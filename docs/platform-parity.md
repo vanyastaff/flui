@@ -1,580 +1,803 @@
 # Platform parity
 
 > [!NOTE]
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-04 · **Change:** minor (a row for persisted documents under System services: headless ✅ from the document and acceptance-app rows, every native column 🟡 until the acceptance app runs there as a process; summary recounted; previously notes only: winit is deleted from the workspace and `deny.toml` bans it: the notes that named it as a host lose it, no cell changes; previously major: the Wayland and X11 columns describe the native hosts, which `current_platform` picks on Linux in place of winit: occlusion, activation, pens, pinches, keyboard layout, event timestamps and input purpose ❌, ❔ or — → 🟡 on Wayland, X11 or both, secure text entry on X11 ❌ → 🟡, the Wayland mouse and presentation feedback → ✅, the plain-text clipboard, drops and drags ✅ on both from runs on Weston, sway and Xvfb; summary recounted over every column; previously minor: the native Wayland host takes an application title bar inside the margins of its own frame, run on Weston 13, no cell changes; previously minor: the native X11 host takes an application title bar without decorations, moved and resized through `_NET_WM_MOVERESIZE`, run under openbox on Xvfb, no cell changes; previously notes only: the native Wayland host starts drag sessions from its windows, run on sway 1.9 and Weston 13, the Wayland column still winit's; previously notes only: the native Wayland host takes drops on its windows through `wl_data_device`, run on sway 1.9, the Wayland column still winit's; previously minor: winit takes an application title bar as a window without decorations, moved and resized from the chrome regions, run under openbox on Xvfb, no cell changes; previously notes only: HTTP requests on Linux go through `ureq`, an embedder's executors there included, run in the Linux tests, so every host sends through a stack of its own; previously notes only: Android takes unbuffered pointer input for a low-latency window from API 30, type-checked, no cell changes; previously notes only: HTTP requests on macOS and iOS go through `NSURLSession` instead of `reqwest`, type-checked, no cell changes; previously notes only: HTTP requests on Windows go through WinHTTP, an embedder's executors there included, type-checked, no run on Windows; previously minor: macOS takes an application title bar under a transparent system one, moved from the chrome regions, type-checked, no cell changes; previously minor: Win32 takes an application title bar and answers its hit test from the chrome regions, type-checked, no cell changes; previously minor: HTTP requests on Android ❌ → 🟡: the system's `HttpURLConnection` answers through the capability over JNI, type-checked, no device run; summary recounted; previously minor: with no input method on D-Bus, the native X11 host speaks XIM, run against a stand-in XIM server on Xvfb, the X11 column still winit's; previously minor: HTTP requests on the Web ❌ → 🟡: the page's `fetch` answers through the capability, run in headless Chrome; summary recounted; previously minor: the native X11 host serves the focused field to IBus or Fcitx5 over D-Bus, run against a stand-in IBus on Xvfb, the X11 column still winit's; previously minor: a row for HTTP requests under System services: the built-in client ran on Linux, the headless host's scripted client ✅, Android and the Web ❌; summary recounted; previously notes only: the native X11 host starts XDND drag sessions from its windows, run on Xvfb, the X11 column still winit's; previously notes only: the native X11 host takes XDND drops on its windows, run on Xvfb, the X11 column still winit's; previously notes only: the native X11 host owns and reads the `PRIMARY` selection beside `CLIPBOARD`, run on Xvfb, the X11 column still winit's; previously notes only: Text input: the iOS responder serves the focused field through the shared text-store host, its range and rect queries answered from the field's store and layout, type-checked; no cell changes; previously notes only: App folders and storage: headless keeps each application's values in memory or under a test's root, never in the user's directories; no cell changes; previously minor: System services on Linux: open a URL, trash and the file dialogs ❌ → 🟡 on Wayland and X11 through the desktop portal, run against a stand-in portal on a private bus; previously minor: Text input: the native Wayland host serves the focused field through `zwp_text_input_v3`, run against sway with an input method of the test's own; no cell changes; previously minor: Text input: iOS reports keyboard traits and secure entry from the pushed field status and winit names the password purpose, secure text entry ❌ → 🟡 on Wayland and iOS, input purpose ❌ → 🟡 on iOS; previously minor: Text input: macOS holds secure event input while a protected field has focus, 🟡; previously minor: Clipboard: concealed clipboard entries are written on every host, headless ✅ and the native hosts 🟡, X11 run on Xvfb, the Web ❌ as gap 26; previously notes only: Accessibility: a route change and a modal dialog are told by name, heard on X11, the screen notice on iOS and Android type-checked; no cell changes; previously minor: Accessibility: properties ✅ on X11 and 🟡 on Wayland, announcements and live regions 🟡 on both, read by a real AT-SPI client on Xvfb; previously notes only: Windows accessibility: a scrollable answers UI Automation's `ScrollPattern` from the vendored adapter, type-checked; no cell changes; previously notes only: Web accessibility: a live region enters the page empty and is given its text once rendered, run in headless Chrome; no cell changes; previously notes only: Web accessibility: static text that publishes runs is selected as the page's selection, run in headless Chrome; no cell changes; previously notes only: Web accessibility: a focused text field is mirrored as a native input the window's text input edits through, run in headless Chrome; no cell changes; previously notes only: Web accessibility: links, movable sliders and scrollable nodes are mirrored as anchors, range inputs and scrollers, run in headless Chrome; no cell changes; previously minor: notes only: system fonts and fallback: each host's own fallback answer is asked and merged ahead of FLUI's tables, fontconfig checked on Linux, the others type-checked; no cell changes; previously minor: notes only: the native X11 host owns and reads the `CLIPBOARD` selection on a connection of its own, run on Xvfb, the X11 column still winit's; previously minor: Web accessibility: every canvas mirrors its tree as a parallel ARIA DOM, run in headless Chrome with constructed events; tree and actions ❌ → 🟡, properties and announcements ❌ → ❔; previously notes only: the primary selection is a capability of the seam, which the native Wayland host provides through `zwp_primary_selection_device_manager_v1`, run on sway 1.9, the Wayland column still winit's; previously minor: notes only: the native Wayland host reads and writes its seats' selection through `wl_data_device`, run between two clients of Weston 13, the Wayland column still winit's; previously minor: Android plain-text clipboard ❌ → 🟡: `ClipboardManager` through JNI, type-checked, no device run; previously notes only: the Web clipboard reads the system clipboard asynchronously through the capability seam, unrun in a browser; previously minor: Android accessibility: every Activity window answers TalkBack through `accesskit_android`, explore by touch included, and reports its cursor, type-checked, no TalkBack run; tree and actions and assistive-technology focus ❌ → 🟡; previously minor: notes only: the native Wayland host draws its own window frame where the compositor draws none, run on Weston 13, the Wayland column still winit's; previously notes only: the window snapshot keeps shown, minimized and occluded apart on every host, so a minimized or covered window stays shown; no cell changes; previously minor: presentation feedback on macOS: the AppKit view's own `CAMetalLayer` reports each shown drawable, run on an M1 at 100 Hz, macOS ❌ to ✅; iOS tried and left `NotYetOnThisHost` after a blank Simulator run; previously minor: every display carries its colour profile: HDR and colour ❌ to 🟡 on Windows, macOS, Wayland, iOS, Android and the Web and ✅ on headless, HDR change events ❌ to 🟡 on Windows, macOS, Wayland and the Web and ✅ on headless; previously minor: presentation feedback: Windows reports DXGI frame statistics and ran on a 100 Hz display, headless injects, the native Wayland host ran `wp_presentation_time` on Weston 13 with the Wayland column still winit's, the Web and X11 have none on the platform; one monotonic clock now carries presentation too; previously minor: iOS accessibility: UIKit windows answer UIAccessibility through `accesskit_ios`'s low-level adapter, read by an accessibility client on the iOS Simulator; tree and actions ❌ to 🟡, properties and announcements ❌ to ❔; previously minor: activation under the OS's focus rules: on Windows "Bring the app forward, request attention" and "Activation obeys the OS focus rules" to 🟡 from a run with two processes; the native Wayland host asks with an `xdg-activation` token, its column still winit's; previously notes only: the native Wayland host's seats deliver keyboard, pointer, touch, pen and pinch input, a cursor, a click, a wheel notch and a key ran from a Weston seat, the Wayland column stays winit's; previously minor: iOS text input: an invisible `UITextInput` responder composed Japanese and Chinese on the iOS Simulator; composition ❌ to 🟡, soft keyboard, client queries and session survival ❌ to ❔; previously notes only: the native X11 host's input: XInput 2, XKB and the cursor, XTest runs on Xvfb, the X11 column stays winit's; previously notes only: the native X11 host, `X11Platform`, ran the window conformance under openbox on Xvfb, and `current_platform` picks it for an X11 session without winit; the X11 column stays winit's until it replaces winit; previously notes only: the native Wayland host's foundation: windows, displays, preferences, lifecycle and AT-SPI, the window conformance passed on a headless Weston 13; the Wayland column stays winit's until it replaces winit; previously notes only: the AppKit window ran the window conformance on an M1, macOS 27.0; the macOS window cells stay 🟡 until the hand checks of #1736 run; previously notes only: the cross-platform window material, `WindowCommand::SetMaterial`, drawn on Windows from build 22621 and on macOS (type-checked), `Unavailable` elsewhere; the per-frame verbs answer `Unsupported`; previously minor: the escape hatch `flui::native`: macOS backdrop material and Liquid Glass ❌ to 🟡, type-checked only; Windows corners and title-bar theme as creation options; previously minor: the quality bar's panic containment is gated by `cargo xtask panic-boundary` and stays 🟡 until the Apple runs; notes only: the desktop accessibility adapters are in every build, with no `a11y` feature; previously minor: Android preferences follow `FluiView` callbacks instead of a poll: contrast and no-polling preferences ran on Android; the summary recounted after the contrast, languages and text-scale rows changed on every host; previously minor: Android configuration changes reach the running app: a row under App lifecycle, and text scale and bold text ran on Android; before that minor: a gamepad and D-pad row under Input and the note on environments without a host; before that minor: rows for the launch-screen handoff, present mode and tearing control, HDR change events, event timestamp conversion, text-input client queries and session survival, accessibility properties and announcements, layout direction and per-app language, system fonts, power-aware pacing and sandbox manifests; six quality-bar lines; earlier major: a Quality bar section and a Distribution section; rows for activation rules, presentation feedback, HDR and colour, latency modes, secure text entry, concealed clipboard, no-polling preferences and sandbox-aware file access) ·
-> **Target:** every environment below is a ready platform
+> **Last reviewed:** —
 
-What every environment FLUI supports must do, and where each host stands today. An environment is
-a **ready platform** when its native host has every row of the core and system-service sections
-and each row has passed an executed run there. The ranked work list is [`gaps.md`](gaps.md).
+Rendered from `platform-parity.toml`; do not edit by hand.
 
-Linux runs on its native hosts, which `current_platform` picks by the session (ADR-0151 §11), so
-the Wayland and X11 columns describe them; winit is gone from the workspace (`deny.toml` bans
-it). The native Wayland host (`WaylandPlatform`, the
-`wayland` feature) and the native X11 host (`X11Platform`, the `x11` feature) have their loops,
-windows with their state and commands, displays, preferences, lifecycle and AT-SPI; the Wayland
-host ran the window conformance against a headless Weston, the X11 host under openbox on Xvfb.
-The Wayland host also has its seats' input (keyboard through XKB with its layout and repeat,
-pointer and wheel, touch, `tablet-v2` pens, `pointer-gestures` pinches, `cursor-shape` cursors):
-the cursor, a click, a wheel notch and a key ran from a real Weston seat (Weston 13 on its X11
-backend under Xvfb, driven through XTest, 2026-10-28), recorded and replayed; touch, pens and
-pinches are held by their translation tests only, with no device behind them; Weston 13 offers no
-`cursor-shape`, so the cursor ran from the cursor theme only. The X11 host has its input too:
-XInput 2's pointers, touches, pens, touchpad pinches and unphased smooth scrolling, XKB's keys,
-compose and layout, and the cursor theme; XTest's pointer, buttons, wheel and keys ran through it
-on Xvfb under openbox and held against a native recording, while touch, pen, pinch and smooth
-scrolling are checked by their decoder only (no such device on Xvfb). The Wayland host reads and
-writes its seats' selection through `wl_data_device`: two clients of one Weston 13 (X11 backend
-under Xvfb, 2026-10-30) read each other's text through the compositor, and its primary selection
-through `zwp_primary_selection_device_manager_v1`, which two clients of a sway 1.9 read the same way
-(Weston has no primary selection). The Wayland host serves the focused field to the input method
-through each seat's `zwp_text_input_v3`: a sway 1.9 routed it to an input method speaking
-`zwp_input_method_v2`, a client of the test's own, whose preedit, commit and deletion reached the
-field's store and which read the field's text back (`wayland_text_input`, 2026-10-31). The X11 host
-serves the focused field to IBus or Fcitx5 over D-Bus, each key of a composing field held in
-order until the input method answers, run against a stand-in IBus on a private bus with Xvfb
-(`text::linux::x11::bus_tests`, 2026-11-02), and with no daemon there speaks XIM to the server
-`XMODIFIERS` names, run against a stand-in XIM server on Xvfb (`text::linux::x11::xim::tests`,
-2026-11-02); the Wayland host takes drops on its windows through `wl_data_device`, which
-a source of the test's own dropped on under sway 1.9 (`wayland_drag`, 2026-11-03), and starts drag sessions from them, which a
-target of the test's own took under sway 1.9 (`wayland_drag`, 2026-11-03); the X11 host owns and reads the `CLIPBOARD` selection on a connection of its
-own, which two of its clipboards exchanged through Xvfb (2026-10-30), large text in `INCR` chunks,
-and its primary selection on the same connection, asked of the application at the loop's turn,
-and takes XDND drops on its windows, which a source on another connection of Xvfb dropped on
-(2026-10-30), and starts XDND drag sessions from them, which a window of another connection of
-Xvfb took (2026-10-31).
-An application of `flui-app` runs on each, under Weston and under Xvfb (`native_linux`). The
-headless host is the test double: ✅ there means a test can drive the row.
-
-Environments without a host have no column: tvOS, visionOS and watchOS (UIKit targets beside
-iOS), OpenHarmony, Fuchsia, a DRM/KMS Linux session without a compositor, the BSDs (which build
-the Wayland and X11 files), QNX. Form factors of a listed environment (iPadOS, Android TV, Wear OS,
-Android Automotive, Android XR, ChromeOS, SteamOS) are rows of that environment's column, not
-columns. [ADR-0151 §10](adr/ADR-0151-platform-layer-boundary-and-names.md) says what adding a
-host costs: one word of vocabulary, one file per feature and one table whose empty positions are
-the ❌ cells of the new column.
+## Legend
 
 | Mark | Meaning |
 |:-:|:--|
-| ✅ | Implemented and passed an executed run on that environment; the note names the run |
-| 🟡 | Implemented but never run there, or partial; the note says which |
 | ❌ | Missing: no code path, a stub, a mock, or a default that pretends to succeed |
 | — | Not applicable: the environment has no such concept |
+| 🟡 | Implemented but never run there, or partial; the note says which |
 | ❔ | Not audited yet |
-
-**Overall: ~37% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments).**
-
-When work lands, update the row here and its entry in [`gaps.md`](gaps.md), and bump this file's
-status line and revision history. A ✅ needs an executed run on that environment; compile-only code is
-🟡.
-
-Sources: the per-host audit with `file:line` evidence
-([2026-10-14](https://github.com/vanyastaff/flui/blob/083b0f75d/docs/research/2026-10-14-platform-backend-audit.md)),
-the checklists drawn from other frameworks, with the native API for each environment
-([desktop](https://github.com/vanyastaff/flui/blob/083b0f75d/docs/research/2026-10-14-platform-checklist-desktop.md),
-[mobile and Web](https://github.com/vanyastaff/flui/blob/083b0f75d/docs/research/2026-10-14-platform-checklist-mobile-web.md)),
-and counts of FLUI's own tree measured at `main` `083b0f75d`. The quality-bar notes, which collect
-the documented flaws of other platform layers, are kept outside the repository.
+| ✅ | Implemented and passed an executed run on that environment; the note names the run |
 
 ## Summary
 
-Counted over every row of the core, system-service and distribution sections; the quality bar has no
-columns and is listed after them.
-
-| Environment | Host | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
-|:--|:--|--:|--:|--:|--:|--:|--:|:-:|
-| Windows | Win32 (native) | 11 | 53 | 33 | 19 | 10 | 39% | no |
-| macOS | AppKit (native) | 10 | 42 | 44 | 20 | 10 | 32% | no |
-| Wayland | Wayland (native) | 11 | 50 | 30 | 28 | 7 | 40% | no |
-| X11 | X11 (native) | 12 | 45 | 33 | 29 | 7 | 38% | no |
-| iOS | UIKit (native) | 7 | 37 | 41 | 33 | 8 | 30% | no |
-| Android | android-activity (native) | 18 | 40 | 33 | 29 | 6 | 42% | no |
-| Web | wasm canvas (native) | 7 | 40 | 30 | 42 | 7 | 35% | no |
-| Headless | test double | 53 | 2 | 50 | 19 | 2 | 51% | — |
-
-Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 8 partly; 4 not met (zero idle CPU, power and
-thermal behaviour, assistive technology conformance, the first frame matching the OS splash); 2 not
-audited (timestamps across a counter wrap or a clock-base change, platform-edge diagnostics free of
-secrets).
-
-## Core
-
-### App lifecycle
-
-| Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
-|:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
-| Event loop, startup and wake-ups | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Runs: a manual Windows run, the macOS live check, an application of `flui-app` on the native Wayland host under Weston and the native X11 host under Xvfb (`native_linux`, in CI), the iOS Simulator, the Android emulator, the Web counter. Owed: idle checks on hidden and occluded windows, which may get no frame callbacks on Wayland. |
-| Version floor: declared, packaged, refused below it | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | [ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md) sets a floor per environment, and `flui build` packages it (raised by `[platforms.<environment>] min` in `flui.toml`) everywhere but the Windows manifest. Windows, macOS, iOS and Android refuse a release below it at start, and Linux a compositor without `xdg_wm_base` or an X server without RandR 1.5, as `LaunchError::UnsupportedSystem`; the GPU falls back to GLES 3.0, WebGL2 or WARP and reports `NoSupportedGpu` with a reason per backend when none answers (run on llvmpipe GL only), and none has run on its floor. |
-| Quit, exit request, last-window policy | 🟡 | ✅ | ✅ | ✅ | — | 🟡 | 🟡 | ✅ | macOS Cmd+Q and close ran; a manual Linux run checks the exit code; iOS has no quit API |
-| Close request with veto | 🟡 | ✅ | 🟡 | 🟡 | — | — | ❌ | ✅ | Web has no `beforeunload` |
-| Reopen with no windows (Dock click) | — | ✅ | — | — | — | — | — | ❌ | a manual macOS run; headless can't drive it |
-| Focus and active state | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Android follows `onWindowFocusChanged` alone, and focus no longer stands for the Activity being resumed. |
-| Visibility, minimize, occlusion | 🟡 | ✅ | 🟡 | ✅ | ✅ | 🟡 | 🟡 | ✅ | Shown, minimized and occluded are three facts of the snapshot on every host (`visible`, `mode`, `occluded`), and a minimized or covered window stays shown. Wayland reports a window occluded while the compositor suspends it or keeps it on no output once shown, never minimized; Win+L and a desktop switch have not run on Windows. |
-| Suspend, resume, GPU-surface loss | — | — | — | — | ✅ | 🟡 | 🟡 | ✅ | Android dispatches `onResume` and `onPause` as the execution state, apart from focus; the Web's page events ran against a fake page, not yet in Chrome. |
-| Configuration changes reach the running app (no Activity recreation) | — | — | — | — | — | 🟡 | — | — | Android's generated manifest declares the changes the host follows; dark mode, font scale, bold text, density and rotation ran on a Galaxy S21 without a second `android_main`. A language change still recreates the Activity. |
-| Sleep, wake, screen lock | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | ❌ | Windows, macOS and Linux deliver them; none ran through a real sleep or lock, and [#1736](https://github.com/vanyastaff/flui/issues/1736) lists the macOS run. |
-| Session end (log off, shutdown) with veto | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | Delivered on every environment but headless, with a veto only on Windows and macOS; none ran through a real log-off or shutdown. |
-| Memory pressure | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | — | ❌ | Delivered on Windows, macOS, iOS, Android and Linux; only Android's levels were driven on a device. |
-| Bring the app forward, request attention | 🟡 | ❌ | 🟡 | ❌ | — | — | — | ❌ | Windows: `WindowCommand::Activate` brings the window forward where the foreground rules allow and flashes its taskbar button where they refuse, run against a second process; attention has no request of its own. Wayland asks with an `xdg-activation` token (sway marks the window urgent), run by hand on sway only. |
-| Single instance, forward arguments | ❌ | — | ❌ | ❌ | — | — | — | ❌ | macOS enforces one instance itself |
-| Deep links, URL schemes, file associations | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | No host reports an opened URL or file, at cold start or while running (`opened(urls, files)` joins the application handler with the activation feature); the Web entry URL is under history routing |
-| State restoration | — | ❌ | — | — | ❌ | ❌ | ❌ | ❌ | macOS window restoration, iOS scene restoration, Android state after process death, Web `history.state` |
-| Activation obeys the OS focus rules (Wayland `xdg-activation` token, Windows foreground rights handed to the activated process) | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | — | Windows: an activation never takes the foreground from another application and comes forward once that application hands the right over, run with two processes; opening a link or file hands the right to the handler process the shell started; no second launch hands it yet (single instance, in the activation spec). The Wayland token's whole path runs only on sway, by hand: CI's Weston has no `xdg_activation_v1`. A Wayland token names the seat and serial of the user input behind the activation. macOS cooperative activation (`NSApplication.yieldActivation(to:)`, macOS 14) is not audited. |
-| App identity (AUMID, bundle ID, `.desktop` file) | ❔ | ❔ | ❔ | ❔ | — | — | — | — | Notifications, URL schemes, the tray, jump lists and portals need it; `flui-cli` packaging not audited |
-
-<details>
-<summary>Run evidence</summary>
-
-- **Event loop, startup and wake-ups** — The idle sub-checks are owed because the Wayland protocol says a server should avoid signalling the frame callbacks of a surface that is not visible in any way, such as off-screen or completely obscured by other opaque surfaces: a hidden or occluded window may get none, so the loop must wait on events, not on time. winit's Wayland event loop has been reported spinning at a zero-timeout `epoll` wait about 9 400 times a second with one core pinned ([rust-windowing/winit#4668](https://github.com/rust-windowing/winit/issues/4668)).
-- **Version floor: declared, packaged, refused below it** — [ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md) sets a floor per environment, listed in the [version map](version-map.md) generated from `platform-support.toml`; only the Android `minSdk` is packaged from it; the backends refuse a release below it, or a missing Linux protocol, at start (`floor_refusal_contract`), and none has run on its floor version. Headless has no OS version
-- **Focus and active state** — Galaxy S21 run (2026-10-18, SM-G991U, Android 15, release probe printing the signals): the notification shade gave Inactive then Resumed, Home gave Inactive, Hidden, Paused, and returning gave Hidden, Inactive, Resumed
-- **Visibility, minimize, occlusion** — Windows sees minimize and restore, a DWM cloak (another virtual desktop) and a locked session, with the cloak run against DWM in `native_window_commands` and Win+L and a desktop switch not yet run; the native Wayland host reads a window occluded while the compositor suspends it (`xdg_toplevel`'s `suspended`) or keeps it on no output after showing it once, and not before its first frame, which no surface enters an output without (`a_window_waits_for_its_first_frame_unoccluded`, `an_occluded_window_is_given_its_frame_once_shown`, on Weston with the suspension told by the test), and Wayland has no minimized state to read; the native X11 host reads a covered window from the server's `VisibilityNotify` and a minimized one, still shown, from `WM_STATE` and `_NET_WM_STATE` (`a_covered_window_reads_occluded_and_shown`, a full-screen window of another client over it under openbox on Xvfb); Android dispatches `onStart` and `onStop` as visibility; Home and return ran on the Galaxy S21 above. Runs: macOS minimize and hide, iOS Home and return
-- **Suspend, resume, GPU-surface loss** — Android dispatches `onResume` and `onPause` as the execution state, apart from focus (the shade left it running, Home suspended it on the Galaxy S21 above); Web: `freeze` and `resume` set the execution state (run against a fake page), and `webglcontextlost`, `webglcontextrestored` and a lost WebGPU device rebuild the renderer at once, without a frame (compile-checked, its decisions unit-tested; not yet in Chrome)
-- **Configuration changes reach the running app (no Activity recreation)** — Android recreates an Activity for every configuration change its manifest does not declare, which restarts `android_main` and starts the app over. The manifest `flui create` generates declares `orientation`, `screenSize`, `smallestScreenSize`, `screenLayout`, `density`, `uiMode`, `fontScale`, `fontWeightAdjustment`, `keyboard`, `keyboardHidden` and `navigation` (`the_android_activity_handles_the_configuration_changes_the_host_follows`), and the host reads the window, displays, night mode, text sizing and preferences again on `ConfigChanged`. Galaxy S21 run (2026-10-21, SM-G991U, Android 15, a `flui create --local` probe logging `MediaQuery` on each rebuild and how often `android_main` was entered): `cmd uimode night no|yes`, `font_scale 1.3|1.0`, `font_weight_adjustment 300|0`, `wm density 480|450` and a rotation each rebuilt the probe in one process with `android_main` entered once; density moved the pixel ratio from 2.8125 to 3 and the logical size from 384×853 to 360×800, and rotation swapped the size. A language change still recreates the Activity: `locale` and `layoutDirection` are left undeclared because the host reads no languages on Android yet (the Languages row) and the font fallback chain is picked from the locale only when a runtime scans the host fonts. No keyboard or navigation device was attached. iOS keeps its scene through a trait change, and no other host has an Activity to recreate
-- **Sleep, wake, screen lock** — Windows reads `WM_POWERBROADCAST` (suspend, automatic resume) and `WM_WTSSESSION_CHANGE` (lock, unlock) on its hidden receiver and marks the displays and window states stale on wake; checked with the real messages sent to the receiver, not through a real sleep or lock. macOS delivers `NSWorkspace` will-sleep and did-wake and the distributed `screenIsLocked`/`screenIsUnlocked`; type-checked only, [#1736](https://github.com/vanyastaff/flui/issues/1736) lists the run. Linux: logind `PrepareForSleep` with a delay inhibitor released after the owner delivers the notice, and the session's `Lock`, `Unlock` and `LockedHint`; ran against a stand-in for logind on a private bus, not a real suspend or lock.
-- **Session end (log off, shutdown) with veto** — Windows answers `WM_QUERYENDSESSION` through the host hook: a block refuses and registers a fixed neutral wait reason (`ShutdownBlockReasonCreate`, on the first visible window), released when the host lets go; a critical end is never blocked; `WM_ENDSESSION` reaches the hook as ending or cancelled. Checked with the real messages, not through a real log-off. macOS asks the hook on `NSWorkspaceWillPowerOffNotification`, holds the log out with `NSTerminateLater` while a block is held (it replies on release or after 4 s) and lets it pass otherwise; iOS tells the hook `Ending` from `applicationWillTerminate:`, which iOS does not promise; both type-checked only, [#1736](https://github.com/vanyastaff/flui/issues/1736) lists the run. Android sends the end notice only, from `onStop` and `onSaveInstanceState` (once per start-to-stop cycle, since a Back that finishes the Activity saves no state), with no veto; on the Galaxy S21 above it arrived on each Home, so it repeats and does not mean the app is over. Web reports `pagehide` as the session ending and a restored cached page as cancelling it, without a veto and with writes best effort; run against a fake page, not yet in Chrome. Linux: logind `PrepareForShutdown` is a notification only (query, then ending; the answer is not read, since logind cannot be asked to wait for the user), through a delay inhibitor; ran against a stand-in for logind, not a real shutdown.
-- **Memory pressure** — Windows reports `Critical` when the system's low-memory event fires (`CreateMemoryResourceNotification`), at most once per 30 s while memory stays low; the hold and its re-arming are checked, not a real low-memory state. macOS maps the dispatch memory-pressure source (warn is `Moderate`, critical is `Critical`) and iOS maps `applicationDidReceiveMemoryWarning:` to `Critical`; type-checked only, [#1736](https://github.com/vanyastaff/flui/issues/1736) lists the run. Linux: kernel pressure triggers (`some` is moderate, `full` critical) on `/proc/pressure/memory`, with a 2 s window for a process without `CAP_SYS_RESOURCE`; the triggers were set on WSL 2, no real pressure was generated. Android gives `Critical` for `onLowMemory`, and each `onTrimMemory` reaches the application as it arrives, forwarded by `FluiActivity` through `FluiHost`'s queue (ADR-0255), which buffers until the platform starts; type-checked only, the queue has not run on a device. The Galaxy S21 run above ran the earlier path, `lastTrimLevel` read at lifecycle callbacks: with `am send-trim-memory`, RUNNING_MODERATE and BACKGROUND gave `Moderate`, RUNNING_CRITICAL and COMPLETE gave `Critical`; `onLowMemory` was not run (adb cannot raise it)
-- **Activation obeys the OS focus rules (Wayland `xdg-activation` token, Windows foreground rights handed to the activated process)** — Windows run (2026-10-28, Windows 11 build 26300, `an_activation_takes_the_foreground_only_when_it_is_handed_over`): a second process took the foreground the way a click gives it, the window's `Activate` left it there and the shell announced the window's flash (`HSHELL_FLASH`) to that process; once it called `AllowSetForegroundWindow` for this process, the same command brought the window to the foreground. Without the flash, the shell announced none: Windows refuses quietly. Opening a link, file or folder hands the right only to the handler process the shell started, by its id, never to any process; a handler already running is handed nothing; not run against a real handler. Wayland, the native host (2026-10-28, WSL Ubuntu 24.04): on a headless sway 1.9 a window covered by a second one asked with a token, which came and was handed back; sway marked it urgent and kept the focus on the cover, under both `focus_on_window_activation urgent` and `focus`, as a token with no seat and surface cannot activate there. Weston 13 offers no `xdg_activation_v1`, so `Activate` is `NotOnThisDevice`. macOS `activate(ignoringOtherApps:)` not audited. Apple documents cooperative activation through `NSApplication.yieldActivation(to:)` (macOS 14), which explicitly allows another app to make itself active, and marks `activate(ignoringOtherApps:)` deprecated; neither is audited here
-
-</details>
-
-### Windows
-
-| Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
-|:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
-| Open and close a window | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | iOS: the scene supplies the window; Android: one native window, which the application cannot close (`closes` is `Unavailable`) |
-| Multiple windows | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | — | ✅ | No iPad scenes, no Android multi-window |
-| Show without a blank first frame | 🟡 | ✅ | 🟡 | 🟡 | — | — | — | ✅ | Windows and X11 create the window hidden and show it after the first presented frame; Wayland maps with the first buffer, so nothing is deferred, and `show` is refused. |
-| Launch-screen handoff: the first frame matches the OS splash | — | — | — | — | ❌ | ❌ | ❌ | — | Nothing aligns the first frame with the OS splash (the iOS launch screen, Android's `SplashScreen`, the Web page before the wasm loads). Desktop is the row above. |
-| Title | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ | Linux: Wayland sets `xdg_toplevel`'s title and X11 `_NET_WM_NAME` and `WM_NAME`; neither lets a client read the title shown back, so the snapshot holds the one last set. Other hosts: not yet |
-| Minimize, maximize, restore, state readback | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | ✅ | Linux reads the mode back, on X11 from `WM_STATE` and `_NET_WM_STATE`, on Wayland from the compositor's configures, which never report minimized; sway, which tiles, carries out no maximize. macOS: the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); the green button, Cmd-M and the Dock have not run by hand ([#1736](https://github.com/vanyastaff/flui/issues/1736)). |
-| Fullscreen | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ | Linux asks the compositor or window manager for fullscreen (`xdg_toplevel.set_fullscreen`, `_NET_WM_STATE_FULLSCREEN`) and reads it back. |
-| Position, size, move and resize events | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ | Wayland can't read or set a global position by design; X11 ran on an Xvfb server. macOS: the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); a drag, the y-axis by hand and a second display have not run ([#1736](https://github.com/vanyastaff/flui/issues/1736)). |
-| Size constraints, resizable and other flags | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | ✅ | Windows holds limits and flags at the operating system (checked against the real system, not by dragging an edge); Linux hands them to the compositor or window manager (`xdg_toplevel`'s minimum and maximum size, `WM_NORMAL_HINTS`), run in the window conformance on Weston and under openbox on Xvfb with no edge dragged. macOS: the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); no edge was dragged against the limits by hand ([#1736](https://github.com/vanyastaff/flui/issues/1736)). |
-| Live resize without jitter | ❔ | ❔ | ❔ | ❔ | — | — | ❔ | — | Not audited; Windows has no `WM_ENTERSIZEMOVE` handling. It passes when every frame presented during a scripted border drag has the content size of its window. |
-| Save and restore window placement | ✅ | 🟡 | 🟡 | 🟡 | — | — | — | ✅ | `AppConfig::restore_placement`. Windows opens at the remembered position, size and mode (content size, `SetWindowPlacement`) and ran in a real window. |
-| Frameless windows, custom title bar | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | `WindowFrame::AppTitleBar` is in the contract, taken by the headless host, Win32, macOS and the native X11 and Wayland hosts, as are the chrome input regions (move, resize, caption buttons, ADR-0286) that answer the system's hit test and the `flui-widgets` parts that mark them (`WindowTitleBar`, `WindowCaptionButton`, `WindowResizeArea`). Win32 drops the caption and answers `WM_NCHITTEST` from the regions, `HTMAXBUTTON` included for the snap layouts, type-checked and not run; macOS keeps a transparent system title bar under full-size content, moves the window from a move region and answers a double-click as System Settings says, its traffic lights hidden or moved, type-checked and not run; the native X11 host does the same through `_NET_WM_MOVERESIZE` where the window manager lists it, run under openbox on Xvfb; the native Wayland host asks for no frame, keeps the margins of its own and moves and maximizes the window from them, run on Weston 13. |
-| Backdrop material, transparency, corners | 🟡 | 🟡 | ❌ | ❌ | — | — | — | ❌ | The contract's material (`WindowCommand::SetMaterial`, `WindowMaterial::{Opaque, System}`, `WindowCapabilities::material`): a Win32 window opens on Mica (`System`) and changes it from build 22621 on, and below that build the capability is unavailable on this device and admission answers `NotOnThisDevice`; ran in a Win32 window on Windows 11 (build 26300), the desktop window manager's attribute read back after each change. macOS draws `System` as `NSVisualEffectView`'s window-background material, type-checked only. Linux and Web report the material `Unavailable`; no window draws transparent content. On Windows the corners and title-bar theme are creation options (`Win32WindowOptions`), and `flui::native::windows` sets the backdrop, corners and theme or answers why not; ran in a Win32 window. macOS draws an `NSVisualEffectView` material or Liquid Glass (`NSGlassEffectView`, macOS 26, found by name) behind the content through `flui::native::macos` (`AppKitWindow::set_backdrop`, ADR-0254 §3), which ran on macOS 27 (M1, 2026-10-27); the contract's material on macOS is type-checked only, and the cell stays 🟡 for it and for transparency |
-| Owned, modal and popup windows; always on top | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Not in the contract, so menus, tooltips and dropdowns can't leave the window; Wayland needs `xdg_popup` |
-| Window icon | ❌ | — | ❌ | ❌ | — | — | — | ❌ | `WM_SETICON`, `xdg-toplevel-icon`, `_NET_WM_ICON` |
-| Exclude a window from screen capture | ❌ | ❌ | — | — | ❌ | ❌ | — | ❌ | `SetWindowDisplayAffinity`, `NSWindow.sharingType`, iOS capture detection, Android `FLAG_SECURE` |
-| Native views inside the UI (web view, map, video) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | Not in the contract; it shapes compositing, hit-testing and accessibility |
-
-<details>
-<summary>Run evidence</summary>
-
-- **Show without a blank first frame** — Windows creates the window hidden, puts it in its opening mode and shows it after the first presented frame (checked against the real system, no run watching the first frame); X11 creates the window unmapped and maps it after the first frame, in its opening mode and position (ran on an Xvfb server, map state read back, not yet by eye on a desktop); Wayland maps with the first buffer, so nothing is deferred, and `show` is refused. macOS run: deferred first reveal
-- **Launch-screen handoff: the first frame matches the OS splash** — The generated Web page sets no background before the wasm loads, and its manifest `theme_color` is `#FFFFFF`; the generated Android manifest sets no splash or window background; iOS declares an empty `UILaunchScreen`. The OS shows a splash on these environments (Android 12 and later through the `SplashScreen` API), and the first frame must match it.
-- **Minimize, maximize, restore, state readback** — Linux: the native Wayland host asks `xdg_toplevel` for every mode the compositor announces in `wm_capabilities` and reads maximized and fullscreen from its configures; Wayland never reports minimized, and sway, which tiles its windows, carries out no maximize (`a_window_maximized_before_fullscreen_returns_to_normal` runs on Weston). The native X11 host asks the window manager for every mode with the EWMH client messages, writes the mode of a window not mapped yet into its `_NET_WM_STATE`, honours a mode only where the window manager lists it in `_NET_SUPPORTED`, and reads the snapshot back from the server (geometry, `_NET_FRAME_EXTENTS`, map state, `WM_STATE`, `_NET_WM_STATE`, the input focus, `_NET_ACTIVE_WINDOW`). Run (2026-10-27, WSL Ubuntu 24.04, Xvfb with openbox, `tests/x11_window.rs`): the window conformance of `flui-testing` drove every command, compared the snapshot with what the server reads back and saw a revised `_NET_SUPPORTED` supersede a command admitted before it; a window opened maximized was mapped maximized; a decorated window was placed and measured by its frame. macOS reads the mode from `NSWindow` and carries out every mode command. macOS run (2026-10-27, an M1, macOS 27.0): the AppKit window conformance kit passes, driving every command and comparing the snapshot with what AppKit reads back (`contentRectForFrameRect` and `backingScaleFactor` for the metrics, `isKeyWindow`, `isVisible`, `isMiniaturized` and the occlusion state), and a window zoomed before full screen returns to normal; nextest flui-native 233/233; the fixture after review: appkit_window 3/3, nextest flui-native 237/237, 2026-10-27. The cell stays 🟡 because no live change was made by hand: [#1736](https://github.com/vanyastaff/flui/issues/1736) still lists the green button, Cmd-M and the Dock. An earlier macOS run covered minimize and hide. Windows run (2026-10-26, Windows 11): the window conformance of `flui-testing` drove every command and compared the snapshot with what Win32 reads back (`GetClientRect` and `GetDpiForWindow` for the metrics, `GetFocus`, `IsWindowVisible` and the DWM cloak), and a keyboard sizing loop published each step's size inside the modal loop
-- **Fullscreen** — Linux: `SetMode(Fullscreen)` asks the compositor (`xdg_toplevel.set_fullscreen`) or the window manager (`_NET_WM_STATE_FULLSCREEN`), and the mode is read back from the configure or `_NET_WM_STATE`; Web republishes the state on `fullscreenchange`; mobile immersive mode is under System UI
-- **Position, size, move and resize events** — Linux: X11 sets and reads the outer position and size through the window manager, measured by `_NET_FRAME_EXTENTS`; Wayland sets the content size. Wayland can't read or set a global position by design. X11 ran on an Xvfb server. macOS reads and sets the outer top-left position, content size and limits through `NSWindow`; the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233), and [#1736](https://github.com/vanyastaff/flui/issues/1736) still lists a drag, the y-axis by hand and a second display
-- **Size constraints, resizable and other flags** — Windows holds min/max size at the operating system through `WM_GETMINMAXINFO` at the window's DPI, takes `resizable` and the system frame (`WindowFrame::System` or `None`) as style bits and changes them at run time (checked against the real system, not by dragging an edge); macOS sets and reads content size limits, resizable and the system frame through `NSWindow`, and reports a command unavailable where AppKit would ignore it in the window's mode (the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27; nextest flui-native 233/233; no edge dragged by hand, [#1736](https://github.com/vanyastaff/flui/issues/1736)); Linux sets limits, resizable and the frame at run time (`WM_NORMAL_HINTS` and `_MOTIF_WM_HINTS` on X11, `xdg_toplevel`'s sizes and `xdg-decoration` on Wayland), run in the window conformance under openbox on Xvfb and on Weston, and the snapshot holds the limits last set
-- **Live resize without jitter** — Windows `WM_ENTERSIZEMOVE` handling exists only in the DirectManipulation tests; Metal `presentsWithTransaction` and Wayland frame-callback pacing are not audited. Pass criteria: a scripted two-second border drag (Win32 `SendInput`, XTest, a test compositor's `xdg_toplevel.resize`) with every presented frame captured, content size equal to window size in every captured frame, callbacks counted during the modal loop, and the p99 frame time recorded. The engine presents with `Fifo`, which blocks on vsync and ghosts a stale frame during the modal resize loop on Windows; the engine's own notes name `DXGI_SCALING_NONE` as the only real fix, which wgpu 30 does not expose. A resize-jitter probe drove a 40-resize burst into the Metal swapchain in process and saw no size-mismatched acquire; the compositor-side half is unobserved.
-- **Save and restore window placement** — macOS opens at the position, in the mode and returning to the `normal_geometry` of the options, reads the display by its UUID (`persistent_key`) and measures display bounds from the top-left corner; type-checked only, [#1736](https://github.com/vanyastaff/flui/issues/1736) lists the run. X11 opens at the remembered position, size and mode (the window is created at the rectangle it returns to, and mapped in its mode) and matches the display by `persistent_key` (the RandR connector and EDID identity); Wayland cannot place a window, so it restores size and mode only, and keys a display by its connector name. The opening mode ran under openbox on Xvfb (`a_window_opened_in_a_mode_is_mapped_in_it`); the display keys are checked by their models only, and no restart cycle ran on a desktop
-- **Frameless windows, custom title bar** — Compositors without server-side decorations need client-side ones. The native Wayland host draws its own where the compositor draws none or leaves the frame to the client: a title bar with the title and buttons, resize margins, `xdg_toplevel.move`/`resize` with the press's serial and the window menu. Run (2026-10-28, WSL Ubuntu 24.04, Weston 13's desktop shell on its X11 backend under Xvfb, XTest, `tests/wayland_frame.rs`): the bar read back from the screen, a drag on it moved the window and a drag on the corner margin resized it, the buttons maximized and closed it; under a headless sway 1.9 the compositor's frame stood and the window drew none. This is the host's frame, not an application's own title bar, which the row is about. On Windows the window takes an `AppTitleBar`: `native_window_commands` checks that the caption goes and the content keeps its size (`an_app_title_bar_drops_the_caption_and_keeps_the_content`) and that `WM_NCHITTEST` answers from the chrome regions (`the_system_hit_test_answers_from_the_chrome_regions`); neither has run yet, so the cell stays ❌.
-
-</details>
-
-### Displays and metrics
-
-| Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
-|:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
-| Displays: list, work area, current display, changes | ✅ | 🟡 | ✅ | ✅ | 🟡 | ✅ | ✅ | ✅ | Windows, Wayland, X11, Android and the Web ran live; macOS and iOS are type-checked only. A move between two monitors ran only on Windows, and a Windows disconnect did not run. |
-| Scale factor and DPI changes | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | ✅ | ✅ | Web watches `(resolution: Xdppx)` and re-arms it after each change for the display snapshot. |
-| Refresh rate and frame pacing | ✅ | 🟡 | ✅ | ✅ | 🟡 | ✅ | ✅ | ✅ | Every host reads the mode's rate or estimates the period; macOS and iOS are type-checked only. A display that reports none uses 60 Hz, with a diagnostic. |
-| Present mode, queue depth, VRR and tearing control | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | — | The engine always presents with `Fifo` and a frame latency of 2; nothing lets the platform layer or the app choose a present mode, a queue depth, variable-refresh behaviour or tearing. |
-| HDR, wide gamut and colour management (surface colour space, SDR/HDR headroom, display profile changes) | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | 🟡 | ✅ | Every display carries its colour profile (`DisplayInfo::color`: colour space and headroom, or why there is none), and the engine sets a surface up for the colour of its window's display (ADR-0256). Windows read an SDR monitor correctly; no HDR or P3 display has run anywhere, and sources stay sRGB. X11 reads no colour (`NotYetOnThisHost`); the Web reports capability and no headroom. |
-| HDR and SDR-white change events | 🟡 | 🟡 | 🟡 | ❌ | ❌ | ❌ | 🟡 | ✅ | A profile change is a new display snapshot revision. Windows re-reads on `WM_DISPLAYCHANGE` (the SDR white level moving raises none), macOS on the screen-parameters notification, Wayland on `image_description_changed`, the Web on the colour queries' `change`; none ran with a real change. iOS and Android re-read only on their other display events. The window receives the change as a new `WindowDisplay`, and its renderer configures the surface again before the next frame (ADR-0256 §6, amended). |
-| Presentation feedback: when each frame reached the screen | ✅ | ✅ | ✅ | — | ❌ | ❌ | — | ✅ | A frame request carries when the window's newest earlier frame was shown (`FrameRequest::presented`, on the event timeline input is stamped on); the frame clock keeps it and bounds idle work by the next refresh. Windows reads the DXGI frame statistics of the renderer's swap chain; headless reports what a test injects. Wayland reads `wp_presentation_time`, run on Weston 13. The Web (a `requestAnimationFrame` stamp is a frame's start) and X11 (a present completes on the GPU driver's connection) have none, and their windows say so; macOS reads a presented handler on each drawable of the view's own `CAMetalLayer`; iOS and Android do not report yet. |
-| GPU surface | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | Rendered in every run above |
-| Safe area | — | ❌ | — | — | ✅ | ✅ | ❌ | ✅ | macOS ignores the notch in fullscreen; Web doesn't read `env(safe-area-inset-*)`. |
-| Soft-keyboard insets | — | — | — | — | 🟡 | 🟡 | 🟡 | ✅ | In the contract (ADR-0277): a window reports the keyboard's target and its motion, and each frame lays out with the occlusion at its vsync; headless scripts a motion. Android reports the keyboard (`Type.ime()` from API 30, the system window bottom below) and, from API 30, its motion from `WindowInsetsAnimation.Callback`, type-checked, no device run; below API 30 it jumps to the target. iOS reports the keyboard and its motion from `UIKeyboardWillChangeFrameNotification` (end frame, duration, curve), type-checked, no device run. The Web reports the keyboard at rest, from `navigator.virtualKeyboard` (which the window has overlay the page) or else the visual viewport, run against a fake page on Node, not in a mobile browser. |
-| System-gesture insets | — | — | — | — | — | 🟡 | — | ✅ | `WindowInsets::system_gestures` reaches `MediaQueryData::system_gesture_insets` (ADR-0277). Android reads `getSystemGestureInsets()` from API 29 (`NotOnThisDevice` below), type-checked, no device run. |
-| System-gesture exclusion | — | — | — | — | 🟡 | ✅ | — | ✅ | Android's exclusion rects ran on a Galaxy S21; the iOS path never ran and was not type-checked on the authoring host. |
-| Display cutout, fold posture | — | — | — | — | — | 🟡 | ❌ | ❌ | Android folds the cutout into the safe area; no fold posture |
-
-<details>
-<summary>Run evidence</summary>
-
-- **Displays: list, work area, current display, changes** — Headless injects displays, changes and window moves. Windows keys each monitor by adapter and target (`QueryDisplayConfig`), names the window's display through `MonitorFromWindow`, and delivers `WM_DISPLAYCHANGE`, DPI and work-area changes. Windows run (2026-10-18, Windows 11, one 3440×1440 monitor, a display watcher running): a refresh switch, a scale change to 125% and a resolution change to 2560×1440 each published a new snapshot with the same `DisplayId`. Windows two-monitor run (2026-10-18, Windows 11, a display watcher running, a second 3440×1440 monitor connected live): the new monitor appeared as a new snapshot revision with `id 2` at (3440, 0) and 60.001 Hz while `id 1` stayed at 100 Hz; dragging the window to monitor 2 raised the display change and the window then named `DisplayId 2`, and dragging it back named `DisplayId 1`; rearranging monitor 2 to the left, at (-3440, 0), kept `id 2`; changing the refresh rates live, monitor 1 to 144 Hz and monitor 2 to 165 Hz, published each change with the ids unchanged. Disconnecting a monitor on Windows was not run (removing an output was run on X11, below). macOS keys each display by its UUID, resamples after `NSApplicationDidChangeScreenParametersNotification` and publishes the window's display from `windowDidChangeScreen:` and backing-property changes; iOS numbers each retained `UIScreen`, observes screen and scene notifications and names the window's screen; both are type-checked only; no Apple code runs in CI. The Web lists the one screen, or every screen once the Window Management permission is already granted (it is read, never requested), keys a listed screen by its JS object, and resamples on a pixel-ratio, `window.screen` or screen-list change. Web run (2026-10-18, Windows 11, Chrome, one 3440×1440 monitor, `browser_display_probe`): with access already granted the display kept id 1 while its name changed from "Browser Screen" to "34HC5CUR P"; page zoom 0.9, 1.0, 1.1 and 1.25 changed the scale each time while the bounds stayed 3440×1440; more than one screen was not run (one monitor). Android reads every display through JNI (`DisplayManager.getDisplays`: real size, density, the current mode's rate, `getDisplayId` as the key) and resamples on `ConfigChanged`, on resume and on the choreographer's refresh-rate callback (API 30+; below it, only the first two). Android run (2026-10-18, Galaxy S21 SM-G991U, Android 15 / API 35, release probe): 1080×2400, scale 2.8125, 8 333 µs (120 Hz); the adaptive panel dropped to 16 666 µs when idle and returned to 120 Hz on touch, through the choreographer callback; Settings → Motion smoothness Standard gave 16 666 µs and Adaptive 8 333 µs, with the same `id=1`; more than one display (an external or virtual screen) was not run. Linux reads the outputs from the compositor on a connection of its own, kept current by a thread that wakes the owner: Wayland `wl_output` v2–4 with `zxdg_output_v1` (applied at `done`; keyed by the v4 connector name), X11 RandR 1.5 monitors (keyed by the first output's XID); a Wayland window names its display by the first output its surface entered and has not left, an X11 window by the monitor its frame overlaps most. X11 runs (2026-10-18, WSL Ubuntu 24.04 on Windows 11, a display watcher running): XWayland under WSLg read `rdp-0`, 3440×1440, 59.936 Hz, and the window matched its output by CRTC and fired the display hint; live RandR changes under an Xorg dummy server published a new snapshot each time with the same `id 1`: 60.020 → 75.025 → 85.024 Hz, mode 1600×900, output off (no displays) and back on. Wayland run (same session): WSLg's weston read `weston rdp`, 3440×1440, 60.000 Hz, and a headless weston read `headless` 1280×720. Wayland live run (2026-10-18, a display watcher running, winit/Linux under WSLg, WSL Ubuntu 24.04 on Windows 11 with two 3440×1440 monitors): revision 1 was `weston rdp` at 640×480 while WSLg was starting; revision 2 was the same output grown live to 3440×1440 at (3440, 0), 60.000 Hz, keeping `id 1`; revision 3 added a second `wl_output` live, `weston rdp` 3440×1440 at (0, 0), as `id 2`: both outputs carry the same name and still get distinct ids. A Windows scale change was not seen: WSLg restarts its weston on one, ending the probe's connection, so the scale cannot be observed live through WSLg. Two outputs were present but no window was moved between them. A Wayland window that has drawn no frame is on no output yet, so it names no display until its surface enters one; a move between two monitors has not run on X11. The native Wayland host names a window's display by the first output its surface entered and has not left: a window moved to the other output of a two-output Weston 13 (X11 backend on Xvfb, both at scale 1, 2026-10-28) named that output's display, its handler heard the change, and moved back it named the first again (`a_window_moved_to_another_output_names_its_display`)
-- **Scale factor and DPI changes** — A window's canvas backing store is the `ResizeObserver` entry's `devicePixelContentBoxSize` where the browser observes that box (Chrome, Firefox), the canvas has no padding and the size fits the CSS box at the current ratio; otherwise (Safari) it is `round(CSS size × ratio)`. Each window also watches the ratio itself, so a move to a display of another scale resizes the canvas although its CSS box stays (both paths checked against a fake browser on Node); page zoom changed the scale at every step in the Web run above. Headless Chrome run (2026-10-22, Windows 11, Chrome, `examples/web_demo` with its window kept alive, driven over CDP `Emulation.setDeviceMetricsOverride`): device emulation reports `devicePixelContentBoxSize` in the screen's own pixels, 600×500 for a 600×500 canvas at an emulated 2×, while `--force-device-scale-factor=2` reports 2× the CSS box, so a size the ratio contradicts is not the store; a live change from 896×545 at 1× to 600×500 at 2× gives a 1200×1000 store in one resize, and a reload at 2× gives 1200×1000. A move between two real displays of different scale was not run. A page canvas laid out at its own size (no CSS width or height) is as large as the store in its attributes, which grew its box at every report at a ratio above 1 or with padding; the window pins such a side at its box when it opens (fake browser on Node, with padding and a CSS minimum). Chromium run (2026-10-22, Windows 11, the desktop app's browser pane, `examples/web_demo` with its window kept alive and no CSS size on its canvas, 600×500 emulated at 2×): the box stays 300×150 with a 600×300 store, where it grew to 67108856×67108856 before, and a return to 1× resizes the store to 300×150; a canvas on `min-height: 60vh` is pinned at its 971×486 box; a canvas with a CSS width alone keeps its height at the store's aspect ratio, is not pinned and still follows the viewport. Firefox and Safari were not run. Android run: emulator at density 420
-- **Refresh rate and frame pacing** — Windows reads the active mode's rational rate. Windows run (same session): 60 Hz reported as 16 666 µs, a switch to 144 Hz reported 6 944 µs and raised the window's display observation. Windows two-monitor run (2026-10-18, a second 3440×1440 monitor connected live, a display watcher running): monitor 1 at 100 Hz and the new monitor 2 at 60.001 Hz were told apart by id; changing the rates live, monitor 1 to 144 Hz and monitor 2 to 165 Hz, published each change with the ids unchanged, and the window's display followed the monitor it was dragged to (`DisplayId 2`, then back to `DisplayId 1`). macOS reads the display's current-mode rate. iOS asks the display link for a 60 Hz to maximum frame-rate range (iOS 15 and later; `preferredFramesPerSecond` before), writes `CADisableMinimumFrameDurationOnPhone` into the app's `Info.plist`, and reports the cadence the link measures once it leaves a 5% band; both are type-checked only; no Apple code runs in CI. The Web estimates the period from `requestAnimationFrame` timestamps (a trimmed mean over 30 intervals, published only after it has settled), so it is an estimate of the cadence the browser presents at. Web run (same session): 144 Hz read as 6.938 ms (144.14 Hz) about 300 ms after load; a monitor change to 100 Hz read 99.67 Hz; the re-run published 100→144 Hz once, at 6.955 ms (143.79 Hz), with no value in between, and 100 Hz read 99.96 Hz. Android reads the current mode's rate and follows an adaptive switch; the runtime asks for the display's highest rate while an animation runs or a pointer is down, released 250 ms after (`ANativeWindow_setFrameRate`, API 30+); the event loop blocks until woken (ADR-0249). Android run (2026-10-19, Galaxy S21, interaction widgets): after Home the loop thread woke about twice a second, not once per display period. Android run (same session): a touch requested the highest mode rate, 120 Hz in Adaptive and 60 Hz in Standard, and `rate=0.0` after the 250 ms hold; touch then Home requested at 28.637, Paused at 28.749 and released at 28.924, and nothing stayed held across the resume. Linux reads the mode's rate: Wayland's `wl_output.mode` refresh in millihertz (zero or less is unknown), X11's `dot_clock / (htotal × vtotal)` as `xrandr` computes it (double scan and interlace counted, zero totals unknown). Linux runs (2026-10-18, same session): XWayland under WSLg read 59.936 Hz; under an Xorg dummy server `xrandr` changes published 60.020, 75.025 and 85.024 Hz at the same display id; Wayland read 60.000 Hz from WSLg's weston and a headless weston, and the live WSLg run (2026-10-18) followed an output growing from 640×480 to 3440×1440 at 60.000 Hz and a second output added, with ids kept and distinct, so Wayland is ✅. The haptic frame deadline (ADR-0212 §4) multiplies the same presentation period; a display that reports none uses 60 Hz, with a diagnostic
-- **Present mode, queue depth, VRR and tearing control** — `Renderer::select_present_mode` returns `Fifo` whatever the surface offers, and the swap chain asks for a frame latency of 2. Windows needs `DXGI_FEATURE_PRESENT_ALLOW_TEARING` and `DXGI_PRESENT_ALLOW_TEARING`, which can only be used with sync interval 0; Wayland has `wp_tearing_control_v1`, `fifo-v1` and `commit-timing-v1`; the default DXGI queue of up to three frames costs about 16–32 ms of input latency in another framework ([libsdl-org/SDL#15656](https://github.com/libsdl-org/SDL/issues/15656)). Reading and requesting the rate is the row above; this row is the control over how frames are presented.
-- **HDR, wide gamut and colour management (surface colour space, SDR/HDR headroom, display profile changes)** — Sources: Windows `IDXGIOutput6::GetDesc1` (colour space, peak) and `DISPLAYCONFIG_SDR_WHITE_LEVEL`, HDR10 being high range in BT.2020 with the peak over SDR white as headroom; macOS `canRepresentDisplayGamut:` and `maximumPotentialExtendedDynamicRangeColorComponentValue` (10.15+), the potential because the current value stays at white until a layer asks for extended range; iOS the trait collection's display gamut and `potentialEDRHeadroom` (16+); Android `isWideColorGamut` and `isHdr` (API 26+) and `getHighestHdrSdrRatio` (API 35+); Wayland the output's image description from `wp_color_management_v1`; the Web `(dynamic-range: high)` and `(color-gamut: …)`, which say the screen is capable, not that the capability is active, and no headroom. Windows run (2026-10-28, Windows 11, one 3440×1440 monitor without HDR support, RTX 3070 Ti): `windows_displays_report_their_colour` read SDR sRGB with headroom 1, as `dxdiag` reports (`DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709`, 270 nits, HDR not supported); no HDR display was at hand. Headless injects a profile (`DisplaySpec::with_color`, `DisplayChange::Color`); the Web ran on Node against a controlled browser boundary (`web_colour_follows_the_media_queries`). The window's renderer configures its surface again before the next frame when its display's colour changes (ADR-0256 §6, amended), and the Android Activity's window asks for the colour mode of the requested surface (`Window.setColorMode`, API 26+). Not yet: X11's `_ICC_PROFILE`, and wide-gamut or HDR sources.
-- **HDR and SDR-white change events** — The HDR row is the capability read; this row is the change. FLUI publishes a change as a new display snapshot revision: Windows on `WM_DISPLAYCHANGE` (Microsoft's guidance for an HDR switch; the SDR white level has no broadcast, so a moved slider is read at the next other display event), macOS on `NSApplicationDidChangeScreenParametersNotification`, Wayland on `wp_color_management_output_v1.image_description_changed` (each description numbered, the newest wins), the Web on the colour queries' `change`. Not subscribed: Android's `Display.registerHdrSdrRatioChangedListener` (needs a Java listener in `FluiView`) and UIKit's headroom. Headless injects the change (`a_profile_change_reaches_the_snapshot_as_a_new_revision`); no host ran a real change.
-- **Presentation feedback: when each frame reached the screen** — A window's capabilities say whether it reports (`WindowCapabilities::presentation_feedback`, `Unsupported` with the reason where not), and the conformance row `presentation_is_reported_exactly_when_claimed` presents frames and checks the next request carries a report stamped after them, or none where the window says it makes none. Windows: the renderer reads its DX12 swap chain's `GetFrameStatistics` before each present and hands it to the surface target, which rebases the shown present's `SyncQPCTime` from the performance counter and measures the refresh period from two reads. Windows run (2026-10-28, Windows 11, RTX 3070 Ti, 100 Hz monitor): the `counter` example with an indeterminate progress bar reported 477 shown presents in about 4.8 s: 474 of 476 consecutive reports one refresh apart, the shown present three behind the newest (two frames in flight), and 466 of the 476 periods two reads measured within 10 µs of 10 ms, the other ten between 5.0 and 20.0 ms, and the conformance fixture's own DXGI swap chain reported a shown present and a 10.01 ms period. Wayland: the native host binds `wp_presentation`, asks for a feedback per commit and rebases `presented` from the compositor's `clock_id` (`CLOCK_MONOTONIC`); Weston 13 headless run (2026-10-28, WSL Ubuntu 24.04): a commit was reported shown 0.8 ms before the window's next frame request, at a 16.666666 ms refresh. Headless: `MockWindow::simulate_presented` and `HeadlessHost::report_presented` inject a report, which a recording replays. The Web has no presentation time (a `requestAnimationFrame` timestamp is the start of a frame), and X11 none a toolkit can read (the Present extension reports a completion to the GPU driver's connection alone): both answer `NotOnThisPlatform`. macOS: the AppKit view is backed by its own `CAMetalLayer` (`makeBackingLayer`), which wgpu takes as the view's layer, and its `nextDrawable` adds `addPresentedHandler:` to each drawable; the handler rebases `presentedTime` from `CACurrentMediaTime` and carries the display's refresh. macOS run (2026-10-28, M1, macOS 27.0, a 100 Hz monitor): the conformance fixture presented Metal drawables into the window's layer and the next request carried a report 13 ms before it with a 10 ms refresh; the `counter` example reported 29 shown frames for 30 presses, the shown times a multiple of 9.999 ms apart, each handler 0.34–0.49 ms after the showing, with Main Thread Checker loaded and silent. iOS and Android answer `NotYetOnThisHost`: a UIKit view whose layer is a `CAMetalLayer` showed nothing on the iOS Simulator, and Android's presentation time is the Vulkan swap chain's (`VK_GOOGLE_display_timing`), which wgpu does not read; its frame timelines name when a frame is due, not that it was shown. Win32 also hands the frame pump the last and next compositor refresh from `DwmGetCompositionTimingInfo` (`window::windows::frame_timing`), and the Web the `requestAnimationFrame` timestamp (rebased by its age; `web_browser` test `an_animation_frame_request_is_stamped_with_the_browsers_frame_time`, run in headless Chrome by CI). DWM's `qpcVBlank` is most often the refresh still to come, which the Win32 host first refused as a report it could not place, so no request carried a target present time. Windows 11 run (2026-10-29, 100 Hz): every request of the window conformance carried a vsync and a target present one 10 ms period apart, within a second of its arrival (`a_frame_request_is_stamped_on_the_event_timeline`; the Win32 fixture also requires the target present). iOS hands it the display link's `timestamp` as the vsync and its `targetTimestamp` as the target present, by their distance from `CACurrentMediaTime` (`window::apple::link_timing`); that is type-checked only, not yet run on a device. Android runs its frames on the choreographer's callback and hands the request its frame time as the vsync, and on API 33 the preferred frame timeline's expected presentation as the target present, by their distance from `CLOCK_MONOTONIC` (`owner::android::frame_clock`, ADR-0269); type-checked only, not yet run on a device.
-- **Safe area** — iOS run: a manual iOS run. Android run: a manual Android run on a Galaxy S21, where the insets reach `SafeArea` as the status and navigation bars (28.4 and 48 logical px at 2.8125) and the tab strip and screens lie clear of them and take taps; rotated to landscape (2026-10-19) the content cleared the left cutout, the status bar and the right navigation bar, and 0.6 s after rotating back the portrait insets were in place
-- **System-gesture exclusion** — `SystemGestureExclusion` → `PlatformWindow::set_input_regions`: Android `setSystemGestureExclusionRects` (API 29+), iOS deferred screen edges. Android run: a manual Android run on a Galaxy S21 (Android 15) reads the probe's left-edge exclusion back from the window manager's display region. The iOS path never ran and was not type-checked on the authoring host
-
-</details>
-
-### Input
-
-| Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
-|:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
-| Mouse: buttons, hover, capture | ✅ | ✅ | ✅ | ✅ | 🟡 | 🟡 | ✅ | ✅ | The iPad pointer hovers, scrolls, pinches, rotates and reads its secondary button, type-checked only, never run on an iPad; Android ran no hardware mouse, hover or capture. |
-| Touch | 🟡 | — | 🟡 | 🟡 | ✅ | ✅ | 🟡 | ✅ | Linux translates `wl_touch` and XInput 2 touches, held by their translation tests only; no touch device ran on either. |
-| Pen and stylus | 🟡 | ❌ | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | macOS doesn't translate tablet events; Wayland (`tablet-v2`) and X11 (XInput 2 pens) are held by their decoders only; no hardware pen has run on Windows, Android or the Web. |
-| Precise scrolling with phases and momentum | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Windows' precision-touchpad pan is implemented but no touchpad has run; Android's two-finger scroll ran only from a `uinput` touchpad. the iPad trackpad's scroll is type-checked only, never run on an iPad; the Web has no phases. |
-| Touchpad pan as a drag or a scroll | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ✅ | Runs on every host that sends phased precise scroll (see the row above); headless runs it with synthetic packets, no touchpad has. the iPad trackpad is type-checked only; the Web has no phases. |
-| Trackpad pinch and rotate | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Windows, Android and the Web decode a pinch, none from a hardware trackpad; the iPad decodes a pinch and a rotation, type-checked only; Wayland (`pointer-gestures`) and X11 (XInput 2.4 gestures) decode a pinch, held by their decoders only. |
-| Pointer lock and warp | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Not in the contract |
-| Keyboard: keys, modifiers, repeat, dead keys | ✅ | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | iOS handles no hardware keyboard; Android ran hardware key events through a manual Android run, with no repeat, dead key or physical keyboard. |
-| Keyboard layout and its changes | 🟡 | ❌ | 🟡 | 🟡 | ❌ | ❌ | ❌ | ❌ | Web hard-codes `en-US`; Wayland and X11 read the layout through XKB and report its changes, not run with a layout switched |
-| Gamepad and D-pad: a controller's buttons and sticks, a remote's keys, moving focus by direction | ❌ | ❌ | ❌ | ❌ | ❌ | 🟡 | ❌ | 🟡 | No gamepad source on any host (XInput or GameInput, `GCController`, Android `SOURCE_GAMEPAD` axes, the Web Gamepad API, evdev); Android's D-pad arrives as the arrow keys and Enter through the key table, and the arrows drive directional focus, never run on a TV. |
-| Cursor shapes | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | 🟡 | ✅ | No iPad pointer styles or Android `PointerIcon`; no custom image or hide-until-move |
-| System back and history | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android predictive back (from targetSdk 36, `KEYCODE_BACK` isn't delivered), the iOS edge swipe, the Web History and Navigation APIs |
-| Browser gesture suppression | — | — | — | — | — | — | 🟡 | — | The canvas sets `touch-action: none` inline; `overscroll-behavior` is not set, and it never ran in Safari or on a phone. |
-| Input device availability | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Headless, Wayland and X11 report presence changes, the other hosts only their initial table so far; none ran on its environment. |
-| Input latency mode and high-rate sampling (raw updates, coalesced and predicted samples, one monotonic clock) | 🟡 | ❔ | ❌ | ❌ | ❔ | 🟡 | 🟡 | ✅ | `AppConfig::with_input_latency` sets `WindowOptions::input_latency`; Android takes unbuffered pointer dispatch for a `Low` window from API 30 (type-checked). |
-| Event timestamps converted without wrap or base skew (Win32 `GetMessageTime` 32-bit ms, Wayland undefined base, Android uptime ms) | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❔ | ❔ | — | Windows pointer ticks, the Apple uptime seconds and the Wayland and X11 millisecond stamps are rebased onto `EventTime` without a wrap, a Linux stamp only within a trusted skew of its arrival; Android and the Web are not audited, and nothing ran across a wrap or a clock-base change. |
-
-<details>
-<summary>Run evidence</summary>
-
-- **Mouse: buttons, hover, capture** — The iPad pointer hovers, scrolls with phases, pinches, rotates and reads its secondary button through UIKit's indirect-input recognizers, type-checked only, never run on an iPad. Runs: a manual Windows run (`SendInput` clicks, a double click, a chord, a Control-held click and both wheels, recorded and replayed as one mouse pointer), the Windows contract row `a_pointer_routed_mouse_hovers_the_window` (`SendInput` moves on the `WM_POINTER` route: the window's hover enters and leaves once each, and a drag released outside the window delivers its release there), macOS CGEvent clicks, XTest's pointer, buttons and wheel through the native X11 host under openbox on Xvfb (`x11_input`), a cursor, a click and a wheel notch through the native Wayland host from a Weston 13 seat driven through XTest (2026-10-28), both recorded and replayed, the Web counter, and a manual Web run (trusted clicks, a double click, a drag and a secondary click over WebDriver BiDi in headless Chrome, recorded and replayed). Android runs an `input mouse` click on the gesture pad and a wheel notch over the collapsing header (a manual Android run); no hardware mouse, hover or capture.
-- **Touch** — Runs: a manual Windows run (a synthetic touch from `InjectSyntheticPointerInput` into a real window, recorded and replayed), a manual iOS run, an Android emulator tap, a manual Android run on a Galaxy S21 (`adb shell input` taps and swipes, recorded and replayed), and a manual Web run (two trusted touches in headless Chrome, recorded and replayed); a manual Android run drives the interaction widgets's widgets on the same phone with a `uinput` multi-touch screen (swipes, flings, a pull, pages, the sheet, double taps, a spread, a pinch, long presses and a carried drag), each outcome read through the development agent and the screen's pixels; a manual Web run drove the same widgets in headless Chrome with trusted touch swipes, drags, long presses, double taps, spreads and pinches, which the canvas keeps from the browser's own panning (`touch-action: none`). Linux touch has run on neither native host (no touch device on Xvfb or a headless Weston); their translation tests hold it
-- **Pen and stylus** — macOS doesn't translate tablet events; Wayland (`tablet-v2`) and X11 (XInput 2) decode pens, held by their decoders only. Windows runs a synthetic pen (pressure and tilt) from `InjectSyntheticPointerInput` through a manual Windows run, recorded and replayed; its position comes from the himetric location through the device's rectangles, finer than a pixel (the synthetic pen ran through that mapping, but it is injected at whole pixels). Android runs a manual Android run on a Galaxy S21: `input stylus` taps and a `uinput` pen the system's `InputReader` reads, hovering, touching with pressure and tilt and leaving under one pointer identity, recorded and replayed. No hardware pen has run on either (the S21 takes no S Pen); a manual Android run taps the gesture pad with `input stylus` after a mouse hovered on the same injected device, which the pointer assembly now ends as a hover rather than refusing the pen; Android has no property revisions, so `Revise` never comes from it. The Web reads pressure, spherical angles or the tilt planes, twist and coalesced and predicted samples; constructed pen events and a trusted BiDi pen stroke (pressure, angles, twist, recorded and replayed) ran in headless Chrome, no hardware pen
-- **Precise scrolling with phases and momentum** — Windows: a DirectManipulation viewport per window delivers the precision touchpad's pan as phased `Scroll` with `Momentum*` inertia (implemented; on a Windows host its init, messages, pump, own frame request, pacing timer, size-and-move pause and teardown ran on a real window and viewport with synthetic readings, but no precision touchpad was attached, so no hardware manipulation has run; no injector reaches the touchpad, and the native capture journals its viewport calls, so a `native-capture` run on one records the golden that certifies it). Wheel notches stay unphased; the iPad trackpad scrolls with phases through UIKit's continuous-scroll recognizer and a wheel's notches stay unphased, type-checked only; Web has no phases. AppKit's two-finger pan arrives as phased `Scroll`. Android (API 34+) turns a touchpad's two-finger scroll gesture into phased `Scroll` from its cursor; a manual Android run ran it on a Galaxy S21 from a `uinput` touchpad, not a hardware one; Android sends no touchpad momentum
-- **Touchpad pan as a drag or a scroll** — a precise, phased scroll that begins over a `GestureDetector` with a pan or drag slot opens a `Trackpad` contact in the gesture arena, and a `Scrollable` with somewhere to go on its axis contests it through the ownership table of ADR-0208; the winner gets the pan and a recognizer win drops the platform's momentum. Run in headless with synthetic phased packets (the `touchpad_pan` rows and `flui-interaction`'s `scroll_contact`); no precision touchpad has driven it on any host.
-- **Trackpad pinch and rotate** — Windows decodes the precision touchpad's pinch from its DirectManipulation viewport (scale only, no rotation; never run on a touchpad); Android (API 34+) decodes a touchpad's pinch gesture as `PanZoom` scale about its cursor, ran by a manual Android run on a Galaxy S21 from a `uinput` touchpad, not a hardware one (Android has no touchpad rotation); the Web decodes the Control-held wheel events Chromium and Firefox send for a pinch (`Emulated`, classified by a sequence's first event, End at a deadline on the event timeline, refused in favour of the browser's zoom) and WebKit's `gesture*` events (scale and rotation): run in headless Chrome with constructed events through a manual Web run, never with a trackpad or in Safari; Wayland (`pointer-gestures`) and X11 (XInput 2.4) decode a pinch, held by their decoders only. `PanZoom` carries only scale and rotation about a focal point
-- **Keyboard: keys, modifiers, repeat, dead keys** — iOS handles no hardware keyboard. Windows run: Tab and Enter. Android run: a manual Android run sends hardware key events (`input keyevent`, `keycombination`): Tab and Shift+Tab, Enter, Space, Escape, F5, the arrows, Home, + and -, Ctrl+X and Ctrl+V (a character key looked up without Control, so the shortcut sees `x`), and the Menu key (named `ContextMenu`, which opens a row's menu); no repeat, dead key or physical keyboard
-- **Gamepad and D-pad: a controller's buttons and sticks, a remote's keys, moving focus by direction** — No gamepad vocabulary in the contract and no source on any host. Android: the `ui_events` key table turns `KEYCODE_DPAD_UP`, `DOWN`, `LEFT` and `RIGHT` into the arrow keys and `KEYCODE_DPAD_CENTER` into Enter, and `DefaultFocusTraversal` binds unmodified arrows to `DirectionalFocusIntent`, so a remote can move focus; never run on Android TV, Fire OS or with a controller. Headless drives the D-pad half through key events, not the gamepad half
-- **Browser gesture suppression** — The canvas sets `touch-action: none` inline, so a page's stylesheet cannot hand touch panning and zooming back to the browser; a manual Web run's trusted touch swipes, drags and pinches in headless Chrome kept their pointers. `overscroll-behavior` is not set on the canvas or the page; never run in Safari or on a phone
-- **Input device availability** — Per-window `InputCapabilities` with `Availability` (native, emulated, unavailable) and the devices present, as an initial snapshot then ordered changes; headless, Wayland and X11 report presence changes, the other hosts only their initial table so far; none ran on its environment
-- **Input latency mode and high-rate sampling (raw updates, coalesced and predicted samples, one monotonic clock)** — `AppConfig::with_input_latency` sets `WindowOptions::input_latency` for every window; Windows has raw input and DirectManipulation (no touchpad run); the Web reads `pointerrawupdate` for a `Low` window (wasm32 type-check only); Android asks the decor view for unbuffered pointer dispatch for a `Low` window (`View.requestUnbufferedDispatch`, API 30+, which `ViewRootImpl` applies ahead of `NativeActivity`'s input queue; type-checked, not run on a device); iOS coalesced and predicted touches and macOS not audited. Every timestamp already lands on `EventTime`'s monotonic timeline
-- **Event timestamps converted without wrap or base skew (Win32 `GetMessageTime` 32-bit ms, Wayland undefined base, Android uptime ms)** — Win32 `GetMessageTime` and `dwTime` are 32-bit milliseconds that wrap every 49.7 days; `NativeTime::TickMillis` places a tick at the nearest signed offset from the uptime read when the reading arrived, so it survives the wrap. AppKit and UIKit stamps are seconds of uptime (`NativeTime::UptimeSeconds`). A Wayland compositor's and the X server's 32-bit millisecond stamps go through `NativeTime::TickMillis` when they lie within a trusted skew of the arrival on the monotonic clock (a Wayland compositor's base is undefined), and the arrival stands in otherwise. Android's `MotionEvent` event time is on the `SystemClock.uptimeMillis()` base with nanosecond precision that may not be accurate, and the Web's `timeStamp` is on the page's high-resolution timeline; neither conversion is audited.
-
-</details>
-
-### Text input
-
-| Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
-|:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
-| IME composition and candidate placement | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Windows TSF and macOS `NSTextInputClient` haven't run with a real input method. iOS composes through an invisible `UITextInput` responder, which now edits the field through the shared text-store host as macOS does (type-checked; the run below predates it): on the iOS 27.1 Simulator (2026-10-28, an M1 host, on-screen keyboard driven by XCUITest) the Japanese Romaji keyboard composed `にほんご` and committed `日本語`, and the nine-key Pinyin keyboard composed `ni hao` and committed `你好`, each reaching an `EditableText`; candidate placement was not observed (the Simulator device gives no screenshot) and no device ran. Android ran with Samsung Keyboard on a Galaxy S21 only, the Web through Chrome's own input-method path only. |
-| Text-input client queries (selected range, surrounding text, first rect) for dictation, reconversion and handwriting | ❔ | ❔ | ❔ | ❔ | ❔ | ❔ | ❔ | — | The text store has the shape of TSF's `ITextStoreACP`, and iOS's responder answers `UITextInput`'s range and rect queries from the field's store and layout (type-checked), but dictation, reconversion and first-rect queries are not audited on any host. |
-| Text-input session survives window move, resize, DPI change and focus loss | 🟡 | ❔ | ❔ | ❔ | ❔ | ❔ | ❔ | — | Windows tells TSF the focused field's layout changed on a move, a size-and-move loop and a DPI change, checked with no input method composing; the other hosts are not audited. |
-| Soft keyboard show and hide | — | — | — | — | ❔ | ✅ | ❌ | ❌ | Android shows Samsung Keyboard when a field takes focus and hides it when none does. iOS shows the system keyboard when a field takes focus (the Simulator run above); hiding it when focus leaves did not run. |
-| Input purpose and hints (password, number, autocorrect) | 🟡 | ❌ | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | Windows, Android, iOS and the Web map the purpose, and only Android's plain single-line field ran on a device; Wayland (`text-input-v3`) and X11 (IBus and Fcitx5, not XIM) send the purpose, unit-tested only; otherwise it is not in the contract. |
-| System edit menu | — | — | — | — | ❌ | ❌ | — | ❌ | `UIEditMenuInteraction` (its Paste avoids the iOS paste prompt), Android floating `ActionMode` |
-| Spell check | ❌ | ❌ | — | — | ❌ | ❌ | — | ❌ | `ISpellChecker`, `NSSpellChecker`, `UITextChecker`, `SpellCheckerSession` |
-| Autofill (passwords, one-time codes) | — | — | — | — | ❌ | ❌ | ❌ | ❌ |  |
-| Handwriting into text fields | ❌ | — | — | — | ❌ | 🟡 | — | ❌ | Windows Ink and iPad Scribble are missing; Android asks `startStylusHandwriting` (API 33) and never ran (the S21 takes no S Pen). |
-| Secure text entry (password keystrokes and text kept from other apps, input-method learning and the clipboard history) | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | macOS holds `EnableSecureEventInput` while a protected field has focus in the key window and iOS sets `isSecureTextEntry` (both type-checked, not run); Wayland sends a protected field as the `text-input-v3` password purpose with the hidden-text and sensitive-data hints, and X11 sends IBus and Fcitx5 the password purpose (XIM has none), unit-tested only. |
-
-<details>
-<summary>Run evidence</summary>
-
-- **IME composition and candidate placement** — Windows TSF and macOS `NSTextInputClient` haven't run with a real input method (Windows tells TSF the focused field's layout changed when the window moves, ends a size-and-move loop or changes DPI, checked against the real TSF with no input method composing); iOS serves the focused field through the shared Apple text-store host and an invisible `UITextInput` responder (the Simulator run above predates this store-host path); Android serves the focused field through `FluiView`'s `InputConnection` (ADR-0247: a mirror the input method reads and edits on the Java main thread, its edits replayed into the field's store in order): a manual Android run on a Galaxy S21 (Android 15) tapped three letters on Samsung Keyboard, which composed them into the store, kept a hardware Escape during the composition the input method's, committed on space and sent Done as Enter, and a manual Android run typed four letters into a text field and pressed Done while the keyboard still composed them: the editor action commits the composition before its Enter, so the field submits what the keyboard shows; its candidates sit in the keyboard's own strip, and `CursorAnchorInfo` placement never ran, nor did Gboard; the native Wayland host serves the focused field through `zwp_text_input_v3` (preedit, commit, deletion around the caret in whole characters, the field's text back as surrounding text, its purpose as the content type), run against sway 1.9 with an input method of the test's own and never with IBus, Fcitx or a desktop compositor; the native X11 host serves it to IBus or Fcitx5 over D-Bus, preedit and commit run against a stand-in IBus on a private bus, never a real daemon, its caret rectangle sent in root coordinates; the Web serves the focused field through an `EditContext` on the canvas, or a hidden textarea without one, with Escape during a composition left to the input method: run in headless Chrome through Chrome's own input-method path (a manual Web run), never with an OS input method or a soft keyboard. On 2026-11-02, Windows headless Chrome 155.0.8059.85 passed all 43 browser fixtures, including `an_edit_context_serves_the_focused_field` and `a_textarea_serves_the_field_without_edit_context`: an application commit with identical text clears composing-key state on both surfaces. These fixtures dispatch synthetic DOM composition events; they do not exercise a real OS input method or candidate placement
-- **Text-input client queries (selected range, surrounding text, first rect) for dictation, reconversion and handwriting** — Composition and candidate placement are the row above; dictation, reconversion and handwriting read the field instead: the selected range, the replacement range, the text around the caret and the rectangle of the first character. The store's shape (`ITextStoreACP`, mapped onto `NSTextInputClient` and Android's `InputConnection`, ADR-0090) has the verbs for them, and the Win32 text services convert a range's rect for `GetTextExt`; no host has been checked against a dictation, reconversion or handwriting session. Other frameworks show the failure mode: macOS dictation silently drops text when `selectedRange` returns `NSNotFound` ([rust-windowing/winit#4666](https://github.com/rust-windowing/winit/issues/4666), [#3617](https://github.com/rust-windowing/winit/issues/3617)), and SDL3 has candidates but no surrounding text.
-- **Text-input session survives window move, resize, DPI change and focus loss** — Windows tells TSF the focused field's layout changed when the window moves, ends a size-and-move loop or changes DPI, checked against the real TSF with no input method composing. Other frameworks lose the session instead: a Korean input method stops editing inline after the window moves or resizes ([DioxusLabs/dioxus#5246](https://github.com/DioxusLabs/dioxus/issues/5246)), and the candidate window lands far from the field on Linux ([tauri-apps/tauri#11412](https://github.com/tauri-apps/tauri/issues/11412)).
-- **Soft keyboard show and hide** — a manual Android run on a Galaxy S21 reads `mInputShown` from `dumpsys input_method`
-- **Input purpose and hints (password, number, autocorrect)** — Windows answers TSF's input scope from the store's status (`IS_PASSWORD` for a protected field, otherwise the scope of its `TextInputPurpose`: email, URL, phone, number, search), type-checked and unit-tested for the scope choice and request flags, never run against a real input method or the touch keyboard; Android maps the store's status to `EditorInfo` (a protected field is a password the keyboard does not learn from, the purpose picks the email, URL, phone, number or search keyboard, a multi-line field's Enter breaks lines; only the plain single-line field ran on a device); the Web sets `inputmode` from the purpose on the element the browser reads (the canvas with `EditContext`, the hidden textarea otherwise) and `autocomplete="new-password"` on a protected textarea, never run in a browser; iOS answers `UITextInputTraits` from the focused field's store status, read as it takes focus and whenever the status changes: the purpose picks the email, URL, number, phone or web-search keyboard, an address or a number is neither corrected nor spell-checked (`a_fields_status_picks_its_keyboard_traits`), type-checked, never run on a device; the native Wayland host sends `text-input-v3` the content type of the store's status (the purpose's email, URL, phone or number, a multi-line hint, a protected field as the password purpose; `each_purpose_names_its_content_type`), unit-tested over the wire seam; the native X11 host sends IBus and Fcitx5 the same purpose and hints, unit-tested for the mapping (`a_field_states_its_purpose_in_each_protocol`); otherwise not in the contract: secure input
-- **Handwriting into text fields** — Windows Ink, iPad Scribble; Android asks `startStylusHandwriting` (API 33) for a pen tip that touches down inside the focused field (ADR-0247), never run: the S21 takes no S Pen, though its Samsung Keyboard reports stylus handwriting support
-- **Secure text entry (password keystrokes and text kept from other apps, input-method learning and the clipboard history)** — Windows answers the TSF password input scope; Android picks the password keyboard variation; the Web mirrors protected fields into the hidden element; Android also sets `IME_FLAG_NO_PERSONALIZED_LEARNING`; macOS holds secure event input (`EnableSecureEventInput`, as `NSSecureTextField` does) exactly while a protected field has focus in the key window, giving each hold back as the field loses focus or protection, as the window resigns key and when the view goes (`a_protected_field_holds_secure_input_while_it_has_focus`, `secure_input_is_given_back_while_the_window_is_not_key`, `a_focus_moved_by_a_status_query_is_held_for`, `secure_input_follows_the_bind_and_the_systems_refusal`), type-checked and never run on a Mac; iOS sets `isSecureTextEntry` and reloads the keyboard when the focused field becomes or stops being protected, the shared host reading the focused store on focus and status changes (`the_input_method_is_told_the_fields_status`), type-checked, never run on a device; the native Wayland host sends a protected field as that purpose with the hidden-text and sensitive-data hints and no surrounding text, unit-tested over the wire seam, and the native X11 host sends IBus and Fcitx5 the password purpose, which XIM has no word for; concealed clipboard entries are their own row
-
-</details>
-
-### Accessibility
-
-| Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
-|:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
-| Tree and actions | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | The desktop adapters are built into every window, with no feature, iOS's into every UIKit window, Android's into every Activity window, and every Web canvas mirrors its tree as a parallel ARIA DOM; none is checked with a screen reader. |
-| Properties (value, hint, description, state) | ❔ | ❔ | 🟡 | ✅ | ❔ | ❔ | ❔ | ❔ | X11: an AT-SPI client reads role, name, hint, a field's text, a slider's value and range, states and actions (`linux_atspi`); Wayland has the same adapter, not run on a Wayland window. The Web writes states, ranges and descriptions as ARIA attributes. |
-| Announcements and live regions | ❔ | ❔ | 🟡 | 🟡 | ❔ | ❔ | ❔ | ❔ | X11: an AT-SPI client hears announcements, live regions and a status that appears (`linux_atspi`), and a route change by name (`a_route_change_is_heard_by_its_name`). |
-| Gesture alternatives (custom actions, context menu, keys, controls) | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Checked headless by `assert_gesture_alternatives` (ADR-0216); no locked AccessKit adapter routes custom actions or `ShowContextMenu`, so assistive technology reaches them only through the controls. |
-| Assistive-technology focus (screen reader cursor) | ❌ | ❌ | ❌ | ❌ | 🟡 | 🟡 | ❌ | ✅ | `Semantics::on_assistive_focus_within` hears the cursor where an adapter reports it; iOS and Android do through vendored `accesskit_ios` and `accesskit_android` changes, not yet run with VoiceOver or TalkBack, and no other adapter does ([gap 36](gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)); checked headless by `the_screen_reader_entering_the_carousel_pauses_autoplay`. |
-
-<details>
-<summary>Run evidence</summary>
-
-- **Tree and actions** — The desktop adapters are built into every window, with no feature (UI Automation on Win32, NSAccessibility on AppKit, AT-SPI with the native Wayland and X11 hosts on Linux), and every UIKit window answers UIAccessibility through `accesskit_ios`'s low-level adapter, which the window's own view forwards to (iOS Simulator run, 2026-10-28, iOS 27.1 on an M1 host: an XCUITest client read a counter's tree as `StaticText 'Count 0'` and `Button identifier: 'increment', label: 'Increment'`, pressed the button twice through its accessibility frame and read `Count 2`; with the iOS table naming no accessibility the same client found no element; no VoiceOver session, and an AccessKit action was not sent), and Win32 hands it to UI Automation (Windows 11 run, 2026-10-29: the `counter` example with `.identifier("increment")` on its button read through `UIAutomationClient` as `Button` named `Increment` with `AutomationId` `increment`, found by that id, invoked twice through its `InvokePattern`, and the count text read `2`; a scrollable answers UI Automation's `ScrollPattern` from the vendored `accesskit_windows`, type-checked, not run); the runs read one control through UI Automation and AX, not a Narrator or VoiceOver session; every Android Activity window answers TalkBack through `accesskit_android`'s low-level adapter, which `FluiView`'s node provider forwards to on the Java main thread (type-checked for aarch64-linux-android, no TalkBack run; explore by touch comes from the native input queue, a finger hovering over the touchscreen going to the adapter instead of the app); every Web canvas mirrors its tree as a parallel ARIA DOM in a host over the canvas, activated by a placeholder only a screen reader finds (headless Chrome, 2026-10-30, `flui-native`'s `web_browser` tests: a counter's tree read back from the DOM as a button named `Increment` with `data-flui-id` `increment` and the count's text, a click on the button reaching the action listener as `Click`, a link mirrored as an `<a href>` whose click asks for `Click` and follows no address, a slider's range input moved to 55 asking for `SetValue` 55, a scroller scrolled to 250 asking for `SetScrollOffset` (0, 250), a focused email field mirrored as an `<input>` the text input edits its store through (a composition, an application edit during it and a lagging published value left the store's text in the field; 2026-10-31), static text in a selection area selected as the page's selection both ways (a selection set in the page asking for `SetTextSelection` in run positions, and the published one shown in the page; 2026-10-31), and the host kept over a canvas in a scrolled and in a scaled container; constructed events, no NVDA, VoiceOver or TalkBack session)
-- **Properties (value, hint, description, state)** — Each part of a bridge can fail on its own: another framework's Linux bridge drops a field's `value` and `hint` while its tree and actions work ([flutter/flutter#194638](https://github.com/flutter/flutter/issues/194638)). A check with the real assistive technology per OS has to read role, name, value, hint and state, not one control's label. On X11 a real AT-SPI client on an accessibility bus of its own (at-spi2-core on Xvfb, `flui-native`'s `linux_atspi`, 2026-10-31) reads each through `accesskit_unix`: `a_node_reads_back_with_its_role_name_value_hint_and_states` reads a field as an `Entry` whose hint is its description and whose text the Text interface gives, a checkbox checked, a disabled button without `Enabled` and `Sensitive`, a slider's value and range through the Value interface, and each node's actions. A field reaches the Text interface only through its runs (ADR-0214): a value without them reaches no AT-SPI interface. No Orca session read it.
-- **Announcements and live regions** — Audited on X11 only. Another framework's Linux bridge produces no AT-SPI announcement for live regions, snack bars, alert dialogs or route changes, only for an explicit announcement call ([flutter/flutter#194045](https://github.com/flutter/flutter/issues/194045)); its harness registers AT-SPI listeners and matches only strings that carry a nonce, so no other source can produce a hit. On the Web an announcement is a live region of the semantics host, which enters the page empty and is given its text once the page has rendered it, since a browser reads out no region inserted with its text (headless Chrome, 2026-10-31, `a_live_region_is_given_its_text_once_rendered`: the region empty when published, its text after the page rendered, the latest text winning and a region removed meanwhile never written; no screen reader heard it). On X11 the same client (`linux_atspi`, 2026-10-31) hears `object:announcement` for each text carrying the run's nonce: a live region whose label changes, one whose child's label changes and a status that appears, at polite or assertive as declared, a timer's tick not at all (`a_live_region_is_announced_with_its_text`), and an announcement at its urgency, again when it repeats (`an_announcement_is_heard_at_its_urgency`). A route change and a modal dialog appearing are spoken by name (ADR-0204 §5): on X11 the client hears the pushed page and the page a pop uncovers, politely (`a_route_change_is_heard_by_its_name`); iOS posts `UIAccessibilityScreenChangedNotification` and Android raises `TYPE_WINDOW_STATE_CHANGED`, each with the name, type-checked, with no VoiceOver or TalkBack run.
-- **Gesture alternatives (custom actions, context menu, keys, controls)** — Behavioural widgets publish each gesture's intent as a custom action, keys and a visible control or a context menu (ADR-0216), checked headless by `assert_gesture_alternatives`; no locked AccessKit adapter routes custom actions or `ShowContextMenu`, so on every platform assistive technology reaches them only through the controls; the Win32 and AppKit menu-key decoders pass the conformance row, no native run
-- **Assistive-technology focus (screen reader cursor)** — A subtree hears the screen reader's cursor enter and leave it through `Semantics::on_assistive_focus_within`, and `PresentationCapabilities::assistive_focus` says whether the platform reports it. iOS reports VoiceOver's cursor through a hook FLUI adds to `accesskit_ios` (`third_party/README.md`), typechecked only: no VoiceOver run on a device yet. Android reads TalkBack's cursor from an accessor FLUI adds to `accesskit_android` after each action, hover and update, typechecked only. UI Automation, NSAccessibility and AT-SPI give no signal for the cursor, and the browser gives a page none, so those report `Unreported` (`each_native_adapter_says_whether_it_reports_the_assistive_cursor`). The headless host moves it with `move_assistive_focus`.
-
-</details>
-
-### Clipboard and drag and drop
-
-| Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
-|:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
-| Plain-text clipboard | 🟡 | 🟡 | ✅ | ✅ | 🟡 | 🟡 | 🟡 | ✅ | Wayland reads and writes its seats' selection through `wl_data_device`, run between two clients of Weston 13; X11 owns and reads `CLIPBOARD` on a connection of its own, run between two clipboards on Xvfb; Android reads and writes `ClipboardManager` through JNI, type-checked, no device run; the Web reads `navigator.clipboard` asynchronously, unrun in a browser, and falls back to its own writes |
-| Rich clipboard (images, HTML, files) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |  |
-| Drop into the app | 🟡 | ❌ | ✅ | ✅ | ❌ | 🟡 | 🟡 | ✅ | Wayland and X11 take drops from a source of another client, run under sway 1.9 and on Xvfb; Windows, the Web and Android take drops, run within one process, in headless Chrome or on a Galaxy S21 only; none ran from Explorer or another app or page. |
-| Drag out of the app | 🟡 | ❌ | ✅ | ✅ | ❌ | 🟡 | 🟡 | ✅ | Wayland and X11 start OS drags, taken by a target of another client under sway 1.9 and on Xvfb; Windows, the Web and Android start them too, none run into another app or page; macOS and iOS report outgoing drags `Unavailable`. |
-| Concealed clipboard entries (kept out of clipboard history and cloud sync) | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ✅ | `ClipboardWrite::concealed` (ADR-0152 §6); each host answers its `Concealment`. X11 and Wayland offer KDE's hint and Android its sensitive extra, which only what reads them honours, so those cells stay 🟡 by design; the Web has no mark and fails the scenario as gap 26. |
-
-<details>
-<summary>Run evidence</summary>
-
-- **Drop into the app** — `flui-runtime` delivers OS drags to the receivers under the pointer and answers the OS with their feedback (ADR-0211); Windows registers an OLE `IDropTarget` per window (text, HTML, files, media types, the session identity), run here only within one process (`ole_drag_and_drop_on_real_windows`: OLE's calls on a real window, and a real `DoDragDrop` dropping into one), never from Explorer or another app; the native Wayland host takes drops through each seat's `wl_data_device`, a source of the test's own dropping on its window under sway 1.9 (`wayland_drag`), and the native X11 host takes XDND drops, a source on another connection of Xvfb dropping on its window; the Web takes HTML drags on its canvas (types and files at hover, every representation copied out at the drop, `dragover` answered from the cached feedback), run in headless Chrome with constructed drag events and a trusted BiDi drag of a page element onto the canvas through a manual Web run, never from the OS or another page; Android takes drags on `FluiView`'s `onDragEvent` (ADR-0247: an offer minted from the `ClipDescription` on entry, the drop answered from the cached feedback, text, HTML and URIs copied out at the drop, a URI's bytes read through the content resolver when requested), run by a manual Android run on a Galaxy S21 only with a drag the probe started dropping on its own window, never from another app; headless plays the OS through `HeadlessDragAndDrop` (`drag_and_drop_reaches_the_runtime`)
-- **Drag out of the app** — Sessions run in their window on pointer capture and escalate to an OS session (ADR-0211); over another window of their runtime they stay on the source's capture where the host places its windows (`PlatformWindow::window_at`: Windows, run here on two real windows by `ole_drag_and_drop_on_real_windows`, the routing itself run headless by `drag_and_drop_reaches_the_runtime`), and escalate elsewhere; Windows starts the OS session with `DoDragDrop` on the owner window's next turn and keeps every window of the thread painting while the loop rests, run here in one process with synthetic input (the deferred start, a second window's frames, a drop into a FLUI window), never with a held mouse button, pen or touch, nor into another app; OLE's loop follows the mouse alone, so a drag no mouse button holds, or a pen or touch drag, is refused `Unavailable` and stays in its window (`a_drag_the_os_loop_cannot_carry_stays_in_its_window`, against the thread's key state); the Web starts an HTML drag at the browser's `dragstart` only for a session the runtime started on that press before the browser's drag threshold (a long-press trigger), storing every representation then, and keeps any later one in its window, run in headless Chrome with constructed events and a trusted BiDi drag out of the canvas onto a page element, never into another page or app; Android starts `FluiView.startDragAndDrop` (API 24) with the whole clip when a drag leaves its window (ADR-0247), and on a Galaxy S21 a manual Android run dropped one on the probe's own window (so the view surface is valid under `NativeActivity`'s `takeSurface`); a manual run carried one into Chrome in a pop-up window, which declined it, and the source heard `Cancelled`; no other app has taken one; the native Wayland host starts sessions through `wl_data_device.start_drag` under its press's serial, a target of the test's own taking them under sway 1.9 (`wayland_drag`), and the native X11 host through XDND, a window of another connection of Xvfb taking them; macOS and iOS have no drag source, report outgoing drags `Unavailable` and keep a drag in its window; headless starts sessions through `with_os_drag`, and the widget harness's window plays them for `Draggable` (`a_drag_leaving_the_window_escalates_to_the_os_when_it_may_reach_it`)
-- **Concealed clipboard entries (kept out of clipboard history and cloud sync)** — one scenario, `flui_native::testing::clipboard::a_concealed_write_stays_out_of_history`, on every host (ADR-0152 §6). Win32 writes `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory` and `CanUploadToCloudClipboard` (DWORD 0) beside the text, `a_concealed_write_stays_out_of_the_windows_history`, type-checked, unrun; AppKit writes `org.nspasteboard.ConcealedType` and `TransientType` after `prepareForNewContentsWithOptions(CurrentHostOnly)`, `a_concealed_write_stays_out_of_the_macos_history`, type-checked, unrun; UIKit sets the item with `UIPasteboardOptionLocalOnly`, type-checked; Android puts `EXTRA_IS_SENSITIVE` in the clip's extras from API 24, type-checked, no device run (it changes no clipboard behaviour, a rendering hint, so the cell is at most 🟡); X11 offers and answers `x-kde-passwordManagerHint`, run on Xvfb (`a_concealed_write_offers_the_password_manager_hint`); Wayland offers the same MIME type and answers it (`a_concealed_source_offers_and_answers_the_hint`), the scenario in `the_selection_crosses_between_clients` on Weston, the offer not yet read by a second client; the Web writes an ordinary entry and fails the scenario as gap 26 (`a_concealed_write_is_an_ordinary_one_on_the_web`, on Node); headless keeps no history (`a_concealed_write_stays_out_of_the_headless_history`).
-
-</details>
-
-### System preferences
-
-| Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
-|:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
-| Dark mode and its changes | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | Every window seeds `MediaQueryData::platform_brightness` and follows changes; only Windows and Android ran a live flip. |
-| Accent colour | ❌ | ❌ | ❌ | ❌ | — | ❌ | — | ❌ | Not in the contract |
-| Text scale | 🟡 | — | 🟡 | 🟡 | 🟡 | ✅ | ❌ | ✅ | iOS and Android answer each size natively, and Android ran a live change on a Galaxy S21; Windows applies its one `TextScaleFactor` linearly, while WinUI scales larger text less; Linux reads GNOME's `text-scaling-factor` through the Settings portal, linear as in GTK (ran in WSL against a stand-in portal, not in a GNOME session). Headless: `the_system_text_scale_grows_each_span_once`, `a_field_measures_and_hit_tests_the_current_text_scale` |
-| Reduce motion | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | Headless injects preferences through `HeadlessHost::set_system_preferences`; no reduce-motion row drives it yet |
-| Contrast | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ❌ | Android reads the system contrast level (API 34+) and the high-contrast-text setting and follows both live: on a Galaxy S21 (Android 15) `high_text_contrast_enabled` and `contrast_level` changes reached `MediaQuery` without a restart. macOS reads `accessibilityDisplayShouldIncreaseContrast` on the workspace's display-options notification, iOS `UIAccessibilityDarkerSystemColorsEnabled` on its status notification (both type-checked only). Linux reads the Settings portal's `contrast`, or GNOME's `high-contrast`, and follows their changes (ran in WSL against a stand-in portal). The Web reads `prefers-contrast` and `forced-colors` and follows their changes: `browser_contrast_and_languages_reach_their_owner` runs on Node against a controlled browser boundary; not run in a browser |
-| Bold text | — | — | — | — | 🟡 | ✅ | — | ❌ | Android ran a live change on a Galaxy S21 |
-| Languages and regional formats | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | Every host reads the languages (Android from the configuration's `LocaleList`, `[en-US]` on a Galaxy S21, a change not run; macOS and iOS from `NSLocale.preferredLanguages` on the current-locale notification, type-checked only; Linux from `LANGUAGE`, `LC_ALL`, `LC_MESSAGES` and `LANG` as gettext reads them, once at start; the Web from `navigator.languages`, following `languagechange`; run on Node against a controlled browser boundary, not in a browser); regional formats ([ADR-0278](adr/ADR-0278-regional-formats-are-the-unicode-locale-extension-keys.md)) on Windows from Region settings (first weekday, clock, units, native digits, formats region; type-checked only) and on Linux from `LC_TIME`, `LC_MEASUREMENT` and GNOME's `clock-format` (not run on a desktop), on macOS and iOS from Foundation's autoupdating locale and calendar (first weekday, the `j` skeleton's clock, units, the `numbers` keyword, the country; type-checked only), on Android from the default locale's `fw` and `nu` keywords, the calendar and `is24HourFormat`, following `TIME_12_24` (type-checked only), and on the Web from `Intl`'s default hour cycle and week info (not run in a browser) |
-| Layout direction and per-app language | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | The platform layer exposes no layout direction and no per-app language override (Android 13 and iOS let the user pick a language for one app). |
-| System fonts and fallback | ❔ | ❔ | ❔ | ❔ | ❔ | ❔ | ❔ | — | Text layout resolves fonts through `fontdb` in `flui-painting`. `flui_native::fonts::system_fallback` asks each host which faces fall back (DirectWrite, CoreText, fontconfig, `AFontMatcher` on Android from API 29 and `fonts.xml` below it) and the collection tries them ahead of FLUI's tables (ADR-0271); fontconfig's answer is checked on the Linux CI host, the others are type-checked only, and no OS has rendered the CJK and emoji check yet. |
-| Gesture and wheel settings | 🟡 | 🟡 | ❌ | ❌ | ❌ | 🟡 | ❌ | ✅ | The Windows wheel smoke passed; the timings never ran. |
-| Haptics setting | ❔ | ❔ | — | — | — | ✅ | — | ✅ | Android reads `HAPTIC_FEEDBACK_ENABLED` and ran on a Galaxy S21; iOS has no public read API, and the Windows pen and macOS Force Touch settings are not audited. |
-| Power state (battery, low-power mode, thermal) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Not in the contract |
-| Power-aware pacing (frame cap and background pause under low-power or thermal state) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Power state is not read, so nothing lowers the frame rate or pauses background work under a low-power, battery-saver or thermal state. |
-| Preference changes arrive as OS notifications, never by polling | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | — | Android's `FluiView` reports setting, contrast and inset changes; on a Galaxy S21 the loop made no turn in 10 s idle, resumed or behind Home. macOS wakes on AppKit notifications and app activation (type-checked only). No host polls a healthy, installed source: Android keeps a 500 ms cadence only while `FluiView` is not in the window, and Linux retries a failed portal read every second. |
-
-<details>
-<summary>Run evidence</summary>
-
-- **Dark mode and its changes** — Every window seeds `MediaQueryData::platform_brightness` and follows changes. Sources: Windows `AppsUseLightTheme` (the title bar follows it), macOS `effectiveAppearance`, Linux the Settings portal's `color-scheme`, iOS `userInterfaceStyle`, Android night mode, Web `prefers-color-scheme`. Runs: on Windows 11 the same probe, as a native Win32 window, followed the user switching the app mode from light to dark and back without restarting, its title bar with it (`DWMWA_USE_IMMERSIVE_DARK_MODE` read back 0 and 1); on a Galaxy S21 (Android 15, release APK) a probe painting the surface from `platform_brightness` started light in light mode, then turned dark in the same process when the user switched dark mode on; that template did not declare `uiMode`, so the flip recreated the Activity and started a new runtime. Since the generated manifest declares it, the flip happens in the running app: the native `AConfiguration` android-activity refreshes on `ConfigChanged` keeps the night mode the Activity started with, so the host reads `Configuration.uiMode` through Java, and on the same S21 (2026-10-21) `cmd uimode night no` and `night yes` flipped `platform_brightness` both ways with `android_main` entered once. No live flip on the other environments
-- **Text scale** — Android answers each size with `TypedValue.applyDimension` against the Activity's display metrics, so Android 14's non-linear curve applies. Galaxy S21 run (2026-10-21, SM-G991U, Android 15, a `flui create --local` probe): `settings put system font_scale 1.3` grew default-size text about 1.33× in the running app while 40 sp text kept its size, as Android scales large text less, and `1.0` restored it; `android_main` was entered once
-- **Bold text** — Android reads `Configuration.fontWeightAdjustment` (API 31). Galaxy S21 run (same probe): `settings put secure font_weight_adjustment 300` reached `MediaQueryData::font_weight_adjustment` as 300 and the text drew heavier in the running app, and `0` restored it
-- **Layout direction and per-app language** — Android 13 adds per-app language preferences (`setApplicationLocales`), iOS has a per-app language setting, and a right-to-left layout follows from the locale. The check is a locale matrix (a right-to-left locale such as ar-EG among them) on every OS, not only a language list.
-- **System fonts and fallback** — DirectWrite `IDWriteFontFallback`, Android `SystemFonts` (API 29), CoreText and fontconfig say which font draws a character the requested family lacks. The check renders CJK and emoji text on each OS without missing-glyph boxes.
-- **Gesture and wheel settings** — Presets per platform and pointer kind with accessibility floors, geometry per display; Android also reads the haptics setting; headless rows drive the presets and per-display geometry. Android run: a manual Android run on a Galaxy S21 changes the long-press timeout with `settings put` and reads it back from `SystemPreferences`, with the double-tap timeout, touch and double-tap slop and fling limits from `ViewConfiguration`; its wheel factors were not checked
-- **Haptics setting** — `SystemPreferences::haptics()`, unobserved where the OS publishes nothing; Android reads `HAPTIC_FEEDBACK_ENABLED`, run by a manual Android run on a Galaxy S21 (switched off and on with `settings put`); iOS has no public read API; Windows pen and macOS Force Touch settings not audited
-- **Power-aware pacing (frame cap and background pause under low-power or thermal state)** — Apple's `CADisplayLink.preferredFrameRateRange` is a hint that Low Power Mode, a critical thermal state and accessibility settings can override; `ProcessInfo.thermalState` and `isLowPowerModeEnabled` (with a change notification), Android `PowerManager.getCurrentThermalStatus()` and `addThermalStatusListener`, Windows battery saver through `SYSTEM_POWER_STATUS.SystemStatusFlag` and `RegisterPowerSettingNotification`, and the Linux portal's `PowerProfileMonitor.power-saver-enabled` tell a layer when to lower the frame rate and stop background work. The check forces each state and asserts a delivery within one event-loop turn and a frame-rate or work reduction.
-- **Preference changes arrive as OS notifications, never by polling** — Android's `FluiView` registers content observers for the animator duration scale, touch feedback, long-press timeout and high-contrast-text settings, the contrast listener from API 34 and `onApplyWindowInsets`; configuration-backed values arrive as `ConfigChanged`. A 500 ms cadence stands in only while the view is not in the window. Galaxy S21 run (2026-10-21, Android 15 / API 35, a probe logging each `MediaQuery` rebuild and each loop turn): no loop turn in 10 s idle, resumed or behind Home; `animator_duration_scale 0` delivered reduced motion, `high_text_contrast_enabled 1` and `contrast_level 0.5` high contrast, and rotating the screen new padding, each without a restart, and restoring each delivered the old value. macOS wakes on the workspace's accessibility display-options notification, the current-locale notification and application activation, since the double-click interval has no notification of its own (type-checked only); Windows has a hidden `WM_SETTINGCHANGE` receiver, Linux the portal's `SettingChanged` (motion, contrast, text-scale and color-scheme keys; ran in WSL against a stand-in portal), iOS `NSNotificationCenter`, the Web `matchMedia` and `languagechange` (run on Node against a controlled browser boundary); of these, only the Windows refresh and Android ran as live OS changes. A ready platform's idle app wakes only for OS events
-
-</details>
-
-### System UI
-
-| Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
-|:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
-| Status and navigation bars, immersive mode | — | — | — | — | 🟡 | ✅ | ❌ | ❌ | Status-bar icon style ran on Android; iOS is type-checked only, and no host has navigation-bar or immersive control. |
-| Orientation lock | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android 16 ignores it on large screens |
-| Haptics | 🟡 | 🟡 | — | — | 🟡 | 🟡 | 🟡 | ✅ | Both tiers and the frame queue ship (ADR-0210); macOS, iOS and the Android envelopes never ran on a device, and no haptic pen has vibrated. |
-| System sounds, alert beep | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ |  |
-
-<details>
-<summary>Run evidence</summary>
-
-- **Status and navigation bars, immersive mode** — Status-bar icon style from `AnnotatedRegion<SystemUiOverlayStyle>` (ADR-0232): Android ran on an API-35 phone (SystemUI received `APPEARANCE_LIGHT_STATUS_BARS` set and cleared on toggle); iOS type-checked only; no navigation-bar or immersive control; headless records the style. Android enforces edge-to-edge from targetSdk 35; Web `theme-color`
-- **Haptics** — Both tiers, requests and outcomes and the frame queue (ADR-0210); every host's degradation table runs as pure functions in CI. macOS `NSHapticFeedbackManager`, iOS UIKit generators and Core Haptics with engine restart, Android envelopes (API 36) and compositions: compiled, never run on a device. The Web Vibration API ran in headless Chrome through a manual Web run: refused before the first trusted click, `Submitted` after it; no motor vibrated. Android `performHapticFeedback` and the `Vibrator` waveform ran on a Galaxy S21 (Android 15, amplitude control, no primitives) through a manual Android run: the feedback and a continuous pattern play as the probe's touch vibrations, a two-tap pattern falls back as the table says; patterns need the `VIBRATE` permission the CLI template declares, and fall back without it. Windows plays on the pen in range of the window through its `SimpleHapticsController`; a real window's actuator ran on a Windows host with no haptic pen (every request `Unavailable`), so no pen has vibrated yet. `InputHapticsManager` (touchpad, mouse) is in no published `windows` crate and stays `Unavailable`. Headless rows run the queue, the conformance rows and the tables
-
-</details>
-
-### Menus
-
-| Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
-|:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
-| App menu bar | — | ❌ | — | — | ❌ | — | — | ❌ | A macOS app without one has no Quit or Edit menu; iPadOS 26 has a menu bar; elsewhere the app draws its own |
-| Native context menus | ❌ | ❌ | — | — | — | — | — | ❌ | The mobile system edit menu is under Text input; the in-app, theme-free `ContextMenuArea` draws its own menu on every platform, run headless only |
-| Dock menu, jump list, recent documents | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Linux: desktop actions in the `.desktop` file |
-
-## System services
-
-| Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
-|:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
-| Open a URL | 🟡 | ❌ | 🟡 | 🟡 | ❌ | ❌ | 🟡 | ✅ | Linux: `flui-system`'s launcher through the `OpenURI` portal, run against a stand-in portal on a private bus, not a desktop. Windows and Web: the core `open_url`, which nothing calls |
-| Open a file, reveal it in the file manager | 🟡 | ❌ | 🟡 | 🟡 | — | — | — | ❌ | Linux: `OpenFile` and `OpenDirectory` portals with a descriptor, run against a stand-in portal; the file manager decides whether the file is selected |
-| Move to trash | ❌ | ❌ | 🟡 | 🟡 | — | — | — | ❌ | Linux: the `Trash` portal, run against a stand-in portal |
-| Open, save and folder dialogs | 🟡 | ❌ | 🟡 | 🟡 | ❌ | ❌ | ❌ | ❌ | Linux: `flui-system`'s dialogs through the `FileChooser` portal, filters, title, folder and accept label, modal to an X11 window; on Wayland not modal until the host exports an `xdg-foreign` handle; run against a stand-in portal. Windows has no filters, title or owner window; every other host answers "cancelled" |
-| Message box | ❌ | ❌ | — | — | ❌ | ❌ | ❌ | ❌ | Linux has no native one: the app draws it |
-| Share | ❌ | ❌ | — | — | ❌ | ❌ | ❌ | ❌ |  |
-| App folders and storage | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | An application identifier or `AppConfig::with_storage_dir` gives widgets storage on every host; it ran on Windows and Android, and no Web app has run the probe. Headless keeps each application's values in memory for the platform's life, or on disk under `HeadlessPlatform::with_data_root`, never in the user's directories. Android `app_path` still reports a fixed path. |
-| Persisted documents survive a kill, a read-only file, a redirected profile, a second instance and a session end | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | `Persisted<D>` over the host's storage and flush registry (ADR-0262); the acceptance app's persistence rows run headless, and no native process has run them |
-| HTTP requests | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | A capability of the host (ADR-0280): `ureq` on Linux, WinHTTP on Windows, `NSURLSession` on macOS and iOS, the page's `fetch` on the Web, `HttpURLConnection` on Android, each exchange held on the IO lane, so an embedder's executors send on every host |
-| Tray and status icon | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Linux uses StatusNotifierItem |
-| Local notifications | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Needs app identity |
-| Taskbar and Dock progress, badge | 🟡 | ❌ | ❌ | ❌ | ❌ | — | ❌ | ❌ | Windows `ITaskbarList3` sits in an extension nothing can reach; Linux `LauncherEntry`; Web Badging API |
-| Global shortcuts | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Wayland only through the GlobalShortcuts portal |
-| Launch at login | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ |  |
-| Keep the screen awake | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |  |
-| Secure storage | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | Credential Manager or DPAPI, Keychain, Secret Service, Keystore |
-| Sandbox-aware file and resource access (the layer never hands an app a path it cannot use) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | `data_dirs` and the dialogs assume an unsandboxed process: no security-scoped bookmarks, portal file access, AppContainer-aware paths, Storage Access Framework URIs or iOS document-scoped URLs. |
-
-<details>
-<summary>Run evidence</summary>
-
-- **App folders and storage** — an application identifier or `AppConfig::with_storage_dir` gives widgets storage: the user's data directories on desktop and iOS, the app's `files` and `no_backup` on Android, IndexedDB on the Web, and on headless a memory store per application that lives as long as its `HeadlessPlatform` (two platforms never share values) or, with `with_data_root`, files under the root a test names, where a write based on a version compares and replaces in one readwrite transaction, so two tabs never both succeed from one base. Runs: a probe counting its launches through `LifecycleContext::storage` read back 1 then 2 across restarts on Windows 11 (`%APPDATA%`) and on a Galaxy S21 (Android 15, release APK, data cleared first, process force-stopped between launches). The Web store's own tests ran on Chromium 152 against its IndexedDB; no Web app has run the probe. Android `app_path` still reports a fixed path
-- **Persisted documents survive a kill, a read-only file, a redirected profile, a second instance and a session end** — a document is written through the host's flush registry to `FileStore` on desktop, iOS and Android and to IndexedDB on the Web (ADR-0262). Headless runs every row on a memory store: `crates/flui-view/tests/persist.rs`, and the acceptance app's restart, storage-failure and close rows through the facade (`acceptance_app_runs_through_the_facade`); `FileStore` runs its contract, its atomic replacement, lock and two-writer conflict included, in the `flui-native` tests on Linux. A ✅ on a native column needs the acceptance app run there as a process through flui-driver's `os` lane: killed in a loop of writes, over a read-only file, under a long, non-ASCII and redirected profile path, as two instances on one directory, and through a session end during a save. None has run yet
-- **HTTP requests** — Linux sends through `ureq` over rustls with the platform's verifier, each request on a thread of its own on an agent whose shutdown is the abort, its exchange holding a slot of the IO lane, polled by a caller with no runtime of its own: a loopback server answered bodies, a status, a body past its limit, a failed handshake and a closed connection on a dropped request or body and at the deadline, an embedder's executors included, on Linux in the `flui-app` and `flui-native` tests, which run no window, so no column but headless is ✅. A lane that shuts down under an exchange ends it on every host. The headless host's scripted client loads `Image::network`. The Web sends through the page's `fetch`: in headless Chrome it answered the test server's page, and against a `fetch` the test stood in for it answered a status, headers and a body, refused a URL that is not HTTP and a body past its limit, and aborted the fetch on a dropped request or body and at the deadline, in the `flui-native` browser suite; each exchange holds a slot of the IO lane, checked in the `flui-app` tests on Linux. No window ran it, so the Web stays 🟡. Android sends through the system's `HttpURLConnection` over JNI, each request on a thread of its own that reads the body a chunk at a time into a queue of four, disconnecting on a dropped request or body and at the deadline, its exchange holding a slot of the IO lane as on the Web; that model ran over a scripted stack in the `flui-native` tests on Linux, and the JNI exchange is type-checked, not run on a device, so Android is 🟡. Windows sends through WinHTTP in the same model, held on the IO lane, so an embedder's executors send there too: WinHTTP runs in asynchronous mode, the request's thread waiting for the status callback, and an abort closes the request handle only while no call is inside WinHTTP on it. That gate, the header and URL translation and the error mapping ran in the `flui-native` tests on Linux; the WinHTTP exchange is type-checked, not run on Windows, so Windows stays 🟡. macOS and iOS send through an ephemeral `NSURLSession` on the same model, its delegate handing each task's response, data and end to the request's thread and suspending the task while 256 KiB wait unread; type-checked, not run, so both stay 🟡.
-- **Sandbox-aware file and resource access (the layer never hands an app a path it cannot use)** — No security-scoped bookmarks for the macOS App Sandbox, no `xdg-desktop-portal` file access for Flatpak and Snap, no AppContainer-aware paths for MSIX, no Storage Access Framework URIs on Android, no iOS document-scoped URLs; `data_dirs` and the dialogs assume an unsandboxed process
-
-</details>
-
-## Distribution
-
-What a ready platform needs beyond the running process: an identity the OS recognises and a package
-the OS installs. Built by `flui-cli`; audited here because notifications, URL schemes, portals, the
-tray and jump lists fail without it.
-
-| Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
-|:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
-| Package the OS installs (MSIX or installer, notarised `.app`, Flatpak and `.deb`, `.ipa`, `.aab`, web bundle) | ❔ | 🟡 | ❔ | ❔ | 🟡 | 🟡 | 🟡 | — | `flui build` stages an unsigned `.app`, a debug or release APK (no AAB) and a `wasm-bindgen` bundle; Windows and Linux packaging not audited. |
-| Code signing and notarisation | ❔ | ❌ | — | — | ❌ | 🟡 | — | — | Android signs with the debug or a given key; no macOS or iOS signing, no Windows Authenticode, no notarisation |
-| App identity reaches the package (AUMID, bundle ID, `.desktop` file and `app_id`, manifest) | ❔ | ❔ | ❔ | ❔ | ❔ | 🟡 | 🟡 | — | See the App identity row above; Android's manifest is generated by the CLI, the Web manifest is a template |
-| Sandbox and entitlement manifests generated from declared capabilities | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | — | No manifest is derived from the capabilities an app declares: the CLI generates no entitlements, Flatpak or Snap permissions, MSIX capabilities or Android permissions from them (its Android template declares `VIBRATE` itself). |
-
-<details>
-<summary>Run evidence</summary>
-
-- **Package the OS installs (MSIX or installer, notarised `.app`, Flatpak and `.deb`, `.ipa`, `.aab`, web bundle)** — `flui build` stages an unsigned `.app` on macOS and iOS, builds a debug or release APK (no AAB, no Play path), and a `wasm-bindgen` bundle served from `localhost`; Windows and Linux packaging not audited
-- **Sandbox and entitlement manifests generated from declared capabilities** — The manifests a sandbox reads are macOS and iOS entitlements, Flatpak `finish-args`, Snap interfaces, MSIX capabilities and Android permissions. An app that declares a capability once should get each of them generated, and an app that does not declare one should get none. Other toolchains cover part of this: Compose Multiplatform's packaging takes an `entitlements` option for macOS, while Tauri's autostart plugin writes a launcher path that cannot run outside the Flatpak sandbox ([tauri-apps/plugins-workspace#3166](https://github.com/tauri-apps/plugins-workspace/issues/3166)).
-
-</details>
-
-## Quality bar
-
-Qualities every environment must have at once. They are not features of one OS, so they have no
-columns; a ready platform meets each of them, and the enforcement column says what proves it.
-Synchronised live resize, where the content matches the frame on every size, is the row
-[Live resize without jitter](#windows), not a line here.
-
-| Quality | Status | Enforced by | Notes |
-|---|---|---|---|
-| Zero CPU when idle: every OS signal is a notification, nothing polls | 🟡 | nothing yet | No host polls a healthy, installed preference source (Android keeps a 500 ms cadence only while `FluiView` is not in the window; Linux retries a failed portal read every second); the Galaxy S21 loop made no turn in 15 s idle once settled, resumed or behind Home. Nothing measures idle wakes on the other environments or keeps a poll from coming back. |
-| Power and thermal state change what the loop does, not only what it reports | ❌ | nothing yet | Power state is not read, and nothing lowers the frame rate or pauses background work under Low Power Mode, battery saver or a thermal state |
-| A panic in user code never unwinds into the OS: every `extern "C"` and OS callback passes a containment boundary | 🟡 | `cargo xtask panic-boundary` (ADR-0151 §16): every entry's body is a constant or one call of `owner::panic_boundary::os_entry` | The gate proves the shape; Apple runs queued in [#1840](https://github.com/vanyastaff/flui/issues/1840). The entries are the core host's extern fns, Objective-C and COM methods, AccessKit handlers, blocks, WinRT delegates and GCD work items. An entry answers the OS a failure after a panic, a logged failure where the language would abort the process unannounced, or ends the process where the state behind it may be torn (a window procedure). Out of scope: `wasm_bindgen` closures (wasm32 aborts on panic), the procedures winit and android-activity contain themselves, and `flui-hot-reload`'s plugin ABI |
-| No process-global state | ✅ | `cargo xtask globals` (ADR-0097) | 19 granted entries in the core host, each with its reason |
-| Version floors declared, packaged and gated by types; no version check in application code | 🟡 | `platform-support.toml`, `cargo xtask platform-floor`, `Since<F>` gates (ADR-0244) | Declared, generated and refused at start; GPU fallback compiled and run on llvmpipe GL; packaged by `flui build` except the Windows manifest (gaps entry 22) |
-| One monotonic clock for every input, frame and presentation timestamp | ✅ | `EventTime`, the one type of every input stamp, `FrameRequest::vsync`/`target_present` and `FramePresented::at`; `a_presentation_and_the_input_before_it_are_on_one_timeline` | Each host rebases its platform's stamps onto it (Win32's performance counter, the compositor's `clock_id`, the browser's time origin by age) |
-| Timestamps survive clock-base changes and counter wrap | ❔ | nothing yet | Windows pointer ticks survive the 49.7-day wrap (`NativeTime::TickMillis`); Wayland times have an undefined base and Android's are uptime milliseconds, and those conversions are not audited (the Input row) |
-| Frame cadence follows the display's real presentation signal; no fixed-period fallback timer | 🟡 | the display snapshot's refresh period (ADR-0236); nothing forbids a fixed-period timer | A display that reports no period paces at a 60 Hz default with a diagnostic, as a macOS display whose current mode reports 0 Hz does |
-| Honest absence: one `Unsupported` with a reason, no faked success, no zeros | 🟡 | the table test `every_error_carries_its_reason` (`flui-platform`), `absent_positions_say_not_here` (`flui-native`); conformance rows; ADR-0151 §4, ADR-0152 and ADR-0254 | Every contract error that can mean absence carries `Unsupported` with its reason, and a position a host leaves out answers `NotOnThisPlatform` |
-| Optional trait methods never default to success | 🟡 | the compiler (required methods); conformance rows; ADR-0254 | `PlatformWindow`'s facets (`text_input`, `haptics`, `system_chrome`, `drag_source`), `show` and `HostWindow`'s text and accessibility methods have no default body, nor do the verbs `set_frame_rate_hint` and `set_input_regions`, which answer `Unsupported` exactly when their capability is `Unavailable` (a conformance check); the registration methods (`on_*`) and `pre_present_notify` still do, until ADR-0254's handler replaces them |
-| Recorded native input replays deterministically on the headless host | 🟡 | `native_recording` traces recorded by manual runs with `native-capture` | Pointer, key and wheel traces exist; system notices, session ends, reopens, input method events, preference and display reads and window snapshots (`app`, `window`, `platform` and `window_state` streams) replay on headless (`app_recordings_replay_on_the_headless_host`, `window_recordings_replay_on_the_headless_host`, `platform_recordings_replay_on_the_headless_host`, `window_state_recordings_replay_on_the_headless_host`); close requests and closes, and input methods that edit the text store directly (TSF, Android, web), do not |
-| Conformance executed with assistive technology on each OS | ❌ | nothing yet | The runs read one control through UI Automation and AX; no Narrator, VoiceOver, Orca or TalkBack session has driven an app |
-| First frame matches the OS splash on every environment | ❌ | nothing yet | Windows, macOS and X11 show the window after its first frame; iOS, Android and the Web have nothing that matches the OS splash |
-| Every unsupported cell in this table names its reason | 🟡 | this table, by hand | Not machine-checked against the code's `Unsupported` reasons |
-| The platform edge is observable: structured tracing per host and a replayable event journal | 🟡 | `tracing` targets; the `native-capture` journal | The journal records pointers, system notices, session ends, reopens, input method events, preference and display reads and window snapshots; not close requests, closes or text store edits |
-| Platform-edge diagnostics never contain secrets (protected-field text, clipboard payloads, URLs with tokens, journals) | ❔ | nothing yet | No redaction check covers the `tracing` targets or the `native-capture` journal, which will carry text and URLs once more event families are recorded |
-
-## Capabilities
-
-Separate packages on the capability seam. They don't decide whether an environment is ready, and none
-exists yet.
-
-| Capability | Environments |
-|---|---|
-| Location | all but Headless |
-| Camera, photo and file pickers on mobile | iOS, Android, Web |
-| Motion sensors | iOS, Android, Web |
-| Biometrics, passkeys | all but Linux and Headless |
-| Push notifications | all but Headless |
-| NFC | iOS, Android, Web (Chrome Android) |
-| In-app purchase and review | iOS, Android |
-| App shortcuts (quick actions) | iOS, Android, Web |
-| Printing | Windows, macOS, Linux, iOS, Android, Web |
-| Screen capture | Windows, macOS, Linux |
-| Colour and font pickers | Windows, macOS |
-
-## Revision history
-
-<details>
-<summary>Revision history</summary>
-
-| Date | Change | Summary |
-|---|---|---|
-| 2026-10-14 | major | First version: rows from the host audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where an executed run is recorded |
-| 2026-10-14 | minor | Interaction input stack ([spec](plans/specs/flui-interaction/completeness/tasks.md)): input availability per window, the shared scroll-phase grammar and scale-and-rotation `PanZoom`, presets per pointer kind with per-display geometry, headless preference injection, system-gesture exclusion on Android and iOS; new row: haptics setting |
-| 2026-10-14 | minor | Two-tier haptics (ADR-0210, T16): requests and outcomes, the frame queue, degradation tables and conformance rows; native paths on macOS, iOS, Android and the Web compiled, never run on a device |
-| 2026-10-16 | minor | Windows precision touchpad (DirectManipulation, T36): trackpad pinch ❌ to 🟡, precise-scroll note updated; Windows score 28% to 29%, overall still ~25%; no touchpad run yet, so no ✅ |
-| 2026-10-17 | minor | Windows pen haptics (ADR-0210): haptics ❌ to 🟡; Windows score stays 29%; no haptic pen has run, so no ✅ |
-| 2026-10-17 | minor | Windows OLE drag and drop (ADR-0211): drop into the app and drag out of the app ❌ to 🟡; Windows score 29% to 31%, overall still ~25%; run here only within one process, so no ✅ |
-| 2026-10-17 | minor | Drags between the windows of one runtime stay on the source's capture where the host places its windows (Windows, headless); no status changes: the Windows query ran on real windows, the routing only headless |
-| 2026-10-17 | minor | a manual Windows run records golden native recordings of injected touch, pen, mouse and wheel input (ADR-0215 §8); mouse, touch and pen notes name the run; symbols unchanged, and the precision touchpad still needs a hardware run |
-| 2026-10-17 | minor | `Draggable` and `DropTarget` on the drag sessions (ADR-0211): drag out of the app notes the headless widget row; no status changes, no native run |
-| 2026-10-17 | minor | a manual Android run on a Galaxy S21 (Android 15): system-gesture exclusion and the haptics setting 🟡 to ✅; trackpad pinch ❌ to 🟡 (a `uinput` touchpad, no hardware one); touch, pen, precise scrolling, gesture settings and haptics notes name the run; Android score 21% to 23%, overall still ~25%; Android drag and drop and IME stay ❌ (no Java side) |
-| 2026-10-17 | minor | Web input in a real Chrome (a manual Web run): trackpad pinch ❌ to 🟡 (ctrl+wheel and WebKit gesture events), wheel defaults follow the dispatch result, pen tilt planes; Web score 24% to 25%; constructed events only, no trackpad, pen or Safari, so no ✅ |
-| 2026-10-17 | minor | Web HTML drag and drop (ADR-0211 §11): drop into the app and drag out of the app ❌ to 🟡; Web score 25% to 27%; constructed drag events in headless Chrome, so no ✅ |
-| 2026-10-17 | minor | a manual Web run drives the web host over WebDriver BiDi with trusted input in headless Chrome: mouse, touch and pen recorded into the golden `web_bidi_mouse_pen_touch`, the Vibration API before and after user activation, and HTML drags in both directions; notes updated, no status changes (headless Chrome, no hardware) |
-| 2026-10-17 | minor | Web text input (ADR-0090): IME composition ❌ to 🟡 (`EditContext`, a hidden textarea without it); Web score 27% to 28%; Chrome's input-method path in headless Chrome only, so no ✅ |
-| 2026-10-17 | minor | Android `FluiView` (ADR-0247): soft keyboard ❌ to ✅ and IME composition ❌ to 🟡 (Samsung Keyboard composed, committed and kept Escape on a Galaxy S21; no candidate placement run), input hints and handwriting ❌ to 🟡 (never run on the device), drop into the app and drag out of the app ❌ to 🟡 (a drag dropped on its own window; none from or into another app); Android score 23% to 29% |
-| 2026-10-18 | minor | a manual Web run drives every interaction widgets screen in headless Chrome with trusted mouse, wheel, key and touch input and Chrome's input method, reading outcomes from the semantics tree the page's development agent serves and from page captures; it found and fixed two Web defects (the canvas let the browser cancel moving touches; `request_redraw` ran frames inline, so an animation started from a click held the page's thread); notes updated, no status changes (headless Chrome, no hardware) |
-| 2026-10-18 | minor | a manual Android run drives the interaction widgets on a Galaxy S21 (Android 15) through the development agent, 36 checks: safe area 🟡 to ✅ (portrait); touch, pen, mouse, keyboard and IME notes name the run; Android score 29% to 30%, overall still ~25% |
-| 2026-10-18 | minor | Refresh period: Windows reports its monitor's current mode (`a_window_reports_its_monitors_refresh_period` ran on a Windows host) and Android its display's rate (compiled only), so the haptic frame deadline and the frame-pacing fallback follow the window's display; refresh rate and frame pacing ❌ to 🟡 on both; Windows and Android up half a row each, overall still ~25% |
-| 2026-10-17 | minor | Dark mode implemented on every host, with change delivery; headless can inject it; the Windows and Android cells ran live |
-| 2026-10-17 | minor | Storage wired on every host (the Web through IndexedDB); the Windows and Android cells ran live |
-| 2026-10-17 | minor | The Web store moves to IndexedDB, and writes based on a version work there |
-| 2026-10-18 | minor | Windows displays and refresh rate: native keys, the window's display, change delivery and the active-mode rate; the Windows cells ran live |
-| 2026-10-18 | minor | macOS and iOS displays and refresh rate: UUID keys, screen notifications, iOS ProMotion and measured period; type-checked only, the cells stay 🟡 |
-| 2026-10-18 | minor | Web displays and refresh rate: an estimated period from animation frames, pixel-ratio and screen changes, screens listed when access is already granted; the Web cells ran live in Chrome |
-| 2026-10-18 | minor | Android displays and refresh rate: real displays and rate read through JNI, a frame-rate request while the app animates or is touched; the Android cells ran live on a Galaxy S21 (API 35) |
-| 2026-10-18 | minor | Linux displays and refresh rate: the outputs read from the compositor (Wayland `wl_output`/`zxdg_output_v1`, X11 RandR 1.5) on a thread that wakes the owner; the X11 cells ran live (XWayland under WSLg, `xrandr` changes under an Xorg dummy server), the Wayland cells read values live and stay 🟡 |
-| 2026-10-18 | minor | Windows two-monitor run (a second 3440×1440 monitor connected live): a new snapshot with `id 2`, the window naming `DisplayId 2` after a drag and `DisplayId 1` back, the id kept when the monitor moved left, and live rate changes (144 Hz, 165 Hz) published with ids unchanged; the display cells keep their marks; a Windows disconnect was not run; the overall figure recounted from the tables (~26%, 54 ✅, 143 🟡, 477 applicable cells), the summary table brought in line, and the hours of the two display rows lowered to the runs still owed |
-| 2026-10-18 | minor | Wayland displays and refresh rate ran live (a display watcher under WSLg: an output grown from 640×480 to 3440×1440 keeping `id 1`, then a second same-named output added as `id 2`); the two Wayland cells become ✅ and the overall figure is recounted: 56 ✅, 141 🟡, 477 applicable cells, (56 + 70.5) / 477 = 26.5%, ~27%; a Wayland scale change cannot be observed through WSLg and a window moved between the two outputs was not run |
-| 2026-10-18 | minor | The interaction work and the display work merged: the per-call refresh reads (Windows `EnumDisplaySettingsW`, Android `getRefreshRate`) give way to the display snapshot (ADR-0236), and the haptic frame deadline reads the presentation's period from it; the summary recounted from the merged tables |
-| 2026-10-18 | minor | macOS and iOS window lifecycle: macOS reads and sets window state through `NSWindow`, delivers sleep, wake, lock and memory pressure, and holds a session end with `NSTerminateLater`; iOS maps the memory warning and `applicationWillTerminate:`; display bounds and persistent keys on macOS; type-checked only, the cells stay 🟡 until [#1736](https://github.com/vanyastaff/flui/issues/1736) runs |
-| 2026-10-18 | minor | Web page lifecycle: `freeze` and `resume` set the execution state, `pagehide` is reported as the session ending (and a page restored from the back/forward cache as cancelling it), `fullscreenchange` republishes the window state, and a lost WebGL context or WebGPU device rebuilds the renderer at once; the page events ran against a fake page and the renderer rebuild is compile-checked, so the cells are 🟡; the two cells it moves from ❌ and — to 🟡 leave the overall figure at ~27% |
-| 2026-10-18 | minor | Linux windows (winit): commands and state through winit and, on X11, `WM_STATE`/`_NET_WM_STATE` through a connection of its own; the window opens in its mode and position and maps after the first frame on X11; logind sleep, wake, shutdown and lock, and kernel memory pressure, reach the host; displays report a persistent key. Ran on an Xvfb server and WSL 2, against a stand-in for logind; ten Wayland and X11 cells go from ❌ to 🟡, and the figures are recounted: Wayland 6 ✅, 27 🟡, 35 ❌ is 29%, X11 8 ✅, 27 🟡, 32 ❌ is 32%, and overall, with the other environments and the version-floor row counted, (56 + 80.5) / 484 = 28.2%, ~28% |
-| 2026-10-19 | minor | A "Version floor" row: ADR-0244 declares a floor per environment; nothing enforces it yet, so every cell is ❌ |
-| 2026-10-19 | minor | The interaction work merged with the version floor row: the summary recounted from the merged tables as (✅ + ½ 🟡) / (✅ + 🟡 + ❌ + ❔), 60 ✅ and 176 🟡 over 496 applicable cells of the seven user environments, ~30% |
-| 2026-10-19 | minor | The Linux window lifecycle merged into the interaction work: the summary recounted the same way, 60 ✅ and 186 🟡 over 496 applicable cells, ~31% |
-| 2026-10-19 | minor | The "Version floor" row links the [version map](version-map.md) generated from `platform-support.toml`, and the Android `minSdk` is packaged from that file; nothing is checked at start, so the cells stay ❌ |
-| 2026-10-19 | minor | Web browser gesture suppression ❌ to 🟡: the canvas has set `touch-action: none` since the interaction work, which the row missed; no `overscroll-behavior`, and only headless Chrome has run it. Web 7 ✅, 24 🟡, 29 ❌ is 31%; overall 60 ✅ and 187 🟡 over 496 cells, still ~31% |
-| 2026-10-20 | minor | Notes only, no cell changes: an X11 minimize reads as hidden from the window manager's state, every Wayland window's display is checked again when the loop goes idle, and each Web window follows the pixel ratio for its canvas backing store; none ran on a real desktop or browser, so nothing becomes ✅ |
-| 2026-10-20 | minor | Windows TSF input scope (`TextInputPurpose`): input purpose and hints ❌ to 🟡; Windows score stays 36%, overall still ~31%; type-checked and unit-tested only, no run with an input method, so no ✅ |
-| 2026-10-20 | major | The quality bar: a section of environment-independent qualities with what enforces each, a Distribution section (packages, signing, identity), and rows for activation rules, presentation feedback, HDR and colour management, latency modes, secure text entry, concealed clipboard entries, no-polling preferences and sandbox-aware file access. Scores move with the new ❌ rows (overall ~31%, Headless 45%); nothing became ✅ |
-| 2026-10-21 | minor | Android and Web read `TextInputPurpose`: the Android keyboard follows the purpose and the Web sets `inputmode`; input purpose and hints on the Web ❌ to 🟡; Web score 31% to 32%, overall still ~31%; checked through the shared mapping tables only, no device or browser run, so no ✅ |
-| 2026-10-20 | minor | Restructured for reading: run evidence moved under each table, the hours column removed; rows added from the quality-bar research (see the next line) |
-| 2026-10-20 | minor | Rows added: launch-screen handoff, present mode and tearing control, HDR and SDR-white change events, event timestamp conversion, text-input client queries, text-input session survival, accessibility split into tree and actions, properties, and announcements, layout direction and per-app language, system fonts and fallback, power-aware pacing, sandbox and entitlement manifests; live resize is the single row for it and leaves the Quality bar; six Quality bar lines added; the activation, HDR, presentation feedback and concealed clipboard rows corrected. Nothing became ✅; the figures are recounted from the tables: 61 ✅, 218 🟡 and 312 ❌ over 591 applicable cells of the seven user environments, ~29%, and the Quality bar stands at 1 of 16 met |
-| 2026-10-21 | minor | A gamepad and D-pad row under Input (❌ everywhere but Android, where the D-pad arrives as the arrow keys and Enter, 🟡, and headless, which can drive that half, 🟡): Windows 36% to 35%, Wayland 25% to 24%, Web 32% to 31%, headless 44%, the rest unchanged, overall still ~29%; a note on environments without a host |
-| 2026-10-21 | minor | Android configuration changes reach the running app: the generated manifest declares every change the host follows, and a row under App lifecycle records it (🟡 on Android: the run on a Galaxy S21 passed, and a language change still recreates the Activity; — elsewhere); text scale and bold text 🟡 to ✅ on Android from the same run; the dark-mode evidence names the in-place flip and the Java `uiMode` read it needs. Android 33% to 35%, the other environments unchanged, overall still ~29% |
-| 2026-10-21 | minor | Android preferences follow `FluiView` callbacks instead of a 500 ms poll: contrast ❌ to ✅, languages ❌ to 🟡 and no-polling preferences ❌ to ✅ on Android from a Galaxy S21 run. The summary is recounted from the rows, which the Web, Linux, macOS, iOS and headless text-scale changes of the same series had left behind: macOS 27% to 28%, Wayland 24% to 26%, X11 28% to 30%, iOS 21% to 22%, Android 35% to 38%, Web 31% to 32%, headless 44% to 45%; overall ~29% to ~30% |
-| 2026-10-22 | minor | Notes only, no cell changes: a Web window's backing store ignores a device-pixel size its pixel ratio contradicts, which Chrome's device emulation reports; a live 1× to 2× change ran in headless Chrome |
-| 2026-10-22 | minor | Notes only, no cell changes: a Web page canvas laid out at its own size is pinned at its box when its window opens, so the backing store no longer grows it at a pixel ratio above 1; ran in Chromium at an emulated 2×, not in Firefox or Safari |
-| 2026-10-22 | minor | Notes only, no cell changes: the `a11y` feature is gone, so the desktop accessibility adapters are in every build (UI Automation on Win32, NSAccessibility on AppKit, AT-SPI with the Linux host); tree and actions stay 🟡, no screen reader has read them |
-| 2026-10-22 | minor | Quality bar, the panic-containment line stays 🟡 with a new enforcement: `cargo xtask panic-boundary` proves every OS entry is a constant or one call of `os_entry`, and the 94 entries that had no boundary and the 12 that had one around part of their body go through it now; the 41 AppKit and 14 UIKit entries never ran, so the line waits for the Apple runs (vanyastaff/flui#1840) |
-| 2026-10-26 | minor | Touchpad pan as a drag or a scroll ([ADR-0251](adr/ADR-0251-touchpad-pan-enters-the-gesture-arena.md)): new row; a phased precise scroll now enters the gesture arena beside the recognizers that declared they feed on it; ✅ in headless with synthetic phased packets only, every host stays 🟡 until a precision touchpad has run |
-| 2026-10-26 | minor | The escape hatch `flui::native` (ADR-0254 §8): backdrop material on macOS ❌ to 🟡 (an `NSVisualEffectView` material or Liquid Glass behind the content, type-checked only, its run listed in vanyastaff/flui#1840); the Windows corners and title-bar theme become creation options, which ran in a Win32 window. macOS 28% to 29%, overall still ~30% |
-| 2026-10-26 | minor | Notes only, no cell changes: the window snapshot holds every window fact (metrics, appearance, display, safe area, execution state, focus, visibility, hover, capabilities); the Win32 window ran the window conformance against the real system, including a live resize inside its modal loop |
-| 2026-10-27 | minor | Notes only, no cell changes: the AppKit window conformance kit passes on an M1, macOS 27.0 (nextest flui-native 233/233; the fixture after review: appkit_window 3/3, nextest flui-native 237/237, 2026-10-27); the macOS window rows stay 🟡 until the hand checks of vanyastaff/flui#1736 run: a drag, the y-axis and a second display; the green button, Cmd-M and the Dock; opening options; displays (UUID and bounds); sleep, lock and memory-pressure notices; session end |
-| 2026-10-27 | minor | Notes only, no cell changes: the native Wayland host's foundation (`WaylandPlatform`): a loop that blocks on the compositor's socket and an `eventfd`, `xdg-shell` windows with the snapshot and admitted commands, displays, the Settings portal, logind and AT-SPI. The window conformance, a cross-thread redraw, a run ending with its last window and a due deadline leaving the loop idle passed against a headless Weston 13.0 in WSL Ubuntu 24.04; no input, text input, clipboard or drag and drop yet, and winit stays the Linux host `current_platform` picks while it is built, so the Wayland column keeps describing winit |
-| 2026-10-27 | minor | Notes only, no cell changes: the window material is a contract command with a capability (`WindowCommand::SetMaterial`, `WindowMaterial::{Opaque, System}`), drawn on Windows from build 22621 (`NotOnThisDevice` below; ran on Windows 11 with the desktop window manager's attribute read back) and on macOS (type-checked only), `Unavailable` elsewhere; `set_frame_rate_hint` and `set_input_regions` answer `Unsupported` exactly when their capability is `Unavailable` |
-| 2026-10-27 | minor | Notes only, no cell changes: the native X11 host (`X11Platform`: loop, windows, displays, preferences, host notices, AT-SPI) ran the window conformance under openbox on Xvfb; `current_platform` picks it for an X11 session when winit is not built; the X11 column stays the winit host's until the native one, which still lacks input, text input, clipboard and drag and drop, replaces winit |
-| 2026-10-28 | minor | Notes only, no cell changes: the native Wayland host's input (keyboard through XKB, pointer and wheel, touch, `tablet-v2`, `pointer-gestures`, `cursor-shape`); the cursor, a click, a wheel notch and a key ran from a Weston 13 seat (X11 backend under Xvfb, XTest), recorded and replayed; touch, pens and pinches tested by translation only; the Wayland column stays winit's until it replaces winit |
-| 2026-10-28 | minor | Notes only, no cell changes: the native X11 host has its input: XInput 2 pointers, touches, pens and unphased smooth scrolling, XKB keys, compose and layout, and the cursor theme; XTest's pointer, buttons, wheel and keys ran on Xvfb under openbox and replay from `x11_xtest_mouse_and_wheel.jsonl`; touch, pen and smooth scrolling are checked by the decoder only; the X11 column stays winit's until the host replaces winit |
-| 2026-10-28 | minor | Every display carries its colour profile (`DisplayInfo::color`): HDR and colour ❌ to 🟡 on Windows, macOS, Wayland, iOS, Android and the Web, — to ✅ on headless; HDR change events ❌ to 🟡 on Windows, macOS and Wayland, — to 🟡 on the Web and — to ✅ on headless. Windows read an SDR monitor (no HDR display at hand), so no ✅ there; scores (recounted on main of 2026-10-28) Windows 38%, macOS 30%, Wayland 27%, iOS 25%, Web 34%, Headless 47%, overall ~32% |
-| 2026-10-28 | minor | Notes only, no cell changes: the native Wayland host's window asks for its frame through `xdg-decoration` (none of its own where the compositor draws none), draws at a fractional scale (`wp_fractional_scale_v1`), is given no frame while suspended, and is exported through `xdg-foreign` for a portal's parent; a window moved between two outputs of one scale named the display it moved to, run on Weston 13 with two outputs (X11 backend on Xvfb, WSL Ubuntu 24.04). Weston offers none of the three protocols; they ran against a headless sway 1.9 at scale 1.5 (frame honoured when floating and overruled when tiled, buffer at 1.5, the export imported by another client and revoked with the window); the Wayland column stays the winit host's |
-| 2026-10-28 | minor | Presentation feedback: Windows ❌ → ✅ (DXGI frame statistics of the renderer's swap chain, run on a 100 Hz display), Headless ❌ → ✅ (an injected report), Web and X11 ❌ → — (no presentation time on the platform, which their windows answer as `NotOnThisPlatform`); the native Wayland host reports `wp_presentation_time` under Weston 13, the column staying winit's. Quality bar: one monotonic clock 🟡 → ✅, presentation times being `EventTime` too. Summary recounted |
-| 2026-10-28 | minor | Activation under the OS's focus rules on Windows: "Bring the app forward, request attention" ❌ to 🟡 and "Activation obeys the OS focus rules" ❔ to 🟡, from a run with two processes (the window kept behind another application flashes, and comes forward once that application hands the right over); opening a link or file hands the right to the handler process the shell started. The native Wayland host asks for activation with an `xdg-activation` token (run on sway; Weston has none); the Wayland column stays the winit host's. Windows 35% to 36%, the other environments unchanged |
-| 2026-10-28 | minor | Presentation feedback: macOS ❌ → ✅ (the AppKit view's own `CAMetalLayer` hands each drawable a presented handler; run on an M1, macOS 27.0, 100 Hz: 29 reports for 30 frames of `counter`, a multiple of 9.999 ms apart); iOS stays ❌ after a UIKit view backed by a `CAMetalLayer` showed nothing on the Simulator |
-| 2026-10-28 | notes only | Visibility, minimize, occlusion: every host keeps the window's show state (`visible`), its minimized mode and its occlusion (`occluded`) as three snapshot facts that `is_seen` reads together; a minimized window now stays shown on X11 and through winit as it already did on Windows and AppKit, and the window conformance checks it without the host's own readback. No cell changes |
-| 2026-10-28 | minor | Notes only, no cell changes: the native Wayland host draws its own window frame where the compositor draws none or leaves it to the client (title bar, buttons after `wm_capabilities`, resize margins, `xdg_toplevel.move`/`resize` with the press's serial, the window menu); ran on Weston 13's desktop shell (X11 backend on Xvfb, XTest) and, with the compositor's frame and none of the window's, under a headless sway 1.9; the Wayland column stays the winit host's |
-| 2026-10-30 | minor | Accessibility on Android: every Activity window answers TalkBack through `accesskit_android`'s low-level adapter, which `FluiView`'s node provider forwards to on the Java main thread (type-checked, no TalkBack run). Tree and actions ❌ → 🟡; properties and announcements ❌ → ❔, there being a tree for them to reach. Summary recounted |
-| 2026-10-30 | minor | Android reports TalkBack's cursor, read from an accessor FLUI adds to a vendored `accesskit_android` after each action, hover and update, and explore by touch comes from the native input queue to the adapter (type-checked, no TalkBack run). Assistive-technology focus ❌ → 🟡 on Android. Summary recounted |
-| 2026-10-30 | minor | Accessibility on the Web: every canvas window mirrors its tree as a parallel ARIA DOM in a host over the canvas, activated by a placeholder only a screen reader finds (headless Chrome, constructed events, no screen reader). Tree and actions ❌ → 🟡; properties and announcements ❌ → ❔. Summary recounted |
-| 2026-10-30 | notes only | The Web clipboard reads `navigator.clipboard` asynchronously and answers through the capability seam (ADR-0152), falling back to its own writes; unrun in a browser, so no cell changes |
-| 2026-10-30 | minor | iPad pointer (type-checked, no iPad run): precise scrolling with phases, touchpad pan as a drag or a scroll and trackpad pinch and rotate ❌ → 🟡 on iOS; a mouse wheel stays notched. Summary recounted |
-| 2026-10-30 | minor | Android plain-text clipboard ❌ → 🟡: the host reads and writes the system `ClipboardManager` through JNI instead of an in-process mock; type-checked, no device run |
-| 2026-10-30 | minor | Soft-keyboard insets ❌ → ✅ on headless: the window contract carries the keyboard's occlusion and motion, sampled on the frame clock (ADR-0277); a System-gesture insets row, ✅ on headless; no producer on a device yet |
-| 2026-10-31 | minor | Android soft-keyboard and system-gesture insets ❌ → 🟡: the Activity window reports the keyboard at rest and the gesture regions in its insets snapshot; type-checked, no device run |
-| 2026-10-31 | minor | Notes only, no cell changes: from API 30 the Android keyboard's insets carry its motion, from `WindowInsetsAnimation.Callback` with the interpolator mapped to a curve, so each frame lays out with the keyboard where it is; type-checked, no device run |
-| 2026-10-31 | minor | iOS and Web soft-keyboard insets ❌ → 🟡: the iOS window reports the keyboard and its motion from `UIKeyboardWillChangeFrameNotification`, type-checked, no device run; the Web window reports the keyboard at rest from `navigator.virtualKeyboard` or the visual viewport, run against a fake page on Node |
-| 2026-10-31 | minor | Notes only, no cell changes: a scrollable answers UI Automation's `ScrollPattern` from the vendored `accesskit_windows`, type-checked, not run on Windows |
-| 2026-10-31 | minor | Accessibility: properties ❔ → ✅ on X11 and 🟡 on Wayland, announcements and live regions ❔ → 🟡 on both: a real AT-SPI client on an accessibility bus of its own (at-spi2-core on Xvfb, `linux_atspi`) reads role, name, hint, a field's text, a slider's value, states and actions, and hears announcements, live regions and a status that appears; route changes and modal dialogs are announced on no adapter |
-| 2026-10-31 | minor | Notes only, no cell changes: a route change and a modal dialog are told by name, heard as an announcement on X11 (`a_route_change_is_heard_by_its_name`), the platform's screen notice on iOS and Android type-checked |
-| 2026-11-02 | minor | Notes only, no cell changes: with no input method on D-Bus, the native X11 host speaks XIM to the server `XMODIFIERS` names, run against a stand-in XIM server on Xvfb; the X11 column stays winit's |
-| 2026-11-02 | minor | Notes only, no cell changes: the native X11 host serves the focused field to IBus or Fcitx5 over D-Bus, each key of a composing field held in order until the input method answers, run against a stand-in IBus on a private bus with Xvfb; the X11 column stays winit's |
-| 2026-10-31 | minor | Notes only, no cell changes: the native Wayland host serves the focused field to the input method through each seat's `zwp_text_input_v3`, run against sway 1.9 with an input method of the test's own (`wayland_text_input`); the Wayland column stays winit's until `flui-app` picks the native host |
-| 2026-10-30 | minor | Notes only, no cell changes: the native X11 host owns and reads the `CLIPBOARD` selection on a connection and a thread of its own, answering `TARGETS`, `TIMESTAMP` and the text forms and writing large text in `INCR` chunks; two of its clipboards exchanged text through Xvfb; the X11 column stays winit's |
-| 2026-10-30 | minor | Notes only, no cell changes: the native X11 host takes XDND drops on its windows (version 5: offers, feedback answered at each position, a refused drop finished unaccepted, `XdndSelection` fetched on the owner thread with `INCR`); a source on another connection of Xvfb dropped on it. The X11 column stays the winit host's |
-| 2026-10-31 | minor | Notes only, no cell changes: the native X11 host starts XDND drag sessions from its windows (a target found under the pointer, positions answered one at a time, a drop on acceptance, a leave on refusal or Escape, `XdndSelection` served from the session's provider); a target on another connection of Xvfb took one with synthetic pointer events; the X11 column stays winit's |
-| 2026-10-31 | minor | A row for HTTP requests under System services (ADR-0280): the built-in `reqwest` client on the run's IO lane ran on Linux without a window, so 🟡 on the desktop hosts and iOS; the headless host's scripted client ✅; Android and the Web ❌ (gap 42); summary recounted |
-| 2026-11-02 | minor | HTTP requests on the Web ❌ → 🟡 (ADR-0280): the page's `fetch` answers through the capability, each exchange holding a slot of the IO lane, run in headless Chrome without a window; summary recounted |
-| 2026-11-03 | minor | HTTP requests on Android ❌ → 🟡 (ADR-0280): the system's `HttpURLConnection` over JNI, each request on a thread of its own with its body read a chunk at a time, its exchange holding a slot of the IO lane; the request model ran over a scripted stack on Linux, the JNI exchange type-checked, no device run; summary recounted |
-| 2026-11-03 | notes only | HTTP requests on Windows go through WinHTTP (ADR-0280) in the same request-per-thread model, held on the IO lane, an embedder's executors there included; type-checked, not run on Windows; no cell changes |
-| 2026-11-03 | notes only | HTTP requests on macOS and iOS (ADR-0280): an ephemeral `NSURLSession` on the request-per-thread model replaces `reqwest`, each exchange holding a slot of the IO lane, type-checked, not run; no cell changes |
-| 2026-11-03 | notes only | Input latency on Android: a `Low` window asks the decor view for unbuffered pointer dispatch (`View.requestUnbufferedDispatch`, API 30+), which `NativeActivity` honours; type-checked, not run on a device, no cell changes |
-| 2026-11-03 | notes only | HTTP requests on Linux go through `ureq` (ADR-0280) in the request-per-thread model, held on the IO lane, so an embedder's executors send on every host; run in the `flui-native` and `flui-app` tests on Linux, no window, so the Linux cells stay 🟡 |
-| 2026-11-03 | notes only | The native Wayland host takes drops on its windows through each seat's `wl_data_device` (up to v3): types become representations, each motion answered from the feedback the target cached, a refused drop cancels its source, and a fetch reads the offer's pipe, held to its limit and five seconds; a source of the test's own dropped on it under sway 1.9 (`wayland_drag`); it starts no drags, and the Wayland column stays winit's |
-| 2026-11-03 | notes only | The native Wayland host starts drag sessions from its windows: a press the window holds begins one under its grab's serial, the session's data source serves its representations from the provider, and it ends dropped with the compositor's action or cancelled; a target of the test's own took one under sway 1.9 (`wayland_drag`), and one started after its release ended cancelled on sway and Weston 13; the Wayland column stays winit's |
-| 2026-11-03 | major | The Wayland and X11 columns describe the native hosts, which `current_platform` picks on Linux in place of winit: occlusion, activation, pens, pinches, keyboard layout, event timestamps and input purpose ❌, ❔ or — → 🟡 on Wayland, X11 or both, secure text entry on X11 ❌ → 🟡, the Wayland mouse and presentation feedback → ✅, the plain-text clipboard, drops and drags ✅ on both from runs on Weston, sway and Xvfb; summary recounted over every column |
-| 2026-11-03 | notes only | winit is deleted from the workspace and `deny.toml` bans it; the notes that named it as a host (the application title bar, wheel phases, the concealed clipboard, the mouse session rules) lose it. No cell changes |
-| 2026-11-04 | minor | A row for persisted documents under System services (ADR-0262): `Persisted<D>` and the acceptance app's persistence rows run headless, so headless ✅; every native column 🟡 until the acceptance app runs there as a process through flui-driver's `os` lane (a kill in a write loop, a read-only file, a long and redirected profile path, two instances, a session end during a save); summary recounted |
-
-</details>
+| Environment | Host | ✅ | 🟡 | ❌ | — | ❔ |
+|:--|:--|--:|--:|--:|--:|--:|
+| Windows | Win32 (native) | 11 | 53 | 33 | 19 | 10 |
+| macOS | AppKit (native) | 10 | 42 | 44 | 20 | 10 |
+| Wayland | Wayland (native) | 11 | 50 | 30 | 28 | 7 |
+| X11 | X11 (native) | 12 | 45 | 33 | 29 | 7 |
+| iOS | UIKit (native) | 7 | 37 | 41 | 33 | 8 |
+| Android | android-activity (native) | 18 | 40 | 33 | 29 | 6 |
+| Web | wasm canvas (native) | 7 | 40 | 30 | 42 | 7 |
+| Headless | test double | 53 | 2 | 50 | 19 | 2 |
+
+## Parity
+
+| Capability | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless |
+|:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| **App lifecycle** | | | | | | | | |
+| Event loop, startup and wake-ups | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Version floor: declared, packaged, refused below it | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — |
+| Quit, exit request, last-window policy | 🟡 | ✅ | ✅ | ✅ | — | 🟡 | 🟡 | ✅ |
+| Close request with veto | 🟡 | ✅ | 🟡 | 🟡 | — | — | ❌ | ✅ |
+| Reopen with no windows (Dock click) | — | ✅ | — | — | — | — | — | ❌ |
+| Focus and active state | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ |
+| Visibility, minimize, occlusion | 🟡 | ✅ | 🟡 | ✅ | ✅ | 🟡 | 🟡 | ✅ |
+| Suspend, resume, GPU-surface loss | — | — | — | — | ✅ | 🟡 | 🟡 | ✅ |
+| Configuration changes reach the running app (no Activity recreation) | — | — | — | — | — | 🟡 | — | — |
+| Sleep, wake, screen lock | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | ❌ |
+| Session end (log off, shutdown) with veto | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ |
+| Memory pressure | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | — | ❌ |
+| Bring the app forward, request attention | 🟡 | ❌ | 🟡 | ❌ | — | — | — | ❌ |
+| Single instance, forward arguments | ❌ | — | ❌ | ❌ | — | — | — | ❌ |
+| Deep links, URL schemes, file associations | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ |
+| State restoration | — | ❌ | — | — | ❌ | ❌ | ❌ | ❌ |
+| Activation obeys the OS focus rules (Wayland `xdg-activation` token, Windows foreground rights handed to the activated process) | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | — |
+| App identity (AUMID, bundle ID, `.desktop` file) | ❔ | ❔ | ❔ | ❔ | — | — | — | — |
+| **Window** | | | | | | | | |
+| Open and close a window | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Multiple windows | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | — | ✅ |
+| Show without a blank first frame | 🟡 | ✅ | 🟡 | 🟡 | — | — | — | ✅ |
+| Launch-screen handoff: the first frame matches the OS splash | — | — | — | — | ❌ | ❌ | ❌ | — |
+| Title | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ |
+| Minimize, maximize, restore, state readback | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | ✅ |
+| Fullscreen | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ |
+| Position, size, move and resize events | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ |
+| Size constraints, resizable and other flags | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | ✅ |
+| Live resize without jitter | ❔ | ❔ | ❔ | ❔ | — | — | ❔ | — |
+| Save and restore window placement | ✅ | 🟡 | 🟡 | 🟡 | — | — | — | ✅ |
+| Frameless windows, custom title bar | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ |
+| Backdrop material, transparency, corners | 🟡 | 🟡 | ❌ | ❌ | — | — | — | ❌ |
+| Owned, modal and popup windows; always on top | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ |
+| Window icon | ❌ | — | ❌ | ❌ | — | — | — | ❌ |
+| Exclude a window from screen capture | ❌ | ❌ | — | — | ❌ | ❌ | — | ❌ |
+| Native views inside the UI (web view, map, video) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — |
+| **Display** | | | | | | | | |
+| Displays: list, work area, current display, changes | ✅ | 🟡 | ✅ | ✅ | 🟡 | ✅ | ✅ | ✅ |
+| Scale factor and DPI changes | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | ✅ | ✅ |
+| Refresh rate and frame pacing | ✅ | 🟡 | ✅ | ✅ | 🟡 | ✅ | ✅ | ✅ |
+| Present mode, queue depth, VRR and tearing control | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | — |
+| HDR, wide gamut and colour management (surface colour space, SDR/HDR headroom, display profile changes) | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | 🟡 | ✅ |
+| HDR and SDR-white change events | 🟡 | 🟡 | 🟡 | ❌ | ❌ | ❌ | 🟡 | ✅ |
+| Presentation feedback: when each frame reached the screen | ✅ | ✅ | ✅ | — | ❌ | ❌ | — | ✅ |
+| GPU surface | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Safe area | — | ❌ | — | — | ✅ | ✅ | ❌ | ✅ |
+| Soft-keyboard insets | — | — | — | — | 🟡 | 🟡 | 🟡 | ✅ |
+| System-gesture insets | — | — | — | — | — | 🟡 | — | ✅ |
+| System-gesture exclusion | — | — | — | — | 🟡 | ✅ | — | ✅ |
+| Display cutout, fold posture | — | — | — | — | — | 🟡 | ❌ | ❌ |
+| **Input** | | | | | | | | |
+| Mouse: buttons, hover, capture | ✅ | ✅ | ✅ | ✅ | 🟡 | 🟡 | ✅ | ✅ |
+| Touch | 🟡 | — | 🟡 | 🟡 | ✅ | ✅ | 🟡 | ✅ |
+| Pen and stylus | 🟡 | ❌ | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ |
+| Precise scrolling with phases and momentum | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ |
+| Touchpad pan as a drag or a scroll | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ✅ |
+| Trackpad pinch and rotate | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ |
+| Pointer lock and warp | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Keyboard: keys, modifiers, repeat, dead keys | ✅ | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ |
+| Keyboard layout and its changes | 🟡 | ❌ | 🟡 | 🟡 | ❌ | ❌ | ❌ | ❌ |
+| Gamepad and D-pad: a controller's buttons and sticks, a remote's keys, moving focus by direction | ❌ | ❌ | ❌ | ❌ | ❌ | 🟡 | ❌ | 🟡 |
+| Cursor shapes | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | 🟡 | ✅ |
+| System back and history | — | — | — | — | ❌ | ❌ | ❌ | ❌ |
+| Browser gesture suppression | — | — | — | — | — | — | 🟡 | — |
+| Input device availability | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ |
+| Input latency mode and high-rate sampling (raw updates, coalesced and predicted samples, one monotonic clock) | 🟡 | ❔ | ❌ | ❌ | ❔ | 🟡 | 🟡 | ✅ |
+| Event timestamps converted without wrap or base skew (Win32 `GetMessageTime` 32-bit ms, Wayland undefined base, Android uptime ms) | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❔ | ❔ | — |
+| **Text input** | | | | | | | | |
+| IME composition and candidate placement | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ |
+| Text-input client queries (selected range, surrounding text, first rect) for dictation, reconversion and handwriting | ❔ | ❔ | ❔ | ❔ | ❔ | ❔ | ❔ | — |
+| Text-input session survives window move, resize, DPI change and focus loss | 🟡 | ❔ | ❔ | ❔ | ❔ | ❔ | ❔ | — |
+| Soft keyboard show and hide | — | — | — | — | ❔ | ✅ | ❌ | ❌ |
+| Input purpose and hints (password, number, autocorrect) | 🟡 | ❌ | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ |
+| System edit menu | — | — | — | — | ❌ | ❌ | — | ❌ |
+| Spell check | ❌ | ❌ | — | — | ❌ | ❌ | — | ❌ |
+| Autofill (passwords, one-time codes) | — | — | — | — | ❌ | ❌ | ❌ | ❌ |
+| Handwriting into text fields | ❌ | — | — | — | ❌ | 🟡 | — | ❌ |
+| Secure text entry (password keystrokes and text kept from other apps, input-method learning and the clipboard history) | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ |
+| **Accessibility** | | | | | | | | |
+| Tree and actions | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ |
+| Properties (value, hint, description, state) | ❔ | ❔ | 🟡 | ✅ | ❔ | ❔ | ❔ | ❔ |
+| Announcements and live regions | ❔ | ❔ | 🟡 | 🟡 | ❔ | ❔ | ❔ | ❔ |
+| Gesture alternatives (custom actions, context menu, keys, controls) | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ |
+| Assistive-technology focus (screen reader cursor) | ❌ | ❌ | ❌ | ❌ | 🟡 | 🟡 | ❌ | ✅ |
+| **Transfer** | | | | | | | | |
+| Plain-text clipboard | 🟡 | 🟡 | ✅ | ✅ | 🟡 | 🟡 | 🟡 | ✅ |
+| Rich clipboard (images, HTML, files) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Drop into the app | 🟡 | ❌ | ✅ | ✅ | ❌ | 🟡 | 🟡 | ✅ |
+| Drag out of the app | 🟡 | ❌ | ✅ | ✅ | ❌ | 🟡 | 🟡 | ✅ |
+| Concealed clipboard entries (kept out of clipboard history and cloud sync) | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ✅ |
+| **Preferences** | | | | | | | | |
+| Dark mode and its changes | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ |
+| Accent colour | ❌ | ❌ | ❌ | ❌ | — | ❌ | — | ❌ |
+| Text scale | 🟡 | — | 🟡 | 🟡 | 🟡 | ✅ | ❌ | ✅ |
+| Reduce motion | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 |
+| Contrast | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ❌ |
+| Bold text | — | — | — | — | 🟡 | ✅ | — | ❌ |
+| Languages and regional formats | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ |
+| Layout direction and per-app language | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| System fonts and fallback | ❔ | ❔ | ❔ | ❔ | ❔ | ❔ | ❔ | — |
+| Gesture and wheel settings | 🟡 | 🟡 | ❌ | ❌ | ❌ | 🟡 | ❌ | ✅ |
+| Haptics setting | ❔ | ❔ | — | — | — | ✅ | — | ✅ |
+| Power state (battery, low-power mode, thermal) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Power-aware pacing (frame cap and background pause under low-power or thermal state) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Preference changes arrive as OS notifications, never by polling | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | — |
+| **Mobile system UI** | | | | | | | | |
+| Status and navigation bars, immersive mode | — | — | — | — | 🟡 | ✅ | ❌ | ❌ |
+| Orientation lock | — | — | — | — | ❌ | ❌ | ❌ | ❌ |
+| Haptics | 🟡 | 🟡 | — | — | 🟡 | 🟡 | 🟡 | ✅ |
+| System sounds, alert beep | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ |
+| **Menus** | | | | | | | | |
+| App menu bar | — | ❌ | — | — | ❌ | — | — | ❌ |
+| Native context menus | ❌ | ❌ | — | — | — | — | — | ❌ |
+| Dock menu, jump list, recent documents | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ |
+| **Services** | | | | | | | | |
+| Open a URL | 🟡 | ❌ | 🟡 | 🟡 | ❌ | ❌ | 🟡 | ✅ |
+| Open a file, reveal it in the file manager | 🟡 | ❌ | 🟡 | 🟡 | — | — | — | ❌ |
+| Move to trash | ❌ | ❌ | 🟡 | 🟡 | — | — | — | ❌ |
+| Open, save and folder dialogs | 🟡 | ❌ | 🟡 | 🟡 | ❌ | ❌ | ❌ | ❌ |
+| Message box | ❌ | ❌ | — | — | ❌ | ❌ | ❌ | ❌ |
+| Share | ❌ | ❌ | — | — | ❌ | ❌ | ❌ | ❌ |
+| App folders and storage | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ |
+| Persisted documents survive a kill, a read-only file, a redirected profile, a second instance and a session end | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ |
+| HTTP requests | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ |
+| Tray and status icon | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ |
+| Local notifications | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Taskbar and Dock progress, badge | 🟡 | ❌ | ❌ | ❌ | ❌ | — | ❌ | ❌ |
+| Global shortcuts | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ |
+| Launch at login | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ |
+| Keep the screen awake | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Secure storage | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ |
+| Sandbox-aware file and resource access (the layer never hands an app a path it cannot use) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ |
+| **Packaging** | | | | | | | | |
+| Package the OS installs (MSIX or installer, notarised `.app`, Flatpak and `.deb`, `.ipa`, `.aab`, web bundle) | ❔ | 🟡 | ❔ | ❔ | 🟡 | 🟡 | 🟡 | — |
+| Code signing and notarisation | ❔ | ❌ | — | — | ❌ | 🟡 | — | — |
+| App identity reaches the package (AUMID, bundle ID, `.desktop` file and `app_id`, manifest) | ❔ | ❔ | ❔ | ❔ | ❔ | 🟡 | 🟡 | — |
+| Sandbox and entitlement manifests generated from declared capabilities | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | — |
+
+### App lifecycle — Event loop, startup and wake-ups
+
+Runs: a manual Windows run, the macOS live check, an application of `flui-app` on the native Wayland host under Weston and the native X11 host under Xvfb (`native_linux`, in CI), the iOS Simulator, the Android emulator, the Web counter. Owed: idle checks on hidden and occluded windows, which may get no frame callbacks on Wayland.
+
+
+### App lifecycle — Version floor: declared, packaged, refused below it
+
+[ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md) sets a floor per environment, and `flui build` packages it (raised by `[platforms.<environment>] min` in `flui.toml`) everywhere but the Windows manifest. Windows, macOS, iOS and Android refuse a release below it at start, and Linux a compositor without `xdg_wm_base` or an X server without RandR 1.5, as `LaunchError::UnsupportedSystem`; the GPU falls back to GLES 3.0, WebGL2 or WARP and reports `NoSupportedGpu` with a reason per backend when none answers (run on llvmpipe GL only), and none has run on its floor.
+
+
+### App lifecycle — Quit, exit request, last-window policy
+
+macOS Cmd+Q and close ran; a manual Linux run checks the exit code; iOS has no quit API
+
+
+### App lifecycle — Close request with veto
+
+Web has no `beforeunload`
+
+
+### App lifecycle — Reopen with no windows (Dock click)
+
+a manual macOS run; headless can't drive it
+
+
+### App lifecycle — Focus and active state
+
+Android follows `onWindowFocusChanged` alone, and focus no longer stands for the Activity being resumed.
+
+
+### App lifecycle — Visibility, minimize, occlusion
+
+Shown, minimized and occluded are three facts of the snapshot on every host (`visible`, `mode`, `occluded`), and a minimized or covered window stays shown. Wayland reports a window occluded while the compositor suspends it or keeps it on no output once shown, never minimized; Win+L and a desktop switch have not run on Windows.
+
+
+### App lifecycle — Suspend, resume, GPU-surface loss
+
+Android dispatches `onResume` and `onPause` as the execution state, apart from focus; the Web's page events ran against a fake page, not yet in Chrome.
+
+
+### App lifecycle — Configuration changes reach the running app (no Activity recreation)
+
+Android's generated manifest declares the changes the host follows; dark mode, font scale, bold text, density and rotation ran on a Galaxy S21 without a second `android_main`. A language change still recreates the Activity.
+
+
+### App lifecycle — Sleep, wake, screen lock
+
+Windows, macOS and Linux deliver them; none ran through a real sleep or lock, and [#1736](https://github.com/vanyastaff/flui/issues/1736) lists the macOS run.
+
+
+### App lifecycle — Session end (log off, shutdown) with veto
+
+Delivered on every environment but headless, with a veto only on Windows and macOS; none ran through a real log-off or shutdown.
+
+
+### App lifecycle — Memory pressure
+
+Delivered on Windows, macOS, iOS, Android and Linux; only Android's levels were driven on a device.
+
+
+### App lifecycle — Bring the app forward, request attention
+
+Windows: `WindowCommand::Activate` brings the window forward where the foreground rules allow and flashes its taskbar button where they refuse, run against a second process; attention has no request of its own. Wayland asks with an `xdg-activation` token (sway marks the window urgent), run by hand on sway only.
+
+
+### App lifecycle — Single instance, forward arguments
+
+macOS enforces one instance itself
+
+
+### App lifecycle — Deep links, URL schemes, file associations
+
+No host reports an opened URL or file, at cold start or while running (`opened(urls, files)` joins the application handler with the activation feature); the Web entry URL is under history routing
+
+
+### App lifecycle — State restoration
+
+macOS window restoration, iOS scene restoration, Android state after process death, Web `history.state`
+
+
+### App lifecycle — Activation obeys the OS focus rules (Wayland `xdg-activation` token, Windows foreground rights handed to the activated process)
+
+Windows: an activation never takes the foreground from another application and comes forward once that application hands the right over, run with two processes; opening a link or file hands the right to the handler process the shell started; no second launch hands it yet (single instance, in the activation spec). The Wayland token's whole path runs only on sway, by hand: CI's Weston has no `xdg_activation_v1`. A Wayland token names the seat and serial of the user input behind the activation. macOS cooperative activation (`NSApplication.yieldActivation(to:)`, macOS 14) is not audited.
+
+
+### App lifecycle — App identity (AUMID, bundle ID, `.desktop` file)
+
+Notifications, URL schemes, the tray, jump lists and portals need it; `flui-cli` packaging not audited
+
+
+### Window — Open and close a window
+
+iOS: the scene supplies the window; Android: one native window, which the application cannot close (`closes` is `Unavailable`)
+
+
+### Window — Multiple windows
+
+No iPad scenes, no Android multi-window
+
+
+### Window — Show without a blank first frame
+
+Windows and X11 create the window hidden and show it after the first presented frame; Wayland maps with the first buffer, so nothing is deferred, and `show` is refused.
+
+
+### Window — Launch-screen handoff: the first frame matches the OS splash
+
+Nothing aligns the first frame with the OS splash (the iOS launch screen, Android's `SplashScreen`, the Web page before the wasm loads). Desktop is the row above.
+
+
+### Window — Title
+
+Linux: Wayland sets `xdg_toplevel`'s title and X11 `_NET_WM_NAME` and `WM_NAME`; neither lets a client read the title shown back, so the snapshot holds the one last set. Other hosts: not yet
+
+
+### Window — Minimize, maximize, restore, state readback
+
+Linux reads the mode back, on X11 from `WM_STATE` and `_NET_WM_STATE`, on Wayland from the compositor's configures, which never report minimized; sway, which tiles, carries out no maximize. macOS: the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); the green button, Cmd-M and the Dock have not run by hand ([#1736](https://github.com/vanyastaff/flui/issues/1736)).
+
+
+### Window — Fullscreen
+
+Linux asks the compositor or window manager for fullscreen (`xdg_toplevel.set_fullscreen`, `_NET_WM_STATE_FULLSCREEN`) and reads it back.
+
+
+### Window — Position, size, move and resize events
+
+Wayland can't read or set a global position by design; X11 ran on an Xvfb server. macOS: the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); a drag, the y-axis by hand and a second display have not run ([#1736](https://github.com/vanyastaff/flui/issues/1736)).
+
+
+### Window — Size constraints, resizable and other flags
+
+Windows holds limits and flags at the operating system (checked against the real system, not by dragging an edge); Linux hands them to the compositor or window manager (`xdg_toplevel`'s minimum and maximum size, `WM_NORMAL_HINTS`), run in the window conformance on Weston and under openbox on Xvfb with no edge dragged. macOS: the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); no edge was dragged against the limits by hand ([#1736](https://github.com/vanyastaff/flui/issues/1736)).
+
+
+### Window — Live resize without jitter
+
+Not audited; Windows has no `WM_ENTERSIZEMOVE` handling. It passes when every frame presented during a scripted border drag has the content size of its window.
+
+
+### Window — Save and restore window placement
+
+`AppConfig::restore_placement`. Windows opens at the remembered position, size and mode (content size, `SetWindowPlacement`) and ran in a real window.
+
+
+### Window — Frameless windows, custom title bar
+
+`WindowFrame::AppTitleBar` is in the contract, taken by the headless host, Win32, macOS and the native X11 and Wayland hosts, as are the chrome input regions (move, resize, caption buttons, ADR-0286) that answer the system's hit test and the `flui-widgets` parts that mark them (`WindowTitleBar`, `WindowCaptionButton`, `WindowResizeArea`). Win32 drops the caption and answers `WM_NCHITTEST` from the regions, `HTMAXBUTTON` included for the snap layouts, type-checked and not run; macOS keeps a transparent system title bar under full-size content, moves the window from a move region and answers a double-click as System Settings says, its traffic lights hidden or moved, type-checked and not run; the native X11 host does the same through `_NET_WM_MOVERESIZE` where the window manager lists it, run under openbox on Xvfb; the native Wayland host asks for no frame, keeps the margins of its own and moves and maximizes the window from them, run on Weston 13.
+
+
+### Window — Backdrop material, transparency, corners
+
+The contract's material (`WindowCommand::SetMaterial`, `WindowMaterial::{Opaque, System}`, `WindowCapabilities::material`): a Win32 window opens on Mica (`System`) and changes it from build 22621 on, and below that build the capability is unavailable on this device and admission answers `NotOnThisDevice`; ran in a Win32 window on Windows 11 (build 26300), the desktop window manager's attribute read back after each change. macOS draws `System` as `NSVisualEffectView`'s window-background material, type-checked only. Linux and Web report the material `Unavailable`; no window draws transparent content. On Windows the corners and title-bar theme are creation options (`Win32WindowOptions`), and `flui::native::windows` sets the backdrop, corners and theme or answers why not; ran in a Win32 window. macOS draws an `NSVisualEffectView` material or Liquid Glass (`NSGlassEffectView`, macOS 26, found by name) behind the content through `flui::native::macos` (`AppKitWindow::set_backdrop`, ADR-0254 §3), which ran on macOS 27 (M1, 2026-10-27); the contract's material on macOS is type-checked only, and the cell stays 🟡 for it and for transparency
+
+
+### Window — Owned, modal and popup windows; always on top
+
+Not in the contract, so menus, tooltips and dropdowns can't leave the window; Wayland needs `xdg_popup`
+
+
+### Window — Window icon
+
+`WM_SETICON`, `xdg-toplevel-icon`, `_NET_WM_ICON`
+
+
+### Window — Exclude a window from screen capture
+
+`SetWindowDisplayAffinity`, `NSWindow.sharingType`, iOS capture detection, Android `FLAG_SECURE`
+
+
+### Window — Native views inside the UI (web view, map, video)
+
+Not in the contract; it shapes compositing, hit-testing and accessibility
+
+
+### Display — Displays: list, work area, current display, changes
+
+Windows, Wayland, X11, Android and the Web ran live; macOS and iOS are type-checked only. A move between two monitors ran only on Windows, and a Windows disconnect did not run.
+
+
+### Display — Scale factor and DPI changes
+
+Web watches `(resolution: Xdppx)` and re-arms it after each change for the display snapshot.
+
+
+### Display — Refresh rate and frame pacing
+
+Every host reads the mode's rate or estimates the period; macOS and iOS are type-checked only. A display that reports none uses 60 Hz, with a diagnostic.
+
+
+### Display — Present mode, queue depth, VRR and tearing control
+
+The engine always presents with `Fifo` and a frame latency of 2; nothing lets the platform layer or the app choose a present mode, a queue depth, variable-refresh behaviour or tearing.
+
+
+### Display — HDR, wide gamut and colour management (surface colour space, SDR/HDR headroom, display profile changes)
+
+Every display carries its colour profile (`DisplayInfo::color`: colour space and headroom, or why there is none), and the engine sets a surface up for the colour of its window's display (ADR-0256). Windows read an SDR monitor correctly; no HDR or P3 display has run anywhere, and sources stay sRGB. X11 reads no colour (`NotYetOnThisHost`); the Web reports capability and no headroom.
+
+
+### Display — HDR and SDR-white change events
+
+A profile change is a new display snapshot revision. Windows re-reads on `WM_DISPLAYCHANGE` (the SDR white level moving raises none), macOS on the screen-parameters notification, Wayland on `image_description_changed`, the Web on the colour queries' `change`; none ran with a real change. iOS and Android re-read only on their other display events. The window receives the change as a new `WindowDisplay`, and its renderer configures the surface again before the next frame (ADR-0256 §6, amended).
+
+
+### Display — Presentation feedback: when each frame reached the screen
+
+A frame request carries when the window's newest earlier frame was shown (`FrameRequest::presented`, on the event timeline input is stamped on); the frame clock keeps it and bounds idle work by the next refresh. Windows reads the DXGI frame statistics of the renderer's swap chain; headless reports what a test injects. Wayland reads `wp_presentation_time`, run on Weston 13. The Web (a `requestAnimationFrame` stamp is a frame's start) and X11 (a present completes on the GPU driver's connection) have none, and their windows say so; macOS reads a presented handler on each drawable of the view's own `CAMetalLayer`; iOS and Android do not report yet.
+
+
+### Display — GPU surface
+
+Rendered in every run above
+
+
+### Display — Safe area
+
+macOS ignores the notch in fullscreen; Web doesn't read `env(safe-area-inset-*)`.
+
+
+### Display — Soft-keyboard insets
+
+In the contract (ADR-0277): a window reports the keyboard's target and its motion, and each frame lays out with the occlusion at its vsync; headless scripts a motion. Android reports the keyboard (`Type.ime()` from API 30, the system window bottom below) and, from API 30, its motion from `WindowInsetsAnimation.Callback`, type-checked, no device run; below API 30 it jumps to the target. iOS reports the keyboard and its motion from `UIKeyboardWillChangeFrameNotification` (end frame, duration, curve), type-checked, no device run. The Web reports the keyboard at rest, from `navigator.virtualKeyboard` (which the window has overlay the page) or else the visual viewport, run against a fake page on Node, not in a mobile browser.
+
+
+### Display — System-gesture insets
+
+`WindowInsets::system_gestures` reaches `MediaQueryData::system_gesture_insets` (ADR-0277). Android reads `getSystemGestureInsets()` from API 29 (`NotOnThisDevice` below), type-checked, no device run.
+
+
+### Display — System-gesture exclusion
+
+Android's exclusion rects ran on a Galaxy S21; the iOS path never ran and was not type-checked on the authoring host.
+
+
+### Display — Display cutout, fold posture
+
+Android folds the cutout into the safe area; no fold posture
+
+
+### Input — Mouse: buttons, hover, capture
+
+The iPad pointer hovers, scrolls, pinches, rotates and reads its secondary button, type-checked only, never run on an iPad; Android ran no hardware mouse, hover or capture.
+
+
+### Input — Touch
+
+Linux translates `wl_touch` and XInput 2 touches, held by their translation tests only; no touch device ran on either.
+
+
+### Input — Pen and stylus
+
+macOS doesn't translate tablet events; Wayland (`tablet-v2`) and X11 (XInput 2 pens) are held by their decoders only; no hardware pen has run on Windows, Android or the Web.
+
+
+### Input — Precise scrolling with phases and momentum
+
+Windows' precision-touchpad pan is implemented but no touchpad has run; Android's two-finger scroll ran only from a `uinput` touchpad. the iPad trackpad's scroll is type-checked only, never run on an iPad; the Web has no phases.
+
+
+### Input — Touchpad pan as a drag or a scroll
+
+Runs on every host that sends phased precise scroll (see the row above); headless runs it with synthetic packets, no touchpad has. the iPad trackpad is type-checked only; the Web has no phases.
+
+
+### Input — Trackpad pinch and rotate
+
+Windows, Android and the Web decode a pinch, none from a hardware trackpad; the iPad decodes a pinch and a rotation, type-checked only; Wayland (`pointer-gestures`) and X11 (XInput 2.4 gestures) decode a pinch, held by their decoders only.
+
+
+### Input — Pointer lock and warp
+
+Not in the contract
+
+
+### Input — Keyboard: keys, modifiers, repeat, dead keys
+
+iOS handles no hardware keyboard; Android ran hardware key events through a manual Android run, with no repeat, dead key or physical keyboard.
+
+
+### Input — Keyboard layout and its changes
+
+Web hard-codes `en-US`; Wayland and X11 read the layout through XKB and report its changes, not run with a layout switched
+
+
+### Input — Gamepad and D-pad: a controller's buttons and sticks, a remote's keys, moving focus by direction
+
+No gamepad source on any host (XInput or GameInput, `GCController`, Android `SOURCE_GAMEPAD` axes, the Web Gamepad API, evdev); Android's D-pad arrives as the arrow keys and Enter through the key table, and the arrows drive directional focus, never run on a TV.
+
+
+### Input — Cursor shapes
+
+No iPad pointer styles or Android `PointerIcon`; no custom image or hide-until-move
+
+
+### Input — System back and history
+
+Android predictive back (from targetSdk 36, `KEYCODE_BACK` isn't delivered), the iOS edge swipe, the Web History and Navigation APIs
+
+
+### Input — Browser gesture suppression
+
+The canvas sets `touch-action: none` inline; `overscroll-behavior` is not set, and it never ran in Safari or on a phone.
+
+
+### Input — Input device availability
+
+Headless, Wayland and X11 report presence changes, the other hosts only their initial table so far; none ran on its environment.
+
+
+### Input — Input latency mode and high-rate sampling (raw updates, coalesced and predicted samples, one monotonic clock)
+
+`AppConfig::with_input_latency` sets `WindowOptions::input_latency`; Android takes unbuffered pointer dispatch for a `Low` window from API 30 (type-checked).
+
+
+### Input — Event timestamps converted without wrap or base skew (Win32 `GetMessageTime` 32-bit ms, Wayland undefined base, Android uptime ms)
+
+Windows pointer ticks, the Apple uptime seconds and the Wayland and X11 millisecond stamps are rebased onto `EventTime` without a wrap, a Linux stamp only within a trusted skew of its arrival; Android and the Web are not audited, and nothing ran across a wrap or a clock-base change.
+
+
+### Text input — IME composition and candidate placement
+
+Windows TSF and macOS `NSTextInputClient` haven't run with a real input method. iOS composes through an invisible `UITextInput` responder, which now edits the field through the shared text-store host as macOS does (type-checked; the run below predates it): on the iOS 27.1 Simulator (2026-10-28, an M1 host, on-screen keyboard driven by XCUITest) the Japanese Romaji keyboard composed `にほんご` and committed `日本語`, and the nine-key Pinyin keyboard composed `ni hao` and committed `你好`, each reaching an `EditableText`; candidate placement was not observed (the Simulator device gives no screenshot) and no device ran. Android ran with Samsung Keyboard on a Galaxy S21 only, the Web through Chrome's own input-method path only.
+
+
+### Text input — Text-input client queries (selected range, surrounding text, first rect) for dictation, reconversion and handwriting
+
+The text store has the shape of TSF's `ITextStoreACP`, and iOS's responder answers `UITextInput`'s range and rect queries from the field's store and layout (type-checked), but dictation, reconversion and first-rect queries are not audited on any host.
+
+
+### Text input — Text-input session survives window move, resize, DPI change and focus loss
+
+Windows tells TSF the focused field's layout changed on a move, a size-and-move loop and a DPI change, checked with no input method composing; the other hosts are not audited.
+
+
+### Text input — Soft keyboard show and hide
+
+Android shows Samsung Keyboard when a field takes focus and hides it when none does. iOS shows the system keyboard when a field takes focus (the Simulator run above); hiding it when focus leaves did not run.
+
+
+### Text input — Input purpose and hints (password, number, autocorrect)
+
+Windows, Android, iOS and the Web map the purpose, and only Android's plain single-line field ran on a device; Wayland (`text-input-v3`) and X11 (IBus and Fcitx5, not XIM) send the purpose, unit-tested only; otherwise it is not in the contract.
+
+
+### Text input — System edit menu
+
+`UIEditMenuInteraction` (its Paste avoids the iOS paste prompt), Android floating `ActionMode`
+
+
+### Text input — Spell check
+
+`ISpellChecker`, `NSSpellChecker`, `UITextChecker`, `SpellCheckerSession`
+
+
+### Text input — Autofill (passwords, one-time codes)
+
+
+
+
+### Text input — Handwriting into text fields
+
+Windows Ink and iPad Scribble are missing; Android asks `startStylusHandwriting` (API 33) and never ran (the S21 takes no S Pen).
+
+
+### Text input — Secure text entry (password keystrokes and text kept from other apps, input-method learning and the clipboard history)
+
+macOS holds `EnableSecureEventInput` while a protected field has focus in the key window and iOS sets `isSecureTextEntry` (both type-checked, not run); Wayland sends a protected field as the `text-input-v3` password purpose with the hidden-text and sensitive-data hints, and X11 sends IBus and Fcitx5 the password purpose (XIM has none), unit-tested only.
+
+
+### Accessibility — Tree and actions
+
+The desktop adapters are built into every window, with no feature, iOS's into every UIKit window, Android's into every Activity window, and every Web canvas mirrors its tree as a parallel ARIA DOM; none is checked with a screen reader.
+
+
+### Accessibility — Properties (value, hint, description, state)
+
+X11: an AT-SPI client reads role, name, hint, a field's text, a slider's value and range, states and actions (`linux_atspi`); Wayland has the same adapter, not run on a Wayland window. The Web writes states, ranges and descriptions as ARIA attributes.
+
+
+### Accessibility — Announcements and live regions
+
+X11: an AT-SPI client hears announcements, live regions and a status that appears (`linux_atspi`), and a route change by name (`a_route_change_is_heard_by_its_name`).
+
+
+### Accessibility — Gesture alternatives (custom actions, context menu, keys, controls)
+
+Checked headless by `assert_gesture_alternatives` (ADR-0216); no locked AccessKit adapter routes custom actions or `ShowContextMenu`, so assistive technology reaches them only through the controls.
+
+
+### Accessibility — Assistive-technology focus (screen reader cursor)
+
+`Semantics::on_assistive_focus_within` hears the cursor where an adapter reports it; iOS and Android do through vendored `accesskit_ios` and `accesskit_android` changes, not yet run with VoiceOver or TalkBack, and no other adapter does ([gap 36](gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)); checked headless by `the_screen_reader_entering_the_carousel_pauses_autoplay`.
+
+
+### Transfer — Plain-text clipboard
+
+Wayland reads and writes its seats' selection through `wl_data_device`, run between two clients of Weston 13; X11 owns and reads `CLIPBOARD` on a connection of its own, run between two clipboards on Xvfb; Android reads and writes `ClipboardManager` through JNI, type-checked, no device run; the Web reads `navigator.clipboard` asynchronously, unrun in a browser, and falls back to its own writes
+
+
+### Transfer — Rich clipboard (images, HTML, files)
+
+
+
+
+### Transfer — Drop into the app
+
+Wayland and X11 take drops from a source of another client, run under sway 1.9 and on Xvfb; Windows, the Web and Android take drops, run within one process, in headless Chrome or on a Galaxy S21 only; none ran from Explorer or another app or page.
+
+
+### Transfer — Drag out of the app
+
+Wayland and X11 start OS drags, taken by a target of another client under sway 1.9 and on Xvfb; Windows, the Web and Android start them too, none run into another app or page; macOS and iOS report outgoing drags `Unavailable`.
+
+
+### Transfer — Concealed clipboard entries (kept out of clipboard history and cloud sync)
+
+`ClipboardWrite::concealed` (ADR-0152 §6); each host answers its `Concealment`. X11 and Wayland offer KDE's hint and Android its sensitive extra, which only what reads them honours, so those cells stay 🟡 by design; the Web has no mark and fails the scenario as gap 26.
+
+
+### Preferences — Dark mode and its changes
+
+Every window seeds `MediaQueryData::platform_brightness` and follows changes; only Windows and Android ran a live flip.
+
+
+### Preferences — Accent colour
+
+Not in the contract
+
+
+### Preferences — Text scale
+
+iOS and Android answer each size natively, and Android ran a live change on a Galaxy S21; Windows applies its one `TextScaleFactor` linearly, while WinUI scales larger text less; Linux reads GNOME's `text-scaling-factor` through the Settings portal, linear as in GTK (ran in WSL against a stand-in portal, not in a GNOME session). Headless: `the_system_text_scale_grows_each_span_once`, `a_field_measures_and_hit_tests_the_current_text_scale`
+
+
+### Preferences — Reduce motion
+
+Headless injects preferences through `HeadlessHost::set_system_preferences`; no reduce-motion row drives it yet
+
+
+### Preferences — Contrast
+
+Android reads the system contrast level (API 34+) and the high-contrast-text setting and follows both live: on a Galaxy S21 (Android 15) `high_text_contrast_enabled` and `contrast_level` changes reached `MediaQuery` without a restart. macOS reads `accessibilityDisplayShouldIncreaseContrast` on the workspace's display-options notification, iOS `UIAccessibilityDarkerSystemColorsEnabled` on its status notification (both type-checked only). Linux reads the Settings portal's `contrast`, or GNOME's `high-contrast`, and follows their changes (ran in WSL against a stand-in portal). The Web reads `prefers-contrast` and `forced-colors` and follows their changes: `browser_contrast_and_languages_reach_their_owner` runs on Node against a controlled browser boundary; not run in a browser
+
+
+### Preferences — Bold text
+
+Android ran a live change on a Galaxy S21
+
+
+### Preferences — Languages and regional formats
+
+Every host reads the languages (Android from the configuration's `LocaleList`, `[en-US]` on a Galaxy S21, a change not run; macOS and iOS from `NSLocale.preferredLanguages` on the current-locale notification, type-checked only; Linux from `LANGUAGE`, `LC_ALL`, `LC_MESSAGES` and `LANG` as gettext reads them, once at start; the Web from `navigator.languages`, following `languagechange`; run on Node against a controlled browser boundary, not in a browser); regional formats ([ADR-0278](adr/ADR-0278-regional-formats-are-the-unicode-locale-extension-keys.md)) on Windows from Region settings (first weekday, clock, units, native digits, formats region; type-checked only) and on Linux from `LC_TIME`, `LC_MEASUREMENT` and GNOME's `clock-format` (not run on a desktop), on macOS and iOS from Foundation's autoupdating locale and calendar (first weekday, the `j` skeleton's clock, units, the `numbers` keyword, the country; type-checked only), on Android from the default locale's `fw` and `nu` keywords, the calendar and `is24HourFormat`, following `TIME_12_24` (type-checked only), and on the Web from `Intl`'s default hour cycle and week info (not run in a browser)
+
+
+### Preferences — Layout direction and per-app language
+
+The platform layer exposes no layout direction and no per-app language override (Android 13 and iOS let the user pick a language for one app).
+
+
+### Preferences — System fonts and fallback
+
+Text layout resolves fonts through `fontdb` in `flui-painting`. `flui_native::fonts::system_fallback` asks each host which faces fall back (DirectWrite, CoreText, fontconfig, `AFontMatcher` on Android from API 29 and `fonts.xml` below it) and the collection tries them ahead of FLUI's tables (ADR-0271); fontconfig's answer is checked on the Linux CI host, the others are type-checked only, and no OS has rendered the CJK and emoji check yet.
+
+
+### Preferences — Gesture and wheel settings
+
+The Windows wheel smoke passed; the timings never ran.
+
+
+### Preferences — Haptics setting
+
+Android reads `HAPTIC_FEEDBACK_ENABLED` and ran on a Galaxy S21; iOS has no public read API, and the Windows pen and macOS Force Touch settings are not audited.
+
+
+### Preferences — Power state (battery, low-power mode, thermal)
+
+Not in the contract
+
+
+### Preferences — Power-aware pacing (frame cap and background pause under low-power or thermal state)
+
+Power state is not read, so nothing lowers the frame rate or pauses background work under a low-power, battery-saver or thermal state.
+
+
+### Preferences — Preference changes arrive as OS notifications, never by polling
+
+Android's `FluiView` reports setting, contrast and inset changes; on a Galaxy S21 the loop made no turn in 10 s idle, resumed or behind Home. macOS wakes on AppKit notifications and app activation (type-checked only). No host polls a healthy, installed source: Android keeps a 500 ms cadence only while `FluiView` is not in the window, and Linux retries a failed portal read every second.
+
+
+### Mobile system UI — Status and navigation bars, immersive mode
+
+Status-bar icon style ran on Android; iOS is type-checked only, and no host has navigation-bar or immersive control.
+
+
+### Mobile system UI — Orientation lock
+
+Android 16 ignores it on large screens
+
+
+### Mobile system UI — Haptics
+
+Both tiers and the frame queue ship (ADR-0210); macOS, iOS and the Android envelopes never ran on a device, and no haptic pen has vibrated.
+
+
+### Mobile system UI — System sounds, alert beep
+
+
+
+
+### Menus — App menu bar
+
+A macOS app without one has no Quit or Edit menu; iPadOS 26 has a menu bar; elsewhere the app draws its own
+
+
+### Menus — Native context menus
+
+The mobile system edit menu is under Text input; the in-app, theme-free `ContextMenuArea` draws its own menu on every platform, run headless only
+
+
+### Menus — Dock menu, jump list, recent documents
+
+Linux: desktop actions in the `.desktop` file
+
+
+### Services — Open a URL
+
+Linux: `flui-system`'s launcher through the `OpenURI` portal, run against a stand-in portal on a private bus, not a desktop. Windows and Web: the core `open_url`, which nothing calls
+
+
+### Services — Open a file, reveal it in the file manager
+
+Linux: `OpenFile` and `OpenDirectory` portals with a descriptor, run against a stand-in portal; the file manager decides whether the file is selected
+
+
+### Services — Move to trash
+
+Linux: the `Trash` portal, run against a stand-in portal
+
+
+### Services — Open, save and folder dialogs
+
+Linux: `flui-system`'s dialogs through the `FileChooser` portal, filters, title, folder and accept label, modal to an X11 window; on Wayland not modal until the host exports an `xdg-foreign` handle; run against a stand-in portal. Windows has no filters, title or owner window; every other host answers "cancelled"
+
+
+### Services — Message box
+
+Linux has no native one: the app draws it
+
+
+### Services — Share
+
+
+
+
+### Services — App folders and storage
+
+An application identifier or `AppConfig::with_storage_dir` gives widgets storage on every host; it ran on Windows and Android, and no Web app has run the probe. Headless keeps each application's values in memory for the platform's life, or on disk under `HeadlessPlatform::with_data_root`, never in the user's directories. Android `app_path` still reports a fixed path.
+
+
+### Services — Persisted documents survive a kill, a read-only file, a redirected profile, a second instance and a session end
+
+`Persisted<D>` over the host's storage and flush registry (ADR-0262); the acceptance app's persistence rows run headless, and no native process has run them
+
+
+### Services — HTTP requests
+
+A capability of the host (ADR-0280): `ureq` on Linux, WinHTTP on Windows, `NSURLSession` on macOS and iOS, the page's `fetch` on the Web, `HttpURLConnection` on Android, each exchange held on the IO lane, so an embedder's executors send on every host
+
+
+### Services — Tray and status icon
+
+Linux uses StatusNotifierItem
+
+
+### Services — Local notifications
+
+Needs app identity
+
+
+### Services — Taskbar and Dock progress, badge
+
+Windows `ITaskbarList3` sits in an extension nothing can reach; Linux `LauncherEntry`; Web Badging API
+
+
+### Services — Global shortcuts
+
+Wayland only through the GlobalShortcuts portal
+
+
+### Services — Launch at login
+
+
+
+
+### Services — Keep the screen awake
+
+
+
+
+### Services — Secure storage
+
+Credential Manager or DPAPI, Keychain, Secret Service, Keystore
+
+
+### Services — Sandbox-aware file and resource access (the layer never hands an app a path it cannot use)
+
+`data_dirs` and the dialogs assume an unsandboxed process: no security-scoped bookmarks, portal file access, AppContainer-aware paths, Storage Access Framework URIs or iOS document-scoped URLs.
+
+
+### Packaging — Package the OS installs (MSIX or installer, notarised `.app`, Flatpak and `.deb`, `.ipa`, `.aab`, web bundle)
+
+`flui build` stages an unsigned `.app`, a debug or release APK (no AAB) and a `wasm-bindgen` bundle; Windows and Linux packaging not audited.
+
+
+### Packaging — Code signing and notarisation
+
+Android signs with the debug or a given key; no macOS or iOS signing, no Windows Authenticode, no notarisation
+
+
+### Packaging — App identity reaches the package (AUMID, bundle ID, `.desktop` file and `app_id`, manifest)
+
+See the App identity row above; Android's manifest is generated by the CLI, the Web manifest is a template
+
+
+### Packaging — Sandbox and entitlement manifests generated from declared capabilities
+
+No manifest is derived from the capabilities an app declares: the CLI generates no entitlements, Flatpak or Snap permissions, MSIX capabilities or Android permissions from them (its Android template declares `VIBRATE` itself).
+
+

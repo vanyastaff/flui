@@ -1,10 +1,6 @@
-# The parity table `docs/platform-parity.md` is rendered from this file
-# (decision 8; the check is a flui-native crate test, ADR-0303 rung 4).
-# Hand-written. Edit a row here, run the flui-native parity test with
-# `FLUI_WRITE_PARITY=1` to restate `docs/platform-parity.md`, and commit both.
+# The parity table docs/platform-parity.md is rendered from this file
+# (decision 8; ADR-0303 rung 4). Hand-written source, not an edit target.
 
-# A cell mark and its legend line, rendered as `docs/platform-parity.md`'s
-# first table.
 [legend]
 yes = "Implemented and passed an executed run on that environment; the note names the run"
 partial = "Implemented but never run there, or partial; the note says which"
@@ -18,51 +14,841 @@ environment = "Windows"
 runner = "Win32 (native)"
 
 [[host]]
+id = "macos"
+environment = "macOS"
+runner = "AppKit (native)"
+
+[[host]]
 id = "wayland"
 environment = "Wayland"
 runner = "Wayland (native)"
 
 [[host]]
+id = "x11"
+environment = "X11"
+runner = "X11 (native)"
+
+[[host]]
+id = "ios"
+environment = "iOS"
+runner = "UIKit (native)"
+
+[[host]]
+id = "android"
+environment = "Android"
+runner = "android-activity (native)"
+
+[[host]]
+id = "web"
+environment = "Web"
+runner = "wasm canvas (native)"
+
+[[host]]
 id = "headless"
 environment = "Headless"
-runner = "Headless host"
+runner = "test double"
 
 [[section]]
-id = "core"
-name = "Core"
+id = "app-lifecycle"
+name = "App lifecycle"
 
 [[section.row]]
+id = "event-loop-startup-and-wake-ups"
+capability = "Event loop, startup and wake-ups"
+note = "Runs: a manual Windows run, the macOS live check, an application of `flui-app` on the native Wayland host under Weston and the native X11 host under Xvfb (`native_linux`, in CI), the iOS Simulator, the Android emulator, the Web counter. Owed: idle checks on hidden and occluded windows, which may get no frame callbacks on Wayland."
+status = { windows = "yes", macos = "yes", wayland = "yes", x11 = "yes", ios = "yes", android = "yes", web = "yes", headless = "yes" }
+
+[[section.row]]
+id = "version-floor-declared-packaged-refus"
+capability = "Version floor: declared, packaged, refused below it"
+note = "[ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md) sets a floor per environment, and `flui build` packages it (raised by `[platforms.<environment>] min` in `flui.toml`) everywhere but the Windows manifest. Windows, macOS, iOS and Android refuse a release below it at start, and Linux a compositor without `xdg_wm_base` or an X server without RandR 1.5, as `LaunchError::UnsupportedSystem`; the GPU falls back to GLES 3.0, WebGL2 or WARP and reports `NoSupportedGpu` with a reason per backend when none answers (run on llvmpipe GL only), and none has run on its floor."
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "missing", headless = "na" }
+
+[[section.row]]
+id = "quit-exit-request-last-window-policy"
+capability = "Quit, exit request, last-window policy"
+note = "macOS Cmd+Q and close ran; a manual Linux run checks the exit code; iOS has no quit API"
+status = { windows = "partial", macos = "yes", wayland = "yes", x11 = "yes", ios = "na", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "close-request-with-veto"
+capability = "Close request with veto"
+note = "Web has no `beforeunload`"
+status = { windows = "partial", macos = "yes", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "missing", headless = "yes" }
+
+[[section.row]]
+id = "reopen-with-no-windows-dock-click"
+capability = "Reopen with no windows (Dock click)"
+note = "a manual macOS run; headless can't drive it"
+status = { windows = "na", macos = "yes", wayland = "na", x11 = "na", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "focus-and-active-state"
+capability = "Focus and active state"
+note = "Android follows `onWindowFocusChanged` alone, and focus no longer stands for the Activity being resumed."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "visibility-minimize-occlusion"
+capability = "Visibility, minimize, occlusion"
+note = "Shown, minimized and occluded are three facts of the snapshot on every host (`visible`, `mode`, `occluded`), and a minimized or covered window stays shown. Wayland reports a window occluded while the compositor suspends it or keeps it on no output once shown, never minimized; Win+L and a desktop switch have not run on Windows."
+status = { windows = "partial", macos = "yes", wayland = "partial", x11 = "yes", ios = "yes", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "suspend-resume-gpu-surface-loss"
+capability = "Suspend, resume, GPU-surface loss"
+note = "Android dispatches `onResume` and `onPause` as the execution state, apart from focus; the Web's page events ran against a fake page, not yet in Chrome."
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "yes", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "configuration-changes-reach-the-running"
+capability = "Configuration changes reach the running app (no Activity recreation)"
+note = "Android's generated manifest declares the changes the host follows; dark mode, font scale, bold text, density and rotation ran on a Galaxy S21 without a second `android_main`. A language change still recreates the Activity."
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "na", android = "partial", web = "na", headless = "na" }
+
+[[section.row]]
+id = "sleep-wake-screen-lock"
+capability = "Sleep, wake, screen lock"
+note = "Windows, macOS and Linux deliver them; none ran through a real sleep or lock, and [#1736](https://github.com/vanyastaff/flui/issues/1736) lists the macOS run."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "session-end-log-off-shutdown-with-vet"
+capability = "Session end (log off, shutdown) with veto"
+note = "Delivered on every environment but headless, with a veto only on Windows and macOS; none ran through a real log-off or shutdown."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "missing" }
+
+[[section.row]]
+id = "memory-pressure"
+capability = "Memory pressure"
+note = "Delivered on Windows, macOS, iOS, Android and Linux; only Android's levels were driven on a device."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "bring-the-app-forward-request-attention"
+capability = "Bring the app forward, request attention"
+note = "Windows: `WindowCommand::Activate` brings the window forward where the foreground rules allow and flashes its taskbar button where they refuse, run against a second process; attention has no request of its own. Wayland asks with an `xdg-activation` token (sway marks the window urgent), run by hand on sway only."
+status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "single-instance-forward-arguments"
+capability = "Single instance, forward arguments"
+note = "macOS enforces one instance itself"
+status = { windows = "missing", macos = "na", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "deep-links-url-schemes-file-associatio"
+capability = "Deep links, URL schemes, file associations"
+note = "No host reports an opened URL or file, at cold start or while running (`opened(urls, files)` joins the application handler with the activation feature); the Web entry URL is under history routing"
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "state-restoration"
+capability = "State restoration"
+note = "macOS window restoration, iOS scene restoration, Android state after process death, Web `history.state`"
+status = { windows = "na", macos = "missing", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "activation-obeys-the-os-focus-rules-way"
+capability = "Activation obeys the OS focus rules (Wayland `xdg-activation` token, Windows foreground rights handed to the activated process)"
+note = "Windows: an activation never takes the foreground from another application and comes forward once that application hands the right over, run with two processes; opening a link or file hands the right to the handler process the shell started; no second launch hands it yet (single instance, in the activation spec). The Wayland token's whole path runs only on sway, by hand: CI's Weston has no `xdg_activation_v1`. A Wayland token names the seat and serial of the user input behind the activation. macOS cooperative activation (`NSApplication.yieldActivation(to:)`, macOS 14) is not audited."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "na", headless = "na" }
+
+[[section.row]]
+id = "app-identity-aumid-bundle-id-deskto"
+capability = "App identity (AUMID, bundle ID, `.desktop` file)"
+note = "Notifications, URL schemes, the tray, jump lists and portals need it; `flui-cli` packaging not audited"
+status = { windows = "unaudited", macos = "unaudited", wayland = "unaudited", x11 = "unaudited", ios = "na", android = "na", web = "na", headless = "na" }
+
+[[section]]
 id = "window"
-capability = "Window"
-position = "window"
-note = "A native window with its system frame, shown, moved and resized."
-status = { windows = "yes", wayland = "partial", headless = "yes" }
-evidence = [{ scenario = "window_conformance", date = "2026-10-28", device = "Windows 11" }]
+name = "Window"
 
 [[section.row]]
-id = "displays"
-capability = "Displays"
-position = "displays"
-note = "Reading the environment's screens, their sizes and their changes."
-status = { windows = "yes", wayland = "partial", headless = "yes" }
-evidence = [{ scenario = "displays", date = "2026-10-18", device = "Windows 11" }]
+id = "open-and-close-a-window"
+capability = "Open and close a window"
+note = "iOS: the scene supplies the window; Android: one native window, which the application cannot close (`closes` is `Unavailable`)"
+status = { windows = "yes", macos = "yes", wayland = "yes", x11 = "yes", ios = "yes", android = "yes", web = "yes", headless = "yes" }
 
 [[section.row]]
-id = "clipboard"
-capability = "Clipboard"
-position = "clipboard"
-note = "Reading and writing the system clipboard, plain text."
-status = { windows = "partial", wayland = "yes", headless = "yes" }
-evidence = [{ scenario = "clipboard", date = "2026-10-30", device = "Weston 13" }]
+id = "multiple-windows"
+capability = "Multiple windows"
+note = "No iPad scenes, no Android multi-window"
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "na", headless = "yes" }
+
+[[section.row]]
+id = "show-without-a-blank-first-frame"
+capability = "Show without a blank first frame"
+note = "Windows and X11 create the window hidden and show it after the first presented frame; Wayland maps with the first buffer, so nothing is deferred, and `show` is refused."
+status = { windows = "partial", macos = "yes", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "na", headless = "yes" }
+
+[[section.row]]
+id = "launch-screen-handoff-the-first-frame-m"
+capability = "Launch-screen handoff: the first frame matches the OS splash"
+note = "Nothing aligns the first frame with the OS splash (the iOS launch screen, Android's `SplashScreen`, the Web page before the wasm loads). Desktop is the row above."
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "na" }
+
+[[section.row]]
+id = "title"
+capability = "Title"
+note = "Linux: Wayland sets `xdg_toplevel`'s title and X11 `_NET_WM_NAME` and `WM_NAME`; neither lets a client read the title shown back, so the snapshot holds the one last set. Other hosts: not yet"
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "minimize-maximize-restore-state-readb"
+capability = "Minimize, maximize, restore, state readback"
+note = "Linux reads the mode back, on X11 from `WM_STATE` and `_NET_WM_STATE`, on Wayland from the compositor's configures, which never report minimized; sway, which tiles, carries out no maximize. macOS: the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); the green button, Cmd-M and the Dock have not run by hand ([#1736](https://github.com/vanyastaff/flui/issues/1736))."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "na", headless = "yes" }
+
+[[section.row]]
+id = "fullscreen"
+capability = "Fullscreen"
+note = "Linux asks the compositor or window manager for fullscreen (`xdg_toplevel.set_fullscreen`, `_NET_WM_STATE_FULLSCREEN`) and reads it back."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "position-size-move-and-resize-events"
+capability = "Position, size, move and resize events"
+note = "Wayland can't read or set a global position by design; X11 ran on an Xvfb server. macOS: the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); a drag, the y-axis by hand and a second display have not run ([#1736](https://github.com/vanyastaff/flui/issues/1736))."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "size-constraints-resizable-and-other-fl"
+capability = "Size constraints, resizable and other flags"
+note = "Windows holds limits and flags at the operating system (checked against the real system, not by dragging an edge); Linux hands them to the compositor or window manager (`xdg_toplevel`'s minimum and maximum size, `WM_NORMAL_HINTS`), run in the window conformance on Weston and under openbox on Xvfb with no edge dragged. macOS: the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); no edge was dragged against the limits by hand ([#1736](https://github.com/vanyastaff/flui/issues/1736))."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "na", headless = "yes" }
+
+[[section.row]]
+id = "live-resize-without-jitter"
+capability = "Live resize without jitter"
+note = "Not audited; Windows has no `WM_ENTERSIZEMOVE` handling. It passes when every frame presented during a scripted border drag has the content size of its window."
+status = { windows = "unaudited", macos = "unaudited", wayland = "unaudited", x11 = "unaudited", ios = "na", android = "na", web = "unaudited", headless = "na" }
+
+[[section.row]]
+id = "save-and-restore-window-placement"
+capability = "Save and restore window placement"
+note = "`AppConfig::restore_placement`. Windows opens at the remembered position, size and mode (content size, `SetWindowPlacement`) and ran in a real window."
+status = { windows = "yes", macos = "partial", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "na", headless = "yes" }
+
+[[section.row]]
+id = "frameless-windows-custom-title-bar"
+capability = "Frameless windows, custom title bar"
+note = "`WindowFrame::AppTitleBar` is in the contract, taken by the headless host, Win32, macOS and the native X11 and Wayland hosts, as are the chrome input regions (move, resize, caption buttons, ADR-0286) that answer the system's hit test and the `flui-widgets` parts that mark them (`WindowTitleBar`, `WindowCaptionButton`, `WindowResizeArea`). Win32 drops the caption and answers `WM_NCHITTEST` from the regions, `HTMAXBUTTON` included for the snap layouts, type-checked and not run; macOS keeps a transparent system title bar under full-size content, moves the window from a move region and answers a double-click as System Settings says, its traffic lights hidden or moved, type-checked and not run; the native X11 host does the same through `_NET_WM_MOVERESIZE` where the window manager lists it, run under openbox on Xvfb; the native Wayland host asks for no frame, keeps the margins of its own and moves and maximizes the window from them, run on Weston 13."
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "backdrop-material-transparency-corners"
+capability = "Backdrop material, transparency, corners"
+note = "The contract's material (`WindowCommand::SetMaterial`, `WindowMaterial::{Opaque, System}`, `WindowCapabilities::material`): a Win32 window opens on Mica (`System`) and changes it from build 22621 on, and below that build the capability is unavailable on this device and admission answers `NotOnThisDevice`; ran in a Win32 window on Windows 11 (build 26300), the desktop window manager's attribute read back after each change. macOS draws `System` as `NSVisualEffectView`'s window-background material, type-checked only. Linux and Web report the material `Unavailable`; no window draws transparent content. On Windows the corners and title-bar theme are creation options (`Win32WindowOptions`), and `flui::native::windows` sets the backdrop, corners and theme or answers why not; ran in a Win32 window. macOS draws an `NSVisualEffectView` material or Liquid Glass (`NSGlassEffectView`, macOS 26, found by name) behind the content through `flui::native::macos` (`AppKitWindow::set_backdrop`, ADR-0254 §3), which ran on macOS 27 (M1, 2026-10-27); the contract's material on macOS is type-checked only, and the cell stays 🟡 for it and for transparency"
+status = { windows = "partial", macos = "partial", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "owned-modal-and-popup-windows-always-o"
+capability = "Owned, modal and popup windows; always on top"
+note = "Not in the contract, so menus, tooltips and dropdowns can't leave the window; Wayland needs `xdg_popup`"
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "window-icon"
+capability = "Window icon"
+note = "`WM_SETICON`, `xdg-toplevel-icon`, `_NET_WM_ICON`"
+status = { windows = "missing", macos = "na", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "exclude-a-window-from-screen-capture"
+capability = "Exclude a window from screen capture"
+note = "`SetWindowDisplayAffinity`, `NSWindow.sharingType`, iOS capture detection, Android `FLAG_SECURE`"
+status = { windows = "missing", macos = "missing", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "native-views-inside-the-ui-web-view-ma"
+capability = "Native views inside the UI (web view, map, video)"
+note = "Not in the contract; it shapes compositing, hit-testing and accessibility"
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "missing", headless = "na" }
+
+[[section]]
+id = "display"
+name = "Display"
+
+[[section.row]]
+id = "displays-list-work-area-current-displ"
+capability = "Displays: list, work area, current display, changes"
+note = "Windows, Wayland, X11, Android and the Web ran live; macOS and iOS are type-checked only. A move between two monitors ran only on Windows, and a Windows disconnect did not run."
+status = { windows = "yes", macos = "partial", wayland = "yes", x11 = "yes", ios = "partial", android = "yes", web = "yes", headless = "yes" }
+
+[[section.row]]
+id = "scale-factor-and-dpi-changes"
+capability = "Scale factor and DPI changes"
+note = "Web watches `(resolution: Xdppx)` and re-arms it after each change for the display snapshot."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "yes", web = "yes", headless = "yes" }
+
+[[section.row]]
+id = "refresh-rate-and-frame-pacing"
+capability = "Refresh rate and frame pacing"
+note = "Every host reads the mode's rate or estimates the period; macOS and iOS are type-checked only. A display that reports none uses 60 Hz, with a diagnostic."
+status = { windows = "yes", macos = "partial", wayland = "yes", x11 = "yes", ios = "partial", android = "yes", web = "yes", headless = "yes" }
+
+[[section.row]]
+id = "present-mode-queue-depth-vrr-and-teari"
+capability = "Present mode, queue depth, VRR and tearing control"
+note = "The engine always presents with `Fifo` and a frame latency of 2; nothing lets the platform layer or the app choose a present mode, a queue depth, variable-refresh behaviour or tearing."
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "na", headless = "na" }
+
+[[section.row]]
+id = "hdr-wide-gamut-and-colour-management-s"
+capability = "HDR, wide gamut and colour management (surface colour space, SDR/HDR headroom, display profile changes)"
+note = "Every display carries its colour profile (`DisplayInfo::color`: colour space and headroom, or why there is none), and the engine sets a surface up for the colour of its window's display (ADR-0256). Windows read an SDR monitor correctly; no HDR or P3 display has run anywhere, and sources stay sRGB. X11 reads no colour (`NotYetOnThisHost`); the Web reports capability and no headroom."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "missing", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "hdr-and-sdr-white-change-events"
+capability = "HDR and SDR-white change events"
+note = "A profile change is a new display snapshot revision. Windows re-reads on `WM_DISPLAYCHANGE` (the SDR white level moving raises none), macOS on the screen-parameters notification, Wayland on `image_description_changed`, the Web on the colour queries' `change`; none ran with a real change. iOS and Android re-read only on their other display events. The window receives the change as a new `WindowDisplay`, and its renderer configures the surface again before the next frame (ADR-0256 §6, amended)."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "missing", ios = "missing", android = "missing", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "presentation-feedback-when-each-frame-r"
+capability = "Presentation feedback: when each frame reached the screen"
+note = "A frame request carries when the window's newest earlier frame was shown (`FrameRequest::presented`, on the event timeline input is stamped on); the frame clock keeps it and bounds idle work by the next refresh. Windows reads the DXGI frame statistics of the renderer's swap chain; headless reports what a test injects. Wayland reads `wp_presentation_time`, run on Weston 13. The Web (a `requestAnimationFrame` stamp is a frame's start) and X11 (a present completes on the GPU driver's connection) have none, and their windows say so; macOS reads a presented handler on each drawable of the view's own `CAMetalLayer`; iOS and Android do not report yet."
+status = { windows = "yes", macos = "yes", wayland = "yes", x11 = "na", ios = "missing", android = "missing", web = "na", headless = "yes" }
+
+[[section.row]]
+id = "gpu-surface"
+capability = "GPU surface"
+note = "Rendered in every run above"
+status = { windows = "yes", macos = "yes", wayland = "yes", x11 = "yes", ios = "yes", android = "yes", web = "yes", headless = "na" }
+
+[[section.row]]
+id = "safe-area"
+capability = "Safe area"
+note = "macOS ignores the notch in fullscreen; Web doesn't read `env(safe-area-inset-*)`."
+status = { windows = "na", macos = "missing", wayland = "na", x11 = "na", ios = "yes", android = "yes", web = "missing", headless = "yes" }
+
+[[section.row]]
+id = "soft-keyboard-insets"
+capability = "Soft-keyboard insets"
+note = "In the contract (ADR-0277): a window reports the keyboard's target and its motion, and each frame lays out with the occlusion at its vsync; headless scripts a motion. Android reports the keyboard (`Type.ime()` from API 30, the system window bottom below) and, from API 30, its motion from `WindowInsetsAnimation.Callback`, type-checked, no device run; below API 30 it jumps to the target. iOS reports the keyboard and its motion from `UIKeyboardWillChangeFrameNotification` (end frame, duration, curve), type-checked, no device run. The Web reports the keyboard at rest, from `navigator.virtualKeyboard` (which the window has overlay the page) or else the visual viewport, run against a fake page on Node, not in a mobile browser."
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "system-gesture-insets"
+capability = "System-gesture insets"
+note = "`WindowInsets::system_gestures` reaches `MediaQueryData::system_gesture_insets` (ADR-0277). Android reads `getSystemGestureInsets()` from API 29 (`NotOnThisDevice` below), type-checked, no device run."
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "na", android = "partial", web = "na", headless = "yes" }
+
+[[section.row]]
+id = "system-gesture-exclusion"
+capability = "System-gesture exclusion"
+note = "Android's exclusion rects ran on a Galaxy S21; the iOS path never ran and was not type-checked on the authoring host."
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "partial", android = "yes", web = "na", headless = "yes" }
+
+[[section.row]]
+id = "display-cutout-fold-posture"
+capability = "Display cutout, fold posture"
+note = "Android folds the cutout into the safe area; no fold posture"
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "na", android = "partial", web = "missing", headless = "missing" }
+
+[[section]]
+id = "input"
+name = "Input"
+
+[[section.row]]
+id = "mouse-buttons-hover-capture"
+capability = "Mouse: buttons, hover, capture"
+note = "The iPad pointer hovers, scrolls, pinches, rotates and reads its secondary button, type-checked only, never run on an iPad; Android ran no hardware mouse, hover or capture."
+status = { windows = "yes", macos = "yes", wayland = "yes", x11 = "yes", ios = "partial", android = "partial", web = "yes", headless = "yes" }
+
+[[section.row]]
+id = "touch"
+capability = "Touch"
+note = "Linux translates `wl_touch` and XInput 2 touches, held by their translation tests only; no touch device ran on either."
+status = { windows = "partial", macos = "na", wayland = "partial", x11 = "partial", ios = "yes", android = "yes", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "pen-and-stylus"
+capability = "Pen and stylus"
+note = "macOS doesn't translate tablet events; Wayland (`tablet-v2`) and X11 (XInput 2 pens) are held by their decoders only; no hardware pen has run on Windows, Android or the Web."
+status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "precise-scrolling-with-phases-and-moment"
+capability = "Precise scrolling with phases and momentum"
+note = "Windows' precision-touchpad pan is implemented but no touchpad has run; Android's two-finger scroll ran only from a `uinput` touchpad. the iPad trackpad's scroll is type-checked only, never run on an iPad; the Web has no phases."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "touchpad-pan-as-a-drag-or-a-scroll"
+capability = "Touchpad pan as a drag or a scroll"
+note = "Runs on every host that sends phased precise scroll (see the row above); headless runs it with synthetic packets, no touchpad has. the iPad trackpad is type-checked only; the Web has no phases."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "missing", headless = "yes" }
+
+[[section.row]]
+id = "trackpad-pinch-and-rotate"
+capability = "Trackpad pinch and rotate"
+note = "Windows, Android and the Web decode a pinch, none from a hardware trackpad; the iPad decodes a pinch and a rotation, type-checked only; Wayland (`pointer-gestures`) and X11 (XInput 2.4 gestures) decode a pinch, held by their decoders only."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "pointer-lock-and-warp"
+capability = "Pointer lock and warp"
+note = "Not in the contract"
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "keyboard-keys-modifiers-repeat-dead"
+capability = "Keyboard: keys, modifiers, repeat, dead keys"
+note = "iOS handles no hardware keyboard; Android ran hardware key events through a manual Android run, with no repeat, dead key or physical keyboard."
+status = { windows = "yes", macos = "partial", wayland = "partial", x11 = "partial", ios = "missing", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "keyboard-layout-and-its-changes"
+capability = "Keyboard layout and its changes"
+note = "Web hard-codes `en-US`; Wayland and X11 read the layout through XKB and report its changes, not run with a layout switched"
+status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "gamepad-and-d-pad-a-controller-s-button"
+capability = "Gamepad and D-pad: a controller's buttons and sticks, a remote's keys, moving focus by direction"
+note = "No gamepad source on any host (XInput or GameInput, `GCController`, Android `SOURCE_GAMEPAD` axes, the Web Gamepad API, evdev); Android's D-pad arrives as the arrow keys and Enter through the key table, and the arrows drive directional focus, never run on a TV."
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "partial", web = "missing", headless = "partial" }
+
+[[section.row]]
+id = "cursor-shapes"
+capability = "Cursor shapes"
+note = "No iPad pointer styles or Android `PointerIcon`; no custom image or hide-until-move"
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "system-back-and-history"
+capability = "System back and history"
+note = "Android predictive back (from targetSdk 36, `KEYCODE_BACK` isn't delivered), the iOS edge swipe, the Web History and Navigation APIs"
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "browser-gesture-suppression"
+capability = "Browser gesture suppression"
+note = "The canvas sets `touch-action: none` inline; `overscroll-behavior` is not set, and it never ran in Safari or on a phone."
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "na", android = "na", web = "partial", headless = "na" }
+
+[[section.row]]
+id = "input-device-availability"
+capability = "Input device availability"
+note = "Headless, Wayland and X11 report presence changes, the other hosts only their initial table so far; none ran on its environment."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "input-latency-mode-and-high-rate-samplin"
+capability = "Input latency mode and high-rate sampling (raw updates, coalesced and predicted samples, one monotonic clock)"
+note = "`AppConfig::with_input_latency` sets `WindowOptions::input_latency`; Android takes unbuffered pointer dispatch for a `Low` window from API 30 (type-checked)."
+status = { windows = "partial", macos = "unaudited", wayland = "missing", x11 = "missing", ios = "unaudited", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "event-timestamps-converted-without-wrap"
+capability = "Event timestamps converted without wrap or base skew (Win32 `GetMessageTime` 32-bit ms, Wayland undefined base, Android uptime ms)"
+note = "Windows pointer ticks, the Apple uptime seconds and the Wayland and X11 millisecond stamps are rebased onto `EventTime` without a wrap, a Linux stamp only within a trusted skew of its arrival; Android and the Web are not audited, and nothing ran across a wrap or a clock-base change."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "unaudited", web = "unaudited", headless = "na" }
+
+[[section]]
+id = "text-input"
+name = "Text input"
+
+[[section.row]]
+id = "ime-composition-and-candidate-placement"
+capability = "IME composition and candidate placement"
+note = "Windows TSF and macOS `NSTextInputClient` haven't run with a real input method. iOS composes through an invisible `UITextInput` responder, which now edits the field through the shared text-store host as macOS does (type-checked; the run below predates it): on the iOS 27.1 Simulator (2026-10-28, an M1 host, on-screen keyboard driven by XCUITest) the Japanese Romaji keyboard composed `にほんご` and committed `日本語`, and the nine-key Pinyin keyboard composed `ni hao` and committed `你好`, each reaching an `EditableText`; candidate placement was not observed (the Simulator device gives no screenshot) and no device ran. Android ran with Samsung Keyboard on a Galaxy S21 only, the Web through Chrome's own input-method path only."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "text-input-client-queries-selected-rang"
+capability = "Text-input client queries (selected range, surrounding text, first rect) for dictation, reconversion and handwriting"
+note = "The text store has the shape of TSF's `ITextStoreACP`, and iOS's responder answers `UITextInput`'s range and rect queries from the field's store and layout (type-checked), but dictation, reconversion and first-rect queries are not audited on any host."
+status = { windows = "unaudited", macos = "unaudited", wayland = "unaudited", x11 = "unaudited", ios = "unaudited", android = "unaudited", web = "unaudited", headless = "na" }
+
+[[section.row]]
+id = "text-input-session-survives-window-move"
+capability = "Text-input session survives window move, resize, DPI change and focus loss"
+note = "Windows tells TSF the focused field's layout changed on a move, a size-and-move loop and a DPI change, checked with no input method composing; the other hosts are not audited."
+status = { windows = "partial", macos = "unaudited", wayland = "unaudited", x11 = "unaudited", ios = "unaudited", android = "unaudited", web = "unaudited", headless = "na" }
+
+[[section.row]]
+id = "soft-keyboard-show-and-hide"
+capability = "Soft keyboard show and hide"
+note = "Android shows Samsung Keyboard when a field takes focus and hides it when none does. iOS shows the system keyboard when a field takes focus (the Simulator run above); hiding it when focus leaves did not run."
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "unaudited", android = "yes", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "input-purpose-and-hints-password-numbe"
+capability = "Input purpose and hints (password, number, autocorrect)"
+note = "Windows, Android, iOS and the Web map the purpose, and only Android's plain single-line field ran on a device; Wayland (`text-input-v3`) and X11 (IBus and Fcitx5, not XIM) send the purpose, unit-tested only; otherwise it is not in the contract."
+status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "missing" }
+
+[[section.row]]
+id = "system-edit-menu"
+capability = "System edit menu"
+note = "`UIEditMenuInteraction` (its Paste avoids the iOS paste prompt), Android floating `ActionMode`"
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "spell-check"
+capability = "Spell check"
+note = "`ISpellChecker`, `NSSpellChecker`, `UITextChecker`, `SpellCheckerSession`"
+status = { windows = "missing", macos = "missing", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "autofill-passwords-one-time-codes"
+capability = "Autofill (passwords, one-time codes)"
+note = ""
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "handwriting-into-text-fields"
+capability = "Handwriting into text fields"
+note = "Windows Ink and iPad Scribble are missing; Android asks `startStylusHandwriting` (API 33) and never ran (the S21 takes no S Pen)."
+status = { windows = "missing", macos = "na", wayland = "na", x11 = "na", ios = "missing", android = "partial", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "secure-text-entry-password-keystrokes-a"
+capability = "Secure text entry (password keystrokes and text kept from other apps, input-method learning and the clipboard history)"
+note = "macOS holds `EnableSecureEventInput` while a protected field has focus in the key window and iOS sets `isSecureTextEntry` (both type-checked, not run); Wayland sends a protected field as the `text-input-v3` password purpose with the hidden-text and sensitive-data hints, and X11 sends IBus and Fcitx5 the password purpose (XIM has none), unit-tested only."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section]]
+id = "accessibility"
+name = "Accessibility"
+
+[[section.row]]
+id = "tree-and-actions"
+capability = "Tree and actions"
+note = "The desktop adapters are built into every window, with no feature, iOS's into every UIKit window, Android's into every Activity window, and every Web canvas mirrors its tree as a parallel ARIA DOM; none is checked with a screen reader."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "properties-value-hint-description-st"
+capability = "Properties (value, hint, description, state)"
+note = "X11: an AT-SPI client reads role, name, hint, a field's text, a slider's value and range, states and actions (`linux_atspi`); Wayland has the same adapter, not run on a Wayland window. The Web writes states, ranges and descriptions as ARIA attributes."
+status = { windows = "unaudited", macos = "unaudited", wayland = "partial", x11 = "yes", ios = "unaudited", android = "unaudited", web = "unaudited", headless = "unaudited" }
+
+[[section.row]]
+id = "announcements-and-live-regions"
+capability = "Announcements and live regions"
+note = "X11: an AT-SPI client hears announcements, live regions and a status that appears (`linux_atspi`), and a route change by name (`a_route_change_is_heard_by_its_name`)."
+status = { windows = "unaudited", macos = "unaudited", wayland = "partial", x11 = "partial", ios = "unaudited", android = "unaudited", web = "unaudited", headless = "unaudited" }
+
+[[section.row]]
+id = "gesture-alternatives-custom-actions-co"
+capability = "Gesture alternatives (custom actions, context menu, keys, controls)"
+note = "Checked headless by `assert_gesture_alternatives` (ADR-0216); no locked AccessKit adapter routes custom actions or `ShowContextMenu`, so assistive technology reaches them only through the controls."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "assistive-technology-focus-screen-reade"
+capability = "Assistive-technology focus (screen reader cursor)"
+note = "`Semantics::on_assistive_focus_within` hears the cursor where an adapter reports it; iOS and Android do through vendored `accesskit_ios` and `accesskit_android` changes, not yet run with VoiceOver or TalkBack, and no other adapter does ([gap 36](gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)); checked headless by `the_screen_reader_entering_the_carousel_pauses_autoplay`."
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "partial", android = "partial", web = "missing", headless = "yes" }
+
+[[section]]
+id = "transfer"
+name = "Transfer"
+
+[[section.row]]
+id = "plain-text-clipboard"
+capability = "Plain-text clipboard"
+note = "Wayland reads and writes its seats' selection through `wl_data_device`, run between two clients of Weston 13; X11 owns and reads `CLIPBOARD` on a connection of its own, run between two clipboards on Xvfb; Android reads and writes `ClipboardManager` through JNI, type-checked, no device run; the Web reads `navigator.clipboard` asynchronously, unrun in a browser, and falls back to its own writes"
+status = { windows = "partial", macos = "partial", wayland = "yes", x11 = "yes", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "rich-clipboard-images-html-files"
+capability = "Rich clipboard (images, HTML, files)"
+note = ""
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "drop-into-the-app"
+capability = "Drop into the app"
+note = "Wayland and X11 take drops from a source of another client, run under sway 1.9 and on Xvfb; Windows, the Web and Android take drops, run within one process, in headless Chrome or on a Galaxy S21 only; none ran from Explorer or another app or page."
+status = { windows = "partial", macos = "missing", wayland = "yes", x11 = "yes", ios = "missing", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "drag-out-of-the-app"
+capability = "Drag out of the app"
+note = "Wayland and X11 start OS drags, taken by a target of another client under sway 1.9 and on Xvfb; Windows, the Web and Android start them too, none run into another app or page; macOS and iOS report outgoing drags `Unavailable`."
+status = { windows = "partial", macos = "missing", wayland = "yes", x11 = "yes", ios = "missing", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "concealed-clipboard-entries-kept-out-of"
+capability = "Concealed clipboard entries (kept out of clipboard history and cloud sync)"
+note = "`ClipboardWrite::concealed` (ADR-0152 §6); each host answers its `Concealment`. X11 and Wayland offer KDE's hint and Android its sensitive extra, which only what reads them honours, so those cells stay 🟡 by design; the Web has no mark and fails the scenario as gap 26."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "missing", headless = "yes" }
+
+[[section]]
+id = "preferences"
+name = "Preferences"
+
+[[section.row]]
+id = "dark-mode-and-its-changes"
+capability = "Dark mode and its changes"
+note = "Every window seeds `MediaQueryData::platform_brightness` and follows changes; only Windows and Android ran a live flip."
+status = { windows = "yes", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "yes", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "accent-colour"
+capability = "Accent colour"
+note = "Not in the contract"
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "missing", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "text-scale"
+capability = "Text scale"
+note = "iOS and Android answer each size natively, and Android ran a live change on a Galaxy S21; Windows applies its one `TextScaleFactor` linearly, while WinUI scales larger text less; Linux reads GNOME's `text-scaling-factor` through the Settings portal, linear as in GTK (ran in WSL against a stand-in portal, not in a GNOME session). Headless: `the_system_text_scale_grows_each_span_once`, `a_field_measures_and_hit_tests_the_current_text_scale`"
+status = { windows = "partial", macos = "na", wayland = "partial", x11 = "partial", ios = "partial", android = "yes", web = "missing", headless = "yes" }
+
+[[section.row]]
+id = "reduce-motion"
+capability = "Reduce motion"
+note = "Headless injects preferences through `HeadlessHost::set_system_preferences`; no reduce-motion row drives it yet"
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "partial" }
+
+[[section.row]]
+id = "contrast"
+capability = "Contrast"
+note = "Android reads the system contrast level (API 34+) and the high-contrast-text setting and follows both live: on a Galaxy S21 (Android 15) `high_text_contrast_enabled` and `contrast_level` changes reached `MediaQuery` without a restart. macOS reads `accessibilityDisplayShouldIncreaseContrast` on the workspace's display-options notification, iOS `UIAccessibilityDarkerSystemColorsEnabled` on its status notification (both type-checked only). Linux reads the Settings portal's `contrast`, or GNOME's `high-contrast`, and follows their changes (ran in WSL against a stand-in portal). The Web reads `prefers-contrast` and `forced-colors` and follows their changes: `browser_contrast_and_languages_reach_their_owner` runs on Node against a controlled browser boundary; not run in a browser"
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "yes", web = "partial", headless = "missing" }
+
+[[section.row]]
+id = "bold-text"
+capability = "Bold text"
+note = "Android ran a live change on a Galaxy S21"
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "partial", android = "yes", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "languages-and-regional-formats"
+capability = "Languages and regional formats"
+note = "Every host reads the languages (Android from the configuration's `LocaleList`, `[en-US]` on a Galaxy S21, a change not run; macOS and iOS from `NSLocale.preferredLanguages` on the current-locale notification, type-checked only; Linux from `LANGUAGE`, `LC_ALL`, `LC_MESSAGES` and `LANG` as gettext reads them, once at start; the Web from `navigator.languages`, following `languagechange`; run on Node against a controlled browser boundary, not in a browser); regional formats ([ADR-0278](adr/ADR-0278-regional-formats-are-the-unicode-locale-extension-keys.md)) on Windows from Region settings (first weekday, clock, units, native digits, formats region; type-checked only) and on Linux from `LC_TIME`, `LC_MEASUREMENT` and GNOME's `clock-format` (not run on a desktop), on macOS and iOS from Foundation's autoupdating locale and calendar (first weekday, the `j` skeleton's clock, units, the `numbers` keyword, the country; type-checked only), on Android from the default locale's `fw` and `nu` keywords, the calendar and `is24HourFormat`, following `TIME_12_24` (type-checked only), and on the Web from `Intl`'s default hour cycle and week info (not run in a browser)"
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "missing" }
+
+[[section.row]]
+id = "layout-direction-and-per-app-language"
+capability = "Layout direction and per-app language"
+note = "The platform layer exposes no layout direction and no per-app language override (Android 13 and iOS let the user pick a language for one app)."
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "system-fonts-and-fallback"
+capability = "System fonts and fallback"
+note = "Text layout resolves fonts through `fontdb` in `flui-painting`. `flui_native::fonts::system_fallback` asks each host which faces fall back (DirectWrite, CoreText, fontconfig, `AFontMatcher` on Android from API 29 and `fonts.xml` below it) and the collection tries them ahead of FLUI's tables (ADR-0271); fontconfig's answer is checked on the Linux CI host, the others are type-checked only, and no OS has rendered the CJK and emoji check yet."
+status = { windows = "unaudited", macos = "unaudited", wayland = "unaudited", x11 = "unaudited", ios = "unaudited", android = "unaudited", web = "unaudited", headless = "na" }
+
+[[section.row]]
+id = "gesture-and-wheel-settings"
+capability = "Gesture and wheel settings"
+note = "The Windows wheel smoke passed; the timings never ran."
+status = { windows = "partial", macos = "partial", wayland = "missing", x11 = "missing", ios = "missing", android = "partial", web = "missing", headless = "yes" }
+
+[[section.row]]
+id = "haptics-setting"
+capability = "Haptics setting"
+note = "Android reads `HAPTIC_FEEDBACK_ENABLED` and ran on a Galaxy S21; iOS has no public read API, and the Windows pen and macOS Force Touch settings are not audited."
+status = { windows = "unaudited", macos = "unaudited", wayland = "na", x11 = "na", ios = "na", android = "yes", web = "na", headless = "yes" }
+
+[[section.row]]
+id = "power-state-battery-low-power-mode-th"
+capability = "Power state (battery, low-power mode, thermal)"
+note = "Not in the contract"
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "power-aware-pacing-frame-cap-and-backgr"
+capability = "Power-aware pacing (frame cap and background pause under low-power or thermal state)"
+note = "Power state is not read, so nothing lowers the frame rate or pauses background work under a low-power, battery-saver or thermal state."
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "preference-changes-arrive-as-os-notifica"
+capability = "Preference changes arrive as OS notifications, never by polling"
+note = "Android's `FluiView` reports setting, contrast and inset changes; on a Galaxy S21 the loop made no turn in 10 s idle, resumed or behind Home. macOS wakes on AppKit notifications and app activation (type-checked only). No host polls a healthy, installed source: Android keeps a 500 ms cadence only while `FluiView` is not in the window, and Linux retries a failed portal read every second."
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "yes", web = "partial", headless = "na" }
+
+[[section]]
+id = "mobile-system-ui"
+name = "Mobile system UI"
+
+[[section.row]]
+id = "status-and-navigation-bars-immersive-mo"
+capability = "Status and navigation bars, immersive mode"
+note = "Status-bar icon style ran on Android; iOS is type-checked only, and no host has navigation-bar or immersive control."
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "partial", android = "yes", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "orientation-lock"
+capability = "Orientation lock"
+note = "Android 16 ignores it on large screens"
+status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "haptics"
+capability = "Haptics"
+note = "Both tiers and the frame queue ship (ADR-0210); macOS, iOS and the Android envelopes never ran on a device, and no haptic pen has vibrated."
+status = { windows = "partial", macos = "partial", wayland = "na", x11 = "na", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "system-sounds-alert-beep"
+capability = "System sounds, alert beep"
+note = ""
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "na", headless = "missing" }
+
+[[section]]
+id = "menus"
+name = "Menus"
+
+[[section.row]]
+id = "app-menu-bar"
+capability = "App menu bar"
+note = "A macOS app without one has no Quit or Edit menu; iPadOS 26 has a menu bar; elsewhere the app draws its own"
+status = { windows = "na", macos = "missing", wayland = "na", x11 = "na", ios = "missing", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "native-context-menus"
+capability = "Native context menus"
+note = "The mobile system edit menu is under Text input; the in-app, theme-free `ContextMenuArea` draws its own menu on every platform, run headless only"
+status = { windows = "missing", macos = "missing", wayland = "na", x11 = "na", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "dock-menu-jump-list-recent-documents"
+capability = "Dock menu, jump list, recent documents"
+note = "Linux: desktop actions in the `.desktop` file"
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
 
 [[section]]
 id = "services"
-name = "System services"
+name = "Services"
 
 [[section.row]]
-id = "launch"
-capability = "Launch"
-position = "launch"
-note = "Opening URLs, files and dialogs through the host's services."
-status = { windows = "yes", wayland = "partial", headless = "na" }
-evidence = [{ scenario = "portal", date = "2026-10-31", device = "stand-in portal" }]
+id = "open-a-url"
+capability = "Open a URL"
+note = "Linux: `flui-system`'s launcher through the `OpenURI` portal, run against a stand-in portal on a private bus, not a desktop. Windows and Web: the core `open_url`, which nothing calls"
+status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "open-a-file-reveal-it-in-the-file-manag"
+capability = "Open a file, reveal it in the file manager"
+note = "Linux: `OpenFile` and `OpenDirectory` portals with a descriptor, run against a stand-in portal; the file manager decides whether the file is selected"
+status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "move-to-trash"
+capability = "Move to trash"
+note = "Linux: the `Trash` portal, run against a stand-in portal"
+status = { windows = "missing", macos = "missing", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "open-save-and-folder-dialogs"
+capability = "Open, save and folder dialogs"
+note = "Linux: `flui-system`'s dialogs through the `FileChooser` portal, filters, title, folder and accept label, modal to an X11 window; on Wayland not modal until the host exports an `xdg-foreign` handle; run against a stand-in portal. Windows has no filters, title or owner window; every other host answers \"cancelled\""
+status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "message-box"
+capability = "Message box"
+note = "Linux has no native one: the app draws it"
+status = { windows = "missing", macos = "missing", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "share"
+capability = "Share"
+note = ""
+status = { windows = "missing", macos = "missing", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "app-folders-and-storage"
+capability = "App folders and storage"
+note = "An application identifier or `AppConfig::with_storage_dir` gives widgets storage on every host; it ran on Windows and Android, and no Web app has run the probe. Headless keeps each application's values in memory for the platform's life, or on disk under `HeadlessPlatform::with_data_root`, never in the user's directories. Android `app_path` still reports a fixed path."
+status = { windows = "yes", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "yes", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "persisted-documents-survive-a-kill-a-re"
+capability = "Persisted documents survive a kill, a read-only file, a redirected profile, a second instance and a session end"
+note = "`Persisted<D>` over the host's storage and flush registry (ADR-0262); the acceptance app's persistence rows run headless, and no native process has run them"
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "http-requests"
+capability = "HTTP requests"
+note = "A capability of the host (ADR-0280): `ureq` on Linux, WinHTTP on Windows, `NSURLSession` on macOS and iOS, the page's `fetch` on the Web, `HttpURLConnection` on Android, each exchange held on the IO lane, so an embedder's executors send on every host"
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
+
+[[section.row]]
+id = "tray-and-status-icon"
+capability = "Tray and status icon"
+note = "Linux uses StatusNotifierItem"
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "local-notifications"
+capability = "Local notifications"
+note = "Needs app identity"
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "taskbar-and-dock-progress-badge"
+capability = "Taskbar and Dock progress, badge"
+note = "Windows `ITaskbarList3` sits in an extension nothing can reach; Linux `LauncherEntry`; Web Badging API"
+status = { windows = "partial", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "na", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "global-shortcuts"
+capability = "Global shortcuts"
+note = "Wayland only through the GlobalShortcuts portal"
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "launch-at-login"
+capability = "Launch at login"
+note = ""
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "keep-the-screen-awake"
+capability = "Keep the screen awake"
+note = ""
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+
+[[section.row]]
+id = "secure-storage"
+capability = "Secure storage"
+note = "Credential Manager or DPAPI, Keychain, Secret Service, Keystore"
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "na", headless = "missing" }
+
+[[section.row]]
+id = "sandbox-aware-file-and-resource-access"
+capability = "Sandbox-aware file and resource access (the layer never hands an app a path it cannot use)"
+note = "`data_dirs` and the dialogs assume an unsandboxed process: no security-scoped bookmarks, portal file access, AppContainer-aware paths, Storage Access Framework URIs or iOS document-scoped URLs."
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "na", headless = "missing" }
+
+[[section]]
+id = "packaging"
+name = "Packaging"
+
+[[section.row]]
+id = "package-the-os-installs-msix-or-install"
+capability = "Package the OS installs (MSIX or installer, notarised `.app`, Flatpak and `.deb`, `.ipa`, `.aab`, web bundle)"
+note = "`flui build` stages an unsigned `.app`, a debug or release APK (no AAB) and a `wasm-bindgen` bundle; Windows and Linux packaging not audited."
+status = { windows = "unaudited", macos = "partial", wayland = "unaudited", x11 = "unaudited", ios = "partial", android = "partial", web = "partial", headless = "na" }
+
+[[section.row]]
+id = "code-signing-and-notarisation"
+capability = "Code signing and notarisation"
+note = "Android signs with the debug or a given key; no macOS or iOS signing, no Windows Authenticode, no notarisation"
+status = { windows = "unaudited", macos = "missing", wayland = "na", x11 = "na", ios = "missing", android = "partial", web = "na", headless = "na" }
+
+[[section.row]]
+id = "app-identity-reaches-the-package-aumid"
+capability = "App identity reaches the package (AUMID, bundle ID, `.desktop` file and `app_id`, manifest)"
+note = "See the App identity row above; Android's manifest is generated by the CLI, the Web manifest is a template"
+status = { windows = "unaudited", macos = "unaudited", wayland = "unaudited", x11 = "unaudited", ios = "unaudited", android = "partial", web = "partial", headless = "na" }
+
+[[section.row]]
+id = "sandbox-and-entitlement-manifests-genera"
+capability = "Sandbox and entitlement manifests generated from declared capabilities"
+note = "No manifest is derived from the capabilities an app declares: the CLI generates no entitlements, Flatpak or Snap permissions, MSIX capabilities or Android permissions from them (its Android template declares `VIBRATE` itself)."
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "na", headless = "na" }
+

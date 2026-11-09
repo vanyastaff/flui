@@ -280,9 +280,63 @@ mod tests {
 
     const ROOT: &str = include_str!("../../../../platform-parity.toml");
 
+    fn repo_root() -> std::path::PathBuf {
+        let mut dir = std::env::current_dir().expect("a current directory");
+        loop {
+            if dir.join("platform-parity.toml").exists() {
+                return dir;
+            }
+            assert!(
+                dir.pop(),
+                "no platform-parity.toml found above the current directory"
+            );
+        }
+    }
+
     fn parity() -> Parity {
         Parity::parse(ROOT).expect("the root file parses")
     }
+
+    /// A small source that exercises the `position` and `evidence` cross-checks
+    /// against the same types as the real table.
+    const SYNTHETIC: &str = r#"
+[legend]
+yes = "Implemented"
+partial = "Partial"
+missing = "Missing"
+na = "Not applicable"
+unaudited = "Not audited"
+
+[[host]]
+id = "windows"
+environment = "Windows"
+runner = "Win32"
+
+[[host]]
+id = "headless"
+environment = "Headless"
+runner = "test double"
+
+[[section]]
+id = "core"
+name = "Core"
+
+[[section.row]]
+id = "window"
+capability = "Window"
+position = "window"
+note = ""
+status = { windows = "yes", headless = "yes" }
+evidence = [{ scenario = "window_conformance", date = "2026-10-28", device = "Windows 11" }]
+
+[[section.row]]
+id = "launch"
+capability = "Launch"
+position = "launch"
+note = ""
+status = { windows = "yes", headless = "na" }
+evidence = []
+"#;
 
     #[test]
     fn parses_and_renders_every_row_and_host() {
@@ -307,24 +361,37 @@ mod tests {
     }
 
     #[test]
-    fn the_summary_counts_the_rows() {
+    fn the_summary_counts_every_row_once() {
         let parity = parity();
-        let host = parity
-            .hosts
-            .iter()
-            .find(|host| host.id == "headless")
-            .expect("a headless host");
-        // Core rows `window`/`displays`/`clipboard` are `yes`, the services
-        // `launch` row is `na` for the headless host.
-        let counts = parity.counts(host);
-        assert_eq!(counts[0], 3, "three `yes` core rows");
-        assert_eq!(counts[3], 1, "one `na` services row");
-        assert_eq!(counts[1] + counts[2] + counts[4], 0);
+        for host in &parity.hosts {
+            let counts = parity.counts(host);
+            let total = counts.iter().sum::<usize>();
+            let rows = parity.sections.iter().map(|s| s.rows.len()).sum::<usize>();
+            assert_eq!(total, rows, "{} counts every row exactly once", host.id);
+        }
+    }
+
+    #[test]
+    fn the_checked_in_parity_agrees() {
+        let parity = parity();
+        let rendered = parity.render();
+        if std::env::var("FLUI_WRITE_PARITY").is_ok() {
+            let root = repo_root();
+            std::fs::write(root.join("docs/platform-parity.md"), rendered)
+                .expect("write docs/platform-parity.md");
+            return;
+        }
+        let committed = std::fs::read_to_string(repo_root().join("docs/platform-parity.md"))
+            .expect("docs/platform-parity.md is readable");
+        assert_eq!(
+            rendered, committed,
+            "docs/platform-parity.md drifted from platform-parity.toml; run with FLUI_WRITE_PARITY=1 to restate it"
+        );
     }
 
     #[test]
     fn absent_positions_never_claim_support() {
-        let parity = parity();
+        let parity = Parity::parse(SYNTHETIC).expect("the synthetic source parses");
         let host = parity
             .hosts
             .iter()
@@ -348,8 +415,14 @@ mod tests {
 
     #[test]
     fn cited_scenarios_are_known_names() {
-        let parity = parity();
-        let known = ["window_conformance", "displays", "clipboard", "portal"];
-        assert_eq!(unknown_scenarios(&parity, &known), Vec::<&str>::new());
+        let parity = Parity::parse(SYNTHETIC).expect("the synthetic source parses");
+        assert_eq!(
+            unknown_scenarios(&parity, &["window_conformance"]),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            unknown_scenarios(&parity, &["elsewhere"]),
+            vec!["window_conformance"]
+        );
     }
 }
