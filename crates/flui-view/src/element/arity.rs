@@ -5,9 +5,7 @@
 //!
 //! # Arity Types
 //!
-//! - `Leaf` - No children (e.g., text, images)
 //! - `Single` - Exactly one child (e.g., StatelessElement, ProxyElement)
-//! - `Optional` - Zero or one child
 //! - `Variable` - N children (e.g., RenderElement with multiple children)
 //!
 //! # Example
@@ -31,29 +29,18 @@ pub use flui_foundation::{Arity, Leaf, Optional, Single, Variable};
 /// child graph. The slab-resident [`ElementTree`](crate::tree::ElementTree)
 /// is now the single element graph, so there is no per-element storage to
 /// associate. The trait remains as the compile-time child-count constraint
-/// (`Leaf` = 0, `Single` = 1, `Optional` = 0..=1, `Variable` = N) layered
-/// over `flui_foundation::Arity`; it simply no longer carries storage.
+/// (`Single` = 1, `Variable` = N) layered over `flui_foundation::Arity`; it
+/// simply no longer carries storage.
 ///
-/// This mirrors `RenderObject` arity in `flui_rendering`, providing
-/// compile-time guarantees about child count while letting generic code
-/// work with any arity.
+/// `Leaf` and `Optional` are render-object arity only: no element instantiates
+/// them, so they do not implement `ElementArity`.
 pub trait ElementArity: Arity {}
-
-/// Leaf arity - no children allowed.
-///
-/// Used for elements that cannot have children (terminal nodes in the tree).
-impl ElementArity for Leaf {}
 
 /// Single arity - exactly one child required.
 ///
 /// Used for elements that wrap a single child (e.g., StatelessElement,
 /// ProxyElement).
 impl ElementArity for Single {}
-
-/// Optional arity - zero or one child allowed.
-///
-/// Used for elements that may or may not have a child.
-impl ElementArity for Optional {}
 
 /// Variable arity - N children allowed.
 ///

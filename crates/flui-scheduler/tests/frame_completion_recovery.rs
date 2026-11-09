@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Instant;
 
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{FrameCompletionFuture, FrameOutcome, IdleDeadline, UpdateScheduler};
 
 /// Counts its drop and, when armed, panics from it. A waker holds at most one

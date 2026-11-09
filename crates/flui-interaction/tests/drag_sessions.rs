@@ -28,7 +28,8 @@ use flui_interaction::{
 };
 use flui_platform::data_transfer::{
     DataTransferOffer, DragTransport, DropFeedback, RepresentationIndex, TransferActions,
-    TransferCompleter, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
+    TransferCompleter, TransferError, TransferFormat, TransferLimits, TransferPayload,
+    TransferRequest,
 };
 use flui_platform::drag::{OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::{
@@ -2735,11 +2736,136 @@ fn a_receiver_under_perspective_sees_its_own_plane() {
     });
 }
 
+// --- a fetch is held to the limit the target asked for ------------------------------------------
+
+/// A receiver that asks for the drag's text under `limits` on entry and keeps
+/// the request.
+struct LimitedFetch {
+    limits: TransferLimits,
+    fetched: RefCell<Vec<DragFetch>>,
+}
+
+impl LimitedFetch {
+    fn register(f: &Fixture, max_bytes: u64) -> Rc<Self> {
+        let receiver = Rc::new(Self {
+            limits: TransferLimits::default().with_max_bytes(max_bytes),
+            fetched: RefCell::default(),
+        });
+        let target = f
+            .dispatch
+            .register_local_payload(Rc::new(DropReceiverSlot(receiver.clone())))
+            .expect("active lane");
+        f.probe.spots.borrow_mut().push((0.0, 100.0, target));
+        receiver
+    }
+
+    fn resolved(&self) -> Result<TransferPayload, TransferError> {
+        let fetch = self.fetched.borrow_mut().pop().expect("a request was made");
+        let mut fetch = std::pin::pin!(fetch);
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let std::task::Poll::Ready(result) = fetch.as_mut().poll(&mut context) else {
+            panic!("the fetch has its answer");
+        };
+        result
+    }
+}
+
+impl DropReceiver for LimitedFetch {
+    fn drag_entered(&self, drag: &DragView<'_>, _: DragPoint) -> DropFeedback {
+        if let Some(fetch) = drag.request(&TransferFormat::Text, self.limits) {
+            self.fetched.borrow_mut().push(fetch);
+        }
+        DropFeedback { accept: Some(COPY) }
+    }
+    fn drag_moved(&self, _: &DragView<'_>, _: DragPoint) -> DropFeedback {
+        DropFeedback { accept: Some(COPY) }
+    }
+    fn drag_left(&self, _: &DragView<'_>) {}
+    fn dropped(&self, _: &DragView<'_>, _: DragPoint, _: TransferActions) {}
+}
+
+/// A drag in its own window: the items serialize the text in process.
+fn fetched_in_process(max_bytes: u64) -> Result<TransferPayload, TransferError> {
+    let mut result = None;
+    in_lane(|f| {
+        let receiver = LimitedFetch::register(f, max_bytes);
+        let session = f.start_with(
+            desktop(),
+            AllowedActions::within(COPY),
+            None,
+            vec![DragItem::new().with_text("hello")],
+        );
+        assert_eq!(moved(&session, 10.0), MoveOutcome::Tracking(Some(COPY)));
+        result = Some(receiver.resolved());
+    });
+    result.expect("the lane ran")
+}
+
+/// Another application's drag: the OS side answers with the text whatever the
+/// limit was, as a backend that forgot to hold it would.
+fn fetched_from_the_os(max_bytes: u64) -> Result<TransferPayload, TransferError> {
+    let mut result = None;
+    in_lane(|f| {
+        let receiver = LimitedFetch::register(f, max_bytes);
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer: f.text_offer(),
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        let (_, _, completer) = f
+            .source
+            .requests
+            .lock()
+            .pop()
+            .expect("the request reached the OS side");
+        completer.complete(Ok(TransferPayload::Text("hello".into())));
+        result = Some(receiver.resolved());
+    });
+    result.expect("the lane ran")
+}
+
+/// One way a target fetches the drag's text under a byte limit.
+type FetchPath = fn(u64) -> Result<TransferPayload, TransferError>;
+
+/// The limit holds on every path a fetch takes, refused with the size and the
+/// limit; a payload of exactly the limit is delivered.
+fn a_fetch_is_held_to_its_limit_on_every_path() {
+    let paths: [(&str, FetchPath); 2] = [
+        ("in process", fetched_in_process),
+        ("from the OS", fetched_from_the_os),
+    ];
+    for (path, fetch) in paths {
+        let over = fetch(4);
+        assert!(
+            matches!(
+                over,
+                Err(TransferError::TooLarge {
+                    actual: 5,
+                    limit: 4
+                })
+            ),
+            "{path}: one byte past the limit is refused: {over:?}"
+        );
+        let at = fetch(5);
+        assert!(
+            matches!(&at, Ok(TransferPayload::Text(text)) if text == "hello"),
+            "{path}: exactly the limit is delivered: {at:?}"
+        );
+    }
+}
+
 #[test]
 fn drag_sessions() {
     run_table(
         "drag sessions",
         &[
+            (
+                "a_fetch_is_held_to_its_limit_on_every_path",
+                a_fetch_is_held_to_its_limit_on_every_path,
+            ),
             (
                 "a_receiver_under_perspective_sees_its_own_plane",
                 a_receiver_under_perspective_sees_its_own_plane,

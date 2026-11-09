@@ -13,31 +13,31 @@ categories = ["gui"]
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
-exclude = ["/ARCHITECTURE.md", "/UNIFIED_ELEMENT.md", "/benches/"]
+exclude = ["/ARCHITECTURE.md", "/benches/"]
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 24
 # separate binaries). See the `[[test]] name = "view_it"` target below.
 autotests = false
 
 [dependencies]
-flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-foundation = { workspace = true }
 flui-macros = { workspace = true }
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
-flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
+flui-painting = { workspace = true }
+flui-rendering = { workspace = true }
 # Owner-routed interaction targets/dispatch handles (ADR-0027).
-flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
+flui-interaction = { workspace = true }
 # Concrete render-object catalog (moved out of flui-rendering into flui-objects).
 # Two reasons, one of which T09 removes: the snap/expand controller
 # plumb-through for the floating persistent headers (the WIDGET catalog owns
 # the controller lifecycle; this crate only carries the already-built
 # controller into the render object), and `environment::VsyncScope` — the
 # inherited frame registry implicitly-animated widgets acquire.
-flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
-flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
+flui-animation = { workspace = true }
+flui-objects = { workspace = true }
 # The frame-driven async task driver. A `ViewState` reaches its
 # binding's driver through `BuildContext::async_driver()`; the type lives here.
 # No cycle: flui-rendering already depends on flui-scheduler.
-flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
+flui-scheduler = { workspace = true }
 # The `Stream` trait `StreamBuilder` polls. Trait-only.
 futures-core = { workspace = true }
 # The byte-storage capability `LifecycleContext::storage` hands out and the
@@ -82,11 +82,11 @@ serde_json = { workspace = true }
 # Enable flui-rendering's `testing` feature for unit tests so the
 # layout-builder tests can read committed geometry back off the pipeline
 # (`testing::box_geometry`). Dev-only; stays out of release builds.
-flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
+flui-rendering = { workspace = true, features = ["testing"] }
 # Enable flui-scheduler's `testing` feature so `future_builder.rs`'s
 # `nested_token_disposal_cancels_child_and_parent` unit test can reach
 # `AsyncDriver::is_unlocked`. Dev-only; stays out of release builds.
-flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev", features = ["testing"] }
+flui-scheduler = { workspace = true, features = ["testing"] }
 # Same crate; dev-deps must redeclare so unit tests + integration
 # tests under `#[cfg(test)]` (without the `testing` feature flag
 # enabled at the integration boundary) still see it. Cargo merges

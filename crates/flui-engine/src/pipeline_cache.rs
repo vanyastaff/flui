@@ -744,7 +744,7 @@ impl PipelineCache {
 
 /// Helper to determine pipeline key from paint properties.
 ///
-/// Blend-mode routing (Phase A — fixed-function Porter-Duff; Phase B — advanced):
+/// Blend-mode routing (fixed-function Porter-Duff now; advanced blends later):
 /// - A non-`SrcOver` Porter-Duff mode always selects a blended pipeline keyed by
 ///   that mode (the blend stage is required even for fully opaque source, e.g.
 ///   `Clear`/`DstOut` punch-outs and `Plus` additive).

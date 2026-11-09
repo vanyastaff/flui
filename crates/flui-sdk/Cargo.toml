@@ -28,17 +28,17 @@ workspace = true
 # their tests; see ARCHITECTURE.md for how it was measured.
 [dependencies]
 flui-platform = { workspace = true }
-flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
-flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
-flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
-flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
-flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
-flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
-flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
+flui-animation = { workspace = true }
+flui-foundation = { workspace = true }
+flui-view = { workspace = true }
+flui-widgets = { workspace = true }
+flui-interaction = { workspace = true }
+flui-rendering = { workspace = true }
+flui-painting = { workspace = true }
+flui-objects = { workspace = true }
 # `hooks::FrameSnapshot`, which `flui-devtools`' timeline records. Already in
 # this crate's closure through `flui-view`, so reach does not change.
-flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
+flui-scheduler = { workspace = true }
 
 [dev-dependencies]
 trybuild = { workspace = true }

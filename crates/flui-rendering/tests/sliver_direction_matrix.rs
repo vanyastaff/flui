@@ -1,4 +1,4 @@
-//! Pure-math regression matrix for sliver direction composition (Wave 3.1).
+//! Pure-math regression matrix for sliver direction composition.
 //!
 //! Covers 4 axis directions × 2 growth directions × 3 concerns:
 //! effective axis, paint/sign sizing, and scroll-direction composition.

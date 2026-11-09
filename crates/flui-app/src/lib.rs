@@ -47,7 +47,7 @@
 // recursion limit under the next-generation trait solver; see the matching
 // attribute and rationale at the top of flui-engine's `lib.rs`.
 #![recursion_limit = "256"]
-// Ship bar (wave 4): every public item is documented; keep it that way.
+// Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 // A `_` arm must not absorb a variant added later; see the
 // `wildcard_enum_match_arm` entry in the workspace `Cargo.toml`.
@@ -144,9 +144,9 @@ pub use app::{
 // only their presentation's frame; narrower lifecycle failures can be
 // contained while the frame continues. These types report both outcomes.
 pub use app::{
-    DeviceRecovery, FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
-    FrameFailureReport, LifecycleHook, PanicText, RecoveredAt, SamplingFailure,
-    SamplingFailureOrigin, SamplingStage, SegmentPhase,
+    DeviceRecovery, FailureDisposition, FrameFailureDetail, FrameFailureHandler,
+    FrameFailureHandlerFactory, FrameFailureKind, FrameFailureReport, LifecycleHook, PanicText,
+    RecoveredAt, SamplingFailure, SamplingFailureOrigin, SamplingStage, SegmentPhase,
 };
 // Multi-window policy knobs (issue #555's embedder-facing seam) — not
 // available on iOS, where `AppRuntime`/`UiRuntime`'s ui_runtime-hosting machinery

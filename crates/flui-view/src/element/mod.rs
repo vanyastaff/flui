@@ -54,8 +54,8 @@ pub use future_builder::{BoxedResultFuture, FutureBuilder, FutureBuilderState, F
 pub use generic::ElementCore;
 pub use inherited_access::InheritedElementAccess;
 pub use kind::{
-    AnimationListener, ElementKind, InheritedElementBase, NotificationElementBase,
-    ProxyElementBase, RenderElementBase, StatefulElementBase, StatelessElementBase,
+    ElementKind, InheritedElementBase, NotificationElementBase, ProxyElementBase,
+    RenderElementBase, StatefulElementBase, StatelessElementBase,
 };
 pub use layout_builder::LayoutBuilder;
 pub use lifecycle::Lifecycle;

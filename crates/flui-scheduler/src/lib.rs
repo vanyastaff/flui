@@ -5,9 +5,9 @@
 //! `UpdateScheduler` owns *logical* time only — the phase machine, callback
 //! queues, and the priority task queue — and makes no refresh-rate, display,
 //! or surface assumption of its own; a caller supplies the frame's vsync
-//! timestamp and an Idle-slice deadline to [`OwnerFrame::drive_frame`]
-//! (physical pacing is a presentation-owned concern, split out from this
-//! crate).
+//! timestamp and an Idle-slice deadline to the owner frame through the
+//! composition-root seam [`__runtime::DriveFrame`] (physical pacing is a
+//! presentation-owned concern, split out from this crate).
 //!
 //! ## Architecture
 //!
@@ -70,6 +70,7 @@
 //! ## Example Usage
 //!
 //! ```rust
+//! use flui_scheduler::__runtime::DriveFrame as _;
 //! use flui_scheduler::{FrameBudget, OwnerFrame, Priority, UpdateScheduler};
 //!
 //! let scheduler = UpdateScheduler::new();
@@ -146,6 +147,9 @@
 pub mod budget;
 pub mod config;
 pub mod frame;
+// The composition-root frame-drive seam (ADR-0081 §4).
+#[doc(hidden)]
+pub mod __runtime;
 pub mod frame_clock;
 pub mod frame_histogram;
 pub mod frame_telemetry;
@@ -197,7 +201,7 @@ mod table_test;
 
 /// The instant type the frame clock is stamped with. `std::time::Instant` on
 /// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
-/// name `OwnerFrame::drive_frame`'s timestamp without depending on `web_time`.
+/// name the frame drive's timestamp without depending on `web_time`.
 pub use web_time::Instant;
 // Re-exports - Duration types
 pub use duration::{BudgetPercentage, FrameDuration, Microseconds, Milliseconds, Seconds};

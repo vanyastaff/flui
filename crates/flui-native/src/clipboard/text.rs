@@ -94,9 +94,7 @@ impl TextForm {
     /// refused past [`MAX_TEXT`](crate::host::MAX_TEXT) bytes before it is
     /// made, as ISO 8859-1 and ill-formed UTF-8 grow as they decode.
     pub(crate) fn answer(self, bytes: Vec<u8>) -> flui_platform::ClipboardRead {
-        if self.decoded_len(&bytes) > crate::host::MAX_TEXT {
-            return Err(flui_platform::ClipboardError::TooLarge);
-        }
+        crate::host::admit_text(self.decoded_len(&bytes))?;
         crate::host::host_text(self.decode(bytes))
     }
 

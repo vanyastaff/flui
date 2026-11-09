@@ -7,6 +7,7 @@ use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
 
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{
     ExecutionError, IdleDeadline, Instant, OwnerFrame, TaskToken, UpdateScheduler,
 };

@@ -195,9 +195,9 @@ impl View for LayoutBuilder {
 }
 
 /// `LayoutBuilder` uses a custom behavior, so it needs its own
-/// `RenderElementBase<Variable>` tag to route into `ElementKind::RenderVariable`
-/// — the `RenderBehavior` blanket impl does not cover this behavior.
-impl crate::element::RenderElementBase<Variable> for LayoutBuilderElement {}
+/// `RenderElementBase` tag to route into `ElementKind::RenderVariable` — the
+/// `RenderBehavior` blanket impl does not cover this behavior.
+impl crate::element::RenderElementBase for LayoutBuilderElement {}
 
 /// The concrete element type for [`LayoutBuilder`].
 pub(crate) type LayoutBuilderElement = Element<LayoutBuilder, Variable, LayoutBuilderBehavior>;

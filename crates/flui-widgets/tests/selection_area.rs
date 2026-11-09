@@ -389,7 +389,7 @@ pub(crate) fn a_document_selection_snaps_into_its_texts_or_is_withheld() {
                 "héllo",
                 0,
                 0,
-                flui_widgets::SemanticsTextDirection::Ltr,
+                flui_painting::typography::TextDirection::Ltr,
                 Rect::from_origin_size(Point::ZERO, Size::new(50.0, 10.0)),
             );
             for (index, length) in [1_u8, 2, 1, 1, 1].into_iter().enumerate() {

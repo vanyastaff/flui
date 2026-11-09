@@ -52,7 +52,7 @@ pub enum HotReloadOutcome {
     },
 }
 
-/// Environment variables for the host/worker split (Phase B).
+/// Environment variables for the host/worker split.
 pub mod env {
     /// Path to the reloadable worker dylib (`my_app_logic.dll`).
     pub const WORKER_PLUGIN: &str = "FLUI_WORKER_PLUGIN";

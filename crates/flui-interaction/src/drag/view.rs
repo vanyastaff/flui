@@ -151,14 +151,17 @@ impl<'a> DragView<'a> {
     /// Ask for the first representation in `format`. `None` when the drag offers
     /// none. The request is a future the target spawns on its scheduler; the drop
     /// is not concluded with the OS until it resolves or is dropped.
+    ///
+    /// The fetch resolves with [`TransferError::TooLarge`] for a payload past
+    /// `limits` ([`TransferLimits::enforce`]), whether the drag's own items
+    /// serialized it or the OS delivered it: a backend that failed to hold the
+    /// limit still cannot hand the target more than it asked for.
     #[must_use]
     pub fn request(&self, format: &TransferFormat, limits: TransferLimits) -> Option<DragFetch> {
         if let Some(data) = self.data {
             let index = data.find(format)?;
-            let result = data
-                .serialized(index)
-                .and_then(|payload| within_limit(payload, limits));
-            return Some(DragFetch::new(TransferRequest::ready(result), None));
+            let request = TransferRequest::ready(data.serialized(index));
+            return Some(DragFetch::new(request, limits, None));
         }
         let offer = self.offer?;
         let index = offer.find(format)?;
@@ -166,23 +169,10 @@ impl<'a> DragView<'a> {
         let guard = self.in_flight.map(FetchGuard::new);
         Some(DragFetch::new(
             source.request(offer.id(), index, limits),
+            limits,
             guard,
         ))
     }
-}
-
-fn within_limit(
-    payload: TransferPayload,
-    limits: TransferLimits,
-) -> Result<TransferPayload, TransferError> {
-    let actual = payload.byte_len();
-    if actual > limits.max_bytes {
-        return Err(TransferError::TooLarge {
-            actual,
-            limit: limits.max_bytes,
-        });
-    }
-    Ok(payload)
 }
 
 /// How the owner is woken from another thread: a request made from a drop
@@ -239,13 +229,20 @@ impl Drop for FetchGuard {
 #[must_use = "dropping a DragFetch cancels the request"]
 pub struct DragFetch {
     request: TransferRequest,
+    // What the target asked for: every payload the request resolves with is
+    // held to it.
+    limits: TransferLimits,
     // Released when the request resolves or is dropped.
     hold: Option<FetchGuard>,
 }
 
 impl DragFetch {
-    fn new(request: TransferRequest, hold: Option<FetchGuard>) -> Self {
-        Self { request, hold }
+    fn new(request: TransferRequest, limits: TransferLimits, hold: Option<FetchGuard>) -> Self {
+        Self {
+            request,
+            limits,
+            hold,
+        }
     }
 }
 
@@ -259,10 +256,13 @@ impl Future for DragFetch {
     type Output = Result<TransferPayload, TransferError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let poll = Pin::new(&mut self.request).poll(cx);
-        if poll.is_ready() {
-            drop(self.hold.take());
-        }
-        poll
+        let Poll::Ready(result) = Pin::new(&mut self.request).poll(cx) else {
+            return Poll::Pending;
+        };
+        let limits = self.limits;
+        let result =
+            result.and_then(|payload| limits.enforce(payload.byte_len()).map(|()| payload));
+        drop(self.hold.take());
+        Poll::Ready(result)
     }
 }

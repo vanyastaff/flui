@@ -41,7 +41,7 @@
 //! renamed facade).
 //! Framework library code and integration targets use the same absolute path.
 
-// Ship bar (wave 1): every public item is documented; keep it that way.
+// Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 // A library that prints owns a terminal it was never given; report through
 // `tracing` or a returned error instead.

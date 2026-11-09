@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::Poll;
 
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{ExecutionError, IdleDeadline, Instant, OwnerFrame, UpdateScheduler};
 
 fn background_batches_are_bounded_with_frames_disabled() {

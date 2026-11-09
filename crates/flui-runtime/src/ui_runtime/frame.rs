@@ -12,6 +12,7 @@ use flui_layer::Scene;
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{
     DemandKind, FramePhase, FramePhaseDurations, FrameSnapshot, FrameTimes, Instant, PresentOutcome,
 };
@@ -1362,7 +1363,7 @@ impl UiRuntime {
                 // exact per-presentation catch) gates
                 // [`Self::mark_needs_full_repaint_for`], the same fix #630
                 // already established for the pre-frame device-recovery-success
-                // arm (`runner.rs`'s `render_frame_with_device_recovery`) —
+                // arm (`flui-app`'s `device_recovery::attempt_device_recovery`) —
                 // shared rather than duplicated via that one function, since
                 // both are "a retry needs the pipeline to actually have work to
                 // redo, not just a wake"; see that function's own doc for why
@@ -1380,8 +1381,9 @@ impl UiRuntime {
                 // pre-frame device-recovery path, this arm is not gated by
                 // `DeviceRecoveryBackoff` — a surface that keeps failing every
                 // submit now retries every wake, throttled only by
-                // `runner.rs`'s `NO_PRESENT_FALLBACK_PACE` (~62 Hz), running a
-                // full-tree paint each time, indefinitely. Before this fix that
+                // `frame_pacing.rs`'s fallback wake (one display period after
+                // the last present), running a full-tree paint each time,
+                // indefinitely. Before this fix that
                 // same surface went quiet after one no-op frame. A working
                 // retry that costs CPU forever on a permanently broken surface
                 // is still strictly better than one that silently gives up, but
@@ -1433,7 +1435,7 @@ impl UiRuntime {
         // that point (inside `draw_frame_entered`) gets silently clobbered
         // within this SAME callback. On the real desktop path, where the
         // next platform callback's own dirty gate (`wake_action`, in
-        // `runner.rs`) reads `needs_redraw()`/`has_pending_work()` fresh —
+        // `frame_pacing.rs`) reads `needs_redraw()`/`has_pending_work()` fresh —
         // neither of which a bare running controller with no other
         // tree-visible effect keeps true — that clobber is a genuine,
         // silent stall: the controller never receives another tick after

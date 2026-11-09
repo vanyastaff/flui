@@ -13,6 +13,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{IdleDeadline, Instant, SchedulerPhase, UpdateScheduler};
 use parking_lot::Mutex;
 

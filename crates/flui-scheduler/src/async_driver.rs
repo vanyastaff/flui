@@ -37,7 +37,7 @@
 //! waker. A wake after the UI runtime is gone upgrades nothing and does nothing.
 //!
 //! Waking is legal from any thread. Polling is not: it happens only inside
-//! [`OwnerFrame::drive_frame`](crate::OwnerFrame::drive_frame) or
+//! `OwnerFrame::drive_frame` or
 //! [`OwnerFrame::pump_background`](crate::OwnerFrame::pump_background), on the owner.
 //!
 //! # Readiness index

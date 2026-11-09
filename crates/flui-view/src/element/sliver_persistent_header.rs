@@ -461,7 +461,7 @@ impl<R: PersistentHeaderRenderObject> View for PersistentHeaderView<R> {
     }
 }
 
-impl<R: PersistentHeaderRenderObject> crate::element::RenderElementBase<Variable>
+impl<R: PersistentHeaderRenderObject> crate::element::RenderElementBase
     for PersistentHeaderElement<R>
 {
 }

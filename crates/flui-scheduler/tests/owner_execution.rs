@@ -8,6 +8,7 @@ use std::pin::pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{
     ExecutionError, FrameOutcome, IdleDeadline, Instant, OwnerFrame, UpdateScheduler,
     WeakUpdateScheduler,

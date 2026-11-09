@@ -1,6 +1,6 @@
 //! Cross-protocol child layout — Box parent lays out a leaf Sliver child.
 //!
-//! Core.2 W3.2b-1: verifies that a Box parent can call
+//! Verifies that a Box parent can call
 //! `ctx.layout_sliver_child(index, constraints)` to drive a Sliver child
 //! through the `layout_sliver_subtree_borrowed` pipeline path, and that
 //! calling that method when the indexed child is a Box-protocol node returns

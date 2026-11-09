@@ -39,14 +39,38 @@ pub trait NativeClipboard {
 /// [`ClipboardError::TooLarge`](flui_platform::ClipboardError::TooLarge).
 pub(crate) const MAX_TEXT: usize = 64 * 1024 * 1024;
 
+/// Whether a read of `len` bytes is within [`MAX_TEXT`]: the same predicate
+/// [`admit_text`] applies, without its warning, for a reader that must decide
+/// while it still holds an OS lock and admit once the lock is released.
+pub(crate) const fn text_fits(len: usize) -> bool {
+    len <= MAX_TEXT
+}
+
+/// Refuse a read of `len` bytes — or, for a UTF-16 source, `len` code units,
+/// each at least one UTF-8 byte — past [`MAX_TEXT`], before its copy is made.
+///
+/// Every check of a finished read's size goes through here, so the limit, the
+/// refusal and its warning are the same on every host. A reader that stops a
+/// stream at a cap while it still reads (the Wayland pipe, an X11 property
+/// read) takes [`MAX_TEXT`] as that cap instead: it has no length to admit
+/// until it has stopped.
+///
+/// The refusal emits a `tracing` event, which is user code: call this with none
+/// of the host's own state locked or borrowed.
+pub(crate) fn admit_text(len: usize) -> Result<(), flui_platform::ClipboardError> {
+    if !text_fits(len) {
+        tracing::warn!(len, "a clipboard read past {MAX_TEXT} bytes was refused");
+        return Err(flui_platform::ClipboardError::TooLarge);
+    }
+    Ok(())
+}
+
 /// What a read answers with `text` the application wrote and the host still
 /// holds: shared, not copied, and refused past [`MAX_TEXT`] bytes as text
 /// from any other client is, so a read's answer never depends on who owns
 /// the clipboard.
 pub(crate) fn owned_text(text: &Arc<str>) -> ClipboardRead {
-    if text.len() > MAX_TEXT {
-        return Err(flui_platform::ClipboardError::TooLarge);
-    }
+    admit_text(text.len())?;
     Ok(Some(Arc::clone(text)))
 }
 
@@ -63,38 +87,8 @@ pub(crate) fn owned_text(text: &Arc<str>) -> ClipboardRead {
     x11_host,
 ))]
 pub(crate) fn host_text(text: String) -> ClipboardRead {
-    if text.len() > MAX_TEXT {
-        tracing::warn!(
-            len = text.len(),
-            "a clipboard read past {MAX_TEXT} bytes was refused"
-        );
-        return Err(flui_platform::ClipboardError::TooLarge);
-    }
+    admit_text(text.len())?;
     Ok(Some(Arc::from(text)))
-}
-
-/// Refuse text the host holds as `units` UTF-16 code units (an `NSString`, a
-/// JavaScript or Java string) before it is copied out, when it is past
-/// [`MAX_TEXT`] on length alone: each unit takes at least one byte of UTF-8.
-/// A host calls this before its copy and hands the copy to [`host_text`],
-/// which measures text within the bound exactly, so the answer is the same on
-/// every host and text a read refuses for its length is never copied.
-#[cfg(any(
-    target_os = "android",
-    target_os = "macos",
-    target_os = "ios",
-    target_arch = "wasm32",
-    test
-))]
-pub(crate) fn admit_utf16(units: usize) -> Result<(), flui_platform::ClipboardError> {
-    if units > MAX_TEXT {
-        tracing::warn!(
-            units,
-            "a clipboard read past {MAX_TEXT} bytes was refused before its copy"
-        );
-        return Err(flui_platform::ClipboardError::TooLarge);
-    }
-    Ok(())
 }
 
 /// A clipboard the operating system reads synchronously: its read answers
@@ -171,7 +165,11 @@ impl std::fmt::Debug for MemoryClipboard {
 
 impl SyncClipboard for MemoryClipboard {
     fn read_now(&self) -> ClipboardRead {
-        self.text.lock().as_ref().map_or(Ok(None), owned_text)
+        // Clone out and release the guard first: the admission may emit a
+        // `tracing` event, and a subscriber is user code that may re-enter
+        // this clipboard.
+        let text: Option<Arc<str>> = self.text.lock().clone();
+        text.as_ref().map_or(Ok(None), owned_text)
     }
 
     fn write_now(&self, write: ClipboardWrite) {
@@ -246,7 +244,7 @@ impl<C: NativePrimarySelection + ?Sized> NativePrimarySelection for Arc<C> {
 mod tests {
     use flui_platform::ClipboardError;
 
-    use super::{MAX_TEXT, admit_utf16, host_text};
+    use super::{MAX_TEXT, admit_text, host_text};
 
     /// Text a host handed over is answered up to the limit and refused past
     /// it, the refusal made before any copy of the text.
@@ -267,11 +265,11 @@ mod tests {
     /// once copied.
     #[test]
     fn utf16_text_past_the_limit_is_refused_before_its_copy() {
-        assert_eq!(admit_utf16(MAX_TEXT + 1), Err(ClipboardError::TooLarge));
-        assert_eq!(admit_utf16(MAX_TEXT), Ok(()));
+        assert_eq!(admit_text(MAX_TEXT + 1), Err(ClipboardError::TooLarge));
+        assert_eq!(admit_text(MAX_TEXT), Ok(()));
 
         let units = MAX_TEXT / 2 + 1;
-        assert_eq!(admit_utf16(units), Ok(()));
+        assert_eq!(admit_text(units), Ok(()));
         assert_eq!(
             host_text("é".repeat(units)),
             Err(ClipboardError::TooLarge),

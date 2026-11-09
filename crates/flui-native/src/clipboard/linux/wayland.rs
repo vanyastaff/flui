@@ -258,6 +258,9 @@ impl NativePrimarySelection for SeatClipboard {
 enum Read {
     /// The answer is known now.
     Now(ClipboardRead),
+    /// The application owns the selection and wrote this text: admitted once
+    /// the state is let go of, since a refusal logs.
+    Owned(Arc<str>),
     /// The offer's owner writes the text in `form` to the pipe.
     Pipe(OwnedFd, TextForm),
 }
@@ -274,7 +277,7 @@ impl NativeClipboard for SeatClipboard {
             .with(|state| {
                 let seat = selection.as_ref().map(|selection| &selection.seat);
                 if let Some(owned) = state.owned.read(seat) {
-                    return Read::Now(owned_text(&owned.text));
+                    return Read::Owned(Arc::clone(&owned.text));
                 }
                 let Some((offer, (form, mime))) = selection
                     .as_ref()
@@ -303,6 +306,7 @@ impl NativeClipboard for SeatClipboard {
         match read {
             // A retired owner has nobody left to answer.
             Read::Now(text) => drop(answer.resolve(text)),
+            Read::Owned(text) => drop(answer.resolve(owned_text(&text))),
             Read::Pipe(reader, form) => {
                 let spawned = std::thread::Builder::new()
                     .name("flui-wayland-clipboard".to_owned())

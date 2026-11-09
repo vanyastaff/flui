@@ -14,6 +14,10 @@ use flui_rendering::{
     testing::{box_node, tree, update_render_object},
 };
 use flui_scheduler::{IdleDeadline, Instant, OwnerFrame, UpdateScheduler};
+// Lower-crate test drives a frame through the composition-root seam
+// (ADR-0081 §4) until the raw-owner suites mount under the UI runtime's
+// root scopes (ADR-0083 6b).
+use flui_scheduler::__runtime::DriveFrame as _;
 
 /// A pipeline painting one leader around a box `height` tall, and the
 /// scheduler whose post-frame lane its watches deliver through.

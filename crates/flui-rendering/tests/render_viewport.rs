@@ -1,4 +1,4 @@
-//! Core.2 W3.4a: minimal `RenderViewport` driver for sliver children.
+//! Minimal `RenderViewport` driver for sliver children.
 
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};

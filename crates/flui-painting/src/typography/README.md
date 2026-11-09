@@ -13,7 +13,7 @@ font faces in [`fonts`](../fonts.rs).
 | `text_spans` | `InlineSpan`, `TextSpan`, `TextLink`, `PlaceholderSpan`, `PlaceholderDimensions`, `PlaceholderAlignment` |
 | `text_alignment` | `TextAlign`, `TextAlignVertical`, `TextDirection`, `TextAffinity` |
 | `text_decoration` | `TextDecoration`, `TextDecorationLines`, `TextDecorationStyle`, `DecorationThickness`, `TextOverflow`, `TextWidthBasis`, `TextHeightBehavior`, `TextLeadingDistribution` |
-| `text_metrics` | `TextPosition`, `TextRange`, `TextSelection`, `TextBox`, `GlyphInfo`, `LineMetrics` |
+| `text_metrics` | `TextPosition`, `TextRange`, `TextBox`, `GlyphInfo`, `LineMetrics` |
 
 Every item is re-exported at `flui_painting::typography`.
 

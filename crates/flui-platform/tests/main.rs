@@ -40,6 +40,9 @@ mod unsupported;
 #[path = "surface_target.rs"]
 mod surface_target;
 
+#[path = "transfer_limits.rs"]
+mod transfer_limits;
+
 #[path = "transfer_request.rs"]
 mod transfer_request;
 

@@ -920,7 +920,7 @@ impl RenderBox for RenderParagraph {
                 &self.painter,
                 &self.link_routes,
                 self.link_focus.map(|focus| focus.link),
-                self.painter.text_direction().map(semantics_text_direction),
+                self.painter.text_direction(),
                 flui_foundation::geometry::Rect::from_ltwh(0.0, 0.0, size.width, size.height),
                 &run_ranges,
             ),
@@ -981,18 +981,7 @@ impl RenderBox for RenderParagraph {
             }
         }
         if let Some(direction) = self.painter.text_direction() {
-            config.set_text_direction(semantics_text_direction(direction));
+            config.set_text_direction(direction);
         }
-    }
-}
-
-/// Maps the painting-side [`TextDirection`] onto `flui-semantics`'s own
-/// parallel enum of the same name (two definitions of the same concept).
-pub(super) fn semantics_text_direction(
-    direction: TextDirection,
-) -> flui_rendering::semantics::TextDirection {
-    match direction {
-        TextDirection::Ltr => flui_rendering::semantics::TextDirection::Ltr,
-        TextDirection::Rtl => flui_rendering::semantics::TextDirection::Rtl,
     }
 }
