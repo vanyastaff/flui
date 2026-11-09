@@ -168,7 +168,7 @@ pub use localization::{
     BoxedLocalizationsDelegate, BoxedWidgetsLocalizations, DefaultWidgetsLocalizations,
     DefaultWidgetsLocalizationsDelegate, Directionality, GlobalWidgetsLocalizations,
     GlobalWidgetsLocalizationsDelegate, Localizations, LocalizationsDelegate, RTL_LANGUAGES,
-    WidgetsLocalizations, basic_locale_list_resolution, resolve_alignment,
+    WidgetsLocalizations, basic_locale_list_resolution,
 };
 
 pub use animated::{
