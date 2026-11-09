@@ -23,7 +23,7 @@ use flui_platform::{
 use parking_lot::Mutex;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::host::{NativeClipboard, admit_utf16, host_text, owned_text};
+use crate::host::{NativeClipboard, admit_text, host_text, owned_text};
 
 pub struct WebClipboard {
     /// What this page last wrote: the answer to a read the browser refuses,
@@ -90,7 +90,7 @@ impl NativeClipboard for WebClipboard {
                     // Measured in UTF-16 units before the copy into Rust.
                     |text| {
                         let units = usize::try_from(text.length()).unwrap_or(usize::MAX);
-                        admit_utf16(units)?;
+                        admit_text(units)?;
                         host_text(String::from(text))
                     },
                 ),
@@ -140,7 +140,10 @@ fn degraded_once(degraded: &AtomicBool) {
 /// What a read the browser did not answer gives: this page's last write, or
 /// `error` when it wrote nothing yet.
 fn fallback_read(fallback: &Mutex<Option<Arc<str>>>, error: ClipboardError) -> ClipboardRead {
-    fallback.lock().as_ref().map_or(Err(error), owned_text)
+    // The lock is let go before the read is admitted: a refusal logs, and a
+    // subscriber is user code.
+    let held = fallback.lock().clone();
+    held.as_ref().map_or(Err(error), owned_text)
 }
 
 /// Why the browser refused a read: a `NotAllowedError` is the user's or the

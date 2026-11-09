@@ -35,14 +35,14 @@ hot-reload = []
 # `ActionRequest`, the assistive-technology variant of `HostInput` (ADR-0207 §1).
 accesskit = { workspace = true }
 # `PresentationId`, which names a held-input queue in traces.
-flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-foundation = { workspace = true }
 # `PointerEvent`/`PointerId`, the events the held-input lane retains.
-flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
+flui-interaction = { workspace = true }
 # `Scene`, what a frame sink submits.
-flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
+flui-layer = { workspace = true }
 # `Assertiveness`/`SemanticsEvent`, what the semantics host delivers, and the
 # wire projection a semantics agent reads through.
-flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
+flui-semantics = { workspace = true }
 # The agent-protocol schema a semantics agent reads and acts in (ADR-0095), and
 # the JSON lines the agent service speaks (ADR-0288): always compiled, so an
 # app that never starts the agent pays only for the code.
@@ -54,18 +54,18 @@ serde_json = { workspace = true }
 flui-platform = { workspace = true }
 # Window sizes and geometry; `FontCollection`/`TextContext`, the text service
 # each UI runtime owns over the app's font collection (ADR-0092 §3).
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
+flui-painting = { workspace = true }
 # The UI runtime core (ADR-0083 move 4): the widget tree a presentation hosts
 # (`WidgetsBinding`, `GlobalKeyScope`; `flui_view::__runtime` is the seam a
 # UI runtime drives it through), its render pipeline, the UI runtime-owned scheduler,
 # the vsync the root's animations tick on, and the root wrappers the UI runtime
 # installs above every root widget (`FocusRoot`, `GestureArenaScope`,
 # `VsyncScope`).
-flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
-flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
-flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
-flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
-flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
+flui-view = { workspace = true }
+flui-rendering = { workspace = true }
+flui-scheduler = { workspace = true }
+flui-animation = { workspace = true }
+flui-widgets = { workspace = true }
 # The UI runtime's bounded owner inbox.
 crossbeam-channel = { workspace = true }
 parking_lot = { workspace = true }
@@ -93,7 +93,7 @@ wasm-bindgen-futures = { workspace = true }
 flui-platform = { workspace = true, features = ["testing"] }
 # `flui_interaction::events::make_*_event`, the synthetic pointer events the
 # held-input tests queue.
-flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
+flui-interaction = { workspace = true, features = ["testing"] }
 # `log_capture::capture`, which the semantics agent's privacy test calls so a
 # sibling test cannot poison the callsites it captures.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
@@ -103,8 +103,8 @@ flui-testing = { path = "../flui-testing" }
 # a dev edge only, so the shipped crate still links no backend; the concrete
 # render objects some tests mount; AccessKit action requests driven the way
 # an adapter would; and `!Send` pins on the UI runtime.
-flui-native = { path = "../flui-native", version = "=0.2.0-dev" }
-flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
+flui-native = { workspace = true }
+flui-objects = { workspace = true }
 static_assertions = { workspace = true }
 # Exact diagnostics for owner-thread and frame-entry boundaries.
 trybuild = { workspace = true }
@@ -113,11 +113,11 @@ flui-protocol = { workspace = true, features = ["serde"] }
 serde_json = { workspace = true }
 # The test-only hooks of the crates the UI runtime drives: `push_pending_child_
 # request_for_test`, `register_layout_builder_for_test`.
-flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
-flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["testing"] }
+flui-rendering = { workspace = true, features = ["testing"] }
+flui-view = { workspace = true, features = ["testing"] }
 # `testing::font_collection_holders`, which pins who holds the app's font
 # collection and when a UI runtime lets go of it.
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }
+flui-painting = { workspace = true, features = ["testing"] }
 
 # Executing wasm32 unit tests: the execution services' sequential backend is
 # pinned by lib tests that run on wasm32 (`cargo xtask wasm-test`). Pinned to

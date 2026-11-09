@@ -22,7 +22,7 @@ exclude = ["/ARCHITECTURE.md", "/benches/"]
 [dependencies]
 # Flui foundation (for the generic Id<T: Marker> system: TaskId, FrameCallbackId;
 # and MonotonicClock/ManualClock/SystemClock, which FrameClock's ClockSource reuses)
-flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-foundation = { workspace = true }
 
 # Cross-platform time (web-time is the maintained replacement for instant)
 web-time = { workspace = true }

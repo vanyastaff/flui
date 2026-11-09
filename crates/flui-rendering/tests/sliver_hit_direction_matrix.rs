@@ -1,4 +1,4 @@
-//! Integration matrix for sliver hit-test coordinate conversion (Wave 3.2).
+//! Integration matrix for sliver hit-test coordinate conversion.
 //!
 //! Exercises 4 axis directions × 2 growth directions through a Box host that
 //! lays out a band sliver with explicit [`SliverConstraints`].

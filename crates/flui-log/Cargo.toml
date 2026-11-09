@@ -23,7 +23,7 @@ thiserror = { workspace = true }
 # `diagnostics::REDACTED_VALUE`, the placeholder a redacted field renders as,
 # re-exported from `backend::privacy`; framework types that are not allowed a
 # `flui-log` edge share it from there.
-flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-foundation = { workspace = true }
 
 # Hierarchical desktop output. Optional because a hierarchical tree is a
 # development affordance, not something a shipped application should pay for.

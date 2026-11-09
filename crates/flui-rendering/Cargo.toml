@@ -44,11 +44,11 @@ path = "tests/trace_allocation.rs"
 
 [dependencies]
 serde = { workspace = true, optional = true }
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
-flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
-flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
-flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
-flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
+flui-painting = { workspace = true }
+flui-interaction = { workspace = true }
+flui-foundation = { workspace = true }
+flui-layer = { workspace = true }
+flui-semantics = { workspace = true }
 # `decode_semantics_action` takes the adapter's `ActionRequest` as it arrives.
 accesskit = { workspace = true }
 # `ScrollPosition`'s coalesced post-frame flush (view/scroll_position.rs) names
@@ -56,7 +56,7 @@ accesskit = { workspace = true }
 # real production edge. flui-scheduler sits below flui-rendering in the
 # tiers' order already (flui-view/-widgets/-app all depend on both), so this
 # is not a new direction, just a new consumer.
-flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
+flui-scheduler = { workspace = true }
 # `InputRegionKind` and `InputRegion`: the contract `PlatformWindow::set_input_regions`
 # takes the collected regions in (ADR-0217 §5).
 flui-platform = { workspace = true }
@@ -127,7 +127,7 @@ proptest = { workspace = true }
 # Animation -> render-pipeline integration scenarios (tests only; no
 # production dependency here). flui-scheduler moved to
 # `[dependencies]` above — `ScrollPosition` names it in production now.
-flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
+flui-animation = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on
 # for this crate's own integration tests (`tests/*.rs`), benches, and
 # examples. Unit tests reach the harness via `cfg(test)`; the separate
@@ -147,7 +147,7 @@ flui-rendering = { path = ".", features = ["testing"] }
 flui-objects = { path = "../flui-objects", features = ["testing"] }
 # The text-context tests count the loans of a UI runtime's context
 # (`flui_painting::testing::text_context_lends`).
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }
+flui-painting = { workspace = true, features = ["testing"] }
 
 [features]
 default = []

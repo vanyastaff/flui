@@ -16,8 +16,8 @@ use flui_foundation::ViewKey;
 #[cfg(debug_assertions)]
 use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtocol};
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, StatefulElement,
-    StatefulView, StatelessView, View, ViewExt, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, KeyLookup,
+    StatefulElement, StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -161,7 +161,7 @@ fn set_sentinel(
     key: &GlobalKey<KeyedCounterState>,
     value: u64,
 ) -> bool {
-    let Some(id) = key.current_element() else {
+    let KeyLookup::Mounted(id) = key.current_element() else {
         return false;
     };
     let mut tree_guard = tree.borrow_mut();

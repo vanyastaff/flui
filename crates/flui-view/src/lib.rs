@@ -70,7 +70,7 @@
         reason = "test code catches a panic to assert on it (ADR-0303 §5)"
     )
 )]
-// Lint levels come from `[workspace.lints]`. Ship bar (wave 3): every public
+// Lint levels come from `[workspace.lints]`. Every public
 // item is documented; keep it that way.
 #![deny(missing_docs)]
 // `element/element.rs`, `view/view.rs`: a one-type family module named after
@@ -222,7 +222,7 @@ pub use flui_scheduler::{
     Seconds, Sleep, TaskToken, TimerHandle, duration::InvalidDurationConfig,
 };
 // Keys
-pub use key::{GlobalKey, ObjectKey, ValueKey};
+pub use key::{GlobalKey, KeyLookup, ObjectKey, ValueKey};
 // Legacy test-only handle for `GlobalKey::current_*` lookup. Production code
 // activates the handle through `UiRuntime::enter`; tests bypass the binding.
 pub use test_only_global_key_registry::{

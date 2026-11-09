@@ -1,6 +1,6 @@
 //! Cross-protocol child layout — Sliver parent lays out a Box child.
 //!
-//! Core.2 W3.3: verifies the reverse bridge of PR #187/#188. A
+//! Verifies the reverse bridge of the Box↔Sliver adapters. A
 //! `RenderSliverToBoxAdapter` is a Sliver-protocol parent with a
 //! Box-protocol child. It must:
 //!

@@ -63,7 +63,7 @@ use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
-use crate::host::{MAX_TEXT, owned_text};
+use crate::host::{MAX_TEXT, admit_text, owned_text};
 
 /// How long a transfer may wait for its peer: a whole read, the next chunk
 /// of an `INCR` write, or the owner thread's text for the primary
@@ -615,11 +615,11 @@ impl Selection {
             // The header is let go before the room is taken: an owner may pad
             // it to the read's limit.
             drop(reply);
-            if announced > MAX_TEXT {
+            if let Err(refused) = admit_text(announced) {
                 // Deleting the property asked for the first chunk: it lands
                 // where no read looks.
                 self.retire_destination();
-                self.answer(Err(ClipboardError::TooLarge));
+                self.answer(Err(refused));
                 return Ok(());
             }
             // Deleting the property asked for the first chunk.
@@ -661,7 +661,8 @@ impl Selection {
         };
         // A chunk past what the read has left reads as empty with bytes after
         // it, which is not the end of the transfer.
-        if bytes.len() + reply.value.len() > MAX_TEXT || reply.bytes_after != 0 {
+        let admitted = admit_text(bytes.len() + reply.value.len());
+        if admitted.is_err() || reply.bytes_after != 0 {
             // The owner's transfer goes on: its chunks land where no read looks.
             self.retire_destination();
             self.answer(Err(ClipboardError::TooLarge));

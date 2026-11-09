@@ -35,7 +35,7 @@ use windows::{
 };
 
 use crate::clipboard::lock;
-use crate::host::{MAX_TEXT, NativeClipboard, SyncClipboard, host_text};
+use crate::host::{NativeClipboard, SyncClipboard, admit_text, host_text, text_fits};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// Windows clipboard implementation
@@ -153,26 +153,26 @@ impl SyncClipboard for WindowsClipboard {
             }
 
             if len == max_len {
+                let _ = GlobalUnlock(hglobal);
                 tracing::warn!(
                     byte_size,
                     "Clipboard CF_UNICODETEXT data has no NUL terminator within its allocated size"
                 );
-                let _ = GlobalUnlock(hglobal);
                 return Err(ClipboardError::Malformed);
             }
 
             let wide_slice = std::slice::from_raw_parts(wide_ptr, len);
             // The text is measured before anything is allocated for it: past
-            // the limit nothing is decoded.
-            if decoded_len(wide_slice) > MAX_TEXT {
-                let _ = GlobalUnlock(hglobal);
-                tracing::warn!("a clipboard read past {MAX_TEXT} bytes was refused");
-                return Err(ClipboardError::TooLarge);
-            }
-            let rust_string = String::from_utf16_lossy(wide_slice);
+            // the limit nothing is decoded. The decode needs the allocation
+            // locked, while the refusal's warning (user code) must run after
+            // the unlock, so a panicking subscriber cannot leave it locked.
+            let measured = decoded_len(wide_slice);
+            let decoded = text_fits(measured).then(|| String::from_utf16_lossy(wide_slice));
 
-            // Unlock global memory
             let _ = GlobalUnlock(hglobal);
+            admit_text(measured)?;
+            // `admit_text` accepted exactly what `text_fits` decoded.
+            let rust_string = decoded.unwrap_or_default();
 
             tracing::debug!(len = rust_string.len(), "Read text from clipboard");
             host_text(rust_string)

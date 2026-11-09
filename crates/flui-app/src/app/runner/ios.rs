@@ -371,7 +371,7 @@ where
 
     ui_runtime.set_performance_overlay(config.show_performance_overlay);
     ui_runtime.set_motion_override(config.motion_override);
-    ui_runtime.set_frame_failure_handler(config.frame_failure_handler.clone());
+    config.install_frame_failure_handler(&ui_runtime);
     ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
     config.install_input_tap(&ui_runtime);
     config.install_error_view_builder(&ui_runtime);

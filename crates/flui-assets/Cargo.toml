@@ -22,12 +22,12 @@ autotests = false
 
 [dependencies]
 # Internal dependencies
-flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
+flui-foundation = { workspace = true }
+flui-painting = { workspace = true }
 # The `Executor` a decoded-image load runs on: the caller's background lanes
 # (ADR-0047), so the registry starts no runtime or thread of its own, and the
 # HTTP client a network image is fetched with (ADR-0280).
-flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
+flui-platform = { workspace = true }
 
 # Async runtime. "sync" backs the decoded-image load channels and slots
 # (`registry::images`); "rt" backs the typed cache's `tokio::fs` loaders.

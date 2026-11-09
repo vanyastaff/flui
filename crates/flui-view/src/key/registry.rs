@@ -37,9 +37,10 @@
 //! that lock: it would wait on its own thread forever. So a member's closures
 //! never block. A member whose lock is already held reports [`RegistryBusy`],
 //! the composite moves on to its next member, and only when no member
-//! answered does the busy report reach `GlobalKey`, which resolves it to
-//! nothing. Bindings are `!Send`, so a held lock can only mean re-entry on
-//! the owner thread, never a race with another thread.
+//! answered does the busy report reach `GlobalKey`, which returns it as
+//! `KeyLookup::RegistryBusy` (`with_current_state` folds it into `None`).
+//! Bindings are `!Send`, so a held lock can only mean re-entry on the owner
+//! thread, never a race with another thread.
 
 use std::{cell::RefCell, collections::HashMap, mem::ManuallyDrop, rc::Rc};
 
