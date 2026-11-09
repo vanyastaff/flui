@@ -158,7 +158,11 @@ impl std::fmt::Debug for MemoryClipboard {
 
 impl SyncClipboard for MemoryClipboard {
     fn read_now(&self) -> ClipboardRead {
-        self.text.lock().as_ref().map_or(Ok(None), owned_text)
+        // Clone out and release the guard first: the admission may emit a
+        // `tracing` event, and a subscriber is user code that may re-enter
+        // this clipboard.
+        let text: Option<Arc<str>> = self.text.lock().clone();
+        text.as_ref().map_or(Ok(None), owned_text)
     }
 
     fn write_now(&self, write: ClipboardWrite) {
