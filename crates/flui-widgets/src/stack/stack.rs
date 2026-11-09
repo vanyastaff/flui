@@ -4,11 +4,29 @@ use std::fmt;
 
 use flui_objects::{RenderIndexedStack, RenderStack, StackFit};
 use flui_painting::Alignment;
+use flui_painting::AlignmentGeometry;
+use flui_painting::typography::TextDirection;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::BoxedView;
+use flui_view::InheritedView;
 use flui_view::seq::ViewSeq;
 
+use crate::localization::Directionality;
 use crate::support::generic_render_view_element;
+
+/// Resolve `alignment` against the ambient [`Directionality`]. At mount the
+/// inherited read is not yet available, so a directional alignment defaults to
+/// Ltr and the first rebuild re-resolves it (T09).
+fn resolve_alignment_geometry(
+    alignment: AlignmentGeometry,
+    ctx: &flui_view::RenderObjectContext<'_>,
+) -> Alignment {
+    alignment.resolve(
+        ctx.depend_on::<Directionality, _>(|d| *d.data())
+            .unwrap_or(TextDirection::Ltr)
+            .is_ltr(),
+    )
+}
 
 /// Overlaps its children, sizing itself to the largest non-positioned child and
 /// aligning each by `alignment`.
@@ -21,7 +39,7 @@ use crate::support::generic_render_view_element;
 /// `column!`/`row!` macros) or a dynamic `Vec<BoxedView>`.
 #[derive(Clone)]
 pub struct Stack<C = Vec<BoxedView>> {
-    alignment: Alignment,
+    alignment: AlignmentGeometry,
     fit: StackFit,
     children: C,
 }
@@ -30,16 +48,19 @@ impl<C> Stack<C> {
     /// A stack of the given children with the default alignment and fit.
     pub fn new(children: C) -> Self {
         Self {
-            alignment: Alignment::TOP_LEFT,
+            alignment: Alignment::TOP_LEFT.into(),
             fit: StackFit::Loose,
             children,
         }
     }
 
-    /// How non-positioned children are aligned within the stack.
+    /// How non-positioned children are aligned within the stack — an
+    /// [`Alignment`] converts to an absolute geometry, an
+    /// [`AlignmentDirectional`](flui_painting::AlignmentDirectional) to a
+    /// direction-sensitive one resolved against the ambient [`Directionality`].
     #[must_use]
-    pub fn alignment(mut self, alignment: Alignment) -> Self {
-        self.alignment = alignment;
+    pub fn alignment(mut self, alignment: impl Into<AlignmentGeometry>) -> Self {
+        self.alignment = alignment.into();
         self
     }
 
@@ -69,22 +90,19 @@ where
     type Protocol = BoxProtocol;
     type RenderObject = RenderStack;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
         RenderStack::new()
-            .with_alignment(self.alignment)
+            .with_alignment(resolve_alignment_geometry(self.alignment, ctx))
             .with_fit(self.fit)
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        impact |= render_object.set_alignment(self.alignment);
+        impact |= render_object.set_alignment(resolve_alignment_geometry(self.alignment, ctx));
         impact |= render_object.set_fit(self.fit);
         impact
     }
@@ -108,7 +126,7 @@ generic_render_view_element!(Stack);
 /// displays no child.
 #[derive(Clone)]
 pub struct IndexedStack<C = Vec<BoxedView>> {
-    alignment: Alignment,
+    alignment: AlignmentGeometry,
     fit: StackFit,
     index: Option<usize>,
     children: C,
@@ -118,17 +136,20 @@ impl<C> IndexedStack<C> {
     /// An indexed stack with the default alignment and fit, and `index = 0`.
     pub fn new(children: C) -> Self {
         Self {
-            alignment: Alignment::TOP_LEFT,
+            alignment: Alignment::TOP_LEFT.into(),
             fit: StackFit::Loose,
             index: Some(0),
             children,
         }
     }
 
-    /// How non-positioned children are aligned within the stack.
+    /// How non-positioned children are aligned within the stack — an
+    /// [`Alignment`] converts to an absolute geometry, an
+    /// [`AlignmentDirectional`](flui_painting::AlignmentDirectional) to a
+    /// direction-sensitive one resolved against the ambient [`Directionality`].
     #[must_use]
-    pub fn alignment(mut self, alignment: Alignment) -> Self {
-        self.alignment = alignment;
+    pub fn alignment(mut self, alignment: impl Into<AlignmentGeometry>) -> Self {
+        self.alignment = alignment.into();
         self
     }
 
@@ -166,23 +187,20 @@ where
     type Protocol = BoxProtocol;
     type RenderObject = RenderIndexedStack;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
         RenderIndexedStack::new()
-            .with_alignment(self.alignment)
+            .with_alignment(resolve_alignment_geometry(self.alignment, ctx))
             .with_fit(self.fit)
             .with_index(self.index)
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        impact |= render_object.set_alignment(self.alignment);
+        impact |= render_object.set_alignment(resolve_alignment_geometry(self.alignment, ctx));
         impact |= render_object.set_fit(self.fit);
         impact |= render_object.set_index(self.index);
         impact
