@@ -2,11 +2,12 @@
 
 use flui_objects::RenderIcon;
 use flui_painting::styling::Color;
-use flui_painting::typography::{FontVariation, TextStyle};
+use flui_painting::typography::{FontVariation, TextDirection, TextStyle};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, CreationSite, IntoView, RenderView, ViewExt, impl_render_view};
 
+use crate::Directionality;
 use crate::Semantics;
 use crate::icon::symbol_effect::{ContentKey, SymbolEffectHost};
 use crate::icon::{IconData, IconTheme, IconThemeData, SymbolEffect};
@@ -37,11 +38,6 @@ use flui_view::environment::MediaQuery;
 ///
 /// # Deferred
 ///
-/// - **`IconData::match_text_direction`** RTL mirroring: needs a `Transform`
-///   composition step not wired into this build path yet.
-/// - **Ambient `Directionality`**: `Icon` does not read
-///   `Directionality::of` yet, so it always renders left-to-right
-///   ([`flui_painting::typography::TextDirection::Ltr`]).
 /// - Font weight, blend mode, and per-call shadow/text-direction
 ///   overrides are not supported yet.
 #[derive(Clone, Debug, StatelessView)]
@@ -193,6 +189,9 @@ impl StatelessView for Icon {
                 Some(flui_painting::TextSizing::fixed())
             },
             weight_adjustment: MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
+            mirrored: self.data.as_ref().is_some_and(|d| d.match_text_direction)
+                && Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr)
+                    == TextDirection::Rtl,
         };
         let mut semantics = Semantics::new();
         if let Some(label) = self.semantic_label.as_ref() {
@@ -218,6 +217,7 @@ struct ResolvedIcon {
     style: TextStyle,
     sizing: Option<flui_painting::TextSizing>,
     weight_adjustment: i32,
+    mirrored: bool,
 }
 
 impl RenderView for ResolvedIcon {
@@ -228,6 +228,7 @@ impl RenderView for ResolvedIcon {
         RenderIcon::new(self.size, self.glyph, self.style.clone())
             .with_text_sizing(self.sizing.clone())
             .with_font_weight_adjustment(self.weight_adjustment)
+            .with_mirrored(self.mirrored)
     }
 
     fn update_render_object(
@@ -241,7 +242,7 @@ impl RenderView for ResolvedIcon {
             self.style.clone(),
             self.sizing.clone(),
             self.weight_adjustment,
-        )
+        ) | object.set_mirrored(self.mirrored)
     }
 }
 

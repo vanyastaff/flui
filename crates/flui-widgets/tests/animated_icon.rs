@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use crate::common::{LaidOut, lay_out_animated, loose};
+use crate::common::{LaidOut, lay_out, lay_out_animated, loose};
 use flui_animation::{AnimationController, ConstantAnimation, Cubic, MotionOverride, Vsync};
 use flui_foundation::geometry::Point;
 use flui_painting::display_list::DrawOp;
@@ -14,8 +14,8 @@ use flui_painting::typography::TextDirection;
 use flui_testing::a11y::Role;
 use flui_view::environment::VsyncScope;
 use flui_widgets::{
-    AnimatedIcon, AnimatedIconData, Directionality, IconCommand, IconCommandBuf, IconDataError,
-    IconPath, IconPathBuf, IconTheme, IconThemeData,
+    AnimatedIcon, AnimatedIconData, Directionality, Icon, IconCommand, IconCommandBuf, IconData,
+    IconDataError, IconPath, IconPathBuf, IconTheme, IconThemeData,
 };
 
 /// A bar that slides down: its corner moves from (4, 4) to (4, 14) over two frames, the second
@@ -279,4 +279,36 @@ pub(crate) fn the_label_lives_on_the_icon() {
     let node = tree.find_by_label("Menu").expect("the label");
     assert_eq!(node.role(), Role::Image);
     assert_eq!(node.value(), None, "no progress is announced");
+}
+
+/// `IconData::match_text_direction` flips the glyph in paint under RTL: the mounted
+/// `RenderIcon` carries `mirrored = true` only when the ambient direction is RTL (T09).
+pub(crate) fn icon_mirrors_under_rtl() {
+    fn mounted_icon_is_mirrored(direction: TextDirection) -> bool {
+        let data = IconData {
+            match_text_direction: true,
+            ..IconData::new(0xE092)
+        };
+        let laid = lay_out(
+            Directionality::new(direction, Icon::new(data)),
+            loose(200.0),
+        );
+        laid.pipeline_owner()
+            .with(|owner| {
+                owner.render_tree().iter().find_map(|(_, node)| {
+                    node.downcast_render_object::<flui_objects::RenderIcon>()
+                        .map(flui_objects::RenderIcon::mirrored)
+                })
+            })
+            .expect("a mounted RenderIcon")
+    }
+
+    assert!(
+        mounted_icon_is_mirrored(TextDirection::Rtl),
+        "RTL mirrors a matching glyph"
+    );
+    assert!(
+        !mounted_icon_is_mirrored(TextDirection::Ltr),
+        "LTR keeps a matching glyph unmirrored"
+    );
 }
