@@ -8,6 +8,8 @@ pub mod app;
 #[cfg(target_os = "macos")]
 pub mod appkit;
 pub mod clipboard;
+/// A gap entry's stable identifier and the known-failure assertion.
+pub mod gap;
 /// The request-per-thread HTTP client's scripted stack.
 #[cfg(test)]
 pub(crate) mod http;

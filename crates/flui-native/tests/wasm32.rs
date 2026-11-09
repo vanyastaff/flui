@@ -470,8 +470,9 @@ fn counter_owner() -> (flui_native::OwnerPlatform, Arc<AtomicUsize>) {
 #[wasm_bindgen_test]
 fn a_concealed_write_is_an_ordinary_one_on_the_web() {
     use flui_native::testing::clipboard::{
-        CONCEALED_WRITES, a_concealed_write_stays_out_of_history, expect_fail, read_at_once,
+        CONCEALED_WRITES, a_concealed_write_stays_out_of_history, read_at_once,
     };
+    use flui_native::testing::gap::expect_fail;
 
     install_probe();
     let _probe = Probe;
