@@ -276,7 +276,7 @@ mod tests {
         );
         assert_eq!(
             mount_probe_key.current_element(),
-            KeyLookup::NotMounted,
+            KeyLookup::NoActiveRuntime,
             "mount scope must not leak"
         );
 
@@ -297,7 +297,7 @@ mod tests {
         );
         assert_eq!(
             key.current_element(),
-            KeyLookup::NotMounted,
+            KeyLookup::NoActiveRuntime,
             "plugin scope must not leak"
         );
     }

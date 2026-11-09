@@ -15,17 +15,23 @@ use flui_foundation::{ElementId, ViewKey};
 use crate::view::ElementBase;
 
 /// The outcome of a [`GlobalKey::current_element`](GlobalKey::current_element)
-/// lookup, typed instead of the silent `Option<ElementId>` it replaced (T02a).
+/// lookup: a miss says why it missed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyLookup {
     /// An element is mounted for the key.
     Mounted(ElementId),
-    /// No element is mounted for the key anywhere.
+    /// A registry was consulted and no element is mounted for the key in it.
     NotMounted,
-    /// A presentation that may hold the key is running its frame on this
-    /// thread, so its tree is not read re-entrantly; the key may be mounted
-    /// there.
-    ForeignPresentationBusy,
+    /// No registry is active: the call ran outside a UI runtime scope
+    /// (`UiRuntime::enter`, or a binding's `with_global_key_registry`), so
+    /// nothing was consulted and the key may well be mounted.
+    NoActiveRuntime,
+    /// The registry was consulted but could not be read: a presentation's
+    /// frame is running on this thread (the caller is inside it, from `build`,
+    /// a lifecycle hook, `dispose` or a layout-builder build), so its tree is
+    /// not read re-entrantly. The key may be mounted there; a key held by
+    /// another presentation of the runtime resolves normally.
+    RegistryBusy,
 }
 
 /// A key that provides access to the element from anywhere.
@@ -119,16 +125,19 @@ impl<T: 'static> GlobalKey<T> {
 
     /// Get the current element ID associated with this key.
     ///
-    /// Returns `None` if no element registered under this `GlobalKey`'s
-    /// hash is currently mounted in the registered build owner.
+    /// Returns [`KeyLookup::Mounted`] with the element's id, or the reason
+    /// the key did not resolve: [`KeyLookup::NotMounted`] when the registry
+    /// was consulted and holds no element for this key,
+    /// [`KeyLookup::NoActiveRuntime`] when there was no registry to consult,
+    /// [`KeyLookup::RegistryBusy`] when the registry could not be read.
     ///
     /// # Registry access
     ///
     /// Reads the registry handle activated by the current owner-thread UI runtime
     /// scope (or by the legacy test harness adapter). When no UI runtime is active
-    /// the method returns `None` — this is the
-    /// quiescent state expected in pure-unit tests that bypass the
-    /// framework binding.
+    /// the method returns [`KeyLookup::NoActiveRuntime`]: the call ran outside
+    /// `UiRuntime::enter`, as in a unit test that bypasses the framework binding,
+    /// and says nothing about whether the key is mounted.
     ///
     /// Resolution is by key identity: the registries behind the handle
     /// bucket entries by
@@ -140,7 +149,7 @@ impl<T: 'static> GlobalKey<T> {
     ///
     /// Called from inside the frame of the presentation that hosts the key
     /// (from `build`, a lifecycle hook, `dispose`, or a layout-builder build),
-    /// this returns [`KeyLookup::ForeignPresentationBusy`] (logged at `debug`)
+    /// this returns [`KeyLookup::RegistryBusy`] (logged at `debug`)
     /// instead of the element: that presentation's tree is locked for the frame
     /// and is not read re-entrantly. Keys held by other presentations of the UI
     /// runtime resolve normally.
@@ -150,9 +159,10 @@ impl<T: 'static> GlobalKey<T> {
             Some(Ok(Some(id))) => KeyLookup::Mounted(id),
             Some(Err(crate::key::registry::RegistryBusy)) => {
                 self.report_skipped_busy_presentation();
-                KeyLookup::ForeignPresentationBusy
+                KeyLookup::RegistryBusy
             }
-            None | Some(Ok(None)) => KeyLookup::NotMounted,
+            Some(Ok(None)) => KeyLookup::NotMounted,
+            None => KeyLookup::NoActiveRuntime,
         }
     }
 
@@ -174,7 +184,9 @@ impl<T: 'static> GlobalKey<T> {
     /// this key, downcasting to `R` first.
     ///
     /// Returns `None` if:
-    /// - No element is currently registered for this key, OR
+    /// - [`Self::current_element`] does not resolve the key (not mounted, no
+    ///   active UI runtime, or the registry busy: this method folds all three
+    ///   into `None`; call [`Self::current_element`] to tell them apart), OR
     /// - The matched element has no state (e.g. it's a `StatelessElement`), OR
     /// - The state's runtime type doesn't match `T`.
     ///
@@ -205,7 +217,9 @@ impl<T: 'static> GlobalKey<T> {
     {
         let element_id = match self.current_element() {
             KeyLookup::Mounted(id) => id,
-            KeyLookup::NotMounted | KeyLookup::ForeignPresentationBusy => return None,
+            KeyLookup::NotMounted | KeyLookup::NoActiveRuntime | KeyLookup::RegistryBusy => {
+                return None;
+            }
         };
 
         // `with_registry` yields `None` when no ui_runtime/fixture handle is

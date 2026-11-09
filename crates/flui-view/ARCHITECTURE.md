@@ -605,19 +605,21 @@ reconciliation stream observed by tools is the production one, not a test-only r
 
 The stream is typed and zero-cost when nothing subscribes.
 
-### A GlobalKey read inside its own presentation's frame resolves to nothing
+### A GlobalKey read inside its own presentation's frame reports `RegistryBusy`
 
-**Rule.** `GlobalKey::current_element` and `with_current_state` return `None` when called
+**Rule.** `GlobalKey::current_element` returns `KeyLookup::RegistryBusy` when called
 from inside the frame of the binding that hosts the key: from `build`, a lifecycle hook,
 `dispose`, or a layout-builder build, all of which run while `WidgetsBinding` holds its own state
-lock. The registry closures take that lock with a non-blocking recursive read and report
+lock. `with_current_state` folds that outcome, like every other miss, into `None` and does not
+call its closure. The registry closures take that lock with a non-blocking recursive read and report
 `RegistryBusy` when it is held; the UI runtime composite skips a busy member and keeps trying the
 others, so keys held by other presentations of the UI runtime resolve normally. The binding is
 `!Send` (pinned by a static assertion), so a held lock can only mean re-entry on the owner
 thread. Before this rule such a read blocked on its own thread forever. The skip is logged at
 `debug`, not `warn`: the running presentation is busy for every read in its frame, so a key
 mounted nowhere reports the same skip, and a warning there would fire every frame.
-**Unasserted:** no test pins this.
+`a_miss_names_why_it_missed` pins the three miss outcomes: `NoActiveRuntime` outside a runtime
+scope, `NotMounted` for an unmounted key inside one, `RegistryBusy` from `build`.
 
 Closing a presentation uses the same composite as every other UI runtime entry, the closing
 presentation included. Its keys resolve until its tree teardown takes the binding lock (a
