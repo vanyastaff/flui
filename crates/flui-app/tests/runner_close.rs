@@ -251,17 +251,19 @@ fn observed_app(
     handler: Option<CloseRequestHandler>,
 ) -> Application<ObservedRoot, impl FnMut(&AppHandle) -> ObservedRoot> {
     let device_reports = Arc::clone(&observed.device_reports);
-    let failures = FrameFailureHandler::new(move |report| {
-        if let FrameFailureKind::DeviceLost { recovery, .. } = report.kind {
-            device_reports
-                .lock()
-                .expect("BUG: the frame-failure handler does not panic")
-                .push(recovery);
-        }
-    });
     let mut config = AppConfig::new()
         .with_exit_policy(ExitPolicy::OnLastWindowClosed)
-        .with_frame_failure_handler(failures);
+        .with_frame_failure_handler(move || {
+            let reports = Arc::clone(&device_reports);
+            FrameFailureHandler::new(move |report| {
+                if let FrameFailureKind::DeviceLost { recovery, .. } = report.kind {
+                    reports
+                        .lock()
+                        .expect("BUG: the frame-failure handler does not panic")
+                        .push(recovery);
+                }
+            })
+        });
     if let Some(handler) = handler {
         config = config.with_close_request_handler(handler);
     }

@@ -1676,14 +1676,18 @@ fn reporting_callback_panics(panics: &CallbackPanics) -> AppConfig {
     let panics = std::sync::Arc::clone(panics);
     AppConfig::new()
         .with_exit_policy(ExitPolicy::OnLastWindowClosed)
-        .with_frame_failure_handler(flui_app::app::FrameFailureHandler::new(move |report| {
-            if let flui_app::app::FrameFailureKind::CallbackPanic { message, .. } = &report.kind {
-                panics
-                    .lock()
-                    .expect("BUG: the frame-failure handler does not panic")
-                    .push(message.to_string());
-            }
-        }))
+        .with_frame_failure_handler(move || {
+            let panics = std::sync::Arc::clone(&panics);
+            flui_app::app::FrameFailureHandler::new(move |report| {
+                if let flui_app::app::FrameFailureKind::CallbackPanic { message, .. } = &report.kind
+                {
+                    panics
+                        .lock()
+                        .expect("BUG: the frame-failure handler does not panic")
+                        .push(message.to_string());
+                }
+            })
+        })
 }
 
 /// Presses and releases a finger at `at` in `window`, the application's turn

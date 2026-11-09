@@ -16,7 +16,9 @@ use super::lifecycle::ServiceDefinition;
 use super::runtime::ExitPolicy;
 use flui_runtime::InputTapFactory;
 use flui_runtime::execution::HostExecutors;
-use flui_runtime::frame_failure::{FrameFailureDetail, FrameFailureHandler};
+use flui_runtime::frame_failure::{
+    FrameFailureDetail, FrameFailureHandler, FrameFailureHandlerFactory,
+};
 
 /// Default diagnostics policy for a managed application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -216,7 +218,10 @@ pub struct AppConfig {
     /// (the default): reports remain surfaced through `tracing`; only typed
     /// delivery is skipped. See [`FrameFailureHandler`]'s own doc for the
     /// delivery timing and owner-admission contract.
-    pub frame_failure_handler: Option<FrameFailureHandler>,
+    ///
+    /// The handler is owner-local (`Rc`), so the configuration carries a `Send`
+    /// factory that builds it on each owner thread; the config stays `Send`.
+    pub frame_failure_handler: Option<FrameFailureHandlerFactory>,
 
     /// Optional recording hook: each runtime the app builds installs a fresh
     /// tap from this factory before its first input, and the tap observes
@@ -571,8 +576,11 @@ impl AppConfig {
     /// [`Self::frame_failure_handler`]'s doc and
     /// [`FrameFailureHandler`]'s delivery timing and owner-admission contract.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_frame_failure_handler(mut self, handler: FrameFailureHandler) -> Self {
-        self.frame_failure_handler = Some(handler);
+    pub fn with_frame_failure_handler(
+        mut self,
+        handler: impl Fn() -> FrameFailureHandler + Send + Sync + 'static,
+    ) -> Self {
+        self.frame_failure_handler = Some(FrameFailureHandlerFactory::new(handler));
         self
     }
 

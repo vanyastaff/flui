@@ -560,12 +560,13 @@ pub struct FrameFailureReport {
 /// If an ordinary aggregate destructor panics again while unwinding its first
 /// failure, Rust aborts before the catch boundary can regain control.
 #[derive(Clone)]
-pub struct FrameFailureHandler(std::sync::Arc<dyn Fn(&FrameFailureReport) + Send + Sync>);
+pub struct FrameFailureHandler(std::rc::Rc<dyn Fn(&FrameFailureReport)>);
 
 impl FrameFailureHandler {
-    /// Wrap a callback as a registerable handler.
-    pub fn new(handler: impl Fn(&FrameFailureReport) + Send + Sync + 'static) -> Self {
-        Self(std::sync::Arc::new(handler))
+    /// Wrap a callback as a registerable handler. Owner-local (T02a): the
+    /// callback runs on the owner thread, so it needs no `Send + Sync`.
+    pub fn new(handler: impl Fn(&FrameFailureReport) + 'static) -> Self {
+        Self(std::rc::Rc::new(handler))
     }
 
     /// Deliver one report to the wrapped callback.
@@ -578,6 +579,34 @@ impl std::fmt::Debug for FrameFailureHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The wrapped closure is opaque; identity is all Debug can say.
         f.debug_tuple("FrameFailureHandler").finish()
+    }
+}
+
+/// What a [`FrameFailureHandlerFactory`] calls once per owner thread.
+type MakeFrameFailureHandler = dyn Fn() -> FrameFailureHandler + Send + Sync;
+
+/// Makes one handler per owner thread: the embedder's typed frame-failure
+/// callback, which `flui-app` installs on every runtime it builds. A handler
+/// lives on its runtime's owner thread (`Rc`), so the factory — not the
+/// handler — crosses threads.
+#[derive(Clone)]
+pub struct FrameFailureHandlerFactory(std::sync::Arc<MakeFrameFailureHandler>);
+
+impl FrameFailureHandlerFactory {
+    /// A factory calling `make` once per owner thread.
+    pub fn new(make: impl Fn() -> FrameFailureHandler + Send + Sync + 'static) -> Self {
+        Self(std::sync::Arc::new(make))
+    }
+
+    /// Build a fresh owner-local handler.
+    pub fn build(&self) -> FrameFailureHandler {
+        (self.0)()
+    }
+}
+
+impl std::fmt::Debug for FrameFailureHandlerFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("FrameFailureHandlerFactory").finish()
     }
 }
 
