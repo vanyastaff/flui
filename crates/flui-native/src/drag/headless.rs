@@ -118,15 +118,8 @@ impl DragTransport for DragDouble {
         // concluded the drop meanwhile: it retires here, outside every lock.
         drop(provider);
         let result = result.and_then(|payload| {
-            let actual = payload.byte_len();
-            if actual > limits.max_bytes {
-                Err(TransferError::TooLarge {
-                    actual,
-                    limit: limits.max_bytes,
-                })
-            } else {
-                Ok(payload)
-            }
+            crate::drag::offers::too_large_u64(payload.byte_len(), limits.max_bytes)
+                .map_or(Ok(payload), Err)
         });
         TransferRequest::ready(result)
     }

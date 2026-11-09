@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use flui_platform::data_transfer::{Mime, TransferError, TransferFormat, TransferPayload};
 
-use super::{Kind, representations, too_large};
+use super::super::too_large;
+use super::{Kind, representations};
 use crate::clipboard::text::TextForm;
 
 /// The platform's transfer values compare by what they print: they hold no

@@ -1080,27 +1080,17 @@ impl DragTransport for OleTransfer {
             }));
         };
         if let Some(declared) = descriptor.declared_len
-            && declared > limits.max_bytes
+            && let Some(error) = crate::drag::offers::too_large_u64(declared, limits.max_bytes)
         {
-            return TransferRequest::ready(Err(TransferError::TooLarge {
-                actual: declared,
-                limit: limits.max_bytes,
-            }));
+            return TransferRequest::ready(Err(error));
         }
         // No borrow is held: a data object of this process serves the fetch
         // from its provider, which is user code.
         let result = fetch(&object, &native, limits.max_bytes)
             .and_then(|bytes| decode(&native, &descriptor.format, &bytes))
             .and_then(|payload| {
-                let actual = payload.byte_len();
-                if actual > limits.max_bytes {
-                    Err(TransferError::TooLarge {
-                        actual,
-                        limit: limits.max_bytes,
-                    })
-                } else {
-                    Ok(payload)
-                }
+                crate::drag::offers::too_large_u64(payload.byte_len(), limits.max_bytes)
+                    .map_or(Ok(payload), Err)
             });
         drop(object);
         TransferRequest::ready(result)
@@ -1412,11 +1402,8 @@ fn read_global(global: HGLOBAL, max_bytes: u64) -> Result<Vec<u8>, TransferError
     // `GlobalSize` bounds the copy, which reads only while the lock holds.
     unsafe {
         let size = GlobalSize(global);
-        if size as u64 > max_bytes {
-            return Err(TransferError::TooLarge {
-                actual: size as u64,
-                limit: max_bytes,
-            });
+        if let Some(error) = crate::drag::offers::too_large_u64(size as u64, max_bytes) {
+            return Err(error);
         }
         let pointer = GlobalLock(global);
         if pointer.is_null() {

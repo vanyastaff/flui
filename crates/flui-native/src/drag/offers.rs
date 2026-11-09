@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
 use flui_platform::data_transfer::RepresentationDescriptor;
+use flui_platform::data_transfer::TransferError;
 #[cfg(any(
     target_os = "android",
     target_arch = "wasm32",
@@ -425,10 +426,25 @@ pub(crate) fn payload_of_bytes(format: &TransferFormat, bytes: Vec<u8>) -> Trans
     }
 }
 
+/// The error a payload of `len` bytes past `limit` is refused with, for a
+/// length measured in `usize` units (the X11/Wayland/web readers). Cross-host:
+/// every backend refuses an over-limit payload through this predicate or its
+/// [`too_large_u64`] sibling, so the size policy lives once (T10).
+#[cfg(any(x11_host, wayland_host, target_arch = "wasm32"))]
+pub(crate) fn too_large(len: usize, limit: u64) -> Option<TransferError> {
+    too_large_u64(u64::try_from(len).unwrap_or(u64::MAX), limit)
+}
+
+/// The error a payload of `actual` bytes past `limit` is refused with, for a
+/// length already measured in bytes rather than in `usize` units.
+pub(crate) fn too_large_u64(actual: u64, limit: u64) -> Option<TransferError> {
+    (actual > limit).then_some(TransferError::TooLarge { actual, limit })
+}
+
 #[cfg(test)]
 mod tests;
 
 #[cfg(any(x11_host, wayland_host))]
 mod kind;
 #[cfg(any(x11_host, wayland_host))]
-pub(crate) use kind::{Kind, bytes_of, names_of, representations, too_large};
+pub(crate) use kind::{Kind, bytes_of, names_of, representations};

@@ -166,8 +166,8 @@ mod clip {
         let actual = bytes
             .as_ref()
             .map_or(read, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-        if actual > limit {
-            return Err(TransferError::TooLarge { actual, limit });
+        if let Some(error) = crate::drag::offers::too_large_u64(actual, limit) {
+            return Err(error);
         }
         bytes.ok_or(TransferError::SourceGone)
     }
@@ -705,17 +705,10 @@ impl DragTransport for AndroidTransfer {
             Err(error) => return TransferRequest::ready(Err(error)),
         };
         match found {
-            Held::Payload(payload) => {
-                let actual = payload.byte_len();
-                TransferRequest::ready(if actual > limits.max_bytes {
-                    Err(TransferError::TooLarge {
-                        actual,
-                        limit: limits.max_bytes,
-                    })
-                } else {
-                    Ok(payload)
-                })
-            }
+            Held::Payload(payload) => TransferRequest::ready(
+                crate::drag::offers::too_large_u64(payload.byte_len(), limits.max_bytes)
+                    .map_or(Ok(payload), Err),
+            ),
             Held::Missing => TransferRequest::ready(Err(TransferError::SourceGone)),
             Held::Uri(held) => {
                 let Some(view) = self.view.upgrade() else {

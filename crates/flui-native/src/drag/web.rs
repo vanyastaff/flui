@@ -506,24 +506,14 @@ impl DragTransport for WebTransfer {
             }
         };
         match found {
-            Found::Payload(payload) => {
-                let actual = payload.byte_len();
-                TransferRequest::ready(if actual > limits.max_bytes {
-                    Err(TransferError::TooLarge {
-                        actual,
-                        limit: limits.max_bytes,
-                    })
-                } else {
-                    Ok(payload)
-                })
-            }
+            Found::Payload(payload) => TransferRequest::ready(
+                crate::drag::offers::too_large_u64(payload.byte_len(), limits.max_bytes)
+                    .map_or(Ok(payload), Err),
+            ),
             Found::File(file, format) => {
                 let size = file.size() as u64;
-                if size > limits.max_bytes {
-                    return TransferRequest::ready(Err(TransferError::TooLarge {
-                        actual: size,
-                        limit: limits.max_bytes,
-                    }));
+                if let Some(error) = crate::drag::offers::too_large_u64(size, limits.max_bytes) {
+                    return TransferRequest::ready(Err(error));
                 }
                 let (request, completer) = TransferRequest::pending();
                 js_sys::futures::spawn_local(async move {
@@ -532,14 +522,8 @@ impl DragTransport for WebTransfer {
                         .map(|buffer| js_sys::Uint8Array::new(&buffer).to_vec())
                         .map_err(|_| TransferError::SourceGone)
                         .and_then(|bytes| {
-                            if bytes.len() as u64 > limits.max_bytes {
-                                Err(TransferError::TooLarge {
-                                    actual: bytes.len() as u64,
-                                    limit: limits.max_bytes,
-                                })
-                            } else {
-                                Ok(payload_of_bytes(&format, bytes))
-                            }
+                            crate::drag::offers::too_large(bytes.len(), limits.max_bytes)
+                                .map_or_else(|| Ok(payload_of_bytes(&format, bytes)), Err)
                         });
                     completer.complete(result);
                 });
