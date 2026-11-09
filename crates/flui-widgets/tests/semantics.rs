@@ -791,7 +791,7 @@ pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
                         text,
                         start,
                         line,
-                        flui_widgets::SemanticsTextDirection::Ltr,
+                        flui_painting::typography::TextDirection::Ltr,
                         Rect::from_origin_size(
                             Point::new(0.0, 10.0 * line as f64),
                             Size::new(10.0 * text.len() as f64, 10.0),

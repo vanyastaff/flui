@@ -1,5 +1,5 @@
 //! The directionality in which text flows, shared by the paint, semantics and
-//! reading-order paths (T11c; previously defined twice, in `flui-painting` and
+//! reading-order paths (previously defined twice, in `flui-painting` and
 //! `flui-semantics`, with hand-written mappings between them).
 
 /// The directionality in which text flows.

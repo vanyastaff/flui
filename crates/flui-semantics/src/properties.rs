@@ -9,9 +9,9 @@ use crate::action::SemanticsAction;
 // TextDirection
 // ============================================================================
 
-// Text flow direction lives in `flui_foundation::text_direction` (T11c); the
+// Text flow direction lives in `flui_foundation::TextDirection`; the
 // semantics path re-exports it so `flui_semantics::TextDirection` keeps working.
-pub use flui_foundation::text_direction::TextDirection;
+pub use flui_foundation::TextDirection;
 
 // ============================================================================
 // HeadingLevel

@@ -91,9 +91,9 @@ impl TextAlignVertical {
 // Re-export TextBaseline from layout module (canonical source)
 pub use crate::TextBaseline;
 
-// Text flow direction lives in `flui_foundation::text_direction` (T11c); the
+// Text flow direction lives in `flui_foundation::TextDirection`; the
 // painting path re-exports it so `flui_painting::TextDirection` keeps working.
-pub use flui_foundation::text_direction::TextDirection;
+pub use flui_foundation::TextDirection;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

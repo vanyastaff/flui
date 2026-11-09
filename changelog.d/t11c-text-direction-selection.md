@@ -1,6 +1,6 @@
 ### Changed
 
-- `TextDirection` now lives in `flui_foundation::text_direction` and is re-exported from
+- `TextDirection` now lives in `flui_foundation::TextDirection` and is re-exported from
   `flui_painting` and `flui_semantics`, so the two previously-distinct enums are one value and the
   paint, semantics and reading-order paths no longer map between them by hand.
 
