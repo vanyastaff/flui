@@ -75,7 +75,7 @@ tracing-subscriber = { workspace = true, optional = true }
 # normally, which cargo permits for dev-dependencies precisely so a lower crate
 # can use the test support built on it.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
-flui-testing = { workspace = true }
+flui-testing = { path = "../flui-testing" }
 criterion = { workspace = true }
 # The `serde` round trip of `Revision`.
 serde_json = { workspace = true }

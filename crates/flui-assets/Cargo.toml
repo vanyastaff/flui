@@ -55,7 +55,7 @@ lru = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "time", "rt-multi-thread"] }
 # `ScriptedHttp`, the scripted HTTP client network-image tests fetch with.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
-flui-platform = { workspace = true, features = ["testing"] }
+flui-platform = { path = "../flui-platform", features = ["testing"] }
 
 [features]
 default = []

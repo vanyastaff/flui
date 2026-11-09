@@ -144,7 +144,7 @@ flui-rendering = { path = ".", features = ["testing"] }
 # flui-objects in production (the render machine produces the objects,
 # the catalog object classes live above rendering's contract).
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
-flui-objects = { workspace = true, features = ["testing"] }
+flui-objects = { path = "../flui-objects", features = ["testing"] }
 # The text-context tests count the loans of a UI runtime's context
 # (`flui_painting::testing::text_context_lends`).
 flui-painting = { workspace = true, features = ["testing"] }

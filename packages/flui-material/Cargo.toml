@@ -39,9 +39,7 @@ flui-testing = { workspace = true }
 flui-layer = { workspace = true }
 # Key events (`events`, `testing::input::KeyEventBuilder`) and `FocusManager`,
 # which a few tests construct directly (`ink_well.rs`, `text_field.rs`).
-flui-interaction = { workspace = true, features = [
-    "testing",
-] }
+flui-interaction = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

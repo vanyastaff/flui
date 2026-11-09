@@ -97,7 +97,7 @@ flui-interaction = { workspace = true, features = ["testing"] }
 # `log_capture::capture`, which the semantics agent's privacy test calls so a
 # sibling test cannot poison the callsites it captures.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
-flui-testing = { workspace = true }
+flui-testing = { path = "../flui-testing" }
 # The UI runtime tests: the headless platform's windows and capability fakes
 # (`headless_platform`, `FakeTextInput`, `FakeAccessibility`),
 # a dev edge only, so the shipped crate still links no backend; the concrete

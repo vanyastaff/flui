@@ -117,10 +117,10 @@ flui-interaction = { workspace = true, features = ["testing"] }
 # so no type of this crate meets its twin. Keep the harness checkout-only:
 # Cargo omits this versionless dev edge from archives, breaking the publication
 # cycle while retaining the public, versioned testing-to-widgets dependency.
-flui-testing = { workspace = true }
+flui-testing = { path = "../flui-testing" }
 # A capability registry without the background lanes, for the `Image` test of
 # a host that has none. Checkout-only test edge, like `flui-testing` above.
-flui-runtime = { workspace = true }
+flui-runtime = { path = "../flui-runtime" }
 # The integration tests build steps for a connection alone (`testing`).
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-widgets = { path = ".", features = ["testing"] }

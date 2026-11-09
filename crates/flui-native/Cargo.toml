@@ -642,7 +642,7 @@ cfg_aliases = { workspace = true }
 # `assert_backend_conforms` (ADR-0215 §7) over the shared decoders and the
 # headless backend. Checkout-only test edge: versionless, so Cargo drops it
 # from the published manifest; flui-testing never depends on this crate.
-flui-testing = { workspace = true }
+flui-testing = { path = "../flui-testing" }
 # `fonts::android`'s parse, which runs on every host over recorded files.
 roxmltree.workspace = true
 # The host's own test support, the `testing` module, and the `http` client its
