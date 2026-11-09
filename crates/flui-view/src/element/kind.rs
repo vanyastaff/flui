@@ -1,21 +1,17 @@
 //! Closed `ElementKind` discriminated union for element storage.
 //!
-//! FR-019, FR-020. The enum carries the sub-trait surface that gives
-//! each behavior family a type-discriminated home, and the dispatch path
-//! delegates through the typed variant set.
+//! The enum gives each behavior family a type-discriminated home. It is a
+//! storage and match surface: `element` and `element_mut` erase every variant
+//! to `&dyn ElementBase`, and the lifecycle path runs through that trait object.
 //!
 //! # Why closed variants and not one?
 //!
 //! `Box<dyn ElementBase>` storage paired with a runtime
-//! `downcast_ref::<V>()` (`crates/flui-view/src/element/generic.rs:271`)
-//! emits `tracing::warn!` on type mismatch and continues with stale
-//! state — a silent-correctness trap FR-021 retires. `ElementKind`
-//! replaces that path with a closed enum so the reconciler can
-//! dispatch monomorphically per child position. Arity-class dispatch
-//! lives at the outer match site because an enum variant cannot
-//! introduce a generic parameter the outer enum does not carry —
-//! collapsing the Render family into a single variant with an inner
-//! arity enum would defeat the per-position monomorphism guarantee.
+//! `downcast_ref::<V>()` emits `tracing::warn!` on type mismatch and
+//! continues with stale state. `ElementKind` makes the behavior family a
+//! closed, matchable fact instead of something recovered by downcasting.
+//! Arity-class dispatch lives at the outer match site because an enum variant
+//! cannot introduce a generic parameter the outer enum does not carry.
 //!
 //! `#[non_exhaustive]`: future variants (e.g. an `Async` or
 //! `Suspense` family) can land without a breaking change.
@@ -199,10 +195,9 @@ where
 
 /// Closed discriminated union over element behavior families.
 ///
-/// Replaces the legacy `Box<dyn ElementBase>` storage with a typed
-/// variant set so the reconciler can dispatch monomorphically per
-/// arity-class and the `View::can_update` mismatch path no
-/// longer silently downcast-warns with stale state (FR-021).
+/// The variant set is a typed record of the behavior family, so the
+/// `View::can_update` mismatch path matches on it instead of downcasting.
+/// `element` and `element_mut` erase every variant to `&dyn ElementBase`.
 ///
 /// Variants are pinned at the behavior-FAMILY level — adding a new
 /// `StatelessView` impl does not introduce a new variant; it picks up

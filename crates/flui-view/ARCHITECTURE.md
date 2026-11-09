@@ -43,8 +43,11 @@ pub type RenderElement<V>    = Element<V, Variable, RenderBehavior<V>>;
 
 The reconciler stores each element as an `ElementKind` closed union —
 `Stateless`, `Stateful`, `Proxy`, `Inherited`, `Notification`, `RenderVariable`,
-`Root` — so it dispatches monomorphically per behavior family instead of
-downcasting a `Box<dyn ElementBase>` (FR-021).
+`Root`. The variant records the behavior family and lets a caller match on it
+(for example to reach the family's sub-trait). The shared lifecycle path does
+not match on it: `ElementKind::element` and `element_mut` erase every variant
+to `&dyn ElementBase`, so mount, update and unmount go through that one trait
+object.
 
 ---
 
