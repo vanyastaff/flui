@@ -161,8 +161,9 @@ use signal::{OwnerSignal, SignalTransport};
 pub struct OwnerPlatform {
     platform: Arc<dyn Platform>,
     hooks: Arc<dyn OwnerHooks>,
-    // `_owner_affine` (a `PhantomData<*const ()>`) keeps the type `!Send + !Sync`;
-    // the fields stay private regardless.
+    // `_owner_affine` makes the type `!Send + !Sync`, so owner-thread state stays
+    // on the thread that created it; the fields stay private so a caller cannot
+    // swap the backend or hooks out from under that affinity.
     _owner_affine: PhantomData<*const ()>,
 }
 
