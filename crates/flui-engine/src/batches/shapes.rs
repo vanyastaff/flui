@@ -128,7 +128,7 @@ impl DrawBatcher {
             // The instanced fast path renders with a hardcoded SrcOver
             // (ALPHA_BLENDING) pipeline. Non-SrcOver blend modes must route
             // through the tessellated path, whose pipeline is selected per
-            // `pipeline_key_from_paint` (Phase A fixed-function Porter-Duff).
+            // `pipeline_key_from_paint` (fixed-function Porter-Duff).
             if paint.blend_mode == BlendMode::SrcOver {
                 if state.is_translate_scale() {
                     // Baked-AABB fast path: positive-scale SrcOver — bake the
@@ -507,7 +507,8 @@ impl DrawBatcher {
             };
 
             // The instanced fast path renders with a hardcoded SrcOver pipeline;
-            // non-SrcOver blend modes route through tessellation (aliased, until PR-4).
+            // non-SrcOver blend modes route through tessellation (aliased unless the
+            // shape is large and tile-safe enough for the SSAA tile).
             if paint.blend_mode == BlendMode::SrcOver {
                 let m = state.current_transform();
                 if state.is_axis_aligned() {
@@ -660,7 +661,8 @@ impl DrawBatcher {
     /// so the AA band at the thin tips is slightly wider than 1px — same limitation
     /// as `rect_instanced`; acceptable for UI shapes.)
     ///
-    /// Non-SrcOver and stroked ovals remain tessellated (aliased) until PR-4.
+    /// Stroked ovals stay tessellated (aliased), as do non-SrcOver fills that are
+    /// coverage-destructive or too small for the SSAA tile.
     /// A gradient paints the tessellated fill or stroke.
     ///
     /// Instanced ovals keep their recorded position in the ordered run stream.
@@ -861,11 +863,12 @@ impl DrawBatcher {
     ///
     /// Reflection guard: `det < 0` means the transform contains a reflection,
     /// which negates the sector direction in the shader (the angular half-planes
-    /// flip). Reflected arcs fall back to tessellation (PR-4 handles non-SrcOver).
+    /// flip). Reflected arcs fall back to tessellation, or to the SSAA tile for a
+    /// non-SrcOver fill.
     ///
-    /// Non-SrcOver blend modes and stroked arcs remain tessellated (aliased)
-    /// until the SSAA tile path (PR-4). A gradient paints the tessellated fill
-    /// or stroke.
+    /// Stroked arcs stay tessellated (aliased), as do non-SrcOver fills that are
+    /// coverage-destructive or too small for the SSAA tile. A gradient paints the
+    /// tessellated fill or stroke.
     ///
     /// # Opacity
     ///
@@ -919,7 +922,7 @@ impl DrawBatcher {
             };
 
             // Instanced affine SDF path conditions (else → tessellate, correct
-            // shape but aliased until PR-4):
+            // shape, aliased unless the SSAA tile takes it):
             // - SrcOver only — the instanced pipeline is hardcoded SrcOver; other
             //   blend modes route through the tessellated Porter-Duff path.
             // - `use_center` only — the SDF shader carves a PIE SECTOR through the

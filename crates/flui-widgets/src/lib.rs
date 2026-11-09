@@ -58,7 +58,7 @@
         reason = "test code catches a panic to assert on it (ADR-0303 §5)"
     )
 )]
-// Lint levels come from `[workspace.lints]`. Ship bar (wave 3): every public
+// Lint levels come from `[workspace.lints]`. Every public
 // item is documented; keep it that way.
 #![deny(missing_docs)]
 // `flex/flex.rs`, `text/text.rs`: a one-type family module named after its

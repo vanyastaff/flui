@@ -66,7 +66,7 @@
 #![expect(clippy::type_complexity)]
 // Some render objects have many configuration parameters
 #![expect(clippy::too_many_arguments)]
-// Ship bar (wave 3): every public item is documented; keep it that way.
+// Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
 // Public for exported macro expansion in downstream crates, not an authoring alias.

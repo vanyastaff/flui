@@ -582,7 +582,7 @@ pedantic = { level = "warn", priority = -1 }
 # ship-quality waves. `expect_used` stays off — expect() with the BUG:
 # message convention IS the sanctioned invariant idiom.
 unwrap_used = "warn"
-# `undocumented_unsafe_blocks` — re-evaluated (W0-5), measured, reverted.
+# `undocumented_unsafe_blocks` — re-evaluated, measured, reverted.
 # This workspace runs every clippy-capable job under `-D warnings`, so
 # `warn` here means "CI enforces it immediately", and the actual CI run
 # (not a local guess) came back red on every compiling job: clippy,

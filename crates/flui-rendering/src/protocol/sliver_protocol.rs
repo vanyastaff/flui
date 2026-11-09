@@ -307,7 +307,7 @@ enum SliverLayoutCtxStorage<'ctx, P: ParentData + Default> {
     ///
     /// Completion writes through to the erased ctx in addition to filling
     /// the local cache, keeping both views consistent.
-    // Protocol-layout-erasure (Core.2 W3.1 sliver leaf bridge)
+    // Protocol-layout-erasure (the sliver leaf bridge)
     Proxy {
         constraints: SliverConstraints,
         child_geometries: ProxySliverChildGeometryCache,
@@ -388,7 +388,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
     /// **Visibility** — `pub(crate)`. The only sanctioned consumer is the
     /// `RenderObject<SliverProtocol>` blanket impl in
     /// [`crate::traits::RenderSliver`].
-    // Protocol-layout-erasure (Core.2 W3.1 sliver leaf bridge)
+    // Protocol-layout-erasure (the sliver leaf bridge)
     pub(crate) fn from_erased(erased: &'ctx mut dyn SliverLayoutCtxErased) -> Self {
         let constraints = erased.constraints();
         debug_assert!(
