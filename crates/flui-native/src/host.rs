@@ -43,7 +43,7 @@ pub(crate) use clipboard::MAX_TEXT;
     target_os = "ios",
     target_arch = "wasm32"
 ))]
-pub(crate) use clipboard::admit_utf16;
+pub(crate) use clipboard::admit_text;
 #[cfg(any(
     windows,
     target_os = "android",

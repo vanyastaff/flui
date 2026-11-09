@@ -39,14 +39,23 @@ pub trait NativeClipboard {
 /// [`ClipboardError::TooLarge`](flui_platform::ClipboardError::TooLarge).
 pub(crate) const MAX_TEXT: usize = 64 * 1024 * 1024;
 
+/// Refuse a read of `len` bytes — or, for a UTF-16 source, `len` code units,
+/// each at least one UTF-8 byte — past [`MAX_TEXT`], before its copy is made.
+/// The clipboard's size policy lives here, once (T10).
+pub(crate) fn admit_text(len: usize) -> Result<(), flui_platform::ClipboardError> {
+    if len > MAX_TEXT {
+        tracing::warn!(len, "a clipboard read past {MAX_TEXT} bytes was refused");
+        return Err(flui_platform::ClipboardError::TooLarge);
+    }
+    Ok(())
+}
+
 /// What a read answers with `text` the application wrote and the host still
 /// holds: shared, not copied, and refused past [`MAX_TEXT`] bytes as text
 /// from any other client is, so a read's answer never depends on who owns
 /// the clipboard.
 pub(crate) fn owned_text(text: &Arc<str>) -> ClipboardRead {
-    if text.len() > MAX_TEXT {
-        return Err(flui_platform::ClipboardError::TooLarge);
-    }
+    admit_text(text.len())?;
     Ok(Some(Arc::clone(text)))
 }
 
@@ -63,38 +72,8 @@ pub(crate) fn owned_text(text: &Arc<str>) -> ClipboardRead {
     x11_host,
 ))]
 pub(crate) fn host_text(text: String) -> ClipboardRead {
-    if text.len() > MAX_TEXT {
-        tracing::warn!(
-            len = text.len(),
-            "a clipboard read past {MAX_TEXT} bytes was refused"
-        );
-        return Err(flui_platform::ClipboardError::TooLarge);
-    }
+    admit_text(text.len())?;
     Ok(Some(Arc::from(text)))
-}
-
-/// Refuse text the host holds as `units` UTF-16 code units (an `NSString`, a
-/// JavaScript or Java string) before it is copied out, when it is past
-/// [`MAX_TEXT`] on length alone: each unit takes at least one byte of UTF-8.
-/// A host calls this before its copy and hands the copy to [`host_text`],
-/// which measures text within the bound exactly, so the answer is the same on
-/// every host and text a read refuses for its length is never copied.
-#[cfg(any(
-    target_os = "android",
-    target_os = "macos",
-    target_os = "ios",
-    target_arch = "wasm32",
-    test
-))]
-pub(crate) fn admit_utf16(units: usize) -> Result<(), flui_platform::ClipboardError> {
-    if units > MAX_TEXT {
-        tracing::warn!(
-            units,
-            "a clipboard read past {MAX_TEXT} bytes was refused before its copy"
-        );
-        return Err(flui_platform::ClipboardError::TooLarge);
-    }
-    Ok(())
 }
 
 /// A clipboard the operating system reads synchronously: its read answers
@@ -246,7 +225,7 @@ impl<C: NativePrimarySelection + ?Sized> NativePrimarySelection for Arc<C> {
 mod tests {
     use flui_platform::ClipboardError;
 
-    use super::{MAX_TEXT, admit_utf16, host_text};
+    use super::{MAX_TEXT, admit_text, host_text};
 
     /// Text a host handed over is answered up to the limit and refused past
     /// it, the refusal made before any copy of the text.
@@ -267,11 +246,11 @@ mod tests {
     /// once copied.
     #[test]
     fn utf16_text_past_the_limit_is_refused_before_its_copy() {
-        assert_eq!(admit_utf16(MAX_TEXT + 1), Err(ClipboardError::TooLarge));
-        assert_eq!(admit_utf16(MAX_TEXT), Ok(()));
+        assert_eq!(admit_text(MAX_TEXT + 1), Err(ClipboardError::TooLarge));
+        assert_eq!(admit_text(MAX_TEXT), Ok(()));
 
         let units = MAX_TEXT / 2 + 1;
-        assert_eq!(admit_utf16(units), Ok(()));
+        assert_eq!(admit_text(units), Ok(()));
         assert_eq!(
             host_text("é".repeat(units)),
             Err(ClipboardError::TooLarge),
