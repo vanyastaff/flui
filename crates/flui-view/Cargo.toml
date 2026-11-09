@@ -69,6 +69,9 @@ dyn-clone = { workspace = true }
 tracing-subscriber = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Self-reference so integration tests reach the `testing` module (the owned,
+# detached `ElementBuildContext`). Checkout-only.
+flui-view = { path = ".", features = ["testing"] }
 # `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
 # tests call so a sibling test cannot poison their callsites' cached interest.
 # A dev-only edge, and a dev-only CYCLE: flui-testing depends on this crate

@@ -32,9 +32,6 @@
 // around, and the owner graph is `!Send`. Do not restore `Send + Sync` to
 // satisfy clippy — the sibling `global_key.rs` carries the same waiver for the
 // same reason, and a future UiRuntime/`Rc` migration removes both.
-#![expect(clippy::arc_with_non_send_sync)]
-
-use std::sync::Arc;
 
 use flui_foundation::ViewKey;
 use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtocol};
@@ -42,7 +39,8 @@ use flui_view::{
     BuildContext, BuildOwner, ElementId, ElementTree, GlobalKey, IntoView, KeyLookup, RenderView,
     StatefulView, StatelessView, View, ViewExt, ViewState,
 };
-use parking_lot::RwLock;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 // ============================================================================
 // Fixtures — mirrors `global_key.rs`'s, kept local so the two files can
@@ -179,38 +177,38 @@ impl View for Keyed {
     }
 }
 
-fn fresh_tree() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>) {
+fn fresh_tree() -> (Rc<RefCell<ElementTree>>, Rc<RefCell<BuildOwner>>) {
     (
-        Arc::new(RwLock::new(ElementTree::new())),
-        Arc::new(RwLock::new(BuildOwner::new())),
+        Rc::new(RefCell::new(ElementTree::new())),
+        Rc::new(RefCell::new(BuildOwner::new())),
     )
 }
 
 /// Mounts a root with `parent_count` `Filler` parents beneath it and returns
 /// their ids.
 fn tree_with_parents(
-    tree: &Arc<RwLock<ElementTree>>,
-    owner: &Arc<RwLock<BuildOwner>>,
+    tree: &Rc<RefCell<ElementTree>>,
+    owner: &Rc<RefCell<BuildOwner>>,
     parent_count: usize,
 ) -> Vec<ElementId> {
-    let root = tree.write().mount_root_with_pipeline_owner(
+    let root = tree.borrow_mut().mount_root_with_pipeline_owner(
         &SlotHost {
             children: Vec::new(),
         },
         Some(PipelineCell::new(PipelineOwner::new(
             flui_rendering::TextContextHandle::standalone(),
         ))),
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
     (0..parent_count)
         .map(|slot| {
-            tree.write().insert(
+            tree.borrow_mut().insert(
                 &SlotHost {
                     children: Vec::new(),
                 },
                 root,
                 slot,
-                &mut owner.write().element_owner_mut(),
+                &mut owner.borrow_mut().element_owner_mut(),
             )
         })
         .collect()
@@ -218,8 +216,8 @@ fn tree_with_parents(
 
 /// Attaches a child carrying `key` under `parent`.
 fn attach_keyed(
-    tree: &Arc<RwLock<ElementTree>>,
-    owner: &Arc<RwLock<BuildOwner>>,
+    tree: &Rc<RefCell<ElementTree>>,
+    owner: &Rc<RefCell<BuildOwner>>,
     parent: ElementId,
     key: &GlobalKey<KeyedState>,
     tag: i32,
@@ -228,24 +226,24 @@ fn attach_keyed(
         key: key.clone(),
         tag,
     };
-    tree.write().update(
+    tree.borrow_mut().update(
         parent,
         &SlotHost {
             children: vec![view.boxed()],
         },
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
-    let depth = tree.read().get(parent).expect("parent exists").depth();
+    let depth = tree.borrow().get(parent).expect("parent exists").depth();
     owner
-        .write()
+        .borrow_mut()
         .schedule_build_for(parent, depth, flui_view::RebuildReason::ParentUpdate);
-    owner.write().build_scope(&mut tree.write());
+    owner.borrow_mut().build_scope(&mut tree.borrow_mut());
     children_of(tree, parent)[0]
 }
 
 /// Children of `parent` in slot order, as the tree currently holds them.
-fn children_of(tree: &Arc<RwLock<ElementTree>>, parent: ElementId) -> Vec<ElementId> {
-    let tree = tree.read();
+fn children_of(tree: &Rc<RefCell<ElementTree>>, parent: ElementId) -> Vec<ElementId> {
+    let tree = tree.borrow();
     let mut children: Vec<_> = tree
         .iter_nodes()
         .filter(|(_, node)| node.parent() == Some(parent))
@@ -353,35 +351,35 @@ pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
     let key = GlobalKey::<KeyedState>::new();
 
     let root = tree
-        .write()
-        .mount_root(&Filler, &mut owner.write().element_owner_mut());
-    let parent_a = tree.write().insert(
+        .borrow_mut()
+        .mount_root(&Filler, &mut owner.borrow_mut().element_owner_mut());
+    let parent_a = tree.borrow_mut().insert(
         &KeyedParent {
             key: key.clone(),
             tag: 1,
         },
         root,
         0,
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
-    let parent_b = tree.write().insert(
+    let parent_b = tree.borrow_mut().insert(
         &KeyedParent {
             key: key.clone(),
             tag: 2,
         },
         root,
         1,
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
 
     // Drive the boundary the reservation check hooks into. Both guards must
     // be held across the call — `build_scope` takes `&mut` to each — which is
     // why nothing inside may re-enter these locks.
     {
-        let mut owner_guard = owner.write();
+        let mut owner_guard = owner.borrow_mut();
         owner_guard.schedule_build_for(parent_a, 1, flui_view::RebuildReason::InitialMount);
         owner_guard.schedule_build_for(parent_b, 1, flui_view::RebuildReason::InitialMount);
-        let mut tree_guard = tree.write();
+        let mut tree_guard = tree.borrow_mut();
         owner_guard.build_scope(&mut tree_guard);
         owner_guard.finalize_tree(&mut tree_guard);
     }
@@ -418,7 +416,7 @@ pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
          one parent built would leave these equal",
     );
 
-    let reports = owner.write().take_global_key_diagnostics();
+    let reports = owner.borrow_mut().take_global_key_diagnostics();
     assert_eq!(
         reports.len(),
         1,
@@ -450,12 +448,12 @@ pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
     // conflict-free frame reports nothing — the ledger is per-frame, not
     // cumulative.
     {
-        let mut owner_guard = owner.write();
-        let mut tree_guard = tree.write();
+        let mut owner_guard = owner.borrow_mut();
+        let mut tree_guard = tree.borrow_mut();
         owner_guard.finalize_tree(&mut tree_guard);
     }
     assert!(
-        owner.write().take_global_key_diagnostics().is_empty(),
+        owner.borrow_mut().take_global_key_diagnostics().is_empty(),
         "the duplicate must not be re-reported every subsequent frame",
     );
 
