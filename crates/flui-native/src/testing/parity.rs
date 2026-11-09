@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+#[cfg(test)]
+use crate::host::{Absent, Host as NativeHost, position};
+
 /// The `platform-parity.toml` at the repository root.
 pub const SOURCE: &str = "platform-parity.toml";
 
@@ -274,6 +277,71 @@ pub fn unknown_scenarios<'a>(parity: &'a Parity, known: &[&str]) -> Vec<&'a str>
     unknown
 }
 
+/// The host positions `H` fills with [`Absent`]: the parity rows that name one
+/// of these must claim `missing` or `na` on that host, never `yes` or `partial`.
+#[cfg(test)]
+fn absent_positions<H: NativeHost>() -> Vec<&'static str> {
+    use std::any::TypeId;
+
+    fn is_absent<A: 'static, B: 'static>() -> bool {
+        TypeId::of::<A>() == TypeId::of::<B>()
+    }
+
+    let mut absent = Vec::new();
+    if is_absent::<H::Window, Absent<position::Window>>() {
+        absent.push("window");
+    }
+    if is_absent::<H::Displays, Absent<position::Displays>>() {
+        absent.push("displays");
+    }
+    if is_absent::<H::Input, Absent<position::Input>>() {
+        absent.push("input");
+    }
+    if is_absent::<H::Text, Absent<position::Text>>() {
+        absent.push("text");
+    }
+    if is_absent::<H::Accessibility, Absent<position::Accessibility>>() {
+        absent.push("accessibility");
+    }
+    if is_absent::<H::Clipboard, Absent<position::Clipboard>>() {
+        absent.push("clipboard");
+    }
+    if is_absent::<H::PrimarySelection, Absent<position::PrimarySelection>>() {
+        absent.push("primary-selection");
+    }
+    if is_absent::<H::Drag, Absent<position::Drag>>() {
+        absent.push("drag");
+    }
+    if is_absent::<H::Haptics, Absent<position::Haptics>>() {
+        absent.push("haptics");
+    }
+    if is_absent::<H::Preferences, Absent<position::Preferences>>() {
+        absent.push("preferences");
+    }
+    if is_absent::<H::Lifecycle, Absent<position::Lifecycle>>() {
+        absent.push("lifecycle");
+    }
+    if is_absent::<H::Chrome, Absent<position::Chrome>>() {
+        absent.push("chrome");
+    }
+    if is_absent::<H::Storage, Absent<position::Storage>>() {
+        absent.push("storage");
+    }
+    absent
+}
+
+/// Cross-check one host's table against its parity column: every row naming an
+/// absent position must claim `missing` or `na`.
+#[cfg(test)]
+fn check_host<H: NativeHost>(column: &str, parity: &Parity, violations: &mut Vec<String>) {
+    let host = parity
+        .hosts
+        .iter()
+        .find(|host| host.id == column)
+        .expect("the parity table names every host");
+    violations.extend(absent_violations(parity, host, &absent_positions::<H>()));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,26 +459,24 @@ evidence = []
 
     #[test]
     fn absent_positions_never_claim_support() {
-        let parity = Parity::parse(SYNTHETIC).expect("the synthetic source parses");
-        let host = parity
-            .hosts
-            .iter()
-            .find(|host| host.id == "headless")
-            .expect("a headless host");
-        // `launch` is `na` for the headless host, so an absent `launch` position
-        // is not a violation.
-        assert_eq!(
-            absent_violations(&parity, host, &["launch"]),
-            Vec::<String>::new(),
-            "`na` never violates"
-        );
-        // `window` is `yes` for the headless host, so an absent `window` position
-        // is a violation.
-        assert_ne!(
-            absent_violations(&parity, host, &["window"]),
-            Vec::<String>::new(),
-            "`yes` on an absent position violates"
-        );
+        let parity = parity();
+        let mut violations = Vec::new();
+        check_host::<crate::hosts::headless::Headless>("headless", &parity, &mut violations);
+        #[cfg(windows)]
+        check_host::<crate::hosts::windows::Windows>("windows", &parity, &mut violations);
+        #[cfg(target_os = "macos")]
+        check_host::<crate::hosts::apple::Apple>("macos", &parity, &mut violations);
+        #[cfg(target_os = "ios")]
+        check_host::<crate::hosts::apple::Apple>("ios", &parity, &mut violations);
+        #[cfg(target_arch = "wasm32")]
+        check_host::<crate::hosts::web::Web>("web", &parity, &mut violations);
+        #[cfg(target_os = "android")]
+        check_host::<crate::hosts::android::Android>("android", &parity, &mut violations);
+        #[cfg(wayland_host)]
+        check_host::<crate::hosts::linux::Wayland>("wayland", &parity, &mut violations);
+        #[cfg(x11_host)]
+        check_host::<crate::hosts::linux::X11>("x11", &parity, &mut violations);
+        assert!(violations.is_empty(), "{violations:#?}");
     }
 
     #[test]
