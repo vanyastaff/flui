@@ -64,9 +64,8 @@ the ❌ cells of the new column.
 
 **Overall: ~37% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments).**
 
-When work lands, update the row here and its entry in [`gaps.md`](gaps.md), and refresh this file's
-status line. A ✅ needs an executed run on that environment; compile-only code is
-🟡.
+When work lands, update the row here and its entry in [`gaps.md`](gaps.md). A ✅ needs an
+executed run on that environment; compile-only code is 🟡.
 
 Sources: the per-host audit with `file:line` evidence
 ([2026-10-14](https://github.com/vanyastaff/flui/blob/083b0f75d/docs/research/2026-10-14-platform-backend-audit.md)),
