@@ -55,16 +55,6 @@ class = "pr-label"
 count = 1
 
 [[allow]]
-path = "crates/flui-hot-reload/src/dispatch.rs"
-class = "phase-letter"
-count = 1
-
-[[allow]]
-path = "crates/flui-hot-reload/src/engine.rs"
-class = "phase-letter"
-count = 1
-
-[[allow]]
 path = "crates/flui-objects/tests/render_object_harness.rs"
 class = "slice"
 count = 3
