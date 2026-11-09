@@ -1368,6 +1368,7 @@ fn animation_and_visibility() {
             ("animated_icon::theme_and_direction_shape_the_icon", crate::animated_icon::theme_and_direction_shape_the_icon),
             ("animated_icon::reduced_motion_shows_the_target_frame", crate::animated_icon::reduced_motion_shows_the_target_frame),
             ("animated_icon::the_label_lives_on_the_icon", crate::animated_icon::the_label_lives_on_the_icon),
+            ("animated_icon::icon_matches_text_direction_under_rtl", crate::animated_icon::icon_matches_text_direction_under_rtl),
             ("symbol_effect::each_effect_peaks_where_its_timing_says", crate::symbol_effect::each_effect_peaks_where_its_timing_says),
             ("symbol_effect::a_one_shot_effect_plays_per_change_and_repeat", crate::symbol_effect::a_one_shot_effect_plays_per_change_and_repeat),
             ("symbol_effect::a_repeating_effect_finishes_its_cycle_when_turned_off", crate::symbol_effect::a_repeating_effect_finishes_its_cycle_when_turned_off),

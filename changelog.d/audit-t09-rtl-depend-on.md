@@ -11,6 +11,9 @@
   lays its horizontal cross axis right-to-left (previously hardcoded left-to-right). The render
   objects gain `set_cross_axis_direction`/`cross_axis_direction` and the widgets resolve the
   direction from the ambient `Directionality`.
+- **`flui-widgets`**: `IconData::match_text_direction` now mirrors the glyph — `Icon` composes a
+  `Transform` about the glyph's centre under right-to-left text, where previously the flag was
+  documented as deferred.
 
 ### Removed
 

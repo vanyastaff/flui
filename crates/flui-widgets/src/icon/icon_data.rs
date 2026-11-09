@@ -24,11 +24,9 @@ pub struct IconData {
     pub font_package: Option<String>,
 
     /// Whether [`Icon`](crate::Icon) should mirror this glyph horizontally
-    /// under a right-to-left reading direction (e.g. a "back" arrow).
-    ///
-    /// **Deferred:** `Icon::build` does not yet apply this flip — it needs a
-    /// `Transform` composition step not yet wired into the icon build path.
-    /// See the [`Icon`](crate::Icon) docs.
+    /// under a right-to-left reading direction (e.g. a "back" arrow). `Icon`
+    /// composes the mirror as a [`Transform`](crate::Transform) about the
+    /// glyph's centre.
     pub match_text_direction: bool,
 
     /// Additional font families to try, in order, when `font_family` doesn't

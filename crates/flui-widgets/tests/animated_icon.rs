@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use crate::common::{LaidOut, lay_out_animated, loose};
+use crate::common::{LaidOut, lay_out, lay_out_animated, loose};
 use flui_animation::{AnimationController, ConstantAnimation, Cubic, MotionOverride, Vsync};
 use flui_foundation::geometry::Point;
 use flui_painting::display_list::DrawOp;
@@ -14,8 +14,8 @@ use flui_painting::typography::TextDirection;
 use flui_testing::a11y::Role;
 use flui_view::environment::VsyncScope;
 use flui_widgets::{
-    AnimatedIcon, AnimatedIconData, Directionality, IconCommand, IconCommandBuf, IconDataError,
-    IconPath, IconPathBuf, IconTheme, IconThemeData,
+    AnimatedIcon, AnimatedIconData, Directionality, Icon, IconCommand, IconCommandBuf, IconData,
+    IconDataError, IconPath, IconPathBuf, IconTheme, IconThemeData,
 };
 
 /// A bar that slides down: its corner moves from (4, 4) to (4, 14) over two frames, the second
@@ -279,4 +279,43 @@ pub(crate) fn the_label_lives_on_the_icon() {
     let node = tree.find_by_label("Menu").expect("the label");
     assert_eq!(node.role(), Role::Image);
     assert_eq!(node.value(), None, "no progress is announced");
+}
+
+/// `IconData::match_text_direction` composes a horizontal mirror (`RenderTransform`)
+/// under right-to-left text and none under left-to-right or for a fixed glyph (T09).
+pub(crate) fn icon_matches_text_direction_under_rtl() {
+    let mirroring = IconData {
+        match_text_direction: true,
+        ..IconData::new(0xE5C4)
+    };
+    let fixed = IconData::new(0xE5C4);
+
+    let ltr = lay_out(
+        Directionality::new(TextDirection::Ltr, Icon::new(mirroring.clone())),
+        loose(200.0),
+    );
+    assert_eq!(
+        ltr.try_find_by_render_type("RenderTransform"),
+        None,
+        "LTR keeps a matching glyph unmirrored"
+    );
+
+    let rtl = lay_out(
+        Directionality::new(TextDirection::Rtl, Icon::new(mirroring)),
+        loose(200.0),
+    );
+    assert!(
+        rtl.try_find_by_render_type("RenderTransform").is_some(),
+        "RTL mirrors a matching glyph"
+    );
+
+    let rtl_fixed = lay_out(
+        Directionality::new(TextDirection::Rtl, Icon::new(fixed)),
+        loose(200.0),
+    );
+    assert_eq!(
+        rtl_fixed.try_find_by_render_type("RenderTransform"),
+        None,
+        "RTL leaves a fixed glyph unmirrored"
+    );
 }
