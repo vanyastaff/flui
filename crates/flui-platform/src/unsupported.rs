@@ -8,9 +8,11 @@
 //! [`SubmitError`](crate::SubmitError),
 //! [`CursorError`](crate::CursorError), [`DragError`](crate::drag::DragError),
 //! [`HapticOutcome`](crate::haptics::HapticOutcome),
+//! [`LaunchError`](crate::launch::LaunchError),
 //! [`StorageError`](crate::StorageError),
-//! [`PreferenceQueryError`](crate::PreferenceQueryError) and
-//! [`TextStoreHostError`](crate::text_store::TextStoreHostError). Each converts
+//! [`PreferenceQueryError`](crate::PreferenceQueryError),
+//! [`TextStoreHostError`](crate::text_store::TextStoreHostError) and
+//! `flui_system::dialog::DialogError` (its own test, in that crate). Each converts
 //! from it and answers [`unsupported`](crate::AdmissionError::unsupported)
 //! with it, so a caller asks any of them the same question.
 //!

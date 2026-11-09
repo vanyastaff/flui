@@ -298,7 +298,7 @@ pub struct UiRuntime {
     /// process-global singleton: when this UI runtime drops, this field drops
     /// with it, and every retained weak handle starts failing closed.
     /// Read directly for the idle-only commit-gate phase probe in
-    /// [`Self::drain_commands`] and vended to `runner.rs`'s lifecycle sites
+    /// [`Self::drain_commands`] and vended to the app runner's lifecycle sites
     /// via [`Self::scheduler`].
     scheduler: UpdateScheduler,
     /// The embedder's typed frame-failure callback, if one was registered
