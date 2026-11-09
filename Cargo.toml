@@ -349,7 +349,6 @@ flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev" }
 flui-runtime = { path = "crates/flui-runtime", version = "=0.2.0-dev" }
 flui-native = { path = "crates/flui-native", version = "=0.2.0-dev" }
 flui-app = { path = "crates/flui-app", version = "=0.2.0-dev" }
-flui-cli = { path = "crates/flui-cli", version = "=0.2.0-dev" }
 flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev" }
 flui-system = { path = "crates/flui-system", version = "=0.2.0-dev" }
 flui-material = { path = "packages/flui-material", version = "=0.2.0-dev" }
