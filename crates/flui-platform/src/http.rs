@@ -612,24 +612,6 @@ impl fmt::Debug for ResponseBody {
     }
 }
 
-/// A host whose FLUI has no HTTP client yet, though its OS has one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum HttpHost {
-    /// A native host running on executors its embedder handed FLUI
-    /// (`AppConfig::with_executors`), with no Tokio reactor for the default
-    /// client.
-    EmbedderExecutors,
-}
-
-impl fmt::Display for HttpHost {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::EmbedderExecutors => "a host on its embedder's executors",
-        })
-    }
-}
-
 /// Why an HTTP request failed. A response with any status is not a
 /// failure.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -684,12 +666,5 @@ pub enum HttpError {
     Host {
         /// What the bridge reported.
         detail: String,
-    },
-    /// This host's FLUI has no HTTP client yet (a gap of FLUI's, not of the
-    /// OS).
-    #[error("HTTP is not implemented yet on {host}")]
-    NotYetOnThisHost {
-        /// The host.
-        host: HttpHost,
     },
 }

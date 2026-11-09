@@ -49,9 +49,9 @@ pub use close_request::{
 pub use config::{AppConfig, DiagnosticsProfile, MotionOverride, PointerResampling};
 pub use direct::run_direct;
 pub use flui_runtime::frame_failure::{
-    DeviceRecovery, FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
-    FrameFailureReport, PanicText, SamplingFailure, SamplingFailureOrigin, SamplingStage,
-    SegmentPhase,
+    DeviceRecovery, FailureDisposition, FrameFailureDetail, FrameFailureHandler,
+    FrameFailureHandlerFactory, FrameFailureKind, FrameFailureReport, PanicText, SamplingFailure,
+    SamplingFailureOrigin, SamplingStage, SegmentPhase,
 };
 pub use hot_reload::DevReload;
 // The recording hook (ADR-0215 §1): the tap and the records it observes.

@@ -1080,28 +1080,15 @@ impl DragTransport for OleTransfer {
             }));
         };
         if let Some(declared) = descriptor.declared_len
-            && declared > limits.max_bytes
+            && let Err(error) = limits.enforce(declared)
         {
-            return TransferRequest::ready(Err(TransferError::TooLarge {
-                actual: declared,
-                limit: limits.max_bytes,
-            }));
+            return TransferRequest::ready(Err(error));
         }
         // No borrow is held: a data object of this process serves the fetch
         // from its provider, which is user code.
-        let result = fetch(&object, &native, limits.max_bytes)
+        let result = fetch(&object, &native, limits)
             .and_then(|bytes| decode(&native, &descriptor.format, &bytes))
-            .and_then(|payload| {
-                let actual = payload.byte_len();
-                if actual > limits.max_bytes {
-                    Err(TransferError::TooLarge {
-                        actual,
-                        limit: limits.max_bytes,
-                    })
-                } else {
-                    Ok(payload)
-                }
-            });
+            .and_then(|payload| limits.enforce(payload.byte_len()).map(|()| payload));
         drop(object);
         TransferRequest::ready(result)
     }
@@ -1375,18 +1362,25 @@ fn describe(object: &IDataObject) -> Vec<(NativeFormat, RepresentationDescriptor
     let identity_format = NativeFormat::Named(flui_platform::drag::IDENTITY_ESSENCE.to_owned());
     let identity = formats
         .contains(&identity_format)
-        .then(|| fetch(object, &identity_format, IDENTITY_MAX_BYTES).ok())
+        .then(|| {
+            fetch(
+                object,
+                &identity_format,
+                TransferLimits::default().with_max_bytes(IDENTITY_MAX_BYTES),
+            )
+            .ok()
+        })
         .flatten()
         .and_then(|bytes| crossing::identity_descriptor(&bytes));
     offer_representations(formats, identity)
 }
 
-/// Fetch `native` from `object` as bytes, at most `max_bytes` of them.
+/// Fetch `native` from `object` as bytes, held to `limits`.
 #[cfg(windows)]
 fn fetch(
     object: &IDataObject,
     native: &NativeFormat,
-    max_bytes: u64,
+    limits: TransferLimits,
 ) -> Result<Vec<u8>, TransferError> {
     let format = clipboard_format(native).ok_or(TransferError::SourceGone)?;
     let request = global_format(format);
@@ -1396,7 +1390,7 @@ fn fetch(
         unsafe { object.GetData(&raw const request) }.map_err(|_| TransferError::SourceGone)?;
     let bytes = if medium.tymed == TYMED_HGLOBAL.0 as u32 {
         // SAFETY: a `TYMED_HGLOBAL` medium's union holds its global handle.
-        read_global(unsafe { medium.u.hGlobal }, max_bytes)
+        read_global(unsafe { medium.u.hGlobal }, limits)
     } else {
         Err(TransferError::SourceGone)
     };
@@ -1405,19 +1399,14 @@ fn fetch(
     bytes
 }
 
-/// Copy a global allocation's bytes, refusing one larger than `max_bytes`.
+/// Copy a global allocation's bytes, refusing one past `limits`.
 #[cfg(windows)]
-fn read_global(global: HGLOBAL, max_bytes: u64) -> Result<Vec<u8>, TransferError> {
+fn read_global(global: HGLOBAL, limits: TransferLimits) -> Result<Vec<u8>, TransferError> {
     // SAFETY: `global` is the live handle of a medium the caller holds;
     // `GlobalSize` bounds the copy, which reads only while the lock holds.
     unsafe {
         let size = GlobalSize(global);
-        if size as u64 > max_bytes {
-            return Err(TransferError::TooLarge {
-                actual: size as u64,
-                limit: max_bytes,
-            });
-        }
+        limits.enforce(u64::try_from(size).unwrap_or(u64::MAX))?;
         let pointer = GlobalLock(global);
         if pointer.is_null() {
             return Err(TransferError::SourceGone);

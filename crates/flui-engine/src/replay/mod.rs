@@ -435,8 +435,8 @@ impl GpuReplay {
                 // content-so-far from the surface.
                 //
                 // AA note: tessellated shapes run at sample_count=1 with no SDF
-                // anti-aliasing — edges are aliased.  This is consistent with the
-                // Phase-A quality note in `batches/shapes.rs`.
+                // anti-aliasing — edges are aliased, as documented on
+                // `AdvancedShapeOp`.
                 //
                 // Damage-straddle hazard: `flush_advanced_layer` issues its render
                 // pass with `LoadOp::Load` and NO scissor, writing the blend result

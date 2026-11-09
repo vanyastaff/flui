@@ -90,6 +90,10 @@ tiers = [
     "pkg", # official packages: material, cupertino, devtools, hot reload
 ]
 
+# The words printed beside each tier letter in docs/crates.md's tier table;
+# every tier above has one.
+tier-names = { V = "values", C = "contracts", S = "substrate", R = "render machine", K = "spine and runtime", H = "hosts", pkg = "official packages and capability crates" }
+
 # What no crate of a tier may reach in any root build, over normal and build
 # edges on every target (ADR-0081 §2), checked by `cargo xtask reach`. A tier's
 # set is its `extends` set plus `forbid`; H has no table and
@@ -276,8 +280,7 @@ which = "8"    # locate toolchain executables (build/cli)
 # a redirected AppData or OneDrive folder).
 dirs = "6"
 
-# CONTRACTS — the semantics and agent-protocol vocabulary (ADR-0095); shared by
-# flui-semantics and the desktop agent server.
+# The semantics and agent-protocol vocabulary (ADR-0095).
 flui-protocol = { path = "crates/flui-protocol", version = "=0.2.0-dev" }
 
 # WORKSPACE PROC-MACROS
@@ -289,20 +292,13 @@ flui-rendering = { path = "crates/flui-rendering", version = "=0.2.0-dev" }
 # OBJECT CATALOG — sits above flui-rendering (depends on it), below flui-view/app
 flui-objects = { path = "crates/flui-objects", version = "=0.2.0-dev" }
 
-# TEST SUPPORT — the deterministic headless frame driver (`pump_frame(dt)` over
-# the gesture arena + virtual clock) and the home for future test harness APIs.
-# Sits above flui-widgets, below flui-app, and is only ever a *dev*-dependency of
-# a shipped library: a normal edge would link the test driver into production.
+# The deterministic headless test driver; a dev-dependency only.
 flui-testing = { path = "crates/flui-testing", version = "=0.2.0-dev" }
 
-# PACKAGE-AUTHOR SURFACE — what an official or third-party package builds on
-# instead of the internal crates (ADR-0088 §4). Its own `0.N` version, not the
-# train's: the SDK is Evolving.
+# The package-author surface (ADR-0088 §4); Evolving, its own `0.N` version.
 flui-sdk = { path = "crates/flui-sdk", version = "=0.1.0-dev" }
 
-# PLATFORM CONTRACTS — the capability traits and the window/input vocabulary,
-# with no OS backend (ADR-0082). Framework crates that name a platform
-# contract depend on this; only composition roots depend on flui-native.
+# The capability traits with no OS backend (ADR-0082).
 flui-platform = { path = "crates/flui-platform", version = "=0.2.0-dev" }
 
 # ERROR HANDLING - Used everywhere
@@ -333,6 +329,35 @@ tracing-wasm = "0.2"
 # in-workspace dependencies. Its manifest's `allowed-dependents` (checked by
 # `cargo xtask workspace`) keeps framework crates off it.
 flui-log = { path = "crates/flui-log", version = "=0.2.0-dev" }
+
+# The remaining in-workspace crates, each declared once here and pulled by
+# `workspace = true` from every dependent (ADR-0081). One kind of edge stays out
+# of this table: a dev-dependency a crate keeps path-only, with no `version`
+# (`flui-testing` from the crates it tests, `flui-objects` from
+# `flui-rendering`, `flui-runtime` from `flui-widgets`, `flui-platform` from
+# `flui-assets`, `flui-hot-reload` and `flui-log` from `flui-cli`). Cargo drops a
+# versionless dev edge from the published manifest, and that is what breaks the
+# publication cycle those crates would otherwise form; `workspace = true` would
+# add this table's `version` to it. Each such line carries its own comment.
+flui-foundation = { path = "crates/flui-foundation", version = "=0.2.0-dev" }
+flui-scheduler = { path = "crates/flui-scheduler", version = "=0.2.0-dev" }
+flui-painting = { path = "crates/flui-painting", version = "=0.2.0-dev" }
+flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev" }
+flui-semantics = { path = "crates/flui-semantics", version = "=0.2.0-dev" }
+flui-animation = { path = "crates/flui-animation", version = "=0.2.0-dev" }
+flui-assets = { path = "crates/flui-assets", version = "=0.2.0-dev" }
+flui-layer = { path = "crates/flui-layer", version = "=0.2.0-dev" }
+flui-engine = { path = "crates/flui-engine", version = "=0.2.0-dev" }
+flui-view = { path = "crates/flui-view", version = "=0.2.0-dev" }
+flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev" }
+flui-runtime = { path = "crates/flui-runtime", version = "=0.2.0-dev" }
+flui-native = { path = "crates/flui-native", version = "=0.2.0-dev" }
+flui-app = { path = "crates/flui-app", version = "=0.2.0-dev" }
+flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev" }
+flui-system = { path = "crates/flui-system", version = "=0.2.0-dev" }
+flui-material = { path = "packages/flui-material", version = "=0.2.0-dev" }
+flui-cupertino = { path = "packages/flui-cupertino", version = "=0.2.0-dev" }
+flui-devtools = { path = "packages/flui-devtools", version = "=0.2.0-dev" }
 
 # === Shared GPU/Window dependencies ===
 # Used by flui-engine, flui-app, and root examples
@@ -561,7 +586,7 @@ pedantic = { level = "warn", priority = -1 }
 # ship-quality waves. `expect_used` stays off — expect() with the BUG:
 # message convention IS the sanctioned invariant idiom.
 unwrap_used = "warn"
-# `undocumented_unsafe_blocks` — re-evaluated (W0-5), measured, reverted.
+# `undocumented_unsafe_blocks` — re-evaluated, measured, reverted.
 # This workspace runs every clippy-capable job under `-D warnings`, so
 # `warn` here means "CI enforces it immediately", and the actual CI run
 # (not a local guess) came back red on every compiling job: clippy,
@@ -763,22 +788,22 @@ workspace = true
 # (ADR-0028, `cargo xtask workspace`).
 [dependencies]
 flui-platform = { workspace = true }
-flui-foundation = { path = "crates/flui-foundation", version = "=0.2.0-dev" }
-flui-view = { path = "crates/flui-view", version = "=0.2.0-dev" }
-flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev" }
-flui-animation = { path = "crates/flui-animation", version = "=0.2.0-dev" }
-flui-app = { path = "crates/flui-app", version = "=0.2.0-dev" }
-flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev", optional = true }
-flui-devtools = { path = "packages/flui-devtools", version = "=0.2.0-dev", optional = true }
-flui-painting = { path = "crates/flui-painting", version = "=0.2.0-dev" }
-flui-rendering = { path = "crates/flui-rendering", version = "=0.2.0-dev" }
-flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev" }
+flui-foundation = { workspace = true }
+flui-view = { workspace = true }
+flui-widgets = { workspace = true }
+flui-animation = { workspace = true }
+flui-app = { workspace = true }
+flui-hot-reload = { workspace = true, optional = true }
+flui-devtools = { workspace = true, optional = true }
+flui-painting = { workspace = true }
+flui-rendering = { workspace = true }
+flui-interaction = { workspace = true }
 flui-testing = { workspace = true, optional = true }
-flui-material = { path = "packages/flui-material", version = "=0.2.0-dev", optional = true }
-flui-cupertino = { path = "packages/flui-cupertino", version = "=0.2.0-dev", optional = true }
+flui-material = { workspace = true, optional = true }
+flui-cupertino = { workspace = true, optional = true }
 # Capability crates (ADR-0154 §8): the facade alone names them, each behind
 # the feature of its name under `flui::services`.
-flui-system = { path = "crates/flui-system", version = "=0.2.0-dev", optional = true }
+flui-system = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -787,17 +812,17 @@ toml.workspace = true
 # nested consumer builds follow a relocated `CARGO_TARGET_DIR`.
 cargo_metadata.workspace = true
 # === Core ===
-flui-layer = { path = "crates/flui-layer", version = "=0.2.0-dev" }
+flui-layer = { workspace = true }
 # === Rendering ("testing" for the readback test's render-tree inspection) ===
-flui-rendering = { path = "crates/flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
-flui-objects = { path = "crates/flui-objects", version = "=0.2.0-dev" }
-flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev" }
+flui-rendering = { workspace = true, features = ["testing"] }
+flui-objects = { workspace = true }
+flui-interaction = { workspace = true }
 
 # === Platform (for examples) ===
-flui-native = { path = "crates/flui-native", version = "=0.2.0-dev" }
+flui-native = { workspace = true }
 
 # === Hot-Reload (for examples) ===
-flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev" }
+flui-hot-reload = { workspace = true }
 
 # === Test support (the widget harness `flui_testing::widgets` that
 # tests/agent_workflow.rs drives) ===
@@ -812,7 +837,7 @@ trybuild = { workspace = true }
 # facade's own src/lib.rs re-exports them as `flui::material`/`flui::cupertino`.
 
 # === Engine (for GPU examples and the readback test) ===
-flui-engine = { path = "crates/flui-engine", version = "=0.2.0-dev", features = ["dx12"] }
+flui-engine = { workspace = true, features = ["dx12"] }
 pollster = { workspace = true }
 # === Image encoding (scene_render example) ===
 image.workspace = true

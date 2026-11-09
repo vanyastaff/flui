@@ -44,9 +44,9 @@ gpu-profiler = ["dep:wgpu-profiler"]
 testing = []
 
 [dependencies]
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
-flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
-flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
+flui-painting = { workspace = true }
+flui-foundation = { workspace = true }
+flui-layer = { workspace = true }
 # The display's colour profile the surface is configured for (ADR-0256), and
 # the swap-chain statistics a present hook hands the window's surface target.
 flui-platform = { workspace = true }
@@ -138,7 +138,7 @@ wesl = { workspace = true }
 [dev-dependencies]
 flui-objects = { workspace = true }
 flui-rendering = { workspace = true, features = ["testing"] }
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }
+flui-painting = { workspace = true, features = ["testing"] }
 pollster = { workspace = true }
 criterion = { workspace = true }
 # PNG encoding for GPU readback frame dumps (`wgpu::readback_dump` test

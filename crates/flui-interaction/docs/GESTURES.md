@@ -76,10 +76,10 @@ Tap also has `on_secondary_tap*` and `on_tertiary_tap*` per button
 The descriptions below state observable recognition behavior; phase names are
 only a shorthand for the corresponding state machine.
 
-### Tap (`tap.rs`, `TapState`)
+### Tap (`tap.rs`)
 
 `Ready → Down` on pointer down. Up within slop fires `on_tap_up` and `on_tap`
-once the recognizer wins the arena (the release is held in `pending_up` until
+once the recognizer wins the arena (the release is held in the sequence's `up` until
 `accept_gesture`). Moving beyond the kind-specific slop goes to `Cancelled`.
 Down callbacks receive `TapDownDetails`; Up and completed-tap callbacks receive
 `TapUpDetails`. Move and cancellation callbacks receive `TapDetails`. Each
@@ -90,15 +90,15 @@ with no callback of its family is not admitted, so a recognizer that only
 reports secondary clicks never joins, or delays, a primary contact's arena
 (`a_tap_joins_only_contacts_of_buttons_it_reports`).
 
-### Double tap (`double_tap.rs`, `DoubleTapPhase`)
+### Double tap (`double_tap.rs`)
 
-Phases: `Ready`, `FirstDown`, `WaitingForSecond`, `SecondDown`, `Completed`,
-`Cancelled`. The first up holds the first arena entry and waits.
+Phases (`DoubleTapState`): `Ready`, `FirstDown`, `Waiting` and `SecondDown`. The
+first up holds the first arena entry and waits.
 
 - A second down within `double_tap_timeout()` and within `double_tap_slop()` of
   the first goes to `SecondDown`.
 - A second down farther than `double_tap_slop()` is ignored: the first entry
-  stays held and the phase stays `WaitingForSecond`.
+  stays held and the phase stays `Waiting`.
 - After the window expires, deadline polling releases the held entry (so a
   competing single tap can win), fires `on_double_tap_cancel`, and returns to
   `Ready`; a new contact then counts as a first tap.
@@ -163,9 +163,9 @@ let press = LongPressGestureRecognizer::builder(arena)
     .build();
 ```
 
-### Drag (`drag.rs`, `DragPhase`)
+### Drag (`drag.rs`)
 
-`Ready → Possible` on down. The drag starts (`Started`) when the recognizer
+A down tracks the contact. The drag starts when the recognizer
 wins its pointer's arena; moving past `pan_slop_for(kind)` along the axis
 claims the win while competitors remain. `DragStartBehavior::Start` (default)
 reports the position at acceptance, `Down` the down position. Up or an accepted
@@ -184,8 +184,12 @@ pub struct DragEndDetails    { reason: GestureEndReason, velocity: Velocity,
 `delta` and `primary_delta` are per update, not cumulative.
 `DragEndDetails::reason` is `Completed` for pointer Up and `Cancelled` for an
 accepted pointer Cancel; the measured velocity is kept in both cases
-(ADR-0112). `DragGestureRecognizer::is_fling(&velocity)` compares speed with
-`min_fling_velocity()`. Completed Up evaluates velocity at the terminal event's
+(ADR-0112). `DragEndDetails::fling_velocity()` is already the fling policy applied:
+the measured velocity on the drag's axis, zero for a cancellation or a release
+below `GestureSettings::min_fling_velocity`, and capped at
+`max_fling_velocity`; a consumer uses it as is and does not compare it with the
+minimum again. `DragEndDetails::velocity` stays the raw measurement.
+Completed Up evaluates velocity at the terminal event's
 time, so a stationary pause before release cannot publish an old fast fling.
 
 ### Scale (`scale.rs`, `ScalePhase`)
@@ -239,7 +243,7 @@ from an active press, pointer Up, or movement beyond `hit_slop(kind)` ends a sta
 press; movement beyond slop while `Possible` rejects it silently.
 `ForcePressDetails { global_position, local_position, pressure, max_pressure }`.
 
-### Multi-tap (`multi_tap.rs`, `MultiTapPhase`)
+### Multi-tap (`multi_tap.rs`)
 
 `builder(arena, n)` recognizes `n` simultaneous contacts that stay within slop and
 are all released. Each contact is tracked by its own pointer identity

@@ -21,7 +21,7 @@ exclude = ["/ARCHITECTURE.md", "/benches/"]
 autotests = false
 
 [dependencies]
-flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-foundation = { workspace = true }
 
 # `Path` geometry: arcs and ovals as curves, exact winding, tight bounds (ADR-0098 §7).
 kurbo = { workspace = true }

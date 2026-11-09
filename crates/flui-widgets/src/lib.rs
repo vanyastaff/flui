@@ -58,7 +58,7 @@
         reason = "test code catches a panic to assert on it (ADR-0303 §5)"
     )
 )]
-// Lint levels come from `[workspace.lints]`. Ship bar (wave 3): every public
+// Lint levels come from `[workspace.lints]`. Every public
 // item is documented; keep it that way.
 #![deny(missing_docs)]
 // `flex/flex.rs`, `text/text.rs`: a one-type family module named after its
@@ -403,8 +403,7 @@ pub use flui_rendering::semantics::{
     ActionCall, AnnounceError, Announcer, AutoComplete, CellPosition, Current, HasPopup,
     HeadingLevel, Invalid, LiveSetting, NumericRange, NumericRangeError, Reveal,
     ScrollUnit as SemanticsScrollUnit, SemanticsAnchor, SemanticsConfiguration, SemanticsRole,
-    SetSize, SortDirection, TableShape, TextDirection as SemanticsTextDirection, TextSelection,
-    Toggled, Urgency,
+    SetSize, SortDirection, TableShape, TextSelection, Toggled, Urgency,
 };
 
 // ============================================================================
@@ -472,10 +471,10 @@ pub mod prelude {
         CenterLayoutDelegate, CustomPainter, DefaultWidgetsLocalizationsDelegate, FlowDelegate,
         FlowPaintingContext, HeadingLevel, LiveSetting, MultiChildLayoutContext,
         MultiChildLayoutDelegate, NumericRange, NumericRangeError, SemanticsAnchor,
-        SemanticsConfiguration, SemanticsRole, SemanticsTextDirection, SingleChildLayoutDelegate,
-        SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
-        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout, TableBorder,
-        TableCellVerticalAlignment, TableColumnWidth, Toggled, Urgency,
+        SemanticsConfiguration, SemanticsRole, SingleChildLayoutDelegate, SliverGridDelegate,
+        SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
+        SliverGridLayout, TableBorder, TableCellVerticalAlignment, TableColumnWidth, Toggled,
+        Urgency,
     };
     pub use flui_foundation::geometry::Axis;
     pub use flui_foundation::geometry::{EdgeInsets, Matrix4};

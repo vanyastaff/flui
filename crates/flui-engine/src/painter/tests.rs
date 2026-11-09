@@ -614,7 +614,7 @@ fn atlas_image_is_sharp_at_one_to_one() {
     );
 }
 
-// ===== Phase A per-draw blend mode (fixed-function Porter-Duff) =====
+// ===== per-draw blend mode (fixed-function Porter-Duff) =====
 //
 // These tests exercise the TESSELLATED path: a filled `Path` and stroked
 // shapes always tessellate (never the instanced fast path), so they go

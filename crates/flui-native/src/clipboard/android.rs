@@ -14,7 +14,7 @@ use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
 use jni::objects::JObject;
 use jni::{JValue, jni_sig, jni_str};
 
-use crate::host::{SyncClipboard, admit_utf16, host_text};
+use crate::host::{SyncClipboard, admit_text, host_text};
 use crate::owner::android::activity::with_activity;
 use crate::version::gate::android::{AndroidApi, ClipExtras};
 
@@ -100,7 +100,7 @@ impl SyncClipboard for AndroidClipboard {
             let units = env
                 .call_method(&text, jni_str!("length"), jni_sig!("()I"), &[])?
                 .i()?;
-            if let Err(refused) = admit_utf16(usize::try_from(units).unwrap_or(0)) {
+            if let Err(refused) = admit_text(usize::try_from(units).unwrap_or(0)) {
                 return Ok(Err(refused));
             }
             let text = env

@@ -41,6 +41,32 @@ pub(super) fn names(workspace_metadata: &Json) -> anyhow::Result<Vec<String>> {
         .collect()
 }
 
+/// The root manifest's `[workspace.metadata.flui] tier-names`: each tier's
+/// words (`values` for `V`), which `docs/crates.md` prints beside its letter.
+/// Every tier in `tiers` has one.
+pub(super) fn titles(workspace_metadata: &Json) -> anyhow::Result<BTreeMap<String, String>> {
+    let table = workspace_metadata["flui"]["tier-names"]
+        .as_object()
+        .context("Cargo.toml needs `[workspace.metadata.flui] tier-names = { ... }`")?;
+    let mut titles = BTreeMap::new();
+    for (tier, title) in table {
+        titles.insert(
+            tier.clone(),
+            title
+                .as_str()
+                .with_context(|| format!("`tier-names.{tier}` must be a string"))?
+                .to_owned(),
+        );
+    }
+    for tier in names(workspace_metadata)? {
+        anyhow::ensure!(
+            titles.contains_key(&tier),
+            "`[workspace.metadata.flui] tier-names` has no entry for tier `{tier}`"
+        );
+    }
+    Ok(titles)
+}
+
 /// What a crate promises (ADR-0081 §3); the set is closed.
 const KINDS: [&str; 6] = [
     "stable",
