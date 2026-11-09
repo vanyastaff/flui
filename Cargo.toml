@@ -90,6 +90,10 @@ tiers = [
     "pkg", # official packages: material, cupertino, devtools, hot reload
 ]
 
+# The words printed beside each tier letter in docs/crates.md's tier table;
+# every tier above has one.
+tier-names = { V = "values", C = "contracts", S = "substrate", R = "render machine", K = "spine and runtime", H = "hosts", pkg = "official packages and capability crates" }
+
 # What no crate of a tier may reach in any root build, over normal and build
 # edges on every target (ADR-0081 §2), checked by `cargo xtask reach`. A tier's
 # set is its `extends` set plus `forbid`; H has no table and
