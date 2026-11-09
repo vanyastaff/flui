@@ -123,6 +123,8 @@ fn reactivity_and_dependencies() {
             ("media_query_fields::consuming_and_overriding_padding_updates_its_sources", crate::media_query_fields::consuming_and_overriding_padding_updates_its_sources),
             ("media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree",crate::media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree),
             ("directionality_dependency::a_start_aligned_column_depends_on_directionality", crate::directionality_dependency::a_start_aligned_column_depends_on_directionality),
+            ("directionality_dependency::directional_geometry_registers_a_direction_dependency_only_when_directional", crate::directionality_dependency::directional_geometry_registers_a_direction_dependency_only_when_directional),
+            ("directionality_dependency::a_vertical_viewport_depends_on_directionality_but_a_horizontal_one_does_not", crate::directionality_dependency::a_vertical_viewport_depends_on_directionality_but_a_horizontal_one_does_not),
             ("localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl", crate::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl),
             ("hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state", crate::hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state),
             ("layout_builder::layout_builder_constraint_change_rebuilds_in_the_same_frame", crate::layout_builder::layout_builder_constraint_change_rebuilds_in_the_same_frame),

@@ -17,7 +17,9 @@
 
 use crate::common::{lay_out, tight};
 use flui_painting::typography::TextDirection;
-use flui_widgets::{Column, CrossAxisAlignment, Directionality, SizedBox};
+use flui_painting::{Alignment, AlignmentDirectional};
+use flui_rendering::constraints::AxisDirection;
+use flui_widgets::{Align, Column, CrossAxisAlignment, Directionality, SizedBox, Stack, Viewport};
 
 /// Dependents of the ambient `Directionality` for a `Column` with `cross`.
 fn directionality_dependents(cross: CrossAxisAlignment) -> usize {
@@ -42,5 +44,65 @@ pub(crate) fn a_start_aligned_column_depends_on_directionality() {
         1,
         "CrossAxisAlignment::Start resolves against the reading direction, so \
          the column must depend on Directionality"
+    );
+}
+
+/// Dependents of the ambient `Directionality` for a render-object widget mounted
+/// under it.
+fn render_dependents(view: impl flui_view::View) -> usize {
+    let mut laid = lay_out(
+        Directionality::new(TextDirection::Ltr, view),
+        tight(200.0, 200.0),
+    );
+    laid.inherited_dependent_count::<Directionality>()
+}
+
+/// An absolute alignment names physical edges, so it must not register a
+/// `Directionality` dependency; a directional one names a reading edge and must.
+/// The render-object `depend_on` path gates the lookup per arm (T09).
+pub(crate) fn directional_geometry_registers_a_direction_dependency_only_when_directional() {
+    let absolute_align =
+        render_dependents(Align::new(Alignment::CENTER).child(SizedBox::square(10.0)));
+    assert_eq!(
+        absolute_align, 0,
+        "an absolute alignment names physical edges: no Directionality dependency"
+    );
+    let directional_align = render_dependents(
+        Align::new(AlignmentDirectional::TOP_START).child(SizedBox::square(10.0)),
+    );
+    assert_eq!(
+        directional_align, 1,
+        "a directional alignment names a reading edge"
+    );
+
+    let absolute_stack = render_dependents(Stack::new((SizedBox::square(10.0),)));
+    assert_eq!(
+        absolute_stack, 0,
+        "Stack::default()'s alignment is absolute"
+    );
+    let directional_stack = render_dependents(
+        Stack::new((SizedBox::square(10.0),)).alignment(AlignmentDirectional::TOP_START),
+    );
+    assert_eq!(
+        directional_stack, 1,
+        "a directional Stack alignment names a reading edge"
+    );
+}
+
+/// A vertical viewport lays its horizontal cross axis against the reading
+/// direction, so it must depend on it; a horizontal one lays a fixed
+/// top-to-bottom cross axis and must not (T09).
+pub(crate) fn a_vertical_viewport_depends_on_directionality_but_a_horizontal_one_does_not() {
+    let vertical = render_dependents(Viewport::new((SizedBox::square(10.0),)));
+    assert_eq!(
+        vertical, 1,
+        "a vertical viewport's cross axis is horizontal (reading)"
+    );
+    let horizontal = render_dependents(
+        Viewport::new((SizedBox::square(10.0),)).axis_direction(AxisDirection::LeftToRight),
+    );
+    assert_eq!(
+        horizontal, 0,
+        "a horizontal viewport's cross axis is top-to-bottom"
     );
 }

@@ -14,18 +14,25 @@ use flui_view::seq::ViewSeq;
 use crate::localization::Directionality;
 use crate::support::generic_render_view_element;
 
-/// Resolve `alignment` against the ambient [`Directionality`]. At mount the
-/// inherited read is not yet available, so a directional alignment defaults to
-/// Ltr and the first rebuild re-resolves it (T09).
+/// Resolve `alignment` against the ambient [`Directionality`]. Only the
+/// directional arm reads it, so an absolute alignment registers no dependency
+/// and never rebuilds on a direction change; at mount the inherited read is not
+/// yet available, so a directional alignment defaults to Ltr and the first
+/// rebuild re-resolves it (T09).
 fn resolve_alignment_geometry(
     alignment: AlignmentGeometry,
     ctx: &flui_view::RenderObjectContext<'_>,
 ) -> Alignment {
-    alignment.resolve(
-        ctx.depend_on::<Directionality, _>(|d| *d.data())
-            .unwrap_or(TextDirection::Ltr)
-            .is_ltr(),
-    )
+    match alignment {
+        AlignmentGeometry::Absolute(alignment) => alignment,
+        AlignmentGeometry::Directional(directional) => {
+            let is_ltr = ctx
+                .depend_on::<Directionality, _>(|d| *d.data())
+                .unwrap_or(TextDirection::Ltr)
+                .is_ltr();
+            directional.resolve(is_ltr)
+        }
+    }
 }
 
 /// Overlaps its children, sizing itself to the largest non-positioned child and

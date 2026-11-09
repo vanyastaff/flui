@@ -50,18 +50,25 @@ fn cross_axis_direction(axis_direction: AxisDirection, is_ltr: bool) -> AxisDire
     }
 }
 
-/// Resolve the cross-axis direction against the ambient [`Directionality`]. At
-/// mount the inherited read is not yet available, so an RTL viewport defaults to
-/// LTR and the first rebuild re-resolves it (T09).
+/// Resolve the cross-axis direction against the ambient [`Directionality`]. Only
+/// the vertical arm reads it (a horizontal scroll axis lays its cross axis
+/// top-to-bottom regardless of direction, and registers no dependency); at mount
+/// the inherited read is not yet available, so an RTL viewport defaults to LTR
+/// and the first rebuild re-resolves it (T09).
 fn resolve_cross_axis_direction(
     axis_direction: AxisDirection,
     ctx: &flui_view::RenderObjectContext<'_>,
 ) -> AxisDirection {
-    let is_ltr = ctx
-        .depend_on::<Directionality, _>(|d| *d.data())
-        .unwrap_or(TextDirection::Ltr)
-        .is_ltr();
-    cross_axis_direction(axis_direction, is_ltr)
+    match axis_direction.axis() {
+        Axis::Horizontal => AxisDirection::TopToBottom,
+        Axis::Vertical => {
+            let is_ltr = ctx
+                .depend_on::<Directionality, _>(|d| *d.data())
+                .unwrap_or(TextDirection::Ltr)
+                .is_ltr();
+            cross_axis_direction(axis_direction, is_ltr)
+        }
+    }
 }
 
 /// A box render-object widget that drives a sequence of **sliver** children

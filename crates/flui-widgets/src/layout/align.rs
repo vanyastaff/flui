@@ -62,15 +62,22 @@ impl Align {
         self
     }
 
-    /// Resolve the geometry against the ambient [`Directionality`]. At mount the
-    /// inherited read is not yet available, so a directional alignment defaults
-    /// to Ltr and the first rebuild re-resolves it (T09).
+    /// Resolve the geometry against the ambient [`Directionality`]. Only the
+    /// directional arm reads it, so an absolute alignment registers no
+    /// `Directionality` dependency and never rebuilds on a direction change;
+    /// at mount the inherited read is not yet available, so a directional
+    /// alignment defaults to Ltr and the first rebuild re-resolves it (T09).
     fn resolve(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Alignment {
-        self.alignment.resolve(
-            ctx.depend_on::<Directionality, _>(|d| *d.data())
-                .unwrap_or(TextDirection::Ltr)
-                .is_ltr(),
-        )
+        match self.alignment {
+            AlignmentGeometry::Absolute(alignment) => alignment,
+            AlignmentGeometry::Directional(directional) => {
+                let is_ltr = ctx
+                    .depend_on::<Directionality, _>(|d| *d.data())
+                    .unwrap_or(TextDirection::Ltr)
+                    .is_ltr();
+                directional.resolve(is_ltr)
+            }
+        }
     }
 
     fn build_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> RenderAlign {
