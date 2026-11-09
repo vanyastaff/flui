@@ -18,7 +18,7 @@ use std::{
 };
 
 use crate::capability::{Capability, Completion, CompletionSource, ProviderContext, Resolver};
-use crate::unsupported::UnsupportedReason;
+use crate::unsupported::Unsupported;
 
 /// The launcher capability: `cx.capability::<LauncherCapability>()` hands out
 /// a [`Launcher`].
@@ -152,11 +152,11 @@ pub enum LaunchError {
     /// The user, the sandbox or the system refused.
     #[error("the system refused")]
     Denied,
-    /// The service the backend launches through is missing or not running
-    /// (no desktop portal, no file manager); the reason says whether trying
-    /// later may help.
-    #[error("the launch service is unavailable: {0}")]
-    Unavailable(UnsupportedReason),
+    /// The service the backend launches through is not here (no desktop
+    /// portal, no file manager); the [`Unsupported`] says why and whether
+    /// trying later may help.
+    #[error("the launch service cannot do this: {0}")]
+    Unsupported(#[from] Unsupported),
     /// The system answered with an error the launcher does not name; `code`
     /// is the system's, for diagnostics only.
     #[error("the system failed with code {code}")]
@@ -164,6 +164,21 @@ pub enum LaunchError {
         /// The operating system's error code.
         code: i32,
     },
+}
+
+impl LaunchError {
+    /// What is not here, when that is why the launch failed.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<Unsupported> {
+        match self {
+            Self::Unsupported(unsupported) => Some(*unsupported),
+            Self::RelativePath
+            | Self::NotFound
+            | Self::NoHandler
+            | Self::Denied
+            | Self::Failed { .. } => None,
+        }
+    }
 }
 
 /// What a launch answers: done, or why not.

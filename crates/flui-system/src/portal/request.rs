@@ -6,7 +6,7 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
-use flui_platform::UnsupportedReason;
+use flui_platform::{Unsupported, UnsupportedReason};
 use futures_util::StreamExt;
 use futures_util::future::{Either, select};
 use zbus::{MatchRule, MessageStream, OwnedObjectPath, OwnedVariant};
@@ -73,7 +73,11 @@ where
     let departed = std::pin::pin!(departure(&mut departures, owner.as_str()));
     let message = match select(responses.next(), departed).await {
         Either::Left((message, _)) => message.ok_or(PortalError::Failed)??,
-        Either::Right(_) => return Err(PortalError::Unavailable(UnsupportedReason::Unavailable)),
+        Either::Right(_) => {
+            return Err(PortalError::Unsupported(Unsupported::new(
+                UnsupportedReason::Unavailable,
+            )));
+        }
     };
     let (code, results) = message
         .body()
