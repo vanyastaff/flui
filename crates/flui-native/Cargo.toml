@@ -29,11 +29,11 @@ accesskit = { workspace = true }
 # and `HostWindow` hands out. The trait lives there so the
 # frame runtime can hold a window's bridge without linking a backend
 # (ADR-0082 §2).
-flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
+flui-semantics = { workspace = true }
 # The host's fallback answer `fonts::system_fallback` gives (`SystemFallback`,
 # ADR-0271 §3), and the text stack (Parley, swash) the Wayland window's own
 # frame shapes and rasterizes its title with. `flui-app` links it already.
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
+flui-painting = { workspace = true }
 
 # The contracts the backends implement (capability traits, window/input and
 # data-transfer vocabulary), re-exported here at their old paths (ADR-0082).
@@ -42,7 +42,7 @@ flui-platform = { workspace = true }
 # carrying two seams: OwnerAffinity — the ADR-0039 owner-thread backstop,
 # hosted in foundation so its tests run in CI (flui-native's suite does
 # not) — and the generational DataTransferId for the ADR-0312 transport.
-flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-foundation = { workspace = true }
 # Wasm-safe Instant for input timestamps (std re-export on native).
 web-time = { workspace = true }
 
@@ -642,7 +642,7 @@ cfg_aliases = { workspace = true }
 # `assert_backend_conforms` (ADR-0215 §7) over the shared decoders and the
 # headless backend. Checkout-only test edge: versionless, so Cargo drops it
 # from the published manifest; flui-testing never depends on this crate.
-flui-testing = { path = "../flui-testing" }
+flui-testing = { workspace = true }
 # `fonts::android`'s parse, which runs on every host over recorded files.
 roxmltree.workspace = true
 # The host's own test support, the `testing` module, and the `http` client its
