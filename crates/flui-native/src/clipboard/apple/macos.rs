@@ -28,7 +28,7 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardContentsOptions, NSPasteboardType};
 use objc2_foundation::NSString;
 
-use crate::host::{NativeClipboard, SyncClipboard, admit_utf16, host_text};
+use crate::host::{NativeClipboard, SyncClipboard, admit_text, host_text};
 
 use crate::owner::apple::MacOSLoop;
 
@@ -167,7 +167,7 @@ impl SyncClipboard for MacOSClipboard {
                 return Ok(None);
             };
             // Measured in UTF-16 units before the copy into Rust.
-            admit_utf16(ns_string.length())?;
+            admit_text(ns_string.length())?;
             host_text(ns_string.to_string())
         })
     }
