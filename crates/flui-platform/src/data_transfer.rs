@@ -307,6 +307,32 @@ impl TransferLimits {
         self.max_bytes = max_bytes;
         self
     }
+
+    /// Admit a delivery of `actual` bytes, or refuse one past
+    /// [`max_bytes`](Self::max_bytes) with [`TransferError::TooLarge`]. A
+    /// delivery of exactly `max_bytes` is admitted.
+    ///
+    /// This is the one size predicate of the transport. `DragView::request` in
+    /// `flui-interaction` applies it to every delivery it hands a target, in
+    /// process or from the OS, so a backend that forgets the check still cannot
+    /// pass an oversized payload through. A backend calls it too, before it
+    /// copies: with a declared length, while bytes accumulate, and on the
+    /// decoded payload, so it stops reading as soon as the limit is passed. A
+    /// length measured in `usize` saturates into `u64` at the call site.
+    ///
+    /// # Errors
+    ///
+    /// [`TransferError::TooLarge`] with `actual` and this limit when `actual`
+    /// is greater than [`max_bytes`](Self::max_bytes).
+    pub fn enforce(self, actual: u64) -> Result<(), TransferError> {
+        if actual > self.max_bytes {
+            return Err(TransferError::TooLarge {
+                actual,
+                limit: self.max_bytes,
+            });
+        }
+        Ok(())
+    }
 }
 
 impl Default for TransferLimits {
