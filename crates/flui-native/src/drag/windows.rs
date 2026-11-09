@@ -1362,7 +1362,14 @@ fn describe(object: &IDataObject) -> Vec<(NativeFormat, RepresentationDescriptor
     let identity_format = NativeFormat::Named(flui_platform::drag::IDENTITY_ESSENCE.to_owned());
     let identity = formats
         .contains(&identity_format)
-        .then(|| fetch(object, &identity_format, IDENTITY_MAX_BYTES).ok())
+        .then(|| {
+            fetch(
+                object,
+                &identity_format,
+                TransferLimits::default().with_max_bytes(IDENTITY_MAX_BYTES),
+            )
+            .ok()
+        })
         .flatten()
         .and_then(|bytes| crossing::identity_descriptor(&bytes));
     offer_representations(formats, identity)
