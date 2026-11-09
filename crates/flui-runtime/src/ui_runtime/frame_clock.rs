@@ -172,8 +172,8 @@ impl UiRuntime {
     /// failure or recovery event it alone owns:
     ///
     /// - [`Self::mark_primary_needs_full_repaint`] (below), for the
-    ///   pre-frame GPU device-recovery path (`runner.rs`'s
-    ///   `render_frame_with_device_recovery`), where the recovered device's
+    ///   pre-frame GPU device-recovery path (`flui-app`'s
+    ///   `device_recovery::attempt_device_recovery`), where the recovered device's
     ///   backing store was invalidated by the loss — `Renderer::recover`
     ///   already primes a full repaint (`damage_tracker.mark_full_repaint`)
     ///   for whatever scene reaches it next, but nothing reaches it at all
@@ -251,7 +251,7 @@ impl UiRuntime {
 
     /// `Self::mark_needs_full_repaint_for`, addressed to
     /// `self.presentations.primary()` — the shape its one caller
-    /// (`runner.rs`'s `render_frame_with_device_recovery`) needs: that
+    /// (`flui-app`'s `device_recovery::attempt_device_recovery`) needs: that
     /// function runs BEFORE `render_frame`, driven purely by
     /// `renderer.is_device_lost()`, with no per-pump `producer` of its own
     /// to resolve which presentation actually owns the lost device.
@@ -261,9 +261,9 @@ impl UiRuntime {
     // only because a secondary window carries no widget content yet
     // (`open_secondary_window`'s own doc); #559's addressing slice is
     // where this needs to become presentation-addressed, matching how
-    // `render_frame_with_device_recovery` itself is still single-renderer/
+    // `attempt_device_recovery` itself is still single-renderer/
     // single-presentation shaped. Its caller is the host's device recovery
-    // (`flui-app`'s `render_frame_with_device_recovery`, desktop and Android);
+    // (`flui-app`'s `attempt_device_recovery`, desktop and Android);
     // web's own recovery pokes `wake_handle()` directly instead.
     pub fn mark_primary_needs_full_repaint(&self) {
         self.mark_needs_full_repaint_for(self.presentations.primary());
