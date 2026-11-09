@@ -353,7 +353,7 @@ impl BuildOwner {
         }
 
         // Prune stale entries and collect the ones that need a build, in one
-        // pass over the registry. Both the registry lock and the pipeline
+        // pass over the registry. Both the registry borrow and the pipeline
         // borrow are released before `build_scope` runs.
         let mut scheduled: HashMap<ElementId, (RenderId, Rc<dyn BuildDuringLayoutCell>)> = // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
             HashMap::new();

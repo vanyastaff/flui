@@ -932,9 +932,9 @@ pub(crate) struct SliverAdaptorBehavior<R: LazyMultiBoxRender> {
     ///
     /// Deliberately NOT on the manager, though cached for the same reason
     /// `builder` is: `sliver_slot_for_child` runs from inside
-    /// `SparseChildren`'s own work, which already holds the manager lock, so
-    /// reading it there re-enters that mutex and deadlocks — six lazy-sliver
-    /// tests hung on exactly that. A plain field needs no lock at all.
+    /// `SparseChildren`'s own work, which already holds the manager borrow,
+    /// so borrowing it there again fails (as a mutex it deadlocked six
+    /// lazy-sliver tests). A plain field needs no borrow at all.
     semantics: SemanticSetMapping,
     /// Handles the render object's creation / update / removal.
     inner: RenderBehavior<SliverMultiBoxAdaptor<R>>,
