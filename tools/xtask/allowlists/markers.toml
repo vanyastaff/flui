@@ -16,13 +16,8 @@ count = 1
 
 [[allow]]
 path = "crates/flui-engine/src/aa_oracle_tests.rs"
-class = "phase-letter"
-count = 1
-
-[[allow]]
-path = "crates/flui-engine/src/aa_oracle_tests.rs"
 class = "pr-label"
-count = 3
+count = 2
 
 [[allow]]
 path = "crates/flui-engine/src/batches/paths.rs"
@@ -31,18 +26,8 @@ count = 2
 
 [[allow]]
 path = "crates/flui-engine/src/batches/shapes.rs"
-class = "phase-letter"
-count = 1
-
-[[allow]]
-path = "crates/flui-engine/src/batches/shapes.rs"
 class = "pr-label"
 count = 11
-
-[[allow]]
-path = "crates/flui-engine/src/command_ir.rs"
-class = "phase-letter"
-count = 2
 
 [[allow]]
 path = "crates/flui-engine/src/instancing.rs"
@@ -55,23 +40,8 @@ class = "slice"
 count = 3
 
 [[allow]]
-path = "crates/flui-engine/src/painter/tests.rs"
-class = "phase-letter"
-count = 1
-
-[[allow]]
-path = "crates/flui-engine/src/pipeline_cache.rs"
-class = "phase-letter"
-count = 2
-
-[[allow]]
 path = "crates/flui-engine/src/renderer.rs"
 class = "pr-label"
-count = 1
-
-[[allow]]
-path = "crates/flui-engine/src/replay/mod.rs"
-class = "phase-letter"
 count = 1
 
 [[allow]]

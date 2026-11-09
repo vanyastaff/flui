@@ -1,4 +1,4 @@
-//! Worker ↔ host dispatch helpers (Phase B).
+//! Worker ↔ host dispatch helpers.
 //!
 //! Worker crates register reloadable `build()` bodies via `flui_worker_init`.
 //! The host retains a [`RebuildHookRegistration`] so gesture handlers inside

@@ -432,7 +432,7 @@ mod gpu_tests {
 
     // ── PD6: Xor over opaque backdrop — pipeline is NOT SrcOver ─────────────
 
-    // ── PD5: Phase-B regression — SrcOver path still AA'd after PR-4 ─────────
+    // ── PD5: regression — SrcOver path still AA'd ─────────
 
     // ── Q1: L2 gradient norm AA band-width tests ──────────────────────────────
 }

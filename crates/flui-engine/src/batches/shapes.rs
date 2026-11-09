@@ -128,7 +128,7 @@ impl DrawBatcher {
             // The instanced fast path renders with a hardcoded SrcOver
             // (ALPHA_BLENDING) pipeline. Non-SrcOver blend modes must route
             // through the tessellated path, whose pipeline is selected per
-            // `pipeline_key_from_paint` (Phase A fixed-function Porter-Duff).
+            // `pipeline_key_from_paint` (fixed-function Porter-Duff).
             if paint.blend_mode == BlendMode::SrcOver {
                 if state.is_translate_scale() {
                     // Baked-AABB fast path: positive-scale SrcOver — bake the
