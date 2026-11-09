@@ -29,6 +29,7 @@
 use flui_native::HostWindow;
 use flui_native::{IOSSceneEvent, IOSSceneSessionId};
 use flui_view::{StatelessView, View};
+use flui_widgets::DefaultFocusTraversal;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -391,7 +392,11 @@ where
     ui_runtime
         .install_captured_text_sizing_for(ui_runtime.presentation_id(), native_sizing.source());
     let attach = ui_runtime.enter(|ui_runtime| {
-        ui_runtime.attach_root_widget_with_size(&root, logical.width, logical.height)
+        ui_runtime.attach_root_widget_with_size(
+            &DefaultFocusTraversal::new(root.clone()),
+            logical.width,
+            logical.height,
+        )
     });
     if let Err(e) = attach {
         tracing::error!("Root widget attach failed: {:?}", e);

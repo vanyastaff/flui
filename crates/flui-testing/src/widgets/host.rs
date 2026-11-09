@@ -55,10 +55,15 @@ impl WidgetHost {
     ) -> Self {
         let ui_runtime = HeadlessHost::with_storage(window, storage);
         let slot = Rc::new(RefCell::new(tree));
+        // The runtime no longer installs the catalog's keyboard traversal
+        // (T17); the harness is a composition root, so it wraps the harness
+        // root in it — above the tree under test, where the original
+        // `FocusRoot` installed it, so it stays out of the caller's subtree.
+        let root = flui_widgets::DefaultFocusTraversal::new(HarnessRoot {
+            slot: Rc::clone(&slot),
+        });
         ui_runtime
-            .attach(&HarnessRoot {
-                slot: Rc::clone(&slot),
-            })
+            .attach(&root)
             .expect("BUG: a fresh ui_runtime has no root attached");
         let pipeline = ui_runtime
             .ui_runtime()
