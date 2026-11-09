@@ -20,8 +20,8 @@ wasm-opt = false
 ignored = ["wasm-bindgen-futures"]
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-flui-painting = { path = "../../crates/flui-painting" }
-flui-foundation = { path = "../../crates/flui-foundation" }
+flui-painting = { workspace = true }
+flui-foundation = { workspace = true }
 wasm-bindgen = "0.2.109"
 # Required by #[wasm_bindgen(start)] on an async fn — the macro expands to
 # wasm_bindgen_futures::spawn_local internally.
@@ -35,7 +35,7 @@ web-sys = { version = "0.3.86", features = [
 ] }
 console_error_panic_hook = "0.1"
 wgpu = { workspace = true, features = ["webgpu", "wgsl"] }
-flui-engine = { path = "../../crates/flui-engine", features = ["webgpu"] }
+flui-engine = { workspace = true, features = ["webgpu"] }
 
 [lints]
 workspace = true

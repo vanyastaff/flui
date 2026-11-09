@@ -38,14 +38,14 @@ workspace = true
 # shape a real platform translation produces. This crate is itself test
 # support and never enters a production graph (dev edges only, plus the
 # facade's optional `testing` feature), so the feature travels nowhere new.
-flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
+flui-interaction = { workspace = true, features = ["testing"] }
 # PresentationId, the multi-presentation clock registry's key -- it now
 # appears directly in HeadlessBinding's own public method signatures
 # (install_presentation_clock/pump_presentation/pump_all/etc.), which is what
 # promotes this from a transitive (dev-only) dependency to a normal one.
-flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-foundation = { workspace = true }
 # The log capture's home: `log_capture` is a re-export of `flui_log::testing`.
-flui-log = { path = "../flui-log", version = "=0.2.0-dev" }
+flui-log = { workspace = true }
 # The text-store contract `text_store_kit` certifies stores against, and
 # `InMemoryTextStore`, the reference store its own fixture drives; its
 # `testing` doubles (`FakeHaptics`), which `TestHost` hands out.
@@ -56,37 +56,37 @@ raw-window-handle = { workspace = true }
 # Canonical hit-test positions accepted by the production input pipeline.
 # The element tree + build owner this binding drives each frame (`build_scope`
 # drains the external inbox an animation/listenable tick fills).
-flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
+flui-view = { workspace = true }
 # The pipeline owner the frame loop lays out / paints / composites (`run_frame`).
 # `testing` for `inspect`, the committed-geometry and layer accessors the
 # widget harness (`widgets`) reads.
-flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
+flui-rendering = { workspace = true, features = ["testing"] }
 # The widget harness (`widgets`): the catalog widgets it wraps a root in
 # (`Align`, `ConstrainedBox`, `UnconstrainedBox`, `FocusRoot`), and the
 # concrete render objects its probes downcast.
-flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
+flui-widgets = { workspace = true }
 flui-objects = { workspace = true }
 # `HeadlessHost` hosts a `UiRuntime` and drives its frame transaction
 # (`UiRuntime::pump`, ADR-0083 §4). The runtime admits this crate as a normal
 # dependent beside the host. `testing` exposes the test-only UI runtime hooks
 # the harness reads (`UiRuntime::active_text_store`).
-flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["testing"] }
+flui-runtime = { workspace = true, features = ["testing"] }
 # The widget harness's recording IME double.
 parking_lot = { workspace = true }
 # The font collection a headless UI runtime shapes on (bundled faces only, so text
 # measures alike on every host) and the painting values the widget harness
 # reads.
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
+flui-painting = { workspace = true }
 # Registered `AnimationController`s the frame loop ticks on the virtual timeline,
 # restart-aware via the controller's `run_generation` counter.
-flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
+flui-animation = { workspace = true }
 # The frame phases and the binding's `OwnerFrame`. `pump_frame` runs the SAME
 # `UpdateScheduler::drive_frame` a UI runtime's pump runs, whose begin frame polls the
 # owner-local tasks in the same slot — between the vsync tick and `build_scope`.
 # `testing` exposes the scheduler's test probes (`AsyncDriver::set_request_frame`,
 # `is_unlocked`) to every test that links this crate, the scheduler's own
 # integration tests included.
-flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev", features = ["testing"] }
+flui-scheduler = { workspace = true, features = ["testing"] }
 # Names the shared `Arc<RwLock<PipelineOwner>>` the element tree and the binding
 # both hold (render-object attachment shares the owner; the binding does not own
 # it exclusively).
@@ -94,7 +94,7 @@ flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev", features 
 # reads the assembled `SemanticsOwner` tree out of the pipeline owner and
 # translates it with `flui_semantics::tree_to_update` -- the SAME translation a
 # platform adapter uses, so a test and a screen reader cannot disagree.
-flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
+flui-semantics = { workspace = true }
 # Deliberately part of this crate's public contract: `A11yTree` hands back
 # AccessKit roles/nodes rather than a test-only mirror of them. The named types
 # are re-exported from `a11y` so a consumer does not have to add (and
@@ -117,17 +117,17 @@ flui-protocol = { workspace = true, features = ["serde"] }
 [dev-dependencies]
 static_assertions.workspace = true
 # The headless backend whose windows the conformance checks run against.
-flui-native = { path = "../flui-native", version = "=0.2.0-dev" }
+flui-native = { workspace = true }
 # Enable flui-view's `testing` feature in test builds so the layout-builder
 # seam test can plant a registry entry (`register_layout_builder_for_test`).
 # Same dev-only feature-unification pattern used by flui-app; the hook stays out
 # of release builds.
-flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["testing"] }
+flui-view = { workspace = true, features = ["testing"] }
 # The long-press deadline recognizer + settings exercised by the pump_frame test,
 # plus the geometry/offset types for the synthetic pointer-down. The `testing`
 # feature is NOT required: `add_pointer`/`poll_deadlines` are part of the release
 # API, so the deterministic deadline test runs against the public surface.
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
+flui-painting = { workspace = true }
 
 [[test]]
 name = "flui_testing_it"
