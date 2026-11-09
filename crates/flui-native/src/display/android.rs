@@ -20,8 +20,8 @@ pub(crate) mod sample {
 
     use flui_foundation::geometry::{Bounds, Point, Size};
     use flui_platform::{
-        Availability, CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, FrameRateHint,
-        Headroom, RefreshPeriod,
+        Availability, DisplayColor, DisplayId, DisplayInfo, FrameRateHint, Headroom, RefreshPeriod,
+        UnsupportedReason,
     };
 
     use crate::owner::android::ndk::{NdkFn, SetFrameRate, SymbolSource};
@@ -49,7 +49,7 @@ pub(crate) mod sample {
         /// What the display reports of its colour, or why it reports none:
         /// below API 26 there is no such report, and a display whose report
         /// fails loses its colour alone, never the sample.
-        pub(crate) color: Result<ColorReport, CapabilityAbsence>,
+        pub(crate) color: Result<ColorReport, UnsupportedReason>,
     }
 
     /// `Display.isWideColorGamut` and `Display.isHdr` (API 26).
@@ -91,8 +91,8 @@ pub(crate) mod sample {
     /// over white, and absent otherwise (below API 35, or a ratio that is not
     /// one).
     pub(crate) fn display_color(
-        report: Result<ColorReport, CapabilityAbsence>,
-    ) -> Result<DisplayColor, CapabilityAbsence> {
+        report: Result<ColorReport, UnsupportedReason>,
+    ) -> Result<DisplayColor, UnsupportedReason> {
         let report = report?;
         let gamut = crate::display::source::p3_or_srgb(report.wide_gamut);
         if !report.hdr {
@@ -102,7 +102,7 @@ pub(crate) mod sample {
             .highest_hdr_sdr_ratio
             .and_then(|ratio| Headroom::try_new(ratio).ok())
             .filter(|headroom| *headroom > Headroom::SDR)
-            .ok_or(CapabilityAbsence::NotOnThisDevice);
+            .ok_or(UnsupportedReason::NotOnThisDevice);
         Ok(DisplayColor::high(gamut, headroom))
     }
 
@@ -242,7 +242,7 @@ pub(crate) mod sample {
                 density_dpi: 420,
                 refresh_hz: 120.0,
                 max_refresh_hz: Some(120.0),
-                color: Err(CapabilityAbsence::NotOnThisDevice),
+                color: Err(UnsupportedReason::NotOnThisDevice),
             };
             let info = healthy.info(id).expect("a healthy display");
             assert_eq!(info.scale_factor, 2.625, "420 dpi is 2.625 logical pixels");
@@ -299,11 +299,11 @@ pub(crate) mod sample {
                 density_dpi: 160,
                 refresh_hz: 60.0,
                 max_refresh_hz: Some(60.0),
-                color: Err(CapabilityAbsence::NotOnThisDevice),
+                color: Err(UnsupportedReason::NotOnThisDevice),
             };
             let info = failed.info(id).expect("the display is still listed");
             assert_eq!(info.bounds.size, Size::new(1920, 1080));
-            assert_eq!(info.color, Err(CapabilityAbsence::NotOnThisDevice));
+            assert_eq!(info.color, Err(UnsupportedReason::NotOnThisDevice));
             let reported = RawDisplay {
                 color: Ok(report(true, false, None)),
                 ..failed
@@ -339,8 +339,8 @@ pub(crate) mod sample {
         /// Each colour report a `Display` gives, to the display colour it means.
         fn android_colour_reports_map_to_the_display_colour() {
             assert_eq!(
-                display_color(Err(CapabilityAbsence::NotOnThisDevice)),
-                Err(CapabilityAbsence::NotOnThisDevice),
+                display_color(Err(UnsupportedReason::NotOnThisDevice)),
+                Err(UnsupportedReason::NotOnThisDevice),
                 "below API 26"
             );
             assert_eq!(
@@ -370,7 +370,7 @@ pub(crate) mod sample {
                     display_color(Ok(report(true, true, ratio))),
                     Ok(DisplayColor::high(
                         ColorGamut::DisplayP3,
-                        Err(CapabilityAbsence::NotOnThisDevice)
+                        Err(UnsupportedReason::NotOnThisDevice)
                     )),
                     "ratio {ratio:?} publishes no headroom"
                 );
@@ -480,7 +480,7 @@ pub(crate) mod source {
 
     use android_activity::AndroidApp;
     use android_activity::ndk::native_window::NativeWindow;
-    use flui_platform::{CapabilityAbsence, DisplayId, DisplayKey, DisplaySnapshot, FrameRateHint};
+    use flui_platform::{DisplayId, DisplayKey, DisplaySnapshot, FrameRateHint, UnsupportedReason};
     use jni::{
         Env, JValue, jni_sig, jni_str,
         objects::{JObject, JObjectArray, JString},
@@ -1063,14 +1063,14 @@ pub(crate) mod source {
         env: &mut Env<'_>,
         display: &JObject<'_>,
         api: AndroidApi,
-    ) -> Result<ColorReport, CapabilityAbsence> {
+    ) -> Result<ColorReport, UnsupportedReason> {
         if api.since::<DisplayColorReport>().is_none() {
-            return Err(CapabilityAbsence::NotOnThisDevice);
+            return Err(UnsupportedReason::NotOnThisDevice);
         }
         query_color(env, display, api).map_err(|error| {
             env.exception_clear();
             tracing::warn!(%error, "Android: a display's colour report failed");
-            CapabilityAbsence::NotOnThisDevice
+            UnsupportedReason::NotOnThisDevice
         })
     }
 

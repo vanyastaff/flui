@@ -192,7 +192,7 @@ fn restore_fits_the_frame_the_window_opens_with() {
         1.0,
     );
     let no_app_title_bar = WindowCapabilities::ALL
-        .without_app_title_bar(flui_platform::CapabilityAbsence::NotYetOnThisHost);
+        .without_app_title_bar(flui_platform::UnsupportedReason::NotYetOnThisHost);
     // (case, frame asked for, content width)
     let table = [
         (

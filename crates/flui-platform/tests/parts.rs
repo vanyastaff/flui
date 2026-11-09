@@ -7,12 +7,13 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DeviceSize, EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    AppTitleBar, Availability, CapabilitiesOwner, CapabilityAbsence, ColorGamut, DisplayColor,
-    DisplayInfo, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
+    AppTitleBar, Availability, CapabilitiesOwner, ColorGamut, DisplayColor, DisplayInfo,
+    DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
     MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
-    SizeConstraints, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
-    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowFrame,
-    WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowState,
+    SizeConstraints, SystemPreferences, TextWeightPreference, UnsupportedReason, Weekday,
+    WheelPreferences, WheelStep, WindowAppearance, WindowCapabilities, WindowCommand,
+    WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode,
+    WindowState,
 };
 
 fn preferences_round_trip_through_their_parts() {
@@ -71,7 +72,7 @@ fn a_display_round_trips_through_its_parts() {
     .with_persistent_key("studio")
     .with_color(Ok(DisplayColor::high(
         ColorGamut::DisplayP3,
-        Err(CapabilityAbsence::NotOnThisDevice),
+        Err(UnsupportedReason::NotOnThisDevice),
     )));
     let (taken, parts) = display.clone().into_parts();
     assert_eq!(taken, id);
@@ -81,10 +82,10 @@ fn a_display_round_trips_through_its_parts() {
 fn a_window_state_round_trips_through_its_parts() {
     let material = WindowCommand::SetMaterial(WindowMaterial::System);
     let capabilities = WindowCapabilities::ALL
-        .unavailable(&material, CapabilityAbsence::NotYetOnThisHost)
-        .without_presentation_feedback(CapabilityAbsence::NotOnThisDevice)
-        .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
-        .without_system_gestures(CapabilityAbsence::NotYetOnThisHost);
+        .unavailable(&material, UnsupportedReason::NotYetOnThisHost)
+        .without_presentation_feedback(UnsupportedReason::NotOnThisDevice)
+        .without_keyboard_inset(UnsupportedReason::NotOnThisPlatform)
+        .without_system_gestures(UnsupportedReason::NotYetOnThisHost);
     let metrics = WindowMetrics::try_new(DeviceSize::new(1600, 1200), 2.0).expect("valid");
     let state = WindowState::new(
         WindowGeometry::new(Some(Point::new(10.0, 20.0)), Size::new(820.0, 640.0)),
@@ -117,15 +118,15 @@ fn a_window_state_round_trips_through_its_parts() {
     let parts = state.clone().into_parts();
     assert_eq!(
         parts.capabilities.material,
-        Err(CapabilityAbsence::NotYetOnThisHost)
+        Err(UnsupportedReason::NotYetOnThisHost)
     );
     assert_eq!(
         parts.capabilities.reports_presentation,
-        Err(CapabilityAbsence::NotOnThisDevice)
+        Err(UnsupportedReason::NotOnThisDevice)
     );
     assert_eq!(
         parts.capabilities.reports_system_gestures,
-        Err(CapabilityAbsence::NotYetOnThisHost)
+        Err(UnsupportedReason::NotYetOnThisHost)
     );
     assert_eq!(
         state

@@ -61,53 +61,19 @@ pub enum UnsupportedReason {
     NoWindow,
 }
 
-/// Where a capability that is not here is missing: the platform, this device
-/// or this host. These are the reasons a capability that lasts can be absent
-/// for, which a host records against the capability and every refusal of it
-/// answers ([`WindowCapabilities::unavailable`](crate::WindowCapabilities::unavailable)).
-///
-/// None of them is [retryable](Unsupported::is_retryable): a capability is
-/// published as `Unavailable` until the host publishes it again, so a reason
-/// that asks to be tried again ([`UnsupportedReason::Unavailable`]) is not one
-/// a capability can carry, nor are the reasons about a window or a
-/// registration that has gone ([`NoWindow`](UnsupportedReason::NoWindow),
-/// [`NotRegistered`](UnsupportedReason::NotRegistered)).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum CapabilityAbsence {
-    /// No device of this platform has it
-    /// ([`UnsupportedReason::NotOnThisPlatform`]).
-    #[default]
-    NotOnThisPlatform,
-    /// The platform has it and this device or its operating system build
-    /// lacks it ([`UnsupportedReason::NotOnThisDevice`]).
-    NotOnThisDevice,
-    /// The operating system has it and this host does not implement it yet
-    /// ([`UnsupportedReason::NotYetOnThisHost`]).
-    NotYetOnThisHost,
-}
-
-impl From<CapabilityAbsence> for UnsupportedReason {
-    fn from(absence: CapabilityAbsence) -> Self {
-        absence.reason()
-    }
-}
-
-impl CapabilityAbsence {
-    /// The reason a refusal of the capability answers.
-    #[must_use]
-    pub const fn reason(self) -> UnsupportedReason {
-        match self {
-            Self::NotOnThisPlatform => UnsupportedReason::NotOnThisPlatform,
-            Self::NotOnThisDevice => UnsupportedReason::NotOnThisDevice,
-            Self::NotYetOnThisHost => UnsupportedReason::NotYetOnThisHost,
-        }
-    }
-}
-
-impl From<CapabilityAbsence> for Unsupported {
-    fn from(absence: CapabilityAbsence) -> Self {
-        Self::new(absence.reason())
+/// A capability that lasts can be absent for three of the
+/// [`UnsupportedReason`]s — [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform),
+/// [`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice) or
+/// [`NotYetOnThisHost`](UnsupportedReason::NotYetOnThisHost) — never
+/// [`Unavailable`](UnsupportedReason::Unavailable) (a capability is published as
+/// unavailable until the host publishes it again, so it does not ask to be
+/// retried), [`NoWindow`](UnsupportedReason::NoWindow) or
+/// [`NotRegistered`](UnsupportedReason::NotRegistered). A host records the
+/// reason against the capability and every refusal of it answers
+/// ([`WindowCapabilities::unavailable`](crate::WindowCapabilities::unavailable)).
+impl From<UnsupportedReason> for Unsupported {
+    fn from(reason: UnsupportedReason) -> Self {
+        Self::new(reason)
     }
 }
 

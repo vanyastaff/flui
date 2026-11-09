@@ -27,13 +27,13 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{
-    AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ColorParts,
-    ControlsOffset, DisplayId, DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom,
-    HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale,
-    MeasurementSystem, MemoryPressureLevel, MotionPreference, NativeMouseGeometry,
-    NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
-    RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
-    SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance,
+    AppTitleBar, Availability, CapabilityParts, ColorGamut, ColorParts, ControlsOffset, DisplayId,
+    DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom, HourCycle, ImeEvent,
+    InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale, MeasurementSystem,
+    MemoryPressureLevel, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
+    NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod, RegionOverride, RegionalParts,
+    SessionEndPhase, SizeConstraints, SystemControls, SystemNotice, SystemPreferences,
+    TextWeightPreference, UnsupportedReason, Weekday, WheelParts, WheelStep, WindowAppearance,
     WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMode, WindowState,
     WindowStateParts,
 };
@@ -2022,20 +2022,20 @@ const fn bounds_from_wire([x, y, width, height]: [i32; 4]) -> Bounds<i32> {
     Bounds::new(Point::new(x, y), Size::new(width, height))
 }
 
-fn absence_to_wire(absence: CapabilityAbsence) -> DtoResult<wire::Absence> {
+fn absence_to_wire(absence: UnsupportedReason) -> DtoResult<wire::Absence> {
     Ok(match absence {
-        CapabilityAbsence::NotOnThisPlatform => wire::Absence::NotOnThisPlatform,
-        CapabilityAbsence::NotOnThisDevice => wire::Absence::NotOnThisDevice,
-        CapabilityAbsence::NotYetOnThisHost => wire::Absence::NotYetOnThisHost,
-        _ => return Err(DtoError::Unmirrored("CapabilityAbsence")),
+        UnsupportedReason::NotOnThisPlatform => wire::Absence::NotOnThisPlatform,
+        UnsupportedReason::NotOnThisDevice => wire::Absence::NotOnThisDevice,
+        UnsupportedReason::NotYetOnThisHost => wire::Absence::NotYetOnThisHost,
+        _ => return Err(DtoError::Unmirrored("UnsupportedReason")),
     })
 }
 
-fn absence_from_wire(absence: wire::Absence) -> DtoResult<CapabilityAbsence> {
+fn absence_from_wire(absence: wire::Absence) -> DtoResult<UnsupportedReason> {
     Ok(match absence {
-        wire::Absence::NotOnThisPlatform => CapabilityAbsence::NotOnThisPlatform,
-        wire::Absence::NotOnThisDevice => CapabilityAbsence::NotOnThisDevice,
-        wire::Absence::NotYetOnThisHost => CapabilityAbsence::NotYetOnThisHost,
+        wire::Absence::NotOnThisPlatform => UnsupportedReason::NotOnThisPlatform,
+        wire::Absence::NotOnThisDevice => UnsupportedReason::NotOnThisDevice,
+        wire::Absence::NotYetOnThisHost => UnsupportedReason::NotYetOnThisHost,
         other => return Err(unread(other.name())),
     })
 }
@@ -2205,7 +2205,7 @@ fn availability_from_wire(availability: wire::Availability) -> DtoResult<Availab
 }
 
 fn capability_to_wire(
-    honoured: Result<Availability, CapabilityAbsence>,
+    honoured: Result<Availability, UnsupportedReason>,
 ) -> DtoResult<wire::Capability> {
     Ok(match honoured {
         Ok(Availability::Native) => wire::Capability::Native,
@@ -2221,7 +2221,7 @@ fn capability_to_wire(
 
 fn capability_from_wire(
     capability: wire::Capability,
-) -> DtoResult<Result<Availability, CapabilityAbsence>> {
+) -> DtoResult<Result<Availability, UnsupportedReason>> {
     Ok(match capability {
         wire::Capability::Native => Ok(Availability::Native),
         wire::Capability::Emulated => Ok(Availability::Emulated),
@@ -2232,6 +2232,10 @@ fn capability_from_wire(
 
 /// `capabilities` in the schema, through [`CapabilityParts`]: a capability
 /// added there fails to compile here until it is mirrored.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "the DTO grew past 256 bytes when its absence arrays widened from CapabilityAbsence to UnsupportedReason (T10); a recording snapshot, not per frame"
+)]
 fn capabilities_to_wire(capabilities: CapabilityParts) -> DtoResult<wire::Capabilities> {
     let CapabilityParts {
         sets_title,

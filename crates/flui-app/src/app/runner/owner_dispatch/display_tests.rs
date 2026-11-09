@@ -497,7 +497,7 @@ fn closed_window_receives_nothing() {
 /// A renderer is set up for the colour profile the accepted snapshot gives
 /// the window's display, and a profile change reaches the next one set up.
 fn a_surface_is_set_up_for_the_colour_of_its_window_s_display() {
-    use flui_platform::{CapabilityAbsence, ColorGamut, DisplayColor, Headroom};
+    use flui_platform::{ColorGamut, DisplayColor, Headroom, UnsupportedReason};
 
     let rig = boot();
     let left = open_window(&rig, Some(LEFT));
@@ -518,7 +518,7 @@ fn a_surface_is_set_up_for_the_colour_of_its_window_s_display() {
     rig.controls
         .simulate_display_change(
             rig.ids[RIGHT],
-            DisplayChange::Color(Err(CapabilityAbsence::NotOnThisDevice)),
+            DisplayChange::Color(Err(UnsupportedReason::NotOnThisDevice)),
         )
         .expect("colour gone");
     rig.turns.drive();

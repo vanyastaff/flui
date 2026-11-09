@@ -36,7 +36,7 @@ use std::num::NonZeroU64;
 use flui_foundation::geometry::{Point, Size, WindowMetrics};
 
 use crate::{
-    Availability, CapabilityAbsence, DisplayId, Unsupported, WindowAppearance,
+    Availability, DisplayId, Unsupported, UnsupportedReason, WindowAppearance,
     WindowExecutionState, WindowFrame, WindowInsets,
 };
 
@@ -431,7 +431,7 @@ impl WindowState {
 /// A command's capability this device lacks where its platform has it (an
 /// operating system build below the feature's), or one the operating system
 /// has and the host does not implement yet, is set with
-/// [`unavailable`](Self::unavailable) and its [`CapabilityAbsence`], and
+/// [`unavailable`](Self::unavailable) and its [`UnsupportedReason`], and
 /// admission then refuses the command with
 /// [`NotOnThisDevice`](crate::UnsupportedReason::NotOnThisDevice) or
 /// [`NotYetOnThisHost`](crate::UnsupportedReason::NotYetOnThisHost) instead of
@@ -532,10 +532,10 @@ pub struct WindowCapabilities {
     pub reports_system_gestures: Availability,
     /// Why each command's capability is `Unavailable`, indexed by [`Slot`];
     /// read only while it is.
-    absences: [CapabilityAbsence; Slot::COUNT],
+    absences: [UnsupportedReason; Slot::COUNT],
     /// Why each report is `Unavailable`, indexed by [`Report`]; read only
     /// while it is.
-    report_absences: [CapabilityAbsence; Report::COUNT],
+    report_absences: [UnsupportedReason; Report::COUNT],
     /// The window whose snapshot publishes these capabilities; `None` for
     /// capabilities built by hand. Kept by [`WindowState::successor`].
     owner: Option<CapabilitiesOwner>,
@@ -623,7 +623,7 @@ impl WindowCapabilities {
     }
 
     /// `report` made `Unavailable` for `absence`.
-    const fn without_report(mut self, report: Report, absence: CapabilityAbsence) -> Self {
+    const fn without_report(mut self, report: Report, absence: UnsupportedReason) -> Self {
         *self.report_mut(report) = Availability::Unavailable;
         self.report_absences[report as usize] = absence;
         self
@@ -632,13 +632,13 @@ impl WindowCapabilities {
     /// How the window makes `report`, or why it does not.
     const fn report_or_absence(&self, report: Report) -> Result<Availability, Unsupported> {
         match self.report_absence_in_force(report) {
-            Some(absence) => Err(Unsupported::new(absence.reason())),
+            Some(absence) => Err(Unsupported::new(absence)),
             None => Ok(self.report(report)),
         }
     }
 
     /// `report`'s absence, while it is `Unavailable`.
-    const fn report_absence_in_force(&self, report: Report) -> Option<CapabilityAbsence> {
+    const fn report_absence_in_force(&self, report: Report) -> Option<UnsupportedReason> {
         match self.report(report) {
             Availability::Unavailable => Some(self.report_absences[report as usize]),
             Availability::Native | Availability::Emulated => None,
@@ -646,7 +646,7 @@ impl WindowCapabilities {
     }
 
     /// What `report` reports, or its absence while it is `Unavailable`.
-    const fn report_in(&self, report: Report) -> Result<Availability, CapabilityAbsence> {
+    const fn report_in(&self, report: Report) -> Result<Availability, UnsupportedReason> {
         match self.report_absence_in_force(report) {
             Some(absence) => Err(absence),
             None => Ok(self.report(report)),
@@ -654,7 +654,7 @@ impl WindowCapabilities {
     }
 
     /// Every report's absence in force, for equality and hashing.
-    const fn report_absences_in_force(&self) -> [Option<CapabilityAbsence>; Report::COUNT] {
+    const fn report_absences_in_force(&self) -> [Option<UnsupportedReason>; Report::COUNT] {
         let mut absences = [None; Report::COUNT];
         let mut at = 0;
         while at < Report::COUNT {
@@ -665,7 +665,7 @@ impl WindowCapabilities {
     }
 
     /// `report` set from its parts: what it reports, or its absence.
-    const fn set_report(&mut self, report: Report, parts: Result<Availability, CapabilityAbsence>) {
+    const fn set_report(&mut self, report: Report, parts: Result<Availability, UnsupportedReason>) {
         match parts {
             Ok(availability) => *self.report_mut(report) = availability,
             Err(absence) => {
@@ -733,8 +733,8 @@ command_capabilities! {
 }
 
 /// The absence of a capability nothing marked: the platform's.
-const NOT_ON_THIS_PLATFORM: [CapabilityAbsence; Slot::COUNT] =
-    [CapabilityAbsence::NotOnThisPlatform; Slot::COUNT];
+const NOT_ON_THIS_PLATFORM: [UnsupportedReason; Slot::COUNT] =
+    [UnsupportedReason::NotOnThisPlatform; Slot::COUNT];
 
 impl WindowCapabilities {
     /// Every field but the revision, for equality and hashing. Destructured,
@@ -821,7 +821,7 @@ impl WindowCapabilities {
         reports_keyboard_inset: Availability::Unavailable,
         reports_system_gestures: Availability::Unavailable,
         absences: NOT_ON_THIS_PLATFORM,
-        report_absences: [CapabilityAbsence::NotOnThisPlatform; Report::COUNT],
+        report_absences: [UnsupportedReason::NotOnThisPlatform; Report::COUNT],
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -852,7 +852,7 @@ impl WindowCapabilities {
         reports_keyboard_inset: Availability::Native,
         reports_system_gestures: Availability::Native,
         absences: NOT_ON_THIS_PLATFORM,
-        report_absences: [CapabilityAbsence::NotOnThisPlatform; Report::COUNT],
+        report_absences: [UnsupportedReason::NotOnThisPlatform; Report::COUNT],
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -898,24 +898,24 @@ impl WindowCapabilities {
     /// `absence`, which admission then answers for `command`.
     ///
     /// The absence says where the capability is missing:
-    /// [`NotOnThisDevice`](CapabilityAbsence::NotOnThisDevice) where the
+    /// [`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice) where the
     /// platform has it and this device — its operating system build or its
     /// hardware — lacks it,
-    /// [`NotYetOnThisHost`](CapabilityAbsence::NotYetOnThisHost) where the
+    /// [`NotYetOnThisHost`](UnsupportedReason::NotYetOnThisHost) where the
     /// operating system has it and the host does not implement it yet, and
-    /// [`NotOnThisPlatform`](CapabilityAbsence::NotOnThisPlatform), what a
+    /// [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform), what a
     /// field set to `Unavailable` by hand answers, where no device of the
     /// platform has it. The mode every window has ([`WindowMode::Normal`])
     /// cannot be taken away.
     ///
     /// ```
     /// use flui_platform::{
-    ///     CapabilityAbsence, UnsupportedReason, WindowCapabilities, WindowCommand, WindowMaterial,
+    ///     UnsupportedReason, UnsupportedReason, WindowCapabilities, WindowCommand, WindowMaterial,
     /// };
     ///
     /// let material = WindowCommand::SetMaterial(WindowMaterial::System);
     /// let capabilities =
-    ///     WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NotYetOnThisHost);
+    ///     WindowCapabilities::ALL.unavailable(&material, UnsupportedReason::NotYetOnThisHost);
     /// let refused = material.admit(&capabilities).unwrap_err();
     /// assert_eq!(
     ///     refused.unsupported().map(|absent| absent.reason),
@@ -926,7 +926,7 @@ impl WindowCapabilities {
     pub const fn unavailable(
         mut self,
         command: &WindowCommand,
-        absence: CapabilityAbsence,
+        absence: UnsupportedReason,
     ) -> Self {
         let Some(slot) = Self::slot(command) else {
             return self;
@@ -942,7 +942,7 @@ impl WindowCapabilities {
     /// [`WindowCommand::SetFrame`] to an [`AppTitleBar`](crate::AppTitleBar),
     /// in a constant.
     #[must_use]
-    pub const fn without_app_title_bar(mut self, absence: CapabilityAbsence) -> Self {
+    pub const fn without_app_title_bar(mut self, absence: UnsupportedReason) -> Self {
         self.app_title_bar = Availability::Unavailable;
         self.absences[Slot::SetAppTitleBar as usize] = absence;
         self
@@ -950,17 +950,17 @@ impl WindowCapabilities {
 
     /// Why admission refuses `command` when its capability is `Unavailable`:
     /// the absence [`unavailable`](Self::unavailable) gave it or, for a field
-    /// set by hand, [`NotOnThisPlatform`](CapabilityAbsence::NotOnThisPlatform).
+    /// set by hand, [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform).
     /// While the capability is available there is no refusal, and this answers
     /// `NotOnThisPlatform` too.
     #[must_use]
-    pub const fn refusal(&self, command: &WindowCommand) -> CapabilityAbsence {
+    pub const fn refusal(&self, command: &WindowCommand) -> UnsupportedReason {
         match Self::slot(command) {
             Some(slot) => match self.absence_in_force(slot) {
                 Some(absence) => absence,
-                None => CapabilityAbsence::NotOnThisPlatform,
+                None => UnsupportedReason::NotOnThisPlatform,
             },
-            None => CapabilityAbsence::NotOnThisPlatform,
+            None => UnsupportedReason::NotOnThisPlatform,
         }
     }
 
@@ -969,17 +969,17 @@ impl WindowCapabilities {
     /// [`presentation_feedback`](Self::presentation_feedback) then answers.
     ///
     /// ```
-    /// use flui_platform::{CapabilityAbsence, UnsupportedReason, WindowCapabilities};
+    /// use flui_platform::{UnsupportedReason, UnsupportedReason, WindowCapabilities};
     ///
     /// let capabilities = WindowCapabilities::ALL
-    ///     .without_presentation_feedback(CapabilityAbsence::NotYetOnThisHost);
+    ///     .without_presentation_feedback(UnsupportedReason::NotYetOnThisHost);
     /// assert_eq!(
     ///     capabilities.presentation_feedback().map_err(|absent| absent.reason),
     ///     Err(UnsupportedReason::NotYetOnThisHost)
     /// );
     /// ```
     #[must_use]
-    pub const fn without_presentation_feedback(self, absence: CapabilityAbsence) -> Self {
+    pub const fn without_presentation_feedback(self, absence: UnsupportedReason) -> Self {
         self.without_report(Report::Presentation, absence)
     }
 
@@ -1001,7 +1001,7 @@ impl WindowCapabilities {
     /// because of `absence`, which [`keyboard_inset`](Self::keyboard_inset)
     /// then answers.
     #[must_use]
-    pub const fn without_keyboard_inset(self, absence: CapabilityAbsence) -> Self {
+    pub const fn without_keyboard_inset(self, absence: UnsupportedReason) -> Self {
         self.without_report(Report::KeyboardInset, absence)
     }
 
@@ -1024,7 +1024,7 @@ impl WindowCapabilities {
     /// `Unavailable` because of `absence`, which
     /// [`system_gestures`](Self::system_gestures) then answers.
     #[must_use]
-    pub const fn without_system_gestures(self, absence: CapabilityAbsence) -> Self {
+    pub const fn without_system_gestures(self, absence: UnsupportedReason) -> Self {
         self.without_report(Report::SystemGestures, absence)
     }
 
@@ -1043,7 +1043,7 @@ impl WindowCapabilities {
 
     /// The absence recorded for `slot`, while its capability is `Unavailable`;
     /// `None` while it is available, where a recorded absence means nothing.
-    const fn absence_in_force(&self, slot: Slot) -> Option<CapabilityAbsence> {
+    const fn absence_in_force(&self, slot: Slot) -> Option<UnsupportedReason> {
         match self.field(slot) {
             Availability::Unavailable => Some(self.absences[slot as usize]),
             Availability::Native | Availability::Emulated => None,
@@ -1052,7 +1052,7 @@ impl WindowCapabilities {
 
     /// Every slot's absence in force, for equality and hashing: an absence left
     /// behind in a slot that became available again is no difference.
-    const fn absences_in_force(&self) -> [Option<CapabilityAbsence>; Slot::COUNT] {
+    const fn absences_in_force(&self) -> [Option<UnsupportedReason>; Slot::COUNT] {
         let mut in_force = [None; Slot::COUNT];
         let mut at = 0;
         while at < Slot::COUNT {
@@ -1492,44 +1492,44 @@ pub struct WindowStateParts {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapabilityParts {
     /// [`WindowCapabilities::sets_title`].
-    pub sets_title: Result<Availability, CapabilityAbsence>,
+    pub sets_title: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::sets_position`].
-    pub sets_position: Result<Availability, CapabilityAbsence>,
+    pub sets_position: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::sets_size`].
-    pub sets_size: Result<Availability, CapabilityAbsence>,
+    pub sets_size: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::sets_constraints`].
-    pub sets_constraints: Result<Availability, CapabilityAbsence>,
+    pub sets_constraints: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::sets_resizable`].
-    pub sets_resizable: Result<Availability, CapabilityAbsence>,
+    pub sets_resizable: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::sets_frame`].
-    pub sets_frame: Result<Availability, CapabilityAbsence>,
+    pub sets_frame: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::app_title_bar`].
-    pub app_title_bar: Result<Availability, CapabilityAbsence>,
+    pub app_title_bar: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::minimizes`].
-    pub minimizes: Result<Availability, CapabilityAbsence>,
+    pub minimizes: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::maximizes`].
-    pub maximizes: Result<Availability, CapabilityAbsence>,
+    pub maximizes: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::enters_fullscreen`].
-    pub enters_fullscreen: Result<Availability, CapabilityAbsence>,
+    pub enters_fullscreen: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::hides`].
-    pub hides: Result<Availability, CapabilityAbsence>,
+    pub hides: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::shows`].
-    pub shows: Result<Availability, CapabilityAbsence>,
+    pub shows: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::activates`].
-    pub activates: Result<Availability, CapabilityAbsence>,
+    pub activates: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::closes`].
-    pub closes: Result<Availability, CapabilityAbsence>,
+    pub closes: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::material`].
-    pub material: Result<Availability, CapabilityAbsence>,
+    pub material: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::reports_presentation`], with
     /// [`WindowCapabilities::presentation_feedback`]'s absence.
-    pub reports_presentation: Result<Availability, CapabilityAbsence>,
+    pub reports_presentation: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::reports_keyboard_inset`], with
     /// [`WindowCapabilities::keyboard_inset`]'s absence.
-    pub reports_keyboard_inset: Result<Availability, CapabilityAbsence>,
+    pub reports_keyboard_inset: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::reports_system_gestures`], with
     /// [`WindowCapabilities::system_gestures`]'s absence.
-    pub reports_system_gestures: Result<Availability, CapabilityAbsence>,
+    pub reports_system_gestures: Result<Availability, UnsupportedReason>,
     /// [`WindowCapabilities::observes_position`].
     pub observes_position: Availability,
     /// [`WindowCapabilities::observes_minimized`].
@@ -1644,7 +1644,7 @@ impl WindowStateParts {
 
 impl WindowCapabilities {
     /// What `slot` honours, or its absence while it is `Unavailable`.
-    const fn honoured_in(&self, slot: Slot) -> Result<Availability, CapabilityAbsence> {
+    const fn honoured_in(&self, slot: Slot) -> Result<Availability, UnsupportedReason> {
         match self.absence_in_force(slot) {
             Some(absence) => Err(absence),
             None => Ok(self.field(slot)),

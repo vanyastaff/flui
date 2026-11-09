@@ -13,7 +13,7 @@ use flui_foundation::geometry::Bounds;
 #[cfg(any(feature = "x11", test))]
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::{
-    CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, DisplayKey, RefreshPeriod,
+    DisplayColor, DisplayId, DisplayInfo, DisplayKey, RefreshPeriod, UnsupportedReason,
 };
 
 /// How an output is told apart from the others.
@@ -47,7 +47,7 @@ pub(crate) struct OutputView {
     pub persistent_key: Option<String>,
     /// The output's colour, or why the protocol gives none; see
     /// [`DisplayInfo::color`].
-    pub color: Result<DisplayColor, CapabilityAbsence>,
+    pub color: Result<DisplayColor, UnsupportedReason>,
 }
 
 /// The numbers one display answers to, with its id.
@@ -166,7 +166,7 @@ mod tests {
             refresh_period: None,
             is_primary: false,
             persistent_key: None,
-            color: Err(CapabilityAbsence::NotYetOnThisHost),
+            color: Err(UnsupportedReason::NotYetOnThisHost),
         }
     }
 

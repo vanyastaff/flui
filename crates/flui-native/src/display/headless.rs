@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    CapabilityAbsence, ColorGamut, DisplayColor, DisplayId, DisplayInfo, DisplayKey,
-    DisplayRegistry, DisplayRevisionExhausted, DisplaySnapshot,
+    ColorGamut, DisplayColor, DisplayId, DisplayInfo, DisplayKey, DisplayRegistry,
+    DisplayRevisionExhausted, DisplaySnapshot, UnsupportedReason,
 };
 use parking_lot::Mutex;
 
@@ -33,7 +33,7 @@ pub struct DisplaySpec {
     scale_factor: f64,
     refresh_period: Option<Duration>,
     persistent_key: Option<String>,
-    color: Result<DisplayColor, CapabilityAbsence>,
+    color: Result<DisplayColor, UnsupportedReason>,
 }
 
 impl DisplaySpec {
@@ -54,7 +54,7 @@ impl DisplaySpec {
     /// The display's colour profile, as [`DisplayInfo::color`] reports it: a
     /// colour space and headroom, or the reason a platform would give none.
     #[must_use]
-    pub fn with_color(mut self, color: Result<DisplayColor, CapabilityAbsence>) -> Self {
+    pub fn with_color(mut self, color: Result<DisplayColor, UnsupportedReason>) -> Self {
         self.color = color;
         self
     }
@@ -104,7 +104,7 @@ pub enum DisplayChange {
     Name(String),
     /// The display's colour profile changed: HDR switched on or off, the
     /// headroom moved, or the colour can no longer be read.
-    Color(Result<DisplayColor, CapabilityAbsence>),
+    Color(Result<DisplayColor, UnsupportedReason>),
 }
 
 /// Why a simulated display change or move was refused.

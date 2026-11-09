@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    CapabilityAbsence, ColorGamut, DisplayColor, DisplayId, DisplayInfo, DisplayKey,
-    DisplayRegistry, DisplaySnapshot, DynamicRange, Headroom, InvalidHeadroom, RefreshPeriod,
-    SurfaceColorSpace, UnsupportedReason, WindowDisplay,
+    ColorGamut, DisplayColor, DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot,
+    DynamicRange, Headroom, InvalidHeadroom, RefreshPeriod, SurfaceColorSpace, UnsupportedReason,
+    WindowDisplay,
 };
 
 fn same_connector_after_replug_keeps_the_id() {
@@ -395,7 +395,7 @@ fn display_colour_queries_answer_unsupported_with_the_reason() {
 
     let browser = unread.clone().with_color(Ok(DisplayColor::high(
         ColorGamut::DisplayP3,
-        Err(CapabilityAbsence::NotOnThisPlatform),
+        Err(UnsupportedReason::NotOnThisPlatform),
     )));
     assert_eq!(
         browser.color_space(),
@@ -422,7 +422,7 @@ fn display_colour_queries_answer_unsupported_with_the_reason() {
     );
     assert_eq!(sdr.headroom(), Ok(Headroom::SDR));
 
-    let absent = unread.with_color(Err(CapabilityAbsence::NotOnThisDevice));
+    let absent = unread.with_color(Err(UnsupportedReason::NotOnThisDevice));
     assert_eq!(
         absent.headroom().map_err(|refused| refused.reason),
         Err(UnsupportedReason::NotOnThisDevice)

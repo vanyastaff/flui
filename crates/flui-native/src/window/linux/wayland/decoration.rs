@@ -10,7 +10,7 @@
 
 #![forbid(unsafe_code)]
 
-use flui_platform::CapabilityAbsence;
+use flui_platform::UnsupportedReason;
 
 /// `zxdg_toplevel_decoration_v1.mode` values.
 const CLIENT_SIDE: u32 = 1;
@@ -99,11 +99,11 @@ impl Decoration {
         not(wayland_host),
         allow(dead_code, reason = "read by the Wayland host's window alone")
     )]
-    pub(crate) const fn app_title_bar_absence(self) -> Option<CapabilityAbsence> {
+    pub(crate) const fn app_title_bar_absence(self) -> Option<UnsupportedReason> {
         if self.draws_own {
             self.absence()
         } else {
-            Some(CapabilityAbsence::NotOnThisDevice)
+            Some(UnsupportedReason::NotOnThisDevice)
         }
     }
 
@@ -119,7 +119,7 @@ impl Decoration {
     /// frame has none where the compositor draws none, and one the
     /// compositor answered with the other mode is overruled either way.
     /// Until the compositor answers, the request stands.
-    pub(crate) const fn absence(self) -> Option<CapabilityAbsence> {
+    pub(crate) const fn absence(self) -> Option<UnsupportedReason> {
         let (answered_with, decided) = match (self.answered, self.told) {
             (true, Some(drawer)) => (Some(drawer), true),
             _ => (None, false),
@@ -130,7 +130,7 @@ impl Decoration {
             decided && matches!(answered_with, Some(FrameDrawer::Compositor)) != self.requested
         };
         if overruled || (!self.offered && !self.draws_own) {
-            Some(CapabilityAbsence::NotOnThisDevice)
+            Some(UnsupportedReason::NotOnThisDevice)
         } else {
             None
         }
@@ -148,7 +148,7 @@ mod tests {
     fn a_window_has_the_frame_its_compositor_leaves_it() {
         use Drawn::{Client as Own, Compositor as Theirs, Nobody};
         use FrameDrawer::{Client, Compositor};
-        let overruled = Some(CapabilityAbsence::NotOnThisDevice);
+        let overruled = Some(UnsupportedReason::NotOnThisDevice);
         let decoration = |offered, requested, told, answered| Decoration {
             offered,
             draws_own: true,
@@ -238,7 +238,7 @@ mod tests {
             told,
             answered,
         };
-        let overruled = Some(CapabilityAbsence::NotOnThisDevice);
+        let overruled = Some(UnsupportedReason::NotOnThisDevice);
         let bare = none(false, true, None, false);
         assert_eq!(bare.drawn(), Drawn::Nobody);
         assert_eq!(bare.absence(), overruled);

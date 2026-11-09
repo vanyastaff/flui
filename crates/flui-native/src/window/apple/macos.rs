@@ -1471,7 +1471,7 @@ impl PlatformWindow for MacOSWindow {
         _hint: flui_platform::FrameRateHint,
     ) -> Result<(), flui_platform::Unsupported> {
         let absence = self.displays.get().map_or(
-            flui_platform::CapabilityAbsence::NotOnThisDevice,
+            flui_platform::UnsupportedReason::NotOnThisDevice,
             |displays| frame_rate_absence(displays.version()),
         );
         Err(absence.into())

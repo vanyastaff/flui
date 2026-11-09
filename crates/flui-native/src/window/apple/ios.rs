@@ -1126,7 +1126,7 @@ pub struct IOSWindow {
     screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
     id: WindowId,
     /// Why the window does not set the pointer's shape on this device.
-    pointer: flui_platform::CapabilityAbsence,
+    pointer: flui_platform::UnsupportedReason,
     /// The input regions last projected, and the screen edges they reach.
     input_regions: parking_lot::Mutex<(
         crate::input::regions::ProjectedInputRegions,

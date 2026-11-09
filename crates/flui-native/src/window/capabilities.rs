@@ -3,7 +3,7 @@
 //! reads their facts come from, so every host's tests run them.
 //!
 //! Each absence is the platform's, the device's or the host's
-//! ([`CapabilityAbsence`]): a feature the OS gained in a version above the
+//! ([`UnsupportedReason`]): a feature the OS gained in a version above the
 //! floor is gated ([`Since`](crate::version::gate::Since)) and answers
 //! `NotOnThisDevice` below it, and `NotYetOnThisHost` from it on while the
 //! host does not drive it.
@@ -22,11 +22,11 @@
 /// none; the choreographer's frame timelines name when a frame is due on
 /// screen, which is not that it was.
 #[cfg(any(target_os = "ios", target_os = "android", test))]
-pub(crate) const PRESENTATION: CapabilityAbsence = CapabilityAbsence::NotYetOnThisHost;
+pub(crate) const PRESENTATION: UnsupportedReason = UnsupportedReason::NotYetOnThisHost;
 
 #[cfg(any(target_os = "ios", target_os = "android", test))]
 use flui_platform::Availability;
-use flui_platform::{CapabilityAbsence, WindowCapabilities, WindowCommand, WindowMaterial};
+use flui_platform::{UnsupportedReason, WindowCapabilities, WindowCommand, WindowMaterial};
 
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
 use crate::version::gate::Gate;
@@ -54,7 +54,7 @@ const MATERIAL: WindowCommand = WindowCommand::SetMaterial(WindowMaterial::Opaqu
 #[cfg(any(target_os = "ios", test))]
 pub(crate) const fn scene_capabilities() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE
-        .unavailable(&MATERIAL, CapabilityAbsence::NotYetOnThisHost)
+        .unavailable(&MATERIAL, UnsupportedReason::NotYetOnThisHost)
         .without_presentation_feedback(PRESENTATION);
     capabilities.reports_keyboard_inset = Availability::Native;
     capabilities.closes = Availability::Native;
@@ -79,10 +79,10 @@ impl Gate for PointerInteraction {
 /// shows a pointer whose style a view chooses, which this host does not set
 /// yet; an iPhone shows none, nor does an iPad below 13.4.
 #[cfg(any(target_os = "ios", test))]
-pub(crate) fn pointer_absence(version: AppleVersion, shows_a_pointer: bool) -> CapabilityAbsence {
+pub(crate) fn pointer_absence(version: AppleVersion, shows_a_pointer: bool) -> UnsupportedReason {
     match version.since::<PointerInteraction>() {
-        Some(_) if shows_a_pointer => CapabilityAbsence::NotYetOnThisHost,
-        Some(_) | None => CapabilityAbsence::NotOnThisDevice,
+        Some(_) if shows_a_pointer => UnsupportedReason::NotYetOnThisHost,
+        Some(_) | None => UnsupportedReason::NotOnThisDevice,
     }
 }
 
@@ -121,7 +121,7 @@ pub(crate) const fn appkit_window_capabilities(owner_is_main: bool) -> WindowCap
     if owner_is_main {
         capabilities.material = Native;
     } else {
-        capabilities = capabilities.unavailable(&MATERIAL, CapabilityAbsence::NotYetOnThisHost);
+        capabilities = capabilities.unavailable(&MATERIAL, UnsupportedReason::NotYetOnThisHost);
     }
     capabilities
 }
@@ -144,10 +144,10 @@ impl Gate for ViewDisplayLink {
 /// host paces its frames without it. winit's macOS backend carries none either, and
 /// answers the same.
 #[cfg(any(target_os = "macos", test))]
-pub(crate) fn frame_rate_absence(version: MacOSVersion) -> CapabilityAbsence {
+pub(crate) fn frame_rate_absence(version: MacOSVersion) -> UnsupportedReason {
     match version.since::<ViewDisplayLink>() {
-        Some(_) => CapabilityAbsence::NotYetOnThisHost,
-        None => CapabilityAbsence::NotOnThisDevice,
+        Some(_) => UnsupportedReason::NotYetOnThisHost,
+        None => UnsupportedReason::NotOnThisDevice,
     }
 }
 
@@ -185,7 +185,7 @@ pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities 
     if facts.api.since::<SystemGestureInsets>().is_some() {
         capabilities.reports_system_gestures = Availability::Native;
     } else {
-        capabilities = capabilities.without_system_gestures(CapabilityAbsence::NotOnThisDevice);
+        capabilities = capabilities.without_system_gestures(UnsupportedReason::NotOnThisDevice);
     }
     capabilities.frame_rate_hint = facts.frame_rate_hint;
     capabilities
@@ -196,11 +196,11 @@ pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities 
 /// device blurs across windows, which this host does not ask for yet; below
 /// API 31, or where cross-window blur is off, this device has none.
 #[cfg(any(target_os = "android", test))]
-pub(crate) fn material_absence(api: AndroidApi, cross_window_blur: bool) -> CapabilityAbsence {
+pub(crate) fn material_absence(api: AndroidApi, cross_window_blur: bool) -> UnsupportedReason {
     if api.since::<BackgroundBlur>().is_some() && cross_window_blur {
-        CapabilityAbsence::NotYetOnThisHost
+        UnsupportedReason::NotYetOnThisHost
     } else {
-        CapabilityAbsence::NotOnThisDevice
+        UnsupportedReason::NotOnThisDevice
     }
 }
 
@@ -208,10 +208,10 @@ pub(crate) fn material_absence(api: AndroidApi, cross_window_blur: bool) -> Capa
 /// view shows a `PointerIcon` for a mouse or stylus, which this host does not
 /// set yet; below it the system draws its own pointer.
 #[cfg(any(target_os = "android", test))]
-pub(crate) fn pointer_icon_absence(api: AndroidApi) -> CapabilityAbsence {
+pub(crate) fn pointer_icon_absence(api: AndroidApi) -> UnsupportedReason {
     match api.since::<PointerIcons>() {
-        Some(_) => CapabilityAbsence::NotYetOnThisHost,
-        None => CapabilityAbsence::NotOnThisDevice,
+        Some(_) => UnsupportedReason::NotYetOnThisHost,
+        None => UnsupportedReason::NotOnThisDevice,
     }
 }
 
@@ -289,7 +289,7 @@ pub(crate) fn activity_color_mode(
 
 #[cfg(test)]
 mod tests {
-    use flui_platform::{Availability, CapabilityAbsence, WindowCapabilities};
+    use flui_platform::{Availability, UnsupportedReason, WindowCapabilities};
 
     use super::{
         ActivityFacts, AppleVersion, MATERIAL, MacOSVersion, PointerInteraction,
@@ -302,14 +302,14 @@ mod tests {
 
     /// How a window's capabilities refuse its material; `None` where it draws
     /// one.
-    fn material(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
+    fn material(capabilities: &WindowCapabilities) -> Option<UnsupportedReason> {
         (capabilities.availability(&MATERIAL) == Availability::Unavailable)
             .then(|| capabilities.refusal(&MATERIAL))
     }
 
     /// How a window's capabilities refuse a title bar of the application's;
     /// `None` where it takes one.
-    fn app_title_bar(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
+    fn app_title_bar(capabilities: &WindowCapabilities) -> Option<UnsupportedReason> {
         let command = flui_platform::WindowCommand::SetFrame(
             flui_platform::WindowFrame::AppTitleBar(flui_platform::AppTitleBar::new()),
         );
@@ -319,27 +319,27 @@ mod tests {
 
     /// Why a window's capabilities report no presentation; `None` where they
     /// report one.
-    fn presentation(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
+    fn presentation(capabilities: &WindowCapabilities) -> Option<UnsupportedReason> {
         use flui_platform::UnsupportedReason;
         capabilities
             .presentation_feedback()
             .err()
             .map(|absent| match absent.reason {
-                UnsupportedReason::NotYetOnThisHost => CapabilityAbsence::NotYetOnThisHost,
-                UnsupportedReason::NotOnThisDevice => CapabilityAbsence::NotOnThisDevice,
-                _ => CapabilityAbsence::NotOnThisPlatform,
+                UnsupportedReason::NotYetOnThisHost => UnsupportedReason::NotYetOnThisHost,
+                UnsupportedReason::NotOnThisDevice => UnsupportedReason::NotOnThisDevice,
+                _ => UnsupportedReason::NotOnThisPlatform,
             })
     }
 
     /// The reason `answer` gives for a missing report, or `None` when it reports.
     fn report(
         answer: Result<flui_platform::Availability, flui_platform::Unsupported>,
-    ) -> Option<CapabilityAbsence> {
+    ) -> Option<UnsupportedReason> {
         use flui_platform::UnsupportedReason;
         answer.err().map(|absent| match absent.reason {
-            UnsupportedReason::NotYetOnThisHost => CapabilityAbsence::NotYetOnThisHost,
-            UnsupportedReason::NotOnThisDevice => CapabilityAbsence::NotOnThisDevice,
-            _ => CapabilityAbsence::NotOnThisPlatform,
+            UnsupportedReason::NotYetOnThisHost => UnsupportedReason::NotYetOnThisHost,
+            UnsupportedReason::NotOnThisDevice => UnsupportedReason::NotOnThisDevice,
+            _ => UnsupportedReason::NotOnThisPlatform,
         })
     }
 
@@ -355,11 +355,11 @@ mod tests {
     /// `None` where the capability is there.
     #[test]
     fn native_capability_absences() {
-        use CapabilityAbsence::{NotOnThisDevice, NotYetOnThisHost};
+        use UnsupportedReason::{NotOnThisDevice, NotYetOnThisHost};
         let ios = AppleVersion::new;
         let macos = MacOSVersion::new;
         let api = AndroidApi::from_level;
-        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 24] = [
+        let rows: [(&str, Option<UnsupportedReason>, Option<UnsupportedReason>); 24] = [
             (
                 "UIKit material",
                 material(&scene_capabilities()),

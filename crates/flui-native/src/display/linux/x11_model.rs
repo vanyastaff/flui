@@ -27,7 +27,7 @@
 //!   window, which this host does not parse yet.
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::{CapabilityAbsence, DisplayKey, RefreshPeriod};
+use flui_platform::{DisplayKey, RefreshPeriod, UnsupportedReason};
 
 use super::view::{Identity, OutputView, intersection};
 
@@ -131,7 +131,7 @@ impl RandrState {
             refresh_period,
             is_primary: monitor.is_primary,
             persistent_key,
-            color: Err(CapabilityAbsence::NotYetOnThisHost),
+            color: Err(UnsupportedReason::NotYetOnThisHost),
         })
     }
 }
