@@ -7,8 +7,9 @@
 //! then drives a real headless frame and exposes the resulting render-node
 //! geometry. The tree is the root of a [`HeadlessHost`](crate::HeadlessHost):
 //! every frame is the UI runtime's own `UiRuntime::pump` on a manual clock, under
-//! the UI runtime's root scopes (`GestureArenaScope`, `VsyncScope`, `FocusRoot`,
-//! `MediaQuery`), exactly as a runner drives it on screen. No GPU, no OS
+//! the UI runtime's root scopes (`GestureArenaScope`, `VsyncScope`, `FocusTreeRoot`,
+//! `MediaQuery`) and `flui_widgets::app_root`, exactly as a runner drives it on
+//! screen. No GPU, no OS
 //! window, no process-global state, so the tests are order-independent and
 //! run in parallel.
 //!

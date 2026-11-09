@@ -3,8 +3,7 @@
 use super::UiRuntime;
 #[cfg(any(test, feature = "testing"))]
 use flui_foundation::PresentationId;
-use flui_view::environment::{GestureArenaScope, VsyncScope};
-use flui_view::focus_root::FocusRoot;
+use flui_view::environment::{FocusTreeRoot, GestureArenaScope, VsyncScope};
 
 impl UiRuntime {
     // ========================================================================
@@ -53,7 +52,7 @@ impl UiRuntime {
         // Install this ui_runtime's three exact owner-driven capabilities.
         // GestureArenaScope is outermost so every descendant recognizer
         // shares one binding-driven arena, VsyncScope carries the animation
-        // registry, and FocusRoot publishes this presentation's exact focus
+        // registry, and FocusTreeRoot publishes this presentation's exact focus
         // tree. These wrappers have no render object, so the render root is
         // unchanged.
         // The root MediaQuery publishes the ui_runtime's live platform data
@@ -64,7 +63,7 @@ impl UiRuntime {
             std::rc::Rc::clone(self.media_query()),
             flui_view::view::ViewExt::boxed(view.clone()),
         );
-        let focused = FocusRoot::new(with_media_query);
+        let focused = FocusTreeRoot::new(with_media_query);
         let animated = VsyncScope::new(self.vsync(), focused);
         let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated)
             .settings(self.presentations.primary().gesture_settings.provider())
@@ -105,7 +104,7 @@ impl UiRuntime {
                 "BUG: attach_root_widget_to_for_test given a presentation id this ui_runtime does \
                  not host",
             );
-            let focused = FocusRoot::new(view.clone());
+            let focused = FocusTreeRoot::new(view.clone());
             let animated = VsyncScope::new(presentation.vsync(), focused);
             let wrapped = GestureArenaScope::new(presentation.gestures().arena().clone(), animated)
                 .settings(presentation.gesture_settings.provider())
@@ -153,7 +152,7 @@ impl UiRuntime {
                 std::rc::Rc::clone(&presentation.media_query),
                 flui_view::view::ViewExt::boxed(view.clone()),
             );
-            let focused = FocusRoot::new(with_media_query);
+            let focused = FocusTreeRoot::new(with_media_query);
             let animated = VsyncScope::new(presentation.vsync(), focused);
             let wrapped = GestureArenaScope::new(presentation.gestures().arena().clone(), animated)
                 .settings(presentation.gesture_settings.provider())
@@ -179,7 +178,7 @@ impl UiRuntime {
     /// except the root `RenderView` is born at the real window size instead
     /// of the framework's fallback default. This is the runner's bootstrap
     /// entry point, and wraps the root in the same `GestureArenaScope`,
-    /// `VsyncScope`, `FocusRoot` and `MediaQuery` as that method (see its
+    /// `VsyncScope`, `FocusTreeRoot` and `MediaQuery` as that method (see its
     /// doc for the auto-wrap invariants).
     ///
     /// # Errors
@@ -215,7 +214,7 @@ impl UiRuntime {
             std::rc::Rc::clone(self.media_query()),
             flui_view::view::ViewExt::boxed(view.clone()),
         );
-        let focused = FocusRoot::new(with_media_query);
+        let focused = FocusTreeRoot::new(with_media_query);
         let animated = VsyncScope::new(self.vsync(), focused);
         let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated)
             .settings(self.presentations.primary().gesture_settings.provider())

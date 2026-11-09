@@ -109,9 +109,10 @@ substrate driver over raw owners, which the raw-owner suites still use.
   tests use only `log_capture`, which names no type of either crate. The
   compiler does not refuse more: a `flui-widgets` unit test could hand
   `widgets::lay_out` a view (the `View` trait lives in `flui-view`, of which
-  there is one copy), and its lookups of `MediaQuery`, `FocusRoot` or
-  `VsyncScope` would then silently miss the scopes the UI runtime installed from
-  the other copy. Review keeps harness tests in `tests/`.
+  there is one copy), and its lookups of the catalog's own inherited views
+  (the focus parents `Focus` and `app_root` publish) would then silently miss
+  the ones the host installed from the other copy. Review keeps harness tests
+  in `tests/`.
 - **The UI runtime stays behind its host.** `HeadlessHost::UI runtime` and
   `HeadlessHost::enter` are crate-private, and `LaidOut` and `Harness` hand
   out narrow accessors (the window's cursor, the accessibility action
@@ -120,6 +121,11 @@ substrate driver over raw owners, which the raw-owner suites still use.
   `widgets`, so a public path to `UiRuntime` here would open the UI runtime's frame
   entry points (ADR-0083 §2) to every application with the `testing`
   feature.
+- **A headless root is the root a runner attaches.** `HeadlessHost::attach`
+  and `attach_to` pass the view through `flui_widgets::app_root`, the one
+  function `flui-app`'s runners call, before the UI runtime adds its scopes,
+  so Tab, Shift+Tab and the clipboard chords work headlessly as on screen.
+  Tests: `tab_moves_focus_in_a_headless_host_attached_app`.
 - **A recording crosses the wire only through mirror types.**
   `flui_protocol::input_recording` declares the rows and header with pinned
   spellings, `flui-runtime` converts `InputRecord` rows to and from them

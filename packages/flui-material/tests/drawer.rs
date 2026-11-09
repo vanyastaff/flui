@@ -361,8 +361,8 @@ fn drawer_scene_sample(
 pub fn drawer_slides_without_rebuilding_per_frame() {
     use flui_sdk::geometry::Offset;
     use flui_sdk::painting::Color;
-    use flui_sdk::view::environment::GestureArenaScope;
-    use flui_sdk::widgets::{ColoredBox, FocusRoot};
+    use flui_sdk::view::environment::{FocusTreeRoot, GestureArenaScope};
+    use flui_sdk::widgets::{ColoredBox, app_root};
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerScript};
 
     for (end, settling_frames, panel_tap, both) in [
@@ -394,7 +394,7 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
         .drawer_scrim_color(scrim);
         let root = GestureArenaScope::new(
             binding.arena().clone(),
-            FocusRoot::new(themed_animated(scaffold, binding.vsync())),
+            FocusTreeRoot::new(app_root(themed_animated(scaffold, binding.vsync()))),
         );
         let _ = binding.mount_root(
             &root,

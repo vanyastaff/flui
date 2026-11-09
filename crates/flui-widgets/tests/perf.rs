@@ -24,9 +24,9 @@ use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition};
 use flui_testing::widgets::SharedSignal;
 use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners};
-use flui_view::environment::GestureArenaScope;
+use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
 use flui_widgets::prelude::*;
-use flui_widgets::{ColoredBox, Column, Expanded, FocusRoot, ListView, SizedBox, Text};
+use flui_widgets::{ColoredBox, Column, Expanded, ListView, SizedBox, Text, app_root};
 
 /// One 60 Hz frame of virtual time.
 const FRAME: Duration = Duration::from_nanos(16_666_667);
@@ -126,7 +126,7 @@ fn mount() -> Mounted {
     let (position, writer) = ScrollPosition::with_writer(0.0);
     let app = PerfApp { label, position };
     let mut binding = HeadlessBinding::new();
-    let root = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(app));
+    let root = GestureArenaScope::new(binding.arena().clone(), FocusTreeRoot::new(app_root(app)));
     let _ = binding.mount_root(
         &root,
         MountOwners::fresh(),
@@ -251,7 +251,7 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
     let app = Align::new(flui_painting::Alignment::TOP_LEFT)
         .child(RepaintBoundary::new().child(SlideTransition::new(position, panel)));
     let mut binding = HeadlessBinding::new();
-    let root = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(app));
+    let root = GestureArenaScope::new(binding.arena().clone(), FocusTreeRoot::new(app_root(app)));
     let _ = binding.mount_root(
         &root,
         MountOwners::fresh(),

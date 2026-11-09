@@ -3,9 +3,9 @@
 //! [`WidgetHost`] attaches one root, [`HarnessRoot`], to a [`HeadlessHost`]
 //! and never replaces it: the tree under test lives in a slot the root reads
 //! in `build`, so a root swap is a rebuild of that one element and the
-//! UI runtime's own root scopes (`GestureArenaScope`, `VsyncScope`, `FocusRoot`,
-//! `MediaQuery`) stay mounted across it. Every frame is the UI runtime's
-//! `UiRuntime::pump`.
+//! UI runtime's own root scopes (`GestureArenaScope`, `VsyncScope`,
+//! `FocusTreeRoot`, `MediaQuery`) and the host's `app_root` keyboard bindings
+//! stay mounted across it. Every frame is the UI runtime's `UiRuntime::pump`.
 
 use std::any::TypeId;
 use std::cell::RefCell;
@@ -55,15 +55,10 @@ impl WidgetHost {
     ) -> Self {
         let ui_runtime = HeadlessHost::with_storage(window, storage);
         let slot = Rc::new(RefCell::new(tree));
-        // The runtime no longer installs the catalog's keyboard traversal
-        // (T17); the harness is a composition root, so it wraps the harness
-        // root in it — above the tree under test, where the original
-        // `FocusRoot` installed it, so it stays out of the caller's subtree.
-        let root = flui_widgets::DefaultFocusTraversal::new(HarnessRoot {
-            slot: Rc::clone(&slot),
-        });
         ui_runtime
-            .attach(&root)
+            .attach(&HarnessRoot {
+                slot: Rc::clone(&slot),
+            })
             .expect("BUG: a fresh ui_runtime has no root attached");
         let pipeline = ui_runtime
             .ui_runtime()

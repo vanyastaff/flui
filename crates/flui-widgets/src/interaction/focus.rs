@@ -45,9 +45,10 @@ use flui_interaction::focus::{
 use flui_objects::SubtreeAnchor;
 use flui_platform::keyboard::KeyEvent;
 use flui_rendering::semantics::SemanticsConfiguration;
-use flui_view::RebuildHandle;
 use flui_view::element::ElementKind;
+use flui_view::environment::FocusTreeRoot;
 use flui_view::prelude::*;
+use flui_view::{RebuildHandle, impl_inherited_view};
 
 use super::actions::{ActionChain, ActionChainProvider, as_node_context};
 use super::focus_reveal::{FocusRevealScope, SharedRevealTarget};
@@ -80,15 +81,93 @@ fn key_handler(handler: &FocusKeyHandler, writer: &WriterSlot) -> KeyEventHandle
 }
 
 // ============================================================================
-// The focus-tree root
+// The ambient scope
 // ============================================================================
 
-// The presentation focus-tree root lives in `flui_view::focus_root` (T17), so
-// `flui-runtime` names no widget catalog. Re-export it for the catalog focus
-// widgets and the composition roots that wrap it with the keyboard bindings.
-pub use flui_view::focus_root::{
-    FocusParentProvider, FocusRoot, FocusRootState, enclosing_focus_parent, nearest_focus_node,
-};
+/// Provides the nearest enclosing focus **node** â€” scope or plain `Focus` â€”
+/// to descendants, which every `Focus`
+/// widget provides. Private: [`Focus`] and
+/// [`FocusScope`] are the public surface.
+///
+/// The parent being a *node*, not always a scope, is what makes the
+/// leafâ†’root key-dispatch walk (ADR-0023) match the widget tree: a
+/// `Shortcuts`-style non-scope `Focus` above a field is a node **ancestor**
+/// of the field, so keys the field ignores bubble through it.
+#[derive(Clone)]
+struct FocusParentProvider {
+    parent: Rc<FocusNode>,
+    revision: u64,
+    child: BoxedView,
+}
+
+impl std::fmt::Debug for FocusParentProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FocusParentProvider")
+            .field("parent_id", &self.parent.id())
+            .field("revision", &self.revision)
+            .finish_non_exhaustive()
+    }
+}
+
+impl InheritedView for FocusParentProvider {
+    type Data = Rc<FocusNode>;
+
+    fn data(&self) -> &Self::Data {
+        &self.parent
+    }
+
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+
+    fn update_should_notify(&self, old: &Self) -> bool {
+        !Rc::ptr_eq(&self.parent, &old.parent) || self.revision != old.revision
+    }
+}
+
+impl_inherited_view!(FocusParentProvider);
+
+/// The node a mounting/reparenting focus node hangs under.
+///
+/// The UI runtime roots every presentation in a [`FocusTreeRoot`], so a
+/// missing provider is a broken embedder invariant rather than a reason to
+/// reach for the lifecycle-only `LifecycleContext::focus_manager` capability
+/// from arbitrary build paths.
+pub fn enclosing_focus_parent(ctx: &dyn BuildContext) -> Rc<FocusNode> {
+    nearest_focus_node(ctx).expect(
+        "BUG: focus widget mounted outside FocusTreeRoot; every presentation root must install \
+         the focus-tree root",
+    )
+}
+
+/// Raw lookup behind [`Focus::of`]/[`Focus::maybe_of`]/[`FocusScope::of`]:
+/// the nearest enclosing [`FocusParentProvider`]'s node, else the
+/// presentation's root scope from [`FocusTreeRoot::maybe_of`], registering a
+/// dependency, with **no** scope-node filtering. This is the call
+/// [`FocusScope::of`] makes internally; [`Focus::maybe_of`] layers the
+/// scope-node filter back on top.
+///
+/// # Depend, not get
+///
+/// Unlike `Overlay::maybe_of` (`overlay/mod.rs`), this registers a dependency
+/// through [`BuildContextExt::depend_on`], so a build that reads it rebuilds
+/// when the enclosing node changes.
+///
+/// This resolves the SAME [`FocusParentProvider`] marker `Focus`/`FocusScope`'s
+/// own `build` already mounts around their child for
+/// [`enclosing_focus_parent`]'s mount-time attach/reparent lookups. No second,
+/// redundant marker is mounted just for this public entry point. The root
+/// fallback is reached only by a widget with no focus widget above it; every
+/// focus widget sits below the presentation's one `FocusTreeRoot`, so the
+/// nearest provider is always the nearer node.
+///
+/// Each provider carries a revision advanced by its node listener. `update_should_notify` therefore
+/// invalidates dependents on node-state changes as well as identity changes;
+/// a build that reads `Focus::of(ctx).has_focus()` stays live.
+fn nearest_focus_node(ctx: &dyn BuildContext) -> Option<Rc<FocusNode>> {
+    ctx.depend_on::<FocusParentProvider, _>(|provider| Rc::clone(&provider.parent))
+        .or_else(|| FocusTreeRoot::maybe_of(ctx))
+}
 
 // ============================================================================
 // Focus
@@ -998,11 +1077,11 @@ impl ViewState<Focus> for FocusState {
                 .child(view.child.clone())
                 .into_view()
                 .boxed();
-            return FocusParentProvider::new(
-                Rc::clone(&self.node),
-                self.node_revision.get(),
-                BoxedView::new(AnchoredSliver::new(self.anchor.clone(), child).into_view()),
-            );
+            return FocusParentProvider {
+                parent: Rc::clone(&self.node),
+                revision: self.node_revision.get(),
+                child: BoxedView::new(AnchoredSliver::new(self.anchor.clone(), child).into_view()),
+            };
         }
         let semantics = if view.include_semantics && self.node.can_request_focus() {
             let semantics = Semantics::new()
@@ -1029,11 +1108,11 @@ impl ViewState<Focus> for FocusState {
             Semantics::new()
         };
         let child = semantics.child(view.child.clone()).into_view().boxed();
-        FocusParentProvider::new(
-            Rc::clone(&self.node),
-            self.node_revision.get(),
-            BoxedView::new(AnchoredBox::new(self.anchor.clone(), child).into_view()),
-        )
+        FocusParentProvider {
+            parent: Rc::clone(&self.node),
+            revision: self.node_revision.get(),
+            child: BoxedView::new(AnchoredBox::new(self.anchor.clone(), child).into_view()),
+        }
     }
 }
 
@@ -1146,17 +1225,16 @@ impl FocusScope {
     /// `FocusState::try_autofocus` already uses to find "the enclosing
     /// scope" for autofocus purposes).
     ///
-    /// [`FocusRoot`] guarantees that even a bare application subtree has the
-    /// standard traversal `Focus` under the build owner's root scope, so this
-    /// lookup never reaches for the lifecycle-only focus-manager capability
-    /// from `build`.
+    /// The presentation's [`FocusTreeRoot`] guarantees that even a bare
+    /// application subtree resolves to the root scope, so this lookup never
+    /// reaches for the lifecycle-only focus-manager capability from `build`.
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> Rc<FocusScopeNode> {
         nearest_focus_node(ctx)
             .and_then(|node| node.as_scope().or_else(|| node.enclosing_scope()))
             .expect(
-                "BUG: FocusScope::of called outside FocusRoot; every presentation root must \
-                 install the focus-tree provider",
+                "BUG: FocusScope::of called outside FocusTreeRoot; every presentation root must \
+                 install the focus-tree root",
             )
     }
 }
@@ -1392,11 +1470,11 @@ impl ViewState<FocusScope> for FocusScopeState {
     }
 
     fn build(&self, view: &FocusScope, _ctx: &dyn BuildContext) -> impl IntoView {
-        FocusParentProvider::new(
-            Rc::clone(self.scope.as_focus_node()),
-            self.node_revision.get(),
-            view.child.clone(),
-        )
+        FocusParentProvider {
+            parent: Rc::clone(self.scope.as_focus_node()),
+            revision: self.node_revision.get(),
+            child: view.child.clone(),
+        }
     }
 }
 

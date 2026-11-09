@@ -1068,8 +1068,10 @@ impl HeadlessHost {
     }
 
     /// Attach `view` as the UI runtime's root widget, the root view sized to the
-    /// window. The UI runtime wraps it in its root scopes (`GestureArenaScope`,
-    /// `VsyncScope`, `FocusRoot`, `MediaQuery`); the first
+    /// window. Like a `flui-app` runner, the host first wraps it in
+    /// [`flui_widgets::app_root`] (Tab, Shift+Tab, the clipboard chords), and
+    /// the UI runtime then wraps that in its root scopes (`GestureArenaScope`,
+    /// `VsyncScope`, `FocusTreeRoot`, `MediaQuery`); the first
     /// [`pump`](Self::pump) builds, lays out and paints it.
     ///
     /// # Errors
@@ -1080,7 +1082,7 @@ impl HeadlessHost {
         V: flui_view::View + Clone + 'static,
     {
         self.ui_runtime.attach_root_widget_with_size(
-            view,
+            &flui_widgets::app_root(view.clone()),
             self.window.size.width,
             self.window.size.height,
         )
@@ -1531,11 +1533,15 @@ impl HeadlessHost {
         if window == self.primary_window() {
             return self.attach(view);
         }
-        // The same environment the primary root gets: this window's own
-        // `MediaQuery` and its size.
+        // The same root the primary window gets: the catalog's keyboard
+        // bindings, then this window's own `MediaQuery` and its size.
         let size = self.secondary_of(window).window.size;
-        self.ui_runtime
-            .attach_root_widget_with_size_to(window.0, view, size.width, size.height)
+        self.ui_runtime.attach_root_widget_with_size_to(
+            window.0,
+            &flui_widgets::app_root(view.clone()),
+            size.width,
+            size.height,
+        )
     }
 
     /// Attach assistive technology to `window`; see

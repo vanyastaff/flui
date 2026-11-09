@@ -99,13 +99,12 @@ flui-engine = { path = "../flui-engine", version = "=0.2.0-dev" }
 # `native-capture`: the native journal a debug build serving the driver agent records
 # (ADR-0288 §11). Its code is compiled in debug builds only; a release build links none.
 flui-native = { path = "../flui-native", version = "=0.2.0-dev", features = ["native-capture"] }
-# Widget catalog: `UiRuntime::attach_root_widget*` takes a catalog view and
-# auto-wraps the root in the presentation scopes — `FocusRoot` plus
-# `VsyncScope`/`GestureArenaScope` from `flui_view::environment`. Zero new
-# link-time deps: every crate flui-widgets pulls is already transitively
-# present in flui-app's closure (verified via `cargo tree -p flui-app`); this adds
-# only a direct Cargo edge + re-exports. The layering allows app → widgets
-# (`docs/architecture.md`).
+# Widget catalog: every runner wraps each root it attaches, the main window
+# and each secondary one, in `flui_widgets::app_root`, the catalog's keyboard
+# bindings. The UI runtime installs the presentation scopes itself
+# (`FocusTreeRoot`, `VsyncScope`, `GestureArenaScope` from
+# `flui_view::environment`) and names no widget. The layering allows app →
+# widgets (`docs/architecture.md`).
 flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
 # The frame runtime (ADR-0083): the UI runtime core the runners drive, and the
 # per-presentation lanes it owns. `hot-reload` is its `reload::ReloadTier`, the

@@ -1,7 +1,8 @@
 //! Inherited presentation data and subtree-scoped presentation services:
 //! [`MediaQuery`]/[`MediaQueryData`], the gesture arena and its inherited
-//! input policy ([`GestureArenaScope`], [`GesturePolicy`]), and the shared
-//! frame registry for implicitly-animated widgets ([`VsyncScope`]).
+//! input policy ([`GestureArenaScope`], [`GesturePolicy`]), the shared
+//! frame registry for implicitly-animated widgets ([`VsyncScope`]), and the
+//! presentation's root focus scope ([`FocusTreeRoot`]).
 //!
 //! These are the views the runtime installs above one root and the catalog,
 //! the runtime, and the packages all read; the widget catalog owns nothing
@@ -24,7 +25,11 @@
 //! These require platform event plumbing (accessibility bridge, IME state)
 //! that lives above this layer.
 
+mod focus_tree_root;
+
 use std::sync::Arc;
+
+pub use focus_tree_root::{FocusTreeRoot, FocusTreeRootState};
 
 use flui_animation::{MotionPolicy, Vsync};
 use flui_foundation::geometry::{EdgeInsets, Edges, Size};

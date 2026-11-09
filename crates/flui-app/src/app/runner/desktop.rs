@@ -3,7 +3,7 @@ use flui_native::HostWindow;
 use flui_platform::PlatformWindow;
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
-use flui_widgets::DefaultFocusTraversal;
+use flui_widgets::app_root;
 use parking_lot::Mutex;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -151,7 +151,7 @@ where
     let logical = geometry.logical;
     let attach = ui_runtime.enter(|ui_runtime| {
         ui_runtime.attach_root_widget_with_size(
-            &DefaultFocusTraversal::new(root.clone()),
+            &app_root(root.clone()),
             logical.width,
             logical.height,
         )

@@ -601,11 +601,13 @@ impl ViewState<Shortcuts> for ShortcutsState {
 /// here: an `EditableText` answers it on its own node, and with no text field
 /// focused nothing does, so the chord keeps bubbling to whatever else binds
 /// it.
-/// [`FocusRoot`](super::focus::FocusRoot) installs this widget automatically
-/// for every standard FLUI presentation. It remains public for custom
-/// embedders and deliberately isolated subtrees. Each instance binds actions
-/// to its own [`LifecycleContext::focus_manager`], with no ambient process
-/// singleton.
+///
+/// [`app_root`](crate::app_root) installs this widget above every
+/// presentation root `flui-app` and `HeadlessHost` attach; the UI runtime
+/// itself installs no key bindings. It remains public for embedders that
+/// compose their own root and for deliberately isolated subtrees. Each
+/// instance binds actions to its own [`LifecycleContext::focus_manager`],
+/// with no ambient process singleton.
 #[derive(Clone, Debug, StatefulView)]
 pub struct DefaultFocusTraversal {
     child: BoxedView,

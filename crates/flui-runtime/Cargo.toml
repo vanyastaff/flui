@@ -59,7 +59,7 @@ flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # (`WidgetsBinding`, `GlobalKeyScope`; `flui_view::__runtime` is the seam a
 # UI runtime drives it through), its render pipeline, the UI runtime-owned scheduler,
 # the vsync the root's animations tick on, and the root wrappers the UI runtime
-# installs above every root widget (`FocusRoot`, `GestureArenaScope`,
+# installs above every root widget (`FocusTreeRoot`, `GestureArenaScope`,
 # `VsyncScope`).
 flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
@@ -91,7 +91,7 @@ wasm-bindgen-futures = { workspace = true }
 # `flui_platform::testing::FakeHaptics`, the actuator the preference tests record.
 flui-platform = { workspace = true, features = ["testing"] }
 # The widget catalog, for the tests that drive a presentation through real
-# widgets; the runtime itself names none (T17).
+# widgets; the runtime itself names no widget.
 flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
 # `flui_interaction::events::make_*_event`, the synthetic pointer events the
 # held-input tests queue.
@@ -149,8 +149,9 @@ order = 4
 # and `flui-testing`, the host of the headless test loop, whose driver runs the
 # UI runtime's frame (ADR-0083 §4). Dev edges are not restricted.
 allowed-dependents = ["flui-app", "flui-testing"]
-# T17: the UI runtime names no widget catalog; the presentation's root scopes
-# live in `flui-view`, and the tests drive widgets as dev edges.
+# The UI runtime names no widget catalog: the presentation's root scopes
+# live in `flui-view`, keyboard traversal is installed by the composition
+# root through `flui_widgets::app_root`, and tests drive widgets as dev edges.
 reach-forbid = ["flui-widgets"]
 # Process-unique identity only; UI runtime services and registries remain owned.
 globals = [

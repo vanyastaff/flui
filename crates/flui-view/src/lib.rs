@@ -101,7 +101,6 @@ pub mod dev_agent;
 pub mod dev_reload;
 pub mod element;
 pub mod environment;
-pub mod focus_root;
 mod inspect;
 pub mod key;
 pub mod macros;

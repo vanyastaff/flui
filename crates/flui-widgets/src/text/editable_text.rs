@@ -351,8 +351,9 @@ pub(super) fn source_offset_for_masked_offset(
 /// its own focus node — the chain a `Shortcuts` resolves an intent against
 /// when this field holds the primary focus — so the Ctrl/Cmd+C, X and V
 /// bindings [`DefaultFocusTraversal`](crate::DefaultFocusTraversal) installs
-/// under every `FocusRoot` reach it. Its actions are layered over the chain
-/// visible at its position, and are the nearest declaration of those two
+/// under every application root ([`app_root`](crate::app_root)) reach it.
+/// Its actions are layered over the chain visible at its position, and are
+/// the nearest declaration of those two
 /// intent types, so they win over an ancestor `Actions` binding for them.
 ///
 /// | Intent | Enabled when | Does |

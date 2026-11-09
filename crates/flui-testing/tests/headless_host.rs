@@ -841,3 +841,65 @@ fn a_window_that_loses_focus_forgets_its_keys_and_keeps_its_focus() {
         "keys reach the focused node again"
     );
 }
+
+/// Tab moves the primary focus to the next field, and Shift+Tab back, in a
+/// root attached through `HeadlessHost`, on the primary window and on a
+/// secondary one: the host wraps every root in `flui_widgets::app_root`, the
+/// bindings a `flui-app` runner installs, and the UI runtime installs none.
+#[test]
+fn tab_moves_focus_in_a_headless_host_attached_app() {
+    use flui_interaction::focus::FocusNode;
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+    use flui_platform::{EventTime, PlatformInput};
+    use flui_view::ViewExt as _;
+    use flui_widgets::{Column, Focus, SizedBox};
+
+    let tab = |host: &mut HeadlessHost, modifiers: Modifiers| {
+        for state in [KeyState::Down, KeyState::Up] {
+            host.dispatch(PlatformInput::Keyboard(
+                KeyEvent::new(
+                    state,
+                    Key::Named(NamedKey::Tab),
+                    Code::Tab,
+                    EventTime::from_nanos(0),
+                )
+                .with_modifiers(modifiers),
+            ));
+        }
+        let _ = host.pump(Duration::ZERO);
+    };
+    for on_secondary in [false, true] {
+        let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+        let first = FocusNode::with_debug_label("first");
+        let second = FocusNode::with_debug_label("second");
+        let field = |node: &Rc<FocusNode>| {
+            Focus::new(SizedBox::new(100.0, 20.0))
+                .focus_node(Rc::clone(node))
+                .boxed()
+        };
+        let root = Column::new((field(&first), field(&second)));
+        if on_secondary {
+            let window = host.open_window(HeadlessWindow::new(100, 100));
+            host.attach_to(window, &root)
+                .expect("a fresh window has no root");
+            host.focus_window(window);
+        } else {
+            host.attach(&root).expect("a fresh host has no root");
+        }
+        let _ = host.pump(Duration::ZERO);
+        let _ = first.request_focus();
+        let _ = host.pump(Duration::ZERO);
+        assert!(first.has_primary_focus(), "the first field takes focus");
+
+        tab(&mut host, Modifiers::NONE);
+        assert!(
+            second.has_primary_focus(),
+            "Tab moves focus to the next field (secondary window: {on_secondary})"
+        );
+        tab(&mut host, Modifiers::SHIFT);
+        assert!(
+            first.has_primary_focus(),
+            "Shift+Tab moves focus back (secondary window: {on_secondary})"
+        );
+    }
+}

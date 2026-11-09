@@ -502,8 +502,8 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
     use flui_objects::TranslationFraction;
     use flui_painting::{Alignment, styling::Color};
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
-    use flui_view::environment::GestureArenaScope;
-    use flui_widgets::{Align, ColoredBox, FocusRoot, SizedBox, SlideTransition};
+    use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
+    use flui_widgets::{Align, ColoredBox, SizedBox, SlideTransition, app_root};
 
     let mut binding = HeadlessBinding::new();
     let owner =
@@ -518,9 +518,11 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
     );
     let root = GestureArenaScope::new(
         binding.arena().clone(),
-        FocusRoot::new(Align::new(Alignment::TOP_LEFT).child(SlideTransition::new(
-            position,
-            SizedBox::new(40.0, 40.0).child(ColoredBox::new(Color::rgb(255, 0, 0))),
+        FocusTreeRoot::new(app_root(Align::new(Alignment::TOP_LEFT).child(
+            SlideTransition::new(
+                position,
+                SizedBox::new(40.0, 40.0).child(ColoredBox::new(Color::rgb(255, 0, 0))),
+            ),
         ))),
     );
     let _mounted = binding.mount_root(
@@ -591,8 +593,8 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
     use flui_foundation::{Listenable, geometry::Rect};
     use flui_painting::styling::Color;
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
-    use flui_view::environment::GestureArenaScope;
-    use flui_widgets::{CustomPaint, FocusRoot};
+    use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
+    use flui_widgets::{CustomPaint, app_root};
 
     #[derive(Debug)]
     struct FadePainter(Rc<dyn Animation<Color>>, Rc<std::cell::Cell<Option<Color>>>);
@@ -631,11 +633,11 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
     let painted = Rc::new(std::cell::Cell::new(None));
     let root = GestureArenaScope::new(
         binding.arena().clone(),
-        FocusRoot::new(
+        FocusTreeRoot::new(app_root(
             CustomPaint::new()
                 .size(Size::new(16.0, 16.0))
                 .painter(FadePainter(color.clone(), painted.clone())),
-        ),
+        )),
     );
     let _mounted = binding.mount_root(&root, MountOwners::fresh(), MountOptions::tight(16.0, 16.0));
     binding.pump_frame(Duration::ZERO);

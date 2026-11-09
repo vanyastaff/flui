@@ -56,8 +56,8 @@ use flui::prelude::*;
 use flui::testing::rendering::render_snapshot;
 use flui::testing::replay::PointerScript;
 use flui::testing::{HeadlessBinding, MountOptions, MountOwners};
-use flui::view::environment::GestureArenaScope;
-use flui::widgets::column;
+use flui::view::environment::{FocusTreeRoot, GestureArenaScope};
+use flui::widgets::{app_root, column};
 
 /// The tree `flui create`'s counter template builds: `Center` → `Column` →
 /// prompt `Text` / count `Text` / `ElevatedButton`, driven by a `Signal`
@@ -104,7 +104,7 @@ impl ViewState<AgentCounter> for AgentCounterState {
 
 /// Mounts [`AgentCounter`] through the canonical headless bootstrap, wrapped
 /// exactly as `flui_testing::widgets::lay_out` wraps every widget-tier test
-/// (`GestureArenaScope` for tap routing, `FocusRoot` because a mounted tree
+/// (`GestureArenaScope` for tap routing, `FocusTreeRoot` because a mounted tree
 /// always needs a focus scope, `Theme` because `ElevatedButton` panics
 /// without one — see `flui_material::Theme::of`'s doc comment).
 ///
@@ -115,7 +115,7 @@ fn mount_agent_counter() -> HeadlessBinding {
     let mut binding = HeadlessBinding::new();
     let root = GestureArenaScope::new(
         binding.arena().clone(),
-        FocusRoot::new(Theme::new(ThemeData::light(), AgentCounter)),
+        FocusTreeRoot::new(app_root(Theme::new(ThemeData::light(), AgentCounter))),
     );
     let mounted = binding.mount_root(
         &root,

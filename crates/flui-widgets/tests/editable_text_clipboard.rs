@@ -1,7 +1,7 @@
 //! Copy, cut and paste in a mounted [`EditableText`], through the key path a
 //! platform chord takes: `FocusManager::dispatch_key_event` → the field's key
 //! handler leaves the chord unconsumed → `DefaultFocusTraversal`'s
-//! `Shortcuts` (installed by the harness's `FocusRoot`) resolves the intent
+//! `Shortcuts` (installed by the harness's `app_root`) resolves the intent
 //! against the chain the field recorded on its node. The clipboard read back
 //! is the one the harness installs, the headless platform's type.
 
