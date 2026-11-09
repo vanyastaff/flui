@@ -1195,8 +1195,9 @@ impl Default for DrawSegment {
 /// ## AA note
 ///
 /// The tessellated geometry is rendered at `sample_count=1` with no SDF
-/// anti-aliasing, so shape edges are aliased.  This is consistent with the
-/// quality note at `batches/shapes.rs`.  SDF anti-aliasing is not yet added.
+/// anti-aliasing, so its edges are aliased. A shape large enough for the SSAA
+/// tile (`ssaa_eligible_for`) is routed there first, so only the shapes that
+/// stay tessellated reach this op.
 #[derive(Clone)]
 pub(crate) struct AdvancedShapeOp {
     /// Tessellated geometry for this shape (vertices already baked to device

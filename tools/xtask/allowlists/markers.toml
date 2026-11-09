@@ -15,11 +15,6 @@ class = "tracker-h"
 count = 1
 
 [[allow]]
-path = "crates/flui-engine/src/aa_oracle_tests.rs"
-class = "pr-label"
-count = 2
-
-[[allow]]
 path = "crates/flui-engine/src/batches/paths.rs"
 class = "pr-label"
 count = 2
@@ -27,7 +22,7 @@ count = 2
 [[allow]]
 path = "crates/flui-engine/src/batches/shapes.rs"
 class = "pr-label"
-count = 11
+count = 6
 
 [[allow]]
 path = "crates/flui-engine/src/instancing.rs"

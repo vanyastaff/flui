@@ -47,7 +47,7 @@
 // recursion limit under the next-generation trait solver; see the matching
 // attribute and rationale at the top of flui-engine's `lib.rs`.
 #![recursion_limit = "256"]
-// every public item is documented; keep it that way.
+// Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 // A `_` arm must not absorb a variant added later; see the
 // `wildcard_enum_match_arm` entry in the workspace `Cargo.toml`.

@@ -70,7 +70,7 @@
         reason = "test code catches a panic to assert on it (ADR-0303 §5)"
     )
 )]
-// Lint levels come from `[workspace.lints]`. every public
+// Lint levels come from `[workspace.lints]`. Every public
 // item is documented; keep it that way.
 #![deny(missing_docs)]
 // `element/element.rs`, `view/view.rs`: a one-type family module named after
