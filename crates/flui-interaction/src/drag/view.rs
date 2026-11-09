@@ -175,14 +175,7 @@ fn within_limit(
     payload: TransferPayload,
     limits: TransferLimits,
 ) -> Result<TransferPayload, TransferError> {
-    let actual = payload.byte_len();
-    if actual > limits.max_bytes {
-        return Err(TransferError::TooLarge {
-            actual,
-            limit: limits.max_bytes,
-        });
-    }
-    Ok(payload)
+    limits.enforce(payload.byte_len()).map_or(Ok(payload), Err)
 }
 
 /// How the owner is woken from another thread: a request made from a drop

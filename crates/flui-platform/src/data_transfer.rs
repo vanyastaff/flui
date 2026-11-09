@@ -307,6 +307,18 @@ impl TransferLimits {
         self.max_bytes = max_bytes;
         self
     }
+
+    /// Refuse a delivery of `actual` bytes past [`max_bytes`](Self::max_bytes)
+    /// with [`TransferError::TooLarge`], or admit it. The transport's size policy
+    /// lives here once — `flui-interaction`'s in-process path and `flui-native`'s
+    /// per-host readers both enforce through it (T10).
+    #[must_use]
+    pub fn enforce(self, actual: u64) -> Option<TransferError> {
+        (actual > self.max_bytes).then_some(TransferError::TooLarge {
+            actual,
+            limit: self.max_bytes,
+        })
+    }
 }
 
 impl Default for TransferLimits {
@@ -543,4 +555,28 @@ impl DragTransport for NullDragTransport {
     fn update_drop_feedback(&self, _id: DataTransferId, _feedback: DropFeedback) {}
 
     fn conclude_drop(&self, _id: DataTransferId) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TransferLimits;
+    use crate::data_transfer::TransferError;
+
+    /// The transport's size policy: a delivery at the ceiling is admitted, one
+    /// byte past it is refused with the exact `actual`/`limit` (T10).
+    #[test]
+    fn enforce_refuses_only_past_the_ceiling() {
+        let limits = TransferLimits::default().with_max_bytes(10);
+        assert!(limits.enforce(10).is_none(), "at the ceiling is admitted");
+        assert!(
+            matches!(
+                limits.enforce(11),
+                Some(TransferError::TooLarge {
+                    actual: 11,
+                    limit: 10
+                })
+            ),
+            "one byte past the ceiling is refused"
+        );
+    }
 }
