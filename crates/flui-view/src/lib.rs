@@ -230,7 +230,7 @@ pub use flui_scheduler::{
     Seconds, Sleep, TaskToken, TimerHandle, duration::InvalidDurationConfig,
 };
 // Keys
-pub use key::{GlobalKey, ObjectKey, ValueKey};
+pub use key::{GlobalKey, KeyLookup, ObjectKey, ValueKey};
 // Legacy test-only handle for `GlobalKey::current_*` lookup. Production code
 // activates the handle through `UiRuntime::enter`; tests bypass the binding.
 pub use test_only_global_key_registry::{

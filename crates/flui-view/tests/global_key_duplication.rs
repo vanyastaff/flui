@@ -39,7 +39,7 @@ use std::sync::Arc;
 use flui_foundation::ViewKey;
 use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtocol};
 use flui_view::{
-    BuildContext, BuildOwner, ElementId, ElementTree, GlobalKey, IntoView, RenderView,
+    BuildContext, BuildOwner, ElementId, ElementTree, GlobalKey, IntoView, KeyLookup, RenderView,
     StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 use parking_lot::RwLock;
@@ -300,7 +300,7 @@ pub(crate) fn a_second_parent_grafts_the_same_element_rather_than_creating_anoth
     );
     assert_eq!(
         key.current_element(),
-        Some(first),
+        KeyLookup::Mounted(first),
         "the registry points at the single surviving element",
     );
 
