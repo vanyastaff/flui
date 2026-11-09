@@ -47,9 +47,9 @@ impl Default for FlexStyle {
 }
 
 impl FlexStyle {
-    /// `text_direction` is the already-resolved ambient direction — see
-    /// [`FlexRenderView`] for why it must be resolved before this call
-    /// rather than looked up here.
+    /// `text_direction` is the already-resolved ambient direction, resolved by
+    /// [`resolve_text_direction`] at the render-object seam rather than looked
+    /// up here.
     fn build(self, direction: FlexDirection, text_direction: TextDirection) -> RenderFlex {
         let base = match direction {
             FlexDirection::Horizontal => RenderFlex::row(),

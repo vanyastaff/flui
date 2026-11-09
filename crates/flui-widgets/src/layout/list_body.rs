@@ -8,7 +8,7 @@ use flui_painting::typography::TextDirection;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, CreationSite};
+use flui_view::{BoxedView, CreationSite, InheritedView};
 
 use crate::localization::Directionality;
 use crate::support::generic_render_view_element;
@@ -26,13 +26,9 @@ use crate::support::generic_render_view_element;
 /// no ancestor, matching every other FLUI widget that consults
 /// `Directionality`), then `reverse` flips the result to its opposite. A
 /// vertical `ListBody` never consults `Directionality` — `reverse` alone
-/// decides `TopToBottom` vs. `BottomToTop`. That ambient read only exists
-/// inside a `BuildContext`, so `ListBody` is a composing widget: `build` resolves the
-/// direction once and hands the *already-resolved* `AxisDirection` to a
-/// private render-object widget — `flui_view::RenderObjectContext` (the only
-/// context `RenderView::create_render_object`/`update_render_object` ever
-/// receive) carries no ambient-lookup capability, so a bare `RenderView` can
-/// never read `Directionality` itself.
+/// decides `TopToBottom` vs. `BottomToTop`. The read goes through
+/// [`RenderObjectContext::depend_on`](flui_view::RenderObjectContext::depend_on),
+/// so the render object re-pushes its configuration when the direction changes.
 #[derive(Clone)]
 pub struct ListBody<C = Vec<BoxedView>> {
     main_axis: Axis,
@@ -67,11 +63,17 @@ impl<C> ListBody<C> {
         self
     }
 
-    /// Resolve the render object's `AxisDirection`: only `Axis::Horizontal` consults `text_direction`;
-    /// `reverse` flips either axis's base direction to its opposite.
-    fn resolve_axis_direction(&self, text_direction: TextDirection) -> AxisDirection {
+    /// Resolve the render object's `AxisDirection`: only `Axis::Horizontal`
+    /// consults the ambient direction; `reverse` flips either axis's base
+    /// direction to its opposite. At mount the inherited read is not yet
+    /// available, so a horizontal body defaults to `Ltr` and the first rebuild
+    /// re-resolves it (T09).
+    fn resolve_axis_direction(&self, ctx: &flui_view::RenderObjectContext<'_>) -> AxisDirection {
         match self.main_axis {
             Axis::Horizontal => {
+                let text_direction = ctx
+                    .depend_on::<Directionality, _>(|d| *d.data())
+                    .unwrap_or(TextDirection::Ltr);
                 let base = if text_direction.is_rtl() {
                     AxisDirection::RightToLeft
                 } else {
@@ -94,70 +96,23 @@ impl<C: ViewSeq> fmt::Debug for ListBody<C> {
     }
 }
 
-impl<C> flui_view::View for ListBody<C>
-where
-    C: ViewSeq + Clone + 'static,
-{
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateless(self)
-    }
-
-    fn creation_site(&self) -> CreationSite {
-        self.site
-    }
-}
-
-impl<C> flui_view::StatelessView for ListBody<C>
-where
-    C: ViewSeq + Clone + 'static,
-{
-    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
-        // Only a HORIZONTAL list body can use a reading direction; the
-        // vertical arm of `resolve_axis_direction` discards it. Looking it up
-        // regardless would register an inherited dependency the widget cannot
-        // act on, so every vertical `ListBody` would rebuild on a direction
-        // change that cannot move it.
-        let text_direction = match self.main_axis {
-            Axis::Horizontal => Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr),
-            Axis::Vertical => TextDirection::Ltr,
-        };
-        ListBodyRenderView {
-            axis_direction: self.resolve_axis_direction(text_direction),
-            children: self.children.clone(),
-        }
-    }
-}
-
-/// The actual `RenderListBody`-backed render-object widget. Its
-/// `AxisDirection` is already resolved by [`ListBody`]'s `StatelessView::build`
-/// — kept private
-/// so `Directionality` is only ever read at the `BuildContext` seam that can
-/// see it, never assumed to be reachable from a bare `RenderView`.
-#[derive(Clone)]
-struct ListBodyRenderView<C> {
-    axis_direction: AxisDirection,
-    children: C,
-}
-
-impl<C> flui_view::RenderView for ListBodyRenderView<C>
+impl<C> flui_view::RenderView for ListBody<C>
 where
     C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
     type RenderObject = RenderListBody;
 
-    fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> RenderListBody {
-        RenderListBody::with_axis_direction(self.axis_direction)
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> RenderListBody {
+        RenderListBody::with_axis_direction(self.resolve_axis_direction(ctx))
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut RenderListBody,
     ) -> flui_rendering::RenderUpdateImpact {
-        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        impact |= render_object.set_axis_direction(self.axis_direction);
-        impact
+        render_object.set_axis_direction(self.resolve_axis_direction(ctx))
     }
 
     fn has_children(&self) -> bool {
@@ -169,4 +124,4 @@ where
     }
 }
 
-generic_render_view_element!(ListBodyRenderView);
+generic_render_view_element!(ListBody, site = site);
