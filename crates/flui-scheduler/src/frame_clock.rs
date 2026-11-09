@@ -141,7 +141,8 @@ bitflags::bitflags! {
 pub enum DemandKind {
     /// A pending widget build or a dirty render node.
     Dirty,
-    /// A running animation/ticker consumer.
+    /// A running vsync-ticked consumer (an `AnimationController`), not a
+    /// scheduler ticker.
     Animation,
     /// A direct host/platform request with no framework-side dirty state.
     Host,

@@ -35,7 +35,7 @@ pub(crate) use launcher::PortalLauncher;
 #[derive(Debug)]
 pub(crate) enum PortalError {
     /// No session bus, or no portal on it.
-    Unavailable(UnsupportedReason),
+    Unsupported(Unsupported),
     /// The portal or the bus answered with an error.
     Failed,
 }
@@ -46,7 +46,9 @@ impl From<zbus::Error> for PortalError {
             zbus::Error::Address(_)
             | zbus::Error::Connection(..)
             | zbus::Error::InputOutput(_)
-            | zbus::Error::Handshake(_) => Self::Unavailable(UnsupportedReason::Unavailable),
+            | zbus::Error::Handshake(_) => {
+                Self::Unsupported(Unsupported::new(UnsupportedReason::Unavailable))
+            }
             zbus::Error::FDO(error)
                 if matches!(
                     *error,
@@ -57,7 +59,7 @@ impl From<zbus::Error> for PortalError {
                         | zbus::fdo::Error::UnknownObject(_)
                 ) =>
             {
-                Self::Unavailable(UnsupportedReason::Unavailable)
+                Self::Unsupported(Unsupported::new(UnsupportedReason::Unavailable))
             }
             _ => Self::Failed,
         }
@@ -164,10 +166,9 @@ impl Portal {
     pub(crate) fn start(&self) -> Result<(), PortalError> {
         let mut worker = self.worker.borrow_mut();
         if worker.is_none() {
-            *worker = Some(
-                Worker::start(self.address.borrow().clone())
-                    .map_err(|_| PortalError::Unavailable(UnsupportedReason::Unavailable))?,
-            );
+            *worker = Some(Worker::start(self.address.borrow().clone()).map_err(|_| {
+                PortalError::Unsupported(Unsupported::new(UnsupportedReason::Unavailable))
+            })?);
         }
         Ok(())
     }

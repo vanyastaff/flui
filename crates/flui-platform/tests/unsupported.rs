@@ -6,6 +6,7 @@ use std::error::Error;
 
 use flui_platform::drag::DragError;
 use flui_platform::haptics::HapticOutcome;
+use flui_platform::launch::LaunchError;
 use flui_platform::text_store::TextStoreHostError;
 use flui_platform::{
     AdmissionError, CursorError, InvalidPreference, PreferenceQueryError, StorageError,
@@ -101,6 +102,11 @@ fn drags() {
     assert_eq!(DragError::SessionClosed.unsupported(), None);
 }
 
+fn launches() {
+    carries(LaunchError::from, LaunchError::unsupported);
+    assert_eq!(LaunchError::NoHandler.unsupported(), None);
+}
+
 fn storage() {
     carries(StorageError::from, StorageError::unsupported);
     assert_eq!(StorageError::Busy.unsupported(), None);
@@ -164,6 +170,7 @@ fn every_error_carries_its_reason() {
             ("preference queries", preference_queries),
             ("text store hosts", text_store_hosts),
             ("haptic outcomes", haptic_outcomes),
+            ("launches", launches),
             (
                 "each reason answers retry and message",
                 each_reason_answers_retry_and_message,

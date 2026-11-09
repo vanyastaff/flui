@@ -4,11 +4,11 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use flui_platform::UnsupportedReason;
 use flui_platform::capability::Abandoned;
 use flui_platform::launch::{
     ExternalUri, InvalidUri, LaunchError, LaunchResult, LauncherCapability, MAX_EXTERNAL_URI_LEN,
 };
+use flui_platform::{Unsupported, UnsupportedReason};
 use flui_system::SystemPlugin;
 use flui_system::testing::{LaunchRequest, ScriptedFileDialogs, ScriptedLauncher, ScriptedSystem};
 
@@ -94,9 +94,9 @@ fn each_path_request_reaches_the_system_and_carries_its_answer() {
 
     launcher.answer_next(Ok(()));
     launcher.answer_next(Err(LaunchError::NotFound));
-    launcher.answer_next(Err(LaunchError::Unavailable(
+    launcher.answer_next(Err(LaunchError::Unsupported(Unsupported::new(
         UnsupportedReason::Unavailable,
-    )));
+    ))));
     let answers: Vec<_> = [
         handle.open_path(&path),
         handle.reveal_path(&path),
@@ -129,9 +129,9 @@ fn each_path_request_reaches_the_system_and_carries_its_answer() {
         [
             Some(Ok(Ok(()))),
             Some(Ok(Err(LaunchError::NotFound))),
-            Some(Ok(Err(LaunchError::Unavailable(
+            Some(Ok(Err(LaunchError::Unsupported(Unsupported::new(
                 UnsupportedReason::Unavailable
-            )))),
+            ))))),
         ]
     );
 }
