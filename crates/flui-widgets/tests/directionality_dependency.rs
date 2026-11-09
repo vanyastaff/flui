@@ -57,9 +57,11 @@ fn render_dependents(view: impl flui_view::View) -> usize {
     laid.inherited_dependent_count::<Directionality>()
 }
 
-/// An absolute alignment names physical edges, so it must not register a
+/// An absolute alignment names physical edges, so `Align` must not register a
 /// `Directionality` dependency; a directional one names a reading edge and must.
-/// The render-object `depend_on` path gates the lookup per arm (T09).
+/// `Stack` always registers one — it resolves the reading direction for its
+/// `Positioned` children's `start`/`end` edges, which it cannot see statically
+/// (T09).
 pub(crate) fn directional_geometry_registers_a_direction_dependency_only_when_directional() {
     let absolute_align =
         render_dependents(Align::new(Alignment::CENTER).child(SizedBox::square(10.0)));
@@ -77,8 +79,8 @@ pub(crate) fn directional_geometry_registers_a_direction_dependency_only_when_di
 
     let absolute_stack = render_dependents(Stack::new((SizedBox::square(10.0),)));
     assert_eq!(
-        absolute_stack, 0,
-        "Stack::default()'s alignment is absolute"
+        absolute_stack, 1,
+        "Stack always resolves the reading direction for Positioned start/end"
     );
     let directional_stack = render_dependents(
         Stack::new((SizedBox::square(10.0),)).alignment(AlignmentDirectional::TOP_START),

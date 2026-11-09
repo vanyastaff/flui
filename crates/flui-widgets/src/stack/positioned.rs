@@ -24,6 +24,8 @@ pub struct Positioned {
     top: Option<f64>,
     right: Option<f64>,
     bottom: Option<f64>,
+    start: Option<f64>,
+    end: Option<f64>,
     width: Option<f64>,
     height: Option<f64>,
     child: BoxedView,
@@ -38,6 +40,8 @@ impl Positioned {
             top: None,
             right: None,
             bottom: None,
+            start: None,
+            end: None,
             width: None,
             height: None,
             child: child.into_view().boxed(),
@@ -74,6 +78,24 @@ impl Positioned {
     #[must_use]
     pub fn bottom(mut self, bottom: f64) -> Self {
         self.bottom = Some(bottom);
+        self
+    }
+
+    /// Distance between the child's reading-start edge and the stack's
+    /// reading-start edge (left in LTR, right in RTL). Mutually exclusive with
+    /// `left`/`right`.
+    #[must_use]
+    pub fn start(mut self, start: f64) -> Self {
+        self.start = Some(start);
+        self
+    }
+
+    /// Distance between the child's reading-end edge and the stack's
+    /// reading-end edge (right in LTR, left in RTL). Mutually exclusive with
+    /// `left`/`right`.
+    #[must_use]
+    pub fn end(mut self, end: f64) -> Self {
+        self.end = Some(end);
         self
     }
 
@@ -115,6 +137,12 @@ impl ParentDataView for Positioned {
         if let Some(bottom) = self.bottom {
             data = data.with_bottom(bottom);
         }
+        if let Some(start) = self.start {
+            data = data.with_start(start);
+        }
+        if let Some(end) = self.end {
+            data = data.with_end(end);
+        }
         if let Some(width) = self.width {
             data = data.with_width(width);
         }
@@ -132,6 +160,8 @@ impl ParentDataView for Positioned {
             || parent_data.top != self.top
             || parent_data.right != self.right
             || parent_data.bottom != self.bottom
+            || parent_data.start != self.start
+            || parent_data.end != self.end
             || parent_data.width != self.width
             || parent_data.height != self.height;
         if !changed {
@@ -141,6 +171,8 @@ impl ParentDataView for Positioned {
         parent_data.top = self.top;
         parent_data.right = self.right;
         parent_data.bottom = self.bottom;
+        parent_data.start = self.start;
+        parent_data.end = self.end;
         parent_data.width = self.width;
         parent_data.height = self.height;
         flui_rendering::RenderUpdateImpact::LAYOUT

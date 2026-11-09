@@ -206,6 +206,14 @@ pub struct StackParentData {
     /// Distance from parent's left edge.
     pub left: Option<f64>,
 
+    /// Distance from the reading-start edge (left in LTR, right in RTL).
+    /// Mutually exclusive with `left`/`right`.
+    pub start: Option<f64>,
+
+    /// Distance from the reading-end edge (right in LTR, left in RTL).
+    /// Mutually exclusive with `left`/`right`.
+    pub end: Option<f64>,
+
     /// Explicit width (overrides intrinsic size).
     pub width: Option<f64>,
 
@@ -223,6 +231,8 @@ impl StackParentData {
             right: None,
             bottom: None,
             left: None,
+            start: None,
+            end: None,
             width: None,
             height: None,
         }
@@ -252,6 +262,18 @@ impl StackParentData {
         self
     }
 
+    /// Builder: set the reading-start position.
+    pub const fn with_start(mut self, start: f64) -> Self {
+        self.start = Some(start);
+        self
+    }
+
+    /// Builder: set the reading-end position.
+    pub const fn with_end(mut self, end: f64) -> Self {
+        self.end = Some(end);
+        self
+    }
+
     /// Builder: set width.
     pub const fn with_width(mut self, width: f64) -> Self {
         self.width = Some(width);
@@ -265,7 +287,7 @@ impl StackParentData {
     }
 
     /// Check if child is positioned: any of
-    /// top/right/bottom/left/**width/height** set. An explicit `width` or
+    /// top/right/bottom/left/start/end/**width/height** set. An explicit `width` or
     /// `height` alone makes the child positioned — it is excluded from stack
     /// sizing and sized/aligned by `PositionedSpec::child_constraints` /
     /// `child_offset`, which already handle the no-anchor width/height-only
@@ -275,6 +297,8 @@ impl StackParentData {
             || self.right.is_some()
             || self.bottom.is_some()
             || self.left.is_some()
+            || self.start.is_some()
+            || self.end.is_some()
             || self.width.is_some()
             || self.height.is_some()
     }
@@ -307,6 +331,8 @@ impl Hash for StackParentData {
         hash_opt_f32(self.right, state);
         hash_opt_f32(self.bottom, state);
         hash_opt_f32(self.left, state);
+        hash_opt_f32(self.start, state);
+        hash_opt_f32(self.end, state);
         hash_opt_f32(self.width, state);
         hash_opt_f32(self.height, state);
     }

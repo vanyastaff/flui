@@ -14,24 +14,24 @@ use flui_view::seq::ViewSeq;
 use crate::localization::Directionality;
 use crate::support::generic_render_view_element;
 
-/// Resolve `alignment` against the ambient [`Directionality`]. Only the
-/// directional arm reads it, so an absolute alignment registers no dependency
-/// and never rebuilds on a direction change; at mount the inherited read is not
-/// yet available, so a directional alignment defaults to Ltr and the first
-/// rebuild re-resolves it (T09).
+/// Resolve the ambient [`Directionality`], defaulting to `Ltr`. The stack reads
+/// it for both its alignment and the `start`/`end` edges of `Positioned`
+/// children, so it registers the dependency unconditionally (T09).
+fn resolve_text_direction(ctx: &flui_view::RenderObjectContext<'_>) -> TextDirection {
+    ctx.depend_on::<Directionality, _>(|d| *d.data())
+        .unwrap_or(TextDirection::Ltr)
+}
+
+/// Resolve `alignment` against an already-read `text_direction`: an absolute
+/// geometry resolves to itself, a directional one to its physical mirror under
+/// the direction (T09).
 fn resolve_alignment_geometry(
     alignment: AlignmentGeometry,
-    ctx: &flui_view::RenderObjectContext<'_>,
+    text_direction: TextDirection,
 ) -> Alignment {
     match alignment {
         AlignmentGeometry::Absolute(alignment) => alignment,
-        AlignmentGeometry::Directional(directional) => {
-            let is_ltr = ctx
-                .depend_on::<Directionality, _>(|d| *d.data())
-                .unwrap_or(TextDirection::Ltr)
-                .is_ltr();
-            directional.resolve(is_ltr)
-        }
+        AlignmentGeometry::Directional(directional) => directional.resolve(text_direction.is_ltr()),
     }
 }
 
@@ -98,8 +98,10 @@ where
     type RenderObject = RenderStack;
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        let text_direction = resolve_text_direction(ctx);
         RenderStack::new()
-            .with_alignment(resolve_alignment_geometry(self.alignment, ctx))
+            .with_alignment(resolve_alignment_geometry(self.alignment, text_direction))
+            .with_text_direction(text_direction)
             .with_fit(self.fit)
     }
 
@@ -108,8 +110,11 @@ where
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
+        let text_direction = resolve_text_direction(ctx);
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        impact |= render_object.set_alignment(resolve_alignment_geometry(self.alignment, ctx));
+        impact |=
+            render_object.set_alignment(resolve_alignment_geometry(self.alignment, text_direction));
+        impact |= render_object.set_text_direction(text_direction);
         impact |= render_object.set_fit(self.fit);
         impact
     }
@@ -195,8 +200,10 @@ where
     type RenderObject = RenderIndexedStack;
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        let text_direction = resolve_text_direction(ctx);
         RenderIndexedStack::new()
-            .with_alignment(resolve_alignment_geometry(self.alignment, ctx))
+            .with_alignment(resolve_alignment_geometry(self.alignment, text_direction))
+            .with_text_direction(text_direction)
             .with_fit(self.fit)
             .with_index(self.index)
     }
@@ -206,8 +213,11 @@ where
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
+        let text_direction = resolve_text_direction(ctx);
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        impact |= render_object.set_alignment(resolve_alignment_geometry(self.alignment, ctx));
+        impact |=
+            render_object.set_alignment(resolve_alignment_geometry(self.alignment, text_direction));
+        impact |= render_object.set_text_direction(text_direction);
         impact |= render_object.set_fit(self.fit);
         impact |= render_object.set_index(self.index);
         impact
