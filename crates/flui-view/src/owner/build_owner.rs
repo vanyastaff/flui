@@ -773,6 +773,8 @@ impl BuildOwner {
     }
 
     /// Weak window capability, absent for a bare owner or one without a window.
+    /// Test-support only: the borrowed `BuildCtx` reads it off its capabilities.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn window_handle(&self) -> Option<crate::WindowHandle> {
         self.window_handle.clone()
     }
@@ -1331,12 +1333,10 @@ impl BuildOwner {
         self.tree_observer.clone()
     }
 
-    /// Record the reverse half of an inherited dependency registration.
-    ///
-    /// The caller writes the provider's forward map in the same critical
-    /// section. Keeping this method crate-private prevents consumers from
-    /// manufacturing an ownership edge without going through a real
-    /// `BuildContext::depend_on` lookup.
+    /// Record the reverse half of an inherited dependency registration, for the
+    /// test-only detached context. Test-support: the production drain applies
+    /// `DependentRecord`s directly.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn register_inherited_dependency(
         &mut self,
         dependent: ElementId,
@@ -1345,8 +1345,17 @@ impl BuildOwner {
         self.inherited_dependencies.register(dependent, provider);
     }
 
+    /// Record an inherited-dependency miss, for the test-only detached context.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn register_inherited_miss(&mut self, dependent: ElementId) {
         self.inherited_dependencies.register_miss(dependent, true);
+    }
+
+    /// A [`RebuildHandle`](super::RebuildHandle) for `element`, for the test-only
+    /// detached context.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn rebuild_handle(&self, element: ElementId) -> super::RebuildHandle {
+        super::RebuildHandle::new(self.external_scheduler(), element)
     }
 
     /// Build an [`ExternalBuildScheduler`] over this owner's shared inbox and
@@ -1354,19 +1363,13 @@ impl BuildOwner {
     ///
     /// The single construction point for the out-of-frame rebuild channel:
     /// [`ElementOwner::external_scheduler`](super::ElementOwner::external_scheduler)
-    /// and `ElementBuildContext::rebuild_handle` both route through it, so there
-    /// is exactly one inbox and one frame-request path.
+    /// and `testing::ElementBuildContext::rebuild_handle` both route through it,
+    /// so there is exactly one inbox and one frame-request path.
     pub(crate) fn external_scheduler(&self) -> ExternalBuildScheduler {
         ExternalBuildScheduler::from_parts(
             Arc::clone(&self.external_inbox),
             self.on_build_scheduled.clone(),
         )
-    }
-
-    /// A [`RebuildHandle`](super::RebuildHandle) for `element`, scheduling
-    /// through this owner's inbox.
-    pub(crate) fn rebuild_handle(&self, element: ElementId) -> super::RebuildHandle {
-        super::RebuildHandle::new(self.external_scheduler(), element)
     }
 
     /// What the most recent widget draw frame or explicit `build_scope`

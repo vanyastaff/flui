@@ -31,9 +31,10 @@ use std::sync::Arc;
 
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::testing::ElementBuildContext;
 use flui_view::{
-    BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, ElementTree, InheritedElement,
-    IntoView, RenderView, StatelessView, View, ViewExt, view::InheritedView,
+    BuildContext, BuildContextExt, BuildOwner, ElementTree, InheritedElement, IntoView, RenderView,
+    StatelessView, View, ViewExt, view::InheritedView,
 };
 use parking_lot::RwLock;
 

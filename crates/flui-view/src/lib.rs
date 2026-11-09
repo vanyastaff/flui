@@ -108,6 +108,8 @@ pub mod owner;
 pub mod persist;
 pub mod reactive;
 pub mod seq;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod tree;
 pub mod view;
 
@@ -199,10 +201,7 @@ pub use binding::{
 // Child helpers
 pub use child::{Child, Children};
 // Context
-pub use context::{
-    BuildContext, BuildContextExt, ElementBuildContext, ElementBuildContextBuilder,
-    LifecycleContext, LifecycleContextExt,
-};
+pub use context::{BuildContext, BuildContextExt, LifecycleContext, LifecycleContextExt};
 // Element types
 pub use element::Lifecycle;
 // Notification system

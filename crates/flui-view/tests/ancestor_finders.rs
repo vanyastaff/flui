@@ -19,9 +19,9 @@
 
 use std::sync::Arc;
 
+use flui_view::testing::ElementBuildContext;
 use flui_view::{
-    BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, ElementTree, IntoView,
-    StatelessView, View, ViewExt,
+    BuildContext, BuildContextExt, BuildOwner, ElementTree, IntoView, StatelessView, View, ViewExt,
 };
 use parking_lot::RwLock;
 

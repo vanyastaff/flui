@@ -28,9 +28,10 @@ use std::{
 };
 
 use flui_foundation::{ElementId, RenderId};
+use flui_view::testing::ElementBuildContext;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementBuildContext, ElementTree, IntoView,
-    Notification, StatelessView, View, ViewExt,
+    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Notification, StatelessView,
+    View, ViewExt,
     element::{Lifecycle, NotificationElementBase},
 };
 use parking_lot::RwLock;
