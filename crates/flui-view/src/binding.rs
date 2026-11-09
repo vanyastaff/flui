@@ -33,6 +33,7 @@
 mod tree_cell;
 
 use std::{
+    cell::RefCell,
     future::Future,
     pin::Pin,
     rc::Rc,
@@ -46,7 +47,6 @@ use flui_foundation::ElementId;
 use flui_foundation::inspect::{SnapshotError, SnapshotNode, SnapshotQuery};
 use flui_interaction::FocusManager;
 use flui_rendering::pipeline::PipelineCell;
-use parking_lot::RwLock;
 use tree_cell::TreeCell;
 use tree_cell::TreePhase;
 
@@ -330,7 +330,10 @@ pub struct WidgetsBinding {
     pub(crate) global_key_registry: crate::key::registry::GlobalKeyRegistryHandle,
 
     /// Callback when a frame is needed.
-    on_need_frame: RwLock<Option<Box<dyn Fn() + Send + Sync>>>,
+    ///
+    /// Owner-local: the binding never crosses a thread, so the callback needs
+    /// no `Send + Sync` (T02a).
+    on_need_frame: RefCell<Option<Box<dyn Fn()>>>,
 
     /// Whether the first frame has been rasterized.
     first_frame_rasterized: AtomicBool,
@@ -488,7 +491,7 @@ impl WidgetsBinding {
             lifecycle,
             inner,
             global_key_registry,
-            on_need_frame: RwLock::new(None),
+            on_need_frame: RefCell::new(None),
             first_frame_rasterized: AtomicBool::new(false),
             ready_to_produce_frames: AtomicBool::new(false),
             #[cfg(debug_assertions)]
@@ -579,9 +582,9 @@ impl WidgetsBinding {
     /// Set the callback for when a frame is needed.
     pub fn set_on_need_frame<F>(&self, callback: F)
     where
-        F: Fn() + Send + Sync + 'static,
+        F: Fn() + 'static,
     {
-        let _prev = self.on_need_frame.write().replace(Box::new(callback));
+        let _prev = self.on_need_frame.borrow_mut().replace(Box::new(callback));
     }
 
     // ========================================================================
@@ -1029,7 +1032,7 @@ impl WidgetsBinding {
     /// Taking `inner.read()` or `inner.write()` here would deadlock on
     /// parking_lot's non-reentrant `RwLock`. Instead the building flag is
     /// an `AtomicBool` on `WidgetsBinding` itself (outside `inner`), and
-    /// `on_need_frame` is its own separate `RwLock` that is never held
+    /// `on_need_frame` is its own separate `RefCell` that is never held
     /// across any `inner` critical section.
     ///
     /// # Panics (debug only)
@@ -1049,9 +1052,10 @@ impl WidgetsBinding {
         }
 
         // Request a frame from the scheduler.
-        // `on_need_frame` is a leaf RwLock — it is never held across any
-        // acquisition of `self.inner`, so taking it here is deadlock-free.
-        if let Some(ref callback) = *self.on_need_frame.read() {
+        // `on_need_frame` is a leaf `RefCell`, never held across any
+        // acquisition of `self.inner`.
+        let guard = self.on_need_frame.borrow();
+        if let Some(ref callback) = *guard {
             callback();
         }
     }
