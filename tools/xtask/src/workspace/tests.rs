@@ -196,6 +196,35 @@ fn a_crates_map_that_drifted_from_the_manifests_is_reported() {
     assert_eq!(fixture.findings(), Vec::<String>::new());
 }
 
+fn writing_the_crates_map_fixes_drift_and_keeps_the_text_around_it() {
+    let fixture = Fixture::new();
+    let path = fixture.root().join("docs/crates.md");
+    let (before, after) = ("# Crates\n\nintro text\n\n", "\n\nclosing text\n");
+    std::fs::write(
+        &path,
+        format!("{before}<!-- BEGIN crates-map -->\n| stale |\n<!-- END crates-map -->{after}"),
+    )
+    .expect("plant a drifted map");
+    assert_one(
+        &fixture.findings_as_committed(),
+        "docs/crates.md's tier table drifted from the manifests",
+    );
+    let metadata = util::metadata(fixture.root()).expect("cargo metadata on the fixture");
+    let members = Members::load(fixture.root(), &metadata).expect("fixture members load");
+    crates_map::write(fixture.root(), &members, &metadata.workspace_metadata)
+        .expect("write the crates map");
+    assert_eq!(fixture.findings_as_committed(), Vec::<String>::new());
+    let doc = std::fs::read_to_string(&path).expect("read the map");
+    assert!(
+        doc.starts_with(&format!("{before}<!-- BEGIN crates-map -->")),
+        "{doc}"
+    );
+    assert!(
+        doc.ends_with(&format!("<!-- END crates-map -->{after}")),
+        "{doc}"
+    );
+}
+
 fn a_missing_crates_map_or_marker_is_an_error() {
     let fixture = Fixture::new();
     let metadata = util::metadata(fixture.root()).expect("cargo metadata on the fixture");
@@ -959,6 +988,10 @@ fn workspace_gate_contract() {
             (
                 "a_crates_map_that_drifted_from_the_manifests_is_reported",
                 a_crates_map_that_drifted_from_the_manifests_is_reported as fn(),
+            ),
+            (
+                "writing_the_crates_map_fixes_drift_and_keeps_the_text_around_it",
+                writing_the_crates_map_fixes_drift_and_keeps_the_text_around_it as fn(),
             ),
             (
                 "a_missing_crates_map_or_marker_is_an_error",
