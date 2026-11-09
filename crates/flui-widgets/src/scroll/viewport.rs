@@ -6,15 +6,18 @@ use std::fmt;
 use flui_foundation::geometry::Axis;
 use flui_objects::{RenderShrinkWrappingViewport, RenderViewport};
 use flui_painting::paint::Clip;
+use flui_painting::typography::TextDirection;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::protocol::BoxProtocol;
 use flui_rendering::view::{
     CacheExtentStyle, ScrollPosition, SliverPaintOrder, ViewportOffset as _,
 };
 use flui_view::BoxedView;
+use flui_view::InheritedView;
 use flui_view::seq::ViewSeq;
 
 use crate::__private::generic_render_view_element;
+use crate::localization::Directionality;
 
 /// Where a [`Viewport`] or [`ShrinkWrappingViewport`]'s render object gets
 /// its scroll offset from. Shared by both widgets — they're two `RenderBox`
@@ -36,18 +39,29 @@ enum OffsetSource {
     Position(ScrollPosition),
 }
 
-/// The default cross-axis direction for a given scroll `axis_direction` —
-/// horizontal scroll axes lay their cross axis top-to-bottom, vertical axes
-/// lay theirs left-to-right. Mirrors `RenderViewport::new`'s own derivation
-/// (`flui_objects::sliver::viewport`'s private `default_cross_axis_direction`);
-/// duplicated here because `Viewport<ScrollPosition>` has no `::new`
-/// convenience constructor to inherit it from — only the 3-arg `with_offset`
-/// injection constructor, which takes both directions explicitly.
-fn default_cross_axis_direction(axis_direction: AxisDirection) -> AxisDirection {
+/// The cross-axis direction for a scroll `axis_direction`, given whether the
+/// ambient text direction is left-to-right. Horizontal scroll axes lay their
+/// cross axis top-to-bottom; vertical axes lay theirs left-to-right in LTR and
+/// right-to-left in RTL — the flip a vertical viewport was missing (T09).
+fn cross_axis_direction(axis_direction: AxisDirection, is_ltr: bool) -> AxisDirection {
     match axis_direction.axis() {
         Axis::Horizontal => AxisDirection::TopToBottom,
-        Axis::Vertical => AxisDirection::LeftToRight,
+        Axis::Vertical => AxisDirection::from_axis(Axis::Horizontal, !is_ltr),
     }
+}
+
+/// Resolve the cross-axis direction against the ambient [`Directionality`]. At
+/// mount the inherited read is not yet available, so an RTL viewport defaults to
+/// LTR and the first rebuild re-resolves it (T09).
+fn resolve_cross_axis_direction(
+    axis_direction: AxisDirection,
+    ctx: &flui_view::RenderObjectContext<'_>,
+) -> AxisDirection {
+    let is_ltr = ctx
+        .depend_on::<Directionality, _>(|d| *d.data())
+        .unwrap_or(TextDirection::Ltr)
+        .is_ltr();
+    cross_axis_direction(axis_direction, is_ltr)
 }
 
 /// A box render-object widget that drives a sequence of **sliver** children
@@ -169,8 +183,11 @@ impl<C> Viewport<C> {
         self
     }
 
-    fn build_render_object(&self) -> RenderViewport<ScrollPosition> {
-        let cross_axis_direction = default_cross_axis_direction(self.axis_direction);
+    fn build_render_object(
+        &self,
+        ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> RenderViewport<ScrollPosition> {
+        let cross_axis_direction = resolve_cross_axis_direction(self.axis_direction, ctx);
         let position = match &self.offset_source {
             OffsetSource::Fixed(pixels) => ScrollPosition::fixed(*pixels),
             OffsetSource::Position(position) => position.clone(),
@@ -219,22 +236,24 @@ where
     type Protocol = BoxProtocol;
     type RenderObject = RenderViewport<ScrollPosition>;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        self.build_render_object()
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        self.build_render_object(ctx)
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE; // Push the axis through on rebuild (reconciliation reuses the render
         // object), not just the scroll offset — otherwise a vertical↔horizontal
         // change keeps the stale axis from construction.
         impact |= render_object.set_axis_direction(self.axis_direction);
+        // The cross axis is direction-aware: re-resolve it (a vertical viewport
+        // flips its horizontal cross axis under RTL), after `set_axis_direction`
+        // laid down the LTR default.
+        impact |= render_object
+            .set_cross_axis_direction(resolve_cross_axis_direction(self.axis_direction, ctx));
         if let Some((extent, style)) = self.cache_extent {
             impact |= render_object.set_cache_extent(extent, style);
         }
@@ -364,8 +383,11 @@ impl<C> ShrinkWrappingViewport<C> {
         self
     }
 
-    fn build_render_object(&self) -> RenderShrinkWrappingViewport<ScrollPosition> {
-        let cross_axis_direction = default_cross_axis_direction(self.axis_direction);
+    fn build_render_object(
+        &self,
+        ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> RenderShrinkWrappingViewport<ScrollPosition> {
+        let cross_axis_direction = resolve_cross_axis_direction(self.axis_direction, ctx);
         let position = match &self.offset_source {
             OffsetSource::Fixed(pixels) => ScrollPosition::fixed(*pixels),
             OffsetSource::Position(position) => position.clone(),
@@ -404,16 +426,13 @@ where
     type Protocol = BoxProtocol;
     type RenderObject = RenderShrinkWrappingViewport<ScrollPosition>;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        self.build_render_object()
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        self.build_render_object(ctx)
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE; // Reconciliation reuses the render object across rebuilds, so a
@@ -421,6 +440,10 @@ where
         // (not just the scroll offset) — otherwise layout keeps the stale axis
         // from construction.
         impact |= render_object.set_axis_direction(self.axis_direction);
+        // Direction-aware cross axis, after `set_axis_direction` laid down the
+        // LTR default (T09).
+        impact |= render_object
+            .set_cross_axis_direction(resolve_cross_axis_direction(self.axis_direction, ctx));
         impact |= render_object.set_paint_order(self.paint_order);
         impact |= render_object.set_clip_behavior(self.clip_behavior);
         match &self.offset_source {
@@ -454,3 +477,40 @@ where
 }
 
 generic_render_view_element!(ShrinkWrappingViewport);
+
+#[cfg(test)]
+mod tests {
+    use super::cross_axis_direction;
+    use flui_rendering::constraints::AxisDirection;
+
+    /// The cross-axis direction matrix (T09): a horizontal scroll axis lays its
+    /// cross axis top-to-bottom under either text direction; a vertical one lays
+    /// its horizontal cross axis left-to-right in LTR and right-to-left in RTL.
+    #[test]
+    fn cross_axis_direction_matrix() {
+        for axis in [AxisDirection::LeftToRight, AxisDirection::RightToLeft] {
+            assert_eq!(
+                cross_axis_direction(axis, true),
+                AxisDirection::TopToBottom,
+                "{axis:?} (LTR)"
+            );
+            assert_eq!(
+                cross_axis_direction(axis, false),
+                AxisDirection::TopToBottom,
+                "{axis:?} (RTL)"
+            );
+        }
+        for axis in [AxisDirection::TopToBottom, AxisDirection::BottomToTop] {
+            assert_eq!(
+                cross_axis_direction(axis, true),
+                AxisDirection::LeftToRight,
+                "{axis:?} (LTR)"
+            );
+            assert_eq!(
+                cross_axis_direction(axis, false),
+                AxisDirection::RightToLeft,
+                "{axis:?} (RTL)"
+            );
+        }
+    }
+}

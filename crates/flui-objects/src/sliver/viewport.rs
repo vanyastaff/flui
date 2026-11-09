@@ -487,6 +487,34 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
+    /// Sets the cross-axis direction, overriding the LTR default
+    /// [`set_axis_direction`](Self::set_axis_direction) re-derives.
+    ///
+    /// A caller that reads an ambient text direction sets this after
+    /// [`set_axis_direction`](Self::set_axis_direction), which has already laid
+    /// down the LTR default — so an RTL `Directionality` flips a vertical
+    /// viewport's cross axis to right-to-left (T09).
+    ///
+    /// Reports layout when the cross axis actually changed.
+    #[inline]
+    pub fn set_cross_axis_direction(
+        &mut self,
+        cross_axis_direction: AxisDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.cross_axis_direction == cross_axis_direction {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.cross_axis_direction = cross_axis_direction;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
+    /// The configured cross-axis direction.
+    #[inline]
+    #[must_use]
+    pub const fn cross_axis_direction(&self) -> AxisDirection {
+        self.cross_axis_direction
+    }
+
     /// Sets the index of the first forward child (the `center`).
     ///
     /// `None` (the default) means index `0`: every child grows forward, from
@@ -1442,6 +1470,31 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
         self.axis_direction = axis_direction;
         self.cross_axis_direction = default_cross_axis_direction(axis_direction);
         flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
+    /// Sets the cross-axis direction, overriding the LTR default
+    /// [`set_axis_direction`](Self::set_axis_direction) re-derives — an RTL
+    /// `Directionality` flips a vertical viewport's cross axis to
+    /// right-to-left (T09).
+    ///
+    /// Reports layout when the cross axis actually changed.
+    #[inline]
+    pub fn set_cross_axis_direction(
+        &mut self,
+        cross_axis_direction: AxisDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.cross_axis_direction == cross_axis_direction {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.cross_axis_direction = cross_axis_direction;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
+    /// The configured cross-axis direction.
+    #[inline]
+    #[must_use]
+    pub const fn cross_axis_direction(&self) -> AxisDirection {
+        self.cross_axis_direction
     }
 
     /// Last total scroll extent reported by the sliver sequence.

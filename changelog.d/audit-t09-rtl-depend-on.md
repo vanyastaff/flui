@@ -5,6 +5,13 @@
   `Directionality` inside the render object — so an RTL flip re-lays them out. `From<Alignment>`
   keeps every `Alignment` call site compiling.
 
+### Fixed
+
+- **`flui-widgets`**: a vertical `Viewport`/`ShrinkWrappingViewport` under right-to-left text now
+  lays its horizontal cross axis right-to-left (previously hardcoded left-to-right). The render
+  objects gain `set_cross_axis_direction`/`cross_axis_direction` and the widgets resolve the
+  direction from the ambient `Directionality`.
+
 ### Removed
 
 - **`flui-widgets`**: `resolve_alignment`, the build-side seam that resolved a directional
