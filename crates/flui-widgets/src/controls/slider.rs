@@ -324,10 +324,7 @@ impl ViewState<Slider> for SliderState {
             .label(view.label.clone())
             .identifier_if(view.identifier.as_ref())
             .enabled(enabled)
-            .text_direction(match direction {
-                TextDirection::Ltr => crate::SemanticsTextDirection::Ltr,
-                TextDirection::Rtl => crate::SemanticsTextDirection::Rtl,
-            });
+            .text_direction(direction);
         if enabled {
             let increase = Terminal::new(Rc::clone(&self.live));
             let decrease = Terminal::new(Rc::clone(&self.live));

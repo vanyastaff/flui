@@ -71,7 +71,7 @@ type Options = HashMap<&'static str, Variant<'static>>;
 
 fn dialog_error(error: PortalError) -> DialogError {
     match error {
-        PortalError::Unavailable(reason) => DialogError::Unavailable(reason),
+        PortalError::Unsupported(unsupported) => DialogError::Unsupported(unsupported),
         PortalError::Failed => DialogError::Failed { code: 0 },
     }
 }

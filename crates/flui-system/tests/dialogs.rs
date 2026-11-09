@@ -207,3 +207,25 @@ fn a_backend_that_drops_its_answer_ends_the_dialog_and_frees_the_window() {
         "not Busy: the dropped answer freed the window"
     );
 }
+
+#[test]
+fn a_dialog_error_carries_its_unsupported() {
+    use std::error::Error;
+
+    use flui_platform::{Unsupported, UnsupportedReason};
+
+    let unsupported = Unsupported::new(UnsupportedReason::Unavailable);
+    let error = DialogError::from(unsupported);
+    assert_eq!(error.unsupported(), Some(unsupported));
+    assert_eq!(
+        error
+            .source()
+            .and_then(|source| source.downcast_ref::<Unsupported>()),
+        Some(&unsupported)
+    );
+    assert_eq!(
+        error.to_string(),
+        "the dialog service cannot do this: unsupported: unavailable for now"
+    );
+    assert_eq!(DialogError::Busy.unsupported(), None);
+}
