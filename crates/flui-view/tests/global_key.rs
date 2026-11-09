@@ -11,10 +11,6 @@
 //! creates fresh state on remount; the implementation below makes them
 //! pass.
 
-// ADR-0027: ElementBuildContext's current test/prod seam still takes
-// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
-// Send + Sync to satisfy clippy. Future UiRuntime/Rc migration should remove this.
-
 use flui_foundation::ViewKey;
 // The duplicate-key fixture runs only where the debug check panics.
 #[cfg(debug_assertions)]

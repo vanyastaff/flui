@@ -517,11 +517,11 @@ pub struct BuildOwner {
     /// `ElementOwner::register_child_manager` / `unregister_child_manager`
     /// split-borrow methods.
     ///
-    /// `Rc<RefCell<…>>` (not a plain `HashMap`) so `ElementOwner` can carry a
-    /// `&'a Rc<…>` reference — the same pattern as `external_inbox`. The outer
-    /// `Arc` lets `service_child_requests` clone individual manager `Rc`s out
-    /// of the registry before calling service (releasing the registry borrow
-    /// before the potentially long service call).
+    /// A `RefCell` (not a plain `HashMap`) so `ElementOwner` can carry a
+    /// shared `&'a` reference and still register and unregister managers.
+    /// `service_child_requests` clones the manager `Rc`s out of it before
+    /// calling service, releasing the registry borrow before the potentially
+    /// long service call.
     pub(crate) child_manager_registry: ChildManagerRegistry,
 
     /// Registry of live build-during-layout nodes, one per
@@ -738,7 +738,7 @@ impl BuildOwner {
             mid_drain_cap_streak: false,
             built_this_frame: HashSet::new(),
             frame_builds: Box::default(),
-            child_manager_registry: Rc::new(RefCell::new(HashMap::new())),
+            child_manager_registry: RefCell::new(HashMap::new()),
             layout_builder_registry: LayoutBuilderRegistry::default(),
             lazy_band_pass_budget: super::layout_builder::MAX_LAZY_BAND_PASSES,
             build_scope_queues: None,
@@ -1331,31 +1331,6 @@ impl BuildOwner {
     #[must_use]
     pub fn tree_observer(&self) -> Option<Arc<dyn flui_foundation::observe::TreeObserver>> {
         self.tree_observer.clone()
-    }
-
-    /// Record the reverse half of an inherited dependency registration, for the
-    /// test-only detached context. Test-support: the production drain applies
-    /// `DependentRecord`s directly.
-    #[cfg(any(test, feature = "testing"))]
-    pub(crate) fn register_inherited_dependency(
-        &mut self,
-        dependent: ElementId,
-        provider: ElementId,
-    ) {
-        self.inherited_dependencies.register(dependent, provider);
-    }
-
-    /// Record an inherited-dependency miss, for the test-only detached context.
-    #[cfg(any(test, feature = "testing"))]
-    pub(crate) fn register_inherited_miss(&mut self, dependent: ElementId) {
-        self.inherited_dependencies.register_miss(dependent, true);
-    }
-
-    /// A [`RebuildHandle`](super::RebuildHandle) for `element`, for the test-only
-    /// detached context.
-    #[cfg(any(test, feature = "testing"))]
-    pub(crate) fn rebuild_handle(&self, element: ElementId) -> super::RebuildHandle {
-        super::RebuildHandle::new(self.external_scheduler(), element)
     }
 
     /// Build an [`ExternalBuildScheduler`] over this owner's shared inbox and
@@ -2456,7 +2431,7 @@ impl BuildOwner {
             ids.into_iter().collect()
         };
 
-        // 3. Clone manager Arcs out of the registry before any service call.
+        // 3. Clone manager Rcs out of the registry before any service call.
         //    This releases the registry borrow so that service calls that call
         //    `register_child_manager` / `unregister_child_manager` through an
         //    `ElementOwner` can re-enter the registry without re-borrowing.

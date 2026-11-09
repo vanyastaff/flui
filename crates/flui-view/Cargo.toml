@@ -70,7 +70,7 @@ tracing-subscriber = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Self-reference so integration tests reach the `testing` module (the owned,
-# detached `ElementBuildContext` that moved there, T02a). Checkout-only.
+# detached `ElementBuildContext`). Checkout-only.
 flui-view = { path = ".", features = ["testing"] }
 # `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
 # tests call so a sibling test cannot poison their callsites' cached interest.

@@ -44,16 +44,16 @@ use crate::{ElementOwner, tree::ElementTree};
 
 /// Registry mapping a sliver's [`RenderId`] to its live [`ChildManager`].
 ///
-/// Type alias to satisfy `clippy::type_complexity`. Carried by
-/// [`BuildOwner`](crate::BuildOwner) as an owned `Rc` and borrowed by
-/// [`ElementOwner`] as `&'a ChildManagerRegistry`.
+/// Type alias to satisfy `clippy::type_complexity`. Owned by
+/// [`BuildOwner`](crate::BuildOwner) and borrowed by [`ElementOwner`] as
+/// `&'a ChildManagerRegistry`.
 ///
-/// The outer `Rc<RefCell<…>>` lets `service_child_requests` clone individual
-/// manager `Rc`s out of the registry before calling `service` (releasing the
-/// registry borrow before the potentially long service call, and avoiding
-/// re-entrancy panics when `service` triggers `on_mount`/`on_unmount`).
-pub(crate) type ChildManagerRegistry =
-    Rc<RefCell<HashMap<RenderId, Rc<RefCell<dyn ChildManager>>>>>;
+/// Each manager is its own `Rc<RefCell<…>>` so `service_child_requests` can
+/// clone the managers it services out of the registry and release the
+/// registry's borrow before calling `service`: the service call may register
+/// or unregister managers (`on_mount`/`on_unmount`) without a re-entrant
+/// borrow.
+pub(crate) type ChildManagerRegistry = RefCell<HashMap<RenderId, Rc<RefCell<dyn ChildManager>>>>;
 
 /// Object-safe hook called by [`BuildOwner::service_child_requests`] after each
 /// layout pass to build missing lazy children and evict off-band ones.
@@ -69,7 +69,7 @@ pub(crate) type ChildManagerRegistry =
 ///
 /// The trait is object-safe by design: all parameters are concrete types or
 /// references; no associated types or generic methods. The registry is
-/// owner-local (`Rc<RefCell<…>>`), so the manager needs no `Send` bound (T02a).
+/// owner-local (`Rc<RefCell<…>>`), so the manager needs no `Send` bound.
 ///
 /// [`BuildOwner::service_child_requests`]: crate::BuildOwner::service_child_requests
 pub(crate) trait ChildManager {

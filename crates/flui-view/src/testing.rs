@@ -1,6 +1,17 @@
-//! Test-support build context: an owned, detached BuildContext a test can
-//! construct without running `build_scope` (ADR-0243). The production path
-//! uses the borrowed BuildCtx; this owned form exists only for tests.
+//! Test support for `flui-view` (ADR-0243).
+//!
+//! [`ElementBuildContext`] is an owned, detached [`BuildContext`] a test
+//! builds for a mounted element without running `build_scope`. Production
+//! builds use the borrowed context `build_scope` hands each element. The
+//! detached form records dependencies straight into the owner, which the
+//! production drain never does, so it is deprecated: a test reads the context
+//! from inside a build instead, and the type goes once its remaining tests
+//! have moved (`docs/gaps.md`).
+
+#![expect(
+    deprecated,
+    reason = "the deprecated detached context is defined and implemented here"
+)]
 
 use std::{
     any::{Any, TypeId},
@@ -20,10 +31,9 @@ use crate::{
     tree::ElementTree,
 };
 
-/// Concrete BuildContext implementation for Elements.
+/// An owned, detached [`BuildContext`] for one mounted element.
 ///
-/// `ElementBuildContext` presents one element's owner-local
-/// [`BuildContext`] surface, giving Views access to:
+/// It presents the element's owner-local [`BuildContext`] surface:
 /// - Element identity and tree position
 /// - InheritedView lookups (O(1) via each node's `inherited` map)
 /// - Ancestor traversal
@@ -33,9 +43,10 @@ use crate::{
 ///
 /// The context is owner-local: `Rc<RefCell<…>>` tree and owner, so it is
 /// `!Send + !Sync`.
-///
-/// `Element` does not implement `BuildContext` directly: a separate struct
-/// avoids borrow checker issues with self-referential borrows during build.
+#[deprecated(
+    note = "read the `BuildContext` inside a view's `build` driven by `BuildOwner::build_scope`; \
+            this detached context is removed once its remaining tests move"
+)]
 pub struct ElementBuildContext {
     /// The ElementId this context represents.
     element_id: ElementId,
@@ -72,58 +83,29 @@ impl std::fmt::Debug for ElementBuildContext {
 }
 
 impl ElementBuildContext {
-    /// Create a new ElementBuildContext.
-    ///
-    /// # Arguments
-    ///
-    /// * `element_id` - The ElementId this context represents
-    /// * `depth` - Depth in the element tree
-    /// * `mounted` - Whether the element is currently mounted
-    /// * `tree` - Shared reference to the element tree
-    /// * `owner` - Shared reference to the build owner
-    ///
-    /// Takes a read lock on `owner` to capture its reactive graph, so it must
-    /// not be called while the caller holds `owner`'s write lock.
-    pub fn new(
-        element_id: ElementId,
-        depth: usize,
-        mounted: bool,
-        tree: Rc<RefCell<ElementTree>>,
-        owner: Rc<RefCell<BuildOwner>>,
-    ) -> Self {
-        let reads = ElementReads::new(owner.borrow().reactive().clone(), element_id);
-        Self {
-            element_id,
-            depth,
-            mounted,
-            tree,
-            owner,
-            reads,
-            #[cfg(debug_assertions)]
-            is_building: false,
-        }
-    }
-
     /// Create a context for a specific element from the tree.
     ///
     /// Returns None if the element doesn't exist in the tree.
     ///
-    /// Takes a read lock on `owner` (as [`new`](Self::new) does).
-    #[expect(clippy::needless_pass_by_value)] // Arc is cloned into Self, taking by value is idiomatic
+    /// Borrows `owner` to capture its reactive graph, so it must not be called
+    /// while the caller holds `owner` mutably borrowed.
     pub fn for_element(
         element_id: ElementId,
         tree: Rc<RefCell<ElementTree>>,
         owner: Rc<RefCell<BuildOwner>>,
     ) -> Option<Self> {
-        let tree_guard = tree.borrow();
-        let node = tree_guard.get(element_id)?;
+        let (depth, mounted) = {
+            let tree = tree.borrow();
+            let node = tree.get(element_id)?;
+            (node.depth(), node.element().mounted())
+        };
         let reads = ElementReads::new(owner.borrow().reactive().clone(), element_id);
 
         Some(Self {
             element_id,
-            depth: node.depth(),
-            mounted: node.element().mounted(),
-            tree: tree.clone(),
+            depth,
+            mounted,
+            tree,
             owner,
             reads,
             #[cfg(debug_assertions)]
@@ -169,7 +151,7 @@ impl ElementBuildContext {
     ///
     /// The tree read-lock is held for the duration of the walk so the
     /// `&dyn ElementBase` reference handed to `predicate` cannot escape
-    /// the closure ΓÇö preserves the declarative-build invariant
+    /// the closure — preserves the declarative-build invariant
     /// (Constitution Principle 5).
     fn walk_strict_ancestors<R>(
         &self,
@@ -258,7 +240,8 @@ impl BuildContext for ElementBuildContext {
         let Some(ancestor_id) = self.find_inherited_provider(type_id) else {
             self.owner
                 .borrow_mut()
-                .register_inherited_miss(self.element_id);
+                .inherited_dependencies
+                .register_miss(self.element_id, true);
             return false;
         };
 
@@ -292,7 +275,7 @@ impl BuildContext for ElementBuildContext {
         let Some(accessor) = node.element_mut().as_inherited_mut() else {
             // Matched view-type but not actually an InheritedElement;
             // means a non-inherited view shares the TypeId, which is
-            // impossible under TypeId semantics ΓÇö defensive return.
+            // impossible under TypeId semantics — defensive return.
             return false;
         };
 
@@ -305,7 +288,7 @@ impl BuildContext for ElementBuildContext {
             self_depth,
             mask,
         );
-        owner.register_inherited_dependency(self_id, ancestor_id);
+        owner.inherited_dependencies.register(self_id, ancestor_id);
         drop(owner);
 
         // Hand the view out to the callback. The view reference is
@@ -319,7 +302,7 @@ impl BuildContext for ElementBuildContext {
 
     fn get_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
         // Same ancestor walk as depend_on_inherited, but does NOT
-        // record a dependency ΓÇö we share the walk + downcast logic and
+        // record a dependency — we share the walk + downcast logic and
         // skip the `record_dependent` call.
         let Some(ancestor_id) = self.find_inherited_provider(type_id) else {
             return false;
@@ -358,7 +341,7 @@ impl BuildContext for ElementBuildContext {
     fn find_ancestor_view(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
         // Walk strict-ancestors, break on the first whose View's
         // TypeId matches. The callback runs inside `walk_strict_ancestors`
-        // while the tree read-lock is held ΓÇö preserves declarative-build
+        // while the tree read-lock is held — preserves declarative-build
         // invariant.
         //
         // Returns the view of the first ancestor whose view type equals the
@@ -410,7 +393,7 @@ impl BuildContext for ElementBuildContext {
         // AND mutably borrow `callback: &mut dyn FnMut` (to invoke it
         // on that last match). The two-phase approach keeps each
         // borrow disjoint and gives us O(depth) walks with no clones
-        // ΓÇö the tree is single-threaded during build, so the re-lock
+        // — the tree is single-threaded during build, so the re-lock
         // is essentially free.
         //
         // The shared `walk_strict_ancestors` helper isn't reused here
@@ -427,7 +410,7 @@ impl BuildContext for ElementBuildContext {
         // `root_most` mutably and always returns `Continue` so the walk
         // exhausts the entire ancestor chain. We need the matching
         // ancestor's `ElementId`, but the walker only exposes
-        // `&dyn ElementBase` ΓÇö we work around that by parameterising R
+        // `&dyn ElementBase` — we work around that by parameterising R
         // on `Option<ElementId>` and threading the candidate id through
         // the closure via a small index counter. Simpler still: do the
         // walk inline but in a `while let` shape that satisfies
@@ -473,13 +456,13 @@ impl BuildContext for ElementBuildContext {
     fn find_render_object(&self) -> Option<RenderId> {
         // Walk strict-ancestors, break on the first whose
         // `ElementBase::render_id` returns `Some`. Only
-        // `RenderBehavior<V>` overrides the trait default ΓÇö every other
+        // `RenderBehavior<V>` overrides the trait default — every other
         // behavior (Stateless / Proxy / Inherited / Stateful / Animation)
         // keeps `None`, so non-render ancestors are skipped cleanly.
         //
         // Non-callback signature is sound: `RenderId` is `Copy`, so we
         // can hand it out directly without extending a `&self` borrow
-        // into the rest of `build()` (plan ┬ºD2).
+        // into the rest of `build()` (plan §D2).
         //
         // The walk reads `RenderBehavior::render_id` at the dispatch boundary
         // of the first matching render element.
@@ -518,8 +501,8 @@ impl BuildContext for ElementBuildContext {
             );
         }
 
-        // E3 (atomic boxΓåÆarena swap): a node's children are its
-        // slab-resident `child_ids` list ΓÇö the single element graph.
+        // E3 (atomic box→arena swap): a node's children are its
+        // slab-resident `child_ids` list — the single element graph.
         let tree = self.tree.borrow();
         if let Some(node) = tree.get(self.element_id) {
             for child_id in node.child_ids() {
@@ -549,7 +532,7 @@ impl BuildContext for ElementBuildContext {
         // `&dyn Any` via the `Any` supertrait (Rust 1.86+ trait upcasting,
         // stable in this workspace). `TypeId::of::<N>()` for the static
         // type is recovered from the notification value itself via
-        // `Any::type_id` ΓÇö sound because `Notification: Any` guarantees
+        // `Any::type_id` — sound because `Notification: Any` guarantees
         // the concrete-type vtable carries it.
         //
         // The dispatch walks the ancestors, invoking each notification
@@ -576,10 +559,10 @@ impl BuildContext for ElementBuildContext {
 
 impl LifecycleContext for ElementBuildContext {
     fn rebuild_handle(&self) -> crate::RebuildHandle {
-        // A real handle: the owner Arc is right here. The read lock is held only
-        // to clone the shared inbox + frame-request Arcs out; nothing is held
+        // A real handle: the owner is right here. Its borrow is held only to
+        // clone the shared inbox and frame-request hook out; nothing is held
         // across the returned handle's lifetime.
-        self.owner.borrow().rebuild_handle(self.element_id)
+        crate::RebuildHandle::new(self.owner.borrow().external_scheduler(), self.element_id)
     }
     fn writer_source(&self) -> crate::WriterSource {
         crate::WriterSource::new(self.reads.graph().clone())
@@ -652,66 +635,9 @@ impl LifecycleContext for ElementBuildContext {
         self.owner.borrow().focus_manager()
     }
     /// See [`LifecycleContext::pipeline_owner`]. The owner is on this element's own
-    /// node ΓÇö no ancestor walk.
+    /// node — no ancestor walk.
     fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
         let tree = self.tree.borrow();
         tree.get(self.element_id)?.element().pipeline_owner()
-    }
-}
-// Builder for ElementBuildContext
-// ============================================================================
-
-/// Builder for creating ElementBuildContext instances.
-#[derive(Debug)]
-pub struct ElementBuildContextBuilder {
-    tree: Option<Rc<RefCell<ElementTree>>>,
-    owner: Option<Rc<RefCell<BuildOwner>>>,
-}
-
-impl Default for ElementBuildContextBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ElementBuildContextBuilder {
-    /// Create a new builder.
-    pub fn new() -> Self {
-        Self {
-            tree: None,
-            owner: None,
-        }
-    }
-
-    /// Set the element tree.
-    #[must_use]
-    pub fn tree(mut self, tree: Rc<RefCell<ElementTree>>) -> Self {
-        self.tree = Some(tree);
-        self
-    }
-
-    /// Set the build owner.
-    #[must_use]
-    pub fn owner(mut self, owner: Rc<RefCell<BuildOwner>>) -> Self {
-        self.owner = Some(owner);
-        self
-    }
-
-    /// Build a context for the given element.
-    pub fn build_for(self, element_id: ElementId) -> Option<ElementBuildContext> {
-        let tree = self.tree?;
-        let owner = self.owner?;
-
-        ElementBuildContext::for_element(element_id, tree, owner)
-    }
-
-    /// Create shared tree and owner, returning them along with the builder.
-    pub fn with_new_tree_and_owner(
-        self,
-    ) -> (Self, Rc<RefCell<ElementTree>>, Rc<RefCell<BuildOwner>>) {
-        let tree = Rc::new(RefCell::new(ElementTree::new()));
-        let owner = Rc::new(RefCell::new(BuildOwner::new()));
-
-        (self.tree(tree.clone()).owner(owner.clone()), tree, owner)
     }
 }

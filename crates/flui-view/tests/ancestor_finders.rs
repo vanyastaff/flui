@@ -12,9 +12,10 @@
 //! `inherited_dependency.rs`. The dependent-tracking concerns of the
 //! inherited-lookup APIs are out of scope here: these finders are read-only walks.
 
-// ADR-0027: ElementBuildContext's current test/prod seam still takes
-// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
-// Send + Sync to satisfy clippy. Future UiRuntime/Rc migration should remove this.
+#![expect(
+    deprecated,
+    reason = "these tests still read a detached `ElementBuildContext`; docs/gaps.md tracks moving them into a build"
+)]
 
 use flui_view::testing::ElementBuildContext;
 use flui_view::{

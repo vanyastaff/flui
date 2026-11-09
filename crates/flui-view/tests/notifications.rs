@@ -14,9 +14,10 @@
 //! NotificationListener[middle] → DummyChild. From the child the test
 //! dispatches via `ctx.dispatch_notification(ScrollNotification {..})`.
 
-// ADR-0027: ElementBuildContext's current test/prod seam still takes
-// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
-// Send + Sync to satisfy clippy. Future UiRuntime/Rc migration should remove this.
+#![expect(
+    deprecated,
+    reason = "these tests still read a detached `ElementBuildContext`; docs/gaps.md tracks moving them into a build"
+)]
 
 use std::{
     marker::PhantomData,

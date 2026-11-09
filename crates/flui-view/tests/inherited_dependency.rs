@@ -19,13 +19,14 @@
 //!   one-time reads (settings/theme captured at mount).
 //! - Edge: no ancestor of `T` -> returns `None`, no dependent-set write.
 
+#![expect(
+    deprecated,
+    reason = "these tests still read a detached `ElementBuildContext`; docs/gaps.md tracks moving them into a build"
+)]
+
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-// ADR-0027: ElementBuildContext's current test/prod seam still takes
-// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
-// Send + Sync to satisfy clippy. Future UiRuntime/Rc migration should remove this.
-
 use std::sync::Arc;
 
 use flui_objects::RenderSizedBox;

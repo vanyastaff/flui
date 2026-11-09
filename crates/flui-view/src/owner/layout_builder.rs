@@ -30,10 +30,9 @@
 //! but only its element registers here; app code never touches the registry.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     rc::Rc,
-    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use flui_foundation::{ElementId, RenderId};
@@ -187,37 +186,39 @@ pub(crate) struct LayoutBuilderEntry {
 
 /// Registry of live build-during-layout nodes, keyed by render id.
 ///
-/// The map stays behind a private mutex because element lifecycle paths hold a
-/// split borrow of the registry. An atomic length keeps the empty-registry frame
-/// path lock-free; insertion/removal updates it while holding the map lock.
+/// The map sits in a private `RefCell` because element lifecycle paths hold a
+/// shared split borrow of the registry. A mirrored length answers the
+/// empty-registry frame path without borrowing the map, even while a
+/// `with_entries_mut` caller holds it; every mutation updates it before its
+/// borrow ends.
 ///
 /// [`ElementOwner`]: super::ElementOwner
 #[derive(Debug, Default)]
 pub(crate) struct LayoutBuilderRegistry {
     entries: RefCell<HashMap<RenderId, LayoutBuilderEntry>>,
-    len: AtomicUsize,
+    len: Cell<usize>,
 }
 
 impl LayoutBuilderRegistry {
     pub(crate) fn insert(&self, render_id: RenderId, entry: LayoutBuilderEntry) {
         let mut entries = self.entries.borrow_mut();
         entries.insert(render_id, entry);
-        self.len.store(entries.len(), Ordering::Release);
+        self.len.set(entries.len());
     }
 
     pub(crate) fn remove(&self, render_id: RenderId) {
         let mut entries = self.entries.borrow_mut();
         entries.remove(&render_id);
-        self.len.store(entries.len(), Ordering::Release);
+        self.len.set(entries.len());
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.len.load(Ordering::Acquire) == 0
+        self.len.get() == 0
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn len(&self) -> usize {
-        self.len.load(Ordering::Acquire)
+        self.len.get()
     }
 
     pub(crate) fn with_entries<R>(
@@ -233,7 +234,7 @@ impl LayoutBuilderRegistry {
     ) -> R {
         let mut entries = self.entries.borrow_mut();
         let result = f(&mut entries);
-        self.len.store(entries.len(), Ordering::Release);
+        self.len.set(entries.len());
         result
     }
 }

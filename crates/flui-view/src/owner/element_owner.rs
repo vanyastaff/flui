@@ -805,13 +805,13 @@ impl ElementOwner<'_> {
     /// Tell the lazy sliver whose render node is `host_render_id` — if one is
     /// registered — that `child` was grafted away by a `GlobalKey` retake.
     ///
-    /// The manager `Arc` is cloned out first so the registry lock is not
-    /// held across the call. The manager's own lock is taken with
-    /// `try_lock`: the only way it can already be held is a retake running
-    /// *inside* that same manager's `service` (a child moving within one
-    /// list, which the retake path rejects earlier as a duplicate), so a
-    /// contended lock here is a bug worth a loud debug failure, never a
-    /// hang.
+    /// The manager `Rc` is cloned out first so the registry borrow is not
+    /// held across the call. The manager itself is borrowed with
+    /// `try_borrow_mut`: the only way it can already be borrowed is a retake
+    /// running *inside* that same manager's `service` (a child moving within
+    /// one list, which the retake path rejects earlier as a duplicate), so a
+    /// refused borrow here is a bug worth a loud debug failure, never a
+    /// release-build panic.
     pub(crate) fn forget_sparse_child(&self, host_render_id: RenderId, child: ElementId) {
         let manager = self
             .child_manager_registry

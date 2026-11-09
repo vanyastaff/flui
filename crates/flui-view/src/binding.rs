@@ -332,8 +332,9 @@ pub struct WidgetsBinding {
     /// Callback when a frame is needed.
     ///
     /// Owner-local: the binding never crosses a thread, so the callback needs
-    /// no `Send + Sync` (T02a).
-    on_need_frame: RefCell<Option<Box<dyn Fn()>>>,
+    /// no `Send + Sync`. `Rc` so a call can clone it out of the cell and run
+    /// it with the cell's borrow released.
+    on_need_frame: RefCell<Option<Rc<dyn Fn()>>>,
 
     /// Whether the first frame has been rasterized.
     first_frame_rasterized: AtomicBool,
@@ -584,7 +585,9 @@ impl WidgetsBinding {
     where
         F: Fn() + 'static,
     {
-        let _prev = self.on_need_frame.borrow_mut().replace(Box::new(callback));
+        // The replaced callback drops after the borrow ends, so its `Drop`
+        // may reach this binding again.
+        let _prev = self.on_need_frame.borrow_mut().replace(Rc::new(callback));
     }
 
     // ========================================================================
@@ -1023,17 +1026,18 @@ impl WidgetsBinding {
     /// Checks that we're not currently building, then requests a frame from
     /// the scheduler.
     ///
-    /// # Deadlock-safety
+    /// # Re-entrancy
     ///
-    /// This method is intentionally **lock-free w.r.t. `self.inner`**.
+    /// This method never borrows `self.inner`.
     ///
     /// It is called from inside `build_scope` (via the `on_build_scheduled`
-    /// callback on `BuildOwner`) while `draw_frame` holds `inner.write()`.
-    /// Taking `inner.read()` or `inner.write()` here would deadlock on
-    /// parking_lot's non-reentrant `RwLock`. Instead the building flag is
-    /// an `AtomicBool` on `WidgetsBinding` itself (outside `inner`), and
-    /// `on_need_frame` is its own separate `RefCell` that is never held
-    /// across any `inner` critical section.
+    /// callback on `BuildOwner`) while `draw_frame` holds `inner.write()`,
+    /// so borrowing `inner` here would be refused as re-entry. Instead the
+    /// building flag is an `AtomicBool` on `WidgetsBinding` itself (outside
+    /// `inner`). The `on_need_frame` callback is cloned out of its cell and
+    /// called with no borrow held, so it may call
+    /// [`set_on_need_frame`](Self::set_on_need_frame) or schedule another
+    /// build.
     ///
     /// # Panics (debug only)
     ///
@@ -1051,11 +1055,11 @@ impl WidgetsBinding {
             );
         }
 
-        // Request a frame from the scheduler.
-        // `on_need_frame` is a leaf `RefCell`, never held across any
-        // acquisition of `self.inner`.
-        let guard = self.on_need_frame.borrow();
-        if let Some(ref callback) = *guard {
+        // Request a frame from the scheduler. The callback is user code: the
+        // cell's borrow ends before it runs, and the clone keeps a callback
+        // that replaces itself alive until it returns.
+        let callback = self.on_need_frame.borrow().clone();
+        if let Some(callback) = callback {
             callback();
         }
     }
