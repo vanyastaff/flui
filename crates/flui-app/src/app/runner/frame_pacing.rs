@@ -44,7 +44,7 @@ pub(super) fn install_pre_present_hook(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WakeAction {
     /// Run the full frame pipeline — the pre-existing path, unchanged:
-    /// frames are enabled and there is real work or a scheduled ticker.
+    /// frames are enabled and there is real work or a requested frame.
     Render,
     /// Frames are disabled (`AppLifecycleState::Hidden`/`Paused`/
     /// `Detached`): drain owner commands, poll ready async tasks, and service
@@ -53,13 +53,13 @@ pub(super) enum WakeAction {
     /// presentation do not run.
     PumpBackground,
     /// A spurious wake while frames are enabled: nothing dirty, no
-    /// scheduled ticker. No render, no pump, no sleep.
+    /// requested frame. No render, no pump, no sleep.
     Skip,
 }
 
 /// Decides what a platform wake should do, given the scheduler's
 /// [`UpdateScheduler::frames_enabled`](flui_scheduler::UpdateScheduler::frames_enabled) fact (ADR-0035) alongside the pre-existing
-/// dirty/scheduled-ticker signals.
+/// dirty/frame-requested signals.
 ///
 /// `frames_enabled == false` takes priority over everything else — even
 /// with visual `dirty` work pending, a backgrounded app services owner commands,
@@ -70,19 +70,21 @@ pub(super) enum WakeAction {
 ///
 /// `dirty` is true when there is real work (an inbox redraw request,
 /// `needs_redraw`, or dirty pipeline nodes); `frame_scheduled` is true when
-/// the global `UpdateScheduler` has a pending frame callback (a scheduled
-/// transient callback or microtask — not a running `AnimationController`,
-/// which ticks through its presentation's `Vsync`, never the scheduler
-/// ticker).
+/// the global `UpdateScheduler` has a requested frame it has not begun yet:
+/// any `UpdateScheduler::request_frame` or `FrameWaker::request_frame` sets it
+/// (a task's waker, for one) and beginning the frame clears it. An animation
+/// does not set it by itself: controllers tick through their presentation's
+/// `Vsync`, and a pump that leaves one running re-requests a frame through
+/// `wake_frame`, which sets `needs_redraw`.
 pub(super) fn wake_action(
     frames_enabled: bool,
     dirty: bool,
     frame_scheduled: bool,
     fallback: FallbackGate,
 ) -> WakeAction {
-    // A scheduled ticker alone renders — unless a fallback wake is armed
+    // A requested frame alone renders — unless a fallback wake is armed
     // and not yet due (ADR-0058): the previous pump ran the pipeline for
-    // this ticker and presented nothing (no visible change in the ~0.2 ms
+    // this request and presented nothing (no visible change in the ~0.2 ms
     // since the last present), so re-running it now would only repeat
     // that; the armed deadline brings the loop back exactly one display
     // period after the last present, and real dirty work (`dirty`) is
@@ -148,7 +150,7 @@ pub(super) fn frame_is_dirty(
     fallback: FallbackGate,
 ) -> bool {
     // `needs_redraw` is also the ui_runtime's OWN echo: every pump with a
-    // running ticker ends by re-requesting a frame through `wake_frame`,
+    // running animation ends by re-requesting a frame through `wake_frame`,
     // which sets it. While a fallback wake is pending that echo is exactly
     // the wake being deferred, so it does not count; inbox redraws, pending
     // build/gesture work and a due recovery attempt always do. The due
@@ -159,7 +161,7 @@ pub(super) fn frame_is_dirty(
 }
 
 /// Whether another frame will be requested regardless of this one's
-/// outcome: `needs_redraw`, a scheduled ticker, or dirty
+/// outcome: `needs_redraw`, a requested frame, or dirty
 /// pipeline/build work left over from the frame that just ran.
 ///
 /// This only feeds [`FallbackWake`]'s deferral decision below —
@@ -258,7 +260,7 @@ impl BackgroundPace {
 const FALLBACK_PERIOD_FRACTION: f64 = 0.95;
 
 /// What a wake sees of the fallback deadline: armed and not yet due (the
-/// ticker-only wake is deferred), or due (this wake IS the deferred one).
+/// wake with no dirty work is deferred), or due (this wake IS the deferred one).
 /// Both false when nothing is armed.
 ///
 /// Not `cfg`-gated, unlike `FallbackWake` itself: every backend's
@@ -276,7 +278,7 @@ pub(super) struct FallbackGate {
     pub(super) due: bool,
 }
 
-/// A window's non-blocking bound on ticker-driven wakes that present
+/// A window's non-blocking bound on animation-driven wakes that present
 /// nothing (ADR-0058). Replaces the fixed 16 ms `thread::sleep` on the
 /// event-loop thread that used to play this role: that sleep was the only
 /// pacer on any stack whose present does not block at vsync, quantized a
@@ -284,7 +286,7 @@ pub(super) struct FallbackGate {
 /// duration every cycle.
 ///
 /// The bound is a deadline, not a sleep: after a pump that ran the
-/// pipeline for a running ticker and presented nothing, the next produce
+/// pipeline for a requested frame and presented nothing, the next produce
 /// is deferred to `last_present + FALLBACK_PERIOD_FRACTION × period` via
 /// the platform's wake-deadline hook (`ControlFlow::WaitUntil`), the loop
 /// stays responsive to input meanwhile, and the deadline is one-shot:
@@ -376,8 +378,8 @@ impl FallbackWake {
         state.delivered_at = None;
     }
 
-    /// A pump ran and presented nothing while a ticker keeps the gate open:
-    /// defer the next ticker-only wake to one (fractional) display period
+    /// A pump ran and presented nothing while a requested frame keeps the gate open:
+    /// defer the next wake with no dirty work to one (fractional) display period
     /// after the last present — or after `now`, when nothing has presented
     /// yet or the last present is already further back than that (an
     /// occluded window keeps a bounded, non-blocking cadence). Returns the
@@ -431,7 +433,7 @@ impl FallbackWake {
     /// be. The period runs from the first report, not from the deadline: a
     /// loop that was busy elsewhere (another window blocked in `present`)
     /// reads a deadline late the first time it looks, and the platform was
-    /// never handed that wake to answer. The ticker's demand is retained on
+    /// never handed that wake to answer. The frame request's demand is retained on
     /// the clock either way, so the next delivered redraw produces.
     pub(super) fn next_wake(
         &self,
@@ -482,9 +484,9 @@ impl FallbackWake {
 /// - **Idle = zero frames**: pinned by
 ///   `idle_wake_with_no_dirty_work_and_no_scheduled_frame_skips`
 ///   below.
-/// - **Ticker keeps the gate open**, and a pending fallback defers a
-///   ticker-only wake but never dirty work: pinned by
-///   `a_pending_fallback_defers_a_ticker_only_wake_but_never_dirty_work`.
+/// - **A requested frame keeps the gate open**, and a pending fallback defers a
+///   wake that carries no dirty work, but never dirty work: pinned by
+///   `a_pending_fallback_defers_a_wake_with_no_dirty_work_but_never_dirty_work`.
 /// - **No-present fallback deadline** (ADR-0058's non-blocking deadline):
 ///   `the_fallback_deadline_is_anchored_to_the_last_present` pins where
 ///   the deadline sits; no test bounds the pipeline passes over repeated
@@ -507,7 +509,7 @@ mod desktop_pacing_tests {
         assert_eq!(
             wake_action(true, false, false, FallbackGate::default()),
             WakeAction::Skip,
-            "a spurious wake with frames enabled, nothing dirty, and no scheduled ticker must \
+            "a spurious wake with frames enabled, nothing dirty, and no requested frame must \
              render zero frames"
         );
     }
@@ -594,9 +596,9 @@ mod desktop_pacing_tests {
         );
     }
 
-    /// The gate's whole point: a ticker-only wake that arrives before the
+    /// The gate's whole point: a wake with no dirty work that arrives before the
     /// deadline runs nothing, and real dirty work is never held behind it.
-    fn a_pending_fallback_defers_a_ticker_only_wake_but_never_dirty_work() {
+    fn a_pending_fallback_defers_a_wake_with_no_dirty_work_but_never_dirty_work() {
         assert_eq!(
             wake_action(
                 true,
@@ -608,7 +610,7 @@ mod desktop_pacing_tests {
                 }
             ),
             WakeAction::Skip,
-            "a scheduled ticker alone, with the fallback pending, waits for the deadline"
+            "a requested frame alone, with the fallback pending, waits for the deadline"
         );
         assert_eq!(
             wake_action(true, false, true, FallbackGate::default()),
@@ -653,8 +655,9 @@ mod desktop_pacing_tests {
                     a_deadline_first_read_late_is_still_reported_due as fn(),
                 ),
                 (
-                    "a_pending_fallback_defers_a_ticker_only_wake_but_never_dirty_work",
-                    a_pending_fallback_defers_a_ticker_only_wake_but_never_dirty_work as fn(),
+                    "a_pending_fallback_defers_a_wake_with_no_dirty_work_but_never_dirty_work",
+                    a_pending_fallback_defers_a_wake_with_no_dirty_work_but_never_dirty_work
+                        as fn(),
                 ),
             ],
         );
