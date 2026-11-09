@@ -10,7 +10,7 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, CreationSite};
 
-use crate::localization::Directionality;
+use crate::localization::{Directionality, resolve_horizontal_axis_direction};
 use crate::support::generic_render_view_element;
 
 /// Lays children out sequentially along one axis, stretching them in the cross
@@ -68,17 +68,11 @@ impl<C> ListBody<C> {
     }
 
     /// Resolve the render object's `AxisDirection`: only `Axis::Horizontal` consults `text_direction`;
-    /// `reverse` flips either axis's base direction to its opposite.
+    /// `reverse` flips either axis's base direction to its opposite. The horizontal arm shares
+    /// the pure rule with `axis_direction_from_axis_reverse_and_directionality`.
     fn resolve_axis_direction(&self, text_direction: TextDirection) -> AxisDirection {
         match self.main_axis {
-            Axis::Horizontal => {
-                let base = if text_direction.is_rtl() {
-                    AxisDirection::RightToLeft
-                } else {
-                    AxisDirection::LeftToRight
-                };
-                if self.reverse { base.opposite() } else { base }
-            }
+            Axis::Horizontal => resolve_horizontal_axis_direction(text_direction, self.reverse),
             Axis::Vertical => AxisDirection::from_axis(Axis::Vertical, self.reverse),
         }
     }

@@ -11,6 +11,7 @@ mod localizations;
 mod widgets_localizations;
 
 pub use directionality::axis_direction_from_axis_reverse_and_directionality;
+pub(crate) use directionality::resolve_horizontal_axis_direction;
 pub use directionality::{Directionality, resolve_alignment};
 pub use global_widgets_localizations::{
     GlobalWidgetsLocalizations, GlobalWidgetsLocalizationsDelegate, RTL_LANGUAGES,

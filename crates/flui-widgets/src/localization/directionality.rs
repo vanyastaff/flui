@@ -165,9 +165,9 @@ pub fn resolve_alignment(
 /// [`CustomScrollView`](crate::CustomScrollView), [`GridView`](crate::GridView),
 /// [`ListView`](crate::ListView), [`PageView`](crate::PageView), and
 /// [`SingleChildScrollView`](crate::SingleChildScrollView). [`ListBody`](crate::ListBody)
-/// implements the identical rule inline (its own `resolve_axis_direction`)
-/// rather than depending on this function, since it resolves through a
-/// private render-object widget this module has no reason to know about.
+/// resolves through a private render-object widget, so it takes its already-read
+/// `text_direction` and shares the pure
+/// [`resolve_horizontal_axis_direction`] arm rather than re-deriving it.
 #[must_use]
 pub fn axis_direction_from_axis_reverse_and_directionality(
     ctx: &dyn BuildContext,
@@ -185,9 +185,11 @@ pub fn axis_direction_from_axis_reverse_and_directionality(
 
 /// The pure `text_direction` + `reverse` -> `AxisDirection` rule for the
 /// horizontal branch of [`axis_direction_from_axis_reverse_and_directionality`],
-/// split out so it is unit-testable without a [`BuildContext`].
+/// split out so it is unit-testable without a [`BuildContext`], and shared with
+/// [`ListBody`](crate::ListBody)'s render-object widget, which resolves direction
+/// in its own build.
 #[must_use]
-fn resolve_horizontal_axis_direction(
+pub(crate) fn resolve_horizontal_axis_direction(
     text_direction: TextDirection,
     reverse: bool,
 ) -> AxisDirection {
