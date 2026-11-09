@@ -533,8 +533,9 @@ pub struct FrameFailureReport {
 
 /// An embedder-registered callback receiving every [`FrameFailureReport`].
 ///
-/// Register via `flui_app::AppConfig::with_frame_failure_handler`.
-/// Invoked synchronously on the UI thread. Sampling reports arrive after every
+/// Register a [`FrameFailureHandlerFactory`] via
+/// `flui_app::AppConfig::with_frame_failure_handler`; each runtime the app
+/// builds for a window gets its own handler from it. Invoked synchronously on the UI thread. Sampling reports arrive after every
 /// presentation has sampled and established recovery, before the build walk;
 /// retained premises are reconciled again after their diagnostics. Other frame
 /// reports arrive after the complete attempt and its recovery queue are drained.
@@ -560,12 +561,15 @@ pub struct FrameFailureReport {
 /// If an ordinary aggregate destructor panics again while unwinding its first
 /// failure, Rust aborts before the catch boundary can regain control.
 #[derive(Clone)]
-pub struct FrameFailureHandler(std::sync::Arc<dyn Fn(&FrameFailureReport) + Send + Sync>);
+pub struct FrameFailureHandler(std::rc::Rc<dyn Fn(&FrameFailureReport)>);
 
 impl FrameFailureHandler {
-    /// Wrap a callback as a registerable handler.
-    pub fn new(handler: impl Fn(&FrameFailureReport) + Send + Sync + 'static) -> Self {
-        Self(std::sync::Arc::new(handler))
+    /// Wrap a callback as a registerable handler. The handler is owner-local:
+    /// it is called only on its runtime's owner thread, so it needs no
+    /// `Send + Sync`. An application registers handlers through a
+    /// [`FrameFailureHandlerFactory`].
+    pub fn new(handler: impl Fn(&FrameFailureReport) + 'static) -> Self {
+        Self(std::rc::Rc::new(handler))
     }
 
     /// Deliver one report to the wrapped callback.
@@ -578,6 +582,46 @@ impl std::fmt::Debug for FrameFailureHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The wrapped closure is opaque; identity is all Debug can say.
         f.debug_tuple("FrameFailureHandler").finish()
+    }
+}
+
+/// What a [`FrameFailureHandlerFactory`] calls once per runtime.
+type MakeFrameFailureHandler = dyn Fn() -> FrameFailureHandler + Send + Sync;
+
+/// Makes one [`FrameFailureHandler`] per runtime: the embedder's typed
+/// frame-failure callback, which `flui-app` installs on every runtime it
+/// builds for a window. A handler lives on its runtime's owner thread (`Rc`),
+/// so the factory, not the handler, crosses threads. The factory is shared
+/// (`Arc`) by every clone of the configuration that carries it, so it is
+/// `Sync` as well as `Send`.
+///
+/// Each runtime gets its own handler. State the handler captures by value is
+/// per window: a counter or escalation policy that must see every window's
+/// failures together has to be shared by the factory itself (an
+/// `Arc<Mutex<..>>` or an atomic each handler clones). A report's
+/// [`FrameFailureReport::consecutive_failures`] is already per presentation.
+///
+/// A panic out of `make` unwinds into the window installation that called
+/// it, as a panic out of an input-tap factory does; on desktop that
+/// installation fails with `AppWindowError::InstallerPanicked`.
+#[derive(Clone)]
+pub struct FrameFailureHandlerFactory(std::sync::Arc<MakeFrameFailureHandler>);
+
+impl FrameFailureHandlerFactory {
+    /// A factory calling `make` once for each runtime it is installed on.
+    pub fn new(make: impl Fn() -> FrameFailureHandler + Send + Sync + 'static) -> Self {
+        Self(std::sync::Arc::new(make))
+    }
+
+    /// Register a fresh handler on `runtime` in place of the one it had.
+    pub fn install_on(&self, runtime: &crate::ui_runtime::UiRuntime) {
+        runtime.set_frame_failure_handler(Some((self.0)()));
+    }
+}
+
+impl std::fmt::Debug for FrameFailureHandlerFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("FrameFailureHandlerFactory").finish()
     }
 }
 
