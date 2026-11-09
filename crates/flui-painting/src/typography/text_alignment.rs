@@ -91,43 +91,9 @@ impl TextAlignVertical {
 // Re-export TextBaseline from layout module (canonical source)
 pub use crate::TextBaseline;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-/// The directionality in which text flows.
-#[derive(flui_foundation::inspect::Inspect)]
-pub enum TextDirection {
-    /// Left-to-right text direction.
-    #[default]
-    Ltr,
-    /// Right-to-left text direction.
-    Rtl,
-}
-
-impl TextDirection {
-    /// Returns `true` if the direction is left-to-right.
-    #[must_use]
-    #[inline]
-    pub const fn is_ltr(&self) -> bool {
-        matches!(self, Self::Ltr)
-    }
-
-    /// Returns `true` if the direction is right-to-left.
-    #[must_use]
-    #[inline]
-    pub const fn is_rtl(&self) -> bool {
-        matches!(self, Self::Rtl)
-    }
-
-    /// Returns the opposite direction (`Ltr` <-> `Rtl`).
-    #[must_use]
-    #[inline]
-    pub const fn opposite(&self) -> Self {
-        match self {
-            Self::Ltr => Self::Rtl,
-            Self::Rtl => Self::Ltr,
-        }
-    }
-}
+// Text flow direction lives in `flui_foundation::text_direction` (T11c); the
+// painting path re-exports it so `flui_painting::TextDirection` keeps working.
+pub use flui_foundation::text_direction::TextDirection;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

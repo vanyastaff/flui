@@ -183,6 +183,10 @@ pub mod text_sizing;
 pub use text_sizing::{
     TextScaleProfile, TextSize, TextSizeError, TextSizeRequest, TextSizingIntent,
 };
+// Text flow direction, the one value the paint, semantics and reading-order
+// paths share (T11c).
+pub mod text_direction;
+pub use text_direction::TextDirection;
 pub mod id;
 pub mod key;
 pub mod memory;
