@@ -64,7 +64,6 @@ lets a test hand every layer the same scripted client.
    #[non_exhaustive] pub enum HttpError {
        InvalidUrl { url }, Connect { detail }, Tls { detail }, Timeout, TooLarge { limit },
        Protocol { detail }, Cancelled, Refused(SpawnError), Host { detail },
-       NotYetOnThisHost { host: HttpHost },
    }
    ```
 
@@ -210,5 +209,6 @@ lets a test hand every layer the same scripted client.
 
 Every host now sends through a stack of its own (NSURLSession on Apple, WinHTTP on Windows,
 `HttpURLConnection` on Android, `fetch` on the web, `ureq` on Linux and the BSDs), so no host
-answers `NotYetOnThisHost` today; the variant stays for a host whose provider has not landed.
-OkHttp or Cronet on Android would be a later provider behind the same trait.
+answers "no HTTP client" — a host whose provider has not landed reports the capability as absent
+via `Unsupported` (the unified absence value), not as an `HttpError`. OkHttp or Cronet on Android
+would be a later provider behind the same trait.
