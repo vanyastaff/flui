@@ -76,7 +76,7 @@ Tap also has `on_secondary_tap*` and `on_tertiary_tap*` per button
 The descriptions below state observable recognition behavior; phase names are
 only a shorthand for the corresponding state machine.
 
-### Tap (`tap.rs`, `TapState`)
+### Tap (`tap.rs`)
 
 `Ready → Down` on pointer down. Up within slop fires `on_tap_up` and `on_tap`
 once the recognizer wins the arena (the release is held in `pending_up` until
@@ -90,7 +90,7 @@ with no callback of its family is not admitted, so a recognizer that only
 reports secondary clicks never joins, or delays, a primary contact's arena
 (`a_tap_joins_only_contacts_of_buttons_it_reports`).
 
-### Double tap (`double_tap.rs`, `DoubleTapPhase`)
+### Double tap (`double_tap.rs`, `DoubleTapState`)
 
 Phases: `Ready`, `FirstDown`, `WaitingForSecond`, `SecondDown`, `Completed`,
 `Cancelled`. The first up holds the first arena entry and waits.
@@ -184,8 +184,9 @@ pub struct DragEndDetails    { reason: GestureEndReason, velocity: Velocity,
 `delta` and `primary_delta` are per update, not cumulative.
 `DragEndDetails::reason` is `Completed` for pointer Up and `Cancelled` for an
 accepted pointer Cancel; the measured velocity is kept in both cases
-(ADR-0112). `DragGestureRecognizer::is_fling(&velocity)` compares speed with
-`min_fling_velocity()`. Completed Up evaluates velocity at the terminal event's
+(ADR-0112). `DragEndDetails::fling_velocity()` carries the measured speed, and a
+consumer reads a fling by comparing it with `GestureSettings::min_fling_velocity`.
+Completed Up evaluates velocity at the terminal event's
 time, so a stationary pause before release cannot publish an old fast fling.
 
 ### Scale (`scale.rs`, `ScalePhase`)
@@ -239,7 +240,7 @@ from an active press, pointer Up, or movement beyond `hit_slop(kind)` ends a sta
 press; movement beyond slop while `Possible` rejects it silently.
 `ForcePressDetails { global_position, local_position, pressure, max_pressure }`.
 
-### Multi-tap (`multi_tap.rs`, `MultiTapPhase`)
+### Multi-tap (`multi_tap.rs`)
 
 `builder(arena, n)` recognizes `n` simultaneous contacts that stay within slop and
 are all released. Each contact is tracked by its own pointer identity
