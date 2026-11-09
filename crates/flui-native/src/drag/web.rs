@@ -507,23 +507,12 @@ impl DragTransport for WebTransfer {
         };
         match found {
             Found::Payload(payload) => {
-                let actual = payload.byte_len();
-                TransferRequest::ready(if actual > limits.max_bytes {
-                    Err(TransferError::TooLarge {
-                        actual,
-                        limit: limits.max_bytes,
-                    })
-                } else {
-                    Ok(payload)
-                })
+                TransferRequest::ready(limits.enforce(payload.byte_len()).map(|()| payload))
             }
             Found::File(file, format) => {
-                let size = file.size() as u64;
-                if size > limits.max_bytes {
-                    return TransferRequest::ready(Err(TransferError::TooLarge {
-                        actual: size,
-                        limit: limits.max_bytes,
-                    }));
+                // `File.size` is a non-negative double; the cast saturates.
+                if let Err(error) = limits.enforce(file.size() as u64) {
+                    return TransferRequest::ready(Err(error));
                 }
                 let (request, completer) = TransferRequest::pending();
                 js_sys::futures::spawn_local(async move {
@@ -532,14 +521,8 @@ impl DragTransport for WebTransfer {
                         .map(|buffer| js_sys::Uint8Array::new(&buffer).to_vec())
                         .map_err(|_| TransferError::SourceGone)
                         .and_then(|bytes| {
-                            if bytes.len() as u64 > limits.max_bytes {
-                                Err(TransferError::TooLarge {
-                                    actual: bytes.len() as u64,
-                                    limit: limits.max_bytes,
-                                })
-                            } else {
-                                Ok(payload_of_bytes(&format, bytes))
-                            }
+                            limits.enforce(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
+                            Ok(payload_of_bytes(&format, bytes))
                         });
                     completer.complete(result);
                 });

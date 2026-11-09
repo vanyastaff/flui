@@ -41,7 +41,7 @@ mod clip {
 
     use flui_platform::data_transfer::{
         Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
-        TransferPayload,
+        TransferLimits, TransferPayload,
     };
     use flui_platform::drag::{IDENTITY_ESSENCE, OsDragEnd};
 
@@ -149,7 +149,7 @@ mod clip {
         }
     }
 
-    /// What `FluiView.readUri` answered, under `limit`: its `bytes`, or none
+    /// What `FluiView.readUri` answered, under `limits`: its `bytes`, or none
     /// when it stopped after `read` bytes. A read that stopped past the limit is
     /// too large, with the bytes it had read as a lower bound of the size; any
     /// other stop (no stream, an error) means the source is gone.
@@ -161,14 +161,12 @@ mod clip {
     pub(super) fn uri_bytes(
         bytes: Option<Vec<u8>>,
         read: u64,
-        limit: u64,
+        limits: TransferLimits,
     ) -> Result<Vec<u8>, TransferError> {
         let actual = bytes
             .as_ref()
             .map_or(read, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-        if actual > limit {
-            return Err(TransferError::TooLarge { actual, limit });
-        }
+        limits.enforce(actual)?;
         bytes.ok_or(TransferError::SourceGone)
     }
 
@@ -706,15 +704,7 @@ impl DragTransport for AndroidTransfer {
         };
         match found {
             Held::Payload(payload) => {
-                let actual = payload.byte_len();
-                TransferRequest::ready(if actual > limits.max_bytes {
-                    Err(TransferError::TooLarge {
-                        actual,
-                        limit: limits.max_bytes,
-                    })
-                } else {
-                    Ok(payload)
-                })
+                TransferRequest::ready(limits.enforce(payload.byte_len()).map(|()| payload))
             }
             Held::Missing => TransferRequest::ready(Err(TransferError::SourceGone)),
             Held::Uri(held) => {
@@ -725,8 +715,8 @@ impl DragTransport for AndroidTransfer {
                 let spawned = std::thread::Builder::new()
                     .name("flui-drop-read".into())
                     .spawn(move || {
-                        let result = read_uri(&view, &held.uri, limits.max_bytes)
-                            .map(|bytes| held.payload(bytes));
+                        let result =
+                            read_uri(&view, &held.uri, limits).map(|bytes| held.payload(bytes));
                         completer.complete(result);
                     });
                 if let Err(error) = spawned {
@@ -769,7 +759,7 @@ fn java_key(id: DataTransferId) -> i64 {
 /// The bytes behind `uri`, read through the view's content resolver on the
 /// calling thread.
 #[cfg(target_os = "android")]
-fn read_uri(view: &JavaView, uri: &str, limit: u64) -> Result<Vec<u8>, TransferError> {
+fn read_uri(view: &JavaView, uri: &str, limits: TransferLimits) -> Result<Vec<u8>, TransferError> {
     let Some(target) = view.view() else {
         return Err(TransferError::SourceGone);
     };
@@ -783,7 +773,7 @@ fn read_uri(view: &JavaView, uri: &str, limit: u64) -> Result<Vec<u8>, TransferE
                 jni_sig!("(Ljava/lang/String;J[J)[B"),
                 &[
                     JValue::Object(&uri),
-                    JValue::Long(i64::try_from(limit).unwrap_or(i64::MAX)),
+                    JValue::Long(i64::try_from(limits.max_bytes).unwrap_or(i64::MAX)),
                     JValue::Object(&count),
                 ],
             )?
@@ -798,7 +788,7 @@ fn read_uri(view: &JavaView, uri: &str, limit: u64) -> Result<Vec<u8>, TransferE
         Ok((Some(env.convert_byte_array(&bytes)?), read))
     });
     match read {
-        Ok((bytes, read)) => uri_bytes(bytes, read, limit),
+        Ok((bytes, read)) => uri_bytes(bytes, read, limits),
         Err(_) => Err(TransferError::SourceGone),
     }
 }

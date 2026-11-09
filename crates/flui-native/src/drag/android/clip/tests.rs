@@ -13,7 +13,8 @@ use super::{
 };
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
-    Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat, TransferPayload,
+    Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat, TransferLimits,
+    TransferPayload,
 };
 use flui_platform::drag::{DragSessionKey, OsDragEnd, ProcessNonce};
 
@@ -138,8 +139,13 @@ fn a_drop_holds_what_the_clip_carried() {
 /// past the limit is too large, with what it had read, and one it could not
 /// read is gone.
 fn a_dropped_uri_read_reports_how_it_ended() {
-    assert!(matches!(uri_bytes(Some(vec![1, 2]), 2, 4), Ok(bytes) if bytes == [1, 2]));
-    let over = uri_bytes(None, 16_384, 10);
+    let limit = |max_bytes| TransferLimits::default().with_max_bytes(max_bytes);
+    assert!(matches!(uri_bytes(Some(vec![1, 2]), 2, limit(4)), Ok(bytes) if bytes == [1, 2]));
+    assert!(
+        matches!(uri_bytes(Some(vec![1, 2]), 2, limit(2)), Ok(bytes) if bytes == [1, 2]),
+        "a read of exactly the limit is admitted"
+    );
+    let over = uri_bytes(None, 16_384, limit(10));
     assert!(
         matches!(
             over,
@@ -151,11 +157,11 @@ fn a_dropped_uri_read_reports_how_it_ended() {
         "a read stopped past the limit is too large, not gone: {over:?}"
     );
     assert!(matches!(
-        uri_bytes(None, 3, 10),
+        uri_bytes(None, 3, limit(10)),
         Err(TransferError::SourceGone)
     ));
     assert!(matches!(
-        uri_bytes(None, 0, 10),
+        uri_bytes(None, 0, limit(10)),
         Err(TransferError::SourceGone)
     ));
 }
