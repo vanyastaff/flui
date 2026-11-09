@@ -15,15 +15,15 @@ The FLUI workspace contains 24 crates under `crates/`, the official packages und
 ## Tiers
 
 <!-- BEGIN crates-map -->
-| Tier | Crates, by `order` | `tier-kind` |
-|------|--------------------|-------------|
-| V | `flui-macros` (3), `flui-foundation` (4) | internal |
-| C | `flui-platform` (1), `flui-protocol` (2) | stable |
-| S | `flui-log` (1), `flui-scheduler` (2), `flui-painting` (3), `flui-interaction` (4), `flui-semantics` (5), `flui-animation` (6), `flui-assets` (7) | internal |
-| R | `flui-layer` (1), `flui-rendering` (2), `flui-objects` (3), `flui-engine` (4) | internal |
-| K | `flui-view` (1), `flui-widgets` (3), `flui-runtime` (4), `flui-sdk` (5), `flui-testing` (6) | evolving; internal |
-| H | `flui-native` (1), `flui-app` (2), `flui-cli` (3), `flui` (4) | internal; stable; tool |
-| pkg | `flui-material` (1), `flui-cupertino` (2), `flui-devtools` (3), `flui-hot-reload` (4), `flui-system` (5) | capability; official |
+| Tier | Crates, by `order` and `tier-kind` |
+|------|------------------|
+| V values | `flui-macros` (3, internal), `flui-foundation` (4, internal) |
+| C contracts | `flui-platform` (1, stable), `flui-protocol` (2, stable) |
+| S substrate | `flui-log` (1, internal), `flui-scheduler` (2, internal), `flui-painting` (3, internal), `flui-interaction` (4, internal), `flui-semantics` (5, internal), `flui-animation` (6, internal), `flui-assets` (7, internal) |
+| R render machine | `flui-layer` (1, internal), `flui-rendering` (2, internal), `flui-objects` (3, internal), `flui-engine` (4, internal) |
+| K spine and runtime | `flui-view` (1, internal), `flui-widgets` (3, internal), `flui-runtime` (4, internal), `flui-sdk` (5, evolving), `flui-testing` (6, internal) |
+| H hosts | `flui-native` (1, internal), `flui-app` (2, internal), `flui-cli` (3, tool), `flui` (4, stable) |
+| pkg official packages and capability crates | `flui-material` (1, official, under packages/, on `flui-sdk`), `flui-cupertino` (2, official, under packages/, on `flui-sdk`), `flui-devtools` (3, official, under packages/, on `flui-sdk`), `flui-hot-reload` (4, official), `flui-system` (5, capability) |
 <!-- END crates-map -->
 
 The `edge-exceptions` in force:

@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::check;
+use super::{Members, check, crates_map};
 use crate::util;
 
 /// A throwaway workspace; removed on drop.
@@ -32,6 +32,7 @@ members = ["crates/a", "crates/b", "examples/ex"]
 
 [workspace.metadata.flui]
 tiers = ["Low", "High", "Top"]
+tier-names = { Low = "lowest", High = "higher", Top = "highest" }
 
 [workspace.package]
 version = "0.1.0"
@@ -69,6 +70,11 @@ tier-kind = "tool"
         );
         fixture.write("examples/ex/src/main.rs", "fn main() {}\n");
         fixture.write("docs/adr/ADR-0001-first.md", "# ADR-0001\n");
+        fixture.write(
+            "docs/crates.md",
+            "# Crates\n\n<!-- BEGIN crates-map -->\n<!-- END crates-map -->\n",
+        );
+        fixture.sync_crates_map();
         fixture
     }
 
@@ -114,7 +120,24 @@ order = {order}
         std::fs::write(path, text.replacen(from, to, 1)).expect("write fixture file");
     }
 
+    /// Rewrites `docs/crates.md`'s table from the fixture's manifests, so a
+    /// case that moves a crate breaks only the rule it names.
+    fn sync_crates_map(&self) {
+        let metadata = util::metadata(&self.root).expect("cargo metadata on the fixture");
+        let members = Members::load(&self.root, &metadata).expect("fixture members load");
+        crates_map::write(&self.root, &members, &metadata.workspace_metadata)
+            .expect("write the fixture's crates map");
+    }
+
+    /// Findings of `check` as the fixture's manifests stand, with the crates
+    /// map brought up to date first.
     fn findings(&self) -> Vec<String> {
+        self.sync_crates_map();
+        self.findings_as_committed()
+    }
+
+    /// Findings of `check` against `docs/crates.md` as it stands.
+    fn findings_as_committed(&self) -> Vec<String> {
         let metadata = util::metadata(&self.root).expect("cargo metadata on the fixture");
         check(&self.root, &metadata).expect("check runs").0
     }
@@ -144,6 +167,50 @@ fn assert_one(findings: &[String], needle: &str) {
         findings.len() == 1 && findings[0].contains(needle),
         "expected one finding containing {needle:?}, got {findings:#?}"
     );
+}
+
+fn the_crates_map_names_each_tier_and_each_crates_kind() {
+    let fixture = Fixture::new();
+    let doc = std::fs::read_to_string(fixture.root().join("docs/crates.md")).expect("read map");
+    assert!(
+        doc.contains("| Low lowest | `a` (1, internal) |"),
+        "the tier's name and the crate's kind are printed:\n{doc}"
+    );
+    assert!(doc.contains("| High higher | `b` (1, internal) |"), "{doc}");
+    assert!(doc.contains("| Top highest |  |"), "{doc}");
+}
+
+fn a_crates_map_that_drifted_from_the_manifests_is_reported() {
+    let fixture = Fixture::new();
+    // The committed table still lists `b` as internal after the manifest
+    // changes its kind: the check must see the table, not the manifest.
+    fixture.edit(
+        "crates/b/Cargo.toml",
+        "tier-kind = \"internal\"",
+        "tier-kind = \"stable\"",
+    );
+    assert_one(
+        &fixture.findings_as_committed(),
+        "docs/crates.md's tier table drifted from the manifests",
+    );
+    assert_eq!(fixture.findings(), Vec::<String>::new());
+}
+
+fn a_missing_crates_map_or_marker_is_an_error() {
+    let fixture = Fixture::new();
+    let metadata = util::metadata(fixture.root()).expect("cargo metadata on the fixture");
+    fixture.edit("docs/crates.md", "<!-- END crates-map -->", "");
+    let error = format!(
+        "{:#}",
+        check(fixture.root(), &metadata).expect_err("a missing marker fails")
+    );
+    assert!(error.contains("<!-- END crates-map -->"), "{error}");
+    std::fs::remove_file(fixture.root().join("docs/crates.md")).expect("remove the map");
+    let error = format!(
+        "{:#}",
+        check(fixture.root(), &metadata).expect_err("a missing file fails")
+    );
+    assert!(error.contains("docs/crates.md is not readable"), "{error}");
 }
 
 fn a_well_formed_workspace_passes() {
@@ -885,6 +952,18 @@ fn workspace_gate_contract() {
     crate::table_test::run_table(
         "workspace_gate_contract",
         &[
+            (
+                "the_crates_map_names_each_tier_and_each_crates_kind",
+                the_crates_map_names_each_tier_and_each_crates_kind as fn(),
+            ),
+            (
+                "a_crates_map_that_drifted_from_the_manifests_is_reported",
+                a_crates_map_that_drifted_from_the_manifests_is_reported as fn(),
+            ),
+            (
+                "a_missing_crates_map_or_marker_is_an_error",
+                a_missing_crates_map_or_marker_is_an_error as fn(),
+            ),
             (
                 "a_well_formed_workspace_passes",
                 a_well_formed_workspace_passes as fn(),

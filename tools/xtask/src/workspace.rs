@@ -67,6 +67,7 @@ use toml::{Table, Value as Toml};
 
 use crate::util;
 
+mod crates_map;
 mod reach;
 mod tiers;
 
@@ -94,8 +95,7 @@ pub(crate) fn workspace(args: &WorkspaceArgs) -> anyhow::Result<ExitCode> {
     let metadata = util::metadata(&root)?;
     if args.write_crates_map {
         let members = Members::load(&root, &metadata)?;
-        let tier_names = tiers::names(&metadata.workspace_metadata)?;
-        write_crates_map(&root, &crates_map(&members, &tier_names))?;
+        crates_map::write(&root, &members, &metadata.workspace_metadata)?;
         return Ok(ExitCode::SUCCESS);
     }
     let (findings, summary) = check(&root, &metadata)?;
@@ -125,7 +125,7 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
     let edges = check_allowed_dependents(&members, &mut findings);
     check_manifests(root, &members, metadata, &mut findings)?;
     check_unique_adr_numbers(root, &mut findings)?;
-    check_crates_map(root, &members, &tier_names, &mut findings)?;
+    crates_map::check(root, &members, &metadata.workspace_metadata, &mut findings)?;
     Ok((
         findings,
         format!(
@@ -137,98 +137,6 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
             tier_names.len(),
         ),
     ))
-}
-
-/// The `## Tiers` table of `docs/crates.md`, generated from the manifests'
-/// `tier`, `order` and `tier-kind`.
-fn crates_map(members: &Members, tier_names: &[String]) -> String {
-    use std::fmt::Write as _;
-
-    let mut by_tier: BTreeMap<&str, Vec<(&str, u64, &str)>> = BTreeMap::new();
-    for member in &members.0 {
-        if let (Some(tier), Some(order)) = (member.tier.as_deref(), member.order) {
-            by_tier.entry(tier).or_default().push((
-                member.name(),
-                order,
-                member.tier_kind.as_deref().unwrap_or_default(),
-            ));
-        }
-    }
-    let mut out = String::from(
-        "| Tier | Crates, by `order` | `tier-kind` |\n|------|--------------------|-------------|\n",
-    );
-    for tier in tier_names {
-        let mut crates = by_tier.get(tier.as_str()).cloned().unwrap_or_default();
-        crates.sort_by_key(|(_, order, _)| *order);
-        let list = crates
-            .iter()
-            .map(|(name, order, _)| format!("`{name}` ({order})"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let kinds: BTreeSet<&str> = crates
-            .iter()
-            .map(|(_, _, kind)| *kind)
-            .filter(|kind| !kind.is_empty())
-            .collect();
-        let kind = kinds.into_iter().collect::<Vec<_>>().join("; ");
-        writeln!(out, "| {tier} | {list} | {kind} |").expect("writing to a String never fails");
-    }
-    out
-}
-
-/// Verifies `docs/crates.md`'s tier table agrees with [`crates_map`].
-fn check_crates_map(
-    root: &Path,
-    members: &Members,
-    tier_names: &[String],
-    findings: &mut Vec<String>,
-) -> anyhow::Result<()> {
-    const BEGIN: &str = "<!-- BEGIN crates-map -->";
-    const END: &str = "<!-- END crates-map -->";
-    let path = root.join("docs/crates.md");
-    // The self-test's synthetic workspace has no docs; the real one always does.
-    if !path.exists() {
-        return Ok(());
-    }
-    let generated = crates_map(members, tier_names);
-    let doc = std::fs::read_to_string(&path)?;
-    let Some(start) = doc.find(BEGIN) else {
-        findings.push("docs/crates.md has no `<!-- BEGIN crates-map -->` marker".to_owned());
-        return Ok(());
-    };
-    let Some(end) = doc.find(END) else {
-        findings.push("docs/crates.md has no `<!-- END crates-map -->` marker".to_owned());
-        return Ok(());
-    };
-    let committed = doc[start + BEGIN.len()..end].trim();
-    if committed != generated.trim() {
-        findings.push(
-            "docs/crates.md's tier table drifted from the manifests; run `cargo xtask workspace --write-crates-map`"
-                .to_owned(),
-        );
-    }
-    Ok(())
-}
-
-/// Regenerate `docs/crates.md`'s tier table from [`crates_map`].
-fn write_crates_map(root: &Path, generated: &str) -> anyhow::Result<()> {
-    const BEGIN: &str = "<!-- BEGIN crates-map -->";
-    const END: &str = "<!-- END crates-map -->";
-    let path = root.join("docs/crates.md");
-    let doc = std::fs::read_to_string(&path)?;
-    let start = doc
-        .find(BEGIN)
-        .context("docs/crates.md has no `<!-- BEGIN crates-map -->` marker")?;
-    let end = doc
-        .find(END)
-        .context("docs/crates.md has no `<!-- END crates-map -->` marker")?;
-    let updated = format!(
-        "{}\n{generated}{}",
-        &doc[..start + BEGIN.len()],
-        &doc[end..]
-    );
-    std::fs::write(&path, updated)?;
-    Ok(())
 }
 
 /// The keys a member's `[package.metadata.flui]` may set.
