@@ -4,6 +4,8 @@
   `AlignmentDirectional` (via `impl Into<AlignmentGeometry>`), resolved against the ambient
   `Directionality` inside the render object — so an RTL flip re-lays them out. `From<Alignment>`
   keeps every `Alignment` call site compiling.
+- **`flui-widgets`**: `Positioned::start`/`Positioned::end` place a child against the reading
+  edges, resolved against the ambient `Directionality` (`start` is left in LTR, right in RTL).
 
 ### Fixed
 
