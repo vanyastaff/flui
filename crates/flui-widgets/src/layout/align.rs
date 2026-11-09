@@ -4,11 +4,10 @@
 use flui_objects::RenderAlign;
 use flui_painting::Alignment;
 use flui_painting::AlignmentGeometry;
-use flui_painting::typography::TextDirection;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, InheritedView, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
-use crate::localization::Directionality;
+use crate::localization::{Directionality, resolve_alignment};
 
 /// Aligns its child within itself.
 ///
@@ -64,20 +63,9 @@ impl Align {
 
     /// Resolve the geometry against the ambient [`Directionality`]. Only the
     /// directional arm reads it, so an absolute alignment registers no
-    /// `Directionality` dependency and never rebuilds on a direction change;
-    /// at mount the inherited read is not yet available, so a directional
-    /// alignment defaults to Ltr and the first rebuild re-resolves it (T09).
+    /// `Directionality` dependency and never rebuilds on a direction change.
     fn resolve(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Alignment {
-        match self.alignment {
-            AlignmentGeometry::Absolute(alignment) => alignment,
-            AlignmentGeometry::Directional(directional) => {
-                let is_ltr = ctx
-                    .depend_on::<Directionality, _>(|d| *d.data())
-                    .unwrap_or(TextDirection::Ltr)
-                    .is_ltr();
-                directional.resolve(is_ltr)
-            }
-        }
+        resolve_alignment(self.alignment, || Directionality::of_render_object(ctx))
     }
 
     fn build_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> RenderAlign {

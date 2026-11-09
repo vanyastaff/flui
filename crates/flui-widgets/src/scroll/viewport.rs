@@ -13,11 +13,10 @@ use flui_rendering::view::{
     CacheExtentStyle, ScrollPosition, SliverPaintOrder, ViewportOffset as _,
 };
 use flui_view::BoxedView;
-use flui_view::InheritedView;
 use flui_view::seq::ViewSeq;
 
 use crate::__private::generic_render_view_element;
-use crate::localization::Directionality;
+use crate::localization::{Directionality, resolve_horizontal_axis_direction};
 
 /// Where a [`Viewport`] or [`ShrinkWrappingViewport`]'s render object gets
 /// its scroll offset from. Shared by both widgets — they're two `RenderBox`
@@ -39,36 +38,27 @@ enum OffsetSource {
     Position(ScrollPosition),
 }
 
-/// The cross-axis direction for a scroll `axis_direction`, given whether the
-/// ambient text direction is left-to-right. Horizontal scroll axes lay their
-/// cross axis top-to-bottom; vertical axes lay theirs left-to-right in LTR and
-/// right-to-left in RTL — the flip a vertical viewport was missing (T09).
-fn cross_axis_direction(axis_direction: AxisDirection, is_ltr: bool) -> AxisDirection {
+/// The cross-axis direction for a scroll `axis_direction`. A horizontal scroll
+/// axis lays its cross axis top-to-bottom and never calls `text_direction`, so
+/// it registers no `Directionality` dependency; a vertical one lays its
+/// horizontal cross axis from the reading-start edge, the rule
+/// `resolve_horizontal_axis_direction` holds for every horizontal axis.
+fn cross_axis_direction(
+    axis_direction: AxisDirection,
+    text_direction: impl FnOnce() -> TextDirection,
+) -> AxisDirection {
     match axis_direction.axis() {
         Axis::Horizontal => AxisDirection::TopToBottom,
-        Axis::Vertical => AxisDirection::from_axis(Axis::Horizontal, !is_ltr),
+        Axis::Vertical => resolve_horizontal_axis_direction(text_direction(), false),
     }
 }
 
-/// Resolve the cross-axis direction against the ambient [`Directionality`]. Only
-/// the vertical arm reads it (a horizontal scroll axis lays its cross axis
-/// top-to-bottom regardless of direction, and registers no dependency); at mount
-/// the inherited read is not yet available, so an RTL viewport defaults to LTR
-/// and the first rebuild re-resolves it (T09).
+/// [`cross_axis_direction`] against the ambient [`Directionality`].
 fn resolve_cross_axis_direction(
     axis_direction: AxisDirection,
     ctx: &flui_view::RenderObjectContext<'_>,
 ) -> AxisDirection {
-    match axis_direction.axis() {
-        Axis::Horizontal => AxisDirection::TopToBottom,
-        Axis::Vertical => {
-            let is_ltr = ctx
-                .depend_on::<Directionality, _>(|d| *d.data())
-                .unwrap_or(TextDirection::Ltr)
-                .is_ltr();
-            cross_axis_direction(axis_direction, is_ltr)
-        }
-    }
+    cross_axis_direction(axis_direction, || Directionality::of_render_object(ctx))
 }
 
 /// A box render-object widget that drives a sequence of **sliver** children
@@ -448,7 +438,7 @@ where
         // from construction.
         impact |= render_object.set_axis_direction(self.axis_direction);
         // Direction-aware cross axis, after `set_axis_direction` laid down the
-        // LTR default (T09).
+        // LTR default.
         impact |= render_object
             .set_cross_axis_direction(resolve_cross_axis_direction(self.axis_direction, ctx));
         impact |= render_object.set_paint_order(self.paint_order);
@@ -488,33 +478,30 @@ generic_render_view_element!(ShrinkWrappingViewport);
 #[cfg(test)]
 mod tests {
     use super::cross_axis_direction;
+    use flui_painting::typography::TextDirection;
     use flui_rendering::constraints::AxisDirection;
 
-    /// The cross-axis direction matrix (T09): a horizontal scroll axis lays its
-    /// cross axis top-to-bottom under either text direction; a vertical one lays
-    /// its horizontal cross axis left-to-right in LTR and right-to-left in RTL.
+    /// The cross-axis direction matrix: a horizontal scroll axis lays its cross
+    /// axis top-to-bottom without reading the text direction; a vertical one
+    /// lays its horizontal cross axis left-to-right in LTR and right-to-left in
+    /// RTL.
     #[test]
     fn cross_axis_direction_matrix() {
         for axis in [AxisDirection::LeftToRight, AxisDirection::RightToLeft] {
             assert_eq!(
-                cross_axis_direction(axis, true),
+                cross_axis_direction(axis, || panic!("{axis:?} must not read the direction")),
                 AxisDirection::TopToBottom,
-                "{axis:?} (LTR)"
-            );
-            assert_eq!(
-                cross_axis_direction(axis, false),
-                AxisDirection::TopToBottom,
-                "{axis:?} (RTL)"
+                "{axis:?}"
             );
         }
         for axis in [AxisDirection::TopToBottom, AxisDirection::BottomToTop] {
             assert_eq!(
-                cross_axis_direction(axis, true),
+                cross_axis_direction(axis, || TextDirection::Ltr),
                 AxisDirection::LeftToRight,
                 "{axis:?} (LTR)"
             );
             assert_eq!(
-                cross_axis_direction(axis, false),
+                cross_axis_direction(axis, || TextDirection::Rtl),
                 AxisDirection::RightToLeft,
                 "{axis:?} (RTL)"
             );

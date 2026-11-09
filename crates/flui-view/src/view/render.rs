@@ -104,13 +104,18 @@ impl<'a> RenderObjectContext<'a> {
     }
 
     /// Read the nearest ancestor [`InheritedView`] of type `I`, registering a
-    /// dependency so this render element re-pushes its configuration when the
-    /// data changes (T09).
+    /// dependency so this render element re-runs `update_render_object` when
+    /// that provider notifies a change.
     ///
-    /// Returns `None` when no `I` ancestor is in scope, or when this context was
-    /// not minted during a rebuild (at mount or a view swap the tree is borrowed
-    /// mutably, so no inherited read is possible — the first rebuild resolves
-    /// it).
+    /// The read resolves in `update_render_object` while the element rebuilds
+    /// in a build pass, which is where every configuration push runs: after a
+    /// view swap, after a dependency notification and on the element's first
+    /// build. It returns `None` when no `I` ancestor is in scope, and in
+    /// `create_render_object` (the tree is borrowed mutably while an element
+    /// mounts), where the first build, which runs before the first layout,
+    /// pushes the resolved configuration. The dependencies a push records
+    /// replace the previous push's, so a provider this element stopped reading
+    /// stops rebuilding it.
     pub fn depend_on<I: InheritedView, R>(&self, f: impl FnOnce(&I) -> R) -> Option<R> {
         let tree = self.tree?;
         let element_id = self.element_id?;

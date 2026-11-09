@@ -27,11 +27,11 @@ pub(crate) fn positioned_places_child_at_explicit_edges() {
     assert_eq!(laid.offset(child), offset(10.0, 20.0));
 }
 
-/// `Positioned::start`/`end` resolve against the ambient `Directionality`:
-/// `start` is the left edge in LTR and the right edge in RTL (T09).
+/// `Positioned::directional`'s `start`/`end` resolve against the ambient `Directionality`:
+/// `start` is the left edge in LTR and the right edge in RTL.
 pub(crate) fn positioned_start_resolves_against_directionality() {
     let child = || {
-        Positioned::new(SizedBox::new(50.0, 50.0))
+        Positioned::directional(SizedBox::new(50.0, 50.0))
             .start(10.0)
             .top(20.0)
     };

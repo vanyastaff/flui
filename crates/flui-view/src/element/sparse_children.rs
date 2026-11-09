@@ -568,8 +568,9 @@ fn mount_sparse_child(
 /// Returns `Err(replacement)` with the id of the freshly mounted error child
 /// when it had to substitute; the caller re-points its residency map at it.
 ///
-/// The panic this bounds is a user `View::update_render_object`, which runs
-/// inside `RenderBehavior::on_update`'s `with_mut` — half-applied, and with
+/// The panic this bounds is a user update hook (`did_update_view`, or the
+/// `update_render_object` a self-building behavior pushes from its update) —
+/// half-applied, and with
 /// `apply_render_update_impact` never reached, so the render object can be
 /// left carrying part of a new configuration that nothing marked dirty. That
 /// is why the recovery removes the resident outright rather than keeping it:

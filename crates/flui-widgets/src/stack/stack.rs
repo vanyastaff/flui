@@ -5,35 +5,12 @@ use std::fmt;
 use flui_objects::{RenderIndexedStack, RenderStack, StackFit};
 use flui_painting::Alignment;
 use flui_painting::AlignmentGeometry;
-use flui_painting::typography::TextDirection;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::BoxedView;
-use flui_view::InheritedView;
 use flui_view::seq::ViewSeq;
 
-use crate::localization::Directionality;
+use crate::localization::{Directionality, resolve_alignment};
 use crate::support::generic_render_view_element;
-
-/// Resolve the ambient [`Directionality`], defaulting to `Ltr`. The stack reads
-/// it for both its alignment and the `start`/`end` edges of `Positioned`
-/// children, so it registers the dependency unconditionally (T09).
-fn resolve_text_direction(ctx: &flui_view::RenderObjectContext<'_>) -> TextDirection {
-    ctx.depend_on::<Directionality, _>(|d| *d.data())
-        .unwrap_or(TextDirection::Ltr)
-}
-
-/// Resolve `alignment` against an already-read `text_direction`: an absolute
-/// geometry resolves to itself, a directional one to its physical mirror under
-/// the direction (T09).
-fn resolve_alignment_geometry(
-    alignment: AlignmentGeometry,
-    text_direction: TextDirection,
-) -> Alignment {
-    match alignment {
-        AlignmentGeometry::Absolute(alignment) => alignment,
-        AlignmentGeometry::Directional(directional) => directional.resolve(text_direction.is_ltr()),
-    }
-}
 
 /// Overlaps its children, sizing itself to the largest non-positioned child and
 /// aligning each by `alignment`.
@@ -98,9 +75,11 @@ where
     type RenderObject = RenderStack;
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
-        let text_direction = resolve_text_direction(ctx);
+        // Read unconditionally: the direction also resolves directional
+        // `Positioned` children's `start`/`end`, which the stack cannot see.
+        let text_direction = Directionality::of_render_object(ctx);
         RenderStack::new()
-            .with_alignment(resolve_alignment_geometry(self.alignment, text_direction))
+            .with_alignment(resolve_alignment(self.alignment, || text_direction))
             .with_text_direction(text_direction)
             .with_fit(self.fit)
     }
@@ -110,10 +89,11 @@ where
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        let text_direction = resolve_text_direction(ctx);
+        // Read unconditionally: the direction also resolves directional
+        // `Positioned` children's `start`/`end`, which the stack cannot see.
+        let text_direction = Directionality::of_render_object(ctx);
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        impact |=
-            render_object.set_alignment(resolve_alignment_geometry(self.alignment, text_direction));
+        impact |= render_object.set_alignment(resolve_alignment(self.alignment, || text_direction));
         impact |= render_object.set_text_direction(text_direction);
         impact |= render_object.set_fit(self.fit);
         impact
@@ -200,9 +180,11 @@ where
     type RenderObject = RenderIndexedStack;
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
-        let text_direction = resolve_text_direction(ctx);
+        // Read unconditionally: the direction also resolves directional
+        // `Positioned` children's `start`/`end`, which the stack cannot see.
+        let text_direction = Directionality::of_render_object(ctx);
         RenderIndexedStack::new()
-            .with_alignment(resolve_alignment_geometry(self.alignment, text_direction))
+            .with_alignment(resolve_alignment(self.alignment, || text_direction))
             .with_text_direction(text_direction)
             .with_fit(self.fit)
             .with_index(self.index)
@@ -213,10 +195,11 @@ where
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        let text_direction = resolve_text_direction(ctx);
+        // Read unconditionally: the direction also resolves directional
+        // `Positioned` children's `start`/`end`, which the stack cannot see.
+        let text_direction = Directionality::of_render_object(ctx);
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        impact |=
-            render_object.set_alignment(resolve_alignment_geometry(self.alignment, text_direction));
+        impact |= render_object.set_alignment(resolve_alignment(self.alignment, || text_direction));
         impact |= render_object.set_text_direction(text_direction);
         impact |= render_object.set_fit(self.fit);
         impact |= render_object.set_index(self.index);

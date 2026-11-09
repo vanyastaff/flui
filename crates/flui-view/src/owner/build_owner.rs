@@ -1568,7 +1568,7 @@ impl BuildOwner {
         staged.locate_in(tree);
         let error = crate::view::FrameworkError::from_panic(
             payload.as_ref(),
-            "running a stateful lifecycle hook during rebuild",
+            "running a lifecycle hook during rebuild",
         );
         #[expect(
             clippy::disallowed_methods,
@@ -1822,10 +1822,10 @@ impl BuildOwner {
             // Run the build half under `catch_unwind` so the extracted element
             // is ALWAYS restored to its slot before this seam decides whether
             // to substitute or propagate. User `build()` is already recovered
-            // one level down. The two stateful lifecycle calls reachable here
-            // catch only their literal user-hook expressions, stage only when
-            // this parented seam arms them, and rethrow into this guard. Any
-            // other unwind remains unrecorded and propagates after restoration.
+            // one level down. The lifecycle calls reachable here (stateful hooks,
+            // `update_render_object`) catch only their literal user-hook expressions,
+            // stage only when this parented seam arms them, and rethrow into this
+            // guard. Any other unwind remains unrecorded and propagates after restoration.
             // `AssertUnwindSafe` is sound because the sole cross-unwind
             // invariant — the slot is whole again — is re-established by the
             // unconditional `put_element` below.

@@ -22,7 +22,7 @@ pub struct RenderIcon {
     sizing: Option<TextSizing>,
     weight_adjustment: i32,
     /// Mirror the glyph horizontally about the box's centre, for an icon whose
-    /// data matches the text direction under RTL (T09).
+    /// data matches the text direction under RTL.
     mirrored: bool,
     painter: TextPainter,
     glyph_offset: Offset,
@@ -81,13 +81,6 @@ impl RenderIcon {
         }
         self.mirrored = mirrored;
         RenderUpdateImpact::PAINT
-    }
-
-    /// Whether the glyph is mirrored horizontally.
-    #[inline]
-    #[must_use]
-    pub const fn mirrored(&self) -> bool {
-        self.mirrored
     }
 
     /// Replace authored inputs while retaining this mounted render object.

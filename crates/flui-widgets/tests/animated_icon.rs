@@ -281,34 +281,46 @@ pub(crate) fn the_label_lives_on_the_icon() {
     assert_eq!(node.value(), None, "no progress is announced");
 }
 
-/// `IconData::match_text_direction` flips the glyph in paint under RTL: the mounted
-/// `RenderIcon` carries `mirrored = true` only when the ambient direction is RTL (T09).
+/// `IconData::match_text_direction` flips the glyph in paint under RTL: the painted glyph is
+/// recorded under a transform whose x axis is negated, mapping the icon's box onto itself, and
+/// LTR (or a glyph that does not match the direction) paints it unflipped.
 pub(crate) fn icon_mirrors_under_rtl() {
-    fn mounted_icon_is_mirrored(direction: TextDirection) -> bool {
+    /// The x scale and x translation of the transform the glyph paragraph is recorded under,
+    /// relative to the icon's own offset.
+    fn glyph_x_transform(direction: TextDirection, match_text_direction: bool) -> (f64, f64) {
         let data = IconData {
-            match_text_direction: true,
-            ..IconData::new(0xE092)
+            match_text_direction,
+            ..IconData::new(u32::from('A'))
         };
         let laid = lay_out(
-            Directionality::new(direction, Icon::new(data)),
+            Directionality::new(direction, Icon::new(data).size(24.0)),
             loose(200.0),
         );
-        laid.pipeline_owner()
-            .with(|owner| {
-                owner.render_tree().iter().find_map(|(_, node)| {
-                    node.downcast_render_object::<flui_objects::RenderIcon>()
-                        .map(flui_objects::RenderIcon::mirrored)
-                })
-            })
-            .expect("a mounted RenderIcon")
+        let icon = laid.find_by_render_type("RenderIcon");
+        let origin = laid.absolute_offset(icon).dx;
+        let transforms: Vec<_> = laid
+            .draw_ops()
+            .into_iter()
+            .filter(|command| matches!(command.op, DrawOp::Paragraph { .. }))
+            .map(|command| command.transform)
+            .collect();
+        assert_eq!(transforms.len(), 1, "one glyph paragraph is painted");
+        (transforms[0].m[0], transforms[0].m[12] - origin)
     }
 
-    assert!(
-        mounted_icon_is_mirrored(TextDirection::Rtl),
-        "RTL mirrors a matching glyph"
+    assert_eq!(
+        glyph_x_transform(TextDirection::Rtl, true),
+        (-1.0, 24.0),
+        "RTL flips a matching glyph about the box: x -> 24 - x"
     );
-    assert!(
-        !mounted_icon_is_mirrored(TextDirection::Ltr),
-        "LTR keeps a matching glyph unmirrored"
+    assert_eq!(
+        glyph_x_transform(TextDirection::Ltr, true),
+        (1.0, 0.0),
+        "LTR keeps a matching glyph unflipped"
+    );
+    assert_eq!(
+        glyph_x_transform(TextDirection::Rtl, false),
+        (1.0, 0.0),
+        "a glyph that does not match the direction stays unflipped under RTL"
     );
 }

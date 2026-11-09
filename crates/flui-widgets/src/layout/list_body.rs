@@ -4,13 +4,12 @@ use std::fmt;
 
 use flui_foundation::geometry::Axis;
 use flui_objects::RenderListBody;
-use flui_painting::typography::TextDirection;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, CreationSite, InheritedView};
+use flui_view::{BoxedView, CreationSite};
 
-use crate::localization::Directionality;
+use crate::localization::{Directionality, resolve_horizontal_axis_direction};
 use crate::support::generic_render_view_element;
 
 /// Lays children out sequentially along one axis, stretching them in the cross
@@ -64,23 +63,15 @@ impl<C> ListBody<C> {
     }
 
     /// Resolve the render object's `AxisDirection`: only `Axis::Horizontal`
-    /// consults the ambient direction; `reverse` flips either axis's base
-    /// direction to its opposite. At mount the inherited read is not yet
-    /// available, so a horizontal body defaults to `Ltr` and the first rebuild
-    /// re-resolves it (T09).
+    /// consults the ambient direction, so a vertical body registers no
+    /// `Directionality` dependency; `reverse` flips either axis's base
+    /// direction to its opposite.
     fn resolve_axis_direction(&self, ctx: &flui_view::RenderObjectContext<'_>) -> AxisDirection {
         match self.main_axis {
-            Axis::Horizontal => {
-                let text_direction = ctx
-                    .depend_on::<Directionality, _>(|d| *d.data())
-                    .unwrap_or(TextDirection::Ltr);
-                let base = if text_direction.is_rtl() {
-                    AxisDirection::RightToLeft
-                } else {
-                    AxisDirection::LeftToRight
-                };
-                if self.reverse { base.opposite() } else { base }
-            }
+            Axis::Horizontal => resolve_horizontal_axis_direction(
+                Directionality::of_render_object(ctx),
+                self.reverse,
+            ),
             Axis::Vertical => AxisDirection::from_axis(Axis::Vertical, self.reverse),
         }
     }

@@ -74,11 +74,11 @@ pub struct PositionedSpec {
 }
 
 impl PositionedSpec {
-    /// Lifts a `StackParentData` into a typed positioning view, resolving the
-    /// directional `start`/`end` edges into physical `left`/`right` against
-    /// `text_direction` (`start` is left in LTR, right in RTL; `end` the
-    /// opposite). `start`/`end` and `left`/`right` are mutually exclusive — a
-    /// child uses one pair — so when either directional edge is set it wins.
+    /// Lifts a `StackParentData` into a typed positioning view, resolving its
+    /// [`HorizontalInsets`](flui_rendering::parent_data::HorizontalInsets)
+    /// against `text_direction`: a directional `start` is the left inset in
+    /// left-to-right text and the right one in right-to-left text, and `end`
+    /// the opposite.
     ///
     /// Returns `None` when none of the positioning fields is set —
     /// i.e. when the child is "non-positioned" and should be sized by
@@ -87,17 +87,7 @@ impl PositionedSpec {
         if !pd.is_positioned() {
             return None;
         }
-        let is_ltr = text_direction.is_ltr();
-        let (left, right) = match (pd.start, pd.end) {
-            (Some(_), _) | (_, Some(_)) => {
-                if is_ltr {
-                    (pd.start, pd.end)
-                } else {
-                    (pd.end, pd.start)
-                }
-            }
-            (None, None) => (pd.left, pd.right),
-        };
+        let (left, right) = pd.horizontal.resolve(text_direction);
         Some(Self {
             top: pd.top,
             right,
@@ -229,7 +219,7 @@ pub struct RenderStack {
     fit: StackFit,
     alignment: Alignment,
     /// Reading direction used to resolve a positioned child's `start`/`end`
-    /// into physical `left`/`right` (T09).
+    /// into physical `left`/`right`.
     text_direction: TextDirection,
     clip_behavior: Clip,
     /// Computed during layout — read by

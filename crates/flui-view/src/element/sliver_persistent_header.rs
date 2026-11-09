@@ -639,6 +639,11 @@ impl<R: PersistentHeaderRenderObject> ElementBehavior<PersistentHeaderView<R>, V
         core: &ElementCore<PersistentHeaderView<R>, Variable>,
         owner: &mut crate::ElementOwner<'_>,
     ) {
-        self.inner.on_update(core, owner);
+        // This behavior builds its child itself and never reaches
+        // `RenderBehavior::build_into_views`, which pushes a swapped view's
+        // configuration for every other render element: push it here. Its
+        // `update_render_object` reads no inherited data, so the tree-less
+        // context of an update loses nothing.
+        self.inner.push_config(core, owner);
     }
 }

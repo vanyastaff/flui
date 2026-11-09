@@ -424,8 +424,8 @@ removal and nested-provider precedence. The runtime's
 
 `RichText` reads inherited text sizing and weight adjustment during its stateless
 build and passes them with its unchanged authored spans to a private render view.
-Native settings and inherited lookups do not enter `RenderObjectContext`. The paragraph
-update reports layout and semantics invalidation when sizing changes, so the same
+It reads them in `build` rather than through `RenderObjectContext::depend_on`,
+and native settings never enter `RenderObjectContext`. The paragraph update reports layout and semantics invalidation when sizing changes, so the same
 render object produces updated geometry. Weight changes likewise invalidate layout
 and semantics; EditableText forwards the same inherited adjustment to its painter.
 The common shaping policy runs after authored span inheritance (ADR-0174).

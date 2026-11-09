@@ -493,7 +493,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     /// A caller that reads an ambient text direction sets this after
     /// [`set_axis_direction`](Self::set_axis_direction), which has already laid
     /// down the LTR default — so an RTL `Directionality` flips a vertical
-    /// viewport's cross axis to right-to-left (T09).
+    /// viewport's cross axis to right-to-left.
     ///
     /// Reports layout when the cross axis actually changed.
     #[inline]
@@ -506,13 +506,6 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         }
         self.cross_axis_direction = cross_axis_direction;
         flui_rendering::RenderUpdateImpact::LAYOUT
-    }
-
-    /// The configured cross-axis direction.
-    #[inline]
-    #[must_use]
-    pub const fn cross_axis_direction(&self) -> AxisDirection {
-        self.cross_axis_direction
     }
 
     /// Sets the index of the first forward child (the `center`).
@@ -1475,7 +1468,7 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
     /// Sets the cross-axis direction, overriding the LTR default
     /// [`set_axis_direction`](Self::set_axis_direction) re-derives — an RTL
     /// `Directionality` flips a vertical viewport's cross axis to
-    /// right-to-left (T09).
+    /// right-to-left.
     ///
     /// Reports layout when the cross axis actually changed.
     #[inline]
@@ -1488,13 +1481,6 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
         }
         self.cross_axis_direction = cross_axis_direction;
         flui_rendering::RenderUpdateImpact::LAYOUT
-    }
-
-    /// The configured cross-axis direction.
-    #[inline]
-    #[must_use]
-    pub const fn cross_axis_direction(&self) -> AxisDirection {
-        self.cross_axis_direction
     }
 
     /// Last total scroll extent reported by the sliver sequence.

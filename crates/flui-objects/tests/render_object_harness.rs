@@ -162,8 +162,8 @@ use flui_rendering::{
     hit_testing::{HitTestBehavior, HitTestResult, MouseRegionCallbacks},
     layer::{LayerLink, LeaderClip},
     parent_data::{
-        MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData, StackParentData,
-        TableCellParentData,
+        HorizontalInsets, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
+        StackParentData, TableCellParentData,
     },
     semantics::{SemanticsConfiguration, SemanticsRole, Toggled},
     testing::{
@@ -2118,6 +2118,66 @@ fn harness_icon_zero_side_without_a_glyph_remains_empty() {
             );
         }
     }
+}
+
+/// A mirrored icon paints its glyph under a transform that negates x and maps
+/// its box onto itself (`x -> side - x`); an unmirrored one paints it under the
+/// identity. `set_mirrored` reports paint only, since the box is symmetric.
+fn harness_icon_mirrored_paints_its_glyph_flipped_about_its_box() {
+    for (mirrored, expected_transform) in [
+        (false, None),
+        (
+            true,
+            Some(
+                " xf=[-1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,\
+                 0.00,0.00,1.00,0.00,20.00,0.00,0.00,1.00]",
+            ),
+        ),
+    ] {
+        let run = RenderTester::mount(box_node(
+            RenderIcon::new(
+                20.0,
+                Some('A'),
+                flui_painting::typography::TextStyle::default(),
+            )
+            .with_mirrored(mirrored),
+        ))
+        .with_constraints(loose(80.0))
+        .run_frame();
+        let paragraphs: Vec<String> = run
+            .display_commands()
+            .into_iter()
+            .filter(|command| command.line.starts_with("Paragraph"))
+            .map(|command| command.line)
+            .collect();
+        assert_eq!(paragraphs.len(), 1, "one glyph: {paragraphs:#?}");
+        match expected_transform {
+            Some(transform) => assert!(
+                paragraphs[0].ends_with(transform),
+                "mirrored={mirrored}: {}",
+                paragraphs[0]
+            ),
+            None => assert!(
+                !paragraphs[0].contains(" xf="),
+                "mirrored={mirrored}: {}",
+                paragraphs[0]
+            ),
+        }
+    }
+
+    let mut icon = RenderIcon::new(
+        20.0,
+        Some('A'),
+        flui_painting::typography::TextStyle::default(),
+    );
+    assert_eq!(
+        icon.set_mirrored(true),
+        flui_rendering::RenderUpdateImpact::PAINT
+    );
+    assert_eq!(
+        icon.set_mirrored(true),
+        flui_rendering::RenderUpdateImpact::NONE
+    );
 }
 
 fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
@@ -7946,6 +8006,101 @@ fn harness_stack_positioned_child_layout_and_hit_test() {
     assert_eq!(run.offset(run.id("badge")), Offset::new(16.0, 8.0));
     assert_eq!(run.hit_first(20.0, 12.0), Some(run.id("badge")));
     assert_eq!(run.hit_first(5.0, 5.0), Some(run.id("base")));
+}
+
+/// A stack resolves a child's directional insets against its text direction:
+/// `start` is the left inset in left-to-right text and the right one in
+/// right-to-left text, `end` the opposite, and both together stretch the child.
+/// Physical insets ignore the direction.
+fn harness_stack_resolves_directional_insets_against_its_text_direction() {
+    let directional = |start, end| HorizontalInsets::Directional { start, end };
+    let physical = |left, right| HorizontalInsets::Physical { left, right };
+    let mut failures = Vec::new();
+    for (name, horizontal, direction, expected_x, expected_width) in [
+        (
+            "start, ltr",
+            directional(Some(16.0), None),
+            TextDirection::Ltr,
+            16.0,
+            20.0,
+        ),
+        (
+            "start, rtl",
+            directional(Some(16.0), None),
+            TextDirection::Rtl,
+            64.0,
+            20.0,
+        ),
+        (
+            "end, ltr",
+            directional(None, Some(10.0)),
+            TextDirection::Ltr,
+            70.0,
+            20.0,
+        ),
+        (
+            "end, rtl",
+            directional(None, Some(10.0)),
+            TextDirection::Rtl,
+            10.0,
+            20.0,
+        ),
+        (
+            "both, ltr",
+            directional(Some(10.0), Some(30.0)),
+            TextDirection::Ltr,
+            10.0,
+            60.0,
+        ),
+        (
+            "both, rtl",
+            directional(Some(10.0), Some(30.0)),
+            TextDirection::Rtl,
+            30.0,
+            60.0,
+        ),
+        (
+            "left, rtl",
+            physical(Some(16.0), None),
+            TextDirection::Rtl,
+            16.0,
+            20.0,
+        ),
+        (
+            "right, rtl",
+            physical(None, Some(10.0)),
+            TextDirection::Rtl,
+            70.0,
+            20.0,
+        ),
+    ] {
+        for indexed in [false, true] {
+            let child = box_node(RenderColoredBox::green(20.0, 20.0))
+                .with_stack_parent_data(
+                    StackParentData::new()
+                        .with_top(8.0)
+                        .with_horizontal(horizontal),
+                )
+                .label("badge");
+            let stack = if indexed {
+                box_node(RenderIndexedStack::new().with_text_direction(direction))
+            } else {
+                box_node(RenderStack::new().with_text_direction(direction))
+            };
+            let run = RenderTester::mount(stack.child(child))
+                .with_size(Size::new(100.0, 100.0))
+                .run_frame();
+            let badge = run.id("badge");
+            let got = (run.offset(badge), run.box_geometry(badge).width);
+            let want = (Offset::new(expected_x, 8.0), expected_width);
+            if got != want {
+                failures.push(format!(
+                    "{name} (indexed={indexed}): got {got:?}, want {want:?}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 fn harness_stack_baselines_include_positioned_and_aligned_children() {
@@ -14180,6 +14335,10 @@ fn family_text_and_image() {
                 harness_icon_zero_side_without_a_glyph_remains_empty,
             ),
             (
+                "icon_mirrored_paints_its_glyph_flipped_about_its_box",
+                harness_icon_mirrored_paints_its_glyph_flipped_about_its_box,
+            ),
+            (
                 "icon_pending_layout_withdraws_old_glyph_geometry",
                 harness_icon_pending_layout_withdraws_old_glyph_geometry,
             ),
@@ -14673,6 +14832,10 @@ fn family_multi_child() {
             (
                 "stack_intrinsic_sizing_ignores_positioned_overlays",
                 harness_stack_intrinsic_sizing_ignores_positioned_overlays,
+            ),
+            (
+                "stack_resolves_directional_insets_against_its_text_direction",
+                harness_stack_resolves_directional_insets_against_its_text_direction,
             ),
             (
                 "indexed_stack_sizes_like_stack_but_only_paints_and_hits_selected_child",

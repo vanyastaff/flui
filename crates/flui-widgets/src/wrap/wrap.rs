@@ -8,7 +8,7 @@ use flui_painting::paint::Clip;
 use flui_painting::typography::TextDirection;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, CreationSite, InheritedView};
+use flui_view::{BoxedView, CreationSite};
 
 use crate::Directionality;
 use crate::support::generic_render_view_element;
@@ -167,7 +167,7 @@ where
     type RenderObject = RenderWrap;
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> RenderWrap {
-        self.build_render_object(resolve_text_direction(ctx))
+        self.build_render_object(Directionality::of_render_object(ctx))
     }
 
     fn update_render_object(
@@ -182,7 +182,7 @@ where
             self.run_alignment,
             self.run_spacing,
             self.cross_axis_alignment,
-        ) | render_object.set_text_direction(resolve_text_direction(ctx))
+        ) | render_object.set_text_direction(Directionality::of_render_object(ctx))
             | render_object.set_clip_behavior(self.clip_behavior)
     }
 
@@ -196,11 +196,3 @@ where
 }
 
 generic_render_view_element!(Wrap, site = site);
-
-/// Resolve the ambient [`Directionality`], defaulting to `Ltr`. At mount the
-/// inherited read is not yet available, so it defaults and the first rebuild
-/// re-resolves it (T09).
-fn resolve_text_direction(ctx: &flui_view::RenderObjectContext<'_>) -> TextDirection {
-    ctx.depend_on::<Directionality, _>(|d| *d.data())
-        .unwrap_or_default()
-}

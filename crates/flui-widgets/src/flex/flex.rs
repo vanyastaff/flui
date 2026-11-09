@@ -10,7 +10,7 @@ use flui_painting::typography::TextBaseline;
 use flui_painting::typography::TextDirection;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, CreationSite, InheritedView};
+use flui_view::{BoxedView, CreationSite};
 
 use crate::localization::Directionality;
 use crate::support::generic_render_view_element;
@@ -384,16 +384,13 @@ fn needs_text_direction(direction: FlexDirection, cross: CrossAxisAlignment) -> 
 
 /// Resolve the flex's [`TextDirection`] from the ambient [`Directionality`],
 /// gated by [`needs_text_direction`] so a centred column registers no dependency.
-/// At mount the inherited read is not yet available, so it defaults to `Ltr` and
-/// the first rebuild re-resolves it (T09).
 fn resolve_text_direction(
     direction: FlexDirection,
     cross: CrossAxisAlignment,
     ctx: &flui_view::RenderObjectContext<'_>,
 ) -> TextDirection {
     if needs_text_direction(direction, cross) {
-        ctx.depend_on::<Directionality, _>(|d| *d.data())
-            .unwrap_or(TextDirection::Ltr)
+        Directionality::of_render_object(ctx)
     } else {
         TextDirection::Ltr
     }
