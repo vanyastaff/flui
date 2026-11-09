@@ -3,8 +3,51 @@
 Per-crate ledger for architecture decisions that span more than one module in
 this crate. Partial: this file exists for the `## Mapping
 decisions` entries below; a full crate architecture writeup is deferred.
-[`UNIFIED_ELEMENT.md`](UNIFIED_ELEMENT.md) is the crate's existing element
-behaviour taxonomy and remains a sibling appendix.
+
+---
+
+## Element taxonomy
+
+Every element is one `Element<V, A, B>`: the View type `V` (`Clone + 'static`),
+an arity marker `A: ElementArity`, and an `ElementBehavior` `B` that supplies the
+view-specific build/lifecycle half. `ElementCore<V, A>` carries the common logic
+(mount/unmount/activate/deactivate, view storage and update, `PipelineOwner`
+propagation, dirty tracking). `ElementArity` is a marker subtrait of
+`flui_foundation::Arity`; it no longer carries an associated child storage (the
+slab-resident `ElementTree` is the single element graph).
+
+The behavior families, each at one arity:
+
+| Behavior | Arity | Notes |
+|---|---|---|
+| `StatelessBehavior` | `Single` | `view.build()` |
+| `ProxyBehavior` | `Single` | `view.child()` pass-through |
+| `StatefulBehavior<V>` | `Single` | owns `V::State`, `init_state`/`dispose` |
+| `InheritedBehavior<V>` | `Single` | cached `V::Data` + dependent set |
+| `AnimatedBehavior<V>` | `Single` | composes `StatefulBehavior<V>` |
+| `ParentDataBehavior` | `Single` | proxy-shaped parent-data tag |
+| `RenderBehavior<V>` | `Variable` | owns the render object |
+
+`Leaf` and `Optional` are render-object arity (`flui_foundation::Arity`), not
+element arity: no element instantiates them. The type aliases in `element/mod.rs`
+name the concrete tuples:
+
+```rust
+pub type StatelessElement<V> = Element<V, Single, StatelessBehavior>;
+pub type ProxyElement<V>     = Element<V, Single, ProxyBehavior>;
+pub type StatefulElement<V>  = Element<V, Single, StatefulBehavior<V>>;
+pub type InheritedElement<V> = Element<V, Single, InheritedBehavior<V>>;
+pub type AnimatedElement<V>  = Element<V, Single, AnimatedBehavior<V>>;
+pub type RenderElement<V>    = Element<V, Variable, RenderBehavior<V>>;
+```
+
+The reconciler stores each element as an `ElementKind` closed union —
+`Stateless`, `Stateful`, `Proxy`, `Inherited`, `Notification`, `RenderVariable`,
+`Root`. The variant records the behavior family and lets a caller match on it
+(for example to reach the family's sub-trait). The shared lifecycle path does
+not match on it: `ElementKind::element` and `element_mut` erase every variant
+to `&dyn ElementBase`, so mount, update and unmount go through that one trait
+object.
 
 ---
 

@@ -615,7 +615,7 @@ fn without_a_portal_on_the_bus_the_services_are_unavailable() {
     let uri = ExternalUri::try_new("mailto:someone@example.com").expect("a mail URI");
     let answered: Result<LaunchResult, Abandoned> = settle(&mut host, launcher.open_uri(&uri));
     assert!(
-        matches!(answered, Ok(Err(LaunchError::Unavailable(_)))),
+        matches!(answered, Ok(Err(LaunchError::Unsupported(_)))),
         "{answered:?}"
     );
 
@@ -626,7 +626,7 @@ fn without_a_portal_on_the_bus_the_services_are_unavailable() {
     let dialogs = dialogs.expect("the dialogs are handed out before the bus is asked");
     let answered = settle(&mut host, dialogs.open(OpenRequest::files()));
     assert!(
-        matches!(answered, Ok(Err(DialogError::Unavailable(_)))),
+        matches!(answered, Ok(Err(DialogError::Unsupported(_)))),
         "{answered:?}"
     );
 }
@@ -813,14 +813,14 @@ fn a_portal_that_leaves_before_answering_ends_the_dialog_and_frees_the_window() 
     pump_until(&mut host, "the dialog ended", || slot.borrow().is_some());
     let ended = slot.borrow_mut().take();
     assert!(
-        matches!(ended, Some(Ok(Err(DialogError::Unavailable(_))))),
+        matches!(ended, Some(Ok(Err(DialogError::Unsupported(_))))),
         "{ended:?}"
     );
 
     // The window is free again: the next dialog is not `Busy`.
     let next = settle(&mut host, dialogs.save(SaveRequest::new()));
     assert!(
-        matches!(next, Ok(Err(DialogError::Unavailable(_)))),
+        matches!(next, Ok(Err(DialogError::Unsupported(_)))),
         "{next:?}"
     );
 }

@@ -60,11 +60,6 @@ class = "pr-label"
 count = 2
 
 [[allow]]
-path = "crates/flui-engine/src/layer_offscreen.rs"
-class = "slice"
-count = 3
-
-[[allow]]
 path = "crates/flui-engine/src/painter/tests.rs"
 class = "phase-letter"
 count = 1
@@ -120,11 +115,6 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "crates/flui-objects/tests/render_object_harness.rs"
-class = "slice"
-count = 3
-
-[[allow]]
 path = "crates/flui-native/ARCHITECTURE.md"
 class = "tracker-h"
 count = 2
@@ -133,11 +123,6 @@ count = 2
 path = "crates/flui-native/src/lib.rs"
 class = "wave"
 count = 1
-
-[[allow]]
-path = "crates/flui-native/src/owner/mod.rs"
-class = "slice"
-count = 3
 
 [[allow]]
 path = "crates/flui-native/src/platform.rs"

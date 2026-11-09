@@ -47,7 +47,7 @@ impl FocusCoordinator {
     }
 
     /// Record that `id` is now the active presentation. Two write sides:
-    /// `PlatformToUi::WindowFocus(true)` handling (`runner.rs`) calls this
+    /// `PlatformToUi::WindowFocus(true)` handling (`flui-app`'s `runner/owner_dispatch.rs`) calls this
     /// with the event's own addressed presentation when its native window
     /// gains OS focus; [`UiRuntime::close_presentation_entered`] calls this
     /// with the surviving primary when `id` is the presentation being
@@ -314,7 +314,7 @@ impl UiRuntime {
     /// the addressed-routing slice).
     ///
     /// `presentation_id` is the exact presentation `dispatch_platform_ui_runtime`
-    /// (`runner.rs`) stamped this event with at enqueue time — the window
+    /// (`flui-app`'s `runner/owner_dispatch.rs`) stamped this event with at enqueue time — the window
     /// that produced it, resolved through `WindowRegistry` at hop-1 — never
     /// assumed to be this UI runtime's primary. A `presentation_id` this UI runtime no
     /// longer hosts (closed between enqueue and drain) is a traced drop,

@@ -213,7 +213,8 @@ pub fn run_direct(
                 }
             }
 
-            // GPU device-loss recovery: same logic as runner.rs frame callbacks.
+            // GPU device-loss recovery: same recovery as the runner's frame
+            // callbacks (`attempt_device_recovery`).
             if r.is_device_lost() {
                 match pollster::block_on(r.recover()) {
                     Ok(()) => {
