@@ -35,7 +35,6 @@ use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::semantics::{
     DocumentPosition, DocumentSelection, SemanticsAnchor, SemanticsRole,
-    TextDirection as SemanticsTextDirection,
 };
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -305,7 +304,7 @@ impl StatefulView for SelectionArea {
                 rebuild: RefCell::new(None),
                 pipeline: RefCell::new(None),
                 primary: RefCell::default(),
-                direction: Cell::new(SemanticsTextDirection::Ltr),
+                direction: Cell::new(TextDirection::Ltr),
                 writer: RefCell::new(None),
                 clipboard: RefCell::new(None),
                 focus: FocusNode::with_debug_label("SelectionArea"),
@@ -426,10 +425,7 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             view.magnifier.as_ref(),
         ));
         // The document reads its lines in the ambient direction.
-        let direction = match crate::Directionality::maybe_of(ctx).unwrap_or_default() {
-            TextDirection::Ltr => SemanticsTextDirection::Ltr,
-            TextDirection::Rtl => SemanticsTextDirection::Rtl,
-        };
+        let direction = crate::Directionality::maybe_of(ctx).unwrap_or_default();
         // Shown handles are built for the direction they read in.
         if self.model.direction.replace(direction) != direction {
             let mut failure = FirstPanic::new();
@@ -524,7 +520,7 @@ struct SelectionModel {
     primary: RefCell<Rc<PrimarySelectionOwner>>,
     /// The direction the area read as of its last build, which orders the
     /// texts along a line.
-    direction: Cell<SemanticsTextDirection>,
+    direction: Cell<TextDirection>,
     /// Where the listener hears of a change the pointer made, acquired in
     /// `init_state`.
     writer: RefCell<Option<WriterSource>>,
@@ -700,10 +696,7 @@ impl SelectionModel {
 
     /// The direction the area reads in.
     fn text_direction(&self) -> TextDirection {
-        match self.direction.get() {
-            SemanticsTextDirection::Rtl => TextDirection::Rtl,
-            SemanticsTextDirection::Ltr => TextDirection::Ltr,
-        }
+        self.direction.get()
     }
 
     /// The area gained or lost the focus: it rebuilds with the active or the

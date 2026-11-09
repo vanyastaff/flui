@@ -641,10 +641,10 @@ impl<R: LazyMultiBoxRender> View for SliverMultiBoxAdaptor<R> {
 }
 
 // `SliverMultiBoxAdaptor<R>` uses a custom adaptor behavior (not the generic
-// `RenderBehavior`), so it needs its own `RenderElementBase<Variable>` tag to
-// route into `ElementKind::RenderVariable`; the `RenderBehavior` blanket impl
-// in `element/kind.rs` does not cover this behavior.
-impl<R: LazyMultiBoxRender> crate::element::RenderElementBase<Variable> for SliverAdaptorElement<R> where
+// `RenderBehavior`), so it needs its own `RenderElementBase` tag to route into
+// `ElementKind::RenderVariable`; the `RenderBehavior` blanket impl in
+// `element/kind.rs` does not cover this behavior.
+impl<R: LazyMultiBoxRender> crate::element::RenderElementBase for SliverAdaptorElement<R> where
     flui_rendering::storage::RenderNode:
         From<Box<dyn flui_rendering::traits::RenderObject<SliverProtocol>>>
 {
