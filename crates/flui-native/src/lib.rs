@@ -185,7 +185,7 @@
 // are NOT yet at that bar; see the per-crate documentation coverage tracked in
 // the root `Cargo.toml`'s `undocumented_unsafe_blocks` note — do not restate
 // "every block" as a crate-wide claim until that note says so too.
-// Ship bar (wave 4): every public item is documented; keep it that way.
+// every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
 pub(crate) mod accessibility;

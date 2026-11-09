@@ -134,7 +134,7 @@ where
         return ViewUpdate::Unchanged;
     }
 
-    // Memoization equality-bail (Wave 3 `should_skip_rebuild`).
+    // Memoization equality-bail (`should_skip_rebuild`).
     //
     // Evaluate on a BORROW before the unconditional `clone_box` below —
     // every skip must pay zero clone cost. The downcast_ref here is

@@ -15,16 +15,6 @@ class = "tracker-h"
 count = 1
 
 [[allow]]
-path = "Cargo.toml"
-class = "wave"
-count = 1
-
-[[allow]]
-path = "crates/flui-app/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-engine/src/aa_oracle_tests.rs"
 class = "phase-letter"
 count = 1
@@ -95,11 +85,6 @@ class = "pr-label"
 count = 1
 
 [[allow]]
-path = "crates/flui-foundation/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-hot-reload/src/dispatch.rs"
 class = "phase-letter"
 count = 1
@@ -107,16 +92,6 @@ count = 1
 [[allow]]
 path = "crates/flui-hot-reload/src/engine.rs"
 class = "phase-letter"
-count = 1
-
-[[allow]]
-path = "crates/flui-hot-reload/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
-path = "crates/flui-macros/src/lib.rs"
-class = "wave"
 count = 1
 
 [[allow]]
@@ -130,11 +105,6 @@ class = "tracker-h"
 count = 2
 
 [[allow]]
-path = "crates/flui-native/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-native/src/owner/mod.rs"
 class = "slice"
 count = 3
@@ -145,58 +115,13 @@ class = "spec-task"
 count = 3
 
 [[allow]]
-path = "crates/flui-rendering/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-rendering/src/protocol/sliver_protocol.rs"
 class = "tracker-h"
 count = 1
 
 [[allow]]
-path = "crates/flui-rendering/src/protocol/sliver_protocol.rs"
-class = "wave"
-count = 2
-
-[[allow]]
 path = "crates/flui-rendering/src/storage/node.rs"
 class = "pr-label"
-count = 1
-
-[[allow]]
-path = "crates/flui-rendering/tests/cross_protocol_layout.rs"
-class = "wave"
-count = 1
-
-[[allow]]
-path = "crates/flui-rendering/tests/render_viewport.rs"
-class = "wave"
-count = 1
-
-[[allow]]
-path = "crates/flui-rendering/tests/sliver_direction_matrix.rs"
-class = "wave"
-count = 1
-
-[[allow]]
-path = "crates/flui-rendering/tests/sliver_hit_direction_matrix.rs"
-class = "wave"
-count = 1
-
-[[allow]]
-path = "crates/flui-rendering/tests/sliver_to_box_adapter.rs"
-class = "wave"
-count = 1
-
-[[allow]]
-path = "crates/flui-view/src/element/dispatch.rs"
-class = "wave"
-count = 1
-
-[[allow]]
-path = "crates/flui-view/src/lib.rs"
-class = "wave"
 count = 1
 
 [[allow]]
@@ -212,9 +137,4 @@ count = 1
 [[allow]]
 path = "crates/flui-widgets/src/interaction/focus.rs"
 class = "tracker-h"
-count = 1
-
-[[allow]]
-path = "crates/flui-widgets/src/lib.rs"
-class = "wave"
 count = 1
