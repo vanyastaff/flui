@@ -35,7 +35,7 @@ use windows::{
 };
 
 use crate::clipboard::lock;
-use crate::host::{MAX_TEXT, NativeClipboard, SyncClipboard, host_text};
+use crate::host::{NativeClipboard, SyncClipboard, admit_text, host_text};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// Windows clipboard implementation
@@ -164,15 +164,12 @@ impl SyncClipboard for WindowsClipboard {
             let wide_slice = std::slice::from_raw_parts(wide_ptr, len);
             // The text is measured before anything is allocated for it: past
             // the limit nothing is decoded.
-            if decoded_len(wide_slice) > MAX_TEXT {
-                let _ = GlobalUnlock(hglobal);
-                tracing::warn!("a clipboard read past {MAX_TEXT} bytes was refused");
-                return Err(ClipboardError::TooLarge);
-            }
-            let rust_string = String::from_utf16_lossy(wide_slice);
+            let rust_string =
+                admit_text(decoded_len(wide_slice)).map(|()| String::from_utf16_lossy(wide_slice));
 
             // Unlock global memory
             let _ = GlobalUnlock(hglobal);
+            let rust_string = rust_string?;
 
             tracing::debug!(len = rust_string.len(), "Read text from clipboard");
             host_text(rust_string)

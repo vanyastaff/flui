@@ -41,7 +41,15 @@ pub(crate) const MAX_TEXT: usize = 64 * 1024 * 1024;
 
 /// Refuse a read of `len` bytes — or, for a UTF-16 source, `len` code units,
 /// each at least one UTF-8 byte — past [`MAX_TEXT`], before its copy is made.
-/// The clipboard's size policy lives here, once (T10).
+///
+/// Every check of a finished read's size goes through here, so the limit, the
+/// refusal and its warning are the same on every host. A reader that stops a
+/// stream at a cap while it still reads (the Wayland pipe, an X11 property
+/// read) takes [`MAX_TEXT`] as that cap instead: it has no length to admit
+/// until it has stopped.
+///
+/// The refusal emits a `tracing` event, which is user code: call this with none
+/// of the host's own state locked or borrowed.
 pub(crate) fn admit_text(len: usize) -> Result<(), flui_platform::ClipboardError> {
     if len > MAX_TEXT {
         tracing::warn!(len, "a clipboard read past {MAX_TEXT} bytes was refused");
