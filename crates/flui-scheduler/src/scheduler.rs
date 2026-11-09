@@ -30,6 +30,7 @@
 //! ## Example
 //!
 //! ```rust
+//! use flui_scheduler::__runtime::DriveFrame as _;
 //! use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 //!
 //! let scheduler = UpdateScheduler::new();
@@ -150,7 +151,7 @@ struct LifecycleListener {
 ///
 /// `Completed` and `Aborted` carry the SAME [`FrameTiming`] shape but are
 /// distinguished on purpose: a post-frame callback's own panic still closes
-/// via `OwnerFrame::drive_frame` and resolves
+/// via the frame drive (`__runtime::DriveFrame::drive_frame`) and resolves
 /// `Completed` (the pipeline already committed layout and paint; only the
 /// callback failed), while `Aborted` is the outcome of
 /// the internal frame-abort path alone -- a frame whose

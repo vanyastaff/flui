@@ -67,6 +67,7 @@ control logical execution order.
 ### Basic Frame Scheduling
 
 ```rust
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 
 let scheduler = UpdateScheduler::new();
@@ -309,7 +310,7 @@ match event {
 `FrameBudget` reports timing statistics (jank, phase durations, over-budget)
 against whichever target the caller chose — `UpdateScheduler` itself makes
 no frame-rate assumption and does not act on these statistics to skip work.
-The only thing that ever defers work is `OwnerFrame::drive_frame`'s own `deadline`
+The only thing that ever defers work is the frame drive's own `deadline`
 parameter, and it bounds `Priority::Idle` tasks alone; `Priority::Animation`
 and `Priority::Build` always run to completion.
 

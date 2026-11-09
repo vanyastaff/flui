@@ -201,7 +201,7 @@ mod table_test;
 
 /// The instant type the frame clock is stamped with. `std::time::Instant` on
 /// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
-/// name `OwnerFrame::drive_frame`'s timestamp without depending on `web_time`.
+/// name the frame drive's timestamp without depending on `web_time`.
 pub use web_time::Instant;
 // Re-exports - Duration types
 pub use duration::{BudgetPercentage, FrameDuration, Microseconds, Milliseconds, Seconds};
