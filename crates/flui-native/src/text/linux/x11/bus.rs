@@ -580,7 +580,7 @@ async fn serve(
             }
         } else {
             tracing::info!(
-                "no input method answers on D-Bus or XIM: X11 windows take keys as typed (gap 5)"
+                "no input method answers on D-Bus or XIM: X11 windows take keys as typed (docs/gaps.md#native-linux-host-wayland-and-x11)"
             );
         }
         // Every context is lost at once, so no key waits on it.
@@ -1117,7 +1117,7 @@ impl Session {
             }
             (_, "ForwardKeyEvent" | "ForwardKey") => {
                 tracing::debug!(
-                    "the input method forwarded a key, which X11 windows do not take yet (gap 5)"
+                    "the input method forwarded a key, which X11 windows do not take yet (docs/gaps.md#native-linux-host-wayland-and-x11)"
                 );
                 None
             }

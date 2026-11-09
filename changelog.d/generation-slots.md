@@ -5,7 +5,7 @@
   `generation::GenSlots`, the bookkeeping under every packed generational key: `mint_fresh`,
   `mint_recycled` (one checked step at the claim), `generation`, and the release's `peek`→`commit`
   pair (`Release` carries the step; a caught panic between the two steps nothing). A slot whose
-  generation space is exhausted is closed at its release (ADR-0313; gaps entry 43 names the
+  generation space is exhausted is closed at its release (ADR-0313; [Accepted ADR sections not built yet](/docs/gaps.md#accepted-adr-sections-not-built-yet) names the
   render slab's part).
 
 ### Changed

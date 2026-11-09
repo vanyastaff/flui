@@ -95,8 +95,8 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 /// builders (an error renders the same empty box as no data, with a
 /// `tracing::warn!`), device-pixel-ratio-based cache-key scaling, font
 /// unification, and a decoded-image cache owned by the UI runtime that
-/// `memory` and `file` widgets with equal keys would share (`docs/gaps.md`
-/// entry 41).
+/// `memory` and `file` widgets with equal keys would share
+/// (`docs/gaps.md#images-decode-on-the-ui-thread-without-background-lanes`).
 ///
 /// [`from_image`]: Image::from_image
 /// [`memory`]: Image::memory

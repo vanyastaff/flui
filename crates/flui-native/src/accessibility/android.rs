@@ -1,5 +1,5 @@
 //! TalkBack for Android, via `accesskit_android`'s low-level [`Adapter`]
-//! (gap 2 of `docs/gaps.md`).
+//! (`docs/gaps.md#no-accessibility-on-mobile-and-the-web`).
 //!
 //! `FluiView` is FLUI's own view (ADR-0247), so the accessibility delegate it
 //! installs (ADR-0255 decision 3) hands the framework a node provider that
@@ -473,7 +473,7 @@ impl AndroidAccessibility {
     /// TalkBack's cursor comes through the vendored adapter's accessor, read
     /// after each action, hover and update; a run on a device has not checked
     /// it yet
-    /// ([gap 36](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)).
+    /// ([docs/gaps.md, "Accessibility bridge fidelity"](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)).
     pub(crate) const ASSISTIVE_FOCUS: flui_semantics::AssistiveFocusSupport =
         flui_semantics::AssistiveFocusSupport::Reported;
 

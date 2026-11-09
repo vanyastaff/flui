@@ -11,7 +11,8 @@
 //! applies it.
 //!
 //! A compositor that offers no `zwp_text_input_manager_v3` gives the windows
-//! no text input: their store host is `None` (FLUI's gap 5 names it), and a
+//! no text input: their store host is `None`
+//! (`docs/gaps.md#native-linux-host-wayland-and-x11` names it), and a
 //! debug warning says so once.
 
 use std::any::Any;
@@ -420,7 +421,7 @@ impl SeatText for SeatTexts {
                     objects.warned = true;
                     tracing::warn!(
                         "the Wayland compositor offers no zwp_text_input_v3: no input method \
-                         reaches FLUI's text fields (gap 5)"
+                         reaches FLUI's text fields (docs/gaps.md#native-linux-host-wayland-and-x11)"
                     );
                 }
                 offered

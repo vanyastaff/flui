@@ -73,7 +73,7 @@ pub struct WebAccessibility {
 
 impl WebAccessibility {
     /// The browser tells a page nothing of where a screen reader's cursor is
-    /// ([gap 36](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)).
+    /// ([docs/gaps.md, "Accessibility bridge fidelity"](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)).
     pub(crate) const ASSISTIVE_FOCUS: AssistiveFocusSupport = AssistiveFocusSupport::Unreported;
 
     fn page(&self) -> Option<Rc<Page>> {

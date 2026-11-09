@@ -57,6 +57,17 @@ pub(super) const DOCS_ONLY: &[&str] = &[
     "changelog.d/**", // changelog fragments; `changelog --check` in `checks` judges them
 ];
 
+/// Documents under a [`DOCS_ONLY`] pattern that a package's test reads with
+/// `include_str!`, each with the directory of the package that reads it. A
+/// change to one is that package's change: it runs the test that holds the
+/// document to its source, which a docs-only change would skip. The
+/// `paths-filter` guard requires every `include_str!` of a docs-only path to
+/// be listed here, from a file of the package listed with it.
+pub(super) const COMPILED_DOCS: &[(&str, &str)] = &[
+    // `GapId`'s slugs are held to the entries' headings
+    ("docs/gaps.md", "crates/flui-native/"),
+];
+
 /// Inputs whose breakage only the wide lane's jobs block on (feature-matrix,
 /// wasm, cross, doc, miri; and `deps`' advisories): the wide lane runs.
 pub(super) const HEAVY_TRIGGERS: &[&str] = &[
@@ -161,9 +172,19 @@ fn matches_any(path: &str, patterns: &[impl AsRef<str>]) -> bool {
     patterns.iter().any(|p| matches(path, p.as_ref()))
 }
 
-/// Whether `path` (repo-relative, `/`-separated) is documentation only.
+/// Whether `path` (repo-relative, `/`-separated) is documentation only: under
+/// a [`DOCS_ONLY`] pattern and not one of the [`COMPILED_DOCS`].
 pub(super) fn is_docs_only(path: &str) -> bool {
-    matches_any(path, DOCS_ONLY)
+    matches_any(path, DOCS_ONLY) && compiled_doc_reader(path).is_none()
+}
+
+/// The directory of the package whose test reads `path`, when `path` is one of
+/// the [`COMPILED_DOCS`].
+pub(super) fn compiled_doc_reader(path: &str) -> Option<&'static str> {
+    COMPILED_DOCS
+        .iter()
+        .find(|(doc, _)| *doc == path)
+        .map(|(_, reader)| *reader)
 }
 
 /// clap's name for a `Command` variant: `DocStrict` -> `doc-strict`.
@@ -452,8 +473,10 @@ impl Workspace {
         scope
     }
 
-    /// The package owning `path`: the longest matching prefix wins.
+    /// The package owning `path`: the longest matching prefix wins. One of the
+    /// [`COMPILED_DOCS`] is owned by the package that reads it.
     fn owning_package(&self, path: &str) -> Option<&str> {
+        let path = compiled_doc_reader(path).unwrap_or(path);
         let mut best: Option<(&str, usize)> = None;
         for (name, prefixes) in &self.owned {
             for pre in prefixes {
@@ -899,6 +922,18 @@ pub(super) mod tests {
         );
     }
 
+    fn a_compiled_doc_is_its_readers_change() {
+        // docs/gaps.md alone runs flui-native's test that reads it
+        let s = scope(&["docs/gaps.md"]);
+        assert_eq!(s.mode, Mode::Packages);
+        assert_eq!(s.seeds, ["flui-native"]);
+        // beside other documentation it still compiles
+        assert_eq!(
+            scope(&["docs/testing.md", "docs/gaps.md"]).mode,
+            Mode::Packages
+        );
+    }
+
     fn a_dev_dependent_is_the_last_hop() {
         // base <- mid (normal) <- tester (dev) <- above_tester (normal);
         // base <- both (normal and dev) <- above_both (normal).
@@ -1078,6 +1113,10 @@ pub(super) mod tests {
                 (
                     "unattributable_file_is_full",
                     unattributable_file_is_full as fn(),
+                ),
+                (
+                    "a_compiled_doc_is_its_readers_change",
+                    a_compiled_doc_is_its_readers_change as fn(),
                 ),
                 (
                     "a_dev_dependent_is_the_last_hop",

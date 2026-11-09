@@ -4,8 +4,9 @@
 //!
 //! A host's test runs [`a_concealed_write_stays_out_of_history`] over its own
 //! clipboard and read, and asserts its outcome: `Ok` where the host conceals
-//! the entry, [`expect_fail`] with [`CONCEALED_WRITES`] where FLUI cannot yet.
-//! The scenario is never skipped: a host that cannot conceal fails as the gap.
+//! the entry, [`crate::testing::gap::expect_fail`] with [`CONCEALED_WRITES`]
+//! where FLUI cannot yet. The scenario is never skipped: a host that cannot
+//! conceal fails as the gap.
 
 use std::sync::{Arc, Mutex};
 
@@ -15,19 +16,11 @@ use flui_platform::capability::{
 use flui_platform::{ClipboardRead, ClipboardWrite, Concealment};
 
 use crate::host::NativeClipboard;
+use crate::testing::gap::GapId;
 
-/// An entry of `docs/gaps.md`: what FLUI has not built on a host yet, which a
-/// scenario fails as there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct KnownGap {
-    /// The entry's number in `docs/gaps.md`.
-    pub number: u32,
-}
-
-/// Gap 26: a concealed write is an ordinary one, kept by the clipboard's
-/// history.
-pub const CONCEALED_WRITES: KnownGap = KnownGap { number: 26 };
+/// The entry a host fails the scenario as: a concealed write is an ordinary
+/// one, kept by the clipboard's history.
+pub const CONCEALED_WRITES: GapId = GapId::SecureTextEntryAndConcealedClipboard;
 
 /// The text the scenario writes concealed.
 pub const SECRET: &str = "correct horse battery staple";
@@ -46,7 +39,7 @@ pub const SECRET: &str = "correct horse battery staple";
 pub fn a_concealed_write_stays_out_of_history(
     clipboard: &dyn NativeClipboard,
     read: impl FnOnce(&dyn NativeClipboard) -> Option<Arc<str>>,
-) -> Result<(), KnownGap> {
+) -> Result<(), GapId> {
     clipboard.write(ClipboardWrite::text(SECRET).concealed());
     assert_eq!(
         read(clipboard).as_deref(),
@@ -56,29 +49,6 @@ pub fn a_concealed_write_stays_out_of_history(
     match clipboard.concealment() {
         Concealment::Unavailable => Err(CONCEALED_WRITES),
         _ => Ok(()),
-    }
-}
-
-/// Assert that a scenario's `outcome` is the known failure `gap`: the run
-/// passes while the gap is open on this host, and fails once the scenario
-/// passes, so the fix closes the gap's entry and this call with it.
-///
-/// # Panics
-///
-/// When `outcome` passes, or fails as another gap.
-pub fn expect_fail(gap: KnownGap, outcome: Result<(), KnownGap>) {
-    match outcome {
-        Err(failed) if failed == gap => {
-            eprintln!("expected failure: gap {} is open on this host", gap.number);
-        }
-        Err(failed) => panic!(
-            "the scenario failed as gap {}, expected gap {}",
-            failed.number, gap.number
-        ),
-        Ok(()) => panic!(
-            "gap {} is closed on this host: remove its expect_fail and update docs/gaps.md",
-            gap.number
-        ),
     }
 }
 

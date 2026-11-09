@@ -79,7 +79,7 @@ pub enum AssistiveFocusSupport {
     /// The adapter calls its [`AssistiveFocusListener`] each time the cursor moves.
     Reported,
     /// The platform, or FLUI's adapter for it, does not say where the cursor
-    /// is ([gap 36](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)).
+    /// is ([docs/gaps.md, "Accessibility bridge fidelity"](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)).
     #[default]
     Unreported,
 }

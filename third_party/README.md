@@ -18,8 +18,7 @@ takes each change below or FLUI publishes the vendored crate under its own name.
 **Source:** crates.io `accesskit_ios` 0.2.2, AccessKit commit
 `f3026222559c7f5f46d8f25cb7404de68eb149f0` (`adapters/ios`), with the licence files of that commit.
 
-**Why:** VoiceOver's cursor reaches FLUI's `Semantics::on_assistive_focus_within` (gap 36 in
-`docs/gaps.md`). The published adapter records where the cursor is in a private field and tells
+**Why:** VoiceOver's cursor reaches FLUI's `Semantics::on_assistive_focus_within` ([Accessibility bridge fidelity](../docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)). The published adapter records where the cursor is in a private field and tells
 nobody.
 
 **Change** (`accesskit_ios.patch`, the whole difference from the published crate):
@@ -62,8 +61,7 @@ that upstream pull request is below; it has not been sent.
 `f3026222559c7f5f46d8f25cb7404de68eb149f0` (`adapters/android`), with the licence files of that
 commit.
 
-**Why:** TalkBack's cursor reaches FLUI's `Semantics::on_assistive_focus_within` (gap 36 in
-`docs/gaps.md`), as VoiceOver's does through `accesskit_ios` above. The published adapter records
+**Why:** TalkBack's cursor reaches FLUI's `Semantics::on_assistive_focus_within` ([Accessibility bridge fidelity](../docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)), as VoiceOver's does through `accesskit_ios` above. The published adapter records
 where the cursor is (`ACTION_ACCESSIBILITY_FOCUS`) in a private field and tells nobody. The
 semantics identifier (ADR-0240) reaches Android's `viewIdResourceName`, as it reaches
 `AutomationId`, `AXIdentifier`, AT-SPI's id and iOS's `accessibilityIdentifier` through AccessKit's
@@ -118,8 +116,7 @@ the resource name. The text for those upstream pull requests is below; neither h
 `ce8164ba92995cfa86005b6259115e08c8244253` (`adapters/windows`), with the licence files of that
 commit.
 
-**Why:** Narrator and NVDA scroll a `Scrollable` to a position and read where it is (gap 36 in
-`docs/gaps.md`). FLUI publishes the position from the top or left edge and takes
+**Why:** Narrator and NVDA scroll a `Scrollable` to a position and read where it is ([Accessibility bridge fidelity](../docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)). FLUI publishes the position from the top or left edge and takes
 `SetScrollOffset` (ADR-0273), which the macOS, Unix and Web hosts read. The published Windows
 adapter implements no UI Automation `ScrollPattern`, so a client scrolls only through the
 position slider's `RangeValue` and reads no position.

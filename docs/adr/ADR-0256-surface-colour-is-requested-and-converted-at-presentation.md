@@ -156,7 +156,7 @@ peak is not reported uses `h = 4.0`. The headroom is read when the surface is co
 - Bad: a non-`Srgb8` frame costs an `Rgba16Float` target and a full-screen pass.
 - Bad: wide-gamut and HDR sources (P3 images, video, HDR images) still enter as sRGB values; the
   working format has room for them, the sources are future work.
-- Neutral: `docs/gaps.md` entry 24 narrows to the platform-layer headroom read, change events,
+- Neutral: [No HDR, wide gamut or colour management](../gaps.md#no-hdr-wide-gamut-or-colour-management) narrows to the platform-layer headroom read, change events,
   Apple hardware runs and wide-gamut sources.
 
 ### Confirmation

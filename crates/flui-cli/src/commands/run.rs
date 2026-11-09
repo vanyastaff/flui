@@ -196,7 +196,7 @@ fn start_agent_session(
             what: format!("`flui run --agent` in {}", browser.name),
             reason: "it has no remote protocol of its own (WebDriver BiDi or the DevTools \
                      protocol) to reach the page through; run it in Firefox, Chrome, Chromium \
-                     or Edge (docs/gaps.md entry 42)"
+                     or Edge (docs/gaps.md#the-driver-agent-cannot-reach-a-page-in-safari)"
                 .into(),
         });
     }
@@ -1287,7 +1287,7 @@ impl BrowserSession {
         self.driving = None;
         let dialect = Dialect::of(&self.browser.id).ok_or_else(|| CliError::Unsupported {
             what: format!("`flui run --agent` in {}", self.browser.name),
-            reason: "it has no remote protocol of its own (docs/gaps.md entry 42)".into(),
+            reason: "it has no remote protocol of its own (docs/gaps.md#the-driver-agent-cannot-reach-a-page-in-safari)".into(),
         })?;
         let executable = browser::launch::executable(&self.browser.launch)
             .with_context(|| format!("find the executable of {}", self.browser.name))?;

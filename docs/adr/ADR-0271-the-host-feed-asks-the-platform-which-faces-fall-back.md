@@ -28,7 +28,7 @@ asks the host.
 | Android | `fonts.xml`, the system's own ordered fallback with language tags, plus OEM customisation. The common list is empty today, so Android falls back to its sans-serif face alone. |
 
 A character that no listed face covers shapes as `.notdef` (flui-painting `ARCHITECTURE.md`,
-mapping decision 17), so a missing table entry shows as a box (gap 35).
+mapping decision 17), so a missing table entry shows as a box ([Locale edge](../gaps.md#locale-edge-layout-direction-per-app-language-system-fonts-and-fallback)).
 
 fontique's own `system` feature answers this per `FallbackKey` (script and locale). It queries:
 - DirectWrite with each script's sample text (`fontique/src/backend/dwrite.rs:115`);
@@ -190,7 +190,7 @@ start), the order stays with the owner and each request is served there.
 
 The collection is the app's one, so the order follows the host's first preferred locale, not a
 locale a window or a paragraph resolves. A per-paragraph locale in the fallback key is the
-follow-up ([`docs/gaps.md`](../gaps.md) entry 35).
+follow-up ([Locale edge](../gaps.md#locale-edge-layout-direction-per-app-language-system-fonts-and-fallback)).
 
 ### §5 Tests stay deterministic
 
@@ -241,7 +241,7 @@ fallback order is FLUI's tables alone, as today. A test that needs a host answer
 - `fontconfig_answers_latin` (flui-native, Linux CI) gives a non-empty Latin list of existing files
   on the CI image. Where fontconfig is absent, it gets no answer.
 - A device run on Windows, macOS, iOS and Android renders Arabic, Devanagari, Han in ja-JP and
-  zh-CN, and emoji with no missing-glyph box (`docs/platform-parity.md`, gap 35).
+  zh-CN, and emoji with no missing-glyph box (`docs/platform-parity.md`, [Locale edge](../gaps.md#locale-edge-layout-direction-per-app-language-system-fonts-and-fallback)).
 
 ## Pros and cons of the options
 
