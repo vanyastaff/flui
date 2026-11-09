@@ -39,6 +39,8 @@ mod clipboard;
 pub(crate) use clipboard::MAX_TEXT;
 #[cfg(any(target_arch = "wasm32", wayland_host, x11_host))]
 pub(crate) use clipboard::owned_text;
+#[cfg(windows)]
+pub(crate) use clipboard::text_fits;
 pub use clipboard::{MemoryClipboard, NativeClipboard, NativePrimarySelection};
 pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
 #[cfg(any(
