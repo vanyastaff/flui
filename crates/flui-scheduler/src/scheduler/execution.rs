@@ -339,7 +339,7 @@ impl OwnerFrame {
     /// cleanup fails. A destructor that panics while the thread is already
     /// unwinding aborts, as in std (ADR-0281); a rejected envelope's destructor
     /// can panic instead of returning a typed refusal.
-    pub fn drive_frame<R>(
+    pub(crate) fn drive_frame<R>(
         &self,
         timestamp: Instant,
         deadline: IdleDeadline,

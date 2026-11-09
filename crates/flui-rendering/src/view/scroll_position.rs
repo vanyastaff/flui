@@ -1074,6 +1074,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_scheduler::{OwnerFrame, UpdateScheduler};
+    // Lower-crate test drives a frame through the composition-root seam
+    // (ADR-0081 §4) until the raw-owner suites mount under the UI runtime's
+    // root scopes (ADR-0083 6b).
+    use flui_scheduler::__runtime::DriveFrame as _;
 
     use super::*;
 

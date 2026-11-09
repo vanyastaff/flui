@@ -5,6 +5,7 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::scheduler::UpdateScheduler;
 
 #[test]

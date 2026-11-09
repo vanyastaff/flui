@@ -12,6 +12,7 @@ use flui_layer::Scene;
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{
     DemandKind, FramePhase, FramePhaseDurations, FrameSnapshot, FrameTimes, Instant, PresentOutcome,
 };

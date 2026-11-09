@@ -187,6 +187,7 @@ use flui_interaction::{
 use flui_foundation::geometry::Offset;
 use flui_rendering::layer::LayerTree;
 use flui_rendering::pipeline::PipelineCell;
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{
     AsyncDriver, BoxedTask, ClockSource, DemandKind, FrameClock, OwnerFrame, TaskToken,
     UpdateScheduler,

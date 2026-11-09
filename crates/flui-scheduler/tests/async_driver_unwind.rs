@@ -1,6 +1,7 @@
 //! Opaque future destructors run under containment and never replace an
 //! already authoritative failure (ADR-0281).
 
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{OwnerFrame, TaskToken, UpdateScheduler};
 use std::cell::RefCell;
 use std::future::Future;
