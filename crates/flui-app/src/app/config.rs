@@ -16,9 +16,7 @@ use super::lifecycle::ServiceDefinition;
 use super::runtime::ExitPolicy;
 use flui_runtime::InputTapFactory;
 use flui_runtime::execution::HostExecutors;
-use flui_runtime::frame_failure::{
-    FrameFailureDetail, FrameFailureHandler, FrameFailureHandlerFactory,
-};
+use flui_runtime::frame_failure::{FrameFailureDetail, FrameFailureHandlerFactory};
 
 /// Default diagnostics policy for a managed application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -216,11 +214,15 @@ pub struct AppConfig {
     /// Optional embedder callback receiving addressed sampling failures,
     /// terminal frame failures and contained recoveries. `None`
     /// (the default): reports remain surfaced through `tracing`; only typed
-    /// delivery is skipped. See [`FrameFailureHandler`]'s own doc for the
-    /// delivery timing and owner-admission contract.
+    /// delivery is skipped. See
+    /// [`FrameFailureHandler`](flui_runtime::frame_failure::FrameFailureHandler)'s
+    /// own doc for the delivery timing and owner-admission contract.
     ///
-    /// The handler is owner-local (`Rc`), so the configuration carries a `Send`
-    /// factory that builds it on each owner thread; the config stays `Send`.
+    /// The handler is owner-local (`Rc`), so the configuration carries a
+    /// factory that crosses threads, and each runtime the app builds for a
+    /// window installs a fresh handler from it before its first frame. State a
+    /// handler captures is therefore per window; see
+    /// [`FrameFailureHandlerFactory`] for sharing it across windows.
     pub frame_failure_handler: Option<FrameFailureHandlerFactory>,
 
     /// Optional recording hook: each runtime the app builds installs a fresh
@@ -385,6 +387,17 @@ impl AppConfig {
     /// first root is mounted.
     pub(crate) fn install_error_view_builder(&self, runtime: &flui_runtime::ui_runtime::UiRuntime) {
         runtime.set_error_view_builder(self.error_view_builder);
+    }
+
+    /// Install a handler from [`Self::frame_failure_handler`] on a runtime
+    /// just built, before its first frame.
+    pub(crate) fn install_frame_failure_handler(
+        &self,
+        runtime: &flui_runtime::ui_runtime::UiRuntime,
+    ) {
+        if let Some(factory) = &self.frame_failure_handler {
+            factory.install_on(runtime);
+        }
     }
 
     /// Install a tap from [`Self::input_tap`] on a runtime just built, before
@@ -572,15 +585,13 @@ impl AppConfig {
         self
     }
 
-    /// Register a typed frame-failure callback. See
-    /// [`Self::frame_failure_handler`]'s doc and
-    /// [`FrameFailureHandler`]'s delivery timing and owner-admission contract.
+    /// Register a factory of typed frame-failure callbacks, one for each
+    /// window's runtime. See [`Self::frame_failure_handler`]'s doc and
+    /// [`FrameFailureHandler`](flui_runtime::frame_failure::FrameFailureHandler)'s
+    /// delivery timing and owner-admission contract.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_frame_failure_handler(
-        mut self,
-        handler: impl Fn() -> FrameFailureHandler + Send + Sync + 'static,
-    ) -> Self {
-        self.frame_failure_handler = Some(FrameFailureHandlerFactory::new(handler));
+    pub fn with_frame_failure_handler(mut self, factory: FrameFailureHandlerFactory) -> Self {
+        self.frame_failure_handler = Some(factory);
         self
     }
 

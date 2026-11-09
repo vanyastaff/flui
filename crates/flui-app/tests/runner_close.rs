@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use flui_app::app::{
     AppConfig, AppHandle, Application, CloseReason, CloseRequestHandler, CloseResponse,
-    DeviceRecovery, ExitPolicy, FrameFailureHandler, FrameFailureKind, request_presentation_close,
+    DeviceRecovery, ExitPolicy, FrameFailureHandler, FrameFailureHandlerFactory, FrameFailureKind,
+    request_presentation_close,
 };
 use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit, StandInRenderer, TeardownStep};
 use flui_foundation::PresentationAddress;
@@ -253,7 +254,7 @@ fn observed_app(
     let device_reports = Arc::clone(&observed.device_reports);
     let mut config = AppConfig::new()
         .with_exit_policy(ExitPolicy::OnLastWindowClosed)
-        .with_frame_failure_handler(move || {
+        .with_frame_failure_handler(FrameFailureHandlerFactory::new(move || {
             let reports = Arc::clone(&device_reports);
             FrameFailureHandler::new(move |report| {
                 if let FrameFailureKind::DeviceLost { recovery, .. } = report.kind {
@@ -263,7 +264,7 @@ fn observed_app(
                         .push(recovery);
                 }
             })
-        });
+        }));
     if let Some(handler) = handler {
         config = config.with_close_request_handler(handler);
     }

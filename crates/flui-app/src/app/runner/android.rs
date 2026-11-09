@@ -255,8 +255,7 @@ where
 
         // Typed frame-failure route (issue #561) — same wiring as the
         // desktop bootstrap.
-        ui_runtime
-            .set_frame_failure_handler(config.frame_failure_handler.as_ref().map(flui_runtime::frame_failure::FrameFailureHandlerFactory::build));
+        config.install_frame_failure_handler(&ui_runtime);
         ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
         config.install_input_tap(&ui_runtime);
         config.install_error_view_builder(&ui_runtime);
