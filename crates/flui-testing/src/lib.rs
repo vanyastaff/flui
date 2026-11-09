@@ -1268,7 +1268,7 @@ impl HeadlessBinding {
 
     /// The pipeline step: build → layout (with the build-during-layout fixpoint)
     /// → paint, plus the lazy-sliver service pass. Runs inside
-    /// [`OwnerFrame::drive_frame`]'s persistent slot.
+    /// `OwnerFrame::drive_frame`'s persistent slot.
     ///
     /// Returns the composited [`LayerTree`] this frame produced — `None` for a
     /// gesture-only binding, and `None` when nothing was dirty enough to

@@ -97,8 +97,9 @@ owner.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {}, || 
 ### Migrating execution
 
 `UpdateScheduler` registers work and requests delivery. Its owner executes
-`OwnerFrame::drive_frame(timestamp, deadline, prepare, pipeline)` or
-`OwnerFrame::pump_background(prepare)`. Both return typed admission errors;
+`OwnerFrame::pump_background(prepare)`, or, from a composition root, the frame drive
+`flui_scheduler::__runtime::DriveFrame::drive_frame(timestamp, deadline, prepare, pipeline)`
+(`#[doc(hidden)]`, sealed, no semver promise; the method is not inherent on `OwnerFrame`). Both return typed admission errors;
 neither accepts another scheduler's owner. Preparation runs after admission,
 before frame phases or ready-task polling.
 

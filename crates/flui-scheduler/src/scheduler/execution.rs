@@ -456,7 +456,7 @@ impl OwnerFrame {
     /// # Errors
     /// Refuses recursive, retired or closed execution before consuming demand
     /// or invoking preparation. Rejected owned preparation follows the same
-    /// retirement policy as [`Self::drive_frame`].
+    /// retirement policy as `OwnerFrame::drive_frame`.
     ///
     /// # Panics
     /// Propagates the first preparation, poll or cleanup failure. Opaque

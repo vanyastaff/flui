@@ -150,7 +150,7 @@ struct LifecycleListener {
 ///
 /// `Completed` and `Aborted` carry the SAME [`FrameTiming`] shape but are
 /// distinguished on purpose: a post-frame callback's own panic still closes
-/// via [`OwnerFrame::drive_frame`](crate::OwnerFrame::drive_frame) and resolves
+/// via `OwnerFrame::drive_frame` and resolves
 /// `Completed` (the pipeline already committed layout and paint; only the
 /// callback failed), while `Aborted` is the outcome of
 /// the internal frame-abort path alone -- a frame whose
@@ -175,7 +175,7 @@ struct LifecycleListener {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub enum FrameOutcome {
-    /// The frame closed through [`OwnerFrame::drive_frame`](crate::OwnerFrame::drive_frame):
+    /// The frame closed through `OwnerFrame::drive_frame`:
     /// its post-frame callbacks ran (even if one of them panicked -- see the
     /// type's own doc).
     #[non_exhaustive]
@@ -670,7 +670,7 @@ impl FrameCompletionRegistry {
     }
 }
 
-/// The Idle-slice deadline [`crate::OwnerFrame::drive_frame`] bounds
+/// The Idle-slice deadline `OwnerFrame::drive_frame` bounds
 /// `Priority::Idle` task execution by (see that method's own doc — it
 /// never gates `Priority::Animation`/`Build`, and it can never skip a
 /// frame).
@@ -722,7 +722,7 @@ struct FrameState {
     /// Jank tracking - count of frames that exceeded budget
     janky_frame_count: AtomicU64,
     /// The current frame's Idle-slice deadline, set by
-    /// [`crate::OwnerFrame::drive_frame`] and consumed by
+    /// `OwnerFrame::drive_frame` and consumed by
     /// the internal frame-dispatch step to decide whether Idle-priority
     /// tasks still fit. `None` (the default, and the state outside
     /// `drive_frame`) means no active deadline. Only Idle is
@@ -1048,7 +1048,7 @@ impl UpdateScheduler {
     /// accessor. The internal [`FrameBudget`] [`SchedulerBuilder`] seeds is a
     /// stats-window default only (`avg_fps`/jank tracking for a caller who
     /// never configured [`SchedulerBuilder::target_fps`]) — it does not gate
-    /// anything. [`crate::OwnerFrame::drive_frame`]'s `deadline` parameter is the only
+    /// anything. `OwnerFrame::drive_frame`'s `deadline` parameter is the only
     /// thing that bounds work, and it bounds Idle priority tasks alone:
     /// Animation and Build tasks always run.
     pub fn new() -> Self {
@@ -1334,7 +1334,7 @@ impl UpdateScheduler {
     /// This method now leaves the scheduler in `PersistentCallbacks` after running
     /// persistent callbacks. Previously it also drained the post-frame queue and
     /// returned to `Idle`, which meant every post-frame callback ran *before* the
-    /// pipeline it was supposed to observe. Use [`drive_frame`](crate::OwnerFrame::drive_frame),
+    /// pipeline it was supposed to observe. Use `drive_frame`,
     /// or pair this with `end_frame`.
     ///
     /// # Panics
@@ -1346,7 +1346,7 @@ impl UpdateScheduler {
     ///
     /// Animation and Build priority tasks always run to completion here,
     /// unconditionally. Only `Priority::Idle` work is bounded, and only by
-    /// the deadline [`drive_frame`](crate::OwnerFrame::drive_frame) supplies (see the
+    /// the deadline `drive_frame` supplies (see the
     /// private `is_idle_deadline_passed` helper below) — a caller driving
     /// this method directly, without going through `drive_frame`, has no
     /// deadline set and Idle work always runs too.
@@ -1423,7 +1423,7 @@ impl UpdateScheduler {
         }
     }
 
-    /// Whether the Idle-slice deadline [`drive_frame`](crate::OwnerFrame::drive_frame) set
+    /// Whether the Idle-slice deadline `drive_frame` set
     /// for the current frame has already passed, on the scheduler's clock.
     ///
     /// `false` (never passed, i.e. Idle work is never deferred) when no
@@ -1586,7 +1586,7 @@ impl UpdateScheduler {
     ///
     /// # Who calls this, and why it is not a `Drop` guard
     ///
-    /// [`drive_frame`](crate::OwnerFrame::drive_frame) **does** catch a panic from any phase it
+    /// `drive_frame` **does** catch a panic from any phase it
     /// owns — `handle_begin_frame`, `handle_draw_frame`, or the pipeline, all three
     /// under one `catch_unwind` — calls this, then `resume_unwind`s. So this runs
     /// *between* the catch and the resume — the panic payload is already captured
@@ -2081,7 +2081,7 @@ impl UpdateScheduler {
     /// own scope. It is one small allocation, not free (`FrameBudget` carries
     /// a bounded rolling-window frame-time history), and the returned value
     /// is a stats snapshot only: it does not gate anything (see
-    /// [`OwnerFrame::drive_frame`](crate::OwnerFrame::drive_frame) for the actual
+    /// `OwnerFrame::drive_frame` for the actual
     /// Idle-slice deadline gate).
     #[must_use]
     pub fn budget_snapshot(&self) -> FrameBudget {
@@ -2763,7 +2763,7 @@ impl SchedulerBuilder {
     }
 
     /// Read time from `clock`: the clock the frame times passed to
-    /// [`OwnerFrame::drive_frame`](crate::OwnerFrame::drive_frame) come from,
+    /// `OwnerFrame::drive_frame` come from,
     /// so frame durations, jank and the Idle deadline are measured on the
     /// frames' own timeline. The OS clock by default.
     pub fn clock(mut self, clock: ClockSource) -> Self {

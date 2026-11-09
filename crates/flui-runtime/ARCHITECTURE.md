@@ -281,7 +281,7 @@ host.
   frame time projected through each presentation's motion clock before `Vsync`
   controllers tick (see "`Vsync` controllers tick at the
   frame's timestamp" below).
-  Scheduler execution runs through `OwnerFrame::drive_frame`. A wake with
+  Scheduler execution runs through `DriveFrame::drive_frame` (`flui_scheduler::__runtime`, imported by the runtime as `DriveFrame as _`). A wake with
   frames disabled runs `OwnerFrame::pump_background` instead: consume old
   demand, drain commands and service runtime gesture geometry, acknowledge the
   drained redraw request, then poll ready tasks once and advance due input
