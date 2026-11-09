@@ -161,8 +161,8 @@ use signal::{OwnerSignal, SignalTransport};
 pub struct OwnerPlatform {
     platform: Arc<dyn Platform>,
     hooks: Arc<dyn OwnerHooks>,
-    // Slice 3 shrinks `platform` to `Arc<dyn OwnerOps>`; both fields stay
-    // private regardless.
+    // `_owner_affine` (a `PhantomData<*const ()>`) keeps the type `!Send + !Sync`;
+    // the fields stay private regardless.
     _owner_affine: PhantomData<*const ()>,
 }
 
@@ -1019,12 +1019,11 @@ pub enum WaitError {
 }
 
 // ============================================================================
-// pub(crate) seams: the slice-3 `OwnerOps` seed
+// pub(crate) seams
 // ============================================================================
 
-/// Backend-specific window-open dispatch behind [`OwnerPlatform`]. The
-/// slice-3 `OwnerOps` seed (ADR-0039 §2/§8) — stays `pub(crate)` until then,
-/// alongside [`OwnerPlatform`]'s own third private field.
+/// Backend-specific window-open dispatch behind [`OwnerPlatform`], kept
+/// `pub(crate)` alongside [`OwnerPlatform`]'s own private fields.
 pub(crate) trait OwnerHooks: Send + Sync {
     fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
         drop(callback);

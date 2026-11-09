@@ -725,8 +725,8 @@ impl GpuReplay {
         //   reads `acc` as source, then `acc = next` drops the prior texture back
         //   to the pool. At most 2 live textures at any instant regardless of N.
         //
-        // No `_` catch-all: the compiler forces new match arms when Slice 2/3
-        // add `LayerFilter::Mode`/`LayerFilter::Gamma` variants.
+        // No `_` catch-all: the compiler forces a new match arm when a
+        // `LayerFilter::Mode`/`LayerFilter::Gamma` variant is added.
         let offscreen = fold_layer_filter_chain(
             &layer.filters,
             layer_tex,
@@ -790,8 +790,8 @@ impl GpuReplay {
 ///
 /// ## Exhaustiveness discipline
 ///
-/// No `_ =>` catch-all arm: the compiler forces a new match arm when Slice 2/3
-/// add `LayerFilter::Mode`/`LayerFilter::Gamma` variants.
+/// No `_ =>` catch-all arm: the compiler forces a new match arm when a
+/// `LayerFilter::Mode`/`LayerFilter::Gamma` variant is added.
 #[expect(clippy::too_many_arguments)]
 fn fold_layer_filter_chain(
     filters: &LayerFilterChain,
@@ -871,8 +871,8 @@ fn fold_layer_filter_chain(
 /// renders the pass, and drops the prior `acc` (returning it to the pool) —
 /// the bounded ping-pong discipline, identical to `fold_layer_filter_chain`.
 ///
-/// The match has **no `_ =>` catch-all**: Slice 4 (`Blur`) is compiler-forced to
-/// add an arm when its variant is introduced.
+/// The match has **no `_ =>` catch-all**: a `Blur` variant is compiler-forced to
+/// add an arm when it is introduced.
 ///
 /// ## Parameters shared across all arms
 ///
