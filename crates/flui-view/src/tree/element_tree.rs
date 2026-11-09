@@ -1782,11 +1782,11 @@ impl ElementTree {
         let manager = self
             .get(id)
             .and_then(|node| node.element().render_id())
-            .and_then(|render_id| registry.lock().get(&render_id).cloned());
+            .and_then(|render_id| registry.borrow().get(&render_id).cloned());
         let Some(manager) = manager else {
             return Vec::new();
         };
-        let sparse = manager.lock().snapshot_children();
+        let sparse = manager.borrow().snapshot_children();
         sparse
             .into_iter()
             .filter(|child| {
@@ -1813,9 +1813,9 @@ impl ElementTree {
             let manager = self
                 .get(id)
                 .and_then(|node| node.element().render_id())
-                .and_then(|render_id| registry.lock().get(&render_id).cloned());
+                .and_then(|render_id| registry.borrow().get(&render_id).cloned());
             if let Some(manager) = manager {
-                manager.lock().retire_children();
+                manager.borrow_mut().retire_children();
             }
         }
     }

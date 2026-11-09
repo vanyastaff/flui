@@ -8,7 +8,7 @@
 
 use std::{
     any::Any,
-    cell::Cell,
+    cell::{Cell, RefCell},
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
     rc::Rc,
@@ -18,7 +18,6 @@ use std::{
 use flui_foundation::{ElementId, RebuildReasons, RenderId, ViewKey};
 use flui_interaction::FocusManager;
 use flui_rendering::pipeline::DetachedRenderSubtrees;
-use parking_lot::Mutex;
 
 use super::dirty_queue::{DirtyElement, DirtyQueue};
 use crate::{
@@ -518,10 +517,10 @@ pub struct BuildOwner {
     /// `ElementOwner::register_child_manager` / `unregister_child_manager`
     /// split-borrow methods.
     ///
-    /// `Arc<Mutex<…>>` (not a plain `HashMap`) so `ElementOwner` can carry a
-    /// `&'a Arc<…>` reference — the same pattern as `external_inbox`. The outer
-    /// `Arc` lets `service_child_requests` clone individual manager `Arc`s out
-    /// of the registry before calling service (releasing the registry lock
+    /// `Rc<RefCell<…>>` (not a plain `HashMap`) so `ElementOwner` can carry a
+    /// `&'a Rc<…>` reference — the same pattern as `external_inbox`. The outer
+    /// `Arc` lets `service_child_requests` clone individual manager `Rc`s out
+    /// of the registry before calling service (releasing the registry borrow
     /// before the potentially long service call).
     pub(crate) child_manager_registry: ChildManagerRegistry,
 
@@ -739,7 +738,7 @@ impl BuildOwner {
             mid_drain_cap_streak: false,
             built_this_frame: HashSet::new(),
             frame_builds: Box::default(),
-            child_manager_registry: Arc::new(Mutex::new(HashMap::new())),
+            child_manager_registry: Rc::new(RefCell::new(HashMap::new())),
             layout_builder_registry: LayoutBuilderRegistry::default(),
             lazy_band_pass_budget: super::layout_builder::MAX_LAZY_BAND_PASSES,
             build_scope_queues: None,
@@ -2455,18 +2454,18 @@ impl BuildOwner {
         };
 
         // 3. Clone manager Arcs out of the registry before any service call.
-        //    This releases the registry lock so that service calls that call
+        //    This releases the registry borrow so that service calls that call
         //    `register_child_manager` / `unregister_child_manager` through an
-        //    `ElementOwner` can re-enter the registry without deadlocking.
-        let manager_arcs: Vec<(RenderId, Arc<Mutex<dyn ChildManager>>)> = {
-            let registry = self.child_manager_registry.lock();
+        //    `ElementOwner` can re-enter the registry without re-borrowing.
+        let manager_rcs: Vec<(RenderId, Rc<RefCell<dyn ChildManager>>)> = {
+            let registry = self.child_manager_registry.borrow();
             affected_ids
                 .iter()
-                .filter_map(|&id| registry.get(&id).map(|m| (id, Arc::clone(m))))
+                .filter_map(|&id| registry.get(&id).map(|m| (id, Rc::clone(m))))
                 .collect()
         };
 
-        if manager_arcs.is_empty() {
+        if manager_rcs.is_empty() {
             tracing::debug!("service_child_requests: no registered managers for affected slivers");
             return false;
         }
@@ -2481,7 +2480,7 @@ impl BuildOwner {
         //    no new requests in-band) we skip `mark_needs_layout` so the sliver
         //    stays clean and the frame quiesces rather than looping forever.
         let mut any_service_did_work = false;
-        for (sliver_id, manager_arc) in &manager_arcs {
+        for (sliver_id, manager_rc) in &manager_rcs {
             let requested = requests_by_sliver
                 .get(sliver_id)
                 .map_or(&[][..], Vec::as_slice);
@@ -2527,7 +2526,7 @@ impl BuildOwner {
                 lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
             };
 
-            let did_work = manager_arc.lock().service(
+            let did_work = manager_rc.borrow_mut().service(
                 requested,
                 retain_first,
                 retain_last,
@@ -2560,7 +2559,7 @@ impl BuildOwner {
         //    This breaks the unconditional dirty-loop that prevented quiescence.
         if any_service_did_work {
             pipeline.with_mut(|guard| {
-                for (sliver_id, _) in &manager_arcs {
+                for (sliver_id, _) in &manager_rcs {
                     guard.mark_needs_layout(*sliver_id);
                 }
             });
@@ -3048,6 +3047,7 @@ mod tests {
         pipeline::{PipelineCell, PipelineOwner},
         protocol::BoxProtocol,
     };
+    use parking_lot::Mutex;
 
     use super::*;
     use crate::{
