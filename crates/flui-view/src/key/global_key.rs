@@ -14,6 +14,20 @@ use flui_foundation::{ElementId, ViewKey};
 
 use crate::view::ElementBase;
 
+/// The outcome of a [`GlobalKey::current_element`](GlobalKey::current_element)
+/// lookup, typed instead of the silent `Option<ElementId>` it replaced (T02a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyLookup {
+    /// An element is mounted for the key.
+    Mounted(ElementId),
+    /// No element is mounted for the key anywhere.
+    NotMounted,
+    /// A presentation that may hold the key is running its frame on this
+    /// thread, so its tree is not read re-entrantly; the key may be mounted
+    /// there.
+    ForeignPresentationBusy,
+}
+
 /// A key that provides access to the element from anywhere.
 ///
 /// Unlike regular keys which only affect reconciliation, `GlobalKey`
@@ -126,19 +140,19 @@ impl<T: 'static> GlobalKey<T> {
     ///
     /// Called from inside the frame of the presentation that hosts the key
     /// (from `build`, a lifecycle hook, `dispose`, or a layout-builder build),
-    /// this returns `None` (logged at `debug`) instead of the element:
-    /// that presentation's tree is locked for the frame and is
-    /// not read re-entrantly. Keys held by other presentations of the UI runtime
-    /// resolve normally.
+    /// this returns [`KeyLookup::ForeignPresentationBusy`] (logged at `debug`)
+    /// instead of the element: that presentation's tree is locked for the frame
+    /// and is not read re-entrantly. Keys held by other presentations of the UI
+    /// runtime resolve normally.
     #[must_use]
-    pub fn current_element(&self) -> Option<ElementId> {
+    pub fn current_element(&self) -> KeyLookup {
         match crate::key::registry::with_registry(|registry| registry.lookup_element(self)) {
-            None => None,
-            Some(Ok(id)) => id,
+            Some(Ok(Some(id))) => KeyLookup::Mounted(id),
             Some(Err(crate::key::registry::RegistryBusy)) => {
                 self.report_skipped_busy_presentation();
-                None
+                KeyLookup::ForeignPresentationBusy
             }
+            None | Some(Ok(None)) => KeyLookup::NotMounted,
         }
     }
 
@@ -189,7 +203,10 @@ impl<T: 'static> GlobalKey<T> {
     where
         T: 'static,
     {
-        let element_id = self.current_element()?;
+        let element_id = match self.current_element() {
+            KeyLookup::Mounted(id) => id,
+            KeyLookup::NotMounted | KeyLookup::ForeignPresentationBusy => return None,
+        };
 
         // `with_registry` yields `None` when no ui_runtime/fixture handle is
         // active; `with_element` yields `Err` when the owning binding is busy

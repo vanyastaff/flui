@@ -7,7 +7,7 @@ use std::{cell::Cell, rc::Rc};
 use flui_foundation::ElementId;
 use flui_view::{
     __runtime::{BindingRuntime as _, FramePhaseMarker, GlobalKeyRegistryComposite},
-    AppLifecycleState, GlobalKey, LifecycleClosed, WidgetsBinding,
+    AppLifecycleState, GlobalKey, KeyLookup, LifecycleClosed, WidgetsBinding,
 };
 
 #[test]
@@ -17,12 +17,12 @@ fn with_global_key_registry_resolves_this_bindings_keys_only_while_entered() {
     let id = ElementId::new(7);
     binding.with_build_owner_mut(|owner| owner.register_global_key(&key, id));
 
-    assert_eq!(key.current_element(), None);
+    assert_eq!(key.current_element(), KeyLookup::NotMounted);
     assert_eq!(
         binding.with_global_key_registry(|| key.current_element()),
-        Some(id)
+        KeyLookup::Mounted(id)
     );
-    assert_eq!(key.current_element(), None);
+    assert_eq!(key.current_element(), KeyLookup::NotMounted);
 }
 
 #[test]
@@ -34,8 +34,11 @@ fn composite_resolves_a_key_held_by_any_member() {
     second.with_build_owner_mut(|owner| owner.register_global_key(&key, id));
 
     let composite = GlobalKeyRegistryComposite::assemble([&first, &second]);
-    assert_eq!(composite.enter(|| key.current_element()), Some(id));
-    assert_eq!(key.current_element(), None);
+    assert_eq!(
+        composite.enter(|| key.current_element()),
+        KeyLookup::Mounted(id)
+    );
+    assert_eq!(key.current_element(), KeyLookup::NotMounted);
 }
 
 #[test]

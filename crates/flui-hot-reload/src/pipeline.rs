@@ -217,7 +217,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use flui_foundation::ViewKey;
-    use flui_view::{BuildContext, GlobalKey, IntoView};
+    use flui_view::{BuildContext, GlobalKey, IntoView, KeyLookup};
 
     use super::*;
     use flui_view::element::ElementKind;
@@ -264,8 +264,10 @@ mod tests {
                 widgets.with_build_owner_mut(|owner| {
                     owner.register_global_key(&key_at_mount, flui_foundation::ElementId::new(73));
                 });
-                mount_observed_in_probe
-                    .store(key_at_mount.current_element().is_some(), Ordering::Relaxed);
+                mount_observed_in_probe.store(
+                    matches!(key_at_mount.current_element(), KeyLookup::Mounted(_)),
+                    Ordering::Relaxed,
+                );
             },
         );
         assert!(
@@ -274,7 +276,7 @@ mod tests {
         );
         assert_eq!(
             mount_probe_key.current_element(),
-            None,
+            KeyLookup::NotMounted,
             "mount scope must not leak"
         );
 
@@ -282,7 +284,10 @@ mod tests {
         let observed_in_probe = Arc::clone(&observed);
         let key_in_probe = key.clone();
         pipeline.frame_boundary_probe = Some(Box::new(move || {
-            observed_in_probe.store(key_in_probe.current_element().is_some(), Ordering::Relaxed);
+            observed_in_probe.store(
+                matches!(key_in_probe.current_element(), KeyLookup::Mounted(_)),
+                Ordering::Relaxed,
+            );
         }));
 
         let _scene = pipeline.draw_frame(320.0, 240.0);
@@ -290,6 +295,10 @@ mod tests {
             observed.load(Ordering::Relaxed),
             "real draw_frame must keep plugin registry active after build lock release"
         );
-        assert_eq!(key.current_element(), None, "plugin scope must not leak");
+        assert_eq!(
+            key.current_element(),
+            KeyLookup::NotMounted,
+            "plugin scope must not leak"
+        );
     }
 }
