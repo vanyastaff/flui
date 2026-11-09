@@ -1,4 +1,5 @@
 //! Observer delivery survives containment and preserves committed transition order.
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{AppLifecycleState, IdleDeadline, Instant, OwnerFrame, UpdateScheduler};
 use std::{
     cell::RefCell,

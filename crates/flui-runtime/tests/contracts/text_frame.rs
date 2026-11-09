@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_view::prelude::*;
 
 #[derive(Clone, StatefulView)]

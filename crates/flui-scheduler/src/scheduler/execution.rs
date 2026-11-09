@@ -339,7 +339,7 @@ impl OwnerFrame {
     /// cleanup fails. A destructor that panics while the thread is already
     /// unwinding aborts, as in std (ADR-0281); a rejected envelope's destructor
     /// can panic instead of returning a typed refusal.
-    pub fn drive_frame<R>(
+    pub(crate) fn drive_frame<R>(
         &self,
         timestamp: Instant,
         deadline: IdleDeadline,
@@ -456,7 +456,7 @@ impl OwnerFrame {
     /// # Errors
     /// Refuses recursive, retired or closed execution before consuming demand
     /// or invoking preparation. Rejected owned preparation follows the same
-    /// retirement policy as [`Self::drive_frame`].
+    /// retirement policy as `OwnerFrame::drive_frame`.
     ///
     /// # Panics
     /// Propagates the first preparation, poll or cleanup failure. Opaque

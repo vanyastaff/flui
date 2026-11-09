@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 
 fn recursive_turns_preserve_the_admitted_frame() {

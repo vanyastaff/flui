@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{
     FrameCompletionFuture, FrameOutcome, IdleDeadline, Instant, OwnerFrame, Priority,
     SchedulerPhase, UpdateScheduler,
