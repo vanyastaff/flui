@@ -70,8 +70,10 @@ pub(super) enum WakeAction {
 ///
 /// `dirty` is true when there is real work (an inbox redraw request,
 /// `needs_redraw`, or dirty pipeline nodes); `frame_scheduled` is true when
-/// the global `UpdateScheduler` has a pending ticker callback (a running
-/// `AnimationController` with no other dirty state).
+/// the global `UpdateScheduler` has a pending frame callback (a scheduled
+/// transient callback or microtask — not a running `AnimationController`,
+/// which ticks through its presentation's `Vsync`, never the scheduler
+/// ticker).
 pub(super) fn wake_action(
     frames_enabled: bool,
     dirty: bool,
@@ -131,8 +133,9 @@ pub(super) fn wake_action(
 /// an armed device-recovery retry deadline. Dropping that last term is
 /// exactly the bug `DeviceRecoveryBackoff`'s own doc describes: a deadline
 /// wired into the wake-deadline hook but invisible to this gate reaches
-/// `WakeAction::Skip` and returns before `render_frame_with_device_recovery`
-/// is ever called, no matter how faithfully the platform actuates the wake.
+/// `WakeAction::Skip` and returns before the device-recovery render
+/// (`attempt_device_recovery`) is ever called, no matter how faithfully the
+/// platform actuates the wake.
 // Absent on wasm: its two production callers are the desktop and Android
 // frame closures, neither of which exists there, and the web runner has
 // no `DeviceRecoveryBackoff` deadline term to fold in.
