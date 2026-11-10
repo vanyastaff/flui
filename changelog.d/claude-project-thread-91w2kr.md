@@ -16,3 +16,6 @@
 - **`flui-rendering`**: the input-region walk visits only the children a parent painted in the
   last frame, so a child a parent leaves out of paint without also leaving it out of semantics
   no longer reports input regions.
+- **`flui-testing`**: `motion::gate` refuses a `MotionConfig` whose threshold a rule cannot
+  compare against (a NaN or negative distance, an opacity outside `0.0..=1.0`), listed in
+  `MotionReport::invalid_config`, instead of turning that rule off silently.

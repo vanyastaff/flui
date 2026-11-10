@@ -48,7 +48,7 @@ use crate::widgets::LaidOut;
 
 pub use rules::{charge_to_outermost, check, check_all};
 
-/// The thresholds every rule reads, in one place (ADR-0321 §3). Distances are window-logical
+/// The thresholds every rule reads, in one place (ADR-0321 §2). Distances are window-logical
 /// points, opacities `0.0..=1.0`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
@@ -92,6 +92,35 @@ impl Default for MotionConfig {
             settle_opacity: 0.05,
             wake_after_end: Duration::from_secs(1),
         }
+    }
+}
+
+impl MotionConfig {
+    /// The thresholds a rule cannot compare against: a distance that is not finite or is
+    /// negative, an opacity outside `0.0..=1.0`. A NaN threshold would silently turn its rule
+    /// off, so [`gate`] refuses the config instead.
+    fn invalid_thresholds(&self) -> Vec<&'static str> {
+        let distances = [
+            ("jump", self.jump),
+            ("still", self.still),
+            ("overshoot", self.overshoot),
+        ];
+        let opacities = [
+            ("pop_opacity", self.pop_opacity),
+            ("fade_snap", self.fade_snap),
+            ("flicker_dip", self.flicker_dip),
+            ("settle_opacity", self.settle_opacity),
+        ];
+        let bad_distances = distances
+            .into_iter()
+            .filter(|(_, value)| !(value.is_finite() && *value >= 0.0));
+        let bad_opacities = opacities
+            .into_iter()
+            .filter(|(_, value)| !(0.0..=1.0).contains(value));
+        bad_distances
+            .chain(bad_opacities)
+            .map(|(name, _)| name)
+            .collect::<Vec<&'static str>>()
     }
 }
 
@@ -227,7 +256,7 @@ impl Recording {
     }
 }
 
-/// Drives a [`LaidOut`] frame by frame and records each frame (ADR-0321 §1).
+/// Drives a [`LaidOut`] frame by frame and records each frame (ADR-0321 §2).
 pub struct MotionRun<'a> {
     laid: &'a mut LaidOut,
     start: Duration,
@@ -427,6 +456,9 @@ pub struct MotionReport {
     pub unused: Vec<Allow>,
     /// Rows without a reason or a locator.
     pub unexplained: Vec<Allow>,
+    /// Thresholds of the config a rule cannot compare against (a NaN, a negative distance, an
+    /// opacity outside `0.0..=1.0`), by field name.
+    pub invalid_config: Vec<&'static str>,
 }
 
 impl MotionReport {
@@ -437,6 +469,7 @@ impl MotionReport {
             && self.over_budget.is_empty()
             && self.unused.is_empty()
             && self.unexplained.is_empty()
+            && self.invalid_config.is_empty()
     }
 }
 
@@ -466,6 +499,12 @@ impl fmt::Display for MotionReport {
                 row.rule, row.locator
             )?;
         }
+        for field in &self.invalid_config {
+            writeln!(
+                f,
+                "MotionConfig::{field} is not a threshold a rule can compare against"
+            )?;
+        }
         Ok(())
     }
 }
@@ -476,13 +515,17 @@ impl std::error::Error for MotionReport {}
 ///
 /// # Errors
 /// [`MotionReport`] when a finding is not covered, a row covers more than its `max`, a row
-/// matches nothing or a row has no locator or reason.
+/// matches nothing, a row has no locator or reason, or a threshold of `config` is not one a
+/// rule can compare against.
 pub fn gate(
     recording: &Recording,
     config: &MotionConfig,
     allow: &[Allow],
 ) -> Result<(), MotionReport> {
-    let mut report = MotionReport::default();
+    let mut report = MotionReport {
+        invalid_config: config.invalid_thresholds(),
+        ..MotionReport::default()
+    };
     for row in allow {
         if row.locator.is_empty() || row.reason.trim().is_empty() {
             report.unexplained.push(*row);

@@ -1,6 +1,6 @@
 # ADR-0321: A motion gate reads what the window shows each frame
 
-- **Status:** Proposed (2026-11-10)
+- **Status:** Implemented (2026-11-10)
 - **Date:** 2026-11-10
 - **Related:** [ADR-0243](ADR-0243-one-testing-kit-per-layer.md) (the gate is part of the
   widget-level kit, time and frames come from it); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md)
@@ -10,8 +10,9 @@
   (a follower's placement is part of what the window shows);
   [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md) (layer ids
   live one frame, so the layer tree cannot carry identity across frames)
-- **Sources:** Rune (`anomalyco/rune@70eff81165`), the `RULES` table of its `motion_gate` module
-  (a gate of the same family over keyed elements)
+- **Sources:** `anomalyco/rune@70eff81165e9854834a75f17753edb6c96ab2ab7`
+  `rune::motion_gate::check::RULES` (line 38 of the `rune` crate's `motion_gate/check.rs`), the
+  rule table of a gate of the same family over keyed elements
 
 ## Context and problem statement
 
@@ -19,7 +20,7 @@ Every implicit animation, transition and route in `flui-widgets` is tested by sa
 property at chosen frames (`crates/flui-widgets/tests/implicit_animations.rs`). Nothing checks the
 whole window over a run: a widget that moves, fades, mounts or unmounts at once, a spring that
 passes its target or never stops, or a window that keeps asking for frames after the motion ends
-passes every test today. These are the defects a person sees first. The question: what does a
+passes every such test. These are the defects a person sees first. The question: what does a
 test record each frame, and how does it decide that the motion it recorded is what a person would
 call smooth?
 
@@ -32,7 +33,8 @@ call smooth?
 - A run of the same tree names the same node the same way, so an exception can be written down.
 - A finding is reported once, on the node that moved, not on each wrapper that moved with it.
 - Every exception states its reason, and an exception that no longer matches fails.
-- No new crate, no new production surface: this is test support (ADR-0243).
+- No new crate, and test support stays test support (ADR-0243): production code gains only pure
+  declaration hooks the walk reads, never a recording path.
 
 ## Considered options
 
@@ -70,11 +72,14 @@ an invisible sliver, a child its parent left out of the last paint: the children
 painted are what it visits, not the semantics predicate, which drops a page a popup covers but
 still shows), maps a node's own box through `RenderObject::drawn_transform` (the transform its
 `PaintEffects` declare, or one its `paint` applies to its own drawing as an offset, as a
-`Container` does with a translation), composes each step to a child with `RenderObject::apply_paint_transform` and the
-follower transform the last composite resolved, intersects each parent's
-`describe_approximate_paint_clip`, and multiplies `PaintEffects::opacity` with the group opacity
-of the scopes the last paint drew each child in (a flow delegate's per-child opacity). Each of
-those is pure in `(self, size)` and runs no user code. A node whose transform is not finite, or
+`Container` does with a translation), composes each step to a child with
+`RenderObject::apply_paint_transform` and the follower transform the last composite resolved,
+intersects each parent's `describe_approximate_paint_clip`, and multiplies
+`PaintEffects::opacity` with the group opacity of the scopes the last paint drew each child in (a
+flow delegate's per-child opacity). Paint stores that list per parent as `PaintedChild { slot,
+opacity }` only when it differs from every child in order at opacity 1. Each hook is pure in
+`(self, size)` and runs no user code, so the walk cannot re-enter or panic part-way through a
+tree. A node whose transform is not finite, or
 whose corners reach the perspective horizon, is left out with its subtree, so no non-finite
 geometry is published.
 Geometry stays window-logical (ADR-0098); a caller that needs device pixels multiplies by the
@@ -82,9 +87,11 @@ window's scale factor.
 
 §2. **The rules and the charge.** `flui_testing::motion` records one `Frame` per pump
 (`time` from the kit clock since the run started, `input`, `direct`, `wants_frame` from
-`HeadlessHost::time_to_next_frame() == Some(ZERO)`, and a `Sample` per presented node with its
+`UiRuntime::time_to_next_frame() == Some(ZERO)`, and a `Sample` per presented node with its
 `locator`). An input is recorded with the zero-time frame it drives, so its effect lands on its
-own frame. An edge, below, is an edge of the part the window shows where the node is drawn, so a
+own frame. The run's user code (the input closure, the build, layout and paint a pump drives)
+runs before a frame is sampled; a panic in it propagates out of `MotionRun` to the test, which
+fails at that frame, and no partial frame is recorded. An edge, below, is an edge of the part the window shows where the node is drawn, so a
 change confined to clipped-away geometry moves nothing. `check_all(&Recording, &MotionConfig) ->
 Vec<Finding>` applies:
 
@@ -108,7 +115,9 @@ that frame, shows a finding of the same rule in the same frame.
 An `Allow` names a rule, a part of a node's `locator` (render type names from the root, each with
 its child slot when it is not `0`: stable between runs of one tree, unlike a `RenderId`), a reason
 and a `max`. The report fails on a finding no row covers, a row that covers more than its `max`, a
-row that matches nothing and a row without a locator or a reason. `assert_smooth` is `gate` with
+row that matches nothing, a row without a locator or a reason, and a `MotionConfig` threshold a
+rule cannot compare against (a NaN or negative distance, an opacity outside `0.0..=1.0`), which
+would otherwise turn its rule off without a word. `assert_smooth` is `gate` with
 the default config, panicking with the report.
 
 ### Consequences
@@ -140,10 +149,11 @@ the default config, panicking with the report.
   `frames_asked_for_after_the_motion_ends_wake_after_end`,
   `wakes_after_end_reads_what_the_window_shows`).
 - `a_finding_is_charged_to_the_outermost_node_that_shows_it` pins §2's charge;
-  `the_allowlist_covers_with_a_reason_and_refuses_rows_that_match_nothing` pins §3;
-  `presented_nodes_compose_opacity_and_clip` pins §1's composition and
+  `the_allowlist_covers_with_a_reason_and_refuses_rows_that_match_nothing` pins §3, the refused
+  config included; `presented_nodes_compose_opacity_and_clip` pins §1's composition and
   `a_page_under_a_popup_stays_presented` its membership by paint;
-  `a_drag_step_moves_on_its_direct_frame` pins that an input is recorded with the frame it drives.
+  `a_drag_step_moves_on_its_direct_frame` pins that an input is recorded with the frame it drives,
+  and `a_finding_names_the_node_where_it_was` that a finding's locator is the one of its frame.
 
 ## Pros and cons of the options
 
@@ -167,9 +177,8 @@ the default config, panicking with the report.
 
 ## More information
 
-The rule set and thresholds follow the same family of checks in
-Rune's `motion_gate` (`anomalyco/rune@70eff81165`, its `RULES` table),
-read against FLUI's own trees; FLUI's identity, locator and charge are its own. Revisit when the
+The rule set and thresholds follow the same family of checks in Rune's motion gate (the
+`RULES` table cited in the header), read against FLUI's own trees; FLUI's identity, locator and charge are its own. Revisit when the
 retained scene (ADR-0304) gives layers an identity that lasts across frames: sampling the scene
 would then cover effects drawn without being declared. A rule that reads the frame's build report
 (a scroll that rebuilds) is the next addition the frame sample can carry.
