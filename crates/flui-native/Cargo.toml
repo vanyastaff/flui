@@ -29,11 +29,11 @@ accesskit = { workspace = true }
 # and `HostWindow` hands out. The trait lives there so the
 # frame runtime can hold a window's bridge without linking a backend
 # (ADR-0082 §2).
-flui-semantics = { workspace = true }
+flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 # The host's fallback answer `fonts::system_fallback` gives (`SystemFallback`,
 # ADR-0271 §3), and the text stack (Parley, swash) the Wayland window's own
 # frame shapes and rasterizes its title with. `flui-app` links it already.
-flui-painting = { workspace = true }
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 
 # The contracts the backends implement (capability traits, window/input and
 # data-transfer vocabulary), re-exported here at their old paths (ADR-0082).
@@ -42,7 +42,7 @@ flui-platform = { workspace = true }
 # carrying two seams: OwnerAffinity — the ADR-0039 owner-thread backstop,
 # hosted in foundation so its tests run in CI (flui-native's suite does
 # not) — and the generational DataTransferId for the ADR-0312 transport.
-flui-foundation = { workspace = true }
+flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # Wasm-safe Instant for input timestamps (std re-export on native).
 web-time = { workspace = true }
 
@@ -666,6 +666,9 @@ trybuild = { workspace = true }
 flui-protocol = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["float_roundtrip"] }
+# The parity table `docs/platform-parity.md` is rendered from
+# (`platform-parity.toml`, `testing::parity`).
+toml = { workspace = true }
 
 # Browser API fixtures mutate JS globals and therefore have their own process.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

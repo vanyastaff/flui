@@ -64,8 +64,13 @@ the ❌ cells of the new column.
 
 **Overall: ~37% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments).**
 
-When work lands, update the row here and its entry in [`gaps.md`](gaps.md). A ✅ needs an
-executed run on that environment; compile-only code is 🟡.
+This document is rendered from
+[`crates/flui-native/platform-parity.toml`](../crates/flui-native/platform-parity.toml), and a hand
+edit fails the test `parity_document_matches_its_source`. When work lands, update the row there,
+restate this document with
+`FLUI_OVERWRITE=1 cargo test -p flui-native --lib parity_document_matches_its_source`, and update
+its entry in [`gaps.md`](gaps.md). The summary, the scores and the quality bar's tally are
+computed from the rows. A ✅ needs an executed run on that environment; compile-only code is 🟡.
 
 Sources: the per-host audit with `file:line` evidence
 ([2026-10-14](https://github.com/vanyastaff/flui/blob/083b0f75d/docs/research/2026-10-14-platform-backend-audit.md)),
@@ -91,10 +96,7 @@ columns and is listed after them.
 | Web | wasm canvas (native) | 7 | 40 | 30 | 42 | 7 | 35% | no |
 | Headless | test double | 53 | 2 | 50 | 19 | 2 | 51% | — |
 
-Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 8 partly; 4 not met (zero idle CPU, power and
-thermal behaviour, assistive technology conformance, the first frame matching the OS splash); 2 not
-audited (timestamps across a counter wrap or a clock-base change, platform-edge diagnostics free of
-secrets).
+Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partly; 3 not met (power and thermal behaviour, assistive technology conformance, the first frame matching the OS splash); 2 not audited (timestamps across a counter wrap or a clock-base change, platform-edge diagnostics free of secrets).
 
 ## Core
 
