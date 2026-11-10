@@ -3,7 +3,7 @@
 //!
 //! An entry is named by its heading's anchor, never by its rank: the rank is
 //! the order of the entries and changes whenever one closes or moves. The test
-//! `every_gap_id_is_a_gaps_entry` holds each [`GapId`]'s slug to a heading of
+//! `every_gap_id_is_a_gaps_entry` holds each [`GapId`](crate::testing::gap::GapId)'s slug to a heading of
 //! `docs/gaps.md`.
 
 use std::fmt;
