@@ -2,7 +2,8 @@
 //! part of it its ancestors' clips leave, and the opacity it is drawn at (ADR-0321 §1).
 //!
 //! The walk applies the same gates and the same composition as the paint walk and the input
-//! region walk: a node the paint walk skips is not reported, a transform step is
+//! region walk: a node the paint walk skips, and a child its parent left out of the last paint,
+//! are not reported; a transform step is
 //! [`RenderObject::apply_paint_transform`](crate::traits::RenderObject::apply_paint_transform)
 //! with the follower placement the last composite resolved, a clip is the parent's
 //! [`describe_approximate_paint_clip`](crate::traits::RenderObject::describe_approximate_paint_clip),
@@ -168,7 +169,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             let Some(child) = self.render_tree.get(child_id) else {
                 continue;
             };
-            if !child.was_placed_by(id, generation) || !visits_presented_child(node, slot, size) {
+            if !child.was_placed_by(id, generation) {
                 continue;
             }
             let mut clip = inherited.clip;
@@ -218,17 +219,6 @@ fn short_name(name: &'static str) -> &'static str {
     let base = name.split('<').next().unwrap_or(name);
     let start = base.rfind("::").map_or(0, |at| at + 2);
     &name[start..]
-}
-
-fn visits_presented_child(
-    node: &RenderNode,
-    slot: usize,
-    size: flui_foundation::geometry::Size,
-) -> bool {
-    match node {
-        RenderNode::Box(entry) => entry.render_object().visits_child_for_semantics(slot, size),
-        RenderNode::Sliver(entry) => entry.render_object().visits_child_for_semantics(slot, size),
-    }
 }
 
 fn approximate_paint_clip(

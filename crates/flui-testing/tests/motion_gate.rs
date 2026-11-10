@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use flui_animation::{SpringDescription, Vsync};
-use flui_foundation::geometry::EdgeInsets;
+use flui_foundation::geometry::{EdgeInsets, Rect};
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_testing::motion::{
@@ -15,9 +15,10 @@ use flui_testing::motion::{
 use flui_testing::widgets::{LaidOut, lay_out_animated, loose};
 use flui_view::environment::VsyncScope;
 use flui_view::{IntoView, View, ViewExt};
+use flui_widgets::navigator::{Navigator, NavigatorHandle, PopupRoute, SimpleRoute};
 use flui_widgets::{
-    AnimatedOpacity, AnimatedPadding, ClipRect, ColoredBox, MotionBuilder, Opacity, Padding,
-    SizedBox, UnconstrainedBox,
+    AnimatedLerp, AnimatedOpacity, AnimatedPadding, ClipRect, ColoredBox, MotionBuilder, Opacity,
+    Padding, SizedBox, UnconstrainedBox,
 };
 
 const FRAME: Duration = Duration::from_millis(16);
@@ -293,6 +294,28 @@ pub(crate) fn motion_still_running_at_the_end_never_settles() {
         found.contains(&Rule::NeverSettles),
         "a 5 s fade recorded for 1 s: {found:?}"
     );
+
+    // A reveal that only moves a clip: no box moves or fades, what the window shows still grows.
+    let vsync = Vsync::new();
+    let tree = |width: f64| {
+        VsyncScope::new(
+            vsync.clone(),
+            AnimatedLerp::new(Rect::from_ltrb(0.0, 0.0, width, 40.0), |shape: &Rect| {
+                ClipRect::new().clipper(*shape).child(square())
+            })
+            .duration(Duration::from_secs(5)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(0.0), loose(200.0), vsync.clone());
+    let found = rules(&run_change(
+        &mut laid,
+        || tree(40.0),
+        Duration::from_secs(1),
+    ));
+    assert!(
+        found.contains(&Rule::NeverSettles),
+        "a 5 s reveal recorded for 1 s: {found:?}"
+    );
 }
 
 pub(crate) fn frames_asked_for_after_the_motion_ends_wake_after_end() {
@@ -461,4 +484,44 @@ pub(crate) fn presented_nodes_compose_opacity_and_clip() {
         "the leaf lies right of the clip: {outside:#?}"
     );
     assert!(outside.visible.is_none(), "the clip hides it: {outside:#?}");
+}
+
+pub(crate) fn a_page_under_a_popup_stays_presented() {
+    // A popup is modal and not opaque: the page below leaves the semantics tree but is still
+    // painted, so it stays in the recording and does not pop out.
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(SimpleRoute::<()>::new(|_ctx| square().into_view().boxed()));
+    let mut laid = lay_out_animated(
+        Navigator::new(navigator.clone()),
+        loose(200.0),
+        Vsync::new(),
+    );
+    let mut run = MotionRun::new(&mut laid);
+    run.frame(FRAME);
+    run.act(|_| {
+        drop(navigator.push(PopupRoute::<()>::new(|_ctx, _a, _s| {
+            SizedBox::new(10.0, 10.0).into_view().boxed()
+        })));
+    });
+    run.play(Duration::from_secs(1), FRAME);
+    let recording = run.finish();
+    let page = recording.frames()[0]
+        .samples
+        .iter()
+        .find(|sample| sample.locator.ends_with("RenderDecoratedBox"))
+        .expect("the page's square")
+        .id;
+    let last = recording.frames().last().expect("a recorded frame");
+    assert!(
+        last.samples.iter().any(|sample| sample.id == page),
+        "the page under the popup is still drawn: {:#?}",
+        last.samples
+    );
+    let found = check_all(&recording, &MotionConfig::default());
+    assert!(
+        !found
+            .iter()
+            .any(|finding| finding.id == page && finding.rule == Rule::PopOut),
+        "covering a page with a popup does not pop it out: {found:#?}"
+    );
 }

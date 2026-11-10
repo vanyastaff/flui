@@ -396,6 +396,7 @@ fn never_settles(
                 .iter()
                 .zip(first.edges())
                 .any(|(x, y)| (x - y).abs() >= config.still)
+                || !same_visible(sample, first, config.still)
                 || (sample.opacity - first.opacity).abs() >= config.settle_opacity
         });
         if moving {
@@ -468,19 +469,18 @@ fn same_frame(before: &[Sample], after: &[Sample], config: &MotionConfig) -> boo
 }
 
 fn same_view(a: &Sample, b: &Sample, still: f64) -> bool {
-    match (a.is_shown(), b.is_shown(), a.visible, b.visible) {
-        (false, false, ..) => true,
-        (true, true, Some(x), Some(y)) => {
-            [
-                (x.left(), y.left()),
-                (x.top(), y.top()),
-                (x.right(), y.right()),
-                (x.bottom(), y.bottom()),
-            ]
-            .iter()
-            .all(|(p, q)| (p - q).abs() < still)
-                && (a.opacity - b.opacity).abs() < SAME_OPACITY
-        }
+    match (a.is_shown(), b.is_shown()) {
+        (false, false) => true,
+        (true, true) => same_visible(a, b, still) && (a.opacity - b.opacity).abs() < SAME_OPACITY,
+        _ => false,
+    }
+}
+
+/// Whether two samples leave the same part of themselves visible, to within `still`.
+fn same_visible(a: &Sample, b: &Sample, still: f64) -> bool {
+    match (a.visible_edges(), b.visible_edges()) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.iter().zip(y).all(|(p, q)| (p - q).abs() < still),
         _ => false,
     }
 }

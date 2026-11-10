@@ -66,7 +66,9 @@ pub struct PresentedNode {
 ```
 
 The walk keeps the paint walk's gates (a hidden follower, `skip_paint`, a node that needs layout,
-an invisible sliver), composes each step with `RenderObject::apply_paint_transform` and the
+an invisible sliver, a child its parent left out of the last paint: the children each parent
+painted are what it visits, not the semantics predicate, which drops a page a popup covers but
+still shows), composes each step with `RenderObject::apply_paint_transform` and the
 follower transform the last composite resolved, intersects each parent's
 `describe_approximate_paint_clip`, and multiplies `PaintEffects::opacity`. Each of those is pure in
 `(self, size)` and runs no user code. A node whose transform is not finite, or whose corners reach
@@ -87,7 +89,7 @@ window's scale factor.
 | `fade-snap` | a drawn node's opacity steps by `fade_snap` or more in one frame |
 | `flicker` | opacity falls by `flicker_dip` or more from a peak and climbs back to it within `flicker_window`, in one step or many; a frame the node is left out of counts as opacity 0 |
 | `overshoot` | after the last input an edge that travels `still` or more passes where it comes to rest by more than `overshoot` |
-| `never-settles` | something shown still moves or fades in the last `settle_window`, which lies after the last input |
+| `never-settles` | something shown still moves, fades or changes its visible part in the last `settle_window`, which lies after the last input |
 | `wakes-after-end` | a frame is still asked for `wake_after_end` after the last frame that changed what the window shows (a hidden node, or the part of a box past its clip, changes nothing; each frame is compared with the last one that changed, so a slow drift adds up) |
 
 Frame 0 is the settled start: what it draws loaded with the view and is not an entrance. The
@@ -132,7 +134,8 @@ the default config, panicking with the report.
   `wakes_after_end_reads_what_the_window_shows`).
 - `a_finding_is_charged_to_the_outermost_node_that_shows_it` pins §2's charge;
   `the_allowlist_covers_with_a_reason_and_refuses_rows_that_match_nothing` pins §3;
-  `presented_nodes_compose_opacity_and_clip` pins §1's composition.
+  `presented_nodes_compose_opacity_and_clip` pins §1's composition and
+  `a_page_under_a_popup_stays_presented` its membership by paint.
 
 ## Pros and cons of the options
 

@@ -914,14 +914,18 @@ impl PipelineOwner<PaintPhase> {
             }
         }
 
-        // The order children went down in is the order they lie over each other: what
-        // the input-region walk follows. Most parents paint first to last; only the rest
-        // keep their order.
-        if child_ids.len() > 1 {
-            let in_order = painted_children.windows(2).all(|pair| pair[0] < pair[1]);
+        // The children that went down, in the order they lie over each other: what the
+        // input-region and presented walks follow. Most parents paint every child first to
+        // last; only the rest keep their list, a parent that leaves children out included.
+        if !child_ids.is_empty() {
+            let every_child_in_order = painted_children.len() == child_ids.len()
+                && painted_children
+                    .iter()
+                    .enumerate()
+                    .all(|(position, &slot)| position == slot);
             composer
                 .child_paint_orders
-                .push((node_id, (!in_order).then_some(painted_children)));
+                .push((node_id, (!every_child_in_order).then_some(painted_children)));
         }
 
         for _ in 0..effect_layers {
@@ -1420,9 +1424,9 @@ struct FragmentComposer {
     /// `flui_layer::resolve_follower_transform` into `PipelineOwner
     /// ::last_follower_transforms` / `::last_hidden_follower_ids`.
     follower_correlations: Vec<(RenderId, LayerId, Offset)>,
-    /// For each node painted this pass that has more than one child, the order it
-    /// painted them in when that is not first to last (`None` when it is), applied by
-    /// `run_paint` to `PipelineOwner::last_child_paint_orders`.
+    /// For each node painted this pass that has children, the children it painted in the
+    /// order it painted them when that is not every child first to last (`None` when it
+    /// is), applied by `run_paint` to `PipelineOwner::last_child_paint_orders`.
     child_paint_orders: Vec<(RenderId, Option<ChildPaintOrder>)>,
     /// Retention decisions taken during the walk, applied by `run_paint` once
     /// the walk's `&self` borrow ends.

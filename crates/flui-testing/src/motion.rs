@@ -191,6 +191,11 @@ impl Sample {
             self.rect.bottom(),
         ]
     }
+
+    fn visible_edges(&self) -> Option<[f64; 4]> {
+        self.visible
+            .map(|kept| [kept.left(), kept.top(), kept.right(), kept.bottom()])
+    }
 }
 
 /// One frame a [`MotionRun`] drove.

@@ -6,3 +6,9 @@
   match nothing ([ADR-0321](/docs/adr/ADR-0321-a-motion-gate-reads-what-the-window-shows-each-frame.md)).
 - **`flui-rendering`** (feature `testing`): `PipelineOwner::presented_nodes`, each node's box,
   visible part and opacity as the window shows them.
+
+### Fixed
+
+- **`flui-rendering`**: the input-region walk visits only the children a parent painted in the
+  last frame, so a child a parent leaves out of paint without also leaving it out of semantics
+  no longer reports input regions.
