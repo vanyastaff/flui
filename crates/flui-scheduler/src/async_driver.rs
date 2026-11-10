@@ -108,6 +108,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::mem;
+use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::pin::Pin;
 use std::rc::{Rc, Weak as RcWeak};
@@ -115,6 +116,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 
+use flui_foundation::IdMint;
 use flui_foundation::panic::FirstPanic;
 use parking_lot::Mutex;
 
@@ -127,9 +129,12 @@ pub type BoxedTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
 /// Frame-request hook: "please schedule another frame".
 type RequestFrame = Arc<dyn Fn() + Send + Sync>;
 
-/// Monotonic task id. Never reused, so a stale [`Waker`] cannot resurrect or
-/// mis-target a later task.
-type TaskId = u64;
+/// One spawned future's identity within the [`TaskStore`] that minted it.
+/// Minted only by the store's own [`IdMint`] and never reused, so a stale
+/// [`Waker`] cannot resurrect or mis-target a later task. Not the priority
+/// queue's `TaskId`: the two domains are different types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct AsyncTaskId(NonZeroU64);
 
 /// A panic payload kept from a retirement.
 pub(crate) type RetirePanic = Box<dyn Any + Send>;
@@ -185,7 +190,7 @@ struct Task {
 struct WakeShared {
     /// Ids whose waker fired since the last drain, in wake-arrival order.
     /// Sorted and deduplicated once per pump, outside the lock.
-    ready: Mutex<Vec<TaskId>>,
+    ready: Mutex<Vec<AsyncTaskId>>,
     request_frame: Mutex<Option<RequestFrame>>,
     wake_delivery: crate::wake_delivery::WakeDelivery,
 }
@@ -227,15 +232,16 @@ impl WakeShared {
 pub(crate) struct TaskStore {
     /// `BTreeMap`, not `HashMap`: a `HashMap`'s hash-seed-dependent
     /// iteration is worth avoiding wherever this map is walked directly.
-    tasks: RefCell<BTreeMap<TaskId, Task>>,
+    tasks: RefCell<BTreeMap<AsyncTaskId, Task>>,
     /// An always-empty scratch buffer, ping-ponged with `ready` at the start
     /// of every pump (`mem::swap`, not `mem::take`) purely so `ready` always
     /// starts a pump already capacity-warmed. Without it, a self-waking task
     /// pushing its own id back during the pump would regrow `ready` from
     /// empty every pump instead of reaching zero allocations.
-    spare: RefCell<Vec<TaskId>>,
-    /// The next id to issue. `u64::MAX` is reserved for permanent exhaustion.
-    next_id: Cell<TaskId>,
+    spare: RefCell<Vec<AsyncTaskId>>,
+    /// Task identities: the store's own mint, whose refusal is sticky, so a
+    /// task id is never issued twice.
+    ids: IdMint<NonZeroU64>,
     /// Set by retirement: no task is admitted afterwards.
     closed: Cell<bool>,
     execution_failure: RefCell<Option<Weak<crate::wake_delivery::FailureSignal>>>,
@@ -253,14 +259,17 @@ impl TaskStore {
         self.shared.wake_delivery.bind_failure_signal(signal);
     }
     pub(crate) fn new() -> Self {
-        Self::with_first_id(1)
+        Self::with_ids(IdMint::new())
     }
 
-    pub(crate) fn with_first_id(first: TaskId) -> Self {
+    /// A store whose task ids come from `ids`, so a test reaches the
+    /// identity-exhaustion boundary through the mint's own
+    /// [`IdMint::starting_after`] instead of spawning every task before it.
+    pub(crate) fn with_ids(ids: IdMint<NonZeroU64>) -> Self {
         Self {
             tasks: RefCell::new(BTreeMap::new()),
             spare: RefCell::new(Vec::new()),
-            next_id: Cell::new(first),
+            ids,
             closed: Cell::new(false),
             execution_failure: RefCell::new(None),
             deadlines: Rc::default(),
@@ -272,11 +281,8 @@ impl TaskStore {
         }
     }
 
-    fn next_task_id(&self) -> Option<TaskId> {
-        let current = self.next_id.get();
-        let next = current.checked_add(1)?;
-        self.next_id.set(next);
-        Some(current)
+    fn next_task_id(&self) -> Option<AsyncTaskId> {
+        self.ids.next().ok().map(AsyncTaskId)
     }
 
     /// Install the "request a frame" hook; installation retries undelivered
@@ -297,7 +303,7 @@ impl TaskStore {
         self.shared.request_frame(false);
     }
 
-    fn new_waker(&self, id: TaskId, flags: &Arc<TaskFlags>) -> Waker {
+    fn new_waker(&self, id: AsyncTaskId, flags: &Arc<TaskFlags>) -> Waker {
         Waker::from(Arc::new(TaskWaker {
             id,
             flags: Arc::clone(flags),
@@ -305,9 +311,9 @@ impl TaskStore {
         }))
     }
 
-    fn token(self: &Rc<Self>, id: TaskId, flags: Arc<TaskFlags>) -> TaskToken {
+    fn token(self: &Rc<Self>, id: AsyncTaskId, flags: Arc<TaskFlags>) -> TaskToken {
         TaskToken {
-            id,
+            id: Some(id),
             flags,
             store: Rc::downgrade(self),
         }
@@ -411,7 +417,7 @@ impl TaskStore {
 
     /// Remove `id`'s slot, marking it retired. The caller drops the returned
     /// task (and so its future) after the map borrow is released.
-    fn remove(&self, id: TaskId) -> Option<Task> {
+    fn remove(&self, id: AsyncTaskId) -> Option<Task> {
         let removed = self.tasks.borrow_mut().remove(&id);
         if let Some(task) = &removed {
             task.flags.retired.store(true, Ordering::Release);
@@ -425,7 +431,7 @@ impl TaskStore {
         // Drain the ready index, then release every lock and borrow: a task's
         // `poll` may spawn, cancel, or wake. Swap with `spare`, not
         // `mem::take` `ready` directly — see `spare`'s doc for why.
-        let mut remaining: Vec<TaskId> = {
+        let mut remaining: Vec<AsyncTaskId> = {
             let mut ready = self.shared.ready.lock();
             self.shared.wake_delivery.consume(|| {});
             let mut spare = self.spare.borrow_mut();
@@ -583,7 +589,7 @@ impl TaskStore {
 
 /// Outgoing ownership detached from the closed store before user code runs.
 pub(crate) struct RetiringTasks {
-    tasks: BTreeMap<TaskId, Task>,
+    tasks: BTreeMap<AsyncTaskId, Task>,
     hook: Option<RequestFrame>,
     /// The wakers the deadlines held: dropped with the tasks, never woken.
     wakers: Vec<Waker>,
@@ -633,7 +639,7 @@ impl RetiringTasks {
 /// The `Waker` payload for one task: `Send + Sync`, reaching only the
 /// store's cross-thread half, through a `Weak`.
 struct TaskWaker {
-    id: TaskId,
+    id: AsyncTaskId,
     flags: Arc<TaskFlags>,
     /// `Weak`: a waker a worker keeps must not keep the UI runtime's wake state
     /// alive, and nothing on this side may reach the owner-local tasks.
@@ -673,7 +679,8 @@ impl Wake for TaskWaker {
 /// the driver that issued it.
 #[derive(Debug)]
 pub struct TaskToken {
-    id: TaskId,
+    /// `None` for a token the driver refused: it names no task.
+    id: Option<AsyncTaskId>,
     flags: Arc<TaskFlags>,
     store: RcWeak<TaskStore>,
 }
@@ -704,17 +711,17 @@ impl TaskToken {
     /// reaching no store.
     fn refused() -> Self {
         Self {
-            id: 0,
+            id: None,
             flags: Arc::new(TaskFlags::closed()),
             store: RcWeak::new(),
         }
     }
 
-    /// The driver-unique id of the task, for diagnostics. `0` for a task the
-    /// driver refused because its UI runtime was gone.
+    /// The driver-unique id of the task, for diagnostics. `None` for a task
+    /// the driver refused because its UI runtime was gone.
     #[must_use]
-    pub fn id(&self) -> u64 {
-        self.id
+    pub fn id(&self) -> Option<NonZeroU64> {
+        self.id.map(|id| id.0)
     }
 
     /// Whether the task has been cancelled: explicitly, by its UI runtime's
@@ -740,10 +747,12 @@ impl TaskToken {
     /// future and discards a panic from its destructor instead.
     pub fn cancel(&self) {
         self.flags.cancelled.store(true, Ordering::Release);
-        if let Some(store) = self.store.upgrade() {
+        if let Some(id) = self.id
+            && let Some(store) = self.store.upgrade()
+        {
             // If the task is mid-poll its slot holds `None`, and the pump
             // honours `cancelled` when it tries to re-queue.
-            let removed = store.remove(self.id);
+            let removed = store.remove(id);
             crate::scheduler::execution::retire_with_execution_custody(
                 &store.execution_failure,
                 removed,
@@ -762,8 +771,9 @@ impl Drop for TaskToken {
     fn drop(&mut self) {
         if std::thread::panicking() {
             self.flags.cancelled.store(true, Ordering::Release);
-            if let Some(store) = self.store.upgrade()
-                && let Some(mut task) = store.remove(self.id)
+            if let Some(id) = self.id
+                && let Some(store) = self.store.upgrade()
+                && let Some(mut task) = store.remove(id)
                 && let Some(future) = task.future.take()
             {
                 flui_foundation::panic::drop_contained(future);
@@ -776,7 +786,7 @@ impl Drop for TaskToken {
 
 /// Warm `spare` with a drained batch's own allocation (clear and reuse `buf`,
 /// never drop it).
-fn recycle(spare: &mut Vec<TaskId>, mut buf: Vec<TaskId>) {
+fn recycle(spare: &mut Vec<AsyncTaskId>, mut buf: Vec<AsyncTaskId>) {
     buf.clear();
     *spare = buf;
 }
@@ -793,12 +803,12 @@ struct PumpGuard<'a> {
     store: &'a TaskStore,
     /// This pump's whole ready batch, sorted and deduplicated, consumed
     /// front-to-back via `cursor`.
-    remaining: Vec<TaskId>,
+    remaining: Vec<AsyncTaskId>,
     /// The index of the next (not yet polled) id.
     cursor: usize,
     /// The id whose future is between "taken out of its slot" and "outcome
     /// applied", if any.
-    in_flight: Option<TaskId>,
+    in_flight: Option<AsyncTaskId>,
     /// Set just before the pump's normal return.
     done: bool,
 }
@@ -1119,7 +1129,7 @@ mod tests {
 
         for eager_first in [false, true] {
             let scheduler = UpdateScheduler::new();
-            let frame = OwnerFrame::with_first_task_id(&scheduler, u64::MAX - 2)
+            let frame = OwnerFrame::with_task_ids_after(&scheduler, u64::MAX - 2)
                 .expect("the scheduler has no live owner frame");
             let driver = frame.async_driver();
             let alias = driver.clone();
