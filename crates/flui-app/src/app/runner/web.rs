@@ -1,4 +1,5 @@
 use flui_view::{StatelessView, View};
+use flui_widgets::app_root;
 
 use super::frame_pacing::{FallbackGate, WakeAction, wake_action};
 use super::gpu_loss::GpuLossLedger;
@@ -120,7 +121,7 @@ where
         let logical = geometry.logical;
         let attach = ui_runtime.enter(|ui_runtime| {
             ui_runtime.attach_root_widget_with_size(
-                &root,
+                &app_root(root.clone()),
                 logical.width as f64,
                 logical.height as f64,
             )

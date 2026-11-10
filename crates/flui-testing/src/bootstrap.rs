@@ -22,17 +22,20 @@
 //! frame one on screen.
 //!
 //! What stays with the caller is what genuinely differs per harness: which
-//! presentation scopes wrap the root (`FocusRoot` from the widget catalog,
-//! `GestureArenaScope` and `VsyncScope` from `flui_view::environment`), which
-//! extra capabilities the `BuildOwner` carries, and what the
-//! root constraints are.
+//! presentation scopes wrap the root (`FocusTreeRoot`, `GestureArenaScope` and
+//! `VsyncScope` from `flui_view::environment`, and `flui_widgets::app_root` for
+//! the keyboard bindings), which extra capabilities the `BuildOwner` carries,
+//! and what the root constraints are.
 //!
 //! # Example
 //!
 //! ```rust,ignore
 //! let mut binding = HeadlessBinding::new();
 //! let mounted = binding.mount_root(
-//!     &GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(my_widget)),
+//!     &GestureArenaScope::new(
+//!         binding.arena().clone(),
+//!         FocusTreeRoot::new(app_root(my_widget)),
+//!     ),
 //!     MountOwners::fresh(),
 //!     MountOptions::tight(800.0, 600.0),
 //! );

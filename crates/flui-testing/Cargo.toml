@@ -62,7 +62,8 @@ flui-view = { workspace = true }
 # widget harness (`widgets`) reads.
 flui-rendering = { workspace = true, features = ["testing"] }
 # The widget harness (`widgets`): the catalog widgets it wraps a root in
-# (`Align`, `ConstrainedBox`, `UnconstrainedBox`, `FocusRoot`), and the
+# (`Align`, `ConstrainedBox`, `UnconstrainedBox`), `app_root`, which `HeadlessHost`
+# wraps every root it attaches in as a `flui-app` runner does, and the
 # concrete render objects its probes downcast.
 flui-widgets = { workspace = true }
 flui-objects = { workspace = true }

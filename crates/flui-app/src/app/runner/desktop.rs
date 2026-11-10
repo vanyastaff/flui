@@ -3,6 +3,7 @@ use flui_native::HostWindow;
 use flui_platform::PlatformWindow;
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
+use flui_widgets::app_root;
 use parking_lot::Mutex;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -149,7 +150,11 @@ where
     ui_runtime.enter(|ui_runtime| ui_runtime.update_host_lifecycle(host_lifecycle));
     let logical = geometry.logical;
     let attach = ui_runtime.enter(|ui_runtime| {
-        ui_runtime.attach_root_widget_with_size(&root, logical.width, logical.height)
+        ui_runtime.attach_root_widget_with_size(
+            &app_root(root.clone()),
+            logical.width,
+            logical.height,
+        )
     });
     if let Err(e) = attach {
         tracing::error!("Root widget attach failed: {:?}", e);

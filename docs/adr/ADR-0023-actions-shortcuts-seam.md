@@ -76,12 +76,13 @@ nothing matched.
 ## Text-editing intents
 
 `CopySelectionTextIntent` (`Copy`/`Cut`) and `PasteTextIntent` live beside the activation and
-traversal intents in `flui-widgets`' `interaction` module. `DefaultFocusTraversal`, which every
-`FocusRoot` builds, binds them to Ctrl+C, Ctrl+X and Ctrl+V (Cmd on macOS and iOS). They resolve
-at the primary focus (ADR-0079): `EditableText` records its copy/cut/paste actions on its own
-focus node, so the chord reaches the field that holds the focus and nothing answers it when no
-text field does. `SingleActivator` compares an ASCII letter trigger without case, so Caps Lock
-does not defeat a letter chord.
+traversal intents in `flui-widgets`' `interaction` module. `DefaultFocusTraversal`, which
+`flui_widgets::app_root` installs above every application root, binds them to Ctrl+C, Ctrl+X
+and Ctrl+V (Cmd on macOS and iOS). They resolve at the primary focus (ADR-0079):
+`EditableText` records its copy/cut/paste actions on its own focus node, so the chord reaches
+the field that holds the focus and nothing answers it when no text field does.
+`SingleActivator` compares an ASCII letter trigger without case, so Caps Lock does not defeat a
+letter chord.
 
 ## Not implemented
 

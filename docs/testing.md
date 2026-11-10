@@ -589,9 +589,9 @@ The constitution requires `///` doc comments on every public item and `//!` over
 - **Unit tests** live in the same file under `#[cfg(test)] mod tests { ... }`.
   `flui-widgets` unit tests must not use the headless harness: `flui-testing` depends on
   `flui-widgets`, so a unit test under `src/` links a second copy of the library. It still
-  compiles, but the UI runtime's inherited scopes (`MediaQuery`, `FocusRoot`, `VsyncScope`) are the
-  other copy's types, so the test's own lookups of them read `None`. Nothing but review
-  catches it; a test that mounts a tree lives in `crates/flui-widgets/tests/` (ADR-0083 §4).
+  compiles, but the catalog's inherited views the harness installs (the focus parent
+  `app_root` publishes, the themes) are the other copy's types, so the test's own lookups of
+  them read `None`. Nothing but review catches it; a test that mounts a tree lives in `crates/flui-widgets/tests/` (ADR-0083 §4).
 - **Integration tests** live in `tests/` per crate. Cross-crate pipelines are tested in `flui-engine`.
   A crate's root `tests/*.rs` files compile as modules of **one** integration-test
   binary (`tests/main.rs` with `#[path]` module declarations, `autotests = false`

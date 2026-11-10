@@ -227,7 +227,7 @@ pub(crate) mod tab_tests {
     /// the enclosing `Actions`, and moves the focus in reading order.
     ///
     /// The traversal actions come from `DefaultFocusTraversal`, which the
-    /// harness's `FocusRoot` installs.
+    /// harness's `HeadlessHost` installs through `app_root`.
     pub(crate) fn tab_and_shift_tab_move_the_focus_through_the_actions_chain() {
         let scope = FocusScopeNode::with_debug_label("tab-scope");
         let left = FocusNode::with_debug_label("left");

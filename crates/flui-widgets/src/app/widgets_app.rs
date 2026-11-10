@@ -18,8 +18,10 @@
 //! - **`MediaQuery`.** The UI runtime publishes the live root `MediaQuery`
 //!   (size / device-pixel-ratio / platform-brightness republish); the shell
 //!   never introduces its own.
-//! - **Focus root and default traversal.** The UI runtime wraps the root in
-//!   [`FocusRoot`](crate::FocusRoot), which installs the standard Tab /
+//! - **Focus root and default traversal.** The UI runtime roots the focus
+//!   tree ([`FocusTreeRoot`](flui_view::environment::FocusTreeRoot)), and the
+//!   composition root wraps the application root in
+//!   [`app_root`](crate::app_root), which installs the standard Tab /
 //!   Shift+Tab traversal bindings.
 //! - **Vsync scope and gesture arena.** Runtime-installed
 //!   (`VsyncScope`, `GestureArenaScope`).

@@ -16,7 +16,7 @@
   `harness::mount`, `SignalProbe`); `flui::testing::widgets` names it as
   before. Its frames are the realm's own `UiRealm::pump`, the mount included:
   the tree sits under the realm's root `MediaQuery`, `VsyncScope`,
-  `FocusRoot` and `GestureArenaScope`, post-frame callbacks registered in
+  `FocusTreeRoot` and `GestureArenaScope`, post-frame callbacks registered in
   `init_state` run at the end of the mount frame, `mount_with_ime` frames are
   text-store transactions with the realm's commit gate, and a contained frame
   failure is raised after the pump.

@@ -62,12 +62,16 @@ Tests therefore prove the harness. ADR-0075 records the failure this produces: i
 effects "never ran in the product", because `run_effects` was called only from
 `HeadlessBinding::pump_frame` (ADR-0075, "What the prototype got wrong", item 1).
 
-The runtime cannot move below `flui-widgets`. The UI runtime's composition names widget types:
-`use flui_view::environment::{GestureArenaScope, VsyncScope}; use flui_widgets::FocusRoot;`
-(`crates/flui-runtime/src/ui_runtime/attach.rs`), and `flui-app`'s agent pages and tests import
-the catalog's widgets.
+The UI runtime's own composition names no widget. The scopes it installs above each root are
+`flui_view::environment`'s (`FocusTreeRoot`, `GestureArenaScope`, `VsyncScope`, in
+`crates/flui-runtime/src/ui_runtime/attach.rs`); the catalog's keyboard bindings are the
+composition root's, which `flui-app`'s runners and `HeadlessHost` install through
+`flui_widgets::app_root`. `flui-runtime` names `flui-widgets` only on a dev edge, and its
+manifest's `reach-forbid` keeps the catalog out of its normal graph. The runtime still sits above
+`flui-widgets` in the tier order, beside `flui-app`, whose agent pages and tests import the
+catalog's widgets.
 
-The harness also sits in the wrong place for such a move. `flui-widgets` depends on
+The harness also sits in the wrong place for a move below `flui-widgets`. `flui-widgets` depends on
 `flui-testing` optionally for its `testing` feature (`crates/flui-widgets/Cargo.toml:89`), and
 22 modules under `crates/flui-widgets/src` use `crate::testing`
 (`grep -rln 'crate::testing' crates/flui-widgets/src | grep -v src/testing`), a 2,144-line

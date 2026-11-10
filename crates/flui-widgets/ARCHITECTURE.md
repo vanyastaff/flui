@@ -685,7 +685,7 @@ for its drag and `ListView` or `GridView` (`scroll`) for its rows.
 field composes `RawTextField` (`text`), a `Focus` wrapper (`interaction`) and
 the error line's `Column` and `Semantics`, and nothing below names a form.
 The clipboard intents live in `interaction`, not `text`, so the
-`DefaultFocusTraversal` that `FocusRoot` builds can bind them without naming
+`DefaultFocusTraversal` that `app_root` installs can bind them without naming
 the text module that answers them.
 
 A new module takes a place in `layers`; a move that changes the direction
@@ -2823,9 +2823,10 @@ technology reads when it appears. **Unasserted:** no test pins this.
 
 ### 27. Clipboard bindings come from `DefaultFocusTraversal`
 
-**Choice:** `DefaultFocusTraversal`, which every `FocusRoot` builds, binds the
-three chords (Cmd on macOS and iOS, Control elsewhere — a pure table resolved
-once per state from `TargetPlatform::current()`). The chord resolves at the
+**Choice:** `DefaultFocusTraversal`, which `app_root` installs above every
+application root, binds the three chords (Cmd on macOS and iOS, Control
+elsewhere — a pure table resolved once per state from
+`TargetPlatform::current()`). The chord resolves at the
 primary focus like the traversal keys: an `EditableText` answers it on its own
 node, and with no text field focused nothing does, so the chord keeps
 bubbling. **Tests:** `tests/editable_text_clipboard.rs`

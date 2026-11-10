@@ -153,7 +153,7 @@ pub mod wrap;
 // `flui-material` — see `app` module docs.
 pub use app::{
     AppBuilder, AppForm, InheritedTheme, NavigatorForm, RouterForm, SafeArea, WidgetsApp,
-    WidgetsAppState,
+    WidgetsAppState, app_root,
 };
 pub use magnifier::{
     InvalidMagnifierScale, MagnifierDecoration, MagnifierScale, MagnifierShape, RawMagnifier,
@@ -216,17 +216,17 @@ pub use interaction::{
     CrossFadeState, DefaultFocusRingStyle, DefaultFocusTraversal, DefaultFocusTraversalState,
     DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, DragAnchor, DragCommands,
     Draggable, DraggableState, DropCommands, DropHover, DropTarget, DropTargetState, ExcludeFocus,
-    Focus, FocusChangeHandler, FocusRing, FocusRingStyle, FocusRoot, FocusRootState, FocusScope,
-    FocusScopeState, FocusState, FocusTraversalGroup, FocusTraversalGroupState,
-    GestureAlternatives, GestureAlternativesError, GestureAlternativesState, GestureCommand,
-    GestureDetector, GestureDetectorState, GestureRecognizerFactory, HitSlop, Intent, Listener,
-    MenuCause, MenuItem, MenuPresenter, MenuRequest, MenuSpec, MetaData, MouseRegion,
-    NextFocusAction, NextFocusIntent, Offstage, PanClaimRegion, PasteTextIntent,
-    PreviousFocusAction, PreviousFocusIntent, RawButton, RawGestureDetector,
-    RawGestureDetectorState, RecognizerContext, SelectAllTextIntent, ShortcutCallback, Shortcuts,
-    ShortcutsState, ShowContextMenuIntent, SingleActivator, SystemGestureExclusion,
-    TransformationController, Visibility, VisibilityGate, WindowCaptionButton, WindowChromeState,
-    WindowMovePassThrough, WindowResizeArea, WindowTitleBar,
+    Focus, FocusChangeHandler, FocusRing, FocusRingStyle, FocusScope, FocusScopeState, FocusState,
+    FocusTraversalGroup, FocusTraversalGroupState, GestureAlternatives, GestureAlternativesError,
+    GestureAlternativesState, GestureCommand, GestureDetector, GestureDetectorState,
+    GestureRecognizerFactory, HitSlop, Intent, Listener, MenuCause, MenuItem, MenuPresenter,
+    MenuRequest, MenuSpec, MetaData, MouseRegion, NextFocusAction, NextFocusIntent, Offstage,
+    PanClaimRegion, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, RawButton,
+    RawGestureDetector, RawGestureDetectorState, RecognizerContext, SelectAllTextIntent,
+    ShortcutCallback, Shortcuts, ShortcutsState, ShowContextMenuIntent, SingleActivator,
+    SystemGestureExclusion, TransformationController, Visibility, VisibilityGate,
+    WindowCaptionButton, WindowChromeState, WindowMovePassThrough, WindowResizeArea,
+    WindowTitleBar,
 };
 pub use interaction::{DragSlot, ForcePressSlot, MultiTapCount, MultiTapCountError, TransformSlot};
 pub use layout::{
@@ -431,7 +431,7 @@ pub mod prelude {
         DefaultTextStyle, DefaultWidgetsLocalizations, Directionality, Disclosure, DisclosureState,
         DotHandles, DragSlot, Draggable, DropTarget, EditableText, EditableTextState, ExcludeFocus,
         ExcludeSemantics, Expanded, ExpansionState, FittedBox, Flex, FlexFit, Flexible,
-        FlightDirection, Flow, Focus, FocusRoot, FocusScope, FocusTraversalGroup, Form, FormField,
+        FlightDirection, Flow, Focus, FocusScope, FocusTraversalGroup, Form, FormField,
         FormFieldHandle, FormHandle, FractionalTranslation, FractionallySizedBox, FutureBuilder,
         GestureDetector, GridView, HandleInfo, HandleSide, Hero, HeroController, HeroMode,
         HitShape, HitSlop, Icon, IconData, IconTheme, IconThemeData, IgnoreBaseline, IgnorePointer,

@@ -40,7 +40,10 @@ Reference: Flutter `widgets/focus_scope.dart` (`Focus`, `FocusScope`, `_FocusSta
 - A private `FocusParentProvider` inherited view publishes the nearest focus **node**. Widget
   nodes parent to that node rather than being flattened to the nearest scope: key bubbling
   (ADR-0023) makes the node tree's shape observable, so a non-scope `Focus` above a field must
-  be the field's ancestor to see the keys it ignores.
+  be the field's ancestor to see the keys it ignores. A widget with no focus widget above it
+  parents to the presentation's root scope, which `flui_view::environment::FocusTreeRoot`
+  publishes: the UI runtime installs one above each root, reading the scope from its own
+  `FocusManager` in `init_state`.
 - Lifecycle: `init_state` resolves the parent, attaches, applies autofocus once and registers a
   focus listener; `did_change_dependencies` reparents through `FocusScopeNode::adopt_node`,
   which keeps primary focus across the move; `dispose` drops the subscription (which
@@ -84,9 +87,12 @@ unfocuses and reports the key unconsumed; the embedder handoff has no channel ye
 defaulted `to_key_event_result(intent, outcome)`, so a Tab that moves nothing leaves the key
 unconsumed for an outer handler. `Actions` must wrap `Shortcuts`, because `Shortcuts` resolves
 its action chain from its own position (ADR-0023); the reverse nesting silently dead-keys Tab.
-`DefaultFocusTraversal` packages the Tab/Shift+Tab bindings in that order, and `FocusRoot`
-installs it for every standard presentation (Flutter's `WidgetsApp` does the same at the app
-root); custom embedders can install it themselves.
+`DefaultFocusTraversal` packages the Tab/Shift+Tab bindings in that order. The UI runtime
+installs no key bindings: `flui_widgets::app_root(view)` wraps a root in
+`DefaultFocusTraversal`, and it is the one function every composition root calls on each root it
+attaches, `flui-app`'s runners for every window and `flui-testing`'s `HeadlessHost` (Flutter's
+`WidgetsApp` installs the same bindings at the app root). Embedders that compose their own root
+call it too.
 
 ## Flutter divergences
 
@@ -120,6 +126,10 @@ root); custom embedders can install it themselves.
   drift apart.
 - Losing focus on reparent is only observable when a focused widget moves between scopes;
   `adopt_node` has a node-layer test that fails for the naive detach-then-attach.
+- A root attached without `app_root` has a focus tree but no Tab. Two tests run Tab and
+  Shift+Tab through each composition root: `tab_moves_focus_in_every_window_a_runner_installs`
+  (`flui-app`, a main and a secondary window of a headless run) and
+  `tab_moves_focus_in_a_headless_host_attached_app` (`flui-testing`).
 
 ## Alternatives rejected
 

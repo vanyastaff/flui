@@ -46,6 +46,15 @@ mod runner_teardown;
 #[path = "runner_close.rs"]
 mod runner_close;
 
+// The same kit, with a main and a secondary window that take keyboard input.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[path = "runner_keyboard_traversal.rs"]
+mod runner_keyboard_traversal;
+
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -123,4 +132,20 @@ fn native_linux() {
 #[test]
 fn native_linux_child() {
     native_linux::child();
+}
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[test]
+fn runner_keyboard_traversal() {
+    run_table(
+        "runner_keyboard_traversal",
+        &[(
+            "runner_keyboard_traversal::tab_moves_focus_in_every_window_a_runner_installs",
+            runner_keyboard_traversal::tab_moves_focus_in_every_window_a_runner_installs as fn(),
+        )],
+    );
 }

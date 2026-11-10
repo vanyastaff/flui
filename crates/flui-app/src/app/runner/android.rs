@@ -1,5 +1,6 @@
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
+use flui_widgets::app_root;
 
 use super::device_recovery::{new_device_recovery_backoff, pump_with_device_recovery};
 use super::frame_pacing::{
@@ -276,7 +277,7 @@ where
             .install_captured_text_sizing_for(ui_runtime.presentation_id(), native_sizing.source());
         let attach = ui_runtime.enter(|ui_runtime| {
             ui_runtime.attach_root_widget_with_size(
-                &root,
+                &app_root(root.clone()),
                 logical.width as f64,
                 logical.height as f64,
             )
