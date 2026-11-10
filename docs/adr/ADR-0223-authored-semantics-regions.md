@@ -52,12 +52,10 @@ reinsertion receives a new ID. Unvisited mounted scopes retain their keys, so
 partial assembly and temporary ancestor exclusion cannot retire unrelated
 content. Removed render generations are pruned at the next assembly pass.
 
-The pipeline owns a generational identity source throughout the
+The pipeline owns an opaque monotonic identity source throughout the
 presentation's lifetime, independently of replaceable `SemanticsOwner` values.
-Its identities are slot keys whose published form sets the packed key's reserved
-domain bit, so none aliases a render identity (ADR-0313 §4). A retired key's
-identity returns to the source, whose slot comes back only under its next
-generation. Batch reservation is all-or-nothing and never wraps. Duplicate keys in one
+Its reserved range is `1..=u32::MAX`, disjoint from nonzero render generations.
+Batch reservation is all-or-nothing and never wraps. Duplicate keys in one
 contribution list and exhausted reservations return a semantics frame error,
 retain the existing tree and queued marks, and permit a later retry. Every graft
 anchor is staged before the first arena mutation. An abandoned graft plan does
@@ -111,6 +109,5 @@ The public render-object family runs
 `harness_custom_paint_regions_obey_merge_exclude_and_action_blocking`,
 `harness_custom_paint_region_failure_keeps_all_anchors_and_retries` and
 `harness_custom_paint_regions_project_clip_and_rebind_owner`.
-`synthetic_identity_exhaustion_never_wraps_or_partially_reserves` and
-`a_slot_at_its_last_generation_closes_at_its_release` use a private seam because
-reaching a slot's last generation publicly is impractical.
+`synthetic_identity_exhaustion_never_wraps_or_partially_reserves` uses a private
+counter seam because reaching the terminal value publicly is impractical.

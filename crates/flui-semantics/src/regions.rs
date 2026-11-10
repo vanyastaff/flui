@@ -124,7 +124,8 @@ impl SemanticsIdentitySource {
             .slot_count()
             .checked_add(fresh)
             .ok_or(SemanticsIdentityExhausted)?;
-        if slots > (u32::MAX as usize) + 1 {
+        // Compared in u64: on a 32-bit target `u32::MAX + 1` does not fit a usize.
+        if !u64::try_from(slots).is_ok_and(|slots| slots <= u64::from(u32::MAX) + 1) {
             return Err(SemanticsIdentityExhausted);
         }
 
