@@ -36,9 +36,10 @@
 //! # The result
 //!
 //! The open page closes with [`CloseAction::close_with`], which pops the route
-//! with a typed value. [`OpenContainer::on_closed`] receives it as
-//! `Option<T>`; `None` means the page was dismissed without a value. The
-//! callback runs once the exit morph has left the tree and the source is back
+//! with a typed value. [`OpenContainer::on_closed`] receives the route's
+//! result: `Ok(Some(value))` for that value, `Ok(None)` when the page was
+//! dismissed without one, and [`RouteResultError::TypeMismatch`] when something
+//! else popped it with a value of another type. The callback runs once the exit morph has left the tree and the source is back
 //! in its seat, never under the closing transform, so it may change or remove
 //! the source freely. A page the navigator accepted reports its result even if
 //! the container unmounted meanwhile.
@@ -87,8 +88,8 @@ use flui_sdk::widgets::__private::{AnchoredBox, FlightSeat, SeatClaim, SeatHold}
 use flui_sdk::widgets::prelude::BoxFit;
 use flui_sdk::widgets::{
     ExcludeSemantics, FittedBox, IgnorePointer, LayoutBuilder, NavigatorHandle, Offstage, Opacity,
-    PageRoute, PageTransitionBuilder, PopupRoute, Positioned, RouteAnimation, Semantics,
-    SemanticsRole, SizedBox, Stack,
+    PageRoute, PageTransitionBuilder, PopupRoute, Positioned, RouteAnimation, RouteResultError,
+    Semantics, SemanticsRole, SizedBox, Stack,
 };
 
 use crate::ink_well::InkWell;
@@ -202,7 +203,7 @@ impl<T> fmt::Debug for CloseAction<T> {
     }
 }
 
-impl<T: Send + 'static> CloseAction<T> {
+impl<T: 'static> CloseAction<T> {
     /// The action for the page built at `ctx`.
     fn of(ctx: &dyn BuildContext) -> Self {
         Self {
@@ -212,7 +213,7 @@ impl<T: Send + 'static> CloseAction<T> {
     }
 
     /// Close the page without a value: [`OpenContainer::on_closed`] receives
-    /// `None`. Returns whether a route was popped.
+    /// `Ok(None)`. Returns whether a route was popped.
     pub fn close(&self) -> bool {
         self.navigator.as_ref().is_some_and(NavigatorHandle::pop)
     }
@@ -227,7 +228,7 @@ impl<T: Send + 'static> CloseAction<T> {
 
 type ClosedBuilder = Rc<dyn Fn(&dyn BuildContext, &OpenAction) -> BoxedView>;
 type OpenBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &CloseAction<T>) -> BoxedView>;
-type ClosedCallback<T> = Rc<dyn Fn(Option<T>)>;
+type ClosedCallback<T> = Rc<dyn Fn(Result<Option<T>, RouteResultError>)>;
 
 /// A surface that opens into a page and closes back into the surface.
 ///
@@ -292,7 +293,7 @@ impl<T> fmt::Debug for OpenContainer<T> {
     }
 }
 
-impl<T: Send + Clone + 'static> OpenContainer<T> {
+impl<T: 'static> OpenContainer<T> {
     /// A container showing `closed` until it is opened, then `open` as a page.
     ///
     /// `closed` is built inside the container's surface and gets an
@@ -407,10 +408,14 @@ impl<T: Send + Clone + 'static> OpenContainer<T> {
         self
     }
 
-    /// Called with the page's result once the route completes: the value a
-    /// [`CloseAction::close_with`] passed, or `None`.
+    /// Called with the page's result once the route completes: `Ok(Some(_))`
+    /// with the value a [`CloseAction::close_with`] passed, `Ok(None)` without
+    /// one, or [`RouteResultError::TypeMismatch`].
     #[must_use]
-    pub fn on_closed(mut self, callback: impl Fn(Option<T>) + 'static) -> Self {
+    pub fn on_closed(
+        mut self,
+        callback: impl Fn(Result<Option<T>, RouteResultError>) + 'static,
+    ) -> Self {
         self.on_closed = Some(Rc::new(callback));
         self
     }
@@ -569,7 +574,7 @@ struct Shared<T> {
     flight: RefCell<Option<Rc<Landing>>>,
 }
 
-impl<T: Send + Clone + 'static> Shared<T> {
+impl<T: 'static> Shared<T> {
     /// Push the page; the source freezes once the morph has measured its
     /// frame. Does nothing while a page is already in the air, or when the
     /// source has no committed layout to fly from.
@@ -675,13 +680,13 @@ impl<T> fmt::Debug for OpenContainerState<T> {
     }
 }
 
-impl<T: Send + Clone + 'static> View for OpenContainer<T> {
+impl<T: 'static> View for OpenContainer<T> {
     fn create_element(&self) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
 
-impl<T: Send + Clone + 'static> StatefulView for OpenContainer<T> {
+impl<T: 'static> StatefulView for OpenContainer<T> {
     type State = OpenContainerState<T>;
 
     fn create_state(&self) -> Self::State {
@@ -697,7 +702,7 @@ impl<T: Send + Clone + 'static> StatefulView for OpenContainer<T> {
     }
 }
 
-impl<T: Send + Clone + 'static> ViewState<OpenContainer<T>> for OpenContainerState<T> {
+impl<T: 'static> ViewState<OpenContainer<T>> for OpenContainerState<T> {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.shared
             .seat

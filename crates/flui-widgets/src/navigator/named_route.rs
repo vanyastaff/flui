@@ -12,17 +12,15 @@
 //! # What is erased, and what is not
 //!
 //! The route a factory returns stays **concrete**: `PageRoute<bool>` keeps
-//! `Output = bool`, `Route::current_result` clones a `bool`, and
+//! `Output = bool`, `Route::current_result` hands back a `bool`, and
 //! `NavigatorHandle::pop_with(true)` downcasts to `bool`. Nothing about the pop
 //! path changes. What is erased is the *result handle* — a `RouteResult<T>`
 //! travelling back out of a push whose route type the caller never named.
 //!
-//! Erasing the route's own `Output` instead was proposed, and does not compile:
-//! every shipped route is bounded `T: Send + Clone + 'static` because
-//! `Route::current_result` returns by value, and `Box<dyn Any + Send>` is not
-//! `Clone`. It would also have silently destroyed every named route's pop
-//! result, since `RouteRecord::did_complete` downcasts the payload to
-//! `R::Output`. Both defects and the replacement are recorded in
+//! Erasing the route's own `Output` instead was proposed: it would have
+//! silently destroyed every named route's pop result, since
+//! `RouteRecord::did_complete` downcasts the payload to `R::Output`. The defect
+//! and the replacement are recorded in
 //! [`ADR-0024`](../../../../../docs/adr/ADR-0024-named-routes-seam.md) §7.2.
 //!
 //! # Not implemented, and not claimed
@@ -383,7 +381,7 @@ impl GeneratedRoute {
     /// callers; for `push_named_typed` it remains the general guard.
     ///
     /// On refusal `self` is dropped here, which disposes the route.
-    pub(super) fn checked<T: Send + 'static>(
+    pub(super) fn checked<T: 'static>(
         self,
         request: &RouteSettings,
     ) -> Result<TypedPush<T>, NamedRouteError> {
@@ -417,7 +415,7 @@ pub(super) struct TypedPush<T> {
     output: PhantomData<fn() -> T>,
 }
 
-impl<T: Send + 'static> TypedPush<T> {
+impl<T: 'static> TypedPush<T> {
     /// Push the route through `mode` under `reservation` and re-type its
     /// result handle.
     pub(super) fn push(
@@ -586,7 +584,7 @@ pub struct KeyedSettings<T> {
 
 // Hand-written for the same reason as [`RouteKey`]'s: `#[derive(Debug)]` would
 // generate `impl<T: Debug> Debug`, so a `KeyedSettings<T>` whose route `Output`
-// is merely `Send + 'static` would not be `Debug` and could not sit in a
+// is merely `'static` would not be `Debug` and could not sit in a
 // caller's own derived `Debug` struct. `T` has no runtime representation here to
 // format.
 impl<T> fmt::Debug for KeyedSettings<T> {

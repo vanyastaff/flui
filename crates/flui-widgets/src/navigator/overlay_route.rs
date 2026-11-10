@@ -170,7 +170,7 @@ impl<T> SimpleRoute<T> {
     }
 }
 
-impl<T: Send + Clone + 'static> Route for SimpleRoute<T> {
+impl<T: 'static> Route for SimpleRoute<T> {
     type Output = T;
 
     fn settings(&self) -> &RouteSettings {
@@ -178,7 +178,7 @@ impl<T: Send + Clone + 'static> Route for SimpleRoute<T> {
     }
 
     fn current_result(&mut self) -> Option<T> {
-        self.current_result.clone()
+        self.current_result.take()
     }
 
     fn will_handle_pop_internally(&self) -> bool {
@@ -190,7 +190,7 @@ impl<T: Send + Clone + 'static> Route for SimpleRoute<T> {
     }
 }
 
-impl<T: Send + Clone + 'static> NavigatorRoute for SimpleRoute<T> {
+impl<T: 'static> NavigatorRoute for SimpleRoute<T> {
     fn content_builder(&self) -> RouteContentBuilder {
         Rc::clone(&self.builder)
     }

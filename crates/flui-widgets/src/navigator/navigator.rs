@@ -650,6 +650,17 @@ impl NavigatorShared {
         }
     }
 
+    /// Complete every still-pending route result with `Ok(None)`: the
+    /// navigator is unmounting, and no pop will ever deliver them. The
+    /// completions are prepared under the history lock and run, waking their
+    /// awaiting tasks, after it is released; each runs under `first`.
+    fn complete_terminal_results(&self, first: &mut flui_foundation::panic::FirstPanic) {
+        let completions = self.history.lock().terminal_result_completions();
+        for complete in completions {
+            first.contain(complete);
+        }
+    }
+
     /// Begin a user gesture (e.g. an edge swipe-back).
     ///
     /// Only the 0→1 transition resolves the current route and notifies
@@ -1231,7 +1242,7 @@ impl NavigatorHandle {
     /// [`push`](Self::push). On capacity unwind, both the rejected route and
     /// `result` are destroyed by the unwind, before any binding or history
     /// admission.
-    pub fn push_replacement_with<R: NavigatorRoute, T: Send + 'static>(
+    pub fn push_replacement_with<R: NavigatorRoute, T: 'static>(
         &self,
         route: R,
         result: T,
@@ -1429,7 +1440,7 @@ impl NavigatorHandle {
     /// heterogeneous stack and cannot know the top route's `Output`. Passing the
     /// wrong type logs an error and completes the future with `None` rather than
     /// panicking.
-    pub fn pop_with<T: Send + 'static>(&self, result: T) -> bool {
+    pub fn pop_with<T: 'static>(&self, result: T) -> bool {
         self.pop_erased(Some(AnyResult::new(result)))
     }
 
@@ -1482,7 +1493,7 @@ impl NavigatorHandle {
 
     /// Remove `id`, delivering `result`. Same type contract as
     /// [`pop_with`](NavigatorHandle::pop_with).
-    pub fn remove_route_with<T: Send + 'static>(&self, id: RouteId, result: T) -> bool {
+    pub fn remove_route_with<T: 'static>(&self, id: RouteId, result: T) -> bool {
         self.remove_route_erased(id, Some(AnyResult::new(result)))
     }
 
@@ -1595,7 +1606,7 @@ impl NavigatorHandle {
     }
 
     /// [`maybe_pop`](NavigatorHandle::maybe_pop), delivering `result` if it pops.
-    pub fn maybe_pop_with<T: Send + 'static>(&self, result: T) -> bool {
+    pub fn maybe_pop_with<T: 'static>(&self, result: T) -> bool {
         self.maybe_pop_erased(Some(AnyResult::new(result)))
     }
 
@@ -2074,7 +2085,7 @@ impl NavigatorHandle {
     /// generated route is disposed, while `Unresolved` never constructed one.
     /// Neither undoes navigation a factory performed before declining — see
     /// [`push_named`](Self::push_named).
-    pub fn push_named_typed<T: Send + 'static>(
+    pub fn push_named_typed<T: 'static>(
         &self,
         request: impl Into<RouteSettings>,
     ) -> Result<RouteResult<T>, NamedRouteError> {
@@ -2162,7 +2173,7 @@ impl NavigatorHandle {
     /// [`NamedRouteError::Unresolved`] if nothing answered the key's name;
     /// [`NamedRouteError::ResultType`] in the collision cases above. Neither
     /// mutates the stack.
-    pub fn push_keyed<T: Send + 'static>(
+    pub fn push_keyed<T: 'static>(
         &self,
         request: impl Into<KeyedSettings<T>>,
     ) -> Result<RouteResult<T>, NamedRouteError> {
@@ -2220,7 +2231,7 @@ impl NavigatorHandle {
     /// `result` is **reported and dropped outside any guard** rather than
     /// discarded silently — `ARCHITECTURE.md` §5's contract, which this doc used
     /// to contradict by promising a silent drop.
-    pub fn push_replacement_named_with<TO: Send + 'static>(
+    pub fn push_replacement_named_with<TO: 'static>(
         &self,
         request: impl Into<RouteSettings>,
         result: TO,
@@ -2335,7 +2346,7 @@ impl NavigatorHandle {
     ///
     /// As [`pop_and_push_named`](Self::pop_and_push_named): a refusal pops
     /// nothing and retains both the request and `result`.
-    pub fn pop_and_push_named_with<TO: Send + 'static>(
+    pub fn pop_and_push_named_with<TO: 'static>(
         &self,
         request: impl Into<RouteSettings>,
         result: TO,
@@ -2819,7 +2830,12 @@ impl ViewState<Navigator> for NavigatorState {
         self.shared
             .registries
             .set_transition_hooks(AdoptedTransitions::default());
-        self.shared.detach_observers();
+        // Observers and wakers are user code: a panic in one still lets every
+        // pending result complete and the rest of the teardown run, and the
+        // first panic is raised once it has.
+        let mut first = flui_foundation::panic::FirstPanic::new();
+        first.contain(|| self.shared.detach_observers());
+        self.shared.complete_terminal_results(&mut first);
         // The capabilities die with the tree they name, so a `HeroController` that
         // outlives its navigator schedules nothing and measures nothing, and a
         // push-completion continuation that outlives it finds no one to wake.
@@ -2833,5 +2849,6 @@ impl ViewState<Navigator> for NavigatorState {
         if let Some((registry, source)) = nested_hero_registration {
             registry.deregister_nested(&source);
         }
+        first.resume();
     }
 }

@@ -595,7 +595,7 @@ impl<T> Drop for ModalRoute<T> {
     }
 }
 
-impl<T: Send + Clone + 'static> ModalRoute<T> {
+impl<T: 'static> ModalRoute<T> {
     /// A modal showing `page`, entering and leaving over `duration`, with a
     /// jump-cut transition.
     ///
@@ -1027,7 +1027,7 @@ fn changed_internal_state(inner: &ModalInner) {
 // Route delegation
 // ============================================================================
 
-impl<T: Send + Clone + 'static> ModalRoute<T> {
+impl<T: 'static> ModalRoute<T> {
     /// This route's navigator capability, or `None` before it is pushed.
     fn binding(&self) -> Option<super::binding::RouteBinding> {
         self.inner
@@ -1037,7 +1037,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
     }
 }
 
-impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
+impl<T: 'static> Route for ModalRoute<T> {
     type Output = T;
 
     fn settings(&self) -> &RouteSettings {
@@ -1165,7 +1165,7 @@ impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
     }
 }
 
-impl<T: Send + Clone + 'static> NavigatorRoute for ModalRoute<T> {
+impl<T: 'static> NavigatorRoute for ModalRoute<T> {
     fn content_builder(&self) -> RouteContentBuilder {
         self.transition.content_builder()
     }

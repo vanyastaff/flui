@@ -62,7 +62,7 @@ where
 
 /// Configure `modal` from `builder`: its transition and both durations, all
 /// explicit, so no ambient hook replaces them.
-fn with_builder<T: Send + Clone + 'static>(
+fn with_builder<T: 'static>(
     modal: ModalRoute<T>,
     builder: Rc<dyn PageTransitionBuilder>,
 ) -> ModalRoute<T> {
@@ -80,7 +80,7 @@ fn with_builder<T: Send + Clone + 'static>(
 /// on the modal beneath them. Fifteen forwarding methods, written once.
 macro_rules! delegate_modal_route {
     ($ty:ident) => {
-        impl<T: Send + Clone + 'static> Route for $ty<T> {
+        impl<T: 'static> Route for $ty<T> {
             type Output = T;
 
             fn settings(&self) -> &RouteSettings {
@@ -148,7 +148,7 @@ macro_rules! delegate_modal_route {
             }
         }
 
-        impl<T: Send + Clone + 'static> NavigatorRoute for $ty<T> {
+        impl<T: 'static> NavigatorRoute for $ty<T> {
             fn content_builder(&self) -> RouteContentBuilder {
                 self.modal.content_builder()
             }
@@ -162,7 +162,7 @@ macro_rules! delegate_modal_route {
             }
         }
 
-        impl<T: Send + Clone + 'static> fmt::Debug for $ty<T> {
+        impl<T: 'static> fmt::Debug for $ty<T> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.debug_struct(stringify!($ty))
                     .field("name", &self.modal.settings().name())
@@ -211,7 +211,7 @@ pub struct PageRoute<T> {
     modal: ModalRoute<T>,
 }
 
-impl<T: Send + Clone + 'static> PageRoute<T> {
+impl<T: 'static> PageRoute<T> {
     /// A page route showing `page`, with a 300 ms jump-cut transition.
     #[must_use]
     pub fn new<F>(page: F) -> Self
@@ -342,7 +342,7 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
     }
 }
 
-impl<T: Send + Clone + 'static> PageRoute<T> {
+impl<T: 'static> PageRoute<T> {
     /// The modal handle, whose `set_offstage` is the seam `HeroController` drives
     /// to measure a route's final hero geometry. Test-facing
     /// until `HeroController` gives it a production caller; read through
@@ -396,7 +396,7 @@ pub struct PopupRoute<T> {
     modal: ModalRoute<T>,
 }
 
-impl<T: Send + Clone + 'static> PopupRoute<T> {
+impl<T: 'static> PopupRoute<T> {
     /// A popup showing `page`, with a 300 ms jump-cut transition, an invisible
     /// non-dismissible barrier, and `maintain_state = true`.
     #[must_use]
@@ -488,7 +488,7 @@ impl<T: Send + Clone + 'static> PopupRoute<T> {
     }
 }
 
-impl<T: Send + Clone + 'static> PopupRoute<T> {
+impl<T: 'static> PopupRoute<T> {
     /// See [`PageRoute::transition_handle`].
     pub(crate) fn transition_handle(&self) -> super::transition_route::TransitionHandle {
         self.modal.transition_handle()

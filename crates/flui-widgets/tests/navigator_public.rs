@@ -144,16 +144,16 @@ pub(crate) fn delivered_route_results_remain_completed() {
             let mut context = Context::from_waker(Waker::noop());
             assert_eq!(
                 Pin::new(&mut result).poll(&mut context),
-                Poll::Ready(expected)
+                Poll::Ready(Ok(expected))
             );
         } else {
-            assert_eq!(result.try_take(), Some(expected));
+            assert_eq!(result.try_take(), Some(Ok(expected)));
         }
         assert!(result.is_completed(), "delivery must preserve completion");
         assert_eq!(result.try_take(), None, "a value is delivered once");
         let next = navigator.push(page(&built, "next"));
         assert!(navigator.pop_with(43));
-        assert_eq!(next.try_take(), Some(Some(43)));
+        assert_eq!(next.try_take(), Some(Ok(Some(43))));
     }
 }
 
@@ -636,7 +636,7 @@ pub(crate) fn a_route_key_carries_its_result_type_from_registration_to_delivery(
     laid.tick();
     assert_eq!(
         count.try_take(),
-        Some(Some(42)),
+        Some(Ok(Some(42))),
         "the key's T is the type the pop delivers"
     );
 
@@ -649,7 +649,7 @@ pub(crate) fn a_route_key_carries_its_result_type_from_registration_to_delivery(
     laid.tick();
     assert_eq!(
         order.try_take(),
-        Some(Some(1776)),
+        Some(Ok(Some(1776))),
         "the arguments reached the factory and came back through the key's T"
     );
 }
@@ -799,8 +799,10 @@ pub(crate) fn a_mismatched_pop_result_is_reported_and_dropped_outside_the_histor
     );
     assert_eq!(
         route.try_take(),
-        Some(None),
-        "the route completed with None, as the contract says"
+        Some(Err(flui_widgets::RouteResultError::TypeMismatch {
+            expected: std::any::type_name::<i32>(),
+        })),
+        "the route completed with the typed mismatch, not a silent `None`"
     );
 }
 

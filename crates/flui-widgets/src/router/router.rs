@@ -308,7 +308,7 @@ impl<R: Routable> RouterState<R> {
     /// tail are destroyed normally by the unwind (ADR-0281).
     fn seed_initial_pages(&mut self) {
         for route in std::mem::take(&mut self.initial) {
-            let page = self.shared.page_route(&route);
+            let page = self.shared.page_route::<()>(&route);
             let id = self.shared.navigator.seed_page(page);
             self.shared
                 .stack
@@ -462,11 +462,11 @@ impl<R: Routable> Drop for RouterShared<R> {
 impl<R: Routable> RouterShared<R> {
     /// The page route for `route`: a [`PageRoute`] named with its path, whose
     /// page scopes a semantics route (and names it, when `route` has a label).
-    pub(super) fn page_route(&self, route: &R) -> PageRoute<()> {
+    pub(super) fn page_route<T: 'static>(&self, route: &R) -> PageRoute<T> {
         let builder = Terminal::new(Rc::clone(&self.page));
         let value = Terminal::new(route.clone());
         let label = route.semantics_label();
-        let mut page = PageRoute::<()>::new(move |cx, _animation, _secondary| {
+        let mut page = PageRoute::<T>::new(move |cx, _animation, _secondary| {
             let page = builder.borrow().clone();
             let mut semantics = Semantics::new()
                 .scopes_route(true)
