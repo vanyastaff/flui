@@ -49,8 +49,9 @@ pub struct PresentedNode {
     pub name: &'static str,
     /// The node's protocol.
     pub kind: PresentedKind,
-    /// The node's laid-out box as drawn, under the transform its paint effects declare around
-    /// its content, mapped into the window: the bounding box of its four corners.
+    /// The node's laid-out box as drawn, under the transform its own drawing is placed under
+    /// (`RenderObject::drawn_transform`), mapped into the window: the bounding box of its four
+    /// corners.
     pub rect: Rect,
     /// The part of [`Self::rect`] inside every ancestor's clip and the window, `None` when no
     /// part of it is.
@@ -130,10 +131,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return;
         };
         let effects = node.paint_effects();
-        // The node's own content is drawn under the transform it declares around its content;
-        // its children reach that transform through `apply_paint_transform` below.
+        // The node's own drawing is placed under its drawn transform (its effect layer, or an
+        // offset its paint applies itself); its children reach theirs through
+        // `apply_paint_transform` below.
         let mut content = inherited.transform;
-        if let Some(own) = effects.transform {
+        if let Some(own) = drawn_transform(node, size) {
             content *= own;
         }
         let Ok(rect) = map_rect(&content, Rect::from_origin_size(Point::ZERO, size)) else {
@@ -226,6 +228,13 @@ fn short_name(name: &'static str) -> &'static str {
     let base = name.split('<').next().unwrap_or(name);
     let start = base.rfind("::").map_or(0, |at| at + 2);
     &name[start..]
+}
+
+fn drawn_transform(node: &RenderNode, size: flui_foundation::geometry::Size) -> Option<Matrix4> {
+    match node {
+        RenderNode::Box(entry) => entry.render_object().drawn_transform(size),
+        RenderNode::Sliver(entry) => entry.render_object().drawn_transform(size),
+    }
 }
 
 fn approximate_paint_clip(

@@ -112,6 +112,25 @@ pub(crate) fn a_padding_change_jumps_unless_it_animates() {
         !hidden_growth.contains(&Rule::Jump),
         "growth past the clip is not a jump: {hidden_growth:?}"
     );
+
+    // A childless container paints a pure translation as an offset, not a layer.
+    let vsync = Vsync::new();
+    let translated = rules(&record(
+        &vsync,
+        |dx| {
+            Container::new()
+                .width(20.0)
+                .height(20.0)
+                .color(Color::rgb(40, 40, 200))
+                .transform(Matrix4::translation(dx, 0.0, 0.0))
+        },
+        0.0,
+        60.0,
+    ));
+    assert!(
+        translated.contains(&Rule::Jump),
+        "an instant translation jumps: {translated:?}"
+    );
 }
 
 pub(crate) fn an_opacity_change_snaps_unless_it_fades() {

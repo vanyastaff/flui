@@ -529,6 +529,22 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
         PaintEffects::NONE
     }
 
+    /// The transform this node's own drawing is placed under, in its local space: where the
+    /// window shows the node's box, before any ancestor's transform.
+    ///
+    /// Default: [`Self::paint_effects`]'s transform, the layer the pipeline pushes around the
+    /// node. Override when `paint` moves its own drawing without a layer, as a translation
+    /// painted as a plain offset does. Pure in `(self, size)` like `paint_effects`. Read by
+    /// `PipelineOwner::presented_nodes` (feature `testing`).
+    ///
+    /// Override on [`RenderBox`](crate::traits::RenderBox); slivers take the default.
+    fn drawn_transform(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
+        self.paint_effects(size).transform
+    }
+
     /// Composes onto `transform` the mapping from child `child`'s local
     /// coordinate space into **this** object's local coordinate space.
     ///

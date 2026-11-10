@@ -7,6 +7,9 @@
 - **`flui-rendering`** (feature `testing`): `PipelineOwner::presented_nodes`, each node's box,
   visible part and opacity as the window shows them, a child's opacity including the paint
   scope its parent drew it in.
+- **`flui-rendering`**: `RenderObject::drawn_transform` (and its `RenderBox` twin), the
+  transform a node's own drawing is placed under; `RenderContainer` reports the translation it
+  paints as an offset.
 
 ### Fixed
 
