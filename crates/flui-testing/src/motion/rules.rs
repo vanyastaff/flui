@@ -258,9 +258,14 @@ fn flicker(
             Some((index, time, opacity))
         })
         .collect();
-    let locator = line
-        .last()
-        .map_or("", |(_, sample)| sample.locator.as_str());
+    // The node's locator as of a frame: its sample there, or the last one before it for a frame
+    // it was left out of. A keyed child that moves slot later keeps the locator it had then.
+    let locator_at = |frame: usize| {
+        line.iter()
+            .rev()
+            .find(|(drawn, _)| *drawn <= frame)
+            .map_or("", |(_, sample)| sample.locator.as_str())
+    };
     let mut at = 1;
     while at < series.len() {
         let (frame, time, opacity) = series[at];
@@ -288,7 +293,7 @@ fn flicker(
                 Rule::Flicker,
                 id,
                 frame,
-                locator,
+                locator_at(frame),
                 format!("opacity dipped {peak_opacity:.2} to {opacity:.2} and came back"),
             ));
             at += offset + 2;
@@ -338,7 +343,7 @@ fn overshoot(
     let (Some(&(_, first)), Some(&(_, rest))) = (travel.first(), travel.last()) else {
         return;
     };
-    let mut worst: Option<(usize, f64)> = None;
+    let mut worst: Option<(usize, &Sample, f64)> = None;
     for edge in 0..4 {
         let from = first.edges()[edge];
         let to = rest.edges()[edge];
@@ -349,18 +354,18 @@ fn overshoot(
         // Only a pass the window shows counts: a bounce wholly clipped or faded out is unseen.
         for &(frame, sample) in travel.iter().filter(|(_, sample)| sample.is_shown()) {
             let past = (sample.edges()[edge] - to) * distance.signum();
-            if past > config.overshoot && worst.is_none_or(|(_, w)| past > w) {
-                worst = Some((frame, past));
+            if past > config.overshoot && worst.is_none_or(|(_, _, w)| past > w) {
+                worst = Some((frame, sample, past));
             }
         }
     }
-    if let Some((frame, past)) = worst {
+    if let Some((frame, sample, past)) = worst {
         out.push(finding(
             recording,
             Rule::Overshoot,
             id,
             frame,
-            &rest.locator,
+            &sample.locator,
             format!("an edge passed its resting place by {past:.1} pt"),
         ));
     }

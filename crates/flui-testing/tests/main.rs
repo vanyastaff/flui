@@ -479,6 +479,10 @@ fn motion_gate_rules() {
                 motion_gate::a_drag_step_moves_on_its_direct_frame as fn(),
             ),
             (
+                "motion_gate::a_finding_names_the_node_where_it_was",
+                motion_gate::a_finding_names_the_node_where_it_was as fn(),
+            ),
+            (
                 "motion_gate::presented_nodes_compose_opacity_and_clip",
                 motion_gate::presented_nodes_compose_opacity_and_clip as fn(),
             ),

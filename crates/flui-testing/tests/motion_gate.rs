@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use flui_animation::{SpringDescription, Vsync};
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Rect, Size};
+use flui_foundation::{ValueKey, ViewKey};
 use flui_interaction::events::PointerEvent;
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
@@ -17,13 +18,14 @@ use flui_testing::motion::{
     check_all, gate,
 };
 use flui_testing::widgets::{LaidOut, lay_out_animated, loose};
+use flui_view::element::ElementKind;
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{IntoView, View, ViewExt};
 use flui_widgets::navigator::{Navigator, NavigatorHandle, PopupRoute, SimpleRoute};
 use flui_widgets::{
-    Align, AnimatedLerp, AnimatedOpacity, AnimatedPadding, ClipRect, ColoredBox, Column, Flow,
-    HitTestBehavior, Listener, MotionBuilder, Opacity, Padding, SizedBox, UnconstrainedBox,
+    Align, AnimatedLerp, AnimatedOpacity, AnimatedPadding, ClipRect, ColoredBox, Column, Container,
+    Flow, HitTestBehavior, Listener, MotionBuilder, Opacity, Padding, SizedBox, UnconstrainedBox,
 };
 
 const FRAME: Duration = Duration::from_millis(16);
@@ -599,6 +601,26 @@ pub(crate) fn presented_nodes_compose_opacity_and_clip() {
         (faded.opacity - 0.2).abs() < 1e-9,
         "the child is drawn at the delegate's opacity: {faded:#?}"
     );
+
+    // A childless container draws its color under the transform it declares around its content.
+    let tree = |scale: f64| {
+        Container::new()
+            .width(20.0)
+            .height(20.0)
+            .color(Color::rgb(40, 40, 200))
+            .transform(Matrix4::scaling(scale, scale, 1.0))
+    };
+    let mut laid = lay_out_animated(tree(2.0), loose(200.0), Vsync::new());
+    let recording = MotionRun::new(&mut laid).finish();
+    let drawn = recording.frames()[0]
+        .samples
+        .iter()
+        .find(|sample| sample.locator.ends_with("RenderContainer"))
+        .expect("the container");
+    assert!(
+        (drawn.rect.width() - 40.0).abs() < 1e-9,
+        "a 2x scale draws the 20 pt box 40 pt wide: {drawn:#?}"
+    );
 }
 
 pub(crate) fn a_page_under_a_popup_stays_presented() {
@@ -734,4 +756,66 @@ impl FlowDelegate for FadingFlow {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+}
+
+/// A square at `opacity` that keeps its element across reorders.
+#[derive(Clone)]
+struct Tagged {
+    key: ValueKey<i32>,
+    opacity: f64,
+}
+
+impl View for Tagged {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
+    }
+
+    fn key(&self) -> Option<&dyn ViewKey> {
+        Some(&self.key)
+    }
+}
+
+impl StatelessView for Tagged {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Opacity::new(self.opacity).child(square())
+    }
+}
+
+pub(crate) fn a_finding_names_the_node_where_it_was() {
+    // The first square flickers in slot 0, then the two swap: the finding keeps slot 0.
+    let tree = |opacity: f64, swapped: bool| {
+        let first = Tagged {
+            key: ValueKey::new(1),
+            opacity,
+        }
+        .boxed();
+        let second = Tagged {
+            key: ValueKey::new(2),
+            opacity: 1.0,
+        }
+        .boxed();
+        Column::new(if swapped {
+            vec![second, first]
+        } else {
+            vec![first, second]
+        })
+    };
+    let mut laid = lay_out_animated(tree(1.0, false), loose(200.0), Vsync::new());
+    let mut run = MotionRun::new(&mut laid);
+    run.frame(FRAME);
+    run.act(|laid| laid.pump_widget(tree(0.6, false)));
+    run.frame(FRAME);
+    run.act(|laid| laid.pump_widget(tree(1.0, false)));
+    run.play(Duration::from_millis(100), FRAME);
+    run.direct(|laid| laid.pump_widget(tree(1.0, true)));
+    run.play(Duration::from_secs(1), FRAME);
+    let found = check(&run.finish(), &MotionConfig::default());
+    let flicker = found
+        .iter()
+        .find(|finding| finding.rule == Rule::Flicker)
+        .expect("the dip flickers");
+    assert!(
+        flicker.locator.ends_with("RenderOpacity"),
+        "the flicker names slot 0, where it happened: {flicker:#?}"
+    );
 }

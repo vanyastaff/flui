@@ -59,7 +59,7 @@ pub struct PresentedNode {
     pub slot: usize,               // the child slot under the parent
     pub name: &'static str,        // the render object's type name
     pub kind: PresentedKind,
-    pub rect: Rect,                // the laid-out box in window-logical points
+    pub rect: Rect,                // the laid-out box as drawn, in window-logical points
     pub visible: Option<Rect>,     // what every ancestor clip and the window leave of it
     pub opacity: f64,              // its own, every ancestor's and their paint scopes', multiplied
 }
@@ -68,7 +68,8 @@ pub struct PresentedNode {
 The walk keeps the paint walk's gates (a hidden follower, `skip_paint`, a node that needs layout,
 an invisible sliver, a child its parent left out of the last paint: the children each parent
 painted are what it visits, not the semantics predicate, which drops a page a popup covers but
-still shows), composes each step with `RenderObject::apply_paint_transform` and the
+still shows), maps a node's own box through the transform its `PaintEffects` declare around its
+content, composes each step to a child with `RenderObject::apply_paint_transform` and the
 follower transform the last composite resolved, intersects each parent's
 `describe_approximate_paint_clip`, and multiplies `PaintEffects::opacity` with the group opacity
 of the scopes the last paint drew each child in (a flow delegate's per-child opacity). Each of

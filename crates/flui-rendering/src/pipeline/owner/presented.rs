@@ -49,7 +49,8 @@ pub struct PresentedNode {
     pub name: &'static str,
     /// The node's protocol.
     pub kind: PresentedKind,
-    /// The node's laid-out box mapped into the window: the bounding box of its four corners.
+    /// The node's laid-out box as drawn, under the transform its paint effects declare around
+    /// its content, mapped into the window: the bounding box of its four corners.
     pub rect: Rect,
     /// The part of [`Self::rect`] inside every ancestor's clip and the window, `None` when no
     /// part of it is.
@@ -128,14 +129,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let Some(size) = node.laid_out_size() else {
             return;
         };
-        let Ok(rect) = map_rect(
-            &inherited.transform,
-            Rect::from_origin_size(Point::ZERO, size),
-        ) else {
+        let effects = node.paint_effects();
+        // The node's own content is drawn under the transform it declares around its content;
+        // its children reach that transform through `apply_paint_transform` below.
+        let mut content = inherited.transform;
+        if let Some(own) = effects.transform {
+            content *= own;
+        }
+        let Ok(rect) = map_rect(&content, Rect::from_origin_size(Point::ZERO, size)) else {
             return;
         };
-        let own_alpha = node
-            .paint_effects()
+        let own_alpha = effects
             .opacity
             .map_or(1.0, crate::traits::PaintOpacity::alpha);
         let opacity = inherited.opacity * own_alpha;
