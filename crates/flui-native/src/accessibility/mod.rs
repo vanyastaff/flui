@@ -91,7 +91,7 @@ mod tests {
             assert_eq!(
                 support,
                 expected,
-                "{adapter} changed what it reports of the assistive cursor: update {} and docs/platform-parity.md",
+                "{adapter} changed what it reports of the assistive cursor: update {} and crates/flui-native/platform-parity.toml",
                 GapId::AccessibilityBridgeFidelity
             );
         }
@@ -139,7 +139,7 @@ mod tests {
             assert_eq!(
                 support,
                 expected,
-                "{adapter} changed how it tells a route change: update {} and docs/platform-parity.md",
+                "{adapter} changed how it tells a route change: update {} and crates/flui-native/platform-parity.toml",
                 GapId::AccessibilityBridgeFidelity
             );
         }

@@ -18,6 +18,7 @@ use crate::{
     tree::ElementTree,
 };
 
+#[derive(Debug)]
 pub(crate) struct DependentRecord {
     /// The provider read from, or an ancestry-dependent lookup that missed.
     pub(crate) provider: Option<ElementId>,

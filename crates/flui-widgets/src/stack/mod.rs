@@ -4,5 +4,5 @@
 mod positioned;
 mod stack;
 
-pub use positioned::Positioned;
+pub use positioned::{DirectionalPositioned, Positioned};
 pub use stack::{IndexedStack, Stack};

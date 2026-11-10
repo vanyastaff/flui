@@ -47,9 +47,9 @@ impl Default for FlexStyle {
 }
 
 impl FlexStyle {
-    /// `text_direction` is the already-resolved ambient direction — see
-    /// [`FlexRenderView`] for why it must be resolved before this call
-    /// rather than looked up here.
+    /// `text_direction` is the already-resolved ambient direction, resolved by
+    /// [`resolve_text_direction`] at the render-object seam rather than looked
+    /// up here.
     fn build(self, direction: FlexDirection, text_direction: TextDirection) -> RenderFlex {
         let base = match direction {
             FlexDirection::Horizontal => RenderFlex::row(),
@@ -134,13 +134,9 @@ macro_rules! flex_style_builders {
 /// vertical flex (`Column`) consults it for its *cross* axis instead — its
 /// main axis is governed by [`Self::vertical_direction`].
 /// Defaults to [`TextDirection::Ltr`] with no ancestor, matching every other
-/// FLUI widget that consults `Directionality`. That ambient read only exists
-/// inside a `BuildContext`, so `Flex` is a composing widget: `build` resolves
-/// the direction once and hands the *already-resolved* [`TextDirection`] to a
-/// private render-object widget — `flui_view::RenderObjectContext` (the only
-/// context `RenderView::create_render_object`/`update_render_object` ever
-/// receive) carries no ambient-lookup capability, so a bare `RenderView` can
-/// never read `Directionality` itself.
+/// FLUI widget that consults `Directionality`. The read goes through
+/// [`RenderObjectContext::depend_on`](flui_view::RenderObjectContext::depend_on),
+/// so the render object re-pushes its configuration when the direction changes.
 #[derive(Clone)]
 pub struct Flex<C = Vec<BoxedView>> {
     direction: FlexDirection,
@@ -174,38 +170,43 @@ impl<C: ViewSeq> fmt::Debug for Flex<C> {
     }
 }
 
-impl<C> flui_view::View for Flex<C>
+impl<C> flui_view::RenderView for Flex<C>
 where
     C: ViewSeq + Clone + 'static,
 {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateless(self)
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderFlex;
+
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        self.style.build(
+            self.direction,
+            resolve_text_direction(self.direction, self.style.cross_axis_alignment, ctx),
+        )
     }
 
-    fn creation_site(&self) -> flui_view::CreationSite {
-        self.site
+    fn update_render_object(
+        &self,
+        ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        update_flex(
+            render_object,
+            self.direction,
+            self.style,
+            resolve_text_direction(self.direction, self.style.cross_axis_alignment, ctx),
+        )
+    }
+
+    fn has_children(&self) -> bool {
+        !self.children.is_empty()
+    }
+
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
+        self.children.for_each(|_index, child| visitor(child));
     }
 }
 
-impl<C> flui_view::StatelessView for Flex<C>
-where
-    C: ViewSeq + Clone + 'static,
-{
-    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
-        let text_direction =
-            if needs_text_direction(self.direction, self.style.cross_axis_alignment) {
-                Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr)
-            } else {
-                TextDirection::Ltr
-            };
-        FlexRenderView {
-            direction: self.direction,
-            style: self.style,
-            text_direction,
-            children: self.children.clone(),
-        }
-    }
-}
+generic_render_view_element!(Flex, site = site);
 
 /// Lays out children horizontally.
 #[derive(Clone)]
@@ -238,33 +239,51 @@ impl<C: ViewSeq> fmt::Debug for Row<C> {
     }
 }
 
-impl<C> flui_view::View for Row<C>
+impl<C> flui_view::RenderView for Row<C>
 where
     C: ViewSeq + Clone + 'static,
 {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateless(self)
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderFlex;
+
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        self.style.build(
+            FlexDirection::Horizontal,
+            resolve_text_direction(
+                FlexDirection::Horizontal,
+                self.style.cross_axis_alignment,
+                ctx,
+            ),
+        )
     }
 
-    fn creation_site(&self) -> flui_view::CreationSite {
-        self.site
+    fn update_render_object(
+        &self,
+        ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        update_flex(
+            render_object,
+            FlexDirection::Horizontal,
+            self.style,
+            resolve_text_direction(
+                FlexDirection::Horizontal,
+                self.style.cross_axis_alignment,
+                ctx,
+            ),
+        )
+    }
+
+    fn has_children(&self) -> bool {
+        !self.children.is_empty()
+    }
+
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
+        self.children.for_each(|_index, child| visitor(child));
     }
 }
 
-impl<C> flui_view::StatelessView for Row<C>
-where
-    C: ViewSeq + Clone + 'static,
-{
-    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
-        let text_direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
-        FlexRenderView {
-            direction: FlexDirection::Horizontal,
-            style: self.style,
-            text_direction,
-            children: self.children.clone(),
-        }
-    }
-}
+generic_render_view_element!(Row, site = site);
 
 /// Lays out children vertically.
 #[derive(Clone)]
@@ -297,101 +316,39 @@ impl<C: ViewSeq> fmt::Debug for Column<C> {
     }
 }
 
-impl<C> flui_view::View for Column<C>
-where
-    C: ViewSeq + Clone + 'static,
-{
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateless(self)
-    }
-
-    fn creation_site(&self) -> flui_view::CreationSite {
-        self.site
-    }
-}
-
-impl<C> flui_view::StatelessView for Column<C>
-where
-    C: ViewSeq + Clone + 'static,
-{
-    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
-        let text_direction =
-            if needs_text_direction(FlexDirection::Vertical, self.style.cross_axis_alignment) {
-                Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr)
-            } else {
-                TextDirection::Ltr
-            };
-        FlexRenderView {
-            direction: FlexDirection::Vertical,
-            style: self.style,
-            text_direction,
-            children: self.children.clone(),
-        }
-    }
-}
-
-/// Whether this flex needs the ambient [`Directionality`] at all.
-///
-/// A HORIZONTAL flex always needs it, "because it affects the layout order"; a VERTICAL one
-/// needs it only when its cross-axis alignment is direction-sensitive
-/// (`Start`/`End`), because those name a reading edge rather than a physical
-/// one.
-///
-/// This gates the LOOKUP, not just its result. `Directionality::maybe_of`
-/// registers an inherited dependency, so calling it unconditionally makes every
-/// `Column` rebuild whenever the ambient direction changes -- even a centred one
-/// whose layout cannot move. Skipping the call avoids that.
-fn needs_text_direction(direction: FlexDirection, cross: CrossAxisAlignment) -> bool {
-    match direction {
-        FlexDirection::Horizontal => true,
-        FlexDirection::Vertical => {
-            matches!(cross, CrossAxisAlignment::Start | CrossAxisAlignment::End)
-        }
-    }
-}
-
-/// The actual `RenderFlex`-backed render-object widget shared by [`Flex`],
-/// [`Row`], and [`Column`]. Its [`TextDirection`] is already resolved by the
-/// composing widget's `StatelessView::build` — kept private so
-/// `Directionality` is only ever read at the `BuildContext` seam that can see
-/// it, never assumed to be reachable from a bare `RenderView`.
-#[derive(Clone)]
-struct FlexRenderView<C> {
-    direction: FlexDirection,
-    style: FlexStyle,
-    text_direction: TextDirection,
-    children: C,
-}
-
-impl<C> flui_view::RenderView for FlexRenderView<C>
+impl<C> flui_view::RenderView for Column<C>
 where
     C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
     type RenderObject = RenderFlex;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        self.style.build(self.direction, self.text_direction)
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        self.style.build(
+            FlexDirection::Vertical,
+            resolve_text_direction(
+                FlexDirection::Vertical,
+                self.style.cross_axis_alignment,
+                ctx,
+            ),
+        )
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        render_object.update_directions(
-            self.direction,
-            self.text_direction,
-            self.style.text_baseline,
-        ) | render_object.update_layout_configuration(
-            self.style.main_axis_alignment,
-            self.style.main_axis_size,
-            self.style.cross_axis_alignment,
-            self.style.spacing,
-        ) | render_object.set_vertical_direction(self.style.vertical_direction)
+        update_flex(
+            render_object,
+            FlexDirection::Vertical,
+            self.style,
+            resolve_text_direction(
+                FlexDirection::Vertical,
+                self.style.cross_axis_alignment,
+                ctx,
+            ),
+        )
     }
 
     fn has_children(&self) -> bool {
@@ -403,4 +360,56 @@ where
     }
 }
 
-generic_render_view_element!(FlexRenderView);
+generic_render_view_element!(Column, site = site);
+
+/// Whether this flex needs the ambient [`Directionality`] at all.
+///
+/// A HORIZONTAL flex always needs it, "because it affects the layout order"; a VERTICAL one
+/// needs it only when its cross-axis alignment is direction-sensitive
+/// (`Start`/`End`), because those name a reading edge rather than a physical
+/// one.
+///
+/// This gates the LOOKUP, not just its result. `depend_on` registers an
+/// inherited dependency, so calling it unconditionally makes every `Column`
+/// rebuild whenever the ambient direction changes -- even a centred one whose
+/// layout cannot move. Skipping the call avoids that.
+fn needs_text_direction(direction: FlexDirection, cross: CrossAxisAlignment) -> bool {
+    match direction {
+        FlexDirection::Horizontal => true,
+        FlexDirection::Vertical => {
+            matches!(cross, CrossAxisAlignment::Start | CrossAxisAlignment::End)
+        }
+    }
+}
+
+/// Resolve the flex's [`TextDirection`] from the ambient [`Directionality`],
+/// gated by [`needs_text_direction`] so a centred column registers no dependency.
+fn resolve_text_direction(
+    direction: FlexDirection,
+    cross: CrossAxisAlignment,
+    ctx: &flui_view::RenderObjectContext<'_>,
+) -> TextDirection {
+    if needs_text_direction(direction, cross) {
+        Directionality::of_render_object(ctx)
+    } else {
+        TextDirection::Ltr
+    }
+}
+
+/// Push a flex's resolved configuration onto `render_object`, shared by
+/// [`Flex`], [`Row`] and [`Column`].
+fn update_flex(
+    render_object: &mut RenderFlex,
+    direction: FlexDirection,
+    style: FlexStyle,
+    text_direction: TextDirection,
+) -> flui_rendering::RenderUpdateImpact {
+    render_object.update_directions(direction, text_direction, style.text_baseline)
+        | render_object.update_layout_configuration(
+            style.main_axis_alignment,
+            style.main_axis_size,
+            style.cross_axis_alignment,
+            style.spacing,
+        )
+        | render_object.set_vertical_direction(style.vertical_direction)
+}

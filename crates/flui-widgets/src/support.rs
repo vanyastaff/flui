@@ -55,6 +55,20 @@ macro_rules! __generic_render_view_element {
             }
         }
     };
+    ($ty:ident, site = $field:ident) => {
+        impl<C> ::flui_view::View for $ty<C>
+        where
+            C: ::flui_view::seq::ViewSeq + ::core::clone::Clone + 'static,
+        {
+            fn create_element(&self) -> ::flui_view::element::ElementKind {
+                ::flui_view::element::ElementKind::render_variable(self)
+            }
+
+            fn creation_site(&self) -> ::flui_view::CreationSite {
+                self.$field
+            }
+        }
+    };
 }
 
 pub(crate) use crate::__generic_render_view_element as generic_render_view_element;

@@ -34,6 +34,11 @@ use crate::storage::UserDataDirs;
 pub use wayland::WaylandPlatform;
 #[cfg(x11_host)]
 pub use x11::X11Platform;
+// The host tables, for the parity table's check against their `Absent` positions.
+#[cfg(all(test, wayland_host))]
+pub(crate) use wayland::Wayland;
+#[cfg(all(test, x11_host))]
+pub(crate) use x11::X11;
 
 /// The channel both hosts' notices take to the application.
 fn system_notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {

@@ -5,6 +5,7 @@ use std::hash::{Hash, Hasher};
 // Re-export RenderId for convenience
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, canonical_bits_f64};
+use flui_painting::typography::TextDirection;
 
 use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 
@@ -180,11 +181,70 @@ impl Eq for FlexParentData {}
 // STACK PARENT DATA
 // ============================================================================
 
+/// A positioned stack child's horizontal insets: from the parent's physical
+/// left and right edges, or from its reading edges, which the stack resolves
+/// against its text direction.
+///
+/// A child names one pair, so physical and directional insets cannot be mixed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HorizontalInsets {
+    /// Distances from the parent's left and right edges.
+    Physical {
+        /// Distance from the parent's left edge.
+        left: Option<f64>,
+        /// Distance from the parent's right edge.
+        right: Option<f64>,
+    },
+    /// Distances from the parent's reading-start and reading-end edges: left
+    /// and right in left-to-right text, right and left in right-to-left text.
+    Directional {
+        /// Distance from the parent's reading-start edge.
+        start: Option<f64>,
+        /// Distance from the parent's reading-end edge.
+        end: Option<f64>,
+    },
+}
+
+impl HorizontalInsets {
+    /// No horizontal inset.
+    pub const NONE: Self = Self::Physical {
+        left: None,
+        right: None,
+    };
+
+    /// Whether either inset of the pair is set.
+    pub const fn is_set(&self) -> bool {
+        match *self {
+            Self::Physical { left, right } => left.is_some() || right.is_some(),
+            Self::Directional { start, end } => start.is_some() || end.is_some(),
+        }
+    }
+
+    /// The physical `(left, right)` insets under `text_direction`.
+    #[must_use]
+    pub const fn resolve(self, text_direction: TextDirection) -> (Option<f64>, Option<f64>) {
+        match self {
+            Self::Physical { left, right } => (left, right),
+            Self::Directional { start, end } => match text_direction {
+                TextDirection::Ltr => (start, end),
+                TextDirection::Rtl => (end, start),
+            },
+        }
+    }
+}
+
+impl Default for HorizontalInsets {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
 /// Parent data for stack layouts with absolute positioning.
 ///
 /// Children can be positioned using combinations of:
 /// - top/bottom for vertical positioning
-/// - left/right for horizontal positioning
+/// - a [`HorizontalInsets`] pair, physical or directional, for horizontal
+///   positioning
 /// - width/height for explicit sizing
 #[derive(Debug, Clone, PartialEq)]
 pub struct StackParentData {
@@ -197,14 +257,11 @@ pub struct StackParentData {
     /// Distance from parent's top edge.
     pub top: Option<f64>,
 
-    /// Distance from parent's right edge.
-    pub right: Option<f64>,
-
     /// Distance from parent's bottom edge.
     pub bottom: Option<f64>,
 
-    /// Distance from parent's left edge.
-    pub left: Option<f64>,
+    /// Distances from the parent's horizontal edges.
+    pub horizontal: HorizontalInsets,
 
     /// Explicit width (overrides intrinsic size).
     pub width: Option<f64>,
@@ -220,9 +277,8 @@ impl StackParentData {
             offset: Offset::ZERO,
             container: ContainerParentDataMixin::new(),
             top: None,
-            right: None,
             bottom: None,
-            left: None,
+            horizontal: HorizontalInsets::NONE,
             width: None,
             height: None,
         }
@@ -234,9 +290,17 @@ impl StackParentData {
         self
     }
 
-    /// Builder: set right position.
+    /// Builder: set the physical right position, keeping a physical left one.
+    /// Directional insets set before are replaced by the physical pair.
     pub const fn with_right(mut self, right: f64) -> Self {
-        self.right = Some(right);
+        let left = match self.horizontal {
+            HorizontalInsets::Physical { left, .. } => left,
+            HorizontalInsets::Directional { .. } => None,
+        };
+        self.horizontal = HorizontalInsets::Physical {
+            left,
+            right: Some(right),
+        };
         self
     }
 
@@ -246,9 +310,23 @@ impl StackParentData {
         self
     }
 
-    /// Builder: set left position.
+    /// Builder: set the physical left position, keeping a physical right one.
+    /// Directional insets set before are replaced by the physical pair.
     pub const fn with_left(mut self, left: f64) -> Self {
-        self.left = Some(left);
+        let right = match self.horizontal {
+            HorizontalInsets::Physical { right, .. } => right,
+            HorizontalInsets::Directional { .. } => None,
+        };
+        self.horizontal = HorizontalInsets::Physical {
+            left: Some(left),
+            right,
+        };
+        self
+    }
+
+    /// Builder: set both horizontal insets, physical or directional.
+    pub const fn with_horizontal(mut self, horizontal: HorizontalInsets) -> Self {
+        self.horizontal = horizontal;
         self
     }
 
@@ -264,17 +342,16 @@ impl StackParentData {
         self
     }
 
-    /// Check if child is positioned: any of
-    /// top/right/bottom/left/**width/height** set. An explicit `width` or
+    /// Check if child is positioned: top, bottom, a horizontal inset,
+    /// **width or height** set. An explicit `width` or
     /// `height` alone makes the child positioned — it is excluded from stack
     /// sizing and sized/aligned by `PositionedSpec::child_constraints` /
     /// `child_offset`, which already handle the no-anchor width/height-only
     /// case.
     pub const fn is_positioned(&self) -> bool {
         self.top.is_some()
-            || self.right.is_some()
             || self.bottom.is_some()
-            || self.left.is_some()
+            || self.horizontal.is_set()
             || self.width.is_some()
             || self.height.is_some()
     }
@@ -304,9 +381,14 @@ impl Hash for StackParentData {
         };
 
         hash_opt_f32(self.top, state);
-        hash_opt_f32(self.right, state);
         hash_opt_f32(self.bottom, state);
-        hash_opt_f32(self.left, state);
+        let (directional, first, second) = match self.horizontal {
+            HorizontalInsets::Physical { left, right } => (false, left, right),
+            HorizontalInsets::Directional { start, end } => (true, start, end),
+        };
+        directional.hash(state);
+        hash_opt_f32(first, state);
+        hash_opt_f32(second, state);
         hash_opt_f32(self.width, state);
         hash_opt_f32(self.height, state);
     }

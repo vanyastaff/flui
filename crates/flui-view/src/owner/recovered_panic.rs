@@ -429,6 +429,24 @@ impl StagedRecoveredPanic {
             self.0.locate_in(tree);
         }
     }
+
+    /// Record that the rebuild drain replaced the failed element with `substitute` at
+    /// `(parent, slot)`. An `Update` panic (a render view's `update_render_object`, run as its
+    /// element rebuilds) is `Substituted`, as the update-window seams report it; any other hook
+    /// keeps its behavior-level attribution.
+    pub(crate) fn substituted_by(&mut self, substitute: ElementId, parent: ElementId, slot: usize) {
+        if self.0.hook != LifecycleHook::Update {
+            return;
+        }
+        if let RecoveredAt::Element { element, .. } = self.0.at {
+            self.0.at = RecoveredAt::Substituted {
+                element: Some(element),
+                substitute,
+                parent,
+                slot,
+            };
+        }
+    }
 }
 
 /// Owner-local state for the one literal lifecycle window currently running.

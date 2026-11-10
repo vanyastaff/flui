@@ -56,6 +56,21 @@ impl Directionality {
     pub fn maybe_of(ctx: &dyn BuildContext) -> Option<TextDirection> {
         ctx.depend_on::<Self, _>(|d| d.direction)
     }
+
+    /// The ambient direction for a render view's configuration, read from
+    /// `create_render_object`/`update_render_object` through
+    /// [`RenderObjectContext::depend_on`](flui_view::RenderObjectContext::depend_on)
+    /// so the render object is reconfigured when the direction changes.
+    ///
+    /// [`TextDirection::Ltr`] with no `Directionality` ancestor, matching
+    /// [`maybe_of`](Self::maybe_of)'s callers, and at mount, where no inherited
+    /// read is possible yet: the element's first build reconfigures the render
+    /// object with the resolved direction before its first layout.
+    #[must_use]
+    pub(crate) fn of_render_object(ctx: &flui_view::RenderObjectContext<'_>) -> TextDirection {
+        ctx.depend_on::<Self, _>(|d| d.direction)
+            .unwrap_or(TextDirection::Ltr)
+    }
 }
 
 impl std::fmt::Debug for Directionality {
@@ -84,74 +99,6 @@ impl InheritedView for Directionality {
 
 impl_inherited_view!(Directionality);
 
-/// Resolve an [`AlignmentGeometry`](flui_painting::AlignmentGeometry) against
-/// the ambient [`Directionality`].
-///
-/// The one seam at which a directional alignment becomes a physical one. Call
-/// it inside a `build`, where a [`BuildContext`] exists, and hand the result to
-/// a render-object widget — [`Align`](crate::Align), `OverflowBox`, a
-/// [`Stack`](crate::Stack) — which stays physical and knows nothing about
-/// reading direction.
-///
-/// # Why the caller resolves, rather than the widget
-///
-/// A `RenderView` cannot read `Directionality` at all in this tree, and the
-/// reason is worth knowing before reaching for a wrapper: `RenderObjectContext`
-/// carries no inherited-dependency access, and — the part that bites — a render
-/// element that IS marked dirty never re-pushes its configuration.
-/// `RenderBehavior::build_into_views` clears the dirty flag without calling
-/// `update_render_object`; the only invocation is on a parent-driven view swap.
-/// So a dependency registered on a render element would mark it dirty, rebuild
-/// it, and change nothing: an RTL flip would silently do nothing, with no panic
-/// and no failing test. A dirty render element has no rebuild path that
-/// re-runs `update_render_object`.
-///
-/// [`Flex`](crate::Flex) and [`ListBody`](crate::ListBody) answer this by being
-/// public `StatelessView`s over private render views. This function applies the
-/// same rule one level up, so a caller who wants a directional alignment pays
-/// for it and a caller who does not pays nothing — no widget layer is added to
-/// the 60-odd `Align::new` sites, nor inside every aligned
-/// [`Container`](crate::Container).
-///
-/// # An absolute alignment registers no dependency
-///
-/// By construction rather than by a conditional that could drift: only the
-/// `Directional` arm reaches [`Directionality::maybe_of`], so an absolute
-/// alignment never becomes a dependent and a direction change never rebuilds
-/// it. Same shape, and same reason, as
-/// `axis_direction_from_axis_reverse_and_directionality`'s vertical arm below.
-///
-/// This matters more than it looks: `InheritedDependencies` has no per-rebuild
-/// clear, so a registration is monotonic — a widget that depends once keeps
-/// depending until it deactivates. A widget that never registers is the only
-/// widget that is reliably not a dependent.
-///
-/// **Not covered by a test, deliberately.** The dependency registry is
-/// `pub(crate)` to `flui-view`, and the widget harness cannot separate "did not
-/// depend" from "did not rebuild for another reason": swapping the root to flip
-/// the direction replaces the child's view as well, so both an absolute and a
-/// directional caller rebuild, and an assertion either way would pass for the
-/// wrong reason. The property is held by the shape of the `match` — there is no
-/// path from the `Absolute` arm to [`Directionality::maybe_of`] — and hoisting
-/// that call above the match is the way to break it. A reviewer, not a test, is
-/// what catches that today.
-///
-/// With no [`Directionality`] ancestor the direction defaults to
-/// [`TextDirection::Ltr`], matching every other FLUI widget that reads one.
-#[must_use]
-pub fn resolve_alignment(
-    ctx: &dyn BuildContext,
-    alignment: impl Into<flui_painting::AlignmentGeometry>,
-) -> flui_painting::Alignment {
-    match alignment.into() {
-        flui_painting::AlignmentGeometry::Absolute(alignment) => alignment,
-        flui_painting::AlignmentGeometry::Directional(directional) => {
-            let text_direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
-            directional.resolve(text_direction.is_ltr())
-        }
-    }
-}
-
 /// Resolves an [`AxisDirection`] from a layout/scroll `axis`, its `reverse`
 /// flag, and the ambient [`Directionality`].
 /// Only `Axis::Horizontal` consults `Directionality` (defaulting to `Ltr`
@@ -165,9 +112,8 @@ pub fn resolve_alignment(
 /// [`CustomScrollView`](crate::CustomScrollView), [`GridView`](crate::GridView),
 /// [`ListView`](crate::ListView), [`PageView`](crate::PageView), and
 /// [`SingleChildScrollView`](crate::SingleChildScrollView). [`ListBody`](crate::ListBody)
-/// implements the identical rule inline (its own `resolve_axis_direction`)
-/// rather than depending on this function, since it resolves through a
-/// private render-object widget this module has no reason to know about.
+/// and the viewports' cross axis share its horizontal arm, the reading-direction
+/// rule, from their render views.
 #[must_use]
 pub fn axis_direction_from_axis_reverse_and_directionality(
     ctx: &dyn BuildContext,
@@ -185,9 +131,10 @@ pub fn axis_direction_from_axis_reverse_and_directionality(
 
 /// The pure `text_direction` + `reverse` -> `AxisDirection` rule for the
 /// horizontal branch of [`axis_direction_from_axis_reverse_and_directionality`],
-/// split out so it is unit-testable without a [`BuildContext`].
+/// split out so it is unit-testable without a [`BuildContext`] and shared with
+/// the render views that read the direction themselves.
 #[must_use]
-fn resolve_horizontal_axis_direction(
+pub(crate) fn resolve_horizontal_axis_direction(
     text_direction: TextDirection,
     reverse: bool,
 ) -> AxisDirection {
@@ -197,4 +144,20 @@ fn resolve_horizontal_axis_direction(
         AxisDirection::LeftToRight
     };
     if reverse { base.opposite() } else { base }
+}
+
+/// Resolve `alignment` to a physical [`Alignment`](flui_painting::Alignment):
+/// an absolute geometry is already physical and never calls `text_direction`,
+/// so a caller that reads the direction through it registers no dependency for
+/// an absolute alignment; a directional one mirrors under right-to-left text.
+pub(crate) fn resolve_alignment(
+    alignment: flui_painting::AlignmentGeometry,
+    text_direction: impl FnOnce() -> TextDirection,
+) -> flui_painting::Alignment {
+    match alignment {
+        flui_painting::AlignmentGeometry::Absolute(alignment) => alignment,
+        flui_painting::AlignmentGeometry::Directional(directional) => {
+            directional.resolve(text_direction().is_ltr())
+        }
+    }
 }

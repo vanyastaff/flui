@@ -21,6 +21,9 @@ pub struct RenderIcon {
     style: TextStyle,
     sizing: Option<TextSizing>,
     weight_adjustment: i32,
+    /// Mirror the glyph horizontally about the box's centre, for an icon whose
+    /// data matches the text direction under RTL.
+    mirrored: bool,
     painter: TextPainter,
     glyph_offset: Offset,
     resolved_side: Option<TextResolvedSize>,
@@ -40,6 +43,7 @@ impl RenderIcon {
             style,
             sizing: None,
             weight_adjustment: 0,
+            mirrored: false,
             painter: TextPainter::new()
                 .with_text_direction(TextDirection::Ltr)
                 .with_text_sizing(Some(TextSizing::fixed())),
@@ -60,6 +64,23 @@ impl RenderIcon {
     pub fn with_font_weight_adjustment(mut self, adjustment: i32) -> Self {
         self.weight_adjustment = adjustment;
         self
+    }
+
+    /// Mirror the glyph horizontally about the box's centre.
+    #[must_use]
+    pub const fn with_mirrored(mut self, mirrored: bool) -> Self {
+        self.mirrored = mirrored;
+        self
+    }
+
+    /// Set the horizontal mirror, repainting when it changes. Paint-only: the
+    /// box and hit-test area are symmetric, so no layout is owed.
+    pub fn set_mirrored(&mut self, mirrored: bool) -> RenderUpdateImpact {
+        if self.mirrored == mirrored {
+            return RenderUpdateImpact::NONE;
+        }
+        self.mirrored = mirrored;
+        RenderUpdateImpact::PAINT
     }
 
     /// Replace authored inputs while retaining this mounted render object.
@@ -274,7 +295,18 @@ impl RenderBox for RenderIcon {
 
     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
         if self.painter.has_layout() {
-            self.painter.paint(ctx.canvas(), self.glyph_offset);
+            if self.mirrored {
+                // Flip about the box's vertical centre: x -> width - x.
+                let size = ctx.size();
+                let canvas = ctx.canvas();
+                canvas.save();
+                canvas.translate(size.width, 0.0);
+                canvas.scale(-1.0, 1.0);
+                self.painter.paint(canvas, self.glyph_offset);
+                canvas.restore();
+            } else {
+                self.painter.paint(ctx.canvas(), self.glyph_offset);
+            }
         }
     }
 }
