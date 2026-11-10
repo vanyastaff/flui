@@ -3,7 +3,7 @@
 - **`flui-foundation`**: `Generation::LAST` (`0x7FFF_FFFF`), `generation::DOMAIN_BIT` and
   `Generation::try_from(NonZeroU32)`, which refuses a raw generation that sets the packed key's
   reserved top bit with `ReservedGenerationBit`
-  ([ADR-0313](/docs/adr/ADR-0313-a-generational-slot-never-mints-an-id-twice.md) §1).
+  ([ADR-0320](/docs/adr/ADR-0320-packed-keys-reserve-their-top-bit-and-synthetic-semantics-ids-set-it.md) §1).
 - **`flui-semantics`**: `SemanticsIdentitySource::release`, which returns a synthetic identity's
   slot under its next generation and refuses a stale or second release.
 
@@ -20,4 +20,4 @@
   top bit, so none aliases a render identity, instead of values below `2^32`. The pipeline
   releases a region's or a text run's identity when its key leaves the tree, and the slot
   returns under its next generation, so churn no longer spends the identity space
-  ([ADR-0313](/docs/adr/ADR-0313-a-generational-slot-never-mints-an-id-twice.md) §4).
+  ([ADR-0320](/docs/adr/ADR-0320-packed-keys-reserve-their-top-bit-and-synthetic-semantics-ids-set-it.md) §2).

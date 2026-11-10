@@ -3,6 +3,7 @@
 - **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-16
 - **Supersedes:** [ADR-0204](ADR-0204-synthetic-semantics-nodes.md), §1 for identity authority and authored-region action routing
+- **Superseded-by:** [ADR-0320](ADR-0320-packed-keys-reserve-their-top-bit-and-synthetic-semantics-ids-set-it.md) for the identity source's monotonic `1..=u32::MAX` range and its never-returned values; the retained-key identity and the all-or-nothing reservation remain in force
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   only where a rejected configuration retains unproven callback owners without running their
   destructors: they are destroyed under the containment of the caller's recovery scope.

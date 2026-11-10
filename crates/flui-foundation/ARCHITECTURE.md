@@ -50,7 +50,7 @@ No id-based registration or withdrawal is a `Listenable` method
 (`take_listener`, `take_listeners`, `add_listener`, `add_with_recovery`),
 reached through concrete types, not through the trait.
 
-## Slot generations (ADR-0313)
+## Slot generations (ADR-0313, ADR-0320)
 
 A packed generational key (`ElementId`, `RenderId`, `UiRuntimeId`) names one
 slot with a `generation::Generation`: 1-based, checked, never wrapped, at most

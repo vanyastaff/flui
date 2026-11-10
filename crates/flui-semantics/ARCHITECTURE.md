@@ -42,8 +42,8 @@ render-boundary origins from allocated region origins. `SemanticsNode` encodes
 that choice as one private enum. A presentation-owned `SemanticsIdentitySource`
 mints synthetic IDs as generational slot keys over a `GenSlots` ledger, and their
 published form sets the packed key's reserved domain bit, which no render ID
-carries ([ADR-0313](../../docs/adr/ADR-0313-a-generational-slot-never-mints-an-id-twice.md)
-§4). A released ID's slot returns only under its next generation, a stale or
+carries ([ADR-0320](../../docs/adr/ADR-0320-packed-keys-reserve-their-top-bit-and-synthetic-semantics-ids-set-it.md)
+§2). A released ID's slot returns only under its next generation, a stale or
 second release changes nothing, and a slot at its last generation closes.
 `a_released_identity_returns_its_slot_under_a_new_generation`,
 `a_synthetic_identity_never_aliases_a_render_identity`,
