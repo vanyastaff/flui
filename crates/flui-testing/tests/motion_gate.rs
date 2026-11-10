@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use flui_animation::{SpringDescription, Vsync};
 use flui_foundation::geometry::EdgeInsets;
+use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_testing::motion::{
     Allow, MotionConfig, MotionRun, Recording, Rule, assert_smooth, charge_to_outermost, check,
@@ -16,7 +17,7 @@ use flui_view::environment::VsyncScope;
 use flui_view::{IntoView, View, ViewExt};
 use flui_widgets::{
     AnimatedOpacity, AnimatedPadding, ClipRect, ColoredBox, MotionBuilder, Opacity, Padding,
-    SizedBox,
+    SizedBox, UnconstrainedBox,
 };
 
 const FRAME: Duration = Duration::from_millis(16);
@@ -190,6 +191,51 @@ pub(crate) fn an_opacity_dip_that_comes_back_flickers() {
         !found.contains(&Rule::FadeSnap),
         "a 0.4 step is under the fade-snap threshold: {found:?}"
     );
+
+    // The same dip over several small steps: no step snaps, the dip still flickers.
+    let vsync = Vsync::new();
+    let tree = |value: f64| {
+        VsyncScope::new(
+            vsync.clone(),
+            AnimatedOpacity::new(value, square()).duration(Duration::from_millis(100)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(1.0), loose(200.0), vsync.clone());
+    let mut run = MotionRun::new(&mut laid);
+    run.frame(FRAME);
+    run.act(|laid| laid.pump_widget(tree(0.6)));
+    run.play(Duration::from_millis(112), FRAME);
+    run.act(|laid| laid.pump_widget(tree(1.0)));
+    run.play(Duration::from_secs(1), FRAME);
+    let found = rules(&run.finish());
+    assert!(
+        found.contains(&Rule::Flicker),
+        "a gradual dip that comes back flickers: {found:?}"
+    );
+    assert!(
+        !found.contains(&Rule::FadeSnap),
+        "no step of a gradual dip snaps: {found:?}"
+    );
+}
+
+pub(crate) fn a_blink_through_opacity_zero_flickers() {
+    // Opacity 0 skips painting its subtree: the square is left out of one frame, not drawn at
+    // opacity 0, and the gap still reads as a dip.
+    let tree = |value: f64| Opacity::new(value).child(square());
+    let mut laid = lay_out_animated(tree(1.0), loose(200.0), Vsync::new());
+    let mut run = MotionRun::new(&mut laid);
+    run.frame(FRAME);
+    run.act(|laid| laid.pump_widget(tree(0.0)));
+    run.frame(FRAME);
+    run.act(|laid| laid.pump_widget(tree(1.0)));
+    run.play(RUN, FRAME);
+    let recording = run.finish();
+    let found = check_all(&recording, &MotionConfig::default());
+    assert!(
+        found.iter().any(|finding| finding.rule == Rule::Flicker
+            && finding.locator.ends_with("RenderDecoratedBox")),
+        "the square blinks out for a frame: {found:#?}"
+    );
 }
 
 pub(crate) fn a_bouncy_spring_overshoots_and_a_critical_one_does_not() {
@@ -214,6 +260,15 @@ pub(crate) fn a_bouncy_spring_overshoots_and_a_critical_one_does_not() {
     assert!(
         bouncy.contains(&Rule::Overshoot),
         "bounce 0.5 overshoots: {bouncy:?}"
+    );
+
+    let mut wide_jump = MotionConfig::default();
+    wide_jump.jump = 1e6;
+    let vsync = Vsync::new();
+    let bouncy = check(&spring(&vsync, 0.5), &wide_jump);
+    assert!(
+        bouncy.iter().any(|finding| finding.rule == Rule::Overshoot),
+        "an overshoot does not depend on the jump threshold: {bouncy:#?}"
     );
 
     let vsync = Vsync::new();
@@ -256,6 +311,63 @@ pub(crate) fn frames_asked_for_after_the_motion_ends_wake_after_end() {
     assert!(
         found.contains(&Rule::WakesAfterEnd),
         "hidden motion keeps waking: {found:?}"
+    );
+}
+
+pub(crate) fn wakes_after_end_reads_what_the_window_shows() {
+    // The padding animates a square that lies wholly outside its parent's clip: its box moves
+    // every frame, the window shows none of it, and the frames it asks for change nothing.
+    let vsync = Vsync::new();
+    let tree = |inset: f64| {
+        VsyncScope::new(
+            vsync.clone(),
+            ClipRect::new().child(
+                SizedBox::new(40.0, 40.0).child(
+                    UnconstrainedBox::new()
+                        .alignment(Alignment::TOP_LEFT)
+                        .child(
+                            Padding::only(60.0, 0.0, 0.0, 0.0).child(
+                                AnimatedPadding::new(
+                                    EdgeInsets::only_left(inset),
+                                    SizedBox::new(20.0, 20.0),
+                                )
+                                .duration(Duration::from_secs(10)),
+                            ),
+                        ),
+                ),
+            ),
+        )
+    };
+    let mut laid = lay_out_animated(tree(0.0), loose(200.0), vsync.clone());
+    let found = rules(&run_change(
+        &mut laid,
+        || tree(100.0),
+        Duration::from_secs(2),
+    ));
+    assert!(
+        found.contains(&Rule::WakesAfterEnd),
+        "clipped motion keeps waking: {found:?}"
+    );
+
+    // A drift slower than `still` per frame, in view, is motion that adds up: the frames it asks
+    // for change what the window shows.
+    let vsync = Vsync::new();
+    let tree = |inset: f64| {
+        VsyncScope::new(
+            vsync.clone(),
+            AnimatedPadding::new(EdgeInsets::only_left(inset), square())
+                .duration(Duration::from_secs(10)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(0.0), loose(200.0), vsync.clone());
+    let found = rules(&run_change(
+        &mut laid,
+        || tree(20.0),
+        Duration::from_secs(4),
+    ));
+    assert!(
+        !found.contains(&Rule::WakesAfterEnd),
+        "a slow visible drift is a change: {found:?}"
     );
 }
 

@@ -24,8 +24,11 @@ pub fn check_all(recording: &Recording, config: &MotionConfig) -> Vec<Finding> {
     let last_frame = frames.len().saturating_sub(1);
     let last_input = frames.iter().rposition(|frame| frame.input).unwrap_or(0);
     for (id, line) in &timelines {
-        presence(recording, config, *id, line, last_frame, &mut findings);
-        steps(recording, config, *id, line, &mut findings);
+        for segment in segments(line) {
+            presence(recording, config, *id, segment, last_frame, &mut findings);
+            steps(recording, config, *id, segment, &mut findings);
+        }
+        flicker(recording, config, *id, line, &mut findings);
         overshoot(recording, config, *id, line, last_input, &mut findings);
     }
     never_settles(recording, config, &timelines, last_input, &mut findings);
@@ -72,8 +75,24 @@ fn parent_in(recording: &Recording, frame: usize, id: RenderId) -> Option<Render
         .and_then(|sample| sample.parent)
 }
 
-/// Each node's samples by frame index. Ids are generational, so a node that leaves never comes
-/// back under the same id and its frames are contiguous.
+/// The runs of consecutive frames in which a node was drawn. A retained node can be left out of
+/// frames in the middle of its life (a parent at opacity 0 skips its paint) and come back under
+/// the same id: each run then enters and leaves on its own, and nothing compares the frames on
+/// either side of the gap as if they were neighbours.
+fn segments<'l, 's>(line: &'l [(usize, &'s Sample)]) -> Vec<&'l [(usize, &'s Sample)]> {
+    let mut runs = Vec::new();
+    let mut start = 0;
+    for at in 1..=line.len() {
+        if at == line.len() || line[at].0 != line[at - 1].0 + 1 {
+            runs.push(&line[start..at]);
+            start = at;
+        }
+    }
+    runs
+}
+
+/// Each node's samples by frame index. Ids are generational, so a remounted node is a new line;
+/// a line can still skip frames (see [`segments`]).
 fn timelines(recording: &Recording) -> FxHashMap<RenderId, Vec<(usize, &Sample)>> {
     let mut lines: FxHashMap<RenderId, Vec<(usize, &Sample)>> = FxHashMap::default();
     for (index, frame) in recording.frames().iter().enumerate() {
@@ -202,31 +221,73 @@ fn steps(
                     ),
                 ));
             }
-            if before.opacity - sample.opacity >= config.flicker_dip {
-                let dip_time = frames.get(frame).map_or(Duration::ZERO, |f| f.time);
-                let returns = line[at + 1..].iter().take_while(|(later, _)| {
-                    frames
-                        .get(*later)
-                        .is_some_and(|f| f.time.saturating_sub(dip_time) <= config.flicker_window)
-                });
-                if returns
-                    .clone()
-                    .any(|(_, later)| later.opacity >= before.opacity - RETURN_OPACITY)
-                {
-                    out.push(finding(
-                        recording,
-                        Rule::Flicker,
-                        id,
-                        frame,
-                        &sample.locator,
-                        format!(
-                            "opacity dipped {:.2} to {:.2} and came back",
-                            before.opacity, sample.opacity
-                        ),
-                    ));
+        }
+    }
+}
+
+/// `flicker`: from a peak, opacity falls by `flicker_dip` or more and climbs back to the peak,
+/// all within `flicker_window`, in one step or over many. A frame the node is left out of counts
+/// as opacity 0: it drew nothing there.
+fn flicker(
+    recording: &Recording,
+    config: &MotionConfig,
+    id: RenderId,
+    line: &[(usize, &Sample)],
+    out: &mut Vec<Finding>,
+) {
+    let (Some(&(first, _)), Some(&(last, _))) = (line.first(), line.last()) else {
+        return;
+    };
+    let frames = recording.frames();
+    let mut drawn = line.iter().peekable();
+    // (frame, time, opacity) for every frame of the node's life.
+    let series: Vec<(usize, Duration, f64)> = (first..=last)
+        .filter_map(|index| {
+            let time = frames.get(index)?.time;
+            let opacity = match drawn.peek() {
+                Some(&&(frame, sample)) if frame == index => {
+                    drawn.next();
+                    sample.opacity
                 }
+                _ => 0.0,
+            };
+            Some((index, time, opacity))
+        })
+        .collect();
+    let locator = line
+        .last()
+        .map_or("", |(_, sample)| sample.locator.as_str());
+    let mut at = 1;
+    while at < series.len() {
+        let (frame, time, opacity) = series[at];
+        let peak = series[..at]
+            .iter()
+            .filter(|(_, earlier, _)| time.saturating_sub(*earlier) <= config.flicker_window)
+            .max_by(|a, b| a.2.total_cmp(&b.2))
+            .copied();
+        if let Some((_, peak_time, peak_opacity)) = peak
+            && peak_opacity - opacity >= config.flicker_dip
+        {
+            let back = series[at + 1..]
+                .iter()
+                .take_while(|(_, later, _)| {
+                    later.saturating_sub(peak_time) <= config.flicker_window
+                })
+                .position(|(_, _, later)| *later >= peak_opacity - RETURN_OPACITY);
+            if let Some(offset) = back {
+                out.push(finding(
+                    recording,
+                    Rule::Flicker,
+                    id,
+                    frame,
+                    locator,
+                    format!("opacity dipped {peak_opacity:.2} to {opacity:.2} and came back"),
+                ));
+                at += offset + 2;
+                continue;
             }
         }
+        at += 1;
     }
 }
 
@@ -275,7 +336,7 @@ fn overshoot(
         let from = first.edges()[edge];
         let to = rest.edges()[edge];
         let distance = to - from;
-        if distance.abs() < config.jump {
+        if distance.abs() < config.still {
             continue;
         }
         for &(frame, sample) in travel {
@@ -361,11 +422,15 @@ fn wakes_after_end(
     out: &mut Vec<Finding>,
 ) {
     let frames = recording.frames();
-    let last_change = (1..frames.len())
-        .rev()
-        .find(|&index| !same_frame(&frames[index - 1].samples, &frames[index].samples, config))
-        .unwrap_or(0)
-        .max(last_input);
+    // Each frame is compared with the last one that changed, so a drift slower than `still`
+    // per frame still counts once it adds up.
+    let mut last_change = 0;
+    for index in 1..frames.len() {
+        if !same_frame(&frames[last_change].samples, &frames[index].samples, config) {
+            last_change = index;
+        }
+    }
+    let last_change = last_change.max(last_input);
     let Some(end) = frames.get(last_change) else {
         return;
     };
@@ -391,10 +456,31 @@ fn wakes_after_end(
     }
 }
 
+/// Whether the window shows the same thing in two frames: the same nodes, each hidden in both
+/// or drawn in both over the same visible part at the same opacity. Where a hidden box lies, or
+/// how far a clipped box reaches past its clip, changes nothing on screen.
 fn same_frame(before: &[Sample], after: &[Sample], config: &MotionConfig) -> bool {
     before.len() == after.len()
         && before
             .iter()
             .zip(after)
-            .all(|(a, b)| a.id == b.id && same_place(a, b, config.still))
+            .all(|(a, b)| a.id == b.id && same_view(a, b, config.still))
+}
+
+fn same_view(a: &Sample, b: &Sample, still: f64) -> bool {
+    match (a.is_shown(), b.is_shown(), a.visible, b.visible) {
+        (false, false, ..) => true,
+        (true, true, Some(x), Some(y)) => {
+            [
+                (x.left(), y.left()),
+                (x.top(), y.top()),
+                (x.right(), y.right()),
+                (x.bottom(), y.bottom()),
+            ]
+            .iter()
+            .all(|(p, q)| (p - q).abs() < still)
+                && (a.opacity - b.opacity).abs() < SAME_OPACITY
+        }
+        _ => false,
+    }
 }

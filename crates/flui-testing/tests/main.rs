@@ -454,6 +454,14 @@ fn motion_gate_rules() {
                 motion_gate::frames_asked_for_after_the_motion_ends_wake_after_end as fn(),
             ),
             (
+                "motion_gate::a_blink_through_opacity_zero_flickers",
+                motion_gate::a_blink_through_opacity_zero_flickers as fn(),
+            ),
+            (
+                "motion_gate::wakes_after_end_reads_what_the_window_shows",
+                motion_gate::wakes_after_end_reads_what_the_window_shows as fn(),
+            ),
+            (
                 "motion_gate::a_finding_is_charged_to_the_outermost_node_that_shows_it",
                 motion_gate::a_finding_is_charged_to_the_outermost_node_that_shows_it as fn(),
             ),

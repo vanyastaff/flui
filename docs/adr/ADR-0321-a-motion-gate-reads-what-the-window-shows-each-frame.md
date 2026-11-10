@@ -85,10 +85,10 @@ window's scale factor.
 | `pop-out` | a node unmounts while drawn at `pop_opacity` or more |
 | `jump` | an edge moves `jump` or more in one frame between frames where it holds still, outside a `direct` frame |
 | `fade-snap` | a drawn node's opacity steps by `fade_snap` or more in one frame |
-| `flicker` | opacity dips by `flicker_dip` or more and comes back within `flicker_window` |
-| `overshoot` | after the last input an edge passes where it comes to rest by more than `overshoot` |
+| `flicker` | opacity falls by `flicker_dip` or more from a peak and climbs back to it within `flicker_window`, in one step or many; a frame the node is left out of counts as opacity 0 |
+| `overshoot` | after the last input an edge that travels `still` or more passes where it comes to rest by more than `overshoot` |
 | `never-settles` | something shown still moves or fades in the last `settle_window`, which lies after the last input |
-| `wakes-after-end` | a frame is still asked for `wake_after_end` after the last frame that changed anything |
+| `wakes-after-end` | a frame is still asked for `wake_after_end` after the last frame that changed what the window shows (a hidden node, or the part of a box past its clip, changes nothing; each frame is compared with the last one that changed, so a slow drift adds up) |
 
 Frame 0 is the settled start: what it draws loaded with the view and is not an entrance. The
 thresholds live in one `#[non_exhaustive] MotionConfig` with defaults. `check` is
@@ -125,9 +125,11 @@ the default config, panicking with the report.
   (`a_padding_change_jumps_unless_it_animates`, `an_opacity_change_snaps_unless_it_fades`,
   `a_node_that_appears_at_once_pops_in_and_one_that_enters_does_not`,
   `a_node_that_vanishes_pops_out`, `an_opacity_dip_that_comes_back_flickers`,
+  `a_blink_through_opacity_zero_flickers`,
   `a_bouncy_spring_overshoots_and_a_critical_one_does_not`,
   `motion_still_running_at_the_end_never_settles`,
-  `frames_asked_for_after_the_motion_ends_wake_after_end`).
+  `frames_asked_for_after_the_motion_ends_wake_after_end`,
+  `wakes_after_end_reads_what_the_window_shows`).
 - `a_finding_is_charged_to_the_outermost_node_that_shows_it` pins §2's charge;
   `the_allowlist_covers_with_a_reason_and_refuses_rows_that_match_nothing` pins §3;
   `presented_nodes_compose_opacity_and_clip` pins §1's composition.

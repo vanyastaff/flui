@@ -109,7 +109,8 @@ pub enum Rule {
     Jump,
     /// A drawn node's opacity steps by [`MotionConfig::fade_snap`] or more in one frame.
     FadeSnap,
-    /// Opacity dips and comes back within [`MotionConfig::flicker_window`].
+    /// Opacity falls from a peak and climbs back within [`MotionConfig::flicker_window`], in one
+    /// step or many; a frame the node is left out of counts as opacity 0.
     Flicker,
     /// An edge travels past where it comes to rest by more than [`MotionConfig::overshoot`].
     Overshoot,
