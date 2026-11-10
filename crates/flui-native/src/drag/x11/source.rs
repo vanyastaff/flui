@@ -161,16 +161,18 @@ impl Phase {
     }
 }
 
-/// A diagnostic a step of an `INCR` answer found, emitted once the session
-/// is back in its cell or ended.
+/// A diagnostic a step of the session found while the session was out of
+/// its cell, emitted once it is back there or ended: a subscriber is the
+/// runtime's code.
 #[derive(Debug)]
 pub(super) enum Report {
     /// A conversion past one property was refused, and why.
     Refused { len: usize, why: &'static str },
-    /// A chunk could not be written.
-    Unwritten(ConnectionError),
-    /// A requestor's events could not be let go of.
-    Unheard(ConnectionError),
+    /// A request to the server failed: what it was for.
+    Failed {
+        what: &'static str,
+        error: ConnectionError,
+    },
     /// This many requestors took no chunk in time.
     Stalled(usize),
 }
@@ -179,12 +181,7 @@ impl Report {
     fn emit(self) {
         match self {
             Self::Refused { len, why } => tracing::debug!(len, "{why}"),
-            Self::Unwritten(error) => {
-                tracing::debug!(%error, "cannot write a chunk of a drag's INCR answer");
-            }
-            Self::Unheard(error) => {
-                tracing::debug!(%error, "cannot stop hearing a drag's INCR requestor");
-            }
+            Self::Failed { what, error } => tracing::debug!(%error, "{what}"),
             Self::Stalled(requestors) => {
                 tracing::debug!(requestors, "an XDND INCR requestor took no chunk in time");
             }
@@ -643,10 +640,13 @@ impl X11Drag {
                 .map(drop)
             });
         if let Err(error) = made {
-            tracing::debug!(%error, "cannot make a drag's window for a target");
+            self.report(Report::Failed {
+                what: "cannot make a drag's window for a target",
+                error,
+            });
             return None;
         }
-        self.send(
+        self.send_reported(
             target,
             self.atoms.messages.enter,
             model::enter(visit, version, types),
@@ -663,7 +663,7 @@ impl X11Drag {
 
     /// Leave the target `over` visits, and end the visit.
     fn leave_visit(&self, over: &Over) {
-        self.send(
+        self.send_reported(
             over.target,
             self.atoms.messages.leave,
             model::leave(over.visit),
@@ -674,7 +674,37 @@ impl X11Drag {
     /// End the visit `over`: a reply to its window after this goes nowhere.
     fn forget_visit(&self, over: &Over) {
         if let Err(error) = self.connection.xcb().destroy_window(over.visit) {
-            tracing::debug!(%error, "cannot destroy a drag's window for a target");
+            self.report(Report::Failed {
+                what: "cannot destroy a drag's window for a target",
+                error,
+            });
+        }
+    }
+
+    /// Send `data` of `kind` to `window`, a failure reported for the step's
+    /// end.
+    fn send_reported(&self, window: xproto::Window, kind: xproto::Atom, data: [u32; 5]) {
+        let event = xproto::ClientMessageEvent::new(32, window, kind, data);
+        if let Err(error) =
+            self.connection
+                .xcb()
+                .send_event(false, window, EventMask::NO_EVENT, event)
+        {
+            self.report(Report::Failed {
+                what: "cannot send an XDND message",
+                error,
+            });
+        }
+    }
+
+    /// Send what the requests wait on, a failure reported for the step's
+    /// end.
+    fn flush_reported(&self) {
+        if let Err(error) = self.connection.xcb().flush() {
+            self.report(Report::Failed {
+                what: "cannot send an XDND message",
+                error,
+            });
         }
     }
 
@@ -705,14 +735,14 @@ impl X11Drag {
                     over.held = Some((root, time));
                 } else {
                     over.asked = true;
-                    self.send(
+                    self.send_reported(
                         over.target,
                         self.atoms.messages.position,
                         model::position(over.visit, root, time, action),
                     );
                 }
             }
-            self.flush();
+            self.flush_reported();
         }
         self.put_session(session);
     }
@@ -751,7 +781,7 @@ impl X11Drag {
         };
         match session.over.as_ref() {
             Some(over) if over.accepted.is_some_and(allowed) => {
-                self.send(
+                self.send_reported(
                     over.target,
                     self.atoms.messages.drop,
                     model::drop_at(over.visit, time),
@@ -761,7 +791,7 @@ impl X11Drag {
                 };
                 // The drop is the target's: the keys are the user's again.
                 self.let_go_of_keyboard(session);
-                self.flush();
+                self.flush_reported();
                 Then::Nothing
             }
             _ => {
@@ -792,12 +822,12 @@ impl X11Drag {
                         Phase::Dragging => {
                             if let Some((root, time)) = over.held.take() {
                                 over.asked = true;
-                                self.send(
+                                self.send_reported(
                                     target,
                                     self.atoms.messages.position,
                                     model::position(over.visit, root, time, action),
                                 );
-                                self.flush();
+                                self.flush_reported();
                             }
                         }
                         Phase::Released { time, .. } => {
@@ -806,12 +836,12 @@ impl X11Drag {
                             // last one, where the button was let go.
                             if let Some((root, moved)) = over.held.take() {
                                 over.asked = true;
-                                self.send(
+                                self.send_reported(
                                     target,
                                     self.atoms.messages.position,
                                     model::position(over.visit, root, moved, action),
                                 );
-                                self.flush();
+                                self.flush_reported();
                             } else {
                                 then = self.decide(&mut session, time);
                             }
@@ -972,9 +1002,12 @@ impl X11Drag {
         // next session has a window of its own.
         .and_then(|()| xcb.destroy_window(session.source).map(drop));
         if let Err(error) = released {
-            tracing::debug!(%error, "cannot let go of a drag's selection");
+            self.report(Report::Failed {
+                what: "cannot let go of a drag's selection",
+                error,
+            });
         }
-        self.flush();
+        self.flush_reported();
         Then::End(on_end, outcome)
     }
 
@@ -988,7 +1021,10 @@ impl X11Drag {
             .xcb()
             .xinput_xi_ungrab_device(self.time(), keyboard)
         {
-            tracing::debug!(%error, "cannot let go of a drag's keyboard");
+            self.report(Report::Failed {
+                what: "cannot let go of a drag's keyboard",
+                error,
+            });
         }
     }
 
@@ -1272,9 +1308,12 @@ impl X11Drag {
             self.forget_requestor(&session, event.window);
         }
         if let Some(error) = failed {
-            self.report(Report::Unwritten(error));
+            self.report(Report::Failed {
+                what: "cannot write a chunk of a drag's INCR answer",
+                error,
+            });
         }
-        self.flush();
+        self.flush_reported();
         self.put_session(session);
         true
     }
@@ -1307,7 +1346,10 @@ impl X11Drag {
             requestor,
             &ChangeWindowAttributesAux::new().event_mask(EventMask::NO_EVENT),
         ) {
-            self.report(Report::Unheard(error));
+            self.report(Report::Failed {
+                what: "cannot stop hearing a drag's INCR requestor",
+                error,
+            });
         }
     }
 

@@ -2847,3 +2847,75 @@ fn a_conversion_into_an_incr_answers_property_replaces_it() {
     }
     assert_eq!(ended.get(), None, "the drop goes on");
 }
+
+/// Records whether the drag session was out of its cell as a diagnostic was
+/// emitted: a subscriber that reached the session then would find none.
+struct SessionAtDiagnostic {
+    drag: Arc<X11Drag>,
+    events: Arc<AtomicUsize>,
+    out: Arc<AtomicUsize>,
+}
+
+impl tracing::Subscriber for SessionAtDiagnostic {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        self.events.fetch_add(1, Ordering::SeqCst);
+        // A dropped session has a deadline while it is in its cell.
+        if self.drag.session_deadline().is_none() {
+            self.out.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// What an `INCR` answer's step finds is emitted with the session back in
+/// its cell: a stalled requestor let go of is told of once the session,
+/// which goes on, is there again.
+#[test]
+fn an_incr_diagnostic_is_emitted_with_the_session_in_its_cell() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    dropped(&target, &other, &foreign, &ended, long_text(MAX_CHUNK + 1));
+    let stalled = listening_window(&other.connection);
+    assert_eq!(
+        convert(&target, &other.connection, atoms, stalled, 101),
+        atoms.utf8,
+        "the text goes INCR"
+    );
+    // The answer is due before the drop, whose deadline its announcement
+    // moved just after.
+    let due = target.drag.session_deadline().expect("the answer is due");
+
+    let events = Arc::new(AtomicUsize::new(0));
+    let out = Arc::new(AtomicUsize::new(0));
+    let subscriber = SessionAtDiagnostic {
+        drag: Arc::clone(&target.drag),
+        events: Arc::clone(&events),
+        out: Arc::clone(&out),
+    };
+    tracing::subscriber::with_default(subscriber, || {
+        target.drag.expire(due);
+    });
+    assert!(events.load(Ordering::SeqCst) > 0, "the stall is told of");
+    assert_eq!(
+        out.load(Ordering::SeqCst),
+        0,
+        "emitted with the session out"
+    );
+    assert_eq!(ended.get(), None, "the drop goes on");
+}

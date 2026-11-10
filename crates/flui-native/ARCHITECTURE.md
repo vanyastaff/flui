@@ -3837,8 +3837,9 @@ into the same property, whatever it asks for (`TARGETS` included), replaces its
 answer. Each holds its payload until it ends, its requestor takes no chunk for
 five seconds or is destroyed, or the session ends, which leaves it unfinished,
 ICCCM giving a source no way to say so; each chunk written, the empty one that
-ends it included, gives the target five more seconds to finish the drop. Its
-diagnostics are emitted once the session is back in its cell.
+ends it included, gives the target five more seconds to finish the drop. What
+a step of the session finds while it is out of its cell (a failed request or
+flush, a refused or stalled answer) is emitted once it is back there or ended.
 The session lives in an owner-thread cell; its provider and end hook run
 outside it, and the provider is dropped contained, so the hook hears the end
 though a capture fails (ADR-0281 §3).
@@ -3878,7 +3879,8 @@ another connection's window: `a_session_drops_on_a_target_that_accepts`,
 `only_the_dropped_on_client_reads_the_session_data`,
 `a_payload_past_one_property_is_written_incrementally`,
 `a_stalled_incr_requestor_is_let_go_and_the_drop_goes_on`,
-`a_conversion_into_an_incr_answers_property_replaces_it`; and in `tests/x11_input.rs`,
+`a_conversion_into_an_incr_answers_property_replaces_it`,
+`an_incr_diagnostic_is_emitted_with_the_session_in_its_cell`; and in `tests/x11_input.rs`,
 with the host's own loop and window, XTest holding and moving the pointer:
 `an_xtest_drag_from_the_window_drops_on_another_client`, which also checks
 that the window's press ends cancelled and its next click arrives whole, and
