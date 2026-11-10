@@ -205,7 +205,7 @@ regressions each direction produced):
   O(1) — the same reason `flush_microtasks` already used one), bounded by
   an id WATERMARK: the id of the LAST (`back()`) entry queued at entry, read
   once before invoking anything. `CallbackId`s are minted from this
-  scheduler's own monotonic `id_gen` in registration order, so `back().id`
+  scheduler's own `id_mint` (an owner-local `IdMint`) in registration order, so `back().id`
   at entry is exactly the highest id already queued, in O(1) — no scan
   needed, since a `VecDeque` already keeps registration order — but ONLY
   because `schedule_frame_callback` mints that id INSIDE the same
@@ -924,8 +924,8 @@ since both sides share that one methodology.) Readiness was recorded per task
 (an `AtomicBool`) but never indexed independently of storage, so discovering
 it meant re-deriving it from every task, every time.
 
-**Choice:** the owner-local `TaskStore` keeps `tasks: RefCell<BTreeMap<TaskId,
-Task>>` beside an index of ready ids, `ready: Mutex<Vec<TaskId>>`, in the
+**Choice:** the owner-local `TaskStore` keeps `tasks: RefCell<BTreeMap<AsyncTaskId,
+Task>>` beside an index of ready ids, `ready: Mutex<Vec<AsyncTaskId>>`, in the
 store's cross-thread half (the only part a `Waker` reaches). Every path that
 sets a task's `ready` flag `true` (`spawn_local`, `TaskWaker::wake_by_ref`'s
 false→true edge once the task is admitted, `spawn_local_eager`'s post-poll
@@ -1067,10 +1067,16 @@ existence.
 
 ### Identity exhaustion refuses reuse
 
-Ids this scheduler mints (`TaskId`, callback ids) come from the foundation
-`IdMint` family: `AtomicIdMint`, the cross-thread twin of the owner-local
-`IdMint`, shares its sealed `MintedId` contract and its refusal rule. A
-minted id is never issued again; once the id space is exhausted, every later
-issue refuses, typed (`IdExhausted`), from every thread, and stays refused.
-The registration seam turns that refusal into a `BUG:`-named panic before
-admitting work it cannot name.
+Every id this scheduler hands out comes from the foundation `IdMint` family;
+the crate keeps no counter of its own. Callback ids come from the scheduler's
+owner-local `IdMint<CallbackId>` and an async task's id from its `TaskStore`'s
+owner-local `IdMint`, because both are minted only on the owner thread.
+`TaskId` alone comes from the process's `AtomicIdMint`: a `Task` is created on
+whichever thread asks. `CallbackId` and `TaskId` are opaque, so no caller
+builds one from a number, and the async task id is a private type of its own
+domain. A minted id is never issued again; once the id space is exhausted,
+every later issue refuses, typed (`IdExhausted`), and stays refused
+(`exhausted_task_ids_preserve_priority_fifo`,
+`exhausted_task_ids_preserve_cancellation_and_progress`). The registration
+seam turns that refusal into a panic before admitting work it cannot name,
+with the rejected callback or future destroyed under containment.

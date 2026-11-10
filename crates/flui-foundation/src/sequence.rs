@@ -21,8 +21,6 @@ use std::marker::PhantomData;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::id::{FrameCallbackId, ListenerId, TaskId};
-
 /// The identity of one input sequence within the binding that minted it.
 ///
 /// Minted only by an [`IdMint`], never reused by it: there is no `Default`
@@ -65,11 +63,12 @@ mod sealed {
     pub struct MintToken(pub(super) ());
 }
 
-/// An identity an [`IdMint`] can issue. Sealed: each implementor is either
-/// an id whose only source is a mint — no `Default`, no conversion from a
-/// number — or a counter id with no slab behind it (`ListenerId`, `TaskId`,
-/// `FrameCallbackId`), whose `next` issue is still the only issuer in
-/// production.
+/// An identity an [`IdMint`] can issue. Sealed: each implementor is an id
+/// whose only source is a mint — no `Default`, no conversion from a number
+/// (`ListenerId`, `FrameCallbackId`, `TaskId`, `InputSequenceId`), an id a
+/// private wire representation names back (`DragSessionId`), or the raw
+/// `NonZeroU64` issue for an identity type defined above this crate, whose
+/// owner keeps its constructor private.
 pub trait MintedId: sealed::Sealed + Copy {
     /// The highest raw value a mint for this id hands out: the id type's own
     /// space width, so every raw stays convertible where
@@ -137,48 +136,69 @@ impl MintedId for NonZeroU64 {
     }
 }
 
-impl sealed::Sealed for ListenerId {}
+/// Declares an opaque identity minted only by the [`IdMint`] family: a
+/// private `NonZeroU64`, no `Default`, no conversion from a number, so the
+/// mint's never-reissue rule holds for every value of the type.
+macro_rules! minted_ids {
+    ($($(#[$meta:meta])* $name:ident;)*) => {$(
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $name(NonZeroU64);
 
-/// `ListenerId` is a counter with no slab behind it, so the listener list's
-/// owner mints it from an [`IdMint`] on its own thread; a raw past
-/// `usize::MAX` would not survive the conversion, and the mint refuses it.
-impl MintedId for ListenerId {
-    const MINT_CEILING: u64 = usize::MAX as u64;
+        impl $name {
+            /// The raw value, for diagnostics only; there is no conversion
+            /// back.
+            #[must_use]
+            pub const fn get(self) -> u64 {
+                self.0.get()
+            }
+        }
 
-    fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
-        Self::zip(usize::try_from(raw.get()).expect(
-            "BUG: a mint issued a listener id past usize::MAX; the mint's \
-             ceiling must end at the id type's MINT_CEILING",
-        ))
-    }
+        impl sealed::Sealed for $name {}
+
+        impl MintedId for $name {
+            const MINT_CEILING: u64 = u64::MAX;
+
+            fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
+                Self(raw)
+            }
+        }
+    )*};
 }
 
-/// `TaskId` is a counter with no slab behind it, minted from an
-/// [`AtomicIdMint`] on the scheduler, where two threads mint.
-impl sealed::Sealed for TaskId {}
-impl MintedId for TaskId {
-    const MINT_CEILING: u64 = usize::MAX as u64;
+minted_ids! {
+    /// The identity of one listener registration within the listener list
+    /// that minted it.
+    ///
+    /// The list's owner mints it from its own [`IdMint`], on its own
+    /// thread. A source outside the framework that keeps its own listener
+    /// ledger mints from an `IdMint<ListenerId>` of its own; no value is
+    /// built from a number.
+    ///
+    /// ```compile_fail
+    /// // A listener id is minted, never built from a number.
+    /// let forged = flui_foundation::ListenerId::new(1);
+    /// ```
+    ListenerId;
 
-    fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
-        Self::zip(usize::try_from(raw.get()).expect(
-            "BUG: a mint issued a task id past usize::MAX; the mint's \
-             ceiling must end at the id type's MINT_CEILING",
-        ))
-    }
-}
+    /// The identity of one scheduler frame callback (transient, persistent or
+    /// post-frame), minted by its scheduler's own [`IdMint`] on the owner
+    /// thread.
+    ///
+    /// ```compile_fail
+    /// // A frame-callback id is minted, never built from a number.
+    /// let forged = flui_foundation::FrameCallbackId::zip(1);
+    /// ```
+    FrameCallbackId;
 
-/// `FrameCallbackId` is a counter with no slab behind it, minted from an
-/// [`AtomicIdMint`] on the scheduler, where two threads mint.
-impl sealed::Sealed for FrameCallbackId {}
-impl MintedId for FrameCallbackId {
-    const MINT_CEILING: u64 = usize::MAX as u64;
-
-    fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
-        Self::zip(usize::try_from(raw.get()).expect(
-            "BUG: a mint issued a frame-callback id past usize::MAX; the \
-             mint's ceiling must end at the id type's MINT_CEILING",
-        ))
-    }
+    /// The identity of one task in a priority task queue, minted by an
+    /// [`AtomicIdMint`]: tasks are created on whichever thread asks.
+    ///
+    /// ```compile_fail
+    /// // A task id is minted, never built from a number.
+    /// let forged = flui_foundation::TaskId::new(1);
+    /// ```
+    TaskId;
 }
 
 /// An owner-local issuer of identities that never reissues one.
@@ -280,8 +300,8 @@ pub struct IdExhausted;
 /// The cross-thread twin of [`IdMint`]: the same sealed [`MintedId`] contract
 /// and the same refusal rule, issued from any thread.
 ///
-/// For an id domain more than one thread mints: the scheduler's task and
-/// callback identities, queued from whichever thread asks. Values are
+/// For an id domain more than one thread mints: the process's task
+/// identities, created on whichever thread asks. Values are
 /// increasing. Once the last value the mint may issue has been issued, every
 /// later [`next`](Self::next) refuses with [`IdExhausted`] from every thread:
 /// the mint never wraps, so a stale id can never come back as a fresh one.

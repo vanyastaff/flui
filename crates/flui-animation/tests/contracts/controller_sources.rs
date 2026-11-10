@@ -8,7 +8,7 @@ use flui_animation::{
     simulation::Simulation,
 };
 use flui_animation::{AnimationRunFuture, RunCanceled};
-use flui_foundation::{Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{IdMint, Listenable, ListenerCallback, ListenerId};
 use std::{
     future::Future,
     pin::Pin,
@@ -1078,6 +1078,8 @@ impl std::ops::DerefMut for TerminalParent {
 }
 
 struct TerminalParentState {
+    /// The ledger's own listener ids: minted, never reused after a removal.
+    ids: IdMint<ListenerId>,
     values: Mutex<Vec<(ListenerId, ListenerCallback)>>,
     statuses: Mutex<Vec<(ListenerId, flui_animation::StatusObserver)>>,
     removed: Rc<Mutex<Vec<&'static str>>>,
@@ -1120,7 +1122,7 @@ impl TerminalParent {
     fn admit(&self, callback: ListenerCallback) -> flui_foundation::ListenerId {
         self.register();
         let mut values = self.values.lock().expect("parent values");
-        let id = flui_foundation::ListenerId::new(values.len() + 1);
+        let id = self.ids.next().expect("the test ledger has ids to issue");
         values.push((id, callback));
         id
     }
@@ -1177,7 +1179,7 @@ impl Animation<f64> for TerminalParent {
         self.register();
         let id = {
             let mut statuses = self.statuses.lock().expect("parent statuses");
-            let id = ListenerId::new(statuses.len() + 1);
+            let id = self.ids.next().expect("the test ledger has ids to issue");
             statuses.push((id, observer));
             id
         };
@@ -1208,6 +1210,7 @@ impl Animation<f64> for TerminalParent {
 fn terminal_parent(fail_removal: bool) -> std::rc::Rc<TerminalParent> {
     std::rc::Rc::new(TerminalParent {
         state: Rc::new(TerminalParentState {
+            ids: IdMint::new(),
             values: Mutex::new(Vec::new()),
             statuses: Mutex::new(Vec::new()),
             removed: Rc::new(Mutex::new(Vec::new())),

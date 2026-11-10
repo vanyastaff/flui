@@ -118,10 +118,11 @@ impl RenderBox for RenderPadding {
 
 ## ID Offset Pattern
 
-Slab-based storage uses 0-based indices internally. Every public ID has a niche (a `NonZero*` payload), so `Option<Id>` costs no extra space, but only the plain slab-backed IDs are the slot plus one. There are two shapes in `flui_foundation::id`:
+Slab-based storage uses 0-based indices internally. Every public ID has a niche (a `NonZero*` payload), so `Option<Id>` costs no extra space, but only the plain slab-backed IDs are the slot plus one. There are three shapes:
 
-- **Plain IDs** wrap a `NonZeroUsize`. The slab-backed ones (`ViewId`, `LayerId`, `SemanticsId`) are the slot plus one: insert `slab_index + 1`, look up `id.get() - 1`. The rest (`ListenerId`, `FrameCallbackId`, `TaskId`) are opaque counters with no slot behind them, minted only by the `IdMint` family (`IdMint` owner-local, `AtomicIdMint` where two threads mint) — an id is never issued twice, and an exhausted mint refuses, typed, forever.
-- **Generational IDs** (`ElementId`, `RenderId`, `UiRuntimeId`, …) pack the slab index with a `NonZeroU32` generation into a `NonZeroU64`, so an id held across a slot's reuse fails the generation check instead of addressing the new occupant. They have no `get()`; the owning tree's accessors use `.index()` (0-based) and `.generation()`. A slot never returns to circulation under a generation an id has carried: `RenderTree` and the signal arena retire a slot whose generations are exhausted, and `ElementTree` refuses that removal with a panic before any teardown.
+- **Plain IDs** (`flui_foundation::id`) wrap a `NonZeroUsize` and address slab storage (`ViewId`, `LayerId`, `SemanticsId`): the slot plus one, so insert `slab_index + 1`, look up `id.get() - 1`.
+- **Minted IDs** (`flui_foundation::sequence`) have no slot behind them (`ListenerId`, `FrameCallbackId`, `TaskId`, `InputSequenceId`): an opaque `NonZeroU64`, 64-bit on every target, whose only constructor is the `IdMint` family (`IdMint` owner-local, `AtomicIdMint` where two threads mint one domain). No value is built from a number, an id is never issued twice, and an exhausted mint refuses, typed (`IdExhausted`), forever.
+- **Generational IDs** (`flui_foundation::id`: `ElementId`, `RenderId`, `UiRuntimeId`, …) pack the slab index with a `NonZeroU32` generation into a `NonZeroU64`, so an id held across a slot's reuse fails the generation check instead of addressing the new occupant. They have no `get()`; the owning tree's accessors use `.index()` (0-based) and `.generation()`. A slot never returns to circulation under a generation an id has carried: `RenderTree` and the signal arena retire a slot whose generations are exhausted, and `ElementTree` refuses that removal with a panic before any teardown.
 
 ```rust
 let slab_index = self.nodes.insert(node);
