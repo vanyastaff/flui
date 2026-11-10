@@ -424,15 +424,15 @@ mod tests {
     /// Fails when the profiler takes every frame, which blends two runtimes' statistics.
     #[test]
     fn a_profiler_follows_one_runtime_and_the_capture_keeps_both() {
-        use std::num::NonZeroU32;
-
         let frame_of = |runtime: u64| {
             let _frame =
                 tracing::debug_span!(target: "flui.frame", "frame", runtime = runtime).entered();
             let _paint = tracing::debug_span!(target: "flui.frame", "paint").entered();
         };
-        let first = UiRuntimeId::new_gen(0, NonZeroU32::MIN).as_u64();
-        let second = UiRuntimeId::new_gen(1, NonZeroU32::MIN).as_u64();
+        let first =
+            UiRuntimeId::new_gen(0, flui_sdk::foundation::generation::Generation::FIRST).as_u64();
+        let second =
+            UiRuntimeId::new_gen(1, flui_sdk::foundation::generation::Generation::FIRST).as_u64();
         let capture = Capture::new();
         let profiler = Arc::new(Profiler::new());
         let subscriber = tracing_subscriber::registry()
@@ -459,15 +459,13 @@ mod tests {
     /// Two pairs on one registry each profile the runtime they were given, not the first one seen.
     #[test]
     fn a_profiler_over_a_named_runtime_ignores_the_others() {
-        use std::num::NonZeroU32;
-
         let frame_of = |runtime: u64| {
             let _frame =
                 tracing::debug_span!(target: "flui.frame", "frame", runtime = runtime).entered();
             let _paint = tracing::debug_span!(target: "flui.frame", "paint").entered();
         };
-        let first = UiRuntimeId::new_gen(0, NonZeroU32::MIN);
-        let second = UiRuntimeId::new_gen(1, NonZeroU32::MIN);
+        let first = UiRuntimeId::new_gen(0, flui_sdk::foundation::generation::Generation::FIRST);
+        let second = UiRuntimeId::new_gen(1, flui_sdk::foundation::generation::Generation::FIRST);
         let (profile_first, profile_second) =
             (Arc::new(Profiler::new()), Arc::new(Profiler::new()));
         let subscriber = tracing_subscriber::registry()
@@ -549,10 +547,9 @@ mod tests {
     /// must not abandon the followed frame's measurements.
     #[test]
     fn another_runtimes_frame_closing_does_not_abandon_the_followed_frame() {
-        use std::num::NonZeroU32;
         let profiler = Arc::new(Profiler::new());
         let capture = Capture::new();
-        let followed = UiRuntimeId::new_gen(0, NonZeroU32::MIN);
+        let followed = UiRuntimeId::new_gen(0, flui_sdk::foundation::generation::Generation::FIRST);
         let subscriber = tracing_subscriber::registry().with(FrameTimingLayer::over_runtime(
             &capture,
             Arc::clone(&profiler),
@@ -575,7 +572,7 @@ mod tests {
                             tracing::debug_span!(
                                 target: "flui.frame",
                                 "frame",
-                                runtime = UiRuntimeId::new_gen(1, NonZeroU32::MIN).as_u64()
+                                runtime = UiRuntimeId::new_gen(1, flui_sdk::foundation::generation::Generation::FIRST).as_u64()
                             )
                             .entered(),
                         );

@@ -249,7 +249,10 @@ pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
 pub use clock::{ManualClock, MonotonicClock, SystemClock, event_epoch};
 pub use consts::EPSILON;
 pub use creation_site::CreationSite;
-pub use sequence::{AtomicIdMint, DragSessionId, IdExhausted, IdMint, InputSequenceId, MintedId};
+pub use sequence::{
+    AtomicIdMint, DragSessionId, FrameCallbackId, IdExhausted, IdMint, InputSequenceId, ListenerId,
+    MintedId, TaskId,
+};
 pub use text_direction::TextDirection;
 pub use ticket::{Ticket, TicketSource};
 pub use tree_error::{PathEntry, TREE_CONTEXT_DEPTH, TreeContext, TreeError};
@@ -264,14 +267,10 @@ pub use id::{
     DataTransferId,
     // Core tree IDs (5-tree architecture)
     ElementId,
-    // UpdateScheduler IDs (consumed by flui-scheduler)
-    FrameCallbackId,
     // Generic ID system
     Id,
     Identifier,
     LayerId,
-    // Listener ID
-    ListenerId,
     Marker,
     // The full (UiRuntimeId, PresentationId) routable address of one presentation
     PresentationAddress,
@@ -280,7 +279,6 @@ pub use id::{
     RawId,
     RenderId,
     SemanticsId,
-    TaskId,
     // Minimal tree-generic bound (does not expose raw index; ElementId satisfies this)
     TreeId,
     // Runtime identity — one UiRuntime incarnation

@@ -2,8 +2,6 @@
 //! trees as the typed snapshot they describe themselves with, a subtree by its handle or by a
 //! reference that must name this window, and the limits.
 
-use std::num::NonZeroU32;
-
 use flui_foundation::PresentationId;
 use flui_foundation::inspect::{Link, NodeRef};
 use flui_protocol::method;
@@ -173,7 +171,9 @@ fn a_reference_to_another_window_is_unknown_and_never_read_here() {
     let own = ui_runtime.presentation_id();
     let reused = PresentationId::new_gen(
         own.index(),
-        NonZeroU32::new(own.generation().get() + 1).expect("a generation"),
+        own.generation()
+            .next()
+            .expect("a generation after the first"),
     );
     let elsewhere = PresentationId::new_gen(own.index() + 1, own.generation());
     for other in [reused, elsewhere] {

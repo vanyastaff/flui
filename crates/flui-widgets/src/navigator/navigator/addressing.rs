@@ -18,7 +18,7 @@
 //!
 //! A refused typed push cannot answer with a `Result` without changing a
 //! public signature, so it returns a [`RouteResult`] already completed with
-//! `None`, logs the refusal with `tracing::error!`, and fails a debug
+//! `Ok(None)`, logs the refusal with `tracing::error!`, and fails a debug
 //! assertion. A named door answers `NamedRouteError::NotAddressable`. Either
 //! way the stack is untouched and the refused route is disposed unpushed.
 
@@ -194,7 +194,7 @@ impl NavigatorHandle {
     }
 
     /// Refuse `route` at a typed public door: dispose it unpushed, report, and
-    /// hand back a result that is already complete with `None`.
+    /// hand back a result that is already complete with `Ok(None)`.
     ///
     /// # Panics
     ///
@@ -220,7 +220,7 @@ impl NavigatorHandle {
         drop(route);
         tracing::error!(operation, route_type = report.route_type, "{report}");
         let (completer, result) = Completer::new();
-        completer.complete(None);
+        completer.complete(Ok(None));
         debug_assert!(false, "{report}");
         result
     }
@@ -231,20 +231,22 @@ impl NavigatorHandle {
     }
 
     /// Push a Router page with its entrance transition. Commit its typed
-    /// entry before observers receive the push.
+    /// entry before observers receive the push, and hand back the page's
+    /// result, which an observer that pops it at once has already completed.
     pub(crate) fn push_page<P: NavigatorRoute, O>(
         &self,
         route: P,
         commit: impl FnOnce(RouteId) -> O,
-    ) -> O {
+    ) -> (O, RouteResult<P::Output>) {
         let mut route = super::super::lifecycle::Terminal::new(route);
         let mut commit = super::super::lifecycle::Terminal::new(commit);
         let id = self.prepare(&*route);
-        self.commit_pages(
+        let (result, committed) = self.commit_pages(
             "push",
             |history| history.push_with_id(id, route.take_value()).1,
             || commit.take_value()(id),
-        )
+        );
+        (committed, result)
     }
 
     /// Push a Router page that replaces `target`: a push-replacement aimed at
@@ -258,7 +260,7 @@ impl NavigatorHandle {
         let mut route = super::super::lifecycle::Terminal::new(route);
         let mut commit = super::super::lifecycle::Terminal::new(commit);
         let id = self.prepare(&*route);
-        self.commit_pages(
+        let (value, committed) = self.commit_pages(
             "push_replacement",
             |history| {
                 history
@@ -271,7 +273,9 @@ impl NavigatorHandle {
                     .1
             },
             || commit.take_value()(id),
-        )
+        );
+        drop(value);
+        committed
     }
 
     /// Replace every route above `keep` (every route, for `None`) with `below`
@@ -319,27 +323,28 @@ impl NavigatorHandle {
         let top_id = self.prepare_reserved(&*top, top_reservation);
         let mut ids: Vec<RouteId> = below.iter().map(|(id, _)| *id).collect();
         ids.push(top_id);
-        self.commit_pages(
+        let ((), committed) = self.commit_pages(
             "replace_tail",
             |history| {
                 history.replace_tail_with_ids(keep, below.take_value(), (top_id, top.take_value()));
             },
             || commit.take_value()(ids),
-        )
+        );
+        committed
     }
 
     /// Commit the Router's typed stack before the flush delivers user effects.
     /// The framework-only commit runs without the history lock. Its return
-    /// value owns outgoing entries until delivery finishes, including unwind.
+    /// value owns outgoing entries until delivery finishes, including unwind;
+    /// the mutation's own value comes back beside it.
     fn commit_pages<V, O>(
         &self,
         operation: &'static str,
         mutate: impl FnOnce(&mut RouteHistory) -> V,
         commit: impl FnOnce() -> O,
-    ) -> O {
+    ) -> (V, O) {
         let (value, retired, undelivered) = self.shared.mutate_committing(mutate, commit);
         report_undelivered(operation, undelivered);
-        drop(value);
-        retired
+        (value, retired)
     }
 }

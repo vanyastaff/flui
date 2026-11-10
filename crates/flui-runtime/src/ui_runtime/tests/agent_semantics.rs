@@ -400,7 +400,10 @@ fn the_record_of_issued_handles_is_exact_and_bounded_by_render_slots() {
     let at = |slot: u32, generation: u32| {
         element(RenderId::new_gen(
             slot,
-            std::num::NonZeroU32::new(generation).expect("test generations are non-zero"),
+            flui_foundation::generation::Generation::try_from(
+                std::num::NonZeroU32::new(generation).expect("test generations are non-zero"),
+            )
+            .expect("a test generation leaves the reserved bit clear"),
         ))
     };
     let mut issued = super::super::agent::IssuedHandles::default();

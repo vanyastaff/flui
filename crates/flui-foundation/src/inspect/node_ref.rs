@@ -8,6 +8,7 @@ use core::fmt;
 use core::num::{NonZeroU32, NonZeroU64};
 use core::str::FromStr;
 
+use crate::generation::Generation;
 use crate::id::{ElementId, LayerId, PresentationId, RenderId, SemanticsId};
 
 use super::tree::{Link, SceneLayer};
@@ -35,7 +36,7 @@ impl NodeRef {
 impl fmt::Display for NodeRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "p{}", self.presentation.index())?;
-        let generation = self.presentation.generation().get();
+        let generation = self.presentation.generation().as_u32();
         if generation > 1 {
             write!(f, ".{generation}")?;
         }
@@ -87,9 +88,10 @@ impl FromStr for Link {
         let prefix = text.chars().next().ok_or_else(error)?;
         let (slot, generation) =
             slot_and_generation(&text[prefix.len_utf8()..]).ok_or_else(error)?;
-        let generation32 = || -> Result<NonZeroU32, ParseRefError> {
+        let generation32 = || -> Result<Generation, ParseRefError> {
             let generation = generation.map_or(1, NonZeroU64::get);
-            NonZeroU32::new(u32::try_from(generation).map_err(|_| error())?).ok_or_else(error)
+            let generation = NonZeroU32::new(u32::try_from(generation).map_err(|_| error())?);
+            Generation::try_from(generation.ok_or_else(error)?).map_err(|_| error())
         };
         Ok(match prefix {
             'v' => Self::Element(ElementId::new_gen(
@@ -123,9 +125,11 @@ impl FromStr for NodeRef {
         let window = window.strip_prefix('p').ok_or_else(error)?;
         let (slot, generation) = slot_and_generation(window).ok_or_else(error)?;
         let generation = generation.map_or(1, NonZeroU64::get);
+        let generation =
+            NonZeroU32::new(u32::try_from(generation).map_err(|_| error())?).ok_or_else(error)?;
         let presentation = PresentationId::new_gen(
             u32::try_from(slot).map_err(|_| error())?,
-            NonZeroU32::new(u32::try_from(generation).map_err(|_| error())?).ok_or_else(error)?,
+            Generation::try_from(generation).map_err(|_| error())?,
         );
         Ok(Self {
             presentation,

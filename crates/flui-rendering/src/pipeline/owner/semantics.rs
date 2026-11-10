@@ -423,13 +423,19 @@ impl RegionIdentities {
             stack.extend(node.children.iter_mut());
         }
         let retained = &self.retained;
-        self.text_runs.retain(|key, _| {
-            live.contains(key)
+        let identities = &mut self.source;
+        self.text_runs.retain(|key, id| {
+            let keep = live.contains(key)
                 || (!rebuilt.contains(&key.field)
                     && match key.field {
                         SemanticsSource::Render(id) => tree.contains(id),
                         SemanticsSource::Region(source) => retained.contains_key(&source),
-                    })
+                    });
+            if !keep {
+                let released = identities.release(*id);
+                debug_assert!(released, "BUG: a kept text run holds its identity");
+            }
+            keep
         });
     }
     /// Spends the identity source.
@@ -467,9 +473,15 @@ impl RegionIdentities {
             .source
             .allocate(missing.len())
             .map_err(|_| SemanticsAssemblyError::RegionIdentityExhausted)?;
-        self.retained.retain(|source, _| {
-            tree.contains(source.host)
-                && (!regions.visited.contains(&source.host) || regions.authored.contains(source))
+        let identities = &mut self.source;
+        self.retained.retain(|source, id| {
+            let keep = tree.contains(source.host)
+                && (!regions.visited.contains(&source.host) || regions.authored.contains(source));
+            if !keep {
+                let released = identities.release(*id);
+                debug_assert!(released, "BUG: a retained region holds its identity");
+            }
+            keep
         });
         self.retained.extend(missing.into_iter().zip(ids));
         Ok(())

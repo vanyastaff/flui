@@ -149,7 +149,7 @@ pub(crate) fn navigator_pop_removes_top_route_and_completes_result() {
     assert!(handle.pop_with(42_i32));
     harness.tick();
 
-    assert_eq!(result.try_take(), Some(Some(42)), "the future resolved");
+    assert_eq!(result.try_take(), Some(Ok(Some(42))), "the future resolved");
     assert_eq!(handle.route_ids().len(), 1);
     assert_eq!(handle.overlay().len(), 1);
     assert_eq!(layers(&mut harness).len(), 1, "the top layer is gone");

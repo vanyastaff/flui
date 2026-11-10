@@ -521,7 +521,7 @@ mod tests {
             }
         }
 
-        let counter = AtomicIdMint::<TaskId>::starting_after(usize::MAX as u64 - 2);
+        let counter = AtomicIdMint::<TaskId>::starting_after(u64::MAX - 2);
         let queue = TaskQueue::new();
         let ran = Rc::new(RefCell::new(Vec::new()));
         for value in [1, 2] {

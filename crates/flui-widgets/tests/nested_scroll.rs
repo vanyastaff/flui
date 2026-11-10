@@ -3657,7 +3657,10 @@ impl HoveringDrag {
                 declared_len: None,
             }]);
         // The id a source minted for the offer.
-        let id = flui_foundation::DataTransferId::new_gen(0, std::num::NonZeroU32::MIN);
+        let id = flui_foundation::DataTransferId::new_gen(
+            0,
+            flui_foundation::generation::Generation::FIRST,
+        );
         let offer = DataTransferOffer::new(id, representations);
         let drag = Self {
             owner,

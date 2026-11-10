@@ -6,7 +6,7 @@
 //! live cases skip without it. The model's cases need no server.
 
 use std::cell::Cell;
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1451,7 +1451,12 @@ fn a_drop_whose_handler_fails_finishes_unaccepted() {
 fn key() -> DragSessionKey {
     DragSessionKey::new(
         ProcessNonce::from_raw(NonZeroU64::new(0xF1A1).expect("non-zero")),
-        UiRuntimeId::new_gen(3, NonZeroU32::new(2).expect("non-zero")),
+        UiRuntimeId::new_gen(
+            3,
+            flui_foundation::generation::Generation::FIRST
+                .next()
+                .expect("generation two"),
+        ),
         DragSessionId::from_wire(NonZeroU64::new(7).expect("non-zero")),
     )
 }

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted (2026-11-04)
 - **Date:** 2026-11-04
+- **Superseded-by:** [ADR-0320](ADR-0320-packed-keys-reserve-their-top-bit-and-synthetic-semantics-ids-set-it.md) for §1's range of a generation (`u32` up to `u32::MAX`) and its "minted only by the ledger" entry; §1's checked step, §2 and §3 remain in force
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) §4 (the counter ids'
   issuance stays `flui_foundation`, the `IdMint` family); [ADR-0209](ADR-0209-nested-scroll-connection.md)
   (the input sequence's id and the mint contract it rests on);

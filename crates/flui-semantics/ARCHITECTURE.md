@@ -39,10 +39,16 @@ callbacks only until their owner retires.
 
 [ADR-0223](../../docs/adr/ADR-0223-authored-semantics-regions.md) distinguishes
 render-boundary origins from allocated region origins. `SemanticsNode` encodes
-that choice as one private enum. A presentation-owned opaque source reserves
-synthetic IDs below nonzero render generations; it never rewinds or reissues
-released values. `synthetic_identity_exhaustion_never_wraps_or_partially_reserves`
-pins the terminal boundary using a private seam. Region actions use the same
+that choice as one private enum. A presentation-owned `SemanticsIdentitySource`
+mints synthetic IDs as generational slot keys over a `GenSlots` ledger, and their
+published form sets the packed key's reserved domain bit, which no render ID
+carries ([ADR-0320](../../docs/adr/ADR-0320-packed-keys-reserve-their-top-bit-and-synthetic-semantics-ids-set-it.md)
+§2). A released ID's slot returns only under its next generation, a stale or
+second release changes nothing, and a slot at its last generation closes.
+`a_released_identity_returns_its_slot_under_a_new_generation`,
+`a_synthetic_identity_never_aliases_a_render_identity`,
+`synthetic_identity_exhaustion_never_wraps_or_partially_reserves` and
+`a_slot_at_its_last_generation_closes_at_its_release` pin it. Region actions use the same
 rooted-node and delivered-offer validation as render boundaries.
 
 ### Scroll ranges retain their actual axis

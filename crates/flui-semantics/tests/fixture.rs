@@ -19,7 +19,10 @@ use flui_semantics::{
 pub fn render_id(index: u32, generation: u32) -> RenderId {
     RenderId::new_gen(
         index,
-        NonZeroU32::new(generation).expect("a fixture generation is non-zero"),
+        flui_foundation::generation::Generation::try_from(
+            NonZeroU32::new(generation).expect("a fixture generation is non-zero"),
+        )
+        .expect("a fixture generation leaves the reserved bit clear"),
     )
 }
 

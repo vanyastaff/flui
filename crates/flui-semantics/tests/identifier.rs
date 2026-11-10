@@ -18,7 +18,10 @@ const IDENTIFIER: &str = "row-7-delete";
 fn render_id(index: u32) -> RenderId {
     RenderId::new_gen(
         index,
-        core::num::NonZeroU32::new(5).expect("fixture generation is non-zero"),
+        flui_foundation::generation::Generation::try_from(
+            core::num::NonZeroU32::new(5).expect("fixture generation is non-zero"),
+        )
+        .expect("a fixture generation leaves the reserved bit clear"),
     )
 }
 

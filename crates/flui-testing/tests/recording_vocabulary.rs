@@ -2,7 +2,7 @@
 //! variant in the generated table has a sample here, and every sample
 //! survives a write and a read unchanged.
 
-use std::num::{NonZeroI32, NonZeroU8, NonZeroU32, NonZeroU64};
+use std::num::{NonZeroI32, NonZeroU8, NonZeroU64};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -207,7 +207,12 @@ fn ime(event: ImeEvent) -> InputRecord {
 }
 
 fn transfer_id() -> DataTransferId {
-    DataTransferId::new_gen(3, NonZeroU32::new(2).expect("nonzero"))
+    DataTransferId::new_gen(
+        3,
+        flui_foundation::generation::Generation::FIRST
+            .next()
+            .expect("generation two"),
+    )
 }
 
 fn entered(format: TransferFormat) -> InputRecord {

@@ -213,7 +213,7 @@ impl TestKey {
     }
 }
 fn element(slot: u32) -> ElementId {
-    ElementId::new_gen(slot, std::num::NonZeroU32::MIN)
+    ElementId::new_gen(slot, flui_foundation::generation::Generation::FIRST)
 }
 fn with_scope(f: impl FnOnce(&GlobalKeyScope)) {
     SCOPE.with(|scope| f(scope.borrow().as_ref().expect("installed scope")));

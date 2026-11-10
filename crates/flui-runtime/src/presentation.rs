@@ -2645,7 +2645,6 @@ impl Drop for PresentationState {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
 
     use super::*;
 
@@ -2653,7 +2652,7 @@ mod tests {
 
     fn presentation() -> PresentationState {
         PresentationState::new_for_test(
-            PresentationId::new_gen(0, NonZeroU32::MIN),
+            PresentationId::new_gen(0, flui_foundation::generation::Generation::FIRST),
             PipelineCell::new(PipelineOwner::new(
                 flui_rendering::TextContextHandle::standalone(),
             )),

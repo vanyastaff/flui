@@ -20,18 +20,27 @@ process-global state or serialization a second identity issuer.
 
 `flui_foundation::sequence` is the workspace's only issuer of identities.
 `IdMint` is the owner-local mint; `AtomicIdMint` is its cross-thread twin for
-an id domain more than one thread mints (the scheduler's task and callback
-identities). Both share the sealed `MintedId` contract, whose `MINT_CEILING`
-keeps every raw value convertible to the identity type's own representation,
-and the same refusal rule: an issued id is never issued again, and an
-exhausted mint refuses, typed (`IdExhausted`), forever
+an id domain more than one thread mints (the process's task identities).
+Both share the sealed `MintedId` contract, whose `MINT_CEILING` keeps every
+raw value convertible to the identity type's own representation, and the
+same refusal rule: an issued id is never issued again, and an exhausted mint
+refuses, typed (`IdExhausted`), forever
 (`the_atomic_mint_issues_the_same_sequence_the_owner_local_mint_does`,
 `an_exhausted_atomic_mint_refuses_permanently`,
 `an_atomic_mint_admits_exactly_one_of_concurrent_requests_for_the_last_identity`,
-`a_pointer_width_bounded_id_refuses_past_its_type_ceiling`,
-`scheduler_and_listener_ids_are_minted_by_the_family`). The counter ids with
-no slab behind them (`ListenerId`, `TaskId`, `FrameCallbackId`) are minted by
-the family; the slab-backed ids stay the slot plus one.
+`listener_and_scheduler_ids_span_the_full_64_bit_space`,
+`scheduler_and_listener_ids_are_minted_by_the_family`).
+
+The ids with no slab behind them (`ListenerId`, `FrameCallbackId`, `TaskId`,
+`InputSequenceId`) are opaque `NonZeroU64`s whose only
+constructor is a mint: no `Default`, no conversion from a number, so a value
+always names an issue and the never-reissue rule holds for the type, not just
+for the mint. They are 64-bit on every target; a pointer-width id would run
+out on wasm32 where a native one never does
+(`minted_listener_and_scheduler_ids_do_not_stop_at_the_pointer_width`). A
+listener ledger outside the framework mints from an `IdMint<ListenerId>` of
+its own. The slab-backed ids (`ViewId`, `LayerId`, `SemanticsId`) stay the
+plain `Id<T>` family, the slot plus one.
 
 ## Listener subscriptions (the owned listener)
 
@@ -50,11 +59,17 @@ No id-based registration or withdrawal is a `Listenable` method
 (`take_listener`, `take_listeners`, `add_listener`, `add_with_recovery`),
 reached through concrete types, not through the trait.
 
-## Slot generations (ADR-0313)
+## Slot generations (ADR-0313, ADR-0320)
 
 A packed generational key (`ElementId`, `RenderId`, `UiRuntimeId`) names one
-slot with a `generation::Generation`: 1-based, checked, never wrapped, minted
-only by the slot arena's `generation::GenSlots` ledger. A release preflights
+slot with a `generation::Generation`: 1-based, checked, never wrapped, at most
+`Generation::LAST` (`0x7FFF_FFFF`), minted by the slot arena's
+`generation::GenSlots` ledger. The packed key's top bit,
+`generation::DOMAIN_BIT`, is reserved for a domain tag: a key's constructor
+takes a `Generation`, so no key carries it, and a raw generation enters only
+through `Generation::try_from`, which answers `ReservedGenerationBit` for it.
+Every raw decoder (`from_u64`, `ElementId`'s `Deserialize`) refuses the bit.
+A release preflights
 its step with `GenSlots::peek` before user code runs and commits it with
 `GenSlots::commit` after; a caught panic between the two steps nothing. A
 slot whose generation space is exhausted closes at its release and never

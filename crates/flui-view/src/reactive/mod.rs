@@ -1590,10 +1590,10 @@ mod tests {
         let first = r.signal(1u8);
         let index = first.slot().index();
         r.release(first.slot());
-        r.inner
-            .borrow_mut()
-            .generations
-            .seed_generation(index, u32::MAX - 1);
+        r.inner.borrow_mut().generations.seed_generation(
+            index,
+            flui_foundation::generation::Generation::LAST.as_u32() - 1,
+        );
         let last = r.signal(2u8);
         assert_eq!(last.slot().index(), index, "the freed slot is taken again");
         r.release(last.slot());

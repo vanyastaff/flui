@@ -63,7 +63,7 @@ fn names_and_values(object: &dyn Inspect) -> Vec<(String, String)> {
 }
 
 fn render_id(slot: u32) -> RenderId {
-    RenderId::new_gen(slot, NonZeroU32::MIN)
+    RenderId::new_gen(slot, flui_foundation::generation::Generation::FIRST)
 }
 
 /// A row's field value, owned by the row.
@@ -168,7 +168,7 @@ fn each_field_type_maps_to_its_value_and_compact_text() {
         ("render link", render_id(12).into_boxed(), "link", "r12"),
         (
             "element link, later generation",
-            ElementId::new_gen(3, NonZeroU32::new(2).expect("2 is nonzero")).into_boxed(),
+            ElementId::new_gen(3, nz32(2)).into_boxed(),
             "link",
             "v3.2",
         ),
@@ -1400,8 +1400,11 @@ fn a_node_reference_prints_and_parses_as_one_text() {
     }
 }
 
-fn nz32(n: u32) -> NonZeroU32 {
-    NonZeroU32::new(n).expect("a generation is not zero")
+fn nz32(n: u32) -> flui_foundation::generation::Generation {
+    flui_foundation::generation::Generation::try_from(
+        NonZeroU32::new(n).expect("a generation is not zero"),
+    )
+    .expect("a fixture generation leaves the reserved bit clear")
 }
 
 /// A positioned value states its unit, and the diff compares it within that unit's tolerance: a

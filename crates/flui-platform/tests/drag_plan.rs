@@ -1,6 +1,6 @@
 //! The drag start and escalation decision, and the identity representation (ADR-0211).
 
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use flui_foundation::{DataTransferId, DragSessionId, IdMint, UiRuntimeId};
@@ -41,7 +41,7 @@ fn offer_of(
     representations: Vec<flui_platform::data_transfer::RepresentationDescriptor>,
 ) -> DataTransferOffer {
     DataTransferOffer::new(
-        DataTransferId::new_gen(0, NonZeroU32::MIN),
+        DataTransferId::new_gen(0, flui_foundation::generation::Generation::FIRST),
         Arc::from(representations),
     )
 }

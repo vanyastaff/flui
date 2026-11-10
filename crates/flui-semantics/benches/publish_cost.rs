@@ -46,7 +46,7 @@ use flui_semantics::{
 fn node(index: u32) -> SemanticsNode {
     let mut node = SemanticsNode::new().with_source_render_id(RenderId::new_gen(
         index,
-        core::num::NonZeroU32::new(1).expect("bench generation is non-zero"),
+        flui_foundation::generation::Generation::FIRST,
     ));
     node.config_mut().set_label(format!("node {index}"));
     if index.is_multiple_of(3) {

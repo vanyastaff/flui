@@ -6,7 +6,8 @@
   registration, `RouteKey<T>` and the named-route errors);
   [ADR-0019](ADR-0019-navigator-routing-seam.md) §2 (the navigator looked up from a build context
   through `Navigator::of`, `maybe_of` and `maybe_of_root`) and §3 only where the pop result
-  crosses as `Box<dyn Any + Send>` and a mismatched type completes with `None`
+  crosses as `Box<dyn Any + Send>`, a mismatched type completes with `None` and `RouteResult<T>`
+  is a `Future<Output = Option<T>>`
 - **Related:** [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md) §6 (the
   router's stack restored from the application's own document),
   [ADR-0254](ADR-0254-window-contract.md) (the URLs the platform opens reach `AppHandler`),
@@ -302,7 +303,14 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   (`from_stack_restores_back_order`, `stack_reads_every_committed_edit`, `empty_stack_is_refused`).
 - §3: the `compile_fail` doctest on `Router::handle` beside its compiling twin; the commit order
   under re-entrant observers (`router_push_commits_before_a_reentrant_observer_pop` and its
-  `replace` and `go` siblings, `router_push_preserves_its_commit_after_an_observer_panic`).
+  `replace` and `go` siblings, `router_push_preserves_its_commit_after_an_observer_panic`); the
+  typed result in `crates/flui-widgets/tests/router.rs`:
+  `push_for_result_resolves_to_the_value_the_page_is_popped_with` (an `Rc` value, which is not
+  `Send`), `a_router_result_of_another_type_is_a_type_mismatch`,
+  `a_page_left_without_a_value_resolves_to_none` (a pop, a replace, a `go`),
+  `an_unmounted_router_resolves_its_pending_results_to_none` and the `terminal-result-waker` row
+  of `router_observer_failure_and_terminal_retirement`, with the `compile_fail` doctest on
+  `RouteResult` that it is not `Send`.
 - §4: `widgets_app_router_navigates_by_handle_and_the_url_follows` and
   `switching_widgets_app_from_home_to_router_releases_the_navigator`
   (`crates/flui-widgets/tests/widgets_app_router.rs`), and the compile-fail case

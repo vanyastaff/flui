@@ -127,7 +127,7 @@ pub use page_route::{PageRoute, PopupRoute};
 pub use page_transitions::{PageTransitionBuilder, PageTransitions};
 pub use parallax_transition::ParallaxPageTransition;
 pub use pop_scope::{PopInvokedCallback, PopScope};
-pub use result::RouteResult;
+pub use result::{RouteResult, RouteResultError};
 pub use route::{PushCompletion, Route, RouteArguments, RouteId, RouteSettings};
 
 // The harness-driven navigator suites live in `crates/flui-widgets/tests/`

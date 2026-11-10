@@ -30,7 +30,10 @@ use parking_lot::Mutex;
 fn node(index: u32, label: &str) -> SemanticsNode {
     let mut node = SemanticsNode::new().with_source_render_id(RenderId::new_gen(
         index,
-        core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        flui_foundation::generation::Generation::try_from(
+            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        )
+        .expect("a fixture generation leaves the reserved bit clear"),
     ));
     node.config_mut().set_label(label);
     node
@@ -909,7 +912,10 @@ fn relations_resolve_through_anchors_across_publication() {
     let render = |index: u32| {
         RenderId::new_gen(
             index,
-            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+            flui_foundation::generation::Generation::try_from(
+                core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+            )
+            .expect("a fixture generation leaves the reserved bit clear"),
         )
     };
     let published = |index: u32| {
@@ -987,7 +993,10 @@ fn every_relation_resolves_to_its_accesskit_property() {
     let render = |index: u32| {
         RenderId::new_gen(
             index,
-            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+            flui_foundation::generation::Generation::try_from(
+                core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+            )
+            .expect("a fixture generation leaves the reserved bit clear"),
         )
     };
     let published = |index: u32| {
@@ -1302,7 +1311,10 @@ fn an_unattached_relation_source_stays_unpublished() {
     let orphan_id = accesskit::NodeId(
         flui_semantics::AccessibilityNodeId::from(RenderId::new_gen(
             9,
-            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+            flui_foundation::generation::Generation::try_from(
+                core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+            )
+            .expect("a fixture generation leaves the reserved bit clear"),
         ))
         .as_u64(),
     );
@@ -1400,7 +1412,10 @@ fn an_unattached_focus_claim_does_not_steal_focus() {
     let field_id = accesskit::NodeId(
         flui_semantics::AccessibilityNodeId::from(RenderId::new_gen(
             1,
-            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+            flui_foundation::generation::Generation::try_from(
+                core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+            )
+            .expect("a fixture generation leaves the reserved bit clear"),
         ))
         .as_u64(),
     );
@@ -1497,7 +1512,10 @@ fn a_labelled_by_target_names_its_source_through_the_consumer() {
     let (_, received, _) = labelled_by_caption(SemanticsRole::Paragraph, |anchor| {
         let mut password = SemanticsNode::new().with_source_render_id(RenderId::new_gen(
             1,
-            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+            flui_foundation::generation::Generation::try_from(
+                core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+            )
+            .expect("a fixture generation leaves the reserved bit clear"),
         ));
         password.config_mut().set_role(SemanticsRole::PasswordInput);
         password.config_mut().set_value("hunter2");
@@ -1561,7 +1579,10 @@ fn labelled_by_caption(
     let label = owner.insert(caption(&anchor));
     let mut field = SemanticsNode::new().with_source_render_id(RenderId::new_gen(
         2,
-        core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        flui_foundation::generation::Generation::try_from(
+            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        )
+        .expect("a fixture generation leaves the reserved bit clear"),
     ));
     field.config_mut().set_role(role);
     field

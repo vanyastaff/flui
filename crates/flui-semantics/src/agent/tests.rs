@@ -14,7 +14,10 @@ use crate::role::SemanticsRole;
 fn render_id(index: u32) -> RenderId {
     RenderId::new_gen(
         index,
-        NonZeroU32::new(3).expect("fixture generation is non-zero"),
+        flui_foundation::generation::Generation::try_from(
+            NonZeroU32::new(3).expect("fixture generation is non-zero"),
+        )
+        .expect("a fixture generation leaves the reserved bit clear"),
     )
 }
 

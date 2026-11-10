@@ -20,7 +20,7 @@
 use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_handler::RecordingWindowHandler;
 use std::cell::{Cell, RefCell};
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -368,7 +368,12 @@ fn answering(
 fn key() -> DragSessionKey {
     DragSessionKey::new(
         ProcessNonce::from_raw(NonZeroU64::new(0xF1A1).expect("non-zero")),
-        UiRuntimeId::new_gen(3, NonZeroU32::new(2).expect("non-zero")),
+        UiRuntimeId::new_gen(
+            3,
+            flui_foundation::generation::Generation::FIRST
+                .next()
+                .expect("generation two"),
+        ),
         DragSessionId::from_wire(NonZeroU64::new(7).expect("non-zero")),
     )
 }

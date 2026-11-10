@@ -1445,7 +1445,7 @@ mod tests {
             "an error that names no node has no path"
         );
         let gone = owner.in_tree(crate::error::RenderError::NodeNotFound(
-            flui_foundation::RenderId::new_gen(999, std::num::NonZeroU32::MIN),
+            flui_foundation::RenderId::new_gen(999, flui_foundation::generation::Generation::FIRST),
         ));
         assert!(
             gone.context().is_empty(),

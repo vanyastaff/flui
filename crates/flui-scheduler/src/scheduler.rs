@@ -65,7 +65,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use flui_foundation::MonotonicClock as _;
+use flui_foundation::{IdMint, MonotonicClock as _};
 use parking_lot::Mutex;
 use web_time::{Duration, Instant};
 
@@ -78,7 +78,7 @@ use crate::{
         RecurringFrameCallback, SchedulerPhase,
     },
     frame_clock::ClockSource,
-    id::{AtomicIdMint, CallbackId},
+    id::CallbackId,
     task::{Priority, TaskQueue},
 };
 
@@ -766,9 +766,9 @@ struct CallbackState {
     transient: RefCell<VecDeque<CancellableTransientCallback>>,
     /// Cancelled callback IDs, queried before callback delivery.
     cancelled: RefCell<HashSet<CallbackId>>,
-    /// Callback identities: the minted `FrameCallbackId`s. Sticky refusal —
-    /// no id is ever issued twice.
-    id_mint: AtomicIdMint<CallbackId>,
+    /// Callback identities: the minted `FrameCallbackId`s, owner-local like
+    /// the rest of this state. Sticky refusal — no id is ever issued twice.
+    id_mint: IdMint<CallbackId>,
     /// Persistent frame callbacks (every frame)
     persistent: RefCell<Vec<CancellablePersistentCallback>>,
     /// Post-frame callbacks (after frame completes)
@@ -784,8 +784,8 @@ impl CallbackState {
     ///
     /// Exhaustion is sticky (the mint refuses, typed, forever), so the ids of
     /// one schedule are never reused; a refusal here names a breached
-    /// invariant, not a caller error — a schedule minting every id
-    /// `usize` names is unreachable.
+    /// invariant, not a caller error — a schedule minting every 64-bit id
+    /// is unreachable.
     fn mint_id(&self) -> CallbackId {
         self.id_mint
             .next()
@@ -1092,7 +1092,7 @@ impl UpdateScheduler {
             callbacks: CallbackState {
                 transient: RefCell::new(VecDeque::new()),
                 cancelled: RefCell::new(HashSet::new()),
-                id_mint: AtomicIdMint::new(),
+                id_mint: IdMint::new(),
                 persistent: RefCell::new(Vec::new()),
                 post_frame: RefCell::new(crate::post_frame::PostFrameStorage::new()),
                 microtasks: RefCell::new(VecDeque::new()),

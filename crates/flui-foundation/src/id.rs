@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! RawId (NonZeroUsize) ─► Id<T: Marker> ─► ViewId, RenderId, etc.
-//! ElementId (NonZeroU64, packs u32 index + NonZeroU32 generation) ─► generational arena key
+//! ElementId (NonZeroU64, packs u32 index + 31-bit Generation) ─► generational arena key
 //! ```
 //!
 //! # Design Notes
@@ -23,7 +23,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use std::num::NonZeroU32;
+//! use flui_foundation::generation::Generation;
 //! use flui_foundation::{ElementId, RenderId, ViewId};
 //!
 //! // ElementId niche optimization: Option<ElementId> == size of ElementId
@@ -37,7 +37,7 @@
 //! assert_eq!(element.index(), 0); // 0-based slab index
 //!
 //! // Create from explicit slot + generation
-//! let generation = NonZeroU32::new(1).unwrap();
+//! let generation = Generation::FIRST;
 //! let element = ElementId::new_gen(0, generation);
 //! assert_eq!(element.index(), 0);
 //! assert_eq!(element.generation(), generation);
@@ -69,6 +69,7 @@ use core::{
 };
 
 use crate::WasmNotSendSync;
+use crate::generation::{DOMAIN_BIT, Generation};
 
 // =========================================================================
 // Compile-time size assertions
@@ -686,28 +687,6 @@ ids! {
         /// `SemanticsNode`s provide accessibility information for screen readers
         /// and other assistive technologies.
         pub type SemanticsId Semantics;
-
-        /// Listener ID - identifier for registered listeners.
-        ///
-        /// Used by `ChangeNotifier` and `Listenable` to track registered
-        /// callbacks. Minted only by an [`IdMint`](crate::IdMint) owned by
-        /// the listener list; never reissued, never wrapped.
-        pub type ListenerId Listener;
-
-        /// Frame Callback ID - scheduler frame callback identifier.
-        ///
-        /// Identifies scheduled frame callbacks in the scheduler binding.
-        /// Minted only by an [`AtomicIdMint`](crate::AtomicIdMint), where
-        /// the scheduler's threads race to mint them.
-        pub type FrameCallbackId FrameCallback;
-
-        /// Task ID - scheduler task identifier.
-        ///
-        /// Identifies tasks in the priority-based task queue. Minted only by
-        /// an [`AtomicIdMint`](crate::AtomicIdMint), where the scheduler's
-        /// threads race to mint them.
-        pub type TaskId Task;
-
     }
     generational: {
         /// Render ID - **generational** key into the `RenderObject` tree.
@@ -759,7 +738,7 @@ ids! {
 
 /// A type-safe **generational** identifier for slab/arena-backed trees.
 ///
-/// Packs a 32-bit slot index and a 32-bit non-zero generation into a
+/// Packs a 32-bit slot index and a non-zero [`Generation`] into a
 /// `NonZeroU64` with the layout `(generation << 32) | index` — the same
 /// scheme as [`ElementId`], generalized over a [`Marker`] so other tree
 /// domains ([`RenderId`] today; `LayerId`/`SemanticsId` candidates) get ABA
@@ -798,25 +777,53 @@ ids! {
 ///
 /// `generation >= 1` keeps the high 32 bits non-zero, so the all-zero
 /// pattern is free for `Option<GenId<T>>` (same size as `GenId<T>`).
+///
+/// # Reserved domain bit
+///
+/// A [`Generation`] is at most [`Generation::LAST`], so the packed value's
+/// top bit ([`DOMAIN_BIT`]) is clear in every id this type builds or decodes.
+/// A domain that publishes its ids next to another's sets the bit on its own
+/// published form (a synthetic semantics identity does), and the raw decoder
+/// [`Self::from_u64`] refuses such a value.
 #[repr(transparent)]
 pub struct GenId<T: Marker>(core::num::NonZeroU64, PhantomData<fn() -> T>);
+
+/// `(generation << 32) | index`: non-zero because a generation is, with the
+/// [`DOMAIN_BIT`] clear because a generation is at most [`Generation::LAST`].
+fn pack_generational(index: u32, generation: Generation) -> core::num::NonZeroU64 {
+    let packed = (u64::from(generation.as_u32()) << 32) | u64::from(index);
+    debug_assert_eq!(packed & DOMAIN_BIT, 0, "BUG: a Generation is at most LAST");
+    core::num::NonZeroU64::new(packed)
+        .expect("BUG: a Generation is non-zero, so the packed value's high bits are non-zero")
+}
+
+/// The generation a packed value read back from a wire or a trace carries,
+/// or `None` when it carries none (high bits zero) or sets the
+/// [`DOMAIN_BIT`].
+fn decode_generational(packed: u64) -> Option<core::num::NonZeroU64> {
+    let generation = core::num::NonZeroU32::new((packed >> 32) as u32)?;
+    Generation::try_from(generation).ok()?;
+    core::num::NonZeroU64::new(packed)
+}
+
+/// The generation in the high bits of a value [`pack_generational`] or
+/// [`decode_generational`] admitted.
+fn packed_generation(packed: core::num::NonZeroU64) -> Generation {
+    core::num::NonZeroU32::new((packed.get() >> 32) as u32)
+        .and_then(|generation| Generation::try_from(generation).ok())
+        .expect("BUG: every packed generational key is admitted by pack_generational or decode_generational")
+}
 
 impl<T: Marker> GenId<T> {
     /// Construct from explicit slab slot index and generation.
     ///
-    /// # Panics
-    ///
-    /// Cannot panic in practice: `generation >= 1` guarantees a non-zero
-    /// packed value; the `expect` is a proof guard.
+    /// A [`Generation`] is at most [`Generation::LAST`], so the id never
+    /// carries the [`DOMAIN_BIT`]; a raw generation enters through
+    /// `Generation::try_from`, which refuses that bit.
     #[inline]
     #[must_use]
-    pub fn new_gen(index: u32, generation: core::num::NonZeroU32) -> Self {
-        let packed = (u64::from(generation.get()) << 32) | u64::from(index);
-        Self(
-            core::num::NonZeroU64::new(packed)
-                .expect("BUG: generation is typed NonZeroU32, so generation >= 1 always keeps the packed value's high bits non-zero"),
-            PhantomData,
-        )
+    pub fn new_gen(index: u32, generation: Generation) -> Self {
+        Self(pack_generational(index, generation), PhantomData)
     }
 
     /// Convenience constructor preserving the 1-based `n` convention:
@@ -835,7 +842,7 @@ impl<T: Marker> GenId<T> {
         assert!(n >= 1, "GenId::new requires n >= 1 (1-based index); got 0");
         let index = u32::try_from(n - 1)
             .expect("GenId::new index overflows u32; tree exceeds u32::MAX slots");
-        Self::new_gen(index, core::num::NonZeroU32::MIN)
+        Self::new_gen(index, Generation::FIRST)
     }
 
     /// The 0-based slab slot index packed into this id.
@@ -849,16 +856,10 @@ impl<T: Marker> GenId<T> {
     }
 
     /// The generation packed into this id.
-    ///
-    /// # Panics
-    ///
-    /// Cannot panic for ids built via `new`/`new_gen` (proof guard only).
     #[inline]
     #[must_use]
-    pub fn generation(self) -> core::num::NonZeroU32 {
-        let generation = (self.0.get() >> 32) as u32;
-        core::num::NonZeroU32::new(generation)
-            .expect("BUG: every GenId is built via new/new_gen, which only accept a NonZeroU32 generation, so the packed high bits are always non-zero")
+    pub fn generation(self) -> Generation {
+        packed_generation(self.0)
     }
 
     /// The raw packed `NonZeroU64` value (tracing/logging).
@@ -869,7 +870,8 @@ impl<T: Marker> GenId<T> {
     }
 
     /// The id whose [`Self::as_u64`] is `packed`, or `None` when `packed` has no generation
-    /// (its high 32 bits are zero), which no id minted by `new`/`new_gen` has.
+    /// (its high 32 bits are zero) or sets the reserved [`DOMAIN_BIT`], which no id minted
+    /// by `new`/`new_gen` has.
     ///
     /// For a value read back from a trace field or a wire message. It proves the value is
     /// well-formed, not that the slot is live: resolving it still goes through the owner's
@@ -877,10 +879,7 @@ impl<T: Marker> GenId<T> {
     #[inline]
     #[must_use]
     pub fn from_u64(packed: u64) -> Option<Self> {
-        if packed >> 32 == 0 {
-            return None;
-        }
-        core::num::NonZeroU64::new(packed).map(|packed| Self(packed, PhantomData))
+        decode_generational(packed).map(|packed| Self(packed, PhantomData))
     }
 }
 
@@ -1028,10 +1027,10 @@ const _: () = assert!(
 );
 
 impl PresentationId {
-    /// Constructs an identity from a zero-based owner slot and non-zero generation.
+    /// Constructs an identity from a zero-based owner slot and its generation.
     #[inline]
     #[must_use]
-    pub fn new_gen(index: u32, generation: core::num::NonZeroU32) -> Self {
+    pub fn new_gen(index: u32, generation: Generation) -> Self {
         Self(GenId::new_gen(index, generation))
     }
 
@@ -1062,10 +1061,10 @@ impl PresentationId {
         self.0.index()
     }
 
-    /// Returns the non-zero incarnation generation encoded in this identity.
+    /// Returns the incarnation generation encoded in this identity.
     #[inline]
     #[must_use]
-    pub fn generation(self) -> core::num::NonZeroU32 {
+    pub fn generation(self) -> Generation {
         self.0.generation()
     }
 
@@ -1159,7 +1158,7 @@ const _: () = {
 ///
 /// # Niche optimisation
 ///
-/// The all-zero bit pattern is unreachable: `generation` is `NonZeroU32` (≥ 1),
+/// The all-zero bit pattern is unreachable: `generation` is a non-zero `Generation`,
 /// so the high 32 bits are never zero. `Option<ElementId>` therefore has the
 /// same size as `ElementId` — the compiler uses 0 as the `None` sentinel.
 ///
@@ -1227,10 +1226,9 @@ const _: () = assert!(
 impl ElementId {
     /// Construct from explicit slab slot index and generation.
     ///
-    /// The packed value is `(generation.get() as u64) << 32 | index as u64`.
-    /// Because `generation >= 1`, the packed value is always non-zero, so the
-    /// `NonZeroU64::new` cannot fail; the `expect` guards against a future
-    /// refactor that accidentally makes the value zero.
+    /// The packed value is `(generation << 32) | index`. A [`Generation`] is
+    /// non-zero and at most [`Generation::LAST`], so the value is non-zero and
+    /// its reserved [`DOMAIN_BIT`] is clear.
     ///
     /// # Index cap
     ///
@@ -1238,29 +1236,15 @@ impl ElementId {
     /// losslessly (`u32::MAX + 1` addressable slots). `ElementTree` enforces
     /// the bound earlier — `alloc_id` narrows the `usize` slab index via
     /// `u32::try_from` and panics if a tree ever exceeds `u32::MAX` slots.
-    ///
-    /// # Panics
-    ///
-    /// In practice this function cannot panic: a `NonZeroU32` generation with
-    /// any `u32` index always produces a non-zero packed value. The
-    /// `.expect` is a compile-time proof guard; it fires only if the
-    /// `(gen << 32) | idx` arithmetic somehow produced zero, which is
-    /// impossible given `generation >= 1`.
     #[inline]
     #[must_use]
-    pub fn new_gen(index: u32, generation: core::num::NonZeroU32) -> Self {
-        let packed = (u64::from(generation.get()) << 32) | u64::from(index);
-        // `generation >= 1` guarantees the high 32 bits are never zero, so the
-        // packed value is always non-zero.
-        Self(
-            core::num::NonZeroU64::new(packed)
-                .expect("BUG: generation is typed NonZeroU32, so generation >= 1 always keeps the packed value's high bits non-zero"),
-        )
+    pub fn new_gen(index: u32, generation: Generation) -> Self {
+        Self(pack_generational(index, generation))
     }
 
     /// Convenience constructor preserving the 1-based `n` convention used by
     /// existing call sites: `new(n)` is equivalent to
-    /// `new_gen((n - 1) as u32, NonZeroU32::new(1).unwrap())`.
+    /// `new_gen((n - 1) as u32, Generation::FIRST)`.
     ///
     /// This maps 1-based indices to 0-based slab slots with generation = 1
     /// so that `ElementId::new(1).index() == 0`.
@@ -1279,7 +1263,7 @@ impl ElementId {
         );
         let index = u32::try_from(n - 1)
             .expect("ElementId::new index overflows u32; tree exceeds u32::MAX elements");
-        Self::new_gen(index, core::num::NonZeroU32::MIN)
+        Self::new_gen(index, Generation::FIRST)
     }
 
     /// The 0-based slab slot index packed into this id.
@@ -1300,27 +1284,10 @@ impl ElementId {
     ///
     /// A stale id (pointing at a freed-and-reused slot) will have a generation
     /// that no longer matches the slot's current generation in `ElementTree`.
-    ///
-    /// # Panics
-    ///
-    /// In practice this function cannot panic: every `ElementId` construction
-    /// path keeps the high 32 bits non-zero — `new`/`new_gen` require a
-    /// `NonZeroU32` generation by their own typing, and `Deserialize` (the
-    /// only other path) explicitly rejects a zero generation field before
-    /// building the value. The `.expect` is a proof guard that fires only if
-    /// a zero-generation id was somehow constructed outside all of the above,
-    /// which the `NonZeroU64` newtype wrapper prevents.
     #[inline]
     #[must_use]
-    pub fn generation(self) -> core::num::NonZeroU32 {
-        // The high 32 bits hold the generation. It is always non-zero because
-        // `new_gen` requires a `NonZeroU32` generation, and the minimum packed
-        // value with generation=1 is `1 << 32` which has non-zero high bits.
-        let generation = (self.0.get() >> 32) as u32;
-        // Invariant: every construction path (new/new_gen's NonZeroU32 typing,
-        // Deserialize's explicit validation) keeps generation >= 1.
-        core::num::NonZeroU32::new(generation)
-            .expect("BUG: the high 32 bits are a NonZeroU32 generation by construction (new/new_gen typing; Deserialize validation)")
+    pub fn generation(self) -> Generation {
+        packed_generation(self.0)
     }
 
     /// The raw packed `NonZeroU64` value. Useful for tracing / logging.
@@ -1411,17 +1378,14 @@ mod serde_impl {
     impl<'de> Deserialize<'de> for ElementId {
         fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
             let packed = u64::deserialize(deserializer)?;
-            let nz = core::num::NonZeroU64::new(packed).ok_or_else(|| {
-                serde::de::Error::custom("ElementId packed value must be non-zero")
-            })?;
-            // Verify the generation (high 32 bits) is non-zero.
-            let generation = (packed >> 32) as u32;
-            if generation == 0 {
-                return Err(serde::de::Error::custom(
-                    "ElementId generation field (high 32 bits) must be non-zero",
-                ));
-            }
-            Ok(ElementId(nz))
+            super::decode_generational(packed)
+                .map(ElementId)
+                .ok_or_else(|| {
+                    serde::de::Error::custom(
+                        "ElementId generation field (high 32 bits) must be non-zero \
+                     and leave the reserved domain bit clear",
+                    )
+                })
         }
     }
 }
@@ -1438,12 +1402,15 @@ mod tests {
 
     #[test]
     fn a_packed_value_read_back_from_a_trace_field_names_the_same_identity() {
-        let presentation = PresentationId::new_gen(7, NonZeroU32::new(3).unwrap());
+        let presentation = PresentationId::new_gen(
+            7,
+            Generation::try_from(NonZeroU32::new(3).unwrap()).unwrap(),
+        );
         assert_eq!(
             PresentationId::from_u64(presentation.as_u64()),
             Some(presentation)
         );
-        let runtime = UiRuntimeId::new_gen(0, NonZeroU32::MIN);
+        let runtime = UiRuntimeId::new_gen(0, Generation::FIRST);
         assert_eq!(UiRuntimeId::from_u64(runtime.as_u64()), Some(runtime));
         // No minted identity has a zero generation, so such a value is not an identity.
         assert_eq!(PresentationId::from_u64(0), None);
@@ -1464,8 +1431,8 @@ mod tests {
 
     /// ABA safety: same slot, different generation → distinct ids.
     fn gen_id_stale_generation_is_distinct() {
-        let gen1 = NonZeroU32::new(1).unwrap();
-        let gen2 = NonZeroU32::new(2).unwrap();
+        let gen1 = Generation::FIRST;
+        let gen2 = Generation::FIRST.next().unwrap();
         let live = RenderId::new_gen(5, gen2);
         let stale = RenderId::new_gen(5, gen1);
         assert_ne!(

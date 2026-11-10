@@ -22,7 +22,7 @@ use flui_view::environment::VsyncScope;
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, GestureDetector, NavigatorHandle, NavigatorObserver, PopupRoute, RouteAnimation,
-    RouteId, RouteParseError, RouterError, Text,
+    RouteId, RouteParseError, RouteResultError, RouterError, Text,
 };
 
 const FRAME: Duration = Duration::from_millis(50);
@@ -736,6 +736,9 @@ fn router_observer_failure_and_terminal_retirement() {
             "terminal-router" => terminal_router_config_destroys_factories_after_route_failure(),
             "terminal-route" => terminal_route_result_failure_destroys_later_observer(),
             "terminal-record-waker" => terminal_route_record_destroys_pending_waker(),
+            "terminal-result-waker" => {
+                a_panicking_waker_leaves_the_other_unmount_results_delivered();
+            }
             "terminal-overlay" => terminal_overlay_entries_compete(),
             "terminal-modal-cycle" => terminal_seeded_modal_releases_its_factories(),
             "terminal-modal-alias" => terminal_modal_aliases_remain_usable_until_last_release(),
@@ -762,6 +765,7 @@ fn router_observer_failure_and_terminal_retirement() {
             "terminal-router",
             "terminal-route",
             "terminal-record-waker",
+            "terminal-result-waker",
             "terminal-overlay",
             "terminal-modal-cycle",
             "terminal-modal-alias",
@@ -2178,4 +2182,183 @@ pub(crate) fn a_stack_listener_may_navigate() {
         ],
         "the listener's push is the next delivery"
     );
+}
+
+// ============================================================================
+// Typed page results
+// ============================================================================
+
+/// A page pushed for a result resolves to the value it is popped with. The
+/// value is owner-local (`Rc` is not `Send`), and a `pop_with` that would take
+/// the last page changes nothing.
+pub(crate) fn push_for_result_resolves_to_the_value_the_page_is_popped_with() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let result = router
+        .push_for_result::<Rc<str>>(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    settle(&mut laid);
+    assert!(laid_out_text(&laid, "Note 1"));
+    assert!(!result.is_completed(), "the page is still on the stack");
+
+    assert_eq!(router.pop_with(Rc::<str>::from("saved")), Ok(true));
+    settle(&mut laid);
+    assert_eq!(router.current(), AppRoute::Home);
+    assert_eq!(result.try_take(), Some(Ok(Some(Rc::<str>::from("saved")))));
+    assert_eq!(result.try_take(), None, "a value is delivered once");
+
+    assert_eq!(router.pop_with(Rc::<str>::from("refused")), Ok(false));
+    settle(&mut laid);
+    assert_eq!(router.stack(), vec![AppRoute::Home]);
+}
+
+/// A page popped with a value of another type still leaves, and its result is
+/// the typed mismatch rather than a silent `None`.
+pub(crate) fn a_router_result_of_another_type_is_a_type_mismatch() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let result = router
+        .push_for_result::<u32>(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    settle(&mut laid);
+
+    assert_eq!(router.pop_with("not a number"), Ok(true));
+    settle(&mut laid);
+    assert_eq!(router.current(), AppRoute::Home);
+    assert_eq!(
+        result.try_take(),
+        Some(Err(RouteResultError::TypeMismatch {
+            expected: std::any::type_name::<u32>(),
+        }))
+    );
+}
+
+/// A page that leaves without a value resolves to `Ok(None)`, whichever way
+/// it leaves: a plain pop, a replace, a `go` that drops it.
+pub(crate) fn a_page_left_without_a_value_resolves_to_none() {
+    type Leave = fn(&RouterHandle<AppRoute>);
+    let leaves: [(&str, Leave); 3] = [
+        ("pop", |router| {
+            assert_eq!(router.pop(), Ok(true));
+        }),
+        ("replace", |router| {
+            assert_eq!(router.replace(AppRoute::Note { id: 2 }), Ok(()));
+        }),
+        ("go", |router| {
+            assert_eq!(router.go("/tag/x"), Ok(()));
+        }),
+    ];
+    for (leave_by, leave) in leaves {
+        let (mut laid, home) = two_screen_app();
+        let router = home.handle();
+        let result = router
+            .push_for_result::<u32>(AppRoute::Note { id: 1 })
+            .expect("mounted router");
+        settle(&mut laid);
+        leave(&router);
+        settle(&mut laid);
+        assert_eq!(result.try_take(), Some(Ok(None)), "left by {leave_by}");
+    }
+}
+
+/// A result still awaited when its router unmounts resolves to `Ok(None)` and
+/// wakes its task, so no caller waits for a page that can no longer leave.
+pub(crate) fn an_unmounted_router_resolves_its_pending_results_to_none() {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Poll, Wake, Waker};
+
+    struct CountWakes(AtomicUsize);
+    impl Wake for CountWakes {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let mut result = router
+        .push_for_result::<u32>(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    settle(&mut laid);
+    let wakes = Arc::new(CountWakes(AtomicUsize::new(0)));
+    let waker = Waker::from(Arc::clone(&wakes));
+    let mut context = Context::from_waker(&waker);
+    assert_eq!(Pin::new(&mut result).poll(&mut context), Poll::Pending);
+
+    drop((router, home, laid));
+    assert_eq!(
+        wakes.0.load(Ordering::Relaxed),
+        1,
+        "the awaiting task is woken"
+    );
+    assert_eq!(
+        Pin::new(&mut result).poll(&mut context),
+        Poll::Ready(Ok(None))
+    );
+}
+
+/// A waker that panics while its router unmounts leaves the other pending
+/// results delivered, and its panic is the one the unmount raises.
+fn a_panicking_waker_leaves_the_other_unmount_results_delivered() {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Poll, Wake, Waker};
+
+    struct Wakes {
+        count: AtomicUsize,
+        panics: bool,
+    }
+    impl Wake for Wakes {
+        fn wake(self: Arc<Self>) {
+            self.count.fetch_add(1, Ordering::Relaxed);
+            assert!(!self.panics, "waker failure");
+        }
+    }
+
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let mut first = router
+        .push_for_result::<u32>(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    let mut second = router
+        .push_for_result::<u32>(AppRoute::Note { id: 2 })
+        .expect("mounted router");
+    settle(&mut laid);
+    let failing = Arc::new(Wakes {
+        count: AtomicUsize::new(0),
+        panics: true,
+    });
+    let healthy = Arc::new(Wakes {
+        count: AtomicUsize::new(0),
+        panics: false,
+    });
+    let failing_waker = Waker::from(Arc::clone(&failing));
+    let healthy_waker = Waker::from(Arc::clone(&healthy));
+    assert_eq!(
+        Pin::new(&mut first).poll(&mut Context::from_waker(&failing_waker)),
+        Poll::Pending
+    );
+    assert_eq!(
+        Pin::new(&mut second).poll(&mut Context::from_waker(&healthy_waker)),
+        Poll::Pending
+    );
+
+    let failure =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop((router, home, laid))))
+            .expect_err("the waker's panic reaches the unmount");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("waker failure")
+    );
+    assert_eq!(failing.count.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        healthy.count.load(Ordering::Relaxed),
+        1,
+        "the other task is woken"
+    );
+    assert_eq!(first.try_take(), Some(Ok(None)));
+    assert_eq!(second.try_take(), Some(Ok(None)));
 }

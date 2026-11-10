@@ -1426,7 +1426,7 @@ variant delivers to the departing route keeps the ordinary delivery-time
 contract (`pop_with`'s), because the navigator still cannot know the departing
 route's `Output`. Only `push_named_typed`'s `T` is checked early. So
 `push_replacement_named_with(name, Wrong)` still completes the replaced route
-with `None` and a log line, exactly as `push_replacement_with` does.
+with `RouteResultError::TypeMismatch`, exactly as `push_replacement_with` does.
 
 **Replacement tests:** in `tests/navigator_public.rs` —
 `push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing`
@@ -2645,7 +2645,7 @@ named `push_replacement_named[_with]`, `pop_and_push_named[_with]` and
 what they remove or place beneath belongs to the Router, whose stack would
 otherwise name a page that is gone. The typed doors cannot return a `Result`
 without a public signature change, so a refusal disposes the route unpushed,
-returns a `RouteResult` already complete with `None`, logs `tracing::error!`
+returns a `RouteResult` already complete with `Ok(None)`, logs `tracing::error!`
 with the reason, and fails a `debug_assert!`. The named doors answer
 `NamedRouteError::NotAddressable` before anything is resolved, dismissed or
 pushed. Popups stay admitted, because `show_dialog` pushes a `PopupRoute` on
@@ -2704,6 +2704,33 @@ Router wraps each one in `Semantics::scopes_route(true)
 route change on every navigation, with no app bar required.
 
 **Unasserted:** no test pins this.
+
+### A Router page's result is typed, owner-local and always delivered
+
+**Choice:** `RouterHandle::push_for_result::<T>` returns the page's
+`RouteResult<T>`, a future of `Result<Option<T>, RouteResultError>` over an
+`Rc`/`RefCell` channel, and `RouterHandle::pop_with` delivers the value as a
+`Box<dyn Any>`: neither `T`, the value nor the result is `Send` (ADR-0093 §3).
+A value of another type pops the page and resolves to
+`RouteResultError::TypeMismatch`; the value is dropped and reported outside the
+history lock. Every exit resolves the result: a value, `Ok(None)` for a page
+that leaves without one (a pop, a replace, a `go` that drops it), and
+`Ok(None)` for every result still pending when the navigator unmounts. Those
+last completions are prepared under the history lock and run, waking their
+tasks, after it is released, each contained so that a panicking waker or
+observer leaves the rest to complete. Completion does not pop a route: a pop
+through a handle that outlived the navigator still runs the route's `did_pop`,
+so local history severs what it owes, and a value it carries comes back as
+undelivered.
+
+**Pinned by:** `push_for_result_resolves_to_the_value_the_page_is_popped_with`,
+`a_router_result_of_another_type_is_a_type_mismatch`,
+`a_page_left_without_a_value_resolves_to_none`,
+`an_unmounted_router_resolves_its_pending_results_to_none` and the
+`terminal-result-waker` row of `router_observer_failure_and_terminal_retirement`
+(`crates/flui-widgets/tests/router.rs`), `an_unmounted_navigators_owed_removal_is_severed`
+(`crates/flui-widgets/tests/navigator.rs`), and the `compile_fail` doctest on
+`RouteResult`.
 
 ### 26. Global widgets localizations live in the catalog, not in a separate package
 

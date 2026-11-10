@@ -1,6 +1,9 @@
 //! Accessible regions authored by one render object.
 
+use flui_foundation::Marker;
+use flui_foundation::generation::{DOMAIN_BIT, GenSlots};
 use flui_foundation::geometry::{Matrix4, Rect};
+use flui_foundation::id::GenId;
 
 use crate::{AccessibilityNodeId, SemanticsConfiguration};
 
@@ -49,36 +52,49 @@ pub struct SemanticsRegions {
     /// Content after the real children in accessibility traversal order.
     pub after_children: Vec<SemanticsRegion>,
 }
+/// The slot domain of synthetic semantics identities.
+#[derive(Debug)]
+enum SyntheticSemantics {}
+
+impl Marker for SyntheticSemantics {}
 
 /// An allocated identity for content with no separate render object.
 ///
-/// Obtain values from a presentation-owned [`SemanticsIdentitySource`]. The
-/// token cannot alias a generational render identity.
+/// Obtain values from a presentation-owned [`SemanticsIdentitySource`]. It is
+/// a generational slot key whose published form sets the packed key's
+/// reserved [`DOMAIN_BIT`], which no render identity carries, so the two
+/// never alias.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SemanticsRegionId(AccessibilityNodeId);
+pub struct SemanticsRegionId(GenId<SyntheticSemantics>);
 
 impl SemanticsRegionId {
     /// The identity published to accessibility adapters.
     #[must_use]
-    pub const fn accessibility_id(self) -> AccessibilityNodeId {
-        self.0
+    pub fn accessibility_id(self) -> AccessibilityNodeId {
+        AccessibilityNodeId::from_u64(self.0.as_u64() | DOMAIN_BIT)
+            .expect("BUG: the domain bit makes the published value non-zero")
     }
 }
 
-/// Presentation-local, monotonic identity authority for synthetic nodes.
+/// Presentation-local, generational identity authority for synthetic nodes.
 ///
 /// Keep this source alive across semantics-owner replacement and accessibility
-/// disable/enable transitions. The low 32-bit range is disjoint from RenderId's
-/// nonzero generation. Allocated values are never returned to the source.
-#[derive(Debug)]
+/// disable/enable transitions. A released identity's slot returns under its
+/// next generation, so a stale identity never names the slot's next occupant;
+/// a slot whose generation reached [`Generation::LAST`] closes at its release
+/// and never returns.
+///
+/// [`Generation::LAST`]: flui_foundation::generation::Generation::LAST
+#[derive(Debug, Default)]
 pub struct SemanticsIdentitySource {
-    next: u64,
-}
-
-impl Default for SemanticsIdentitySource {
-    fn default() -> Self {
-        Self { next: 1 }
-    }
+    /// The live generation of every slot the source has minted.
+    generations: GenSlots,
+    /// Whether each slot's current generation is handed out.
+    occupied: Vec<bool>,
+    /// Released slots with a next generation, taken before a fresh slot.
+    free: Vec<u32>,
+    /// Refuse every reservation that needs a slot (a test's exhaustion).
+    exhausted: bool,
 }
 
 /// The presentation has exhausted the reserved synthetic identity space.
@@ -88,57 +104,127 @@ pub struct SemanticsIdentityExhausted;
 
 impl SemanticsIdentitySource {
     /// Reserves a complete batch or returns an error without consuming any IDs.
-    /// Exhaustion never wraps or reissues an earlier identity.
+    /// A released slot is taken again only under its next generation, and
+    /// exhaustion never wraps or reissues an earlier identity.
     pub fn allocate(
         &mut self,
         count: usize,
     ) -> Result<Vec<SemanticsRegionId>, SemanticsIdentityExhausted> {
-        let count = u64::try_from(count).map_err(|_| SemanticsIdentityExhausted)?;
-        let end = self
-            .next
-            .checked_add(count)
-            .ok_or(SemanticsIdentityExhausted)?;
-        if end > u64::from(u32::MAX) + 1 {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        if self.exhausted {
             return Err(SemanticsIdentityExhausted);
         }
-        let ids = (self.next..end)
-            .map(|value| {
-                SemanticsRegionId(
-                    AccessibilityNodeId::from_u64(value)
-                        .expect("BUG: synthetic identities start at one"),
-                )
-            })
-            .collect();
-        self.next = end;
+        let recycled = count.min(self.free.len());
+        let fresh = count - recycled;
+        // Every fresh slot's index must fit the packed key's 32-bit slot.
+        let slots = self
+            .generations
+            .slot_count()
+            .checked_add(fresh)
+            .ok_or(SemanticsIdentityExhausted)?;
+        // Compared in u64: on a 32-bit target `u32::MAX + 1` does not fit a usize.
+        if !u64::try_from(slots).is_ok_and(|slots| slots <= u64::from(u32::MAX) + 1) {
+            return Err(SemanticsIdentityExhausted);
+        }
+
+        let mut ids = Vec::with_capacity(count);
+        for _ in 0..recycled {
+            let slot = self
+                .free
+                .pop()
+                .expect("BUG: the recycled count is at most the free list's length");
+            let generation = self.generations.mint_recycled(slot);
+            self.occupied[slot as usize] = true;
+            ids.push(SemanticsRegionId(GenId::new_gen(slot, generation)));
+        }
+        for _ in 0..fresh {
+            let slot = u32::try_from(self.generations.slot_count())
+                .expect("BUG: the fresh batch passed its slot-index preflight");
+            let generation = self.generations.mint_fresh();
+            self.occupied.push(true);
+            ids.push(SemanticsRegionId(GenId::new_gen(slot, generation)));
+        }
         Ok(ids)
     }
 
-    /// Spends every remaining identity, so the next reservation fails: how a
-    /// test reaches exhaustion, which no practical run does.
+    /// Returns `id` to the source once its content left the tree.
+    ///
+    /// `false`, with nothing changed, for an identity this source does not
+    /// hold out: a stale one, or one already released. A released slot is
+    /// handed out again under its next generation, unless `id` carried the
+    /// slot's last generation, which closes the slot.
+    #[must_use]
+    pub fn release(&mut self, id: SemanticsRegionId) -> bool {
+        let slot = id.0.index();
+        let held = self.generations.generation(slot) == Some(id.0.generation())
+            && self.occupied.get(slot as usize) == Some(&true);
+        if !held {
+            return false;
+        }
+        self.occupied[slot as usize] = false;
+        if !self.exhausted && self.generations.peek(slot).is_some() {
+            self.free.push(slot);
+        }
+        true
+    }
+
+    /// Refuses every further reservation, so a test reaches exhaustion, which
+    /// no practical run does. Identities already handed out stay valid.
     #[cfg(any(test, feature = "testing"))]
     pub fn exhaust(&mut self) {
-        self.next = u64::from(u32::MAX) + 1;
+        self.exhausted = true;
+        self.free.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::generation::Generation;
+
     use super::*;
 
-    // The terminal counter cannot be reached through a practical public test.
     #[test]
     fn synthetic_identity_exhaustion_never_wraps_or_partially_reserves() {
-        let mut source = SemanticsIdentitySource {
-            next: u64::from(u32::MAX),
-        };
+        let mut source = SemanticsIdentitySource::default();
+        let existing = source.allocate(1).expect("an existing identity")[0];
+        source.exhaust();
         assert_eq!(source.allocate(2), Err(SemanticsIdentityExhausted));
-        let last = source.allocate(1).expect("the final identity is available");
-        assert_eq!(last[0].accessibility_id().as_u64(), u64::from(u32::MAX));
-        assert_eq!(source.allocate(1), Err(SemanticsIdentityExhausted));
-        assert_eq!(source.allocate(1), Err(SemanticsIdentityExhausted));
+        assert!(source.release(existing), "a held identity stays releasable");
+        assert_eq!(
+            source.allocate(1),
+            Err(SemanticsIdentityExhausted),
+            "a release after exhaustion lists nothing"
+        );
+        assert_eq!(source.generations.slot_count(), 1, "no slot was reserved");
         assert_eq!(
             source.allocate(0).expect("empty reservation"),
             [] as [SemanticsRegionId; 0]
         );
+    }
+
+    // Reaching a slot's last generation takes 2^31 releases through the
+    // public API; only the seed is private.
+    #[test]
+    fn a_slot_at_its_last_generation_closes_at_its_release() {
+        let mut source = SemanticsIdentitySource::default();
+        let first = source.allocate(1).expect("a first identity")[0];
+        assert!(source.release(first));
+        source
+            .generations
+            .seed_generation(first.0.index(), Generation::LAST.as_u32() - 1);
+        let last = source.allocate(1).expect("the slot's last identity")[0];
+        assert_eq!(last.0.index(), first.0.index());
+        assert_eq!(last.0.generation(), Generation::LAST);
+        assert!(source.release(last), "the last identity is released");
+        assert!(!source.release(last), "and only once");
+        let next = source.allocate(1).expect("a fresh slot")[0];
+        assert_ne!(
+            next.0.index(),
+            last.0.index(),
+            "the closed slot never returns"
+        );
+        assert_ne!(next.accessibility_id(), last.accessibility_id());
     }
 }

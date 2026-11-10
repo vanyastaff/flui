@@ -55,24 +55,25 @@ IDs use marker traits for type safety, similar to wgpu's resource ID system:
 use flui_foundation::{ElementId, Identifier, LayerId, RenderId, TreeId, ViewId};
 
 // The plain `Id<T: Marker>` family wraps a `NonZeroUsize` and implements
-// `Identifier`. The tree ids that address slab storage (ViewId, LayerId,
-// SemanticsId) are the slot plus one; the rest (ListenerId,
-// FrameCallbackId, TaskId) are opaque counters with no
-// slot behind them, minted only by the `IdMint` family. `zip` takes the
-// public (non-zero) value; the slab offset is the caller's.
+// `Identifier`. Its ids address slab storage (ViewId, LayerId,
+// SemanticsId) and are the slot plus one. `zip` takes the public (non-zero)
+// value; the slab offset is the caller's. Ids with no slot behind them
+// (ListenerId, FrameCallbackId, TaskId) are not in this family: they are
+// opaque, and only an `IdMint` issues one.
 let slab_index = 2;
 let layer_id = LayerId::zip(slab_index + 1);  // slot 2 → ID 3
 assert_eq!(layer_id.unzip() - 1, slab_index); // ID 3 → slot 2
 let first_view = ViewId::zip(1);              // slot 0 → ID 1
 
 // Generational keys (`ElementId`, and `GenId<T>` aliases `RenderId`,
-// `UiRuntimeId`, `DataTransferId`) pack a 32-bit slab index and a non-zero 32-bit
-// generation into a `NonZeroU64`. They do NOT implement `Identifier` (no bare
+// `UiRuntimeId`, `DataTransferId`) pack a 32-bit slab index and a 31-bit `Generation` (the top bit is reserved)
+// into a `NonZeroU64`. They do NOT implement `Identifier` (no bare
 // `.get()` that would strip the generation); use `.index()` / `.generation()`.
 let element_id = ElementId::new(1);           // 1-based ctor → index 0, generation 1
 assert_eq!(element_id.index(), 0);
-let render_id = RenderId::new_gen(5, std::num::NonZeroU32::new(2).expect("non-zero"));
-assert_eq!((render_id.index(), render_id.generation().get()), (5, 2));
+let second = flui_foundation::generation::Generation::FIRST.next().expect("a second generation");
+let render_id = RenderId::new_gen(5, second);
+assert_eq!((render_id.index(), render_id.generation().as_u32()), (5, 2));
 
 // All IDs keep their niche: Option<Id> is the same size as Id.
 assert_eq!(std::mem::size_of::<Option<ElementId>>(), std::mem::size_of::<ElementId>());
@@ -95,7 +96,7 @@ any_tree_id(render_id);
 | Kind | Types |
 |------|-------|
 | **Plain `Id<T>`**, slab slot + 1 | `ViewId`, `LayerId`, `SemanticsId` |
-| **Plain `Id<T>`**, opaque counter (no slot) | `ListenerId`, `FrameCallbackId`, `TaskId` |
+| **Minted**, opaque `NonZeroU64` (no slot, no numeric constructor) | `ListenerId`, `FrameCallbackId`, `TaskId`, `InputSequenceId` |
 | **Generational** (slab index + generation) | `ElementId`, `RenderId`, `UiRuntimeId`, `DataTransferId`, `PresentationId` |
 | **Composite** | `PresentationAddress` (a `UiRuntimeId` plus a `PresentationId`) |
 

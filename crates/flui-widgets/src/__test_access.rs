@@ -235,13 +235,13 @@ pub trait RouteProbe {
     fn transition_handle(&self) -> TransitionHandle;
 }
 
-impl<T: Send + Clone + 'static> RouteProbe for PageRoute<T> {
+impl<T: 'static> RouteProbe for PageRoute<T> {
     fn transition_handle(&self) -> TransitionHandle {
         PageRoute::transition_handle(self)
     }
 }
 
-impl<T: Send + Clone + 'static> RouteProbe for PopupRoute<T> {
+impl<T: 'static> RouteProbe for PopupRoute<T> {
     fn transition_handle(&self) -> TransitionHandle {
         PopupRoute::transition_handle(self)
     }
@@ -253,7 +253,7 @@ pub trait PageRouteProbe {
     fn modal_handle(&self) -> ModalHandle;
 }
 
-impl<T: Send + Clone + 'static> PageRouteProbe for PageRoute<T> {
+impl<T: 'static> PageRouteProbe for PageRoute<T> {
     fn modal_handle(&self) -> ModalHandle {
         PageRoute::modal_handle(self)
     }

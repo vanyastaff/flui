@@ -3,7 +3,6 @@
 //! `AsyncDriver`.
 
 use std::future::Future;
-use std::num::NonZeroU32;
 use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -84,7 +83,8 @@ impl MockSource {
     fn mint_text_offer(&self, text: &str) -> DataTransferOffer {
         let representations = text_representations();
         let mut state = self.state.lock();
-        let id = DataTransferId::new_gen(state.minted, NonZeroU32::MIN);
+        let id =
+            DataTransferId::new_gen(state.minted, flui_foundation::generation::Generation::FIRST);
         state.minted = state.minted.checked_add(1).expect("few offers");
         state.live.push((id, Arc::clone(&representations)));
         state.payloads.push((id, text.to_string()));

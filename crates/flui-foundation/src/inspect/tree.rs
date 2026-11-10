@@ -55,8 +55,8 @@ impl Link {
 impl fmt::Display for Link {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (slot, generation) = match *self {
-            Self::Element(id) => (u64::from(id.index()), u64::from(id.generation().get())),
-            Self::Render(id) => (u64::from(id.index()), u64::from(id.generation().get())),
+            Self::Element(id) => (u64::from(id.index()), u64::from(id.generation().as_u32())),
+            Self::Render(id) => (u64::from(id.index()), u64::from(id.generation().as_u32())),
             Self::Layer(layer) => (layer.id.get() as u64, layer.scene.get()),
             Self::Semantics(id) => (id.get() as u64, 1),
         };

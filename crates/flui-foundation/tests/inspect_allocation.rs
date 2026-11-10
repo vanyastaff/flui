@@ -9,7 +9,6 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
-use std::num::NonZeroU32;
 use std::time::Duration;
 
 use flui_foundation::RenderId;
@@ -128,7 +127,7 @@ fn everything() -> Everything {
         padding: EdgeInsets::all(4.0),
         transform: Matrix4::translation(1.0, 2.0, 0.0),
         delay: Duration::from_millis(16),
-        target: RenderId::new_gen(3, NonZeroU32::MIN),
+        target: RenderId::new_gen(3, flui_foundation::generation::Generation::FIRST),
         missing: None,
         stops: vec![0.0, 0.5, 1.0],
         opaque: Opaque,
@@ -159,7 +158,7 @@ impl InspectTree for One {
     type Node = Everything;
 
     fn root(&self) -> Option<InspectId> {
-        Some(RenderId::new_gen(1, NonZeroU32::MIN).into())
+        Some(RenderId::new_gen(1, flui_foundation::generation::Generation::FIRST).into())
     }
 
     fn node(&self, _: InspectId) -> Option<NodeView<'_, Everything>> {

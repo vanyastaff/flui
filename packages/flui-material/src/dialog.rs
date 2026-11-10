@@ -120,9 +120,12 @@
 //! `EASE_OUT` (`crate::page_transitions`). A navigator with no hook above it
 //! cuts, as any `PopupRoute` does.
 //!
-//! Return value: `navigator.push` already returns a [`RouteResult<T>`] — a
-//! `Future<Option<T>>` — which is FLUI's `Future<T?>`, so `show_dialog`
-//! returns it unchanged rather than wrapping or narrowing it.
+//! Return value: `navigator.push` already returns a [`RouteResult<T>`], a
+//! future of `Result<Option<T>, RouteResultError>`: `Ok(Some(value))` for the
+//! value the dialog was popped with, `Ok(None)` when it closed without one, and
+//! `RouteResultError::TypeMismatch` for a value of another type. `show_dialog`
+//! returns it unchanged rather than wrapping or narrowing it. `T` stays on the
+//! owner thread and needs no `Send`.
 //!
 //! **Not ported**, and named:
 //!
@@ -542,7 +545,7 @@ const BARRIER_COLOR: Color = Color::from_argb(0x8A00_0000);
 /// `BuildContext`, and what the returned [`RouteResult<T>`] is.
 pub fn show_dialog<T, F, W>(navigator: &NavigatorHandle, builder: F) -> RouteResult<T>
 where
-    T: Send + Clone + 'static,
+    T: 'static,
     F: Fn(&dyn BuildContext) -> W + 'static,
     W: IntoView,
 {
