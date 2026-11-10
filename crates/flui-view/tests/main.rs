@@ -45,6 +45,8 @@ mod global_key_reparent;
 mod inherited_dependency;
 #[path = "inspect_reentry.rs"]
 mod inspect_reentry;
+#[path = "lazy_update_containment.rs"]
+mod lazy_update_containment;
 #[path = "support/lifecycle_hook_payload_retirement.rs"]
 mod lifecycle_hook_payload_retirement;
 #[path = "lifecycle_panic_containment.rs"]
@@ -111,6 +113,7 @@ fn dense_and_production_reconcile_matrix() {
             ("dense_reconcile_containment::repeated_dense_mount_panics_do_not_accumulate_ghosts", dense_reconcile_containment::repeated_dense_mount_panics_do_not_accumulate_ghosts as fn()),
             ("dense_update_containment::phase_one_did_update_view_panic_substitutes_at_same_slot", dense_update_containment::phase_one_did_update_view_panic_substitutes_at_same_slot as fn()),
             ("dense_update_containment::phase_five_a_shifted_suffix_update_panic_uses_final_slot", dense_update_containment::phase_five_a_shifted_suffix_update_panic_uses_final_slot as fn()),
+            ("lazy_update_containment::lazy_render_update_panic_substitutes_at_its_logical_index", lazy_update_containment::lazy_render_update_panic_substitutes_at_its_logical_index as fn()),
             #[cfg(feature = "testing")]
             ("production_reconcile_emits::object_keys_follow_retained_allocations_through_reorder", production_reconcile_emits::object_keys_follow_retained_allocations_through_reorder as fn()),
             #[cfg(feature = "testing")]

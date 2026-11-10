@@ -51,7 +51,6 @@ use super::raw_gesture_detector::{
 };
 use super::recognizer_attachment::RecognizerAttachment;
 use super::shortcuts::{Shortcuts, SingleActivator, reserved_key};
-use crate::localization::Directionality;
 use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
 };
@@ -61,7 +60,6 @@ use crate::{
 };
 use flui_objects::{CrossAxisAlignment, MainAxisSize, StackFit};
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::parent_data::FlexFit;
 use flui_rendering::semantics::SemanticsAnchor;
@@ -1564,11 +1562,10 @@ impl ViewState<FocusDecorations> for FocusDecorationsState {
             let control = Listener::new()
                 .on_pointer_down(move |_cx, _dispatch| pressed.set(true))
                 .child(control);
-            let trailing = Positioned::new(control).top(0.0).bottom(0.0);
-            let trailing = match Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr) {
-                TextDirection::Rtl => trailing.left(0.0),
-                TextDirection::Ltr => trailing.right(0.0),
-            };
+            let trailing = Positioned::directional(control)
+                .top(0.0)
+                .bottom(0.0)
+                .end(0.0);
             layers.push(trailing.boxed());
         }
         let stack = Stack::new(layers).fit(StackFit::Passthrough);

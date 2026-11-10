@@ -464,6 +464,32 @@ silently opting out. There is no read path that does not record a dependency.
 comes from the opt-in derive. Inherited field dependencies and signal reads have separate
 registries, feeding the same owner scheduler and depth-ordered build drain (ADR-0074 §5.5).
 
+### A render view reads inherited data while it is reconfigured
+
+**Rule.** `RenderView::update_render_object` runs from the render element's build half, once per
+rebuild (`LayoutBuilder` and the persistent headers, which build their child themselves, push from
+their update instead and read no inherited data). A view swap only marks the element dirty; every
+caller of an element update schedules a dirty child, so the push follows in the same drain, and a
+dependency notification reaches the same push. There the context carries the borrowed tree:
+`RenderObjectContext::depend_on::<I>` resolves the nearest `I` and records a whole-provider
+dependency (a missed provider records an ancestry miss) through the build's deferred sink, as
+`BuildContext::depend_on` does. The drain applies the sink under reset-on-build, so the
+dependencies of one push replace the previous push's and a provider the push no longer read is
+pruned: a widget that reads `Directionality` only for a directional alignment stops depending on
+it once its alignment is absolute.
+
+**At mount.** `create_render_object` runs while the tree is borrowed mutably, so `depend_on`
+returns `None` there. The element is dirty from mount and its first build pushes the resolved
+configuration before the first layout; until then a widget uses its no-provider value.
+
+**Containment.** The push runs the user hook under `catch_unwind` inside the render tree borrow and
+resumes the unwind once the borrow is released, staged through the armed lifecycle handoff, so
+`build_scope` replaces a parented element with the error view and records one `RecoveredPanic`
+with `LifecycleHook::Update` (ADR-0287); the element is not requeued.
+`a_render_update_panic_on_a_dependency_rebuild_shows_the_error_view`,
+`a_swapped_render_view_reconfigures_once_with_its_inherited_data` and
+`a_direction_flip_reconfigures_preserved_render_objects_in_place` (flui-widgets) pin the three.
+
 ### Signal reads subscribe through a private sink
 
 **Rule.** The reactive graph (`reactive/mod.rs`, one `Reactive` per `BuildOwner`) implements

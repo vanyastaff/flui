@@ -168,7 +168,7 @@ pub use localization::{
     BoxedLocalizationsDelegate, BoxedWidgetsLocalizations, DefaultWidgetsLocalizations,
     DefaultWidgetsLocalizationsDelegate, Directionality, GlobalWidgetsLocalizations,
     GlobalWidgetsLocalizationsDelegate, Localizations, LocalizationsDelegate, RTL_LANGUAGES,
-    WidgetsLocalizations, basic_locale_list_resolution, resolve_alignment,
+    WidgetsLocalizations, basic_locale_list_resolution,
 };
 
 pub use animated::{
@@ -323,7 +323,7 @@ pub use scroll::{
 pub use semantics::{
     ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics, SliverSemantics,
 };
-pub use stack::{IndexedStack, Positioned, Stack};
+pub use stack::{DirectionalPositioned, IndexedStack, Positioned, Stack};
 pub use swipe::{
     DismissDirection, DismissSide, DismissSideCallback, DismissThreshold, DismissThresholdError,
     DismissUpdateCallback, DismissUpdateDetails, Dismissible, DismissibleState, SwipeAction,

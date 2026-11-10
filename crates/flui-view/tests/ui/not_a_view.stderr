@@ -15,12 +15,12 @@ help: the trait `View` is not implemented for `NotAView`
    = help: the following other types implement trait `View`:
              BoxedView
              ErrorView
+             FocusTreeRoot
              FutureBuilder<K, T, E>
              GestureArenaScope
              HapticsMode
              LayoutBuilder
              MediaQuery
-             Memo<V>
            and $N others
    = note: required for `NotAView` to implement `IntoView`
 note: required by a bound in `takes_view`

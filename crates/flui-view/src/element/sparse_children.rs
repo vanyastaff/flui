@@ -119,6 +119,31 @@ impl SparseChildren {
         Some(index)
     }
 
+    /// Re-point `logical_index` from `failed` to `replacement`, the error child
+    /// [`replace_failed_resident`] mounted in its place. Bookkeeping only: the
+    /// tree edit is the caller's.
+    ///
+    /// # Panics
+    ///
+    /// Panics with a `BUG:` invariant failure if `logical_index` does not hold
+    /// `failed`.
+    pub(crate) fn replace_resident(
+        &mut self,
+        logical_index: usize,
+        failed: ElementId,
+        replacement: ElementId,
+    ) {
+        let resident = self
+            .by_logical_index
+            .get_mut(&logical_index)
+            .expect("BUG: a replaced lazy resident must hold its logical index");
+        assert!(
+            *resident == failed,
+            "BUG: a replaced lazy resident's index must still name the failed child"
+        );
+        *resident = replacement;
+    }
+
     /// Evict the child at `logical_index`, unmounting its element subtree (and
     /// thus its render nodes). Returns whether a child was removed; a `false`
     /// means no child was built at that index.
@@ -568,12 +593,15 @@ fn mount_sparse_child(
 /// Returns `Err(replacement)` with the id of the freshly mounted error child
 /// when it had to substitute; the caller re-points its residency map at it.
 ///
-/// The panic this bounds is a user `View::update_render_object`, which runs
-/// inside `RenderBehavior::on_update`'s `with_mut` — half-applied, and with
+/// The panic this bounds is a user update hook (`did_update_view`, or the
+/// `update_render_object` a self-building behavior pushes from its update) —
+/// half-applied, and with
 /// `apply_render_update_impact` never reached, so the render object can be
 /// left carrying part of a new configuration that nothing marked dirty. That
 /// is why the recovery removes the resident outright rather than keeping it:
 /// a silently stale subtree is the one outcome worse than a visible error.
+/// A render resident's own `update_render_object` runs later, as it rebuilds;
+/// a panic there reaches [`replace_failed_resident`] instead.
 fn update_or_replace_resident(
     resident_id: ElementId,
     logical_index: usize,
@@ -601,6 +629,79 @@ fn update_or_replace_resident(
         owner.schedule_build_for(now, depth, crate::RebuildReason::ChildListChange);
         Err(now)
     }
+}
+
+/// Replace the lazy resident `failed`, whose lifecycle hook panicked while it
+/// rebuilt, with the keyless `view` at `logical_index` under `host`, and
+/// re-point the host's residency map at the replacement — the sparse
+/// counterpart of [`ElementTree::replace_child_with`], whose dense slot a lazy
+/// host never has (its `child_ids` stay empty).
+///
+/// Validation completes before mutation: the host is live with a registered
+/// manager, and `failed` is the resident at `logical_index`. The failed
+/// subtree is then finalized, the replacement mounted, the map re-pointed, the
+/// replacement's render frontier stamped with its slot, the host marked for
+/// layout and the replacement scheduled for its initial build.
+///
+/// A panic while mounting the replacement propagates after `failed` was
+/// removed and before the map is re-pointed: fatal, with no rollback, as for
+/// the dense primitive.
+///
+/// # Panics
+///
+/// Panics with a `BUG:` invariant failure before mutation if `view` is keyed,
+/// the host or its manager is missing, or `failed` is not resident at
+/// `logical_index`.
+pub(crate) fn replace_failed_resident(
+    host: ElementId,
+    logical_index: usize,
+    failed: ElementId,
+    view: &dyn View,
+    tree: &mut ElementTree,
+    owner: &mut ElementOwner<'_>,
+) -> ElementId {
+    assert!(
+        view.key().is_none(),
+        "BUG: a failure replacement must be keyless",
+    );
+    let (render_id, pipeline, host_depth) = {
+        let host_node = tree
+            .get(host)
+            .expect("BUG: a failure replacement parent must remain live");
+        let element = host_node.element();
+        let render_id = element
+            .render_id()
+            .expect("BUG: a lazy host must own its render object");
+        let pipeline = element
+            .pipeline_owner()
+            .expect("BUG: an active lazy host must have a PipelineOwner");
+        (render_id, pipeline, host_node.depth())
+    };
+    let manager = owner
+        .child_manager_registry
+        .borrow()
+        .get(&render_id)
+        .map(std::rc::Rc::clone)
+        .expect("BUG: a mounted lazy host must register its ChildManager");
+    assert!(
+        manager.borrow().holds_resident(logical_index, failed),
+        "BUG: a failed lazy resident must be resident at its logical index",
+    );
+
+    owner.forget_global_key_reservation(host, failed);
+    tree.remove_subtree(failed, owner, SubtreeRemoval::Finalize);
+    let replacement = tree.insert(view, host, logical_index, owner);
+    manager
+        .borrow_mut()
+        .replace_resident(logical_index, failed, replacement);
+    stamp_logical_index(tree, &pipeline, host, replacement, logical_index);
+    pipeline.with_mut(|pipeline_owner| pipeline_owner.mark_needs_layout(render_id));
+    owner.schedule_build_for(
+        replacement,
+        host_depth + 1,
+        crate::RebuildReason::InitialMount,
+    );
+    replacement
 }
 
 /// Call `builder(index)` under a panic boundary, with no recovery or
@@ -807,3 +908,27 @@ mod tests;
 #[cfg(test)]
 #[path = "sparse_children/reconcile_tests.rs"]
 mod reconcile_tests;
+
+/// Replace the failed child `failed` of `parent` with `view`.
+///
+/// A lazy host keeps its residents out of `child_ids`, in its own residency
+/// map under their logical index as `slot`: those go through
+/// [`replace_failed_resident`], every other parent through
+/// [`ElementTree::replace_child_with`].
+pub(crate) fn replace_failed_child(
+    parent: ElementId,
+    slot: usize,
+    failed: ElementId,
+    view: &dyn View,
+    tree: &mut ElementTree,
+    owner: &mut ElementOwner<'_>,
+) -> ElementId {
+    let sparse_parent = tree
+        .get(parent)
+        .is_some_and(|node| node.element().hosts_sparse_children());
+    if sparse_parent {
+        replace_failed_resident(parent, slot, failed, view, tree, owner)
+    } else {
+        tree.replace_child_with(parent, slot, view, owner)
+    }
+}
