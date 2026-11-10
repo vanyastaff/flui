@@ -110,6 +110,7 @@ const MAX_ACTIONS: u32 = 16;
 /// functions over atoms and bytes.
 pub(crate) mod model {
     use flui_platform::data_transfer::TransferActions;
+    use web_time::Instant;
     use x11rb::NONE;
     use x11rb::protocol::xproto::{Atom, Timestamp, Window};
 
@@ -362,6 +363,190 @@ pub(crate) mod model {
             } else {
                 None
             }
+        }
+    }
+
+    /// The most `INCR` answers a session writes at once; a conversion past
+    /// them is refused.
+    pub(crate) const MAX_INCR_WRITES: usize = 4;
+
+    /// The length an `INCR` answer of `len` bytes announces, in the one
+    /// 32-bit word ICCCM gives it; `None` for a payload no announcement can
+    /// name.
+    #[must_use]
+    pub(crate) fn announced(len: usize) -> Option<u32> {
+        u32::try_from(len).ok()
+    }
+
+    /// One answer written `INCR` (ICCCM §2.7.2): announced in `property` of
+    /// `requestor`, then a chunk each time the requestor deletes the
+    /// property, then the empty chunk that ends it. It holds its payload,
+    /// the one copy its conversion made, and the deadline by which the
+    /// requestor takes the next chunk.
+    #[derive(Debug)]
+    pub(crate) struct IncrWrite {
+        requestor: Window,
+        property: Atom,
+        target: Atom,
+        bytes: Vec<u8>,
+        /// The byte the next chunk starts at.
+        written: usize,
+        /// Whether the empty chunk that ends it is written.
+        ended: bool,
+        deadline: Instant,
+    }
+
+    impl IncrWrite {
+        /// The answer of `bytes` as `target`, into `property` of
+        /// `requestor`, whose first deletion is due by `deadline`; `None`
+        /// when [`announced`] cannot name its length.
+        #[must_use]
+        pub(crate) fn try_new(
+            requestor: Window,
+            property: Atom,
+            target: Atom,
+            bytes: Vec<u8>,
+            deadline: Instant,
+        ) -> Option<Self> {
+            announced(bytes.len())?;
+            Some(Self {
+                requestor,
+                property,
+                target,
+                bytes,
+                written: 0,
+                ended: false,
+                deadline,
+            })
+        }
+
+        /// The announcement's one word.
+        #[must_use]
+        pub(crate) fn announcement(&self) -> u32 {
+            announced(self.bytes.len())
+                .expect("BUG: an INCR write is made only of a length it can announce")
+        }
+
+        /// The type every chunk is written as.
+        #[must_use]
+        pub(crate) fn target(&self) -> Atom {
+            self.target
+        }
+
+        /// Whether the empty chunk that ends it is written: nothing more is
+        /// owed the requestor.
+        #[must_use]
+        pub(crate) fn ended(&self) -> bool {
+            self.ended
+        }
+
+        /// The chunk the requestor's deletion asks for, at most `room`
+        /// bytes and at least one, the next deletion due by `deadline`; the
+        /// empty chunk once every byte went, which ends it; `None` past
+        /// that.
+        pub(crate) fn next_chunk(&mut self, room: usize, deadline: Instant) -> Option<&[u8]> {
+            if self.ended {
+                return None;
+            }
+            let start = self.written;
+            let end = start.saturating_add(room.max(1)).min(self.bytes.len());
+            self.written = end;
+            self.ended = start == end;
+            self.deadline = deadline;
+            Some(&self.bytes[start..end])
+        }
+    }
+
+    /// The `INCR` answers a session writes: at most [`MAX_INCR_WRITES`],
+    /// one for each requestor's property.
+    #[derive(Debug, Default)]
+    pub(crate) struct IncrWrites {
+        writes: Vec<IncrWrite>,
+    }
+
+    impl IncrWrites {
+        /// Take `write` on in place of an earlier answer into the same
+        /// property, which a new conversion replaces.
+        ///
+        /// # Errors
+        ///
+        /// `write` itself, handed back while [`MAX_INCR_WRITES`] others run.
+        pub(crate) fn admit(&mut self, write: IncrWrite) -> Result<(), IncrWrite> {
+            self.writes.retain(|known| {
+                known.requestor != write.requestor || known.property != write.property
+            });
+            if self.writes.len() >= MAX_INCR_WRITES {
+                return Err(write);
+            }
+            self.writes.push(write);
+            Ok(())
+        }
+
+        /// The answer a deletion of `property` on `requestor` asks the next
+        /// chunk of.
+        pub(crate) fn get_mut(
+            &mut self,
+            requestor: Window,
+            property: Atom,
+        ) -> Option<&mut IncrWrite> {
+            self.writes
+                .iter_mut()
+                .find(|write| write.requestor == requestor && write.property == property)
+        }
+
+        /// Let go of the answer into `property` on `requestor`.
+        pub(crate) fn retire(&mut self, requestor: Window, property: Atom) -> Option<IncrWrite> {
+            let at = self
+                .writes
+                .iter()
+                .position(|write| write.requestor == requestor && write.property == property)?;
+            Some(self.writes.swap_remove(at))
+        }
+
+        /// Let go of every answer to `requestor`, a window that is gone:
+        /// how many there were.
+        pub(crate) fn retire_window(&mut self, requestor: Window) -> usize {
+            let before = self.writes.len();
+            self.writes.retain(|write| write.requestor != requestor);
+            before - self.writes.len()
+        }
+
+        /// Let go of every answer whose requestor took no chunk by `now`:
+        /// the requestors they were written to, each once.
+        pub(crate) fn expire(&mut self, now: Instant) -> Vec<Window> {
+            let mut expired = Vec::new();
+            self.writes.retain(|write| {
+                let due = write.deadline <= now;
+                if due {
+                    expired.push(write.requestor);
+                }
+                !due
+            });
+            expired.sort_unstable();
+            expired.dedup();
+            expired
+        }
+
+        /// Let go of every answer: the requestors they were written to,
+        /// each once.
+        pub(crate) fn abandon(&mut self) -> Vec<Window> {
+            let mut requestors: Vec<Window> =
+                self.writes.drain(..).map(|write| write.requestor).collect();
+            requestors.sort_unstable();
+            requestors.dedup();
+            requestors
+        }
+
+        /// Whether an answer to `requestor` is still written.
+        #[must_use]
+        pub(crate) fn writes_to(&self, requestor: Window) -> bool {
+            self.writes.iter().any(|write| write.requestor == requestor)
+        }
+
+        /// The earliest deadline of an answer.
+        #[must_use]
+        pub(crate) fn deadline(&self) -> Option<Instant> {
+            self.writes.iter().map(|write| write.deadline).min()
         }
     }
 }
@@ -635,7 +820,11 @@ struct Wire<'a> {
 }
 
 impl Wire<'_> {
-    /// Make `requestor` and ask the source to convert into it.
+    /// Make `requestor` and ask the source to convert into it. The window
+    /// hears its properties change, which an `INCR` answer comes by, and its
+    /// own destruction, which ends what this transfer's own source writes to
+    /// it: an X client's event mask on a window is one, so the source,
+    /// writing to a requestor of its own client, leaves the mask as made.
     fn open(
         &self,
         requestor: xproto::Window,
@@ -654,7 +843,8 @@ impl Wire<'_> {
             0,
             WindowClass::INPUT_ONLY,
             COPY_FROM_PARENT,
-            &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+            &CreateWindowAux::new()
+                .event_mask(EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY),
         )
         .map(drop)
         .and_then(|()| {

@@ -3824,15 +3824,26 @@ server's current owner. The data goes only to the client whose target took
 the drop, once it took it (a client's windows share the base of their X
 ids); a target hovered over, or any other client, reads nothing but the types
 `XdndTypeList` lists anyway. A conversion is served from the session's
-provider on the owner thread, with no cell borrowed, in one property: a
-payload past one request is refused, since the source writes no `INCR` yet.
+provider on the owner thread, with no cell borrowed: in one property when it
+fits one chunk (256 KiB, or less under the server's request limit), `INCR`
+otherwise, and only while the session that served it still holds the drop of
+the requestor's client. An `INCR` answer announces its length (a payload past
+32 bits is refused), selects the property and structure events of a requestor
+of another client, and writes a chunk at each deletion, then the empty one
+that ends it. At most four are written at once and one past them is refused; a
+new conversion into the same property replaces its answer. Each holds its
+payload until it ends, its requestor takes no chunk for five seconds or is
+destroyed, or the session ends, which leaves it unfinished, ICCCM giving a
+source no way to say so; each chunk gives the target five more seconds to
+finish the drop.
 The session lives in an owner-thread cell; its provider and end hook run
 outside it, and the provider is dropped contained, so the hook hears the end
 though a capture fails (ADR-0281 §3).
 
 Tests of the drag: `drag::x11::tests` holds the model's tables
 (`messages_read_what_the_source_wrote`, `types_offer_each_format_once`,
-`bytes_make_their_payload`, …) and, against the X server CI starts, a source
+`bytes_make_their_payload`, `an_incr_write_numbers_its_chunks`,
+`incr_writes_are_bounded_and_let_go`, …) and, against the X server CI starts, a source
 on a connection of its own: `an_accepted_drop_is_fetched_and_finished`,
 `a_refused_drop_finishes_unaccepted_and_exits`,
 `a_drag_that_leaves_retires_its_offer`,
@@ -3860,7 +3871,9 @@ another connection's window: `a_session_drops_on_a_target_that_accepts`,
 `a_session_without_the_keyboard_ends_as_its_window_loses_the_focus`,
 `a_late_finish_does_not_end_the_next_session`,
 `a_status_for_an_earlier_visit_does_not_decide_the_drop`,
-`only_the_dropped_on_client_reads_the_session_data`; and in `tests/x11_input.rs`,
+`only_the_dropped_on_client_reads_the_session_data`,
+`a_payload_past_one_property_is_written_incrementally`,
+`a_stalled_incr_requestor_is_let_go_and_the_drop_goes_on`; and in `tests/x11_input.rs`,
 with the host's own loop and window, XTest holding and moving the pointer:
 `an_xtest_drag_from_the_window_drops_on_another_client`, which also checks
 that the window's press ends cancelled and its next click arrives whole, and
