@@ -10,8 +10,9 @@
 //!
 //! A slot's generation is its occupant's, or, while the slot is vacant, the one its next id will
 //! carry. Emptying a slot advances it, so every id of the old occupant goes stale. Ids carry
-//! generations below [`RETIRED`]; a slot whose generation cannot advance below it takes
-//! [`RETIRED`] instead and leaves circulation for good. An id therefore matches its slot's
+//! generations up to [`Generation::LAST`], below [`RETIRED`]; a slot whose generation cannot
+//! advance past its last takes [`RETIRED`] instead and leaves circulation for good. An id
+//! therefore matches its slot's
 //! generation exactly while its node occupies the slot, and that comparison is the whole check
 //! a lease makes.
 //!
@@ -34,11 +35,12 @@ use std::marker::PhantomData;
 use std::num::NonZeroU32;
 
 use flui_foundation::RenderId;
+use flui_foundation::generation::Generation;
 
 use super::node::RenderNode;
 
-/// The generation of a slot that has used every other one. No id carries it, so no id matches a
-/// retired slot.
+/// The header of a slot that has used every generation. It is above [`Generation::LAST`], so no
+/// id carries it and no id matches a retired slot.
 const RETIRED: NonZeroU32 = NonZeroU32::MAX;
 
 /// What a slot holds.
@@ -72,6 +74,8 @@ struct Slot {
 /// The id of the node in slot `index` at `generation`.
 fn id_at(index: usize, generation: NonZeroU32) -> RenderId {
     let index = u32::try_from(index).expect("BUG: a slot index is checked against u32 at insert");
+    let generation = Generation::try_from(generation)
+        .expect("BUG: an occupied slot's generation is at most Generation::LAST");
     RenderId::new_gen(index, generation)
 }
 
@@ -124,7 +128,7 @@ impl NodeSlab {
     fn resolve(&self, id: RenderId) -> Option<&Slot> {
         self.slots
             .get(id.index() as usize)
-            .filter(|slot| slot.generation == id.generation())
+            .filter(|slot| slot.generation == id.generation().as_nonzero())
     }
 
     pub(super) fn contains(&self, id: RenderId) -> bool {
@@ -145,7 +149,7 @@ impl NodeSlab {
         let slot = self
             .slots
             .get_mut(id.index() as usize)
-            .filter(|slot| slot.generation == id.generation())?;
+            .filter(|slot| slot.generation == id.generation().as_nonzero())?;
         match slot.state.get_mut() {
             SlotState::Occupied(node) => Some(node),
             SlotState::Vacant { .. } | SlotState::Retired => None,
@@ -205,10 +209,10 @@ impl NodeSlab {
         }
         let link =
             u32::try_from(index).expect("BUG: a slot index is checked against u32 at insert");
-        let next = slot
-            .generation
-            .checked_add(1)
-            .filter(|generation| *generation != RETIRED);
+        let next = Generation::try_from(slot.generation)
+            .ok()
+            .and_then(Generation::next)
+            .map(Generation::as_nonzero);
         let emptied = match next {
             Some(_) => SlotState::Vacant {
                 next_free: self.free_head,
@@ -265,14 +269,13 @@ impl NodeSlab {
     }
 
     /// Ages the slot the next insert takes to the last generation an id can carry, so a test
-    /// reaches exhaustion without `u32::MAX` removals. `false` when no slot is free.
+    /// reaches exhaustion without `Generation::LAST` removals. `false` when no slot is free.
     #[cfg(any(test, feature = "testing"))]
     pub(super) fn age_free_head(&mut self) -> bool {
         let Some(head) = self.free_head else {
             return false;
         };
-        self.slots[head as usize].generation =
-            NonZeroU32::new(RETIRED.get() - 1).expect("BUG: RETIRED is above 1");
+        self.slots[head as usize].generation = Generation::LAST.as_nonzero();
         true
     }
 
@@ -308,7 +311,7 @@ impl TreeLease<'_> {
         // header outside the `UnsafeCell` (invariant 4) and nothing writes it while the lease
         // lives (invariant 1).
         let generation = unsafe { (*slot).generation };
-        (generation == id.generation()).then_some(slot)
+        (generation == id.generation().as_nonzero()).then_some(slot)
     }
 
     /// `true` when `child` is a current id and its header names `parent`. Reads headers only, so
@@ -432,7 +435,14 @@ mod tests {
         assert!(!lease.is_in_flight(b));
         assert!(lease.node(b).is_some());
         assert!(lease.node(a).is_none(), "a stale id names no node");
-        assert!(lease.node(RenderId::new_gen(99, NonZeroU32::MIN)).is_none());
+        assert!(
+            lease
+                .node(RenderId::new_gen(
+                    99,
+                    flui_foundation::generation::Generation::FIRST
+                ))
+                .is_none()
+        );
     }
 
     #[test]

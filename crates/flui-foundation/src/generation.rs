@@ -21,18 +21,43 @@
 //! element's unmount hooks — and only the commit ([`GenSlots::commit`])
 //! mutates; a caught panic between the two steps nothing, so the released
 //! identity cannot be minted from under a partially torn-down occupant.
+//!
+//! A packed key is `(generation << 32) | slot` in 64 bits, and its top bit is
+//! reserved for a domain tag (a synthetic semantics identity sets it), so a
+//! generation is 31 bits wide: [`Generation::LAST`] is `0x7FFF_FFFF`. A raw
+//! generation read back from a wire or a trace enters through
+//! `Generation::try_from`, which refuses the reserved bit.
 
 use std::num::NonZeroU32;
 
+/// The top bit of a packed generational key, reserved for a domain tag. No
+/// [`Generation`] reaches it, so no `GenId`, `ElementId` or `PresentationId`
+/// carries it, and their raw decoders refuse a value that sets it. A domain
+/// whose published ids sit beside another domain's packed keys sets it on its
+/// own published form, so the two never alias.
+pub const DOMAIN_BIT: u64 = 1 << 63;
+
 /// The typed generation of one generational slot: 1-based, increasing, never
-/// wrapped, minted only by a [`GenSlots`]. `as_u32` is the packed value a
-/// generational key carries.
+/// wrapped, at most [`Generation::LAST`]. A [`GenSlots`] mints it; a raw value
+/// read back from a wire enters through `TryFrom<NonZeroU32>`. `as_u32` is the
+/// packed value a generational key carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Generation(NonZeroU32);
+
+/// A raw generation a packed key cannot carry: it sets the top bit that every
+/// packed generational key reserves for its domain tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("generation {0} sets the reserved domain bit of a packed key")]
+pub struct ReservedGenerationBit(pub NonZeroU32);
 
 impl Generation {
     /// A fresh slot's first generation.
     pub const FIRST: Self = Self(NonZeroU32::MIN);
+
+    /// The last generation a packed key carries. The bit above it is the
+    /// packed key's reserved domain bit; a slot at `LAST` closes at its release.
+    pub const LAST: Self =
+        Self(NonZeroU32::new(0x7FFF_FFFF).expect("BUG: the last packed generation is non-zero"));
 
     /// The packed value every generational key carries for this generation.
     #[must_use]
@@ -50,16 +75,39 @@ impl Generation {
     /// the slot ([`GenSlots::peek`] answers `None`).
     #[must_use]
     pub const fn is_last(self) -> bool {
-        self.0.get() == u32::MAX
+        self.0.get() == Self::LAST.0.get()
     }
 
-    /// The generation after this one, or `None` past the slot's last.
+    /// The generation after this one, or `None` past [`Generation::LAST`].
     #[must_use]
     pub const fn next(self) -> Option<Self> {
+        if self.is_last() {
+            return None;
+        }
         match self.0.checked_add(1) {
             Some(generation) => Some(Self(generation)),
             None => None,
         }
+    }
+}
+
+impl TryFrom<NonZeroU32> for Generation {
+    type Error = ReservedGenerationBit;
+
+    /// The generation `raw` names, or the refusal when `raw` exceeds
+    /// [`Generation::LAST`]. For a value read back from a wire, a trace or a
+    /// test fixture; a live slot's generation comes from its [`GenSlots`].
+    fn try_from(raw: NonZeroU32) -> Result<Self, Self::Error> {
+        if raw.get() > Self::LAST.0.get() {
+            return Err(ReservedGenerationBit(raw));
+        }
+        Ok(Self(raw))
+    }
+}
+
+impl core::fmt::Display for Generation {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.0.fmt(formatter)
     }
 }
 
@@ -193,12 +241,14 @@ impl GenSlots {
     ///
     /// # Panics
     ///
-    /// A seed names a non-zero generation: zero names no generation, and a
-    /// seeded zero names a broken invariant.
+    /// A seed names a generation a packed key carries: zero names no
+    /// generation and a value above [`Generation::LAST`] sets the reserved
+    /// domain bit; either names a broken test fixture.
     pub fn seed_generation(&mut self, slot: u32, generation: u32) {
         let generation =
             NonZeroU32::new(generation).expect("BUG: a generation is named by a non-zero u32");
-        let generation = Generation(generation);
+        let generation = Generation::try_from(generation)
+            .expect("BUG: a seeded generation stays below the packed key's reserved bit");
         if slot as usize >= self.live.len() {
             self.live.resize(slot as usize + 1, Generation::FIRST);
         }

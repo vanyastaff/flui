@@ -208,7 +208,7 @@ mod tests {
             kind,
             InspectId::from(RenderId::new_gen(
                 u32::try_from(slot).expect("small slot"),
-                std::num::NonZeroU32::MIN,
+                crate::generation::Generation::FIRST,
             )),
         )
     }

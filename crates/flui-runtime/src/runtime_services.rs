@@ -7,6 +7,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use flui_foundation::generation::Generation;
 use flui_foundation::{PresentationId, UiRuntimeId};
 use flui_painting::{FontCollection, TextContext};
 use flui_platform::data_transfer::{DragTransport, NullDragTransport};
@@ -231,12 +232,15 @@ pub(crate) fn next_identity() -> (UiRuntimeId, PresentationId) {
 fn next_identity_with_counter(counter: &AtomicU32) -> (UiRuntimeId, PresentationId) {
     let incarnation = counter
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            // Zero is permanent exhaustion; MAX remains the last valid generation.
-            (current != 0).then(|| current.wrapping_add(1))
+            // Zero is permanent exhaustion; `Generation::LAST` is the last
+            // generation minted, and the step after it stores zero.
+            let generation = Generation::try_from(NonZeroU32::new(current)?).ok()?;
+            Some(generation.next().map_or(0, Generation::as_u32))
         })
         .expect("BUG: ui_runtime incarnation space exhausted");
     let generation = NonZeroU32::new(incarnation)
-        .expect("BUG: incarnation counter starts at 1 and only increments");
+        .and_then(|incarnation| Generation::try_from(incarnation).ok())
+        .expect("BUG: the counter holds only a generation it admitted, or zero");
     (
         UiRuntimeId::new_gen(0, generation),
         PresentationId::new_gen(0, generation),
@@ -247,7 +251,7 @@ fn next_identity_with_counter(counter: &AtomicU32) -> (UiRuntimeId, Presentation
 pub(crate) fn exhausted_incarnations_never_alias_previous_ui_runtimes() {
     // A local counter reaches an otherwise impractical failure boundary without
     // changing the process-global identity source used by unrelated ui_runtime tests.
-    let counter = AtomicU32::new(u32::MAX - 1);
+    let counter = AtomicU32::new(Generation::LAST.as_u32() - 1);
     let (before_last, before_last_presentation) = next_identity_with_counter(&counter);
     let (last, last_presentation) = next_identity_with_counter(&counter);
     assert_ne!(before_last, last);

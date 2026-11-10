@@ -1421,7 +1421,10 @@ mod tests {
     fn render_id(index: u32) -> flui_foundation::RenderId {
         flui_foundation::RenderId::new_gen(
             index,
-            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+            flui_foundation::generation::Generation::try_from(
+                core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+            )
+            .expect("a fixture generation leaves the reserved bit clear"),
         )
     }
     /// A window publishes one tree, so a request for another is not decoded.
@@ -2032,11 +2035,17 @@ mod tests {
         // A recycled slot (same index, next generation) is a distinct identity.
         let recycled = flui_foundation::RenderId::new_gen(
             7,
-            core::num::NonZeroU32::new(4).expect("fixture generation is non-zero"),
+            flui_foundation::generation::Generation::try_from(
+                core::num::NonZeroU32::new(4).expect("fixture generation is non-zero"),
+            )
+            .expect("a fixture generation leaves the reserved bit clear"),
         );
         let first = flui_foundation::RenderId::new_gen(
             7,
-            core::num::NonZeroU32::new(3).expect("fixture generation is non-zero"),
+            flui_foundation::generation::Generation::try_from(
+                core::num::NonZeroU32::new(3).expect("fixture generation is non-zero"),
+            )
+            .expect("a fixture generation leaves the reserved bit clear"),
         );
         assert_ne!(
             AccessibilityNodeId::from(first),

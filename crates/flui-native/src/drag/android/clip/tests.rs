@@ -23,7 +23,7 @@ use crate::drag::offers::{PathStyle, TransferUri};
 fn identity() -> RepresentationDescriptor {
     DragSessionKey::new(
         ProcessNonce::from_raw(NonZeroU64::new(7).expect("nonzero")),
-        UiRuntimeId::new_gen(0, std::num::NonZeroU32::MIN),
+        UiRuntimeId::new_gen(0, flui_foundation::generation::Generation::FIRST),
         DragSessionId::from_wire(NonZeroU64::MIN),
     )
     .representation()

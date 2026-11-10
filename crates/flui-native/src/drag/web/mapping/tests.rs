@@ -4,7 +4,7 @@
 //! The DOM side runs in Chrome (`tests/web_browser.rs`).
 
 use std::cell::RefCell;
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -65,7 +65,7 @@ fn the_drop_effect_names_one_accepted_action_the_drag_permits() {
 fn a_hover_offers_the_types_flui_announces_then_the_files() {
     let key = DragSessionKey::new(
         ProcessNonce::from_raw(NonZeroU64::new(7).expect("nonzero")),
-        UiRuntimeId::new_gen(2, NonZeroU32::MIN),
+        UiRuntimeId::new_gen(2, flui_foundation::generation::Generation::FIRST),
         DragSessionId::from_wire(NonZeroU64::new(9).expect("nonzero")),
     );
     let identity = key.representation();
@@ -114,8 +114,10 @@ fn a_hover_offers_the_types_flui_announces_then_the_files() {
     // The identity a hover reads names the session.
     let representations: Arc<[RepresentationDescriptor]> =
         offer.into_iter().map(|(_, known)| known).collect();
-    let offer =
-        DataTransferOffer::new(DataTransferId::new_gen(0, NonZeroU32::MIN), representations);
+    let offer = DataTransferOffer::new(
+        DataTransferId::new_gen(0, flui_foundation::generation::Generation::FIRST),
+        representations,
+    );
     assert_eq!(DragSessionKey::from_offer(&offer), Some(key));
     assert_eq!(format_of("Files"), None);
 }

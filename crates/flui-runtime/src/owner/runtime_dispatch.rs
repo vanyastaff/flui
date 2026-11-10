@@ -305,6 +305,7 @@ mod tests {
     use std::{rc::Rc, sync::Arc};
 
     use flui_foundation::UiRuntimeId;
+    use flui_foundation::generation::Generation;
     use flui_foundation::memory::MemoryPressureLevel::{Critical, Moderate};
     use flui_platform::{HostNotice, SystemPreferences};
 
@@ -312,7 +313,11 @@ mod tests {
     use crate::owner::SystemPreferencesSnapshot;
 
     fn runtime(generation: u32) -> UiRuntimeId {
-        UiRuntimeId::new_gen(0, NonZeroU32::new(generation).expect("nonzero"))
+        UiRuntimeId::new_gen(
+            0,
+            Generation::try_from(NonZeroU32::new(generation).expect("nonzero"))
+                .expect("a test generation leaves the reserved bit clear"),
+        )
     }
 
     fn notice(runtime: UiRuntimeId, notice: HostNotice) -> RuntimeWork {

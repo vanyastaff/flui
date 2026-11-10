@@ -2,6 +2,7 @@
 
 - **Status:** Accepted (2026-10-12)
 - **Superseded-by:** [ADR-0223](ADR-0223-authored-semantics-regions.md), §1 identity authority and authored-region action routing
+- **Superseded-by:** [ADR-0320](ADR-0320-packed-keys-reserve-their-top-bit-and-synthetic-semantics-ids-set-it.md) for §1's id range (`1..2^32`) and its never-reissued release policy; the run identity keyed by text remains in force
 - **Date:** 2026-10-12
 - **Amended by:** [ADR-0214](ADR-0214-selection-area-text-runs.md) (§2: text runs for static text
   inside a `SelectionArea`); amended 2026-10-31 (§5: route changes)
