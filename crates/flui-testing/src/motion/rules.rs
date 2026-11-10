@@ -226,8 +226,8 @@ fn steps(
 }
 
 /// `flicker`: from a peak, opacity falls by `flicker_dip` or more and climbs back to the peak,
-/// all within `flicker_window`, in one step or over many. A frame the node is left out of counts
-/// as opacity 0: it drew nothing there.
+/// all within `flicker_window`, in one step or over many. A frame the node is left out of, or
+/// drawn wholly clipped in, counts as opacity 0: it showed nothing there.
 fn flicker(
     recording: &Recording,
     config: &MotionConfig,
@@ -247,7 +247,11 @@ fn flicker(
             let opacity = match drawn.peek() {
                 Some(&&(frame, sample)) if frame == index => {
                     drawn.next();
-                    sample.opacity
+                    if sample.is_shown() {
+                        sample.opacity
+                    } else {
+                        0.0
+                    }
                 }
                 _ => 0.0,
             };

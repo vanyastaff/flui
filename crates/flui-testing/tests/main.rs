@@ -475,6 +475,10 @@ fn motion_gate_rules() {
                 motion_gate::a_page_under_a_popup_stays_presented as fn(),
             ),
             (
+                "motion_gate::a_drag_step_moves_on_its_direct_frame",
+                motion_gate::a_drag_step_moves_on_its_direct_frame as fn(),
+            ),
+            (
                 "motion_gate::presented_nodes_compose_opacity_and_clip",
                 motion_gate::presented_nodes_compose_opacity_and_clip as fn(),
             ),

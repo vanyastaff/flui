@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use flui_animation::{SpringDescription, Vsync};
 use flui_foundation::geometry::{EdgeInsets, Rect};
+use flui_interaction::events::PointerEvent;
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_testing::motion::{
@@ -14,11 +15,12 @@ use flui_testing::motion::{
 };
 use flui_testing::widgets::{LaidOut, lay_out_animated, loose};
 use flui_view::environment::VsyncScope;
+use flui_view::prelude::*;
 use flui_view::{IntoView, View, ViewExt};
 use flui_widgets::navigator::{Navigator, NavigatorHandle, PopupRoute, SimpleRoute};
 use flui_widgets::{
-    AnimatedLerp, AnimatedOpacity, AnimatedPadding, ClipRect, ColoredBox, MotionBuilder, Opacity,
-    Padding, SizedBox, UnconstrainedBox,
+    Align, AnimatedLerp, AnimatedOpacity, AnimatedPadding, ClipRect, ColoredBox, HitTestBehavior,
+    Listener, MotionBuilder, Opacity, Padding, SizedBox, UnconstrainedBox,
 };
 
 const FRAME: Duration = Duration::from_millis(16);
@@ -236,6 +238,23 @@ pub(crate) fn a_blink_through_opacity_zero_flickers() {
         found.iter().any(|finding| finding.rule == Rule::Flicker
             && finding.locator.ends_with("RenderDecoratedBox")),
         "the square blinks out for a frame: {found:#?}"
+    );
+
+    // A clip that shuts for a frame: the square stays in the tree at opacity 1, wholly clipped.
+    let tree = |shape: Rect| ClipRect::new().clipper(shape).child(square());
+    let open = Rect::from_ltrb(0.0, 0.0, 40.0, 40.0);
+    let mut laid = lay_out_animated(tree(open), loose(200.0), Vsync::new());
+    let mut run = MotionRun::new(&mut laid);
+    run.frame(FRAME);
+    run.act(|laid| laid.pump_widget(tree(Rect::ZERO)));
+    run.frame(FRAME);
+    run.act(|laid| laid.pump_widget(tree(open)));
+    run.play(RUN, FRAME);
+    let found = check_all(&run.finish(), &MotionConfig::default());
+    assert!(
+        found.iter().any(|finding| finding.rule == Rule::Flicker
+            && finding.locator.ends_with("RenderDecoratedBox")),
+        "the square is clipped out for a frame: {found:#?}"
     );
 }
 
@@ -523,5 +542,64 @@ pub(crate) fn a_page_under_a_popup_stays_presented() {
             .iter()
             .any(|finding| finding.id == page && finding.rule == Rule::PopOut),
         "covering a page with a popup does not pop it out: {found:#?}"
+    );
+}
+
+/// A square that follows the pointer's x while it moves over the window.
+#[derive(Clone, StatelessView)]
+struct Follower {
+    x: Signal<f64>,
+}
+
+impl StatelessView for Follower {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let x = self.x.get(ctx);
+        let signal = self.x;
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_move(move |cx, event| {
+                if let PointerEvent::Move(event) = event.global {
+                    let _ = signal.set(cx, event.current().position.get().x);
+                }
+            })
+            .child(
+                SizedBox::new(200.0, 200.0).child(
+                    Align::new(Alignment::TOP_LEFT)
+                        .child(Padding::only(x, 0.0, 0.0, 0.0).child(square())),
+                ),
+            )
+    }
+}
+
+pub(crate) fn a_drag_step_moves_on_its_direct_frame() {
+    let mut laid = lay_out_animated(SizedBox::new(0.0, 0.0), loose(200.0), Vsync::new());
+    let x = laid
+        .with_build_owner_mut(|owner| owner.signal_graph().clone())
+        .signal(0.0);
+    laid.pump_widget(Follower { x });
+    let mut run = MotionRun::new(&mut laid);
+    run.frame(FRAME);
+    run.act(|laid| laid.dispatch_pointer_down(10.0, 50.0));
+    run.frame(FRAME);
+    run.direct(|laid| laid.dispatch_pointer_move(60.0, 50.0));
+    run.frame(FRAME);
+    run.direct(|laid| laid.dispatch_pointer_move(110.0, 50.0));
+    run.frame(FRAME);
+    run.act(|laid| laid.dispatch_pointer_up(110.0, 50.0));
+    run.play(RUN, FRAME);
+    let recording = run.finish();
+    let moved = recording.frames().iter().position(|frame| {
+        frame.samples.iter().any(|sample| {
+            sample.locator.ends_with("RenderDecoratedBox") && sample.rect.left() > 30.0
+        })
+    });
+    assert!(
+        moved.is_some_and(|frame| recording.frames()[frame].direct),
+        "the square moves on the drag step's own frame: {moved:?}"
+    );
+    let found = rules(&recording);
+    assert!(
+        !found.contains(&Rule::Jump),
+        "a step that follows the hand is not a jump: {found:?}"
     );
 }

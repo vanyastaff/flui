@@ -110,7 +110,7 @@ pub enum Rule {
     /// A drawn node's opacity steps by [`MotionConfig::fade_snap`] or more in one frame.
     FadeSnap,
     /// Opacity falls from a peak and climbs back within [`MotionConfig::flicker_window`], in one
-    /// step or many; a frame the node is left out of counts as opacity 0.
+    /// step or many; a frame the node is left out of or drawn wholly clipped counts as opacity 0.
     Flicker,
     /// An edge travels past where it comes to rest by more than [`MotionConfig::overshoot`].
     Overshoot,
@@ -274,10 +274,12 @@ impl<'a> MotionRun<'a> {
         }
     }
 
-    /// Runs `input` (a tap, a `pump_widget`, a key) and records the frame it leaves, marked as
-    /// input.
+    /// Runs `input` (a tap, a `pump_widget`, a key), drives the frame it asks for and records
+    /// that frame, marked as input. Dispatched input only schedules a rebuild; the frame is
+    /// what shows its effect.
     pub fn act(&mut self, input: impl FnOnce(&mut LaidOut)) {
         input(self.laid);
+        self.laid.pump_for(Duration::ZERO);
         self.record(true, false);
     }
 
@@ -285,6 +287,7 @@ impl<'a> MotionRun<'a> {
     /// tracks the pointer moves as far as the pointer did, so `jump` does not apply to it.
     pub fn direct(&mut self, input: impl FnOnce(&mut LaidOut)) {
         input(self.laid);
+        self.laid.pump_for(Duration::ZERO);
         self.record(true, true);
     }
 

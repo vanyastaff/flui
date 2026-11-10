@@ -79,7 +79,8 @@ window's scale factor.
 §2. **The rules and the charge.** `flui_testing::motion` records one `Frame` per pump
 (`time` from the kit clock since the run started, `input`, `direct`, `wants_frame` from
 `HeadlessHost::time_to_next_frame() == Some(ZERO)`, and a `Sample` per presented node with its
-`locator`). `check_all(&Recording, &MotionConfig) -> Vec<Finding>` applies:
+`locator`). An input is recorded with the zero-time frame it drives, so its effect lands on its
+own frame. `check_all(&Recording, &MotionConfig) -> Vec<Finding>` applies:
 
 | Rule | Fires when |
 |------|------------|
@@ -87,7 +88,7 @@ window's scale factor.
 | `pop-out` | a node unmounts while drawn at `pop_opacity` or more |
 | `jump` | an edge moves `jump` or more in one frame between frames where it holds still, outside a `direct` frame |
 | `fade-snap` | a drawn node's opacity steps by `fade_snap` or more in one frame |
-| `flicker` | opacity falls by `flicker_dip` or more from a peak and climbs back to it within `flicker_window`, in one step or many; a frame the node is left out of counts as opacity 0 |
+| `flicker` | opacity falls by `flicker_dip` or more from a peak and climbs back to it within `flicker_window`, in one step or many; a frame the node is left out of, or drawn wholly clipped in, counts as opacity 0 |
 | `overshoot` | after the last input an edge that travels `still` or more passes where it comes to rest by more than `overshoot` |
 | `never-settles` | something shown still moves, fades or changes its visible part in the last `settle_window`, which lies after the last input |
 | `wakes-after-end` | a frame is still asked for `wake_after_end` after the last frame that changed what the window shows (a hidden node, or the part of a box past its clip, changes nothing; each frame is compared with the last one that changed, so a slow drift adds up) |
@@ -135,7 +136,8 @@ the default config, panicking with the report.
 - `a_finding_is_charged_to_the_outermost_node_that_shows_it` pins §2's charge;
   `the_allowlist_covers_with_a_reason_and_refuses_rows_that_match_nothing` pins §3;
   `presented_nodes_compose_opacity_and_clip` pins §1's composition and
-  `a_page_under_a_popup_stays_presented` its membership by paint.
+  `a_page_under_a_popup_stays_presented` its membership by paint;
+  `a_drag_step_moves_on_its_direct_frame` pins that an input is recorded with the frame it drives.
 
 ## Pros and cons of the options
 
