@@ -600,6 +600,16 @@ pub(crate) fn the_allowlist_covers_with_a_reason_and_refuses_rows_that_match_not
             .iter()
             .any(|finding| finding.rule == Rule::Jump)
     );
+
+    // A NaN threshold would turn its rule off without a word; the gate refuses the config.
+    let vsync = Vsync::new();
+    let smooth = padding(&vsync, true);
+    gate(&smooth, &config, &[]).expect("an animated move passes");
+    let mut broken = MotionConfig::default();
+    broken.jump = f64::NAN;
+    broken.fade_snap = 1.5;
+    let report = gate(&smooth, &broken, &[]).expect_err("a NaN threshold fails the gate");
+    assert_eq!(report.invalid_config, vec!["jump", "fade_snap"]);
 }
 
 pub(crate) fn presented_nodes_compose_opacity_and_clip() {
