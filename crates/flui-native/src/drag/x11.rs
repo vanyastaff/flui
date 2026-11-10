@@ -388,6 +388,7 @@ pub(crate) mod model {
     /// One answer written `INCR` (ICCCM §2.7.2): announced in `property` of
     /// `requestor`, then a chunk each time the requestor deletes the
     /// property, then the empty chunk that ends it. It holds its payload,
+    /// the provider's own buffer moved behind an `Rc` with no copy made,
     /// shared with every other answer of the same bytes as the same type
     /// ([`IncrWrites::shared`]), and the deadline by which the requestor
     /// takes the next chunk.
@@ -396,7 +397,7 @@ pub(crate) mod model {
         requestor: Window,
         property: Atom,
         target: Atom,
-        bytes: Rc<[u8]>,
+        bytes: Rc<Vec<u8>>,
         /// The byte the next chunk starts at.
         written: usize,
         /// Whether the empty chunk that ends it is written.
@@ -413,7 +414,7 @@ pub(crate) mod model {
             requestor: Window,
             property: Atom,
             target: Atom,
-            bytes: Rc<[u8]>,
+            bytes: Rc<Vec<u8>>,
             deadline: Instant,
         ) -> Option<Self> {
             announced(bytes.len())?;
@@ -476,18 +477,28 @@ pub(crate) mod model {
         /// The payload an answer already holds of `bytes` as `target`, to
         /// share instead of holding a second copy.
         #[must_use]
-        pub(crate) fn shared(&self, target: Atom, bytes: &[u8]) -> Option<Rc<[u8]>> {
+        pub(crate) fn shared(&self, target: Atom, bytes: &[u8]) -> Option<Rc<Vec<u8>>> {
             self.writes
                 .iter()
-                .find(|write| write.target == target && *write.bytes == *bytes)
+                .find(|write| write.target == target && write.bytes.as_slice() == bytes)
                 .map(|write| Rc::clone(&write.bytes))
         }
 
         /// The payload bytes the answers hold, each shared payload once.
+        #[cfg(test)]
         #[must_use]
         pub(crate) fn held_bytes(&self) -> usize {
-            let mut payloads: Vec<&Rc<[u8]>> = Vec::with_capacity(self.writes.len());
+            self.held_bytes_but(None)
+        }
+
+        /// The payload bytes the answers but the one into `property` of
+        /// `requestor`, if given, hold, each shared payload once.
+        fn held_bytes_but(&self, but: Option<(Window, Atom)>) -> usize {
+            let mut payloads: Vec<&Rc<Vec<u8>>> = Vec::with_capacity(self.writes.len());
             for write in &self.writes {
+                if but == Some((write.requestor, write.property)) {
+                    continue;
+                }
                 if !payloads.iter().any(|held| Rc::ptr_eq(held, &write.bytes)) {
                     payloads.push(&write.bytes);
                 }
@@ -497,32 +508,54 @@ pub(crate) mod model {
                 .fold(0_usize, |sum, payload| sum.saturating_add(payload.len()))
         }
 
+        /// Whether an answer of `len` bytes into `property` of `requestor`
+        /// would be taken on, in place of the answer there: its length
+        /// announced, fewer than [`MAX_INCR_WRITES`] others running, and,
+        /// unless it `shares` a payload another answer holds, room for it
+        /// within [`MAX_INCR_BYTES`]. Asked before the payload is moved into
+        /// an answer, so a refused one is never held twice.
+        #[must_use]
+        pub(crate) fn admits(
+            &self,
+            requestor: Window,
+            property: Atom,
+            len: usize,
+            shares: bool,
+        ) -> bool {
+            let others = self
+                .writes
+                .iter()
+                .filter(|known| known.requestor != requestor || known.property != property)
+                .count();
+            announced(len).is_some()
+                && others < MAX_INCR_WRITES
+                && (shares
+                    || self
+                        .held_bytes_but(Some((requestor, property)))
+                        .saturating_add(len)
+                        <= MAX_INCR_BYTES)
+        }
+
         /// Take `write` on in place of an earlier answer into the same
         /// property, which a new conversion replaces.
         ///
         /// # Errors
         ///
-        /// `write` itself, handed back while [`MAX_INCR_WRITES`] others run,
-        /// or when a payload it shares with none of them would take the
-        /// answers past [`MAX_INCR_BYTES`].
+        /// `write` itself, handed back when [`Self::admits`] refuses it.
         pub(crate) fn admit(&mut self, write: IncrWrite) -> Result<(), IncrWrite> {
+            let shares = self.writes.iter().any(|known| {
+                (known.requestor != write.requestor || known.property != write.property)
+                    && Rc::ptr_eq(&known.bytes, &write.bytes)
+            });
+            if !self.admits(write.requestor, write.property, write.bytes.len(), shares) {
+                return Err(write);
+            }
             self.writes.retain(|known| {
                 known.requestor != write.requestor || known.property != write.property
             });
-            if self.writes.len() >= MAX_INCR_WRITES {
-                return Err(write);
-            }
-            let shares = self
-                .writes
-                .iter()
-                .any(|known| Rc::ptr_eq(&known.bytes, &write.bytes));
-            if !shares && self.held_bytes().saturating_add(write.bytes.len()) > MAX_INCR_BYTES {
-                return Err(write);
-            }
             self.writes.push(write);
             Ok(())
         }
-
         /// The answer a deletion of `property` on `requestor` asks the next
         /// chunk of.
         pub(crate) fn get_mut(

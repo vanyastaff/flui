@@ -3832,8 +3832,10 @@ the requestor's client. An `INCR` answer announces its length (a payload past
 of another client, and writes a chunk at each deletion, then the empty one
 that ends it. At most four are written at once, holding at most 64 MiB of
 payload between them: answers of the same bytes as the same type share one
-payload, counted once, and one past either bound is refused. A new conversion
-into the same property, whatever it asks for (`TARGETS` included), replaces its
+payload, counted once, and one past either bound is refused by its length
+before it is held, the payload held as the provider made it, with no copy.
+A new conversion into the same property, whatever it asks for (`TARGETS`
+included), replaces its
 answer. Each holds its payload until it ends, its requestor takes no chunk for
 five seconds or is destroyed, or the session ends, which leaves it unfinished,
 ICCCM giving a source no way to say so; each chunk written, the empty one that

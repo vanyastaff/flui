@@ -1220,12 +1220,23 @@ impl X11Drag {
         bytes: Vec<u8>,
     ) -> Option<&'static str> {
         let requestor = request.requestor;
-        // The same bytes another answer holds are shared, not held twice:
-        // the provider's copy goes now.
-        let bytes = session
+        if model::announced(bytes.len()).is_none() {
+            return Some("a drag's payload is past what INCR can announce");
+        }
+        // The same bytes another answer holds are shared, not held twice.
+        // Admission is asked before the payload goes behind an `Rc`, which
+        // moves the provider's buffer without copying it: a refused payload
+        // is dropped as the provider made it.
+        let shared = session.incr.shared(request.target, &bytes);
+        if !session
             .incr
-            .shared(request.target, &bytes)
-            .unwrap_or_else(|| std::rc::Rc::from(bytes));
+            .admits(requestor, property, bytes.len(), shared.is_some())
+        {
+            return Some(
+                "a drag's INCR answer is refused: as many answers or bytes are held as may be",
+            );
+        }
+        let bytes = shared.unwrap_or_else(|| std::rc::Rc::new(bytes));
         let Some(write) = IncrWrite::try_new(
             requestor,
             property,

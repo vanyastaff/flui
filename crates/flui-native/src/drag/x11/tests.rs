@@ -182,7 +182,7 @@ fn an_incr_write_numbers_its_chunks() {
         let bytes: Vec<u8> = (0..len)
             .map(|byte| u8::try_from(byte).expect("small"))
             .collect();
-        let mut write = model::IncrWrite::try_new(7, 8, 9, Rc::from(bytes.clone()), start)
+        let mut write = model::IncrWrite::try_new(7, 8, 9, Rc::new(bytes.clone()), start)
             .expect("a small length is announced");
         assert_eq!(write.announcement(), u32::try_from(len).expect("small"));
         assert_eq!(write.target(), 9);
@@ -231,7 +231,7 @@ fn incr_writes_are_bounded_and_let_go() {
     let start = Instant::now();
     let at = |seconds: u64| start + Duration::from_secs(seconds);
     let write = |requestor: xproto::Window, property: xproto::Atom, due: u64| {
-        model::IncrWrite::try_new(requestor, property, 31, Rc::from(vec![1, 2, 3]), at(due))
+        model::IncrWrite::try_new(requestor, property, 31, Rc::new(vec![1, 2, 3]), at(due))
             .expect("a small length is announced")
     };
     let mut writes = model::IncrWrites::default();
@@ -293,8 +293,8 @@ fn incr_writes_are_bounded_and_let_go() {
 fn incr_writes_share_a_payload_and_hold_a_byte_budget() {
     let start = Instant::now();
     let half = model::MAX_INCR_BYTES / 2;
-    let payload: Rc<[u8]> = Rc::from(vec![7_u8; half]);
-    let write = |requestor: xproto::Window, target: xproto::Atom, bytes: Rc<[u8]>| {
+    let payload: Rc<Vec<u8>> = Rc::new(vec![7_u8; half]);
+    let write = |requestor: xproto::Window, target: xproto::Atom, bytes: Rc<Vec<u8>>| {
         model::IncrWrite::try_new(requestor, 1, target, bytes, start).expect("announced")
     };
     let mut writes = model::IncrWrites::default();
@@ -318,15 +318,42 @@ fn incr_writes_share_a_payload_and_hold_a_byte_budget() {
     assert!(writes.admit(write(12, 31, Rc::clone(&payload))).is_ok());
     assert_eq!(writes.held_bytes(), half, "three answers, one payload");
 
+    // Admission is decided by the length before a payload is moved into
+    // an answer: one past the budget, or past what INCR announces, is
+    // refused with no payload built.
+    assert!(
+        !writes.admits(13, 1, half + 1, false),
+        "a payload of its own past MAX_INCR_BYTES"
+    );
+    assert!(writes.admits(13, 1, half, false), "one at the budget");
+    assert!(
+        writes.admits(13, 1, half + 1, true),
+        "a shared payload adds nothing"
+    );
+    if let Some(past) = usize::try_from(u32::MAX)
+        .expect("a 32-bit length fits")
+        .checked_add(1)
+    {
+        assert!(!writes.admits(13, 1, past, true), "past one announcement");
+    }
+
     // A payload of its own: past the budget with the shared one held.
-    let own: Rc<[u8]> = Rc::from(vec![8_u8; half + 1]);
+    let own: Rc<Vec<u8>> = Rc::new(vec![8_u8; half + 1]);
     assert!(
         writes.admit(write(13, 32, Rc::clone(&own))).is_err(),
         "past MAX_INCR_BYTES"
     );
-    let within: Rc<[u8]> = Rc::from(vec![8_u8; half]);
+    let within: Rc<Vec<u8>> = Rc::new(vec![8_u8; half]);
     assert!(writes.admit(write(13, 32, within)).is_ok(), "at the budget");
     assert_eq!(writes.held_bytes(), model::MAX_INCR_BYTES);
+    assert!(
+        !writes.admits(14, 1, 1, true),
+        "past MAX_INCR_WRITES answers"
+    );
+    assert!(
+        writes.admits(13, 1, half, false),
+        "in place of its own answer, whose bytes it frees"
+    );
 
     assert_eq!(writes.retire_window(13), 1);
     assert_eq!(writes.retire_window(10), 1);
