@@ -325,8 +325,8 @@ type RefreshCallback = Rc<dyn Fn(&mut EventCx<'_>) -> BoxedTask>;
 ///
 /// ```rust
 /// use flui_widgets::{
-///     Alternative, ControlSpec, GestureAlternatives, RefreshIndicator, RefreshIntent, Scrollable,
-///     SizedBox, Text,
+///     Alternative, ControlSpec, GestureAlternatives, RefreshIndicator, RefreshIntent,
+///     SingleChildScrollView, SizedBox, Text,
 /// };
 ///
 /// let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(

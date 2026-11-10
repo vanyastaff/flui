@@ -349,7 +349,7 @@ pub trait NestedScrollConnection {
 /// use std::rc::Rc;
 ///
 /// use flui_foundation::geometry::Vec2;
-/// use flui_widgets::{NestedScroll, NestedScrollConnection, Scrollable, ScrollStep, SizedBox};
+/// use flui_widgets::{NestedScroll, NestedScrollConnection, ScrollStep, SingleChildScrollView, SizedBox};
 ///
 /// /// Takes the vertical remainder a list leaves at its edge, and counts it.
 /// #[derive(Default)]
