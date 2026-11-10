@@ -83,7 +83,9 @@ window's scale factor.
 (`time` from the kit clock since the run started, `input`, `direct`, `wants_frame` from
 `HeadlessHost::time_to_next_frame() == Some(ZERO)`, and a `Sample` per presented node with its
 `locator`). An input is recorded with the zero-time frame it drives, so its effect lands on its
-own frame. `check_all(&Recording, &MotionConfig) -> Vec<Finding>` applies:
+own frame. An edge, below, is an edge of the part the window shows where the node is drawn, so a
+change confined to clipped-away geometry moves nothing. `check_all(&Recording, &MotionConfig) ->
+Vec<Finding>` applies:
 
 | Rule | Fires when |
 |------|------------|

@@ -88,6 +88,30 @@ pub(crate) fn a_padding_change_jumps_unless_it_animates() {
         animated.is_empty(),
         "an animated move is smooth: {animated:?}"
     );
+
+    // A box that grows only past its clip moves nothing the window shows.
+    let vsync = Vsync::new();
+    let hidden_growth = rules(&record(
+        &vsync,
+        |width| {
+            SizedBox::new(40.0, 40.0).child(
+                ClipRect::new().child(
+                    UnconstrainedBox::new()
+                        .alignment(Alignment::TOP_LEFT)
+                        .child(
+                            ColoredBox::new(Color::rgb(200, 40, 40))
+                                .child(SizedBox::new(width, 40.0)),
+                        ),
+                ),
+            )
+        },
+        80.0,
+        100.0,
+    ));
+    assert!(
+        !hidden_growth.contains(&Rule::Jump),
+        "growth past the clip is not a jump: {hidden_growth:?}"
+    );
 }
 
 pub(crate) fn an_opacity_change_snaps_unless_it_fades() {

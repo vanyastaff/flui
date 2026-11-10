@@ -183,13 +183,12 @@ impl Sample {
         self.visible.is_some() && self.opacity > 1e-3
     }
 
+    /// The edges the motion rules read: the visible part's where the node is drawn at all, so
+    /// a change confined to clipped-away geometry moves nothing, and the laid-out box's where it
+    /// is wholly hidden.
     fn edges(&self) -> [f64; 4] {
-        [
-            self.rect.left(),
-            self.rect.top(),
-            self.rect.right(),
-            self.rect.bottom(),
-        ]
+        let shown = self.visible.unwrap_or(self.rect);
+        [shown.left(), shown.top(), shown.right(), shown.bottom()]
     }
 
     fn visible_edges(&self) -> Option<[f64; 4]> {
