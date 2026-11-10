@@ -1,21 +1,50 @@
-//! The parity table, declared once in `platform-parity.toml` and rendered into
-//! `docs/platform-parity.md` (decision 8). Hand-written source; the test
-//! [`the_summary_counts_the_rows`] and the cross-checks below keep the source
-//! honest, and a follow-up renders `docs/platform-parity.md` from it.
+//! `docs/platform-parity.md`, rendered from `crates/flui-native/platform-parity.toml`.
+//!
+//! The source holds every cell, note and paragraph of the document; the
+//! summary, the scores and the quality bar's tally are computed from it. The
+//! test `parity_document_matches_its_source` holds the committed document to
+//! the render, and `FLUI_OVERWRITE=1` restates it (ADR-0303 §2). A host that
+//! fills a position with `Absent<position::X>` claims no support in a row of
+//! that position: `absent_positions_claim_no_support` checks each host this
+//! target builds.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use serde::Deserialize;
 
-#[cfg(test)]
-use crate::host::{Absent, Host as NativeHost, position};
+/// The source, beside this crate's manifest.
+const SOURCE: &str = include_str!("../../platform-parity.toml");
 
-/// The `platform-parity.toml` at the repository root.
-pub const SOURCE: &str = "platform-parity.toml";
+/// The committed render.
+const DOCUMENT: &str = include_str!("../../../../docs/platform-parity.md");
 
-/// A cell's mark: `yes`, `partial`, `missing`, `na` or `unaudited`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mark {
+/// The parsed `platform-parity.toml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Parity {
+    /// The title, the note and the paragraphs above the legend.
+    preamble: String,
+    /// The paragraphs between the overall score and the summary.
+    rules: String,
+    /// The paragraph under the summary's heading.
+    summary: String,
+    /// The meaning of each mark, in the legend's order.
+    legend: Vec<LegendEntry>,
+    /// The environment columns, in the table's order.
+    host: Vec<Host>,
+    /// The row groups (`Core`, `System services`, `Distribution`).
+    group: Vec<Group>,
+    /// The qualities every environment must have at once.
+    quality: Quality,
+    /// The capability packages that do not decide readiness.
+    capabilities: Capabilities,
+}
+
+/// A cell's mark.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Mark {
     /// Implemented and passed an executed run on that environment.
     Yes,
     /// Implemented but never run there, or partial.
@@ -23,472 +52,649 @@ pub enum Mark {
     /// Missing: no code path, a stub, a mock, or a default that pretends.
     Missing,
     /// Not applicable: the environment has no such concept.
-    NotApplicable,
+    Na,
     /// Not audited yet.
     Unaudited,
 }
 
 impl Mark {
-    fn parse(raw: &str) -> Option<Self> {
-        match raw {
-            "yes" => Some(Self::Yes),
-            "partial" => Some(Self::Partial),
-            "missing" => Some(Self::Missing),
-            "na" => Some(Self::NotApplicable),
-            "unaudited" => Some(Self::Unaudited),
-            _ => None,
-        }
-    }
+    const ALL: [Self; 5] = [
+        Self::Yes,
+        Self::Partial,
+        Self::Missing,
+        Self::Na,
+        Self::Unaudited,
+    ];
 
     fn glyph(self) -> &'static str {
         match self {
             Self::Yes => "✅",
             Self::Partial => "🟡",
             Self::Missing => "❌",
-            Self::NotApplicable => "—",
+            Self::Na => "—",
             Self::Unaudited => "❔",
         }
     }
 }
 
-/// The parsed `platform-parity.toml`.
-#[derive(Debug, Deserialize)]
-pub struct Parity {
-    legend: BTreeMap<String, String>,
-    #[serde(rename = "host", default)]
-    hosts: Vec<Host>,
-    #[serde(rename = "section", default)]
-    sections: Vec<Section>,
+/// A host position a row is the parity of (`crate::host::position`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Position {
+    Window,
+    Displays,
+    Input,
+    Text,
+    Accessibility,
+    Clipboard,
+    PrimarySelection,
+    Drag,
+    Haptics,
+    Preferences,
+    Lifecycle,
+    Chrome,
+    Storage,
 }
 
-/// One environment column of the table.
 #[derive(Debug, Deserialize)]
-pub struct Host {
-    /// The short id a row's status map keys on (`windows`, `wayland`, …).
-    pub id: String,
-    /// The environment's name, the column header (`Windows`, `Wayland`, …).
-    pub environment: String,
-    /// The host that runs there (`Win32 (native)`, `Wayland (native)`, …).
-    pub runner: String,
+#[serde(deny_unknown_fields)]
+struct LegendEntry {
+    mark: Mark,
+    meaning: String,
 }
 
-/// A group of rows (`Core`, `System services`, …).
+/// One environment column.
 #[derive(Debug, Deserialize)]
-pub struct Section {
-    /// The section's short id.
-    pub id: String,
-    /// The section's name, the row group header.
-    pub name: String,
-    /// The section's rows.
-    #[serde(rename = "row", default)]
-    pub rows: Vec<Row>,
+#[serde(deny_unknown_fields)]
+struct Host {
+    /// The key of the column in each row's `status`.
+    id: String,
+    /// The column header.
+    environment: String,
+    /// The host that runs there.
+    runner: String,
+    /// The test double: no user runs there, so it has no readiness and no
+    /// share of the overall score.
+    #[serde(default)]
+    test_double: bool,
 }
 
-/// One capability row.
 #[derive(Debug, Deserialize)]
-pub struct Row {
-    /// The row's short id.
-    pub id: String,
-    /// The capability the row describes (`Window`, `Displays`, …).
-    pub capability: String,
-    /// The host position this row maps to, where one exists: the cross-check
-    /// against `Absent<position::X>` keys on it.
+#[serde(deny_unknown_fields)]
+struct Group {
+    name: String,
+    /// Whether a ready platform needs every row of the group.
     #[serde(default)]
-    pub position: Option<String>,
-    /// The prose note a cell's claim rests on.
+    decides_readiness: bool,
     #[serde(default)]
-    pub note: String,
-    /// The mark per host id.
-    pub status: BTreeMap<String, String>,
-    /// The executed runs a cell's claim cites.
-    #[serde(default)]
-    pub evidence: Vec<Evidence>,
+    intro: Option<String>,
+    section: Vec<Section>,
 }
 
-/// One executed run that a cell's claim rests on.
 #[derive(Debug, Deserialize)]
-pub struct Evidence {
-    /// The scenario's test name, checked to exist.
-    pub scenario: String,
-    /// The run's date.
+#[serde(deny_unknown_fields)]
+struct Section {
+    /// The section's heading; a group's only table has none.
     #[serde(default)]
-    pub date: String,
-    /// The device or host the run executed on.
+    name: Option<String>,
+    row: Vec<Row>,
+}
+
+/// One feature row.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Row {
+    /// The row's stable identifier.
+    id: String,
+    feature: String,
+    /// The host position the row is the parity of, where it is one.
     #[serde(default)]
-    pub device: String,
+    position: Option<Position>,
+    /// The mark on each host, by its id.
+    status: BTreeMap<String, Mark>,
+    #[serde(default)]
+    note: String,
+    /// The run evidence under the section's table.
+    #[serde(default)]
+    evidence: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Quality {
+    intro: String,
+    row: Vec<QualityRow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QualityRow {
+    quality: String,
+    /// How the summary names the quality.
+    #[serde(default)]
+    short: Option<String>,
+    status: Mark,
+    enforced_by: String,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Capabilities {
+    intro: String,
+    row: Vec<CapabilityRow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CapabilityRow {
+    capability: String,
+    environments: String,
+}
+
+/// How many cells of a column carry each mark, in [`Mark::ALL`]'s order.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Tally([usize; 5]);
+
+impl Tally {
+    fn slot(mark: Mark) -> usize {
+        Mark::ALL
+            .iter()
+            .position(|m| *m == mark)
+            .expect("BUG: Mark::ALL lists every mark")
+    }
+
+    fn add(&mut self, mark: Mark) {
+        self.0[Self::slot(mark)] += 1;
+    }
+
+    fn get(self, mark: Mark) -> usize {
+        self.0[Self::slot(mark)]
+    }
+
+    fn total(self) -> usize {
+        self.0.iter().sum()
+    }
+
+    /// ✅ counted as 2 and 🟡 as 1, with the scored cells: neither — nor ❔.
+    fn halves_and_applicable(self) -> (usize, usize) {
+        let halves = 2 * self.get(Mark::Yes) + self.get(Mark::Partial);
+        let scored = self.total() - self.get(Mark::Na) - self.get(Mark::Unaudited);
+        (halves, scored)
+    }
+}
+
+/// `halves / 2` out of `applicable`, as a percentage rounded half up.
+fn percent(halves: usize, applicable: usize) -> usize {
+    if applicable == 0 {
+        return 0;
+    }
+    (100 * halves + applicable) / (2 * applicable)
 }
 
 impl Parity {
-    /// Parse the hand-written source.
-    pub fn parse(source: &str) -> Result<Self, toml::de::Error> {
+    fn parse(source: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(source)
     }
 
-    /// The mark a row claims on a host, or an error naming the row and the
-    /// unknown mark key.
-    pub fn mark(&self, row: &Row, host: &Host) -> Result<Mark, String> {
-        let raw = row
-            .status
-            .get(host.id.as_str())
-            .ok_or_else(|| format!("row `{}` names no status for host `{}`", row.id, host.id))?;
-        Mark::parse(raw).ok_or_else(|| format!("row `{}` names an unknown mark `{raw}`", row.id))
+    fn rows(&self) -> impl Iterator<Item = (&Group, &Row)> {
+        self.group
+            .iter()
+            .flat_map(|group| group.section.iter().map(move |section| (group, section)))
+            .flat_map(|(group, section)| section.row.iter().map(move |row| (group, row)))
     }
 
-    /// The markdown `docs/platform-parity.md` is kept equal to.
-    pub fn render(&self) -> String {
-        use std::fmt::Write as _;
-
-        let mut out = String::new();
-
-        out.push_str("# Platform parity\n\n> [!NOTE]\n> **Last reviewed:** —\n\n");
-        out.push_str("Rendered from `platform-parity.toml`; do not edit by hand.\n\n");
-
-        out.push_str("## Legend\n\n| Mark | Meaning |\n|:-:|:--|\n");
-        for (key, meaning) in &self.legend {
-            let glyph = Mark::parse(key).map(Mark::glyph).unwrap_or_default();
-            writeln!(out, "| {glyph} | {meaning} |").expect("writing to a String never fails");
-        }
-        out.push('\n');
-
-        out.push_str("## Summary\n\n| Environment | Host | ✅ | 🟡 | ❌ | — | ❔ |\n");
-        out.push_str("|:--|:--|--:|--:|--:|--:|--:|\n");
-        for host in &self.hosts {
-            let counts = self.counts(host);
-            writeln!(
-                out,
-                "| {} | {} | {} | {} | {} | {} | {} |",
-                host.environment,
-                host.runner,
-                counts[0],
-                counts[1],
-                counts[2],
-                counts[3],
-                counts[4],
-            )
-            .expect("writing to a String never fails");
-        }
-        out.push('\n');
-
-        out.push_str("## Parity\n\n| Capability |");
-        for host in &self.hosts {
-            write!(out, " {} |", host.environment).expect("writing to a String never fails");
-        }
-        out.push_str("\n|:--|");
-        for _ in &self.hosts {
-            out.push_str(":-:|");
-        }
-        out.push('\n');
-        for section in &self.sections {
-            write!(out, "| **{}** |", section.name).expect("writing to a String never fails");
-            for _ in &self.hosts {
-                out.push_str(" |");
-            }
-            out.push('\n');
-            for row in &section.rows {
-                write!(out, "| {} |", row.capability).expect("writing to a String never fails");
-                for host in &self.hosts {
-                    let glyph = self.mark(row, host).map_or("�?", Mark::glyph);
-                    write!(out, " {glyph} |").expect("writing to a String never fails");
-                }
-                out.push('\n');
-            }
-        }
-        out.push('\n');
-
-        for section in &self.sections {
-            for row in &section.rows {
-                writeln!(out, "### {} — {}\n", section.name, row.capability)
-                    .expect("writing to a String never fails");
-                writeln!(out, "{}\n", row.note).expect("writing to a String never fails");
-                for evidence in &row.evidence {
-                    let when = if evidence.date.is_empty() {
-                        "not run".to_owned()
-                    } else if evidence.device.is_empty() {
-                        format!("run {}", evidence.date)
-                    } else {
-                        format!("run {} on {}", evidence.date, evidence.device)
-                    };
-                    writeln!(out, "- `{}`, {when}.", evidence.scenario)
-                        .expect("writing to a String never fails");
-                }
-                out.push('\n');
-            }
-        }
-
-        out
+    /// The mark `row` claims on `host`.
+    fn mark(row: &Row, host: &Host) -> Mark {
+        *row.status
+            .get(&host.id)
+            .expect("BUG: check_shape proved every row marks every host")
     }
 
-    fn counts(&self, host: &Host) -> [usize; 5] {
-        let mut counts = [0; 5];
-        for section in &self.sections {
-            for row in &section.rows {
-                let idx = match self.mark(row, host) {
-                    Ok(Mark::Yes) => 0,
-                    Ok(Mark::Partial) => 1,
-                    Ok(Mark::Missing) => 2,
-                    Ok(Mark::NotApplicable) => 3,
-                    Ok(Mark::Unaudited) => 4,
-                    Err(_) => continue,
-                };
-                counts[idx] += 1;
+    /// Every row marks exactly the declared hosts, row ids are unique, and
+    /// every quality the summary names has its short name.
+    fn check_shape(&self) -> Result<(), String> {
+        let mut hosts: Vec<&str> = self.host.iter().map(|h| h.id.as_str()).collect();
+        hosts.sort_unstable();
+        let mut ids = BTreeMap::new();
+        for (_, row) in self.rows() {
+            let marked: Vec<&str> = row.status.keys().map(String::as_str).collect();
+            if marked != hosts {
+                return Err(format!(
+                    "row `{}` marks {marked:?}, the hosts are {hosts:?}",
+                    row.id
+                ));
             }
-        }
-        counts
-    }
-}
-
-/// Rows whose `position` is named by `absent` but whose mark on `host` claims
-/// support: the violation that a host with `Absent<position::X>` must never
-/// publish `yes` or `partial`.
-pub fn absent_violations(parity: &Parity, host: &Host, absent: &[&str]) -> Vec<String> {
-    let mut violations = Vec::new();
-    for section in &parity.sections {
-        for row in &section.rows {
-            let Some(position) = row.position.as_deref() else {
-                continue;
-            };
-            if !absent.contains(&position) {
-                continue;
-            }
-            if let Ok(Mark::Yes | Mark::Partial) = parity.mark(row, host) {
-                violations.push(format!(
-                    "row `{}` (position `{position}`) claims support on `{}`, whose host is `Absent<{position}>`",
-                    row.id, host.id
+            if let Some(earlier) = ids.insert(row.id.as_str(), row.feature.as_str()) {
+                return Err(format!(
+                    "row `{}` ({}) reuses the id of `{earlier}`",
+                    row.id, row.feature
                 ));
             }
         }
+        for row in &self.quality.row {
+            let named = matches!(row.status, Mark::Yes | Mark::Missing | Mark::Unaudited);
+            if named && row.short.is_none() {
+                return Err(format!(
+                    "quality `{}` is named in the summary and has no `short`",
+                    row.quality
+                ));
+            }
+        }
+        Ok(())
     }
-    violations
-}
 
-/// Scenarios a row cites as evidence but which are not in `known`.
-pub fn unknown_scenarios<'a>(parity: &'a Parity, known: &[&str]) -> Vec<&'a str> {
-    let mut unknown = Vec::new();
-    for section in &parity.sections {
-        for row in &section.rows {
-            for evidence in &row.evidence {
-                if !known.contains(&evidence.scenario.as_str()) {
-                    unknown.push(evidence.scenario.as_str());
+    fn tally(&self, host: &Host, readiness_only: bool) -> Tally {
+        let mut tally = Tally::default();
+        for (group, row) in self.rows() {
+            if !readiness_only || group.decides_readiness {
+                tally.add(Self::mark(row, host));
+            }
+        }
+        tally
+    }
+
+    /// The document `docs/platform-parity.md` is kept equal to.
+    fn render(&self) -> String {
+        let mut out = String::new();
+        self.render_head(&mut out);
+        self.render_summary(&mut out);
+        for group in &self.group {
+            self.render_group(&mut out, group);
+        }
+        self.render_quality(&mut out);
+        self.render_capabilities(&mut out);
+        out
+    }
+
+    fn render_head(&self, out: &mut String) {
+        line(out, format_args!("{}\n", self.preamble.trim_end()));
+        out.push_str("| Mark | Meaning |\n|:-:|:--|\n");
+        for entry in &self.legend {
+            line(
+                out,
+                format_args!("| {} | {} |", entry.mark.glyph(), entry.meaning),
+            );
+        }
+        let users: Vec<&Host> = self.host.iter().filter(|host| !host.test_double).collect();
+        let (halves, applicable) = users
+            .iter()
+            .map(|host| self.tally(host, false).halves_and_applicable())
+            .fold((0, 0), |(h, a), (dh, da)| (h + dh, a + da));
+        line(
+            out,
+            format_args!(
+                "\n**Overall: ~{}% (✅ = 1, 🟡 = ½, over applicable cells of the {} user \
+                 environments).**\n",
+                percent(halves, applicable),
+                number_word(users.len())
+            ),
+        );
+        line(out, format_args!("{}\n", self.rules.trim_end()));
+    }
+
+    fn render_summary(&self, out: &mut String) {
+        line(
+            out,
+            format_args!("## Summary\n\n{}\n", self.summary.trim_end()),
+        );
+        out.push_str("| Environment | Host | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |\n");
+        out.push_str("|:--|:--|--:|--:|--:|--:|--:|--:|:-:|\n");
+        for host in &self.host {
+            let tally = self.tally(host, false);
+            let (halves, applicable) = tally.halves_and_applicable();
+            let needed = self.tally(host, true);
+            let ready = if host.test_double {
+                "—"
+            } else if needed.get(Mark::Yes) + needed.get(Mark::Na) == needed.total() {
+                "yes"
+            } else {
+                "no"
+            };
+            line(
+                out,
+                format_args!(
+                    "| {} | {} | {} | {} | {} | {} | {} | {}% | {ready} |",
+                    host.environment,
+                    host.runner,
+                    tally.get(Mark::Yes),
+                    tally.get(Mark::Partial),
+                    tally.get(Mark::Missing),
+                    tally.get(Mark::Na),
+                    tally.get(Mark::Unaudited),
+                    percent(halves, applicable),
+                ),
+            );
+        }
+        let qualities = &self.quality.row;
+        let named = |mark: Mark| -> (usize, String) {
+            let shorts: Vec<&str> = qualities
+                .iter()
+                .filter(|row| row.status == mark)
+                .filter_map(|row| row.short.as_deref())
+                .collect();
+            (shorts.len(), shorts.join(", "))
+        };
+        let partly = qualities
+            .iter()
+            .filter(|row| row.status == Mark::Partial)
+            .count();
+        let (met, met_names) = named(Mark::Yes);
+        let (unmet, unmet_names) = named(Mark::Missing);
+        let (unaudited, unaudited_names) = named(Mark::Unaudited);
+        line(
+            out,
+            format_args!(
+                "\nQuality bar: {met} of {} met ({met_names}); {partly} partly; {unmet} not met \
+                 ({unmet_names}); {unaudited} not audited ({unaudited_names}).\n",
+                qualities.len()
+            ),
+        );
+    }
+
+    fn render_group(&self, out: &mut String, group: &Group) {
+        line(out, format_args!("## {}\n", group.name));
+        if let Some(intro) = &group.intro {
+            line(out, format_args!("{}\n", intro.trim_end()));
+        }
+        for section in &group.section {
+            if let Some(name) = &section.name {
+                line(out, format_args!("### {name}\n"));
+            }
+            out.push_str("| Feature |");
+            for host in &self.host {
+                let _ = write!(out, " {} |", host.environment);
+            }
+            out.push_str(" Notes |\n|:--|");
+            for _ in &self.host {
+                out.push_str(":-:|");
+            }
+            out.push_str(":--|\n");
+            for row in &section.row {
+                let _ = write!(out, "| {} |", row.feature);
+                for host in &self.host {
+                    let _ = write!(out, " {} |", Self::mark(row, host).glyph());
                 }
+                line(out, format_args!(" {} |", row.note));
+            }
+            out.push('\n');
+            let evidence: Vec<(&str, &str)> = section
+                .row
+                .iter()
+                .filter_map(|row| Some((row.feature.as_str(), row.evidence.as_deref()?)))
+                .collect();
+            if !evidence.is_empty() {
+                out.push_str("<details>\n<summary>Run evidence</summary>\n\n");
+                for (feature, text) in evidence {
+                    line(out, format_args!("- **{feature}** — {}", text.trim_end()));
+                }
+                out.push_str("\n</details>\n\n");
             }
         }
     }
-    unknown.dedup();
-    unknown
-}
 
-/// The host positions `H` fills with [`Absent`]: the parity rows that name one
-/// of these must claim `missing` or `na` on that host, never `yes` or `partial`.
-#[cfg(test)]
-fn absent_positions<H: NativeHost>() -> Vec<&'static str> {
-    use std::any::TypeId;
-
-    fn is_absent<A: 'static, B: 'static>() -> bool {
-        TypeId::of::<A>() == TypeId::of::<B>()
+    fn render_quality(&self, out: &mut String) {
+        line(
+            out,
+            format_args!("## Quality bar\n\n{}\n", self.quality.intro.trim_end()),
+        );
+        out.push_str("| Quality | Status | Enforced by | Notes |\n|---|---|---|---|\n");
+        for row in &self.quality.row {
+            line(
+                out,
+                format_args!(
+                    "| {} | {} | {} | {} |",
+                    row.quality,
+                    row.status.glyph(),
+                    row.enforced_by,
+                    row.note
+                ),
+            );
+        }
+        out.push('\n');
     }
 
-    let mut absent = Vec::new();
-    if is_absent::<H::Window, Absent<position::Window>>() {
-        absent.push("window");
-    }
-    if is_absent::<H::Displays, Absent<position::Displays>>() {
-        absent.push("displays");
-    }
-    if is_absent::<H::Input, Absent<position::Input>>() {
-        absent.push("input");
-    }
-    if is_absent::<H::Text, Absent<position::Text>>() {
-        absent.push("text");
-    }
-    if is_absent::<H::Accessibility, Absent<position::Accessibility>>() {
-        absent.push("accessibility");
-    }
-    if is_absent::<H::Clipboard, Absent<position::Clipboard>>() {
-        absent.push("clipboard");
-    }
-    if is_absent::<H::PrimarySelection, Absent<position::PrimarySelection>>() {
-        absent.push("primary-selection");
-    }
-    if is_absent::<H::Drag, Absent<position::Drag>>() {
-        absent.push("drag");
-    }
-    if is_absent::<H::Haptics, Absent<position::Haptics>>() {
-        absent.push("haptics");
-    }
-    if is_absent::<H::Preferences, Absent<position::Preferences>>() {
-        absent.push("preferences");
-    }
-    if is_absent::<H::Lifecycle, Absent<position::Lifecycle>>() {
-        absent.push("lifecycle");
-    }
-    if is_absent::<H::Chrome, Absent<position::Chrome>>() {
-        absent.push("chrome");
-    }
-    if is_absent::<H::Storage, Absent<position::Storage>>() {
-        absent.push("storage");
-    }
-    absent
-}
-
-/// Cross-check one host's table against its parity column: every row naming an
-/// absent position must claim `missing` or `na`.
-#[cfg(test)]
-fn check_host<H: NativeHost>(column: &str, parity: &Parity, violations: &mut Vec<String>) {
-    let host = parity
-        .hosts
-        .iter()
-        .find(|host| host.id == column)
-        .expect("the parity table names every host");
-    violations.extend(absent_violations(parity, host, &absent_positions::<H>()));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const ROOT: &str = include_str!("../../../../platform-parity.toml");
-
-    fn repo_root() -> std::path::PathBuf {
-        let mut dir = std::env::current_dir().expect("a current directory");
-        loop {
-            if dir.join("platform-parity.toml").exists() {
-                return dir;
-            }
-            assert!(
-                dir.pop(),
-                "no platform-parity.toml found above the current directory"
+    fn render_capabilities(&self, out: &mut String) {
+        line(
+            out,
+            format_args!(
+                "## Capabilities\n\n{}\n",
+                self.capabilities.intro.trim_end()
+            ),
+        );
+        out.push_str("| Capability | Environments |\n|---|---|\n");
+        for row in &self.capabilities.row {
+            line(
+                out,
+                format_args!("| {} | {} |", row.capability, row.environments),
             );
         }
     }
+}
 
-    fn parity() -> Parity {
-        Parity::parse(ROOT).expect("the root file parses")
+/// Append `args` and a newline.
+fn line(out: &mut String, args: std::fmt::Arguments<'_>) {
+    let _ = out.write_fmt(args);
+    out.push('\n');
+}
+
+/// The count as the document spells it.
+fn number_word(n: usize) -> String {
+    const WORDS: [&str; 11] = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    ];
+    WORDS
+        .get(n)
+        .map_or_else(|| n.to_string(), |word| (*word).to_owned())
+}
+
+/// The positions host `H` fills with [`Absent`](crate::host::Absent).
+fn absent_positions<H: crate::host::Host>() -> Vec<Position> {
+    use std::any::TypeId;
+
+    use crate::host::{Absent, position};
+
+    fn same<A: 'static, B: 'static>() -> bool {
+        TypeId::of::<A>() == TypeId::of::<B>()
     }
 
-    /// A small source that exercises the `position` and `evidence` cross-checks
-    /// against the same types as the real table.
-    const SYNTHETIC: &str = r#"
-[legend]
-yes = "Implemented"
-partial = "Partial"
-missing = "Missing"
-na = "Not applicable"
-unaudited = "Not audited"
+    [
+        (
+            same::<H::Window, Absent<position::Window>>(),
+            Position::Window,
+        ),
+        (
+            same::<H::Displays, Absent<position::Displays>>(),
+            Position::Displays,
+        ),
+        (same::<H::Input, Absent<position::Input>>(), Position::Input),
+        (same::<H::Text, Absent<position::Text>>(), Position::Text),
+        (
+            same::<H::Accessibility, Absent<position::Accessibility>>(),
+            Position::Accessibility,
+        ),
+        (
+            same::<H::Clipboard, Absent<position::Clipboard>>(),
+            Position::Clipboard,
+        ),
+        (
+            same::<H::PrimarySelection, Absent<position::PrimarySelection>>(),
+            Position::PrimarySelection,
+        ),
+        (same::<H::Drag, Absent<position::Drag>>(), Position::Drag),
+        (
+            same::<H::Haptics, Absent<position::Haptics>>(),
+            Position::Haptics,
+        ),
+        (
+            same::<H::Preferences, Absent<position::Preferences>>(),
+            Position::Preferences,
+        ),
+        (
+            same::<H::Lifecycle, Absent<position::Lifecycle>>(),
+            Position::Lifecycle,
+        ),
+        (
+            same::<H::Chrome, Absent<position::Chrome>>(),
+            Position::Chrome,
+        ),
+        (
+            same::<H::Storage, Absent<position::Storage>>(),
+            Position::Storage,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(absent, position)| absent.then_some(position))
+    .collect()
+}
 
-[[host]]
-id = "windows"
-environment = "Windows"
-runner = "Win32"
+/// The rows that claim ✅ or 🟡 in `column` for a position `absent` names.
+fn absent_claims(parity: &Parity, column: &str, absent: &[Position]) -> Vec<String> {
+    let host = parity
+        .host
+        .iter()
+        .find(|host| host.id == column)
+        .unwrap_or_else(|| panic!("the parity table has no host `{column}`"));
+    parity
+        .rows()
+        .filter_map(|(_, row)| {
+            let position = row.position.filter(|p| absent.contains(p))?;
+            let mark = Parity::mark(row, host);
+            matches!(mark, Mark::Yes | Mark::Partial).then(|| {
+                format!(
+                    "row `{}` claims {} on `{column}`, whose host fills {position:?} with Absent",
+                    row.id,
+                    mark.glyph()
+                )
+            })
+        })
+        .collect()
+}
+
+fn parse_checked(source: &str) -> Parity {
+    let parity = Parity::parse(source).expect("platform-parity.toml parses");
+    if let Err(shape) = parity.check_shape() {
+        panic!("platform-parity.toml: {shape}");
+    }
+    parity
+}
+
+#[test]
+fn parity_document_matches_its_source() {
+    let rendered = parse_checked(SOURCE).render();
+    if std::env::var_os("FLUI_OVERWRITE").is_some_and(|v| v == "1") {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/platform-parity.md");
+        std::fs::write(path, &rendered).expect("write docs/platform-parity.md");
+        return;
+    }
+    assert!(
+        rendered == DOCUMENT,
+        "docs/platform-parity.md is not the render of crates/flui-native/platform-parity.toml: \
+         edit the source, then restate the document with \
+         `FLUI_OVERWRITE=1 cargo test -p flui-native --lib parity_document_matches_its_source`"
+    );
+}
+
+#[test]
+fn absent_positions_claim_no_support() {
+    let parity = parse_checked(SOURCE);
+    let mut claims = absent_claims(
+        &parity,
+        "headless",
+        &absent_positions::<crate::hosts::headless::Headless>(),
+    );
+    #[cfg(windows)]
+    claims.extend(absent_claims(
+        &parity,
+        "windows",
+        &absent_positions::<crate::hosts::windows::Windows>(),
+    ));
+    #[cfg(target_os = "macos")]
+    claims.extend(absent_claims(
+        &parity,
+        "macos",
+        &absent_positions::<crate::hosts::apple::Apple>(),
+    ));
+    #[cfg(target_os = "ios")]
+    claims.extend(absent_claims(
+        &parity,
+        "ios",
+        &absent_positions::<crate::hosts::apple::Apple>(),
+    ));
+    #[cfg(target_arch = "wasm32")]
+    claims.extend(absent_claims(
+        &parity,
+        "web",
+        &absent_positions::<crate::hosts::web::Web>(),
+    ));
+    #[cfg(target_os = "android")]
+    claims.extend(absent_claims(
+        &parity,
+        "android",
+        &absent_positions::<crate::hosts::android::Android>(),
+    ));
+    #[cfg(wayland_host)]
+    claims.extend(absent_claims(
+        &parity,
+        "wayland",
+        &absent_positions::<crate::hosts::linux::Wayland>(),
+    ));
+    #[cfg(x11_host)]
+    claims.extend(absent_claims(
+        &parity,
+        "x11",
+        &absent_positions::<crate::hosts::linux::X11>(),
+    ));
+    assert!(claims.is_empty(), "{claims:#?}");
+}
+
+/// A source with one host and one row, for the checks' own cases.
+fn synthetic(position: &str, mark: &str, extra_status: &str) -> String {
+    format!(
+        r##"
+preamble = "# P"
+rules = "R"
+summary = "S"
+legend = []
+quality = {{ intro = "Q", row = [] }}
+capabilities = {{ intro = "C", row = [] }}
 
 [[host]]
 id = "headless"
 environment = "Headless"
 runner = "test double"
+test_double = true
 
-[[section]]
-id = "core"
+[[group]]
 name = "Core"
+[[group.section]]
+[[group.section.row]]
+id = "a-row"
+feature = "A row"
+position = "{position}"
+status = {{ headless = "{mark}"{extra_status} }}
+"##
+    )
+}
 
-[[section.row]]
-id = "window"
-capability = "Window"
-position = "window"
-note = ""
-status = { windows = "yes", headless = "yes" }
-evidence = [{ scenario = "window_conformance", date = "2026-10-28", device = "Windows 11" }]
-
-[[section.row]]
-id = "launch"
-capability = "Launch"
-position = "launch"
-note = ""
-status = { windows = "yes", headless = "na" }
-evidence = []
-"#;
-
-    #[test]
-    fn parses_and_renders_every_row_and_host() {
-        let parity = parity();
-        let rendered = parity.render();
-
-        for host in &parity.hosts {
-            assert!(
-                rendered.contains(&format!(" {} |", host.environment)),
-                "no {host:?} column"
-            );
-        }
-        for section in &parity.sections {
-            for row in &section.rows {
-                assert!(
-                    rendered.contains(&row.capability),
-                    "row `{}` missing",
-                    row.id
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn the_summary_counts_every_row_once() {
-        let parity = parity();
-        for host in &parity.hosts {
-            let counts = parity.counts(host);
-            let total = counts.iter().sum::<usize>();
-            let rows = parity.sections.iter().map(|s| s.rows.len()).sum::<usize>();
-            assert_eq!(total, rows, "{} counts every row exactly once", host.id);
-        }
-    }
-
-    #[test]
-    fn the_checked_in_parity_agrees() {
-        let parity = parity();
-        let rendered = parity.render();
-        if std::env::var("FLUI_WRITE_PARITY").is_ok() {
-            let root = repo_root();
-            std::fs::write(root.join("docs/platform-parity.md"), rendered)
-                .expect("write docs/platform-parity.md");
-            return;
-        }
-        let committed = std::fs::read_to_string(repo_root().join("docs/platform-parity.md"))
-            .expect("docs/platform-parity.md is readable");
-        assert_eq!(
-            rendered, committed,
-            "docs/platform-parity.md drifted from platform-parity.toml; run with FLUI_WRITE_PARITY=1 to restate it"
-        );
-    }
-
-    #[test]
-    fn absent_positions_never_claim_support() {
-        let parity = parity();
-        let mut violations = Vec::new();
-        check_host::<crate::hosts::headless::Headless>("headless", &parity, &mut violations);
-        #[cfg(windows)]
-        check_host::<crate::hosts::windows::Windows>("windows", &parity, &mut violations);
-        #[cfg(target_os = "macos")]
-        check_host::<crate::hosts::apple::Apple>("macos", &parity, &mut violations);
-        #[cfg(target_os = "ios")]
-        check_host::<crate::hosts::apple::Apple>("ios", &parity, &mut violations);
-        #[cfg(target_arch = "wasm32")]
-        check_host::<crate::hosts::web::Web>("web", &parity, &mut violations);
-        #[cfg(target_os = "android")]
-        check_host::<crate::hosts::android::Android>("android", &parity, &mut violations);
-        #[cfg(wayland_host)]
-        check_host::<crate::hosts::linux::Wayland>("wayland", &parity, &mut violations);
-        #[cfg(x11_host)]
-        check_host::<crate::hosts::linux::X11>("x11", &parity, &mut violations);
-        assert!(violations.is_empty(), "{violations:#?}");
-    }
-
-    #[test]
-    fn cited_scenarios_are_known_names() {
-        let parity = Parity::parse(SYNTHETIC).expect("the synthetic source parses");
-        assert_eq!(
-            unknown_scenarios(&parity, &["window_conformance"]),
-            Vec::<&str>::new()
-        );
-        assert_eq!(
-            unknown_scenarios(&parity, &["elsewhere"]),
-            vec!["window_conformance"]
-        );
-    }
+#[test]
+fn the_source_checks_catch_their_violations() {
+    let absent = [Position::PrimarySelection];
+    // a supported cell in an absent position is a claim; an absent cell is not
+    let claims = absent_claims(
+        &parse_checked(&synthetic("primary-selection", "partial", "")),
+        "headless",
+        &absent,
+    );
+    assert_eq!(claims.len(), 1, "{claims:?}");
+    let missing = parse_checked(&synthetic("primary-selection", "missing", ""));
+    assert_eq!(
+        absent_claims(&missing, "headless", &absent),
+        Vec::<String>::new()
+    );
+    // a row marking a host the table does not declare is refused
+    let stray =
+        Parity::parse(&synthetic("drag", "yes", ", web = \"yes\"")).expect("the source parses");
+    assert!(stray.check_shape().is_err());
 }

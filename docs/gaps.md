@@ -7,7 +7,8 @@ The work list. One entry per shortfall, ranked by how much it stops someone from
 production app on that environment. Each entry says what is missing, the evidence, who it hurts and
 the parity document that tracks it. Every entry blocks a ready platform
 ([`platform-parity.md`](platform-parity.md)). Pick from the top, check open pull requests first
-(`gh pr list`), and when a gap closes, update this file and the parity document in the same pull
+(`gh pr list`), and when a gap closes, update this file and the parity source
+(`crates/flui-native/platform-parity.toml`, which renders the parity document) in the same pull
 request.
 
 An entry is named by its heading, never by a number: the rank is only the order of the entries, and

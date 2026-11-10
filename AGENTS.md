@@ -52,7 +52,7 @@ and edits its row.
 | A new identity | `IdMint<I>` and `IdExhausted` (`flui_foundation::sequence`), its `AtomicIdMint` where two threads mint one id domain, or a generational key whose slot generations `GenSlots` carries (ADR-0313) | `wrapping_add`, a `pub` integer field, an ID derived from an OS handle or pointer |
 | A test that drives an application's frames | `flui_testing::HeadlessHost` over `UiRuntime::pump` and its manual clock | `HeadlessBinding::pump_frame`, which ADR-0083 removes |
 | Which crate may depend on which | `tier`, `order` and `reach` (ADR-0081) | reasoning from `layer = N`, which ADR-0081 removed |
-| A platform's status, a version floor, an open gap | `docs/platform-parity.md`, `platform-support.toml`, `docs/gaps.md` | a status line in an ADR, a spec or an `ARCHITECTURE.md` |
+| A platform's status, a version floor, an open gap | `crates/flui-native/platform-parity.toml` (rendered into `docs/platform-parity.md`), `platform-support.toml`, `docs/gaps.md` | a status line in an ADR, a spec or an `ARCHITECTURE.md`; a hand edit of `docs/platform-parity.md` |
 
 ## Codebase map
 
@@ -86,13 +86,14 @@ conversation:
   that states it is rewritten, not appended to: no "Amended" line over an unchanged body, no dated
   session entries, no progress diary. History is git's. A spec's `tasks.md` is a status table
   with its validation evidence, and the spec closes when its code and headless tests are on
-  `main`; runs still owed on devices become `docs/platform-parity.md` rows.
+  `main`; runs still owed on devices become rows of `crates/flui-native/platform-parity.toml`.
 - **One source per fact.** A count, a status, a version, a crate list or a feature table lives in
   one place (a manifest, `platform-support.toml`, `docs/gaps.md`) and other documents link it.
   A PR that changes a fact someone copied fixes each copy.
 - A consumer-visible change adds `changelog.d/<branch-slug>.md`
   (`### Added|Changed|Deprecated|Removed|Fixed|Security` and bullets), so parallel PRs never
-  edit `CHANGELOG.md`. A platform-support change updates `docs/platform-parity.md` (✅ only
+  edit `CHANGELOG.md`. A platform-support change updates `crates/flui-native/platform-parity.toml`
+  and restates `docs/platform-parity.md` from it (✅ only
   after a run on that platform) and `docs/gaps.md`.
 - Commits are `area: what changed`. CI executes Linux and wasm32 only; native and GPU changes are
   run locally.
@@ -132,6 +133,7 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | A caught panic payload nobody resumes goes to `discard_payload`; `mem::forget` is a deliberate leak with its reason at the call | clippy `mem_forget` |
 | Dependencies point down the tiers; an exception names the ADR that removes it | `xtask workspace`, `xtask reach` (ADR-0081) |
 | A Stable crate's public API names upstream types only as ADR-0089 §2 allows | `xtask api-closure` (CI `api-contracts` job, nightly rustdoc JSON) |
+| `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
 | Every `static`/`thread_local!` outside tests has a `globals` entry (an ADR that removes it, or an ADR-0097 grant) | `xtask globals` |
 | Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit handler, a closure handed to the OS) is a constant or one call of `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16) | `xtask panic-boundary` |
 | A value crosses a thread because the compiler proves it may: every `unsafe impl Send`/`Sync` is listed and the list only shrinks; `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed and the list only shrinks (ADR-0136 §3) | `xtask send-impls`, `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
@@ -199,7 +201,7 @@ with an answer you can point to in the code; the reviewers ask the same ones.
     through the public API.
 11. **Repository rules.** A generic-return call names its target type, a new `pub` item has a
     production caller or a named follow-up, no requirement or task IDs in code, `docs/gaps.md`
-    and `docs/platform-parity.md` updated with a platform change.
+    and `crates/flui-native/platform-parity.toml` updated with a platform change.
 12. **A review finding fixes its class.** Apply items 1–3 to every similar point in the PR, not
     only the line the reviewer named.
 13. **Replaced forms.** What does the diff replace or reverse? Name the old form, `rg` it across

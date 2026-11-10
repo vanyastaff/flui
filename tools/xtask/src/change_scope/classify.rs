@@ -66,6 +66,8 @@ pub(super) const DOCS_ONLY: &[&str] = &[
 pub(super) const COMPILED_DOCS: &[(&str, &str)] = &[
     // `GapId`'s slugs are held to the entries' headings
     ("docs/gaps.md", "crates/flui-native/"),
+    // the render of `crates/flui-native/platform-parity.toml`, held to it
+    ("docs/platform-parity.md", "crates/flui-native/"),
 ];
 
 /// Inputs whose breakage only the wide lane's jobs block on (feature-matrix,
@@ -923,10 +925,15 @@ pub(super) mod tests {
     }
 
     fn a_compiled_doc_is_its_readers_change() {
-        // docs/gaps.md alone runs flui-native's test that reads it
-        let s = scope(&["docs/gaps.md"]);
-        assert_eq!(s.mode, Mode::Packages);
-        assert_eq!(s.seeds, ["flui-native"]);
+        // docs/gaps.md or the parity render alone runs flui-native's test that reads it
+        for doc in ["docs/gaps.md", "docs/platform-parity.md"] {
+            let s = scope(&[doc]);
+            assert_eq!(
+                (s.mode, s.seeds),
+                (Mode::Packages, vec!["flui-native".to_owned()]),
+                "{doc}"
+            );
+        }
         // beside other documentation it still compiles
         assert_eq!(
             scope(&["docs/testing.md", "docs/gaps.md"]).mode,
