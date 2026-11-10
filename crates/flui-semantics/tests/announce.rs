@@ -14,7 +14,10 @@ use parking_lot::Mutex;
 fn root() -> SemanticsNode {
     let mut node = SemanticsNode::new().with_source_render_id(RenderId::new_gen(
         0,
-        core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        flui_foundation::generation::Generation::try_from(
+            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        )
+        .expect("a fixture generation leaves the reserved bit clear"),
     ));
     node.config_mut().set_label("Window");
     node

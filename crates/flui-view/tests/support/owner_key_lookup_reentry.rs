@@ -108,7 +108,7 @@ fn scope() -> GlobalKeyScope {
     SCOPE.with(|slot| slot.borrow().as_ref().expect("installed scope").clone())
 }
 fn element(slot: u32) -> ElementId {
-    ElementId::new_gen(slot, std::num::NonZeroU32::MIN)
+    ElementId::new_gen(slot, flui_foundation::generation::Generation::FIRST)
 }
 fn owner(shared: &GlobalKeyScope) -> BuildOwner {
     let mut result = BuildOwner::new();

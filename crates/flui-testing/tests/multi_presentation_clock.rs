@@ -6,7 +6,6 @@
 //! drive two presentations at independent scripted cadences in one
 //! interleaved script.
 
-use std::num::NonZeroU32;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
@@ -14,7 +13,7 @@ use flui_foundation::PresentationId;
 use flui_testing::HeadlessBinding;
 
 fn presentation(index: u32) -> PresentationId {
-    PresentationId::new_gen(index, NonZeroU32::MIN)
+    PresentationId::new_gen(index, flui_foundation::generation::Generation::FIRST)
 }
 
 pub(crate) fn extra_registry_drivers_request_frames_and_retire_on_replacement() {

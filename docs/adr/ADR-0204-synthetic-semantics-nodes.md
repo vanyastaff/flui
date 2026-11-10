@@ -1,4 +1,4 @@
-# ADR-0204: Synthetic semantics nodes take owner-allocated ids below 2^32; text fields publish runs
+# ADR-0204: Synthetic semantics nodes take tagged generational ids; text fields publish runs
 
 - **Status:** Accepted (2026-10-12)
 - **Superseded-by:** [ADR-0223](ADR-0223-authored-semantics-regions.md), §1 identity authority and authored-region action routing
@@ -27,8 +27,8 @@ Two kinds of published nodes have no render object: the runs of a text field's t
 screen reader needs to read by character, word and line and to follow the selection, and the
 nodes that carry announcements, since AccessKit 0.25 has no announcement API. An
 `AccessibilityNodeId` is a packed `RenderId`, `(generation << 32) | index` with
-`generation ≥ 1`, so it uses all 64 bits for render-backed nodes, but no render object ever
-receives a value in `1..2^32`.
+`generation ≥ 1`, and its top bit is a domain bit that no packed key carries (ADR-0313 §1), so
+a value that sets it is free for nodes with no render object.
 
 AccessKit's text model: the field node holds `text_selection`, whose positions name a
 `TextRun` node and a character index; each run carries its text, per-character UTF-8 lengths
@@ -45,12 +45,14 @@ an index that is never reused).
 
 ## Decision
 
-1. **Id range.** Synthetic nodes take ids in `1..2^32`, allocated by the `SemanticsOwner` that
-   publishes them. A run keeps its id while it is the same run: same owner node, same
-   ordinal, same starting character in the field and same text. Any other run takes the next
-   value, so an edit re-mints the edited run and every later run whose start moved, and an
+1. **Id range.** Synthetic nodes take generational slot ids whose published form sets the
+   reserved domain bit (ADR-0313 §4), from the presentation's identity source (ADR-0223). A run
+   keeps its id while it is the same run: same owner node, same
+   ordinal, same starting character in the field and same text. Any other run takes a new
+   identity, so an edit re-mints the edited run and every later run whose start moved, and an
    outstanding `TextPosition` into a changed run is refused as stale rather than resolving to
-   other text. A released value is never reissued during the owner's life. When the range is exhausted, the
+   other text. A released id's slot returns only under its next generation, so no value is
+   reissued. When the source is exhausted, the
    owner refuses permanently: no further synthetic node is published, and it reports
    `tracing::error!` once, queued with the publication and emitted after the owner releases its
    borrows (a subscriber is user code and may re-enter). An inbound action addressed to a synthetic id resolves to its owner

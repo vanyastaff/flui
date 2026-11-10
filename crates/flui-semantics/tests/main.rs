@@ -17,6 +17,8 @@ mod delta;
 mod fixture;
 #[path = "identifier.rs"]
 mod identifier;
+#[path = "identity_source.rs"]
+mod identity_source;
 #[path = "incremental_flush.rs"]
 mod incremental_flush;
 #[path = "locate.rs"]

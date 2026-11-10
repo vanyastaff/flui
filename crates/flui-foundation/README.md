@@ -66,13 +66,14 @@ assert_eq!(layer_id.unzip() - 1, slab_index); // ID 3 → slot 2
 let first_view = ViewId::zip(1);              // slot 0 → ID 1
 
 // Generational keys (`ElementId`, and `GenId<T>` aliases `RenderId`,
-// `UiRuntimeId`, `DataTransferId`) pack a 32-bit slab index and a non-zero 32-bit
-// generation into a `NonZeroU64`. They do NOT implement `Identifier` (no bare
+// `UiRuntimeId`, `DataTransferId`) pack a 32-bit slab index and a 31-bit `Generation` (the top bit is reserved)
+// into a `NonZeroU64`. They do NOT implement `Identifier` (no bare
 // `.get()` that would strip the generation); use `.index()` / `.generation()`.
 let element_id = ElementId::new(1);           // 1-based ctor → index 0, generation 1
 assert_eq!(element_id.index(), 0);
-let render_id = RenderId::new_gen(5, std::num::NonZeroU32::new(2).expect("non-zero"));
-assert_eq!((render_id.index(), render_id.generation().get()), (5, 2));
+let second = flui_foundation::generation::Generation::FIRST.next().expect("a second generation");
+let render_id = RenderId::new_gen(5, second);
+assert_eq!((render_id.index(), render_id.generation().as_u32()), (5, 2));
 
 // All IDs keep their niche: Option<Id> is the same size as Id.
 assert_eq!(std::mem::size_of::<Option<ElementId>>(), std::mem::size_of::<ElementId>());

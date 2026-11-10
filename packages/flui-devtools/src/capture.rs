@@ -928,7 +928,6 @@ pub(crate) fn filter() -> FrameSpanFilter {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
 
     use tracing::Dispatch;
     use tracing_subscriber::layer::SubscriberExt;
@@ -936,11 +935,11 @@ mod tests {
     use super::*;
 
     fn runtime(n: u32) -> UiRuntimeId {
-        UiRuntimeId::new_gen(n, NonZeroU32::MIN)
+        UiRuntimeId::new_gen(n, flui_sdk::foundation::generation::Generation::FIRST)
     }
 
     fn presentation(n: u32) -> PresentationId {
-        PresentationId::new_gen(n, NonZeroU32::MIN)
+        PresentationId::new_gen(n, flui_sdk::foundation::generation::Generation::FIRST)
     }
 
     /// Runs `body` with a fresh capture installed on this thread.

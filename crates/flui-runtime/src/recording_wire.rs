@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::DataTransferId;
+use flui_foundation::generation::Generation;
 use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Point, Size, WindowMetrics};
 use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
 use flui_interaction::{
@@ -1057,17 +1058,17 @@ impl Convert<DataTransferId> for rec::TransferId {
     fn convert(id: DataTransferId) -> Self {
         Self {
             index: id.index(),
-            generation: id.generation().get(),
+            generation: id.generation().as_u32(),
         }
     }
 }
 
 impl TryConvert<rec::TransferId> for DataTransferId {
     fn try_convert(id: rec::TransferId) -> Result<Self> {
-        Ok(Self::new_gen(
-            id.index,
-            NonZeroU32::new(id.generation).ok_or_else(|| invalid("transfer generation 0"))?,
-        ))
+        let generation =
+            NonZeroU32::new(id.generation).ok_or_else(|| invalid("transfer generation 0"))?;
+        let generation = Generation::try_from(generation).map_err(invalid)?;
+        Ok(Self::new_gen(id.index, generation))
     }
 }
 

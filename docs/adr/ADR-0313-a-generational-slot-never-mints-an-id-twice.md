@@ -8,7 +8,10 @@
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (a caught panic's owner
   turn may not re-mint a released identity); [ADR-0098](ADR-0098-owned-f64-geometry-values.md)
   (checked values, the rule the packed keys inherit); the **ID offset** row of `AGENTS.md`
-  ("What the compiler and gates enforce"), which this record's first section states as a type
+  ("What the compiler and gates enforce"), which this record's first section states as a type;
+  [ADR-0204](ADR-0204-synthetic-semantics-nodes.md) and
+  [ADR-0223](ADR-0223-authored-semantics-regions.md) (the synthetic semantics identities §4
+  packs)
 - **Sources:** the workspace on main `1bac2457b` (2026-11-03), whose per-arena bookkeeping this
   record's table lists with its evidence
 
@@ -40,6 +43,9 @@ the one policy live?
   identity again (ADR-0287's owner turn resumes code that holds foreign handles).
 - The frame path is synchronous: the ledger is plain owner-thread state; nothing here crosses a
   thread and nothing here takes a lock.
+- A synthetic semantics identity is recycled like any other slot, stays 64-bit at the AccessKit
+  boundary (AccessKit's text positions name a run by a bare `NodeId` in the field's own tree, so
+  neither a wider id nor a subtree gives runs a namespace) and never aliases a render identity.
 
 ## Considered options
 
@@ -55,26 +61,45 @@ review-time rule the drivers start from, and option 3 rebuilds two storage types
 path and layout touch everywhere, to carry bookkeeping the ledger can carry without owning the
 storage.
 
-### §1. A generation is a checked, 1-based, non-zero `u32`
+### §1. A generation is a checked, 1-based, 31-bit value below the reserved domain bit
 
-`flui_foundation::generation::Generation` is the type, minted only by the ledger of
-the next section:
+A packed key is `(generation << 32) | slot` in 64 bits, and its top bit is reserved for a domain
+tag (§4), so a generation has 31 bits. `flui_foundation::generation::Generation` is the type;
+the ledger of the next section mints it, and a raw value read back from a wire, a trace or a
+test fixture enters through one checked conversion:
 
 ```rust
+pub const DOMAIN_BIT: u64 = 1 << 63;                // no packed key carries it
+
 pub struct Generation(NonZeroU32);
 impl Generation {
     pub const FIRST: Self;                          // a fresh slot's first
+    pub const LAST: Self;                           // 0x7FFF_FFFF, the last a packed key carries
     pub const fn as_u32(self) -> u32;               // the packed value
-    pub const fn as_nonzero(self) -> NonZeroU32;    // the packed-key ctor's form
+    pub const fn as_nonzero(self) -> NonZeroU32;
     pub const fn is_last(self) -> bool;
-    pub const fn next(self) -> Option<Generation>;  // the checked step; None closes a slot
+    pub const fn next(self) -> Option<Generation>;  // the checked step; None past LAST
+}
+impl TryFrom<NonZeroU32> for Generation { type Error = ReservedGenerationBit; }
+
+impl<T: Marker> GenId<T> {                          // ElementId and PresentationId alike
+    pub fn new_gen(index: u32, generation: Generation) -> Self;
+    pub fn generation(self) -> Generation;
+    pub fn from_u64(packed: u64) -> Option<Self>;   // None for no generation or the domain bit
 }
 ```
 
-- `next()` refuses past the last: no generation wraps, so an id an arena minted cannot be minted
+- `next()` refuses past `LAST`: no generation wraps, so an id an arena minted cannot be minted
   again (the audit's identity rule, as a type).
-- The bare-`u32` and raw-`NonZeroU32` fields the trees keep today are the replaced forms; they
-  stay nowhere once §3's adoptions land.
+- A packed key's constructor takes a `Generation`, so no key carries the domain bit; the refusal
+  is the typed outcome of the one raw entry, `Generation::try_from`, which answers
+  `ReservedGenerationBit` above `LAST`. Every raw decoder (`from_u64`, `ElementId`'s
+  `Deserialize`, the recording wire, the drag-session wire key, the inspector's `NodeRef`
+  parser) goes through it and refuses the bit.
+- A counter that mints a generation outside a ledger (the UI runtime's incarnation, the native
+  data-transfer offer table) steps through `Generation::next` and stops at `LAST`.
+- The bare-`u32` and raw-`NonZeroU32` fields the trees kept before this record are the replaced
+  forms; they stay nowhere once §3's adoptions land.
 
 ### §2. The ledger: `GenSlots`, one bookkeeping, one close
 
@@ -109,13 +134,30 @@ Which ledger call each tree uses, and at which point:
 
 | Tree | Step | Close |
 |---|---|---|
-| The reactive signal graph | `mint_recycled` at the free-list claim (the claim's advance, as today) | at release: `peek` is `None`, so the release re-lists nothing |
+| The reactive signal graph | `mint_recycled` at the free-list claim | at release: `peek` is `None`, so the release re-lists nothing |
 | The element tree | `peek` before teardown, `commit` after the removal's own mutation | `peek`'s `None` refuses the removal before any hook, and the occupant stays |
-| The render tree's slab | the ledger behind `RenderId`'s slots | the slab's own `RETIRED` retirement remains; the ledger's adoption lands with #2241 |
+| The synthetic semantics identity source (§4) | `mint_fresh` on growth, `mint_recycled` at the free-list claim | at release: `peek` is `None`, so the release re-lists nothing |
+| The render tree's slab | `Generation::next` on its own slot header | past `LAST` the header takes the slab's `RETIRED` sentinel, above every generation; the ledger's adoption lands with #2241 |
 
-`Generation::FIRST` (one) replaces the fresh-slot bases: the signal graph's fresh slots carry
-generation 0 today and carry one from this record's date, and every compare against a live id
+`Generation::FIRST` (one) is every fresh slot's base, and every compare against a live id
 checks the ledger.
+
+### §4. The reserved domain bit separates synthetic semantics identities
+
+A synthetic semantics node (an authored region, a text run, an announcer; ADR-0204, ADR-0223)
+publishes an `AccessibilityNodeId` beside the render-backed ones, which are packed `RenderId`s.
+`SemanticsRegionId` wraps a `GenId` of its own private marker, and its published form sets
+`DOMAIN_BIT`. No render id carries the bit (§1), so a synthetic and a render identity never
+alias, at any slot and generation, and `RenderId::from_u64` refuses a synthetic value.
+
+`SemanticsIdentitySource` is a slot arena over a `GenSlots` ledger, an occupied flag per slot
+and a free list. A batch is all-or-nothing: its fresh slots' indexes are checked before any
+mint. `release` accepts only the slot's current, occupied generation, so a stale or second
+release answers `false` and lists nothing; a released slot returns under its next generation,
+and one whose generation reached `LAST` closes. The pipeline releases a region's or a text
+run's identity when its key leaves the retained map; mounted identities survive owner
+replacement and accessibility disable/enable, and the announcers' live as long as the
+presentation.
 
 ### Consequences
 
@@ -128,19 +170,25 @@ checks the ledger.
   carry the break, not a migration).
 - Bad, because the ledger is one more indirection between the arena's storage and its resolve;
   the compare stays one lookup, and the ledger's `Vec` is as flat as the fields it replaces.
-- Neutral, because exhausting a generation needs 2³² recycles of one slot: the close is a policy
-  the code keeps, not a case a run reaches.
+- Bad, because the domain bit spends one generation bit: a slot has `2^31 - 1` generations
+  rather than `2^32 - 1`.
+- Neutral, because exhausting a generation needs `2^31 - 2` recycles of one slot: the close is a
+  policy the code keeps, not a case a run reaches.
 
 ### Confirmation
 
-- The compiler: no `GenSlots` or `Generation` constructor takes a raw generation except
+- The compiler: a packed key's constructor takes a `Generation`, and the only constructors of a
+  `Generation` from a raw value are `Generation::try_from`, which refuses the domain bit, and
   `seed_generation`, whose doc states it is a test's claim; `Generation::next` is `const` and
   checked, so no arena can compile a wrapping step.
 - The tests: `crates/flui-foundation/tests/generation.rs` (`a_fresh_slot_starts_at_its_first_generation`,
   `a_recycled_slot_steps_to_the_generation_it_mints_next`,
   `an_exhausted_slot_has_no_release_step_and_closes_forever`,
   `a_release_commit_applies_only_what_its_peek_minted`,
-  `slots_the_bookkeeping_does_not_carry_yet_grow_in_as_fresh_firsts`); the signal graph's
+  `slots_the_bookkeeping_does_not_carry_yet_grow_in_as_fresh_firsts`,
+  `the_last_generation_stops_below_the_reserved_domain_bit`,
+  `a_raw_generation_that_sets_the_reserved_bit_is_refused`,
+  `a_packed_key_never_carries_or_decodes_the_reserved_domain_bit`); the signal graph's
   `reactive_graph_contract_matrix` rows `a_signal_slot_at_its_last_generation_is_retired_not_reused`
   and `unmounting_an_element_releases_what_it_owned_and_its_reads`
   (`crates/flui-view/src/reactive/mod.rs`); the element tree's
@@ -149,6 +197,14 @@ checks the ledger.
   position, through the public tree, and the parent tree's
   `element_tree_contract_matrix` row `stale_id_after_slot_reuse_resolves_none` still names the
   release's compare.
+- §4: `crates/flui-semantics/tests/identity_source.rs`
+  (`a_released_identity_returns_its_slot_under_a_new_generation`,
+  `a_synthetic_identity_never_aliases_a_render_identity`), the source's own
+  `synthetic_identity_exhaustion_never_wraps_or_partially_reserves` and
+  `a_slot_at_its_last_generation_closes_at_its_release` (a private seed, since reaching `LAST`
+  publicly takes `2^31` releases), and the render-object harness row
+  `harness_custom_paint_semantic_regions_keep_order_geometry_identity_and_actions`: an authored
+  region publishes the domain bit, and a removed key's slot returns under its next generation.
 
 An accepted record whose every section is built becomes `Implemented` — the gaps entry below is
 what holds this record at `Accepted`.

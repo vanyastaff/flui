@@ -623,7 +623,7 @@ impl ElementTree {
             );
             self.generations.mint_fresh()
         };
-        ElementId::new_gen(index, generation.as_nonzero())
+        ElementId::new_gen(index, generation)
     }
 
     /// Resolve an [`ElementId`] to its live slab index, applying the
@@ -638,9 +638,7 @@ impl ElementTree {
     fn resolve_index(&self, id: ElementId) -> Option<usize> {
         let index = id.index() as usize;
         match self.generations.generation(id.index()) {
-            Some(live) if live.as_nonzero() == id.generation() && self.nodes.contains(index) => {
-                Some(index)
-            }
+            Some(live) if live == id.generation() && self.nodes.contains(index) => Some(index),
             _ => None,
         }
     }
@@ -655,7 +653,7 @@ impl ElementTree {
             .peek(slab_index_to_u32(index))
             .unwrap_or_else(|| {
                 panic!(
-                    "ElementTree: slab slot {index} exhausted u32::MAX generations \
+                    "ElementTree: slab slot {index} exhausted its generations \
                      (ABA-safety overflow — removal refused)"
                 )
             })
@@ -2344,7 +2342,7 @@ impl ElementTree {
             .generations
             .generation(slot)
             .expect("BUG: the generation ledger runs parallel to the slab");
-        ElementId::new_gen(slot, generation.as_nonzero())
+        ElementId::new_gen(slot, generation)
     }
 }
 
@@ -3405,7 +3403,7 @@ mod tests {
             "test precondition: slab must reuse the freed slot"
         );
         assert_ne!(id_a, id_b, "reused slot must mint a distinct generation");
-        assert_eq!(id_b.generation().get(), 2, "reused slot generation = 2");
+        assert_eq!(id_b.generation().as_u32(), 2, "reused slot generation = 2");
 
         // The stale id resolves to None; the live id resolves to B.
         assert!(

@@ -6421,7 +6421,11 @@ fn harness_custom_paint_semantic_regions_keep_order_geometry_identity_and_action
         original[0].1, original[3].1,
         "background and foreground have separate namespaces"
     );
-    assert!(u32::try_from(original[0].1.as_u64()).is_ok());
+    assert_eq!(
+        original[0].1.as_u64() & flui_foundation::generation::DOMAIN_BIT,
+        flui_foundation::generation::DOMAIN_BIT,
+        "an authored region publishes the synthetic domain bit, which no render id carries"
+    );
     let target = original[0].1;
     run.owner()
         .semantics_owner()
@@ -6466,6 +6470,11 @@ fn harness_custom_paint_semantic_regions_keep_order_geometry_identity_and_action
         semantics_content(&run)[1].1,
         target,
         "a retired key gets a fresh identity"
+    );
+    assert_eq!(
+        semantics_content(&run)[1].1.as_u64() & 0xFFFF_FFFF,
+        target.as_u64() & 0xFFFF_FFFF,
+        "the retired key's released slot is taken again, under its next generation"
     );
     assert_eq!(
         calls.load(Ordering::Relaxed),

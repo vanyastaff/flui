@@ -53,8 +53,14 @@ reached through concrete types, not through the trait.
 ## Slot generations (ADR-0313)
 
 A packed generational key (`ElementId`, `RenderId`, `UiRuntimeId`) names one
-slot with a `generation::Generation`: 1-based, checked, never wrapped, minted
-only by the slot arena's `generation::GenSlots` ledger. A release preflights
+slot with a `generation::Generation`: 1-based, checked, never wrapped, at most
+`Generation::LAST` (`0x7FFF_FFFF`), minted by the slot arena's
+`generation::GenSlots` ledger. The packed key's top bit,
+`generation::DOMAIN_BIT`, is reserved for a domain tag: a key's constructor
+takes a `Generation`, so no key carries it, and a raw generation enters only
+through `Generation::try_from`, which answers `ReservedGenerationBit` for it.
+Every raw decoder (`from_u64`, `ElementId`'s `Deserialize`) refuses the bit.
+A release preflights
 its step with `GenSlots::peek` before user code runs and commits it with
 `GenSlots::commit` after; a caught panic between the two steps nothing. A
 slot whose generation space is exhausted closes at its release and never

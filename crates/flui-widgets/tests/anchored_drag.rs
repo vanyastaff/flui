@@ -829,7 +829,8 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
             declared_len: None,
         }]);
     // The id a source minted for the offer.
-    let id = flui_foundation::DataTransferId::new_gen(0, std::num::NonZeroU32::MIN);
+    let id =
+        flui_foundation::DataTransferId::new_gen(0, flui_foundation::generation::Generation::FIRST);
     let offer = DataTransferOffer::new(id, representations);
     let window = PresentationId::new(1);
     let time = |ms: u64| EventTime::from_nanos(1_000_000_000 + ms * 1_000_000);

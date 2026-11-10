@@ -12,8 +12,9 @@
 //! session, and only the source's own runtime redeems the name for the value.
 
 use std::fmt;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 
+use flui_foundation::generation::Generation;
 use flui_foundation::{DragSessionId, IdExhausted, UiRuntimeId};
 
 use crate::data_transfer::{
@@ -214,7 +215,8 @@ impl DragSessionKey {
                     let (index, generation) = value.split_once('.')?;
                     runtime = Some((
                         index.parse::<u32>().ok()?,
-                        generation.parse::<u32>().ok()?.try_into().ok()?,
+                        Generation::try_from(NonZeroU32::new(generation.parse::<u32>().ok()?)?)
+                            .ok()?,
                     ));
                 }
                 "session" => session = value.parse::<u64>().ok().and_then(NonZeroU64::new),

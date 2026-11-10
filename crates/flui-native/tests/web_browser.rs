@@ -1034,7 +1034,7 @@ fn an_unprevented_dragenter_leaves_the_drag_to_the_page() {
 fn os_drag_request(ended: &Rc<RefCell<Vec<OsDragEnd>>>) -> OsDragRequest {
     let key = DragSessionKey::new(
         ProcessNonce::from_raw(std::num::NonZeroU64::new(5).expect("nonzero")),
-        UiRuntimeId::new_gen(0, std::num::NonZeroU32::MIN),
+        UiRuntimeId::new_gen(0, flui_foundation::generation::Generation::FIRST),
         DragSessionId::from_wire(std::num::NonZeroU64::new(3).expect("nonzero")),
     );
     let text = RepresentationDescriptor {

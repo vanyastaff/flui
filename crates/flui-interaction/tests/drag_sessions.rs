@@ -498,7 +498,7 @@ impl Fixture {
         let slot = self.offers.get();
         self.offers
             .set(slot.checked_add(1).expect("the test mints few offers"));
-        DataTransferId::new_gen(slot, std::num::NonZeroU32::MIN)
+        DataTransferId::new_gen(slot, flui_foundation::generation::Generation::FIRST)
     }
 
     fn deliver(&self, presentation: PresentationId, event: DragDropEvent) {

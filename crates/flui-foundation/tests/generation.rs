@@ -2,7 +2,10 @@
 //! keys' ABA contract).
 
 use flui_foundation::generation::GenSlots;
-use flui_foundation::generation::Generation;
+use std::num::NonZeroU32;
+
+use flui_foundation::generation::{DOMAIN_BIT, Generation, ReservedGenerationBit};
+use flui_foundation::{ElementId, PresentationId, RenderId};
 
 /// The ledger's carry of `slot`, as the packed value.
 fn carry(slots: &GenSlots, slot: u32) -> u32 {
@@ -43,7 +46,7 @@ fn a_recycled_slot_steps_to_the_generation_it_mints_next() {
 #[test]
 fn an_exhausted_slot_has_no_release_step_and_closes_forever() {
     let mut slots = GenSlots::new();
-    slots.seed_generation(3, u32::MAX);
+    slots.seed_generation(3, Generation::LAST.as_u32());
     assert!(
         slots.generation(3).is_some_and(Generation::is_last),
         "the seeded terminal generation is the slot's carry"
@@ -63,7 +66,7 @@ fn an_exhausted_slot_has_no_release_step_and_closes_forever() {
     );
     assert_eq!(
         slots.generation(3).map(Generation::as_u32),
-        Some(u32::MAX),
+        Some(Generation::LAST.as_u32()),
         "the closed slot keeps its final generation"
     );
 }
@@ -96,5 +99,69 @@ fn slots_the_bookkeeping_does_not_carry_yet_grow_in_as_fresh_firsts() {
         slots.generation(3),
         None,
         "the ledger carries exactly the slots it grew to"
+    );
+}
+
+#[test]
+fn the_last_generation_stops_below_the_reserved_domain_bit() {
+    assert_eq!(Generation::LAST.as_u32(), 0x7FFF_FFFF);
+    assert!(Generation::LAST.is_last());
+    assert_eq!(Generation::LAST.next(), None, "no step past the last");
+    let before_last = Generation::try_from(
+        NonZeroU32::new(Generation::LAST.as_u32() - 1).expect("the value is non-zero"),
+    )
+    .expect("the generation before the last is admitted");
+    assert!(!before_last.is_last());
+    assert_eq!(before_last.next(), Some(Generation::LAST));
+
+    let mut slots = GenSlots::new();
+    slots.seed_generation(0, Generation::LAST.as_u32() - 1);
+    assert_eq!(
+        slots.mint_recycled(0),
+        Generation::LAST,
+        "the last recycle reaches LAST"
+    );
+    assert_eq!(slots.peek(0), None, "a slot at LAST closes at its release");
+}
+
+#[test]
+fn a_raw_generation_that_sets_the_reserved_bit_is_refused() {
+    let cases = [
+        (Generation::LAST.as_u32(), true),
+        (Generation::LAST.as_u32() + 1, false),
+        (u32::MAX, false),
+        (1, true),
+    ];
+    for (raw, admitted) in cases {
+        let raw = NonZeroU32::new(raw).expect("the case is non-zero");
+        let answer = Generation::try_from(raw);
+        assert_eq!(answer.is_ok(), admitted, "raw generation {raw}");
+        if !admitted {
+            assert_eq!(answer, Err(ReservedGenerationBit(raw)));
+        }
+    }
+}
+
+#[test]
+fn a_packed_key_never_carries_or_decodes_the_reserved_domain_bit() {
+    let render = RenderId::new_gen(u32::MAX, Generation::LAST);
+    assert_eq!(render.as_u64() & DOMAIN_BIT, 0);
+    assert_eq!(RenderId::from_u64(render.as_u64()), Some(render));
+    assert_eq!(render.generation(), Generation::LAST);
+    let element = ElementId::new_gen(u32::MAX, Generation::LAST);
+    assert_eq!(element.as_u64() & DOMAIN_BIT, 0);
+    let presentation = PresentationId::new_gen(u32::MAX, Generation::LAST);
+    assert_eq!(
+        PresentationId::from_u64(presentation.as_u64()),
+        Some(presentation)
+    );
+
+    let tagged = render.as_u64() | DOMAIN_BIT;
+    assert_eq!(RenderId::from_u64(tagged), None);
+    assert_eq!(PresentationId::from_u64(tagged), None);
+    assert_eq!(
+        RenderId::from_u64(DOMAIN_BIT | 1),
+        None,
+        "the domain bit alone is no generation either"
     );
 }

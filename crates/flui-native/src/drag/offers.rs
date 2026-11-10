@@ -5,10 +5,10 @@
 //! `DataTransfer` types and Android's `ClipDescription` speak media types
 //! alike), what a media type offers and the payload its bytes carry.
 
-use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
+use flui_foundation::generation::Generation;
 use flui_platform::data_transfer::RepresentationDescriptor;
 #[cfg(any(
     target_os = "android",
@@ -27,7 +27,7 @@ use flui_platform::data_transfer::{Mime, TransferFormat, TransferPayload};
 /// bumps it, so the next occupant of the slot mints a different id.
 #[derive(Debug)]
 struct OfferSlot {
-    generation: NonZeroU32,
+    generation: Generation,
     representations: Option<Arc<[RepresentationDescriptor]>>,
 }
 
@@ -63,7 +63,7 @@ impl OfferTable {
 
         let index =
             u32::try_from(self.slots.len()).expect("BUG: offer table exceeds u32::MAX slots");
-        let generation = NonZeroU32::MIN;
+        let generation = Generation::FIRST;
         self.slots.push(OfferSlot {
             generation,
             representations: Some(representations),
@@ -87,7 +87,7 @@ impl OfferTable {
     /// is permanently stale. Returns what the offer announced, or `None` if
     /// `id` was already stale (idempotent).
     ///
-    /// A slot whose generation would overflow is never reused — it is
+    /// A slot at `Generation::LAST` is never reused — it is
     /// dropped from circulation rather than allowed to recycle generation 1.
     pub(crate) fn retire(&mut self, id: DataTransferId) -> Option<Arc<[RepresentationDescriptor]>> {
         let slot_index = id.index() as usize;
@@ -96,7 +96,7 @@ impl OfferTable {
             return None;
         }
         let representations = slot.representations.take();
-        if let Some(next) = slot.generation.checked_add(1) {
+        if let Some(next) = slot.generation.next() {
             slot.generation = next;
             self.free.push(id.index());
         }
