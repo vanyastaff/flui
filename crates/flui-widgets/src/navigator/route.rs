@@ -19,7 +19,7 @@
 //!
 //! `Vec<Box<dyn Route<Output = T>>>` cannot hold routes with different `T`, so
 //! the stack holds `Box<dyn ErasedRoute>` and a pop result crosses a
-//! `Box<dyn Any + Send>` boundary, downcast in [`RouteRecord::did_complete`].
+//! `Box<dyn Any>` boundary, downcast in [`RouteRecord::did_complete`].
 //! A mismatched `pop<T>` is therefore a runtime failure rather than a compile error.
 //!
 //! **This does not authorize the public shape.** A later API sign-off gate still
@@ -28,8 +28,8 @@
 //! `flui-widgets`, so **nothing would have caught this** — which is a reason
 //! to keep it private, not a licence to export.
 //!
-//! On a type mismatch the framework logs and completes with `None` rather than
-//! raising a cast error. A wrong `pop` type is caller error, and
+//! On a type mismatch the framework logs and completes with
+//! [`RouteResultError::TypeMismatch`] rather than raising a cast error. A wrong `pop` type is caller error, and
 //! [`PANIC-POLICY`](../../../../../docs/PANIC-POLICY.md) reserves panics for
 //! framework invariants. Pinned by
 //! `a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock`.
@@ -41,7 +41,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_animation::AnimationRunFuture;
 
-use super::result::{Completer, RouteResult};
+use super::result::{Completer, RouteResult, RouteResultError};
 
 /// A pop result, erased — and carrying the name of what was erased.
 ///
@@ -51,13 +51,13 @@ use super::result::{Completer, RouteResult};
 /// "something was discarded". It is captured once, at the six public erasure
 /// sites, where the caller's `T` is still known.
 pub(crate) struct AnyResult {
-    value: Box<dyn Any + Send>,
+    value: Box<dyn Any>,
     supplied: &'static str,
 }
 
 impl AnyResult {
     /// Erase a caller-supplied result, recording what it was.
-    pub(crate) fn new<T: Send + 'static>(value: T) -> Self {
+    pub(crate) fn new<T: 'static>(value: T) -> Self {
         Self {
             value: Box::new(value),
             supplied: std::any::type_name::<T>(),
@@ -116,7 +116,7 @@ pub(crate) enum UndeliveredResult {
         supplied: &'static str,
     },
     /// A route received it, and its type did not match that route's `Output`.
-    /// The route is logged and completes with `None`; nothing panics.
+    /// The route is logged and completes with a typed error; nothing panics.
     TypeMismatch {
         /// The route that could not take it.
         route: RouteId,
@@ -360,7 +360,7 @@ pub enum PushCompletion {
 #[expect(unused_variables)]
 pub trait Route: 'static {
     /// The value a `pop` of this route delivers.
-    type Output: Send + 'static;
+    type Output: 'static;
 
     /// This route's settings.
     fn settings(&self) -> &RouteSettings;
@@ -463,6 +463,10 @@ impl UndeliveredResult {
     }
 }
 
+/// A result's completion, prepared under the history lock and run after it is
+/// released. Owner-local; it runs no route lifecycle hook.
+pub(crate) type TerminalResultCompletion = Box<dyn FnOnce()>;
+
 /// The framework's view of a route, with `Output` erased.
 ///
 /// Object-safe by construction: no associated type, no generics, and the only
@@ -476,6 +480,11 @@ pub(crate) trait ErasedRoute {
 
     /// Whether the pop completer has fired.
     fn is_completed(&self) -> bool;
+
+    /// The `Ok(None)` completion a still-pending result is owed when its
+    /// navigator unmounts, prepared under the history lock and run after it is
+    /// released. `None` once the result has completed.
+    fn terminal_result_completion(&mut self) -> Option<TerminalResultCompletion>;
 
     fn finished_when_popped(&self) -> bool;
     fn will_handle_pop_internally(&self) -> bool;
@@ -568,6 +577,16 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
         self.completer.is_completed()
     }
 
+    fn terminal_result_completion(&mut self) -> Option<TerminalResultCompletion> {
+        if self.completer.is_completed() {
+            return None;
+        }
+        let completer = Completer::clone(&self.completer);
+        Some(Box::new(move || {
+            completer.complete(Ok(None));
+        }))
+    }
+
     fn finished_when_popped(&self) -> bool {
         self.route.finished_when_popped()
     }
@@ -620,7 +639,7 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
         // not an absent one, so it must not silently fall back.
         let mut undelivered = None;
         let value = match result {
-            None => self.route.current_result(),
+            None => Ok(self.route.current_result()),
             Some(erased) => {
                 // The pop-result type-erasure boundary. A heterogeneous route stack
                 // cannot carry each route's `Output`, so `pop` erases and the owning
@@ -628,24 +647,26 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
                 // `flui-widgets`.
                 let typed = erased.downcast::<R::Output>(); // the pop-result erasure boundary itself — a heterogeneous route stack cannot carry each route's `Output`, so `pop` erases and the owning `RouteRecord` recovers its own type here; signed off in ADR-0019's *Public API and sign-off* section
                 match typed {
-                    Ok(value) => Some(value),
+                    Ok(value) => Ok(Some(value)),
                     Err(mismatched) => {
                         // Neither reported nor dropped here: this runs inside the
                         // flush, under the history mutex, and both a `tracing`
                         // subscriber and the value's own `Drop` are user code that
                         // may re-enter the navigator.
+                        let expected = std::any::type_name::<R::Output>();
                         undelivered = Some(UndeliveredResult::TypeMismatch {
                             route: self.id,
-                            expected: std::any::type_name::<R::Output>(),
+                            expected,
                             value: mismatched,
                         });
-                        None
+                        Err(RouteResultError::TypeMismatch { expected })
                     }
                 }
             }
         };
 
-        self.route.did_complete(value.as_ref());
+        self.route
+            .did_complete(value.as_ref().ok().and_then(Option::as_ref));
         self.completer.complete(value);
         undelivered
     }
@@ -700,7 +721,7 @@ pub(super) fn route_identity_exhaustion_preserves_history_authority() {
         assert_eq!(history.ids(), vec![older, last]);
     }
     assert!(history.remove_route(older, None));
-    assert_eq!(older_result.try_take(), Some(None));
+    assert_eq!(older_result.try_take(), Some(Ok(None)));
     assert_eq!(history.current(), Some(last));
     assert_eq!(
         last_result.try_take(),

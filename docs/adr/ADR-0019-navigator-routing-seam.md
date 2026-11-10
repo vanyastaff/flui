@@ -5,9 +5,11 @@
 - **Superseded-by:** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) for §2 (a
   navigation handle is a `RouterHandle` acquired in a lifecycle hook, not a `NavigatorHandle`
   looked up from a build context, and the Navigator is the Router's internal page stack) and for
-  §3 only where the result crosses as `Box<dyn Any + Send>` and a mismatched type completes with
-  `None` (it crosses as `Box<dyn Any>` and a mismatch is `RouteResultError::TypeMismatch`); §1's
-  pure-data history flush stays
+  §3 only where the result crosses as `Box<dyn Any + Send>`, a mismatched type completes with
+  `None` and `RouteResult<T>` is a `Future<Output = Option<T>>` (it crosses as `Box<dyn Any>`
+  in an owner-thread channel that is not `Send`, `RouteResult<T>` resolves to
+  `Result<Option<T>, RouteResultError>`, and a mismatch is `RouteResultError::TypeMismatch`);
+  §1's pure-data history flush stays
 
 ## Context
 
