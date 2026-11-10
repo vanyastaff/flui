@@ -11,13 +11,6 @@
 //! creates fresh state on remount; the implementation below makes them
 //! pass.
 
-// ADR-0027: ElementBuildContext's current test/prod seam still takes
-// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
-// Send + Sync to satisfy clippy. Future UiRuntime/Rc migration should remove this.
-#![expect(clippy::arc_with_non_send_sync)]
-
-use std::sync::Arc;
-
 use flui_foundation::ViewKey;
 // The duplicate-key fixture runs only where the debug check panics.
 #[cfg(debug_assertions)]
@@ -26,7 +19,8 @@ use flui_view::{
     BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, KeyLookup,
     StatefulElement, StatefulView, StatelessView, View, ViewExt, ViewState,
 };
-use parking_lot::RwLock;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 // ============================================================================
 // Test fixtures
@@ -153,24 +147,24 @@ impl View for DuplicateHost {
 // Helpers
 // ============================================================================
 
-fn fresh_tree() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>) {
+fn fresh_tree() -> (Rc<RefCell<ElementTree>>, Rc<RefCell<BuildOwner>>) {
     (
-        Arc::new(RwLock::new(ElementTree::new())),
-        Arc::new(RwLock::new(BuildOwner::new())),
+        Rc::new(RefCell::new(ElementTree::new())),
+        Rc::new(RefCell::new(BuildOwner::new())),
     )
 }
 
 /// Mutate the sentinel on the matching keyed element's state. Returns
 /// `true` if the state was reachable + mutated.
 fn set_sentinel(
-    tree: &Arc<RwLock<ElementTree>>,
+    tree: &Rc<RefCell<ElementTree>>,
     key: &GlobalKey<KeyedCounterState>,
     value: u64,
 ) -> bool {
     let KeyLookup::Mounted(id) = key.current_element() else {
         return false;
     };
-    let mut tree_guard = tree.write();
+    let mut tree_guard = tree.borrow_mut();
     let Some(node) = tree_guard.get_mut(id) else {
         return false;
     };
@@ -206,11 +200,14 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
 
     // Two distinct parents to migrate between.
     let parent_a = tree
-        .write()
-        .mount_root(&Spacer, &mut owner.write().element_owner_mut());
-    let parent_b =
-        tree.write()
-            .insert(&Spacer, parent_a, 0, &mut owner.write().element_owner_mut());
+        .borrow_mut()
+        .mount_root(&Spacer, &mut owner.borrow_mut().element_owner_mut());
+    let parent_b = tree.borrow_mut().insert(
+        &Spacer,
+        parent_a,
+        0,
+        &mut owner.borrow_mut().element_owner_mut(),
+    );
 
     let key = GlobalKey::<KeyedCounterState>::new();
     let counter = KeyedCounter {
@@ -219,11 +216,11 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
     };
 
     // Mount under parent A.
-    let original_id = tree.write().insert(
+    let original_id = tree.borrow_mut().insert(
         &counter,
         parent_a,
         1,
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
 
     // Make state mutation observable via sentinel.
@@ -232,17 +229,17 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
 
     // Soft-remove from parent A — should push to inactive,
     // not slab-remove.
-    tree.write()
-        .remove(original_id, &mut owner.write().element_owner_mut());
+    tree.borrow_mut()
+        .remove(original_id, &mut owner.borrow_mut().element_owner_mut());
 
     // Re-insert with the same GlobalKey under parent B. The keyed
     // element must be pulled back from the inactive queue instead of a
     // fresh element being created.
-    let migrated_id = tree.write().insert(
+    let migrated_id = tree.borrow_mut().insert(
         &counter,
         parent_b,
         0,
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
 
     assert_eq!(
@@ -295,19 +292,19 @@ fn duplicate_global_key_panics_in_debug() {
     };
     let counter_b = KeyedCounter { key, initial: 2 };
 
-    let root_id = tree.write().mount_root_with_pipeline_owner(
+    let root_id = tree.borrow_mut().mount_root_with_pipeline_owner(
         &DuplicateHost {
             children: vec![counter_a.boxed(), counter_b.boxed()],
         },
         Some(PipelineCell::new(PipelineOwner::new(
             flui_rendering::TextContextHandle::standalone(),
         ))),
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
     owner
-        .write()
+        .borrow_mut()
         .schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
-    owner.write().build_scope(&mut tree.write());
+    owner.borrow_mut().build_scope(&mut tree.borrow_mut());
 }
 
 // ============================================================================

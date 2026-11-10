@@ -178,7 +178,7 @@ would abort (ADR-0281 §2).
 
 ### One recovery boundary closes phase/completion state before any pre-pipeline panic propagates
 
-A caller catching a panic from `OwnerFrame::drive_frame` observes closed
+A caller catching a panic from the frame drive (`__runtime::DriveFrame::drive_frame`) observes closed
 phase and completion bookkeeping for every frame that began. Admission is
 established before preparation and phase mutation; a refused turn cannot
 abort another turn. `OwnerFrame::pump_background` consumes old demand,
@@ -279,7 +279,7 @@ the panic. The failed entry was already removed, so the request cannot
 re-drive it. It does not re-arm for the failure itself, which would hot-loop
 a caller that keeps re-driving a deterministically panicking frame; a caller
 that catches the resumed panic and wants another frame calls
-`request_frame()` itself. See `OwnerFrame::drive_frame`'s contract.
+`request_frame()` itself. See the contract of the frame drive (`__runtime::DriveFrame::drive_frame`).
 
 **The async zombie-slot fix (`AsyncDriver::poll_ready`):** a panic inside
 `future.poll` used to leave that task's slot in `Inner::tasks` holding
@@ -324,7 +324,7 @@ did not choose to isolate.
 Two distinct sites can themselves panic while THIS issue's own recovery
 runs, both discovered by review after the first pass shipped:
 
-- `OwnerFrame::drive_frame` catches failure and calls `abort_frame_impl`, which calls
+- The frame drive (`__runtime::DriveFrame::drive_frame`) catches failure and calls `abort_frame_impl`, which calls
   `notify_frame_completion` — and a panicking waker there is a second panic
   on top of the pipeline's (or `handle_begin_frame`/`handle_draw_frame`'s)
   own. Abort cleanup runs inside its own `catch_unwind`; a
@@ -332,7 +332,7 @@ runs, both discovered by review after the first pass shipped:
   what `resume_unwind`s, always — measured before the fix: the escaped
   panic was the waker's, not the frame's, silently losing whichever failure
   the frame was actually reporting.
-- The successful `end_frame` path inside `OwnerFrame::drive_frame` calls
+- The successful `end_frame` path inside the frame drive calls
   `notify_frame_completion` OUTSIDE the post-frame callback's own
   `catch_unwind`, so a panicking waker there used to escape straight past
   the phase reset at the end of that function, leaving the scheduler stuck

@@ -518,7 +518,7 @@ fn a_surface_is_set_up_for_the_colour_of_its_window_s_display() {
     rig.controls
         .simulate_display_change(
             rig.ids[RIGHT],
-            DisplayChange::Color(Err(CapabilityAbsence::NotOnThisDevice)),
+            DisplayChange::Color(Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)),
         )
         .expect("colour gone");
     rig.turns.drive();

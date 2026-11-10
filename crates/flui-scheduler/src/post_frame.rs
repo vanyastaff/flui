@@ -4,7 +4,7 @@
 //! [`UpdateScheduler`] delegates to it: the post-frame queue and async task
 //! store. A UI runtime (or a headless binding) owns
 //! exactly one and is the only strong owner; every frame entry point takes it
-//! through [`OwnerFrame::drive_frame`] and [`OwnerFrame::pump_background`],
+//! through `__runtime::DriveFrame::drive_frame` and [`OwnerFrame::pump_background`],
 //! so no turn can poll or drain
 //! "nothing".
 //!

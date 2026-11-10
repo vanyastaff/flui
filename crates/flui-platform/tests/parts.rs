@@ -71,7 +71,7 @@ fn a_display_round_trips_through_its_parts() {
     .with_persistent_key("studio")
     .with_color(Ok(DisplayColor::high(
         ColorGamut::DisplayP3,
-        Err(CapabilityAbsence::NotOnThisDevice),
+        Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
     )));
     let (taken, parts) = display.clone().into_parts();
     assert_eq!(taken, id);
@@ -81,10 +81,10 @@ fn a_display_round_trips_through_its_parts() {
 fn a_window_state_round_trips_through_its_parts() {
     let material = WindowCommand::SetMaterial(WindowMaterial::System);
     let capabilities = WindowCapabilities::ALL
-        .unavailable(&material, CapabilityAbsence::NotYetOnThisHost)
-        .without_presentation_feedback(CapabilityAbsence::NotOnThisDevice)
-        .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
-        .without_system_gestures(CapabilityAbsence::NotYetOnThisHost);
+        .unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST)
+        .without_presentation_feedback(CapabilityAbsence::NOT_ON_THIS_DEVICE)
+        .without_keyboard_inset(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
+        .without_system_gestures(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     let metrics = WindowMetrics::try_new(DeviceSize::new(1600, 1200), 2.0).expect("valid");
     let state = WindowState::new(
         WindowGeometry::new(Some(Point::new(10.0, 20.0)), Size::new(820.0, 640.0)),
@@ -117,15 +117,15 @@ fn a_window_state_round_trips_through_its_parts() {
     let parts = state.clone().into_parts();
     assert_eq!(
         parts.capabilities.material,
-        Err(CapabilityAbsence::NotYetOnThisHost)
+        Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
     );
     assert_eq!(
         parts.capabilities.reports_presentation,
-        Err(CapabilityAbsence::NotOnThisDevice)
+        Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)
     );
     assert_eq!(
         parts.capabilities.reports_system_gestures,
-        Err(CapabilityAbsence::NotYetOnThisHost)
+        Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
     );
     assert_eq!(
         state

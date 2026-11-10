@@ -1431,6 +1431,7 @@ mod tests {
     /// A frame whose callback panics before the pipeline runs still says whose frame it was.
     #[test]
     fn a_frame_whose_callback_panics_still_names_its_runtime() {
+        use flui_scheduler::__runtime::DriveFrame as _;
         use flui_scheduler::{IdleDeadline, OwnerFrame, UpdateScheduler};
 
         let capture = Capture::new();

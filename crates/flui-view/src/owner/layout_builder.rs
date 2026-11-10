@@ -30,9 +30,9 @@
 //! but only its element registers here; app code never touches the registry.
 
 use std::{
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     rc::Rc,
-    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use flui_foundation::{ElementId, RenderId};
@@ -42,7 +42,6 @@ use flui_objects::BuildDuringLayoutCell;
 #[cfg(any(test, feature = "testing"))]
 use flui_objects::LayoutConstraintsCell;
 use flui_rendering::pipeline::PipelineCell;
-use parking_lot::Mutex;
 
 use super::{BuildOwner, build_owner::BuildScopeTarget};
 use crate::tree::ElementTree;
@@ -187,53 +186,55 @@ pub(crate) struct LayoutBuilderEntry {
 
 /// Registry of live build-during-layout nodes, keyed by render id.
 ///
-/// The map stays behind a private mutex because element lifecycle paths hold a
-/// split borrow of the registry. An atomic length keeps the empty-registry frame
-/// path lock-free; insertion/removal updates it while holding the map lock.
+/// The map sits in a private `RefCell` because element lifecycle paths hold a
+/// shared split borrow of the registry. A mirrored length answers the
+/// empty-registry frame path without borrowing the map, even while a
+/// `with_entries_mut` caller holds it; every mutation updates it before its
+/// borrow ends.
 ///
 /// [`ElementOwner`]: super::ElementOwner
 #[derive(Debug, Default)]
 pub(crate) struct LayoutBuilderRegistry {
-    entries: Mutex<HashMap<RenderId, LayoutBuilderEntry>>,
-    len: AtomicUsize,
+    entries: RefCell<HashMap<RenderId, LayoutBuilderEntry>>,
+    len: Cell<usize>,
 }
 
 impl LayoutBuilderRegistry {
     pub(crate) fn insert(&self, render_id: RenderId, entry: LayoutBuilderEntry) {
-        let mut entries = self.entries.lock();
+        let mut entries = self.entries.borrow_mut();
         entries.insert(render_id, entry);
-        self.len.store(entries.len(), Ordering::Release);
+        self.len.set(entries.len());
     }
 
     pub(crate) fn remove(&self, render_id: RenderId) {
-        let mut entries = self.entries.lock();
+        let mut entries = self.entries.borrow_mut();
         entries.remove(&render_id);
-        self.len.store(entries.len(), Ordering::Release);
+        self.len.set(entries.len());
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.len.load(Ordering::Acquire) == 0
+        self.len.get() == 0
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn len(&self) -> usize {
-        self.len.load(Ordering::Acquire)
+        self.len.get()
     }
 
     pub(crate) fn with_entries<R>(
         &self,
         f: impl FnOnce(&HashMap<RenderId, LayoutBuilderEntry>) -> R,
     ) -> R {
-        f(&self.entries.lock())
+        f(&self.entries.borrow())
     }
 
     pub(crate) fn with_entries_mut<R>(
         &self,
         f: impl FnOnce(&mut HashMap<RenderId, LayoutBuilderEntry>) -> R,
     ) -> R {
-        let mut entries = self.entries.lock();
+        let mut entries = self.entries.borrow_mut();
         let result = f(&mut entries);
-        self.len.store(entries.len(), Ordering::Release);
+        self.len.set(entries.len());
         result
     }
 }
@@ -352,7 +353,7 @@ impl BuildOwner {
         }
 
         // Prune stale entries and collect the ones that need a build, in one
-        // pass over the registry. Both the registry lock and the pipeline
+        // pass over the registry. Both the registry borrow and the pipeline
         // borrow are released before `build_scope` runs.
         let mut scheduled: HashMap<ElementId, (RenderId, Rc<dyn BuildDuringLayoutCell>)> = // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
             HashMap::new();

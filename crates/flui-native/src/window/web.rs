@@ -1163,7 +1163,8 @@ pub(crate) const fn window_capabilities() -> WindowCapabilities {
     // from its visual viewport (`keyboard_over`), which is an estimate;
     // `page_capabilities` says where it names the keyboard itself.
     capabilities.reports_keyboard_inset = flui_platform::Availability::Emulated;
-    capabilities.without_presentation_feedback(flui_platform::CapabilityAbsence::NotOnThisPlatform)
+    capabilities
+        .without_presentation_feedback(flui_platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM)
 }
 
 /// What this page's window honours: [`window_capabilities`], with the

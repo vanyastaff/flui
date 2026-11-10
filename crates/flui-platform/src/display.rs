@@ -355,7 +355,7 @@ pub struct DisplayInfo {
 impl DisplayInfo {
     /// A display with its bounds as usable area, an unknown refresh period, not
     /// primary, and a colour the host has not read
-    /// ([`CapabilityAbsence::NotYetOnThisHost`]). Refine it with the `with_*`
+    /// ([`CapabilityAbsence::NOT_YET_ON_THIS_HOST`]). Refine it with the `with_*`
     /// methods.
     #[must_use]
     pub fn new(
@@ -373,7 +373,7 @@ impl DisplayInfo {
             refresh_period: None,
             is_primary: false,
             persistent_key: None,
-            color: Err(CapabilityAbsence::NotYetOnThisHost),
+            color: Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
         }
     }
 

@@ -395,7 +395,7 @@ fn display_colour_queries_answer_unsupported_with_the_reason() {
 
     let browser = unread.clone().with_color(Ok(DisplayColor::high(
         ColorGamut::DisplayP3,
-        Err(CapabilityAbsence::NotOnThisPlatform),
+        Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM),
     )));
     assert_eq!(
         browser.color_space(),
@@ -422,7 +422,7 @@ fn display_colour_queries_answer_unsupported_with_the_reason() {
     );
     assert_eq!(sdr.headroom(), Ok(Headroom::SDR));
 
-    let absent = unread.with_color(Err(CapabilityAbsence::NotOnThisDevice));
+    let absent = unread.with_color(Err(CapabilityAbsence::NOT_ON_THIS_DEVICE));
     assert_eq!(
         absent.headroom().map_err(|refused| refused.reason),
         Err(UnsupportedReason::NotOnThisDevice)

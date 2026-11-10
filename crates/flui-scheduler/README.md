@@ -67,6 +67,7 @@ control logical execution order.
 ### Basic Frame Scheduling
 
 ```rust
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 
 let scheduler = UpdateScheduler::new();
@@ -97,8 +98,9 @@ owner.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {}, || 
 ### Migrating execution
 
 `UpdateScheduler` registers work and requests delivery. Its owner executes
-`OwnerFrame::drive_frame(timestamp, deadline, prepare, pipeline)` or
-`OwnerFrame::pump_background(prepare)`. Both return typed admission errors;
+`OwnerFrame::pump_background(prepare)`, or, from a composition root, the frame drive
+`flui_scheduler::__runtime::DriveFrame::drive_frame(timestamp, deadline, prepare, pipeline)`
+(`#[doc(hidden)]`, sealed, no semver promise; the method is not inherent on `OwnerFrame`). Both return typed admission errors;
 neither accepts another scheduler's owner. Preparation runs after admission,
 before frame phases or ready-task polling.
 
@@ -308,7 +310,7 @@ match event {
 `FrameBudget` reports timing statistics (jank, phase durations, over-budget)
 against whichever target the caller chose — `UpdateScheduler` itself makes
 no frame-rate assumption and does not act on these statistics to skip work.
-The only thing that ever defers work is `OwnerFrame::drive_frame`'s own `deadline`
+The only thing that ever defers work is the frame drive's own `deadline`
 parameter, and it bounds `Priority::Idle` tasks alone; `Priority::Animation`
 and `Priority::Build` always run to completion.
 

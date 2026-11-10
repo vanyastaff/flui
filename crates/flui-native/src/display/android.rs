@@ -102,7 +102,7 @@ pub(crate) mod sample {
             .highest_hdr_sdr_ratio
             .and_then(|ratio| Headroom::try_new(ratio).ok())
             .filter(|headroom| *headroom > Headroom::SDR)
-            .ok_or(CapabilityAbsence::NotOnThisDevice);
+            .ok_or(CapabilityAbsence::NOT_ON_THIS_DEVICE);
         Ok(DisplayColor::high(gamut, headroom))
     }
 
@@ -242,7 +242,7 @@ pub(crate) mod sample {
                 density_dpi: 420,
                 refresh_hz: 120.0,
                 max_refresh_hz: Some(120.0),
-                color: Err(CapabilityAbsence::NotOnThisDevice),
+                color: Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
             };
             let info = healthy.info(id).expect("a healthy display");
             assert_eq!(info.scale_factor, 2.625, "420 dpi is 2.625 logical pixels");
@@ -299,11 +299,11 @@ pub(crate) mod sample {
                 density_dpi: 160,
                 refresh_hz: 60.0,
                 max_refresh_hz: Some(60.0),
-                color: Err(CapabilityAbsence::NotOnThisDevice),
+                color: Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
             };
             let info = failed.info(id).expect("the display is still listed");
             assert_eq!(info.bounds.size, Size::new(1920, 1080));
-            assert_eq!(info.color, Err(CapabilityAbsence::NotOnThisDevice));
+            assert_eq!(info.color, Err(CapabilityAbsence::NOT_ON_THIS_DEVICE));
             let reported = RawDisplay {
                 color: Ok(report(true, false, None)),
                 ..failed
@@ -339,8 +339,8 @@ pub(crate) mod sample {
         /// Each colour report a `Display` gives, to the display colour it means.
         fn android_colour_reports_map_to_the_display_colour() {
             assert_eq!(
-                display_color(Err(CapabilityAbsence::NotOnThisDevice)),
-                Err(CapabilityAbsence::NotOnThisDevice),
+                display_color(Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)),
+                Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
                 "below API 26"
             );
             assert_eq!(
@@ -370,7 +370,7 @@ pub(crate) mod sample {
                     display_color(Ok(report(true, true, ratio))),
                     Ok(DisplayColor::high(
                         ColorGamut::DisplayP3,
-                        Err(CapabilityAbsence::NotOnThisDevice)
+                        Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)
                     )),
                     "ratio {ratio:?} publishes no headroom"
                 );
@@ -1065,12 +1065,12 @@ pub(crate) mod source {
         api: AndroidApi,
     ) -> Result<ColorReport, CapabilityAbsence> {
         if api.since::<DisplayColorReport>().is_none() {
-            return Err(CapabilityAbsence::NotOnThisDevice);
+            return Err(CapabilityAbsence::NOT_ON_THIS_DEVICE);
         }
         query_color(env, display, api).map_err(|error| {
             env.exception_clear();
             tracing::warn!(%error, "Android: a display's colour report failed");
-            CapabilityAbsence::NotOnThisDevice
+            CapabilityAbsence::NOT_ON_THIS_DEVICE
         })
     }
 

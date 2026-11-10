@@ -5,6 +5,7 @@ use flui_widgets::SizedBox;
 
 use super::*;
 use crate::testing::ScriptedSink;
+use flui_scheduler::__runtime::DriveFrame as _;
 
 static_assertions::assert_not_impl_any!(UiRuntime: Send, Sync);
 

@@ -1116,7 +1116,7 @@ pub(crate) mod color_query {
             ColorGamut::Srgb
         };
         if matches(HIGH_RANGE) {
-            DisplayColor::high(gamut, Err(CapabilityAbsence::NotOnThisPlatform))
+            DisplayColor::high(gamut, Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM))
         } else {
             DisplayColor::standard(gamut)
         }
@@ -1149,7 +1149,7 @@ pub(crate) mod color_query {
                 matching(true, true, true),
                 DisplayColor::high(
                     ColorGamut::Rec2020,
-                    Err(CapabilityAbsence::NotOnThisPlatform)
+                    Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
                 ),
                 "the widest gamut wins, and the headroom is never readable"
             );
@@ -1402,7 +1402,7 @@ pub(crate) mod source {
             let media = self
                 .features
                 .match_media
-                .ok_or(CapabilityAbsence::NotOnThisDevice)?;
+                .ok_or(CapabilityAbsence::NOT_ON_THIS_DEVICE)?;
             Ok(display_color(|query| {
                 media
                     .query(window, query)
@@ -1503,7 +1503,7 @@ pub(crate) mod source {
                         // A page's media queries describe the screen it is on;
                         // the browser says nothing of the others' colour.
                         screen_info(screen, *id, None)
-                            .with_color(Err(CapabilityAbsence::NotOnThisPlatform))
+                            .with_color(Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM))
                     }
                 })
                 .collect();

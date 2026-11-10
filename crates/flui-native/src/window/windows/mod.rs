@@ -207,7 +207,7 @@ pub(crate) mod material {
             Ok(_) => capabilities,
             Err(_) => capabilities.unavailable(
                 &WindowCommand::SetMaterial(WindowMaterial::Opaque),
-                flui_platform::CapabilityAbsence::NotOnThisDevice,
+                flui_platform::CapabilityAbsence::NOT_ON_THIS_DEVICE,
             ),
         }
     }

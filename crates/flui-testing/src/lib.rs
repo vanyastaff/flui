@@ -187,6 +187,7 @@ use flui_interaction::{
 use flui_foundation::geometry::Offset;
 use flui_rendering::layer::LayerTree;
 use flui_rendering::pipeline::PipelineCell;
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{
     AsyncDriver, BoxedTask, ClockSource, DemandKind, FrameClock, OwnerFrame, TaskToken,
     UpdateScheduler,
@@ -1267,7 +1268,7 @@ impl HeadlessBinding {
 
     /// The pipeline step: build → layout (with the build-during-layout fixpoint)
     /// → paint, plus the lazy-sliver service pass. Runs inside
-    /// [`OwnerFrame::drive_frame`]'s persistent slot.
+    /// `OwnerFrame::drive_frame`'s persistent slot.
     ///
     /// Returns the composited [`LayerTree`] this frame produced — `None` for a
     /// gesture-only binding, and `None` when nothing was dirty enough to

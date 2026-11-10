@@ -2427,6 +2427,7 @@ dependencies = [
  "flui-rendering",
  "flui-scheduler",
  "flui-testing",
+ "flui-view",
  "futures-core",
  "parking_lot",
  "serde",

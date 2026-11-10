@@ -156,24 +156,24 @@ pub(crate) mod sample {
     pub(crate) fn display_color(
         output: Option<OutputColor>,
     ) -> Result<DisplayColor, CapabilityAbsence> {
-        let output = output.ok_or(CapabilityAbsence::NotOnThisDevice)?;
+        let output = output.ok_or(CapabilityAbsence::NOT_ON_THIS_DEVICE)?;
         match output.color_space {
             OutputColorSpace::Srgb => Ok(DisplayColor::standard(ColorGamut::Srgb)),
             OutputColorSpace::WideGamutSdr => Ok(DisplayColor::standard(ColorGamut::Rec2020)),
             OutputColorSpace::Hdr10 => {
                 let headroom = output
                     .sdr_white_level
-                    .ok_or(CapabilityAbsence::NotOnThisDevice)
+                    .ok_or(CapabilityAbsence::NOT_ON_THIS_DEVICE)
                     .and_then(|level| {
                         // 1000 is 80 nits; the product of a `u32` and 0.08 is
                         // finite in `f32`.
                         let white_nits = level as f32 * 0.08;
                         Headroom::from_luminance(output.max_luminance, white_nits)
-                            .map_err(|_| CapabilityAbsence::NotOnThisDevice)
+                            .map_err(|_| CapabilityAbsence::NOT_ON_THIS_DEVICE)
                     });
                 Ok(DisplayColor::high(ColorGamut::Rec2020, headroom))
             }
-            OutputColorSpace::Unread => Err(CapabilityAbsence::NotYetOnThisHost),
+            OutputColorSpace::Unread => Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
         }
     }
 
@@ -227,12 +227,12 @@ pub(crate) mod sample {
             );
             assert_eq!(
                 display_color(None),
-                Err(CapabilityAbsence::NotOnThisDevice),
+                Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
                 "no DXGI output for the monitor"
             );
             assert_eq!(
                 display_color(Some(output(3, 400.0, None))),
-                Err(CapabilityAbsence::NotYetOnThisHost),
+                Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
                 "a studio-range space this host does not read"
             );
         }
@@ -251,7 +251,7 @@ pub(crate) mod sample {
                     display_color(Some(output(DXGI_HDR10, peak, level))),
                     Ok(DisplayColor::high(
                         ColorGamut::Rec2020,
-                        Err(CapabilityAbsence::NotOnThisDevice)
+                        Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)
                     )),
                     "peak {peak}, white level {level:?}"
                 );

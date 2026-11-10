@@ -29,7 +29,7 @@
 //!
 //! 1. **mount**: [`SliverAdaptorBehavior::on_mount`] creates the render object
 //!    (via the inner `RenderBehavior`) and then registers
-//!    `Arc::clone(&self.manager)` in `BuildOwner::child_manager_registry` keyed
+//!    `Rc::clone(&self.manager)` in `BuildOwner::child_manager_registry` keyed
 //!    by the sliver's `RenderId`. Registration happens in the adaptor's own
 //!    `on_mount`, not in the generic `behavior.rs:789` site, because that
 //!    generic site has no way to reach this element's child-manager.
@@ -51,11 +51,11 @@
 //! `service_child_requests`.
 
 use std::{
+    cell::RefCell,
     collections::{BTreeSet, HashMap},
     fmt,
     marker::PhantomData,
     rc::Rc,
-    sync::Arc,
 };
 
 use flui_foundation::{ElementId, RenderId, ViewKey};
@@ -67,7 +67,6 @@ use flui_rendering::{
     parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell, protocol::SliverProtocol,
     semantics::SetSize, traits::RenderSliver,
 };
-use parking_lot::Mutex;
 
 use super::sparse_children::{ReconcileSource, build_item_or_report};
 use super::{
@@ -933,15 +932,15 @@ pub(crate) struct SliverAdaptorBehavior<R: LazyMultiBoxRender> {
     ///
     /// Deliberately NOT on the manager, though cached for the same reason
     /// `builder` is: `sliver_slot_for_child` runs from inside
-    /// `SparseChildren`'s own work, which already holds the manager lock, so
-    /// reading it there re-enters that mutex and deadlocks — six lazy-sliver
-    /// tests hung on exactly that. A plain field needs no lock at all.
+    /// `SparseChildren`'s own work, which already holds the manager borrow,
+    /// so borrowing it there again fails (as a mutex it deadlocked six
+    /// lazy-sliver tests). A plain field needs no borrow at all.
     semantics: SemanticSetMapping,
     /// Handles the render object's creation / update / removal.
     inner: RenderBehavior<SliverMultiBoxAdaptor<R>>,
-    /// Shared manager; Arc lets `on_mount` insert a clone into the registry
+    /// Shared manager; `Rc` lets `on_mount` insert a clone into the registry
     /// without moving out of `self`.
-    manager: Arc<Mutex<SliverAdaptorManager<R>>>,
+    manager: Rc<RefCell<SliverAdaptorManager<R>>>,
 }
 
 impl<R: LazyMultiBoxRender> std::fmt::Debug for SliverAdaptorBehavior<R> {
@@ -949,7 +948,7 @@ impl<R: LazyMultiBoxRender> std::fmt::Debug for SliverAdaptorBehavior<R> {
         f.debug_struct("SliverAdaptorBehavior")
             .field("render_id", &self.inner.render_id)
             .field("semantics", &self.semantics)
-            .field("manager", &*self.manager.lock())
+            .field("manager", &*self.manager.borrow())
             .finish()
     }
 }
@@ -959,7 +958,7 @@ impl<R: LazyMultiBoxRender> SliverAdaptorBehavior<R> {
         Self {
             inner: RenderBehavior::new(),
             semantics: view.effective_semantics(),
-            manager: Arc::new(Mutex::new(SliverAdaptorManager {
+            manager: Rc::new(RefCell::new(SliverAdaptorManager {
                 sparse_children: SparseChildren::new(),
                 host_element_id: None,
                 builder: Rc::clone(&view.builder),
@@ -1020,7 +1019,7 @@ where
         // Step 2: stamp the host element id on the manager now that the element
         // is slab-stamped (set_self_id fires before on_mount in ElementTree::insert).
         if let Some(self_id) = core.self_id() {
-            self.manager.lock().host_element_id = Some(self_id);
+            self.manager.borrow_mut().host_element_id = Some(self_id);
         } else {
             tracing::warn!(
                 "SliverAdaptorBehavior::on_mount: no self_id stamped — \
@@ -1038,10 +1037,10 @@ where
         // travel together.
         match self.inner.render_id {
             Some(render_id) => {
-                self.manager.lock().render_id = Some(render_id);
+                self.manager.borrow_mut().render_id = Some(render_id);
                 owner.register_child_manager(
                     render_id,
-                    Arc::clone(&self.manager) as Arc<Mutex<dyn ChildManager>>,
+                    Rc::clone(&self.manager) as Rc<RefCell<dyn ChildManager>>,
                 );
                 tracing::debug!(
                     ?render_id,
@@ -1079,7 +1078,7 @@ where
                 "SliverAdaptorBehavior: unregistered child manager"
             );
         }
-        self.manager.lock().render_id = None;
+        self.manager.borrow_mut().render_id = None;
 
         // Remove the render object via the inner behavior.
         self.inner.on_unmount(core, owner);
@@ -1124,7 +1123,7 @@ where
         if semantics_changed {
             // Residents keep the slot they were stamped with until something
             // reconciles them. Nothing else here would.
-            self.manager.lock().needs_resident_refresh = true;
+            self.manager.borrow_mut().needs_resident_refresh = true;
         }
 
         if !delegate_changed(old_view, core.view()) {
@@ -1144,7 +1143,7 @@ where
             }
             return;
         }
-        let mut manager = self.manager.lock();
+        let mut manager = self.manager.borrow_mut();
         manager.builder = Rc::clone(&core.view().builder);
         manager
             .find_index_by_key

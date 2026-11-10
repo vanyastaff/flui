@@ -91,6 +91,41 @@ fn terminal_lifecycle_ladder_runs_through_the_seam() {
     assert_eq!(handle.snapshot(), Err(LifecycleClosed));
 }
 
+/// The frame-request callback is user code run with no borrow of its cell held: a callback that
+/// installs its own replacement takes effect, and the replaced callback stays alive until it
+/// returns.
+///
+/// Fails without the clone-out in `handle_build_scheduled`: `set_on_need_frame` then panics with
+/// `BorrowMutError`, since the cell is still borrowed for the call.
+#[test]
+fn an_on_need_frame_callback_may_replace_itself() {
+    let binding = Rc::new(WidgetsBinding::new());
+    let first = Rc::new(Cell::new(0_u32));
+    let second = Rc::new(Cell::new(0_u32));
+    binding.set_on_need_frame({
+        let binding = Rc::downgrade(&binding);
+        let first = Rc::clone(&first);
+        let second = Rc::clone(&second);
+        move || {
+            first.set(first.get() + 1);
+            let second = Rc::clone(&second);
+            binding
+                .upgrade()
+                .expect("the binding outlives its callback")
+                .set_on_need_frame(move || second.set(second.get() + 1));
+        }
+    });
+
+    binding.handle_build_scheduled();
+    binding.handle_build_scheduled();
+
+    assert_eq!(
+        (first.get(), second.get()),
+        (1, 1),
+        "the first request runs the original callback, the second its replacement"
+    );
+}
+
 /// Reads a key from its own `build` and records what the lookup reported.
 #[derive(Clone)]
 struct LookupInBuild {

@@ -34,6 +34,7 @@ use flui_scheduler::UpdateScheduler;
 // ─────────────────────────────────────────────────────────────────────────
 use std::sync::Mutex;
 
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{FrameCompletionFuture, FrameOutcome};
 
 /// Installs a wake hook that only counts `frame_scheduled` false→true edges.

@@ -17,6 +17,7 @@ use std::{
 };
 
 use flui_foundation::{ManualClock, MonotonicClock as _};
+use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{
     ClockSource, DemandKind, FrameBudget, FrameClock, FrameId, FramePhase, FramePhaseDurations,
     FrameTimes, IdleDeadline, Instant, MAX_BUILD_REENTRY_PASSES, Milliseconds, PresentOutcome,
