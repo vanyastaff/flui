@@ -213,15 +213,15 @@ note: required by a bound in `require_thread_spawnable`
  5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
    |                                ^^^^ required by this bound in `require_thread_spawnable`
 
-error[E0277]: `Rc<IdMint<flui::flui_foundation::ListenerId>>` cannot be sent between threads safely
+error[E0277]: `Rc<IdMint<ListenerId>>` cannot be sent between threads safely
   --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:20:30
    |
 20 |     require_thread_spawnable(notifier);
-   |     ------------------------ ^^^^^^^^ `Rc<IdMint<flui::flui_foundation::ListenerId>>` cannot be sent between threads safely
+   |     ------------------------ ^^^^^^^^ `Rc<IdMint<ListenerId>>` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
    |
-   = help: within `ChangeNotifier`, the trait `Send` is not implemented for `Rc<IdMint<flui::flui_foundation::ListenerId>>`
+   = help: within `ChangeNotifier`, the trait `Send` is not implemented for `Rc<IdMint<ListenerId>>`
 note: required because it appears within the type `Notifier<()>`
   --> crates/flui-foundation/src/notifier_generic.rs
    |
