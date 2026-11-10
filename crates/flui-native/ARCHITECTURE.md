@@ -3830,12 +3830,15 @@ otherwise, and only while the session that served it still holds the drop of
 the requestor's client. An `INCR` answer announces its length (a payload past
 32 bits is refused), selects the property and structure events of a requestor
 of another client, and writes a chunk at each deletion, then the empty one
-that ends it. At most four are written at once and one past them is refused; a
-new conversion into the same property replaces its answer. Each holds its
-payload until it ends, its requestor takes no chunk for five seconds or is
-destroyed, or the session ends, which leaves it unfinished, ICCCM giving a
-source no way to say so; each chunk gives the target five more seconds to
-finish the drop.
+that ends it. At most four are written at once, holding at most 64 MiB of
+payload between them: answers of the same bytes as the same type share one
+payload, counted once, and one past either bound is refused. A new conversion
+into the same property, whatever it asks for (`TARGETS` included), replaces its
+answer. Each holds its payload until it ends, its requestor takes no chunk for
+five seconds or is destroyed, or the session ends, which leaves it unfinished,
+ICCCM giving a source no way to say so; each chunk written, the empty one that
+ends it included, gives the target five more seconds to finish the drop. Its
+diagnostics are emitted once the session is back in its cell.
 The session lives in an owner-thread cell; its provider and end hook run
 outside it, and the provider is dropped contained, so the hook hears the end
 though a capture fails (ADR-0281 §3).
@@ -3843,7 +3846,8 @@ though a capture fails (ADR-0281 §3).
 Tests of the drag: `drag::x11::tests` holds the model's tables
 (`messages_read_what_the_source_wrote`, `types_offer_each_format_once`,
 `bytes_make_their_payload`, `an_incr_write_numbers_its_chunks`,
-`incr_writes_are_bounded_and_let_go`, …) and, against the X server CI starts, a source
+`incr_writes_are_bounded_and_let_go`,
+`incr_writes_share_a_payload_and_hold_a_byte_budget`, …) and, against the X server CI starts, a source
 on a connection of its own: `an_accepted_drop_is_fetched_and_finished`,
 `a_refused_drop_finishes_unaccepted_and_exits`,
 `a_drag_that_leaves_retires_its_offer`,
@@ -3873,7 +3877,8 @@ another connection's window: `a_session_drops_on_a_target_that_accepts`,
 `a_status_for_an_earlier_visit_does_not_decide_the_drop`,
 `only_the_dropped_on_client_reads_the_session_data`,
 `a_payload_past_one_property_is_written_incrementally`,
-`a_stalled_incr_requestor_is_let_go_and_the_drop_goes_on`; and in `tests/x11_input.rs`,
+`a_stalled_incr_requestor_is_let_go_and_the_drop_goes_on`,
+`a_conversion_into_an_incr_answers_property_replaces_it`; and in `tests/x11_input.rs`,
 with the host's own loop and window, XTest holding and moving the pointer:
 `an_xtest_drag_from_the_window_drops_on_another_client`, which also checks
 that the window's press ends cancelled and its next click arrives whole, and

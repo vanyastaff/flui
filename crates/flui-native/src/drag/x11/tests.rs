@@ -182,7 +182,7 @@ fn an_incr_write_numbers_its_chunks() {
         let bytes: Vec<u8> = (0..len)
             .map(|byte| u8::try_from(byte).expect("small"))
             .collect();
-        let mut write = model::IncrWrite::try_new(7, 8, 9, bytes.clone(), start)
+        let mut write = model::IncrWrite::try_new(7, 8, 9, Rc::from(bytes.clone()), start)
             .expect("a small length is announced");
         assert_eq!(write.announcement(), u32::try_from(len).expect("small"));
         assert_eq!(write.target(), 9);
@@ -231,7 +231,7 @@ fn incr_writes_are_bounded_and_let_go() {
     let start = Instant::now();
     let at = |seconds: u64| start + Duration::from_secs(seconds);
     let write = |requestor: xproto::Window, property: xproto::Atom, due: u64| {
-        model::IncrWrite::try_new(requestor, property, 31, vec![1, 2, 3], at(due))
+        model::IncrWrite::try_new(requestor, property, 31, Rc::from(vec![1, 2, 3]), at(due))
             .expect("a small length is announced")
     };
     let mut writes = model::IncrWrites::default();
@@ -283,6 +283,64 @@ fn incr_writes_are_bounded_and_let_go() {
     assert!(
         writes.admit(write(12, 99, 5)).is_ok(),
         "room again once they are let go of"
+    );
+}
+
+/// Answers of the same bytes as the same type share one payload, counted
+/// once against `MAX_INCR_BYTES`; a payload of their own past the budget is
+/// handed back, and room comes back as answers are let go of.
+#[test]
+fn incr_writes_share_a_payload_and_hold_a_byte_budget() {
+    let start = Instant::now();
+    let half = model::MAX_INCR_BYTES / 2;
+    let payload: Rc<[u8]> = Rc::from(vec![7_u8; half]);
+    let write = |requestor: xproto::Window, target: xproto::Atom, bytes: Rc<[u8]>| {
+        model::IncrWrite::try_new(requestor, 1, target, bytes, start).expect("announced")
+    };
+    let mut writes = model::IncrWrites::default();
+    assert!(
+        writes.shared(31, &payload).is_none(),
+        "nothing to share yet"
+    );
+    assert!(writes.admit(write(10, 31, Rc::clone(&payload))).is_ok());
+
+    // The same bytes as the same type, freshly made by the provider.
+    let fresh = vec![7_u8; half];
+    let shared = writes
+        .shared(31, &fresh)
+        .expect("the held payload is shared");
+    assert!(Rc::ptr_eq(&shared, &payload), "one payload, not a copy");
+    assert!(
+        writes.shared(32, &fresh).is_none(),
+        "another type is its own"
+    );
+    assert!(writes.admit(write(11, 31, shared)).is_ok());
+    assert!(writes.admit(write(12, 31, Rc::clone(&payload))).is_ok());
+    assert_eq!(writes.held_bytes(), half, "three answers, one payload");
+
+    // A payload of its own: past the budget with the shared one held.
+    let own: Rc<[u8]> = Rc::from(vec![8_u8; half + 1]);
+    assert!(
+        writes.admit(write(13, 32, Rc::clone(&own))).is_err(),
+        "past MAX_INCR_BYTES"
+    );
+    let within: Rc<[u8]> = Rc::from(vec![8_u8; half]);
+    assert!(writes.admit(write(13, 32, within)).is_ok(), "at the budget");
+    assert_eq!(writes.held_bytes(), model::MAX_INCR_BYTES);
+
+    assert_eq!(writes.retire_window(13), 1);
+    assert_eq!(writes.retire_window(10), 1);
+    assert_eq!(writes.retire_window(11), 1);
+    assert_eq!(writes.held_bytes(), half, "one answer still holds it");
+    assert!(
+        writes.admit(write(13, 32, Rc::clone(&own))).is_err(),
+        "still past the budget"
+    );
+    assert_eq!(writes.retire_window(12), 1);
+    assert_eq!(writes.held_bytes(), 0);
+    assert!(
+        writes.admit(write(13, 32, own)).is_ok(),
+        "room once the last holder is let go of"
     );
 }
 
@@ -2360,13 +2418,16 @@ fn take_announcement(
 /// The rest of the `INCR` answer in `property` of `window`, its
 /// announcement taken: each chunk as it comes, deleted to ask for the
 /// next, to the empty one that ends it. Every chunk is at most `MAX_CHUNK`.
+/// Also when the last chunk with bytes was taken: the source writes the
+/// empty one after it.
 fn read_chunks(
     target: &Target,
     connection: &RustConnection,
     window: xproto::Window,
     property: xproto::Atom,
-) -> Vec<u8> {
+) -> (Vec<u8>, Instant) {
     let mut read = Vec::new();
+    let mut taken = Instant::now();
     let deadline = Instant::now() + STEP;
     loop {
         target.deliver_events();
@@ -2384,8 +2445,9 @@ fn read_chunks(
             connection.flush().expect("the deletion is sent");
             assert!(reply.value.len() <= MAX_CHUNK, "a chunk past the bound");
             if reply.value.is_empty() {
-                return read;
+                return (read, taken);
             }
+            taken = Instant::now();
             read.extend_from_slice(&reply.value);
             continue;
         }
@@ -2431,8 +2493,17 @@ fn a_payload_past_one_property_is_written_incrementally() {
     assert_eq!(property, atoms.utf8, "the conversion is answered");
     let announced = take_announcement(&other.connection, atoms, window, property);
     assert_eq!(usize::try_from(announced).expect("fits"), text.len());
-    let read = read_chunks(&target, &other.connection, window, property);
+    let (read, last_taken) = read_chunks(&target, &other.connection, window, property);
     assert!(read == text.as_bytes(), "the chunks make the payload");
+    // The empty chunk, written once the last was taken, gave the target its
+    // time to finish from then.
+    assert!(
+        target
+            .drag
+            .session_deadline()
+            .is_some_and(|deadline| deadline >= last_taken + FINISH_TIMEOUT),
+        "the empty chunk renews the finish deadline"
+    );
 
     other.send(
         target.session(),
@@ -2500,7 +2571,7 @@ fn a_stalled_incr_requestor_is_let_go_and_the_drop_goes_on() {
         "a destroyed requestor's answer made room"
     );
     take_announcement(&other.connection, atoms, reader, atoms.utf8);
-    let read = read_chunks(&target, &other.connection, reader, atoms.utf8);
+    let (read, _) = read_chunks(&target, &other.connection, reader, atoms.utf8);
     assert!(read == text.as_bytes(), "the reader reads the payload");
 
     // The stalled answers are due before the drop is: the reader's chunks,
@@ -2704,4 +2775,75 @@ fn a_diagnostic_is_emitted_with_the_lock_let_go() {
         }
     });
     assert_eq!(locked.load(Ordering::SeqCst), 0, "emitted under the lock");
+}
+
+/// A conversion into the property an `INCR` answer is written into replaces
+/// it, whatever it asks for: once the requestor takes the new answer, a
+/// `TARGETS` list here, no chunk of the old one is written there.
+#[test]
+fn a_conversion_into_an_incr_answers_property_replaces_it() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    dropped(&target, &other, &foreign, &ended, long_text(MAX_CHUNK + 1));
+    let window = listening_window(&other.connection);
+    let property = atoms.html;
+    assert_eq!(
+        convert_into(&target, &other.connection, atoms, window, property, 101),
+        property,
+        "the text goes INCR"
+    );
+    let targets = other
+        .connection
+        .intern_atom(false, b"TARGETS")
+        .expect("intern")
+        .reply()
+        .expect("interned")
+        .atom;
+    other
+        .connection
+        .convert_selection(window, atoms.selection, targets, property, 101_u32)
+        .expect("the conversion is asked");
+    other.connection.flush().expect("the conversion is asked");
+    let deadline = Instant::now() + STEP;
+    loop {
+        target.deliver_events();
+        if let Some(Event::SelectionNotify(notify)) = other.poll()
+            && notify.requestor == window
+        {
+            assert_eq!(notify.property, property, "the types are listed");
+            break;
+        }
+        assert!(Instant::now() < deadline, "the source never answered");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let listed = other
+        .connection
+        .get_property(true, window, property, AtomEnum::ANY, 0, 1024)
+        .expect("the property is asked for")
+        .reply()
+        .expect("the property is read");
+    assert_eq!(listed.type_, u32::from(AtomEnum::ATOM), "a TARGETS list");
+    other.connection.flush().expect("the deletion is sent");
+
+    let quiet = Instant::now() + QUIET;
+    while Instant::now() < quiet {
+        target.deliver_events();
+        if let Some(Event::PropertyNotify(notify)) = other.poll() {
+            assert!(
+                notify.window != window
+                    || notify.atom != property
+                    || notify.state != Property::NEW_VALUE,
+                "a chunk of the replaced answer was written"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(ended.get(), None, "the drop goes on");
 }

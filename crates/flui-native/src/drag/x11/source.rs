@@ -25,11 +25,14 @@
 //! past [`MAX_CHUNK`] or the server's request limit goes `INCR` (ICCCM
 //! §2.7.2): its length announced, then a chunk of at most [`MAX_CHUNK`] as
 //! the requestor deletes each, then the empty chunk that ends it. At most
-//! [`model::MAX_INCR_WRITES`] are written at once and one past them is
-//! refused; each holds its payload until it ends, its requestor takes no
-//! chunk for [`FINISH_TIMEOUT`] or is destroyed, or the session ends. Each
-//! chunk gives the target that took the drop [`FINISH_TIMEOUT`] again to
-//! finish, so a long answer is read to its end.
+//! [`model::MAX_INCR_WRITES`] are written at once, holding at most
+//! [`model::MAX_INCR_BYTES`] of payload, which answers of the same bytes
+//! share, and one past either is refused; a new conversion into a property
+//! replaces its answer. Each holds its payload until it ends, its requestor
+//! takes no chunk for [`FINISH_TIMEOUT`] or is destroyed, or the session
+//! ends. Each chunk written, the empty one included, gives the target that
+//! took the drop [`FINISH_TIMEOUT`] again to finish, so a long answer is read
+//! to its end.
 //!
 //! The session's pointer events are its alone while it runs, as an OS
 //! session's are on every desktop: the window's input never sees them, and
@@ -49,6 +52,7 @@ use flui_platform::drag::{
 use flui_platform::{Unsupported, UnsupportedReason};
 use web_time::Instant;
 use x11rb::connection::{Connection as _, RequestConnection as _};
+use x11rb::errors::ConnectionError;
 use x11rb::protocol::Event;
 use x11rb::protocol::xinput::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{
@@ -153,6 +157,37 @@ impl Phase {
         match self {
             Self::Dragging => None,
             Self::Released { deadline, .. } | Self::Dropped { deadline } => Some(deadline),
+        }
+    }
+}
+
+/// A diagnostic a step of an `INCR` answer found, emitted once the session
+/// is back in its cell or ended.
+#[derive(Debug)]
+pub(super) enum Report {
+    /// A conversion past one property was refused, and why.
+    Refused { len: usize, why: &'static str },
+    /// A chunk could not be written.
+    Unwritten(ConnectionError),
+    /// A requestor's events could not be let go of.
+    Unheard(ConnectionError),
+    /// This many requestors took no chunk in time.
+    Stalled(usize),
+}
+
+impl Report {
+    fn emit(self) {
+        match self {
+            Self::Refused { len, why } => tracing::debug!(len, "{why}"),
+            Self::Unwritten(error) => {
+                tracing::debug!(%error, "cannot write a chunk of a drag's INCR answer");
+            }
+            Self::Unheard(error) => {
+                tracing::debug!(%error, "cannot stop hearing a drag's INCR requestor");
+            }
+            Self::Stalled(requestors) => {
+                tracing::debug!(requestors, "an XDND INCR requestor took no chunk in time");
+            }
         }
     }
 }
@@ -889,23 +924,15 @@ impl X11Drag {
         for requestor in &expired {
             self.forget_requestor(&session, *requestor);
         }
-        // A subscriber is the runtime's code: it hears this with the session
-        // back in its cell.
-        let report = || {
-            if !expired.is_empty() {
-                tracing::debug!(
-                    requestors = expired.len(),
-                    "an XDND INCR requestor took no chunk in time"
-                );
-            }
-        };
+        if !expired.is_empty() {
+            self.report(Report::Stalled(expired.len()));
+        }
         if session
             .phase
             .deadline()
             .is_none_or(|deadline| deadline > now)
         {
             self.put_session(session);
-            report();
             return;
         }
         if let (Phase::Released { .. }, Some(over)) = (session.phase, session.over.as_ref()) {
@@ -914,7 +941,6 @@ impl X11Drag {
         }
         let then = self.end(&mut session, OsDragEnd::Cancelled);
         self.finish_step(session, then);
-        report();
     }
 
     /// End `session` with `outcome`: it lets go of `XdndSelection`, while it
@@ -979,6 +1005,7 @@ impl X11Drag {
         if let Then::End(on_end, outcome) = then {
             contain_owner_callback(|| on_end(outcome));
         }
+        self.emit_reports();
     }
 
     /// Answer a target's conversion of `XdndSelection`.
@@ -988,6 +1015,7 @@ impl X11Drag {
         } else {
             request.property
         };
+        self.replace_answer(request.requestor, property);
         let answered = if request.target == self.atoms.targets {
             let atoms: Vec<xproto::Atom> = self
                 .session
@@ -1110,8 +1138,6 @@ impl X11Drag {
         let Some(mut session) = self.take_session() else {
             return len <= room && whole(&bytes);
         };
-        // A new conversion into the property replaces an earlier answer.
-        let replaced = session.incr.retire(requestor, property).is_some();
         let (answered, refusal) = if len <= room {
             (whole(&bytes), None)
         } else if session.source != request.owner
@@ -1126,14 +1152,25 @@ impl X11Drag {
             let refusal = self.write_incr(&mut session, request, property, bytes);
             (refusal.is_none(), refusal)
         };
-        if replaced {
+        if let Some(why) = refusal {
+            self.report(Report::Refused { len, why });
+        }
+        self.put_session(session);
+        answered
+    }
+
+    /// A new conversion into `property` of `requestor`, whatever it asks
+    /// for: the `INCR` answer written there before is let go of, so the
+    /// requestor's deletion of the new answer writes no chunk of the old,
+    /// and the requestor is no longer heard once nothing is written to it.
+    fn replace_answer(&self, requestor: xproto::Window, property: xproto::Atom) {
+        let Some(mut session) = self.take_session() else {
+            return;
+        };
+        if session.incr.retire(requestor, property).is_some() {
             self.forget_requestor(&session, requestor);
         }
         self.put_session(session);
-        if let Some(refusal) = refusal {
-            tracing::debug!(len, "{refusal}");
-        }
-        answered
     }
 
     /// Start the `INCR` answer of `bytes` to `request`: the requestor heard,
@@ -1147,6 +1184,12 @@ impl X11Drag {
         bytes: Vec<u8>,
     ) -> Option<&'static str> {
         let requestor = request.requestor;
+        // The same bytes another answer holds are shared, not held twice:
+        // the provider's copy goes now.
+        let bytes = session
+            .incr
+            .shared(request.target, &bytes)
+            .unwrap_or_else(|| std::rc::Rc::from(bytes));
         let Some(write) = IncrWrite::try_new(
             requestor,
             property,
@@ -1158,7 +1201,9 @@ impl X11Drag {
         };
         let announcement = write.announcement();
         if session.incr.admit(write).is_err() {
-            return Some("a drag's INCR answer is refused: as many are written as may be at once");
+            return Some(
+                "a drag's INCR answer is refused: as many answers or bytes are held as may be",
+            );
         }
         let xcb = self.connection.xcb();
         // Heard before the announcement is written: the requestor's first
@@ -1218,17 +1263,19 @@ impl X11Drag {
             });
         let ended = write.ended();
         let failed = written.and_then(Result::err);
+        if failed.is_none() {
+            // The empty chunk too: the target finishes after reading it.
+            Self::progressed(&mut session);
+        }
         if failed.is_some() || ended {
             session.incr.retire(event.window, event.atom);
             self.forget_requestor(&session, event.window);
-        } else {
-            Self::progressed(&mut session);
         }
-        self.put_session(session);
-        self.flush();
         if let Some(error) = failed {
-            tracing::debug!(%error, "cannot write a chunk of a drag's INCR answer");
+            self.report(Report::Unwritten(error));
         }
+        self.flush();
+        self.put_session(session);
         true
     }
 
@@ -1260,7 +1307,7 @@ impl X11Drag {
             requestor,
             &ChangeWindowAttributesAux::new().event_mask(EventMask::NO_EVENT),
         ) {
-            tracing::debug!(%error, "cannot stop hearing a drag's INCR requestor");
+            self.report(Report::Unheard(error));
         }
     }
 
@@ -1336,8 +1383,24 @@ impl X11Drag {
         self.session.with(Option::take).flatten()
     }
 
+    /// Put `session` back in its cell, then emit what the step found.
     fn put_session(&self, session: Session) {
         self.session.with(|slot| *slot = Some(session));
+        self.emit_reports();
+    }
+
+    /// Keep `report` for the step's end: a subscriber is the runtime's code,
+    /// and hears nothing while the session is out of its cell.
+    fn report(&self, report: Report) {
+        self.reports.with(|reports| reports.push(report));
+    }
+
+    /// Emit what the steps found, the session in its cell or ended.
+    fn emit_reports(&self) {
+        let reports = self.reports.with(std::mem::take).unwrap_or_default();
+        for report in reports {
+            report.emit();
+        }
     }
 
     /// Note the server time of a pointer or key event.

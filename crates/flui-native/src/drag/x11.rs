@@ -109,6 +109,8 @@ const MAX_ACTIONS: u32 = 16;
 /// The protocol, its actions and its types, with no server call: plain
 /// functions over atoms and bytes.
 pub(crate) mod model {
+    use std::rc::Rc;
+
     use flui_platform::data_transfer::TransferActions;
     use web_time::Instant;
     use x11rb::NONE;
@@ -370,6 +372,11 @@ pub(crate) mod model {
     /// them is refused.
     pub(crate) const MAX_INCR_WRITES: usize = 4;
 
+    /// The most payload bytes the `INCR` answers of a session hold at once,
+    /// each payload counted once however many answers share it; an answer
+    /// past them is refused.
+    pub(crate) const MAX_INCR_BYTES: usize = 64 * 1024 * 1024;
+
     /// The length an `INCR` answer of `len` bytes announces, in the one
     /// 32-bit word ICCCM gives it; `None` for a payload no announcement can
     /// name.
@@ -381,14 +388,15 @@ pub(crate) mod model {
     /// One answer written `INCR` (ICCCM §2.7.2): announced in `property` of
     /// `requestor`, then a chunk each time the requestor deletes the
     /// property, then the empty chunk that ends it. It holds its payload,
-    /// the one copy its conversion made, and the deadline by which the
-    /// requestor takes the next chunk.
+    /// shared with every other answer of the same bytes as the same type
+    /// ([`IncrWrites::shared`]), and the deadline by which the requestor
+    /// takes the next chunk.
     #[derive(Debug)]
     pub(crate) struct IncrWrite {
         requestor: Window,
         property: Atom,
         target: Atom,
-        bytes: Vec<u8>,
+        bytes: Rc<[u8]>,
         /// The byte the next chunk starts at.
         written: usize,
         /// Whether the empty chunk that ends it is written.
@@ -405,7 +413,7 @@ pub(crate) mod model {
             requestor: Window,
             property: Atom,
             target: Atom,
-            bytes: Vec<u8>,
+            bytes: Rc<[u8]>,
             deadline: Instant,
         ) -> Option<Self> {
             announced(bytes.len())?;
@@ -465,17 +473,50 @@ pub(crate) mod model {
     }
 
     impl IncrWrites {
+        /// The payload an answer already holds of `bytes` as `target`, to
+        /// share instead of holding a second copy.
+        #[must_use]
+        pub(crate) fn shared(&self, target: Atom, bytes: &[u8]) -> Option<Rc<[u8]>> {
+            self.writes
+                .iter()
+                .find(|write| write.target == target && *write.bytes == *bytes)
+                .map(|write| Rc::clone(&write.bytes))
+        }
+
+        /// The payload bytes the answers hold, each shared payload once.
+        #[must_use]
+        pub(crate) fn held_bytes(&self) -> usize {
+            let mut payloads: Vec<&Rc<[u8]>> = Vec::with_capacity(self.writes.len());
+            for write in &self.writes {
+                if !payloads.iter().any(|held| Rc::ptr_eq(held, &write.bytes)) {
+                    payloads.push(&write.bytes);
+                }
+            }
+            payloads
+                .into_iter()
+                .fold(0_usize, |sum, payload| sum.saturating_add(payload.len()))
+        }
+
         /// Take `write` on in place of an earlier answer into the same
         /// property, which a new conversion replaces.
         ///
         /// # Errors
         ///
-        /// `write` itself, handed back while [`MAX_INCR_WRITES`] others run.
+        /// `write` itself, handed back while [`MAX_INCR_WRITES`] others run,
+        /// or when a payload it shares with none of them would take the
+        /// answers past [`MAX_INCR_BYTES`].
         pub(crate) fn admit(&mut self, write: IncrWrite) -> Result<(), IncrWrite> {
             self.writes.retain(|known| {
                 known.requestor != write.requestor || known.property != write.property
             });
             if self.writes.len() >= MAX_INCR_WRITES {
+                return Err(write);
+            }
+            let shares = self
+                .writes
+                .iter()
+                .any(|known| Rc::ptr_eq(&known.bytes, &write.bytes));
+            if !shares && self.held_bytes().saturating_add(write.bytes.len()) > MAX_INCR_BYTES {
                 return Err(write);
             }
             self.writes.push(write);
@@ -961,6 +1002,9 @@ pub(crate) struct X11Drag {
     state: Mutex<State>,
     /// The session a window started, on the thread that made the transfer.
     session: OwnerCell<Option<source::Session>>,
+    /// What the session's steps found, emitted once the session is back in
+    /// its cell.
+    reports: OwnerCell<Vec<source::Report>>,
     /// The windows whose press a session took, for the loop to have their
     /// input end it.
     taken: OwnerCell<Vec<xproto::Window>>,
@@ -991,6 +1035,7 @@ impl X11Drag {
             wake,
             state: Mutex::new(State::default()),
             session: OwnerCell::new(),
+            reports: OwnerCell::new(),
             taken: OwnerCell::new(),
             last_time: AtomicU32::new(0),
         }))
