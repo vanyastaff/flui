@@ -37,7 +37,7 @@ use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use super::X11Drag;
 use super::model::{self, ActionAtoms, Message, MessageAtoms};
-use super::source::FINISH_TIMEOUT;
+use super::source::{FINISH_TIMEOUT, MAX_CHUNK};
 use crate::owner::linux::x11::{InputTarget, LoopDrag as _, WindowRef, WindowScale, X11Connection};
 use crate::owner::window_delivery::WindowDelivery;
 
@@ -164,6 +164,211 @@ fn actions_map_both_ways() {
     ] {
         assert_eq!(ACTIONS.actions_of(ACTIONS.atom_of(action)), action);
     }
+}
+
+/// An `INCR` answer goes in chunks of at most the room, at least a byte,
+/// then the empty chunk that ends it, and nothing after. Its announcement is the payload's length, and a
+/// length past one 32-bit word is announced by nothing.
+#[test]
+fn an_incr_write_numbers_its_chunks() {
+    let start = Instant::now();
+    for (len, room, chunks) in [
+        (1, 4, vec![1, 0]),
+        (8, 4, vec![4, 4, 0]),
+        (9, 4, vec![4, 4, 1, 0]),
+        (3, 0, vec![1, 1, 1, 0]),
+        (5, usize::MAX, vec![5, 0]),
+    ] {
+        let bytes: Vec<u8> = (0..len)
+            .map(|byte| u8::try_from(byte).expect("small"))
+            .collect();
+        let mut write = model::IncrWrite::try_new(7, 8, 9, Rc::new(bytes.clone()), start)
+            .expect("a small length is announced");
+        assert_eq!(write.announcement(), u32::try_from(len).expect("small"));
+        assert_eq!(write.target(), 9);
+        let mut read = Vec::new();
+        let mut lens = Vec::new();
+        for step in 1..=chunks.len() {
+            assert!(!write.ended(), "len {len}, room {room}: ended early");
+            let deadline = start + Duration::from_secs(u64::try_from(step).expect("small"));
+            let chunk = write
+                .next_chunk(room, deadline)
+                .expect("a chunk is owed until the empty one");
+            lens.push(chunk.len());
+            read.extend_from_slice(chunk);
+        }
+        assert_eq!(lens, chunks, "len {len}, room {room}");
+        assert_eq!(read, bytes, "len {len}, room {room}");
+        assert!(
+            write.ended(),
+            "len {len}, room {room}: the empty chunk ends it"
+        );
+        assert!(
+            write.next_chunk(room, start).is_none(),
+            "nothing past the end"
+        );
+    }
+
+    assert_eq!(model::announced(0), Some(0));
+    assert_eq!(
+        model::announced(usize::try_from(u32::MAX).expect("a 32-bit length fits")),
+        Some(u32::MAX)
+    );
+    if let Some(past) = usize::try_from(u32::MAX)
+        .expect("a 32-bit length fits")
+        .checked_add(1)
+    {
+        assert_eq!(model::announced(past), None, "past one word");
+    }
+}
+
+/// A session writes at most `MAX_INCR_WRITES` answers: a new conversion into
+/// a property replaces its answer, even when the rest are full; one past them
+/// is handed back. Each is let go of by its property, its window, its
+/// deadline or the session's end, every requestor named once.
+#[test]
+fn incr_writes_are_bounded_and_let_go() {
+    let start = Instant::now();
+    let at = |seconds: u64| start + Duration::from_secs(seconds);
+    let write = |requestor: xproto::Window, property: xproto::Atom, due: u64| {
+        model::IncrWrite::try_new(requestor, property, 31, Rc::new(vec![1, 2, 3]), at(due))
+            .expect("a small length is announced")
+    };
+    let mut writes = model::IncrWrites::default();
+    let max = u32::try_from(model::MAX_INCR_WRITES).expect("a small bound");
+    for property in 0..max {
+        assert!(writes.admit(write(10 + property % 2, property, 5)).is_ok());
+    }
+    assert!(writes.admit(write(12, 99, 5)).is_err(), "past the bound");
+    assert!(
+        writes.admit(write(10, 0, 9)).is_ok(),
+        "a new conversion into a property replaces its answer"
+    );
+    assert_eq!(writes.deadline(), Some(at(5)));
+    for property in 1..max {
+        writes
+            .get_mut(10 + property % 2, property)
+            .expect("written")
+            .next_chunk(2, at(8))
+            .expect("a chunk is owed");
+    }
+    assert_eq!(
+        writes.deadline(),
+        Some(at(8)),
+        "a chunk taken moves its answer's deadline"
+    );
+
+    assert!(writes.get_mut(10, 0).is_some());
+    assert!(writes.get_mut(10, 1).is_none(), "property 1 is window 11's");
+    assert!(writes.retire(10, 0).is_some());
+    assert!(writes.retire(10, 0).is_none(), "let go of once");
+
+    assert_eq!(writes.retire_window(11), 2, "properties 1 and 3");
+    assert!(!writes.writes_to(11));
+    assert!(writes.writes_to(10), "property 2 is still written");
+
+    assert!(writes.admit(write(11, 5, 7)).is_ok());
+    assert!(writes.admit(write(11, 6, 7)).is_ok());
+    assert_eq!(writes.expire(at(6)), Vec::<xproto::Window>::new());
+    assert_eq!(
+        writes.expire(at(7)),
+        vec![11],
+        "window 11's two due answers, named once"
+    );
+    assert!(!writes.writes_to(11));
+    assert!(writes.writes_to(10), "property 2 is due at 8");
+    assert!(writes.admit(write(10, 7, 9)).is_ok());
+    assert_eq!(writes.abandon(), vec![10], "named once for its two answers");
+    assert!(writes.deadline().is_none());
+    assert!(
+        writes.admit(write(12, 99, 5)).is_ok(),
+        "room again once they are let go of"
+    );
+}
+
+/// Answers of the same bytes as the same type share one payload, counted
+/// once against `MAX_INCR_BYTES`; a payload of their own past the budget is
+/// handed back, and room comes back as answers are let go of.
+#[test]
+fn incr_writes_share_a_payload_and_hold_a_byte_budget() {
+    let start = Instant::now();
+    let half = model::MAX_INCR_BYTES / 2;
+    let payload: Rc<Vec<u8>> = Rc::new(vec![7_u8; half]);
+    let write = |requestor: xproto::Window, target: xproto::Atom, bytes: Rc<Vec<u8>>| {
+        model::IncrWrite::try_new(requestor, 1, target, bytes, start).expect("announced")
+    };
+    let mut writes = model::IncrWrites::default();
+    assert!(
+        writes.shared(31, &payload).is_none(),
+        "nothing to share yet"
+    );
+    assert!(writes.admit(write(10, 31, Rc::clone(&payload))).is_ok());
+
+    // The same bytes as the same type, freshly made by the provider.
+    let fresh = vec![7_u8; half];
+    let shared = writes
+        .shared(31, &fresh)
+        .expect("the held payload is shared");
+    assert!(Rc::ptr_eq(&shared, &payload), "one payload, not a copy");
+    assert!(
+        writes.shared(32, &fresh).is_none(),
+        "another type is its own"
+    );
+    assert!(writes.admit(write(11, 31, shared)).is_ok());
+    assert!(writes.admit(write(12, 31, Rc::clone(&payload))).is_ok());
+    assert_eq!(writes.held_bytes(), half, "three answers, one payload");
+
+    // Admission is decided by the length before a payload is moved into
+    // an answer: one past the budget, or past what INCR announces, is
+    // refused with no payload built.
+    assert!(
+        !writes.admits(13, 1, half + 1, false),
+        "a payload of its own past MAX_INCR_BYTES"
+    );
+    assert!(writes.admits(13, 1, half, false), "one at the budget");
+    assert!(
+        writes.admits(13, 1, half + 1, true),
+        "a shared payload adds nothing"
+    );
+    if let Some(past) = usize::try_from(u32::MAX)
+        .expect("a 32-bit length fits")
+        .checked_add(1)
+    {
+        assert!(!writes.admits(13, 1, past, true), "past one announcement");
+    }
+
+    // A payload of its own: past the budget with the shared one held.
+    let own: Rc<Vec<u8>> = Rc::new(vec![8_u8; half + 1]);
+    assert!(
+        writes.admit(write(13, 32, Rc::clone(&own))).is_err(),
+        "past MAX_INCR_BYTES"
+    );
+    let within: Rc<Vec<u8>> = Rc::new(vec![8_u8; half]);
+    assert!(writes.admit(write(13, 32, within)).is_ok(), "at the budget");
+    assert_eq!(writes.held_bytes(), model::MAX_INCR_BYTES);
+    assert!(
+        !writes.admits(14, 1, 1, true),
+        "past MAX_INCR_WRITES answers"
+    );
+    assert!(
+        writes.admits(13, 1, half, false),
+        "in place of its own answer, whose bytes it frees"
+    );
+
+    assert_eq!(writes.retire_window(13), 1);
+    assert_eq!(writes.retire_window(10), 1);
+    assert_eq!(writes.retire_window(11), 1);
+    assert_eq!(writes.held_bytes(), half, "one answer still holds it");
+    assert!(
+        writes.admit(write(13, 32, Rc::clone(&own))).is_err(),
+        "still past the budget"
+    );
+    assert_eq!(writes.retire_window(12), 1);
+    assert_eq!(writes.held_bytes(), 0);
+    assert!(
+        writes.admit(write(13, 32, own)).is_ok(),
+        "room once the last holder is let go of"
+    );
 }
 
 // ============================================================================
@@ -2149,8 +2354,21 @@ fn convert(
     requestor: xproto::Window,
     time: u32,
 ) -> xproto::Atom {
+    convert_into(target, connection, atoms, requestor, atoms.utf8, time)
+}
+
+/// Convert `XdndSelection` to UTF-8 text into `property` of `requestor` at
+/// `time` through `connection`, and the property the answer names.
+fn convert_into(
+    target: &Target,
+    connection: &RustConnection,
+    atoms: &SourceAtoms,
+    requestor: xproto::Window,
+    property: xproto::Atom,
+    time: u32,
+) -> xproto::Atom {
     connection
-        .convert_selection(requestor, atoms.selection, atoms.utf8, atoms.utf8, time)
+        .convert_selection(requestor, atoms.selection, atoms.utf8, property, time)
         .expect("the conversion is asked");
     connection.flush().expect("the conversion is asked");
     let deadline = Instant::now() + STEP;
@@ -2163,6 +2381,258 @@ fn convert(
             return notify.property;
         }
         assert!(Instant::now() < deadline, "the source never answered");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// A session offering `text` alone, telling `ended` how it ended.
+fn request_of(ended: &Rc<Cell<Option<OsDragEnd>>>, text: String) -> OsDragRequest {
+    OsDragRequest {
+        provider: Box::new(move |RepresentationIndex(index)| match index {
+            0 => Ok(TransferPayload::Text(text.clone())),
+            _ => Err(TransferError::Cancelled),
+        }),
+        ..request(ended)
+    }
+}
+
+/// Text of `len` bytes, every chunk of it different.
+fn long_text(len: usize) -> String {
+    (0..len)
+        .map(|at| char::from(b'a' + u8::try_from(at % 26).expect("a letter")))
+        .collect()
+}
+
+/// A window of `connection`'s client that hears its properties change.
+fn listening_window(connection: &RustConnection) -> xproto::Window {
+    let window = connection.generate_id().expect("an X id");
+    connection
+        .create_window(
+            0,
+            window,
+            connection.setup().roots[0].root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_ONLY,
+            COPY_FROM_PARENT,
+            &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+        )
+        .expect("the window is asked for");
+    connection.flush().expect("the window is asked for");
+    window
+}
+
+/// Take the announcement of an `INCR` answer in `property` of `window`,
+/// which asks for its first chunk: the length it announces.
+fn take_announcement(
+    connection: &RustConnection,
+    atoms: &SourceAtoms,
+    window: xproto::Window,
+    property: xproto::Atom,
+) -> u32 {
+    let reply = connection
+        .get_property(true, window, property, AtomEnum::ANY, 0, 1)
+        .expect("the property is asked for")
+        .reply()
+        .expect("the property is read");
+    assert_eq!(reply.type_, atoms.incr, "the answer goes INCR");
+    let announced = reply
+        .value32()
+        .and_then(|mut words| words.next())
+        .expect("the announcement is a word");
+    connection.flush().expect("the deletion is sent");
+    announced
+}
+
+/// The rest of the `INCR` answer in `property` of `window`, its
+/// announcement taken: each chunk as it comes, deleted to ask for the
+/// next, to the empty one that ends it. Every chunk is at most `MAX_CHUNK`.
+/// Also when the last chunk with bytes was taken: the source writes the
+/// empty one after it.
+fn read_chunks(
+    target: &Target,
+    connection: &RustConnection,
+    window: xproto::Window,
+    property: xproto::Atom,
+) -> (Vec<u8>, Instant) {
+    let mut read = Vec::new();
+    let mut taken = Instant::now();
+    let deadline = Instant::now() + STEP;
+    loop {
+        target.deliver_events();
+        if let Some(Event::PropertyNotify(notify)) =
+            connection.poll_for_event().expect("the connection holds")
+            && notify.window == window
+            && notify.atom == property
+            && notify.state == Property::NEW_VALUE
+        {
+            let reply = connection
+                .get_property(true, window, property, AtomEnum::ANY, 0, u32::MAX / 4)
+                .expect("the chunk is asked for")
+                .reply()
+                .expect("the chunk is read");
+            connection.flush().expect("the deletion is sent");
+            assert!(reply.value.len() <= MAX_CHUNK, "a chunk past the bound");
+            if reply.value.is_empty() {
+                return (read, taken);
+            }
+            taken = Instant::now();
+            read.extend_from_slice(&reply.value);
+            continue;
+        }
+        assert!(Instant::now() < deadline, "the source stopped writing");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// Start a session offering `text` over `foreign`, drop it there, and wait
+/// for the drop: the hook `ended` hears the end.
+fn dropped(
+    target: &Target,
+    other: &Source,
+    foreign: &Foreign,
+    ended: &Rc<Cell<Option<OsDragEnd>>>,
+    text: String,
+) {
+    accepted(target, other, foreign, request_of(ended, text));
+    target.release(101);
+    heard_by(other, target, other.atoms.drop);
+}
+
+/// A payload past one property is written `INCR` to the target that took
+/// the drop: announced at its length, in chunks of at most `MAX_CHUNK`
+/// asked for one by one, to the empty one that ends it; the drop then
+/// finishes as the target says.
+#[test]
+fn a_payload_past_one_property_is_written_incrementally() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    let text = long_text(2 * MAX_CHUNK + 7);
+    dropped(&target, &other, &foreign, &ended, text.clone());
+    let window = listening_window(&other.connection);
+
+    let property = convert(&target, &other.connection, atoms, window, 101);
+    assert_eq!(property, atoms.utf8, "the conversion is answered");
+    let announced = take_announcement(&other.connection, atoms, window, property);
+    assert_eq!(usize::try_from(announced).expect("fits"), text.len());
+    let (read, last_taken) = read_chunks(&target, &other.connection, window, property);
+    assert!(read == text.as_bytes(), "the chunks make the payload");
+    // The empty chunk, written once the last was taken, gave the target its
+    // time to finish from then.
+    assert!(
+        target
+            .drag
+            .session_deadline()
+            .is_some_and(|deadline| deadline >= last_taken + FINISH_TIMEOUT),
+        "the empty chunk renews the finish deadline"
+    );
+
+    other.send(
+        target.session(),
+        atoms.finished,
+        model::finished(foreign.window, Some(atoms.copy)),
+    );
+    let deadline = Instant::now() + STEP;
+    while ended.get().is_none() {
+        assert!(Instant::now() < deadline, "the session never ended");
+        target.deliver_events();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(ended.get(), Some(OsDragEnd::Dropped(TransferActions::COPY)));
+}
+
+/// A requestor that takes no chunk for `FINISH_TIMEOUT` is let go of, while
+/// the drop it stalls goes on for a requestor that reads; at most
+/// `MAX_INCR_WRITES` answers are written at once, one past them refused,
+/// and a requestor's window destroyed lets its answers go.
+#[test]
+fn a_stalled_incr_requestor_is_let_go_and_the_drop_goes_on() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    let text = long_text(MAX_CHUNK + 1);
+    dropped(&target, &other, &foreign, &ended, text.clone());
+
+    // As many stalled answers as are written at once, the first on a window
+    // destroyed then.
+    let gone = listening_window(&other.connection);
+    let stalled = listening_window(&other.connection);
+    assert_eq!(
+        convert(&target, &other.connection, atoms, gone, 101),
+        atoms.utf8
+    );
+    for property in [atoms.html, atoms.png, atoms.uri_list] {
+        assert_eq!(
+            convert_into(&target, &other.connection, atoms, stalled, property, 101),
+            property,
+            "answered while room is left"
+        );
+    }
+    // Every stalled answer is due by then.
+    let stalled_by = Instant::now();
+    let reader = listening_window(&other.connection);
+    assert_eq!(
+        convert(&target, &other.connection, atoms, reader, 101),
+        NONE,
+        "one past the bound is refused"
+    );
+    other
+        .connection
+        .destroy_window(gone)
+        .expect("the window is destroyed");
+    other.connection.flush().expect("the window is destroyed");
+    assert_eq!(
+        convert(&target, &other.connection, atoms, reader, 101),
+        atoms.utf8,
+        "a destroyed requestor's answer made room"
+    );
+    take_announcement(&other.connection, atoms, reader, atoms.utf8);
+    let (read, _) = read_chunks(&target, &other.connection, reader, atoms.utf8);
+    assert!(read == text.as_bytes(), "the reader reads the payload");
+
+    // The stalled answers are due before the drop is: the reader's chunks,
+    // all later, gave the target more time.
+    target.drag.expire(stalled_by + FINISH_TIMEOUT);
+    assert_eq!(ended.get(), None, "the drop goes on");
+    for property in [atoms.utf8, atoms.html, atoms.png, atoms.uri_list] {
+        assert_eq!(
+            convert_into(&target, &other.connection, atoms, reader, property, 101),
+            property,
+            "the stalled answers made room"
+        );
+    }
+    for property in [atoms.html, atoms.png, atoms.uri_list] {
+        other
+            .connection
+            .delete_property(stalled, property)
+            .expect("the property is deleted");
+    }
+    other.connection.flush().expect("the deletions are sent");
+    let quiet = Instant::now() + QUIET;
+    while Instant::now() < quiet {
+        target.deliver_events();
+        if let Some(Event::PropertyNotify(notify)) = other.poll() {
+            assert!(
+                notify.window != stalled || notify.state != Property::NEW_VALUE,
+                "a let-go answer wrote a chunk"
+            );
+        }
         std::thread::sleep(Duration::from_millis(2));
     }
 }
@@ -2337,4 +2807,147 @@ fn a_diagnostic_is_emitted_with_the_lock_let_go() {
         }
     });
     assert_eq!(locked.load(Ordering::SeqCst), 0, "emitted under the lock");
+}
+
+/// A conversion into the property an `INCR` answer is written into replaces
+/// it, whatever it asks for: once the requestor takes the new answer, a
+/// `TARGETS` list here, no chunk of the old one is written there.
+#[test]
+fn a_conversion_into_an_incr_answers_property_replaces_it() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    dropped(&target, &other, &foreign, &ended, long_text(MAX_CHUNK + 1));
+    let window = listening_window(&other.connection);
+    let property = atoms.html;
+    assert_eq!(
+        convert_into(&target, &other.connection, atoms, window, property, 101),
+        property,
+        "the text goes INCR"
+    );
+    let targets = other
+        .connection
+        .intern_atom(false, b"TARGETS")
+        .expect("intern")
+        .reply()
+        .expect("interned")
+        .atom;
+    other
+        .connection
+        .convert_selection(window, atoms.selection, targets, property, 101_u32)
+        .expect("the conversion is asked");
+    other.connection.flush().expect("the conversion is asked");
+    let deadline = Instant::now() + STEP;
+    loop {
+        target.deliver_events();
+        if let Some(Event::SelectionNotify(notify)) = other.poll()
+            && notify.requestor == window
+        {
+            assert_eq!(notify.property, property, "the types are listed");
+            break;
+        }
+        assert!(Instant::now() < deadline, "the source never answered");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let listed = other
+        .connection
+        .get_property(true, window, property, AtomEnum::ANY, 0, 1024)
+        .expect("the property is asked for")
+        .reply()
+        .expect("the property is read");
+    assert_eq!(listed.type_, u32::from(AtomEnum::ATOM), "a TARGETS list");
+    other.connection.flush().expect("the deletion is sent");
+
+    let quiet = Instant::now() + QUIET;
+    while Instant::now() < quiet {
+        target.deliver_events();
+        if let Some(Event::PropertyNotify(notify)) = other.poll() {
+            assert!(
+                notify.window != window
+                    || notify.atom != property
+                    || notify.state != Property::NEW_VALUE,
+                "a chunk of the replaced answer was written"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(ended.get(), None, "the drop goes on");
+}
+
+/// Records whether the drag session was out of its cell as a diagnostic was
+/// emitted: a subscriber that reached the session then would find none.
+struct SessionAtDiagnostic {
+    drag: Arc<X11Drag>,
+    events: Arc<AtomicUsize>,
+    out: Arc<AtomicUsize>,
+}
+
+impl tracing::Subscriber for SessionAtDiagnostic {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        self.events.fetch_add(1, Ordering::SeqCst);
+        // A dropped session has a deadline while it is in its cell.
+        if self.drag.session_deadline().is_none() {
+            self.out.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// What an `INCR` answer's step finds is emitted with the session back in
+/// its cell: a stalled requestor let go of is told of once the session,
+/// which goes on, is there again.
+#[test]
+fn an_incr_diagnostic_is_emitted_with_the_session_in_its_cell() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    dropped(&target, &other, &foreign, &ended, long_text(MAX_CHUNK + 1));
+    let stalled = listening_window(&other.connection);
+    assert_eq!(
+        convert(&target, &other.connection, atoms, stalled, 101),
+        atoms.utf8,
+        "the text goes INCR"
+    );
+    // The answer is due before the drop, whose deadline its announcement
+    // moved just after.
+    let due = target.drag.session_deadline().expect("the answer is due");
+
+    let events = Arc::new(AtomicUsize::new(0));
+    let out = Arc::new(AtomicUsize::new(0));
+    let subscriber = SessionAtDiagnostic {
+        drag: Arc::clone(&target.drag),
+        events: Arc::clone(&events),
+        out: Arc::clone(&out),
+    };
+    tracing::subscriber::with_default(subscriber, || {
+        target.drag.expire(due);
+    });
+    assert!(events.load(Ordering::SeqCst) > 0, "the stall is told of");
+    assert_eq!(
+        out.load(Ordering::SeqCst),
+        0,
+        "emitted with the session out"
+    );
+    assert_eq!(ended.get(), None, "the drop goes on");
 }
