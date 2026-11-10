@@ -315,7 +315,7 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
 - The Navigator's own lifecycle order stays pinned by `crates/flui-widgets/tests/navigator.rs`
   and `navigator_public.rs`, which move onto a Router with the doors.
 
-What of this is not built yet is [`docs/gaps.md`](../gaps.md) entry 43, "ADR-0093".
+What of this is not built yet is [Accepted ADR sections not built yet](../gaps.md#accepted-adr-sections-not-built-yet), "ADR-0093".
 
 ## Pros and cons of the options
 

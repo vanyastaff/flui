@@ -237,7 +237,7 @@ impl PlatformAccessibility for IosAccessibility {
 impl IosAccessibility {
     /// VoiceOver's cursor comes through the vendored adapter's hook; a run on
     /// a device has not checked it yet
-    /// ([gap 36](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)).
+    /// ([docs/gaps.md, "Accessibility bridge fidelity"](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)).
     pub(crate) const ASSISTIVE_FOCUS: flui_semantics::AssistiveFocusSupport =
         flui_semantics::AssistiveFocusSupport::Reported;
 

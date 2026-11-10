@@ -12,7 +12,7 @@
 //! The order follows the host's first preferred locale. The collection is the
 //! app's one, so a window whose app resolves another locale keeps the host's
 //! order; a per-paragraph locale in the fallback key is the follow-up
-//! (`docs/gaps.md` entry 35).
+//! (`docs/gaps.md#locale-edge-layout-direction-per-app-language-system-fonts-and-fallback`).
 
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};

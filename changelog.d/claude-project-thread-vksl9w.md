@@ -126,7 +126,7 @@
   page's; a reload ends them, and the client connects again. Firefox is driven over WebDriver
   BiDi and the Chromium family over the DevTools protocol, with no driver binary; a browser has
   60 s to start and answer the link's first commands. `--headless` runs the browser without a
-  window; Safari is refused (`docs/gaps.md` entry 42). `run.agent.ready` carries `relayed` in a
+  window; Safari is refused ([The driver agent cannot reach a page in Safari](/docs/gaps.md#the-driver-agent-cannot-reach-a-page-in-safari)). `run.agent.ready` carries `relayed` in a
   browser.
 - **`flui_protocol::launch::PAGE_LAUNCH_GLOBAL` and `PAGE_EXPORT_VERSION`**: the global a
   driver installs a page's launch under, and the version of the export it connects through.

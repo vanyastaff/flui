@@ -464,14 +464,15 @@ fn counter_owner() -> (flui_native::OwnerPlatform, Arc<AtomicUsize>) {
 }
 
 /// The web host runs the scenario every host's clipboard runs and fails it as
-/// gap 26: the Clipboard API has no way to keep an entry out of the
+/// [`CONCEALED_WRITES`]: the Clipboard API has no way to keep an entry out of the
 /// clipboard's history, so a concealed write pastes back as an ordinary one
 /// (ADR-0152 §6).
 #[wasm_bindgen_test]
 fn a_concealed_write_is_an_ordinary_one_on_the_web() {
     use flui_native::testing::clipboard::{
-        CONCEALED_WRITES, a_concealed_write_stays_out_of_history, expect_fail, read_at_once,
+        CONCEALED_WRITES, a_concealed_write_stays_out_of_history, read_at_once,
     };
+    use flui_native::testing::gap::expect_fail;
 
     install_probe();
     let _probe = Probe;

@@ -9,7 +9,8 @@
 //! The browser is reached through a [`BrowserLink`]: the few things the relay asks of a tab,
 //! spoken in the protocol the browser has without a separate driver ([`Dialect`]): WebDriver
 //! BiDi in Firefox ([`bidi`]), the DevTools protocol in Chrome, Chromium, Edge, Brave and Opera
-//! ([`cdp`]). Safari has neither without `safaridriver` (`docs/gaps.md` entry 42).
+//! ([`cdp`]). Safari has neither without `safaridriver`
+//! (`docs/gaps.md#the-driver-agent-cannot-reach-a-page-in-safari`).
 
 mod bidi;
 mod cdp;

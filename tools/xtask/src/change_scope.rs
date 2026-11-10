@@ -164,7 +164,8 @@ pub(crate) fn paths_filter(_args: &PathsFilterArgs) -> anyhow::Result<ExitCode> 
         eprintln!("  {} includes {}", o.rs_file, o.target);
     }
     eprintln!(
-        "Fix: narrow DOCS_ONLY in tools/xtask/src/change_scope/classify.rs to exclude these paths."
+        "Fix: list the document in COMPILED_DOCS (tools/xtask/src/change_scope/classify.rs) with \
+         the package whose test reads it, and read it from that package only."
     );
     Ok(ExitCode::FAILURE)
 }

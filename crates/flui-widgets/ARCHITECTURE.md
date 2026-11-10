@@ -1211,7 +1211,7 @@ motion would step every frame. The pause control is drawn by the carousel, theme
 gesture menu, as the first item of its column, and pressing it, focus within the carousel, a
 press, a hover or the app leaving the front pause it until the control or
 `CarouselController::resume`. No assistive-technology focus signal exists to pause on
-(`docs/gaps.md` entry 36). `carousel::reduced_motion_stops_autoplay_and_moves_at_once`,
+([Accessibility bridge fidelity](../../docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)). `carousel::reduced_motion_stops_autoplay_and_moves_at_once`,
 `carousel::single_advance_moves_one_item_from_where_the_drag_began` and
 `carousel::index_changes_are_heard_once_each` pin the three.
 
@@ -1366,7 +1366,7 @@ beneath it are found. **Test:** `a_drag_drops_on_the_target_that_accepted_its_la
 [ADR-0093](../../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md) §4
 supersedes: named routes, `RouteKey<T>` and `on_generate_route` are removed,
 with no replacement but the typed `Router`. §4–§12 describe the named-route
-code until that removal ([`docs/gaps.md`](../../docs/gaps.md) entry 43,
+code until that removal ([Accepted ADR sections not built yet](../../docs/gaps.md#accepted-adr-sections-not-built-yet),
 "ADR-0093"); no new code builds on it.
 
 **Problem:** a name that no table entry or generator resolves, and a caller's

@@ -2,7 +2,7 @@
 //! speaks: the roles, names, values, hints, states and actions of its nodes,
 //! the announcements its live regions and its announcer make, and its focus,
 //! on a private session bus with the accessibility bus `at-spi-bus-launcher`
-//! starts beside it (gap 36, `docs/gaps.md`).
+//! starts beside it (`docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements`).
 //!
 //! Each text the cases listen for carries a nonce of the run, so no other
 //! source on the bus can produce a hit.

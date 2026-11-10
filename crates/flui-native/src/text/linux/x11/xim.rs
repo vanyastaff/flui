@@ -561,7 +561,8 @@ impl Session {
                 }];
                 deliver(link, &Message::SetIcValues { im, ic, values })
             }
-            // XIM has no surrounding text and no purpose (gap 5).
+            // XIM has no surrounding text and no purpose
+            // (docs/gaps.md#native-linux-host-wayland-and-x11).
             Request::Surrounding { .. } | Request::Content(_) => true,
         }
     }

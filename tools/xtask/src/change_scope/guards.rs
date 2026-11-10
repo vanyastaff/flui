@@ -7,7 +7,7 @@ use anyhow::Context;
 use regex::Regex;
 use walkdir::WalkDir;
 
-use super::classify::is_docs_only;
+use super::classify::{compiled_doc_reader, is_docs_only};
 
 /// A `.rs` file and the docs-only path it `include_str!`s.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -28,7 +28,8 @@ fn slash_relative(path: &Path, root: &Path) -> Option<String> {
 }
 
 /// Every `include_str!("...")` in the tree's `.rs` files whose target exists,
-/// lies inside the repository and is classified docs-only.
+/// lies inside the repository and is classified docs-only, or is one of the
+/// `COMPILED_DOCS` read from outside the package listed with it.
 ///
 /// The docs-only allowlist decides which changed files let a `pull_request`
 /// run skip every compiling job. A file under it that is pulled into compiled
@@ -70,9 +71,11 @@ pub(super) fn docs_only_include_targets(root: &Path) -> anyhow::Result<Vec<Offen
             let Some(target) = slash_relative(&target, &canonical_root) else {
                 continue;
             };
-            if is_docs_only(&target) {
-                let rs_file =
-                    slash_relative(path, root).context("a walked file lies under the root")?;
+            let rs_file =
+                slash_relative(path, root).context("a walked file lies under the root")?;
+            let read_by_another =
+                compiled_doc_reader(&target).is_some_and(|reader| !rs_file.starts_with(reader));
+            if is_docs_only(&target) || read_by_another {
                 offenders.push(Offender { rs_file, target });
             }
         }
@@ -97,6 +100,7 @@ mod tests {
         for sub in [
             "docs",
             "crates/a/src",
+            "crates/flui-native/tests",
             "crates/a/target",
             ".worktrees/x/crates/a/src",
         ] {
@@ -104,9 +108,18 @@ mod tests {
         }
         std::fs::write(dir.join("docs/guide.md"), "# guide\n").expect("write");
         std::fs::write(dir.join("crates/a/README.md"), "# a\n").expect("write");
+        std::fs::write(dir.join("docs/gaps.md"), "# gaps\n").expect("write");
+        // a compiled doc read by the package listed with it passes; read by
+        // another, it is reported
+        std::fs::write(
+            dir.join("crates/flui-native/tests/gaps.rs"),
+            "include_str!(\"../../../docs/gaps.md\");",
+        )
+        .expect("write");
         let src = "#![doc = include_str!(\"../README.md\")]\n\
                    const GUIDE: &str = include_str!( \"../../../docs/guide.md\" );\n\
-                   const GONE: &str = include_str!(\"../../../docs/missing.md\");\n";
+                   const GONE: &str = include_str!(\"../../../docs/missing.md\");\n\
+                   const GAPS: &str = include_str!(\"../../../docs/gaps.md\");\n";
         std::fs::write(dir.join("crates/a/src/lib.rs"), src).expect("write");
         // build output is not source
         std::fs::write(
@@ -124,10 +137,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(
             offenders,
-            [Offender {
-                rs_file: "crates/a/src/lib.rs".to_owned(),
-                target: "docs/guide.md".to_owned()
-            }]
+            [
+                Offender {
+                    rs_file: "crates/a/src/lib.rs".to_owned(),
+                    target: "docs/gaps.md".to_owned()
+                },
+                Offender {
+                    rs_file: "crates/a/src/lib.rs".to_owned(),
+                    target: "docs/guide.md".to_owned()
+                },
+            ]
         );
     }
 

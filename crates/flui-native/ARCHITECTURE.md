@@ -2871,7 +2871,7 @@ host derives every window's display again on that wake. What stays open is a
 display whose current mode reports 0 Hz, which some built-in panels do: its period
 is unknown and the host paces at its 60 Hz default, because the
 `CVDisplayLinkGetNominalOutputVideoRefreshPeriod` fallback winit takes is not
-written ([gaps](../../docs/gaps.md), entry 4). Neither a live refresh switch nor
+written ([Most implemented rows never ran on their environment](../../docs/gaps.md#most-implemented-rows-never-ran-on-their-environment)). Neither a live refresh switch nor
 such a panel ran: the display this was measured on has one fixed mode.
 
 **Replacement coverage:** the arithmetic is free-standing and AppKit-free
@@ -3888,7 +3888,7 @@ The engine does not draw it, though that was the first shape asked for:
   needs surfaces of its own, as libdecor, SCTK's frames and winit's
   `sctk-adwaita` draw it; a toolkit that draws its frame inside its content
   (GTK4's header bar, Chromium's views frame) draws an application's own
-  title bar, which is the contract's custom title bar (gaps entry 10), not
+  title bar, which is the contract's custom title bar ([No custom title bar, popups or owned windows](../../docs/gaps.md#no-custom-title-bar-popups-or-owned-windows)), not
   the frame `WindowFrame::System` promises;
 - the engine drawing it from `flui-app` would split one host obligation over
   the host, the composition root and the raster lane, a second swapchain a
