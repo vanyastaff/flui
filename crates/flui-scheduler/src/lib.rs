@@ -56,15 +56,16 @@
 //!
 //! ## Type-Safe IDs
 //!
-//! Foundation markers prevent ID type confusion; only a mint issues one:
+//! Callback and task ids are distinct opaque types; only a mint issues one,
+//! and none is built from a number:
 //! ```rust
-//! use std::num::NonZeroU64;
-//! use flui_foundation::{AtomicIdMint, TaskId};
+//! use flui_scheduler::{Priority, Task};
 //!
-//! let task_mint = AtomicIdMint::<TaskId>::new();
-//! let task_id = task_mint.next().expect("a fresh mint has ids to issue");
-//! // An `Id` names exactly one domain - ids of different domains
-//! // are different types and can't be mixed!
+//! let first = Task::new(Priority::Build, || {});
+//! let second = Task::new(Priority::Build, || {});
+//! // Ids of one domain are never issued twice; a `TaskId` and a
+//! // `CallbackId` are different types and can't be mixed.
+//! assert_ne!(first.id(), second.id());
 //! ```
 //!
 //! ## Example Usage
@@ -209,8 +210,8 @@ pub use frame::{
     AppLifecycleState, FrameId, FramePhase, FrameTiming, LifecycleStateCallback,
     OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
 };
-// Re-exports - ID types (unified with flui-foundation; mints included)
-pub use id::{AtomicIdMint, CallbackId, Id, Marker, markers};
+// Re-exports - ID types (opaque foundation identities)
+pub use id::CallbackId;
 pub use scheduler::{
     FrameCompletionFuture, FrameOutcome, FrameWaker, IdleDeadline, MAX_BUILD_REENTRY_PASSES,
     SchedulerBuilder, SchedulerClosed, UpdateScheduler, WeakUpdateScheduler,

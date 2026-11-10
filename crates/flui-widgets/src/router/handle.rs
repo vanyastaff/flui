@@ -9,7 +9,7 @@ use flui_foundation::{ListenerCallback, Subscription};
 use super::path::{RouteParseError, RoutePath};
 use super::routable::Routable;
 use super::router::{RouterEntry, RouterRetiredValues, RouterShared, clone_routes, paths};
-use crate::navigator::RouteId;
+use crate::navigator::{RouteId, RouteResult};
 
 /// An owned, cloneable capability to drive the nearest
 /// [`Router<R>`](super::Router), acquired with
@@ -74,7 +74,7 @@ impl<R: Routable> RouterHandle<R> {
             .expect("BUG: a mounted Router's stack always holds a page")
     }
 
-    /// Pop the popups above the top page: they belong to it (ADR-0093 Â§2).
+    /// Pop the popups above the top page: they belong to it (ADR-0093 §2).
     fn dismiss_popups(&self) {
         let top = self.top_page();
         self.shared.navigator.pop_until(|id| id == top);
@@ -87,16 +87,35 @@ impl<R: Routable> RouterHandle<R> {
     ///
     /// [`RouterError::Disposed`] once the router has unmounted.
     pub fn push(&self, route: R) -> Result<(), RouterError> {
+        self.push_for_result::<()>(route).map(drop)
+    }
+
+    /// Push `route` as a new page, as [`push`](Self::push) does, and return
+    /// the result the page leaves with.
+    ///
+    /// The result resolves once the page leaves the stack: to `Ok(Some(value))`
+    /// for a [`pop_with`](Self::pop_with) of a `T`, to `Ok(None)` when it
+    /// leaves without a value (a plain pop, a [`replace`](Self::replace), a
+    /// [`go`](Self::go) that drops it, or the router unmounting), and to
+    /// [`RouteResultError::TypeMismatch`](crate::RouteResultError::TypeMismatch)
+    /// when it is popped with a value of another type. It stays on the owner
+    /// thread: `T` needs no `Send`, and neither the result nor the value
+    /// crosses a thread.
+    ///
+    /// # Errors
+    ///
+    /// [`RouterError::Disposed`] once the router has unmounted.
+    pub fn push_for_result<T: 'static>(&self, route: R) -> Result<RouteResult<T>, RouterError> {
         self.mounted()?;
         let _told = self.shared.announce_on_exit();
-        let page = self.shared.page_route(&route);
-        self.shared.navigator.push_page(page, |id| {
+        let page = self.shared.page_route::<T>(&route);
+        let ((), result) = self.shared.navigator.push_page(page, |id| {
             self.shared
                 .stack
                 .borrow_mut()
                 .push(RouterEntry::new(id, route));
         });
-        Ok(())
+        Ok(result)
     }
 
     /// Replace the top page with `route`, running the entrance transition. Popups
@@ -110,7 +129,7 @@ impl<R: Routable> RouterHandle<R> {
         let _told = self.shared.announce_on_exit();
         self.dismiss_popups();
         let target = self.top_page();
-        let page = self.shared.page_route(&route);
+        let page = self.shared.page_route::<()>(&route);
         let retired = self
             .shared
             .navigator
@@ -145,6 +164,28 @@ impl<R: Routable> RouterHandle<R> {
         Ok(self.shared.navigator.pop())
     }
 
+    /// Pop the top navigator route, as [`pop`](Self::pop) does, delivering
+    /// `value` as its result.
+    ///
+    /// A page pushed with [`push_for_result::<T>`](Self::push_for_result)
+    /// resolves to `Ok(Some(value))`; a page whose result is of another type
+    /// still pops, and its result resolves to
+    /// [`RouteResultError::TypeMismatch`](crate::RouteResultError::TypeMismatch).
+    /// Answers `Ok(false)` and changes nothing when the only thing left is one
+    /// page; `value` is then dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`RouterError::Disposed`] once the router has unmounted.
+    pub fn pop_with<T: 'static>(&self, value: T) -> Result<bool, RouterError> {
+        self.mounted()?;
+        let popup_on_top = self.shared.navigator.current() != Some(self.top_page());
+        if !popup_on_top && self.shared.stack.borrow().len() <= 1 {
+            return Ok(false);
+        }
+        Ok(self.shared.navigator.pop_with(value))
+    }
+
     /// Navigate to `location`: derive its stack with
     /// [`Routable::back_stack`] and reconcile the current stack to it.
     ///
@@ -158,7 +199,7 @@ impl<R: Routable> RouterHandle<R> {
     /// # Errors
     ///
     /// [`RouterError::Parse`] when `location` does not parse or matches no
-    /// route â€” the stack is then unchanged â€” and [`RouterError::Disposed`]
+    /// route — the stack is then unchanged — and [`RouterError::Disposed`]
     /// once the router has unmounted.
     pub fn go(&self, location: &str) -> Result<(), RouterError> {
         self.mounted()?;
@@ -213,9 +254,9 @@ impl<R: Routable> RouterHandle<R> {
             .expect("BUG: the new stack is longer than the shared part");
         let below_pages = added.0[..added.0.len() - 1]
             .iter()
-            .map(|route| self.shared.page_route(route))
+            .map(|route| self.shared.page_route::<()>(route))
             .collect();
-        let top_page = self.shared.page_route(top);
+        let top_page = self.shared.page_route::<()>(top);
 
         let retired = self
             .shared
@@ -283,7 +324,7 @@ impl<R: Routable> Listenable for RouterHandle<R> {
         let notifier = &self.shared.announcer.notifier;
         let subscription = notifier.listen(listener);
         if !self.shared.mounted.get() {
-            // Unmounted: the listener would never be told â€” drop it and hand
+            // Unmounted: the listener would never be told — drop it and hand
             // the caller the inert form.
             drop(subscription);
             return Subscription::inert();

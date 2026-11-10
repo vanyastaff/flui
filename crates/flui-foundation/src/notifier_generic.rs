@@ -21,10 +21,10 @@ use std::{
     rc::Rc,
 };
 
-use crate::id::ListenerId;
 use crate::notifier::ListenerCallback;
 use crate::panic::PanicRecovery;
 use crate::sequence::IdMint;
+use crate::sequence::ListenerId;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A listener callback that borrows its argument for the duration of the call.

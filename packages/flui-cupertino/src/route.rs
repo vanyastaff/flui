@@ -80,7 +80,7 @@ fn barrier_color() -> Color {
 #[must_use]
 pub fn cupertino_page_route<T, F>(builder: F) -> PageRoute<T>
 where
-    T: Send + Clone + 'static,
+    T: 'static,
     F: Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView + 'static,
 {
     PageRoute::new(builder)

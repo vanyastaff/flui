@@ -55,11 +55,11 @@ IDs use marker traits for type safety, similar to wgpu's resource ID system:
 use flui_foundation::{ElementId, Identifier, LayerId, RenderId, TreeId, ViewId};
 
 // The plain `Id<T: Marker>` family wraps a `NonZeroUsize` and implements
-// `Identifier`. The tree ids that address slab storage (ViewId, LayerId,
-// SemanticsId) are the slot plus one; the rest (ListenerId,
-// FrameCallbackId, TaskId) are opaque counters with no
-// slot behind them, minted only by the `IdMint` family. `zip` takes the
-// public (non-zero) value; the slab offset is the caller's.
+// `Identifier`. Its ids address slab storage (ViewId, LayerId,
+// SemanticsId) and are the slot plus one. `zip` takes the public (non-zero)
+// value; the slab offset is the caller's. Ids with no slot behind them
+// (ListenerId, FrameCallbackId, TaskId) are not in this family: they are
+// opaque, and only an `IdMint` issues one.
 let slab_index = 2;
 let layer_id = LayerId::zip(slab_index + 1);  // slot 2 → ID 3
 assert_eq!(layer_id.unzip() - 1, slab_index); // ID 3 → slot 2
@@ -96,7 +96,7 @@ any_tree_id(render_id);
 | Kind | Types |
 |------|-------|
 | **Plain `Id<T>`**, slab slot + 1 | `ViewId`, `LayerId`, `SemanticsId` |
-| **Plain `Id<T>`**, opaque counter (no slot) | `ListenerId`, `FrameCallbackId`, `TaskId` |
+| **Minted**, opaque `NonZeroU64` (no slot, no numeric constructor) | `ListenerId`, `FrameCallbackId`, `TaskId`, `InputSequenceId` |
 | **Generational** (slab index + generation) | `ElementId`, `RenderId`, `UiRuntimeId`, `DataTransferId`, `PresentationId` |
 | **Composite** | `PresentationAddress` (a `UiRuntimeId` plus a `PresentationId`) |
 

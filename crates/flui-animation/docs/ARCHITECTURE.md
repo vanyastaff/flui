@@ -550,8 +550,9 @@ the changelog fragment rather than preserving parallel legacy spellings.
 ### Fixed values admit no listener identity
 
 `ConstantAnimation` drops value callbacks and recovery relays at admission.
-It returns the inert `ListenerId` at `usize::MAX`, which core notifier allocation
-cannot issue because it checks a representable successor before admission.
+It returns `Subscription::inert()`, which carries no `ListenerId` at all: a
+listener id is opaque and only a listener list's own mint issues one, so a
+source with no list has no id to hand out and none to collide with.
 No process counter, callback storage or wrap/reissue path is needed for a source
 that cannot notify. Value IDs otherwise remain source-scoped; status removal
 authority is bound to its source by `StatusSubscription`.

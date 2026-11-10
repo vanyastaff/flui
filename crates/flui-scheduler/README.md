@@ -189,18 +189,17 @@ let as_seconds: Seconds = elapsed.to_seconds();
 
 ### Type-Safe IDs
 
-Foundation IDs prevent ID type confusion at compile time; only a mint issues one:
+Callback and task ids are distinct opaque types; only a mint issues one, and
+none is built from a number:
 
 ```rust
-use std::num::NonZeroU64;
-use flui_foundation::{AtomicIdMint, TaskId};
+use flui_scheduler::{Priority, Task};
 
-let task_mint = AtomicIdMint::<TaskId>::new();
-let task_id = task_mint.next().expect("a fresh mint has ids to issue");
-
-// An `Id` names exactly one domain - ids of different domains
-// are different types and can't be accidentally mixed!
-// task_id == frame_id  // Compile error: different domains!
+let first = Task::new(Priority::Build, || {});
+let second = Task::new(Priority::Build, || {});
+// Ids of one domain are never issued twice; a `TaskId` and a
+// `CallbackId` are different types and can't be mixed.
+assert_ne!(first.id(), second.id());
 ```
 
 ### Builder Pattern

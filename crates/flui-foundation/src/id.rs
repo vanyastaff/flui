@@ -687,28 +687,6 @@ ids! {
         /// `SemanticsNode`s provide accessibility information for screen readers
         /// and other assistive technologies.
         pub type SemanticsId Semantics;
-
-        /// Listener ID - identifier for registered listeners.
-        ///
-        /// Used by `ChangeNotifier` and `Listenable` to track registered
-        /// callbacks. Minted only by an [`IdMint`](crate::IdMint) owned by
-        /// the listener list; never reissued, never wrapped.
-        pub type ListenerId Listener;
-
-        /// Frame Callback ID - scheduler frame callback identifier.
-        ///
-        /// Identifies scheduled frame callbacks in the scheduler binding.
-        /// Minted only by an [`AtomicIdMint`](crate::AtomicIdMint), where
-        /// the scheduler's threads race to mint them.
-        pub type FrameCallbackId FrameCallback;
-
-        /// Task ID - scheduler task identifier.
-        ///
-        /// Identifies tasks in the priority-based task queue. Minted only by
-        /// an [`AtomicIdMint`](crate::AtomicIdMint), where the scheduler's
-        /// threads race to mint them.
-        pub type TaskId Task;
-
     }
     generational: {
         /// Render ID - **generational** key into the `RenderObject` tree.

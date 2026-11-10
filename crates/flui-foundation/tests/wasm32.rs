@@ -20,7 +20,10 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_foundation::{ManualClock, MonotonicClock, SystemClock, WasmNotSendSync};
+use flui_foundation::{
+    AtomicIdMint, FrameCallbackId, IdMint, ListenerId, ManualClock, MonotonicClock, SystemClock,
+    TaskId, WasmNotSendSync,
+};
 use std::time::Duration;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -74,4 +77,23 @@ fn the_wasm_blanket_impl_accepts_a_type_that_is_neither_send_nor_sync() {
     let returned = takes(Rc::clone(&shared));
     returned.set(returned.get() + 1);
     assert_eq!(shared.get(), 8, "the value did not survive the bound");
+}
+
+/// Listener, frame-callback and task ids are 64-bit on every target. On
+/// wasm32 a pointer-width id would refuse once `u32::MAX` registrations had
+/// been minted, so a long-lived listener list could run out where a native
+/// one never does; the mint must hand out the ids past that point here.
+#[wasm_bindgen_test]
+fn minted_listener_and_scheduler_ids_do_not_stop_at_the_pointer_width() {
+    let past_u32 = u64::from(u32::MAX);
+    let listeners = IdMint::<ListenerId>::starting_after(past_u32);
+    assert_eq!(
+        listeners.next().map(ListenerId::get),
+        Ok(past_u32 + 1),
+        "a listener mint refused at the pointer width"
+    );
+    let callbacks = IdMint::<FrameCallbackId>::starting_after(past_u32);
+    assert_eq!(callbacks.next().map(FrameCallbackId::get), Ok(past_u32 + 1));
+    let tasks = AtomicIdMint::<TaskId>::starting_after(past_u32);
+    assert_eq!(tasks.next().map(TaskId::get), Ok(past_u32 + 1));
 }

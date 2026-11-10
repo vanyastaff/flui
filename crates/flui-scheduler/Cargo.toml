@@ -20,7 +20,7 @@ autotests = false
 exclude = ["/ARCHITECTURE.md", "/benches/"]
 
 [dependencies]
-# Flui foundation (for the generic Id<T: Marker> system: TaskId, FrameCallbackId;
+# Flui foundation (the minted TaskId and FrameCallbackId and their IdMint family;
 # and MonotonicClock/ManualClock/SystemClock, which FrameClock's ClockSource reuses)
 flui-foundation = { workspace = true }
 

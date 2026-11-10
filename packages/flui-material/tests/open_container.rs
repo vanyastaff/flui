@@ -25,7 +25,7 @@ use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     ColoredBox, Column, CrossAxisAlignment, MainAxisSize, NavigatorHandle, Padding, PageRoute,
-    Routable, RouteParseError, RoutePath, Router, ScrollController, Semantics,
+    Routable, RouteParseError, RoutePath, RouteResultError, Router, ScrollController, Semantics,
     SingleChildScrollView, SizedBox, Transform, WidgetsApp,
 };
 use flui_testing::{Action, ActionRequest, TreeId};
@@ -50,6 +50,9 @@ const CLOSED_RADIUS: f64 = 12.0;
 const CLOSED_LABEL: &str = "Open details";
 const PAGE_LABEL: &str = "Details page";
 
+/// What `on_closed` received for one closing.
+type Closed = Result<Option<i32>, RouteResultError>;
+
 struct Rig {
     navigator: Rc<RefCell<Option<NavigatorHandle>>>,
     /// Space above the app, from [`Setup::inset`].
@@ -59,7 +62,7 @@ struct Rig {
     app: LaidOut,
     registry: Vsync,
     scroll: ScrollController,
-    results: Rc<RefCell<Vec<Option<i32>>>>,
+    results: Rc<RefCell<Vec<Closed>>>,
     close: Rc<RefCell<Option<CloseAction<i32>>>>,
     open: Rc<RefCell<Option<OpenAction>>>,
 }
@@ -468,7 +471,7 @@ fn the_transitions_fade_content_on_their_own_schedules() {
 }
 
 /// Closing with a value resolves `on_closed` with it, closing with none
-/// resolves `None`, and the source comes back each time.
+/// resolves `Ok(None)`, and the source comes back each time.
 fn pop_with_a_result_resolves_on_closed() {
     let mut rig = rig(ContainerTransition::Fade);
     rig.open();
@@ -491,7 +494,11 @@ fn pop_with_a_result_resolves_on_closed() {
     );
     rig.app.pump_for(ms(150));
     rig.finish_exit();
-    assert_eq!(*rig.results.borrow(), vec![Some(7)], "the result arrives");
+    assert_eq!(
+        *rig.results.borrow(),
+        vec![Ok(Some(7))],
+        "the result arrives"
+    );
     assert_closed_again(&rig);
     assert_eq!(rig.routes(), 1, "the page left the navigator");
 
@@ -499,7 +506,7 @@ fn pop_with_a_result_resolves_on_closed() {
     rig.settle();
     rig.dismiss();
     rig.finish_exit();
-    assert_eq!(*rig.results.borrow(), vec![Some(7), None]);
+    assert_eq!(*rig.results.borrow(), vec![Ok(Some(7)), Ok(None)]);
     assert_closed_again(&rig);
 }
 
@@ -584,7 +591,7 @@ fn reduced_motion_settles_on_the_first_frame() {
     assert!(sample_of(&rig.app, PAGE).is_none(), "the page is gone");
     rig.finish_exit();
     assert_closed_again(&rig);
-    assert_eq!(*rig.results.borrow(), vec![None]);
+    assert_eq!(*rig.results.borrow(), vec![Ok(None)]);
 }
 
 /// The closed container is one button; while the page flies neither the frozen
@@ -768,7 +775,7 @@ fn a_zero_duration_opens_at_once() {
     rig.dismiss();
     rig.finish_exit();
     assert_closed_again(&rig);
-    assert_eq!(*rig.results.borrow(), vec![None]);
+    assert_eq!(*rig.results.borrow(), vec![Ok(None)]);
 }
 
 /// Under a `Router`, whose navigator admits only popups, the container still
@@ -797,7 +804,7 @@ fn it_opens_under_a_router() {
     assert!(close_action.close_with(3));
     rig.app.pump_for(Duration::ZERO);
     rig.finish_exit();
-    assert_eq!(*rig.results.borrow(), vec![Some(3)]);
+    assert_eq!(*rig.results.borrow(), vec![Ok(Some(3))]);
     assert_closed_again(&rig);
 }
 

@@ -12,8 +12,9 @@
 //!
 //! [`TextureLayer`]: crate::TextureLayer
 
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{collections::HashMap, fmt, num::NonZeroU64, sync::Arc};
 
+use flui_foundation::IdMint;
 use flui_foundation::panic::PanicRecovery;
 use flui_painting::paint::{Image, TextureId};
 use parking_lot::Mutex;
@@ -35,14 +36,16 @@ struct State {
     exhausted: bool,
     live: HashMap<TextureId, Entry>,
     retired: Vec<TextureId>,
-    next_listener: u64,
+    /// Listener keys, issued under this lock and never reissued: a
+    /// reissued key could remove another guard's listener.
+    listener_keys: IdMint<NonZeroU64>,
 }
 
 #[derive(Default)]
 struct Entry {
     pending: Option<Image>,
     revision: u64,
-    listeners: Vec<(u64, Listener)>,
+    listeners: Vec<(NonZeroU64, Listener)>,
 }
 
 type Listener = Arc<dyn Fn() + Send + Sync>;
@@ -138,13 +141,14 @@ impl TextureRegistry {
         id: TextureId,
         listener: impl Fn() + Send + Sync + 'static,
     ) -> Option<TextureListener> {
-        let mut state = self.shared.state.lock();
-        let key = state.next_listener;
-        // `u64::MAX` is never issued, so the counter stays exhausted.
-        let next = key.checked_add(1)?;
+        let mut guard = self.shared.state.lock();
+        let state = &mut *guard;
+        // Liveness first: a listen on a dead id spends no key.
         let entry = state.live.get_mut(&id)?;
+        // The mint's refusal is sticky, so once exhausted every later
+        // `listen` refuses too.
+        let key = state.listener_keys.next().ok()?;
         entry.listeners.push((key, Arc::new(listener)));
-        state.next_listener = next;
         Some(TextureListener {
             registry: self.clone(),
             id,
@@ -260,7 +264,7 @@ impl fmt::Debug for TextureRegistration {
 pub struct TextureListener {
     registry: TextureRegistry,
     id: TextureId,
-    key: u64,
+    key: NonZeroU64,
 }
 
 impl Drop for TextureListener {
@@ -298,9 +302,9 @@ mod tests {
         let registry = TextureRegistry::new(Arc::new(|| {}));
         let texture = registry.register().expect("id");
         let id = texture.id();
-        registry.shared.state.lock().next_listener = u64::MAX - 1;
+        registry.shared.state.lock().listener_keys = IdMint::starting_after(u64::MAX - 1);
         let last = registry.listen(id, || {}).expect("the last key");
-        assert_eq!(last.key, u64::MAX - 1);
+        assert_eq!(last.key.get(), u64::MAX);
         for _ in 0..2 {
             assert!(registry.listen(id, || {}).is_none());
         }

@@ -629,7 +629,7 @@ impl<T> fmt::Debug for TransitionRoute<T> {
     }
 }
 
-impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
+impl<T: 'static> Route for TransitionRoute<T> {
     type Output = T;
 
     fn settings(&self) -> &RouteSettings {
@@ -637,7 +637,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
     }
 
     fn current_result(&mut self) -> Option<T> {
-        self.current_result.clone()
+        self.current_result.take()
     }
 
     /// Finished when the controller is dismissed and the pop is not yet finalized.
@@ -812,7 +812,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
     }
 }
 
-impl<T: Send + Clone + 'static> NavigatorRoute for TransitionRoute<T> {
+impl<T: 'static> NavigatorRoute for TransitionRoute<T> {
     fn content_builder(&self) -> RouteContentBuilder {
         Rc::clone(&self.builder)
     }

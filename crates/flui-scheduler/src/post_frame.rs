@@ -229,14 +229,18 @@ impl OwnerFrame {
         Self::with_tasks(scheduler, TaskStore::new())
     }
 
-    /// As [`new`](Self::new), issuing task ids from `first`: a test reaches
-    /// the identity-exhaustion boundary without spawning `u64::MAX` tasks.
+    /// As [`try_new`](Self::try_new), issuing task ids after `last`: a test
+    /// reaches the identity-exhaustion boundary without spawning `u64::MAX`
+    /// tasks.
     #[cfg(test)]
-    pub(crate) fn with_first_task_id(
+    pub(crate) fn with_task_ids_after(
         scheduler: &UpdateScheduler,
-        first: u64,
+        last: u64,
     ) -> Result<Self, OwnerFrameError> {
-        Self::with_tasks(scheduler, TaskStore::with_first_id(first))
+        Self::with_tasks(
+            scheduler,
+            TaskStore::with_ids(flui_foundation::IdMint::starting_after(last)),
+        )
     }
 
     fn with_tasks(scheduler: &UpdateScheduler, tasks: TaskStore) -> Result<Self, OwnerFrameError> {

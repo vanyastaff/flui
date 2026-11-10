@@ -153,7 +153,7 @@ fn double_pop_or_double_remove_does_not_double_complete() {
     let (top, result) = history.push(Probe::new(&log));
 
     history.remove_route(top, Some(boxed(1)));
-    assert_eq!(result.try_take(), Some(Some(1)));
+    assert_eq!(result.try_take(), Some(Ok(Some(1))));
 
     // The entry is gone; a second removal finds nothing.
     assert!(!history.remove_route(top, Some(boxed(2))));
@@ -343,7 +343,11 @@ fn route_binding_finalize_during_flush_is_deferred_not_reentrant() {
         "the finalized route was disposed and dropped"
     );
     assert_eq!(history.len(), 1);
-    assert_eq!(result.try_take(), Some(Some(5)), "and it still completed");
+    assert_eq!(
+        result.try_take(),
+        Some(Ok(Some(5))),
+        "and it still completed"
+    );
     assert_eq!(
         history.last_flush_passes(),
         2,
