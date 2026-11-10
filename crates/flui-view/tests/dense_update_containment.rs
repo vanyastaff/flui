@@ -229,6 +229,9 @@ struct UpdateRecoveryExpectation {
     slot: usize,
     failed_view_type_id: TypeId,
     panic_classification: PanicClassification,
+    /// The resident was moved to `slot` before it failed: a render update runs in the
+    /// element's own build, after the parent's reconcile placed it at its final slot.
+    resident_moved: bool,
 }
 
 fn assert_update_recovery(
@@ -244,6 +247,7 @@ fn assert_update_recovery(
         slot,
         failed_view_type_id,
         panic_classification,
+        resident_moved,
     } = expected;
     let mut recovered = owner.take_recovered_panics();
     assert_eq!(recovered.len(), 1, "one update hook panic records once");
@@ -274,10 +278,18 @@ fn assert_update_recovery(
         })
         .copied()
         .collect();
+    let moved = resident_moved.then_some(DenseObservation::Move {
+        element: resident,
+        parent,
+        slot,
+    });
     assert_eq!(
         resident_events,
-        vec![DenseObservation::Unmount { element: resident }],
-        "the failed resident must unmount once without a stale move or rebuild"
+        moved
+            .into_iter()
+            .chain([DenseObservation::Unmount { element: resident }])
+            .collect::<Vec<_>>(),
+        "the failed resident must unmount once, after only the move to its final slot"
     );
 
     let substitute_events: Vec<_> = new_events
@@ -386,6 +398,7 @@ fn assert_phase_one_did_update_view_panic_containment(
             slot: PHASE_ONE_FAILED_SLOT,
             failed_view_type_id: TypeId::of::<DenseDidUpdateView>(),
             panic_classification: expected_classification,
+            resident_moved: false,
         },
     );
 }
@@ -443,6 +456,7 @@ pub(crate) fn phase_five_a_shifted_suffix_update_panic_uses_final_slot() {
             slot: 10,
             failed_view_type_id: TypeId::of::<DenseRenderUpdateLeaf>(),
             panic_classification: PanicClassification::Ordinary,
+            resident_moved: true,
         },
     );
 

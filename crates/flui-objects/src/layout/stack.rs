@@ -35,6 +35,7 @@ use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
+use flui_painting::typography::TextDirection;
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -73,20 +74,25 @@ pub struct PositionedSpec {
 }
 
 impl PositionedSpec {
-    /// Lifts a `StackParentData` into a typed positioning view.
+    /// Lifts a `StackParentData` into a typed positioning view, resolving its
+    /// [`HorizontalInsets`](flui_rendering::parent_data::HorizontalInsets)
+    /// against `text_direction`: a directional `start` is the left inset in
+    /// left-to-right text and the right one in right-to-left text, and `end`
+    /// the opposite.
     ///
-    /// Returns `None` when none of the six positioning fields is set —
+    /// Returns `None` when none of the positioning fields is set —
     /// i.e. when the child is "non-positioned" and should be sized by
     /// the [`StackFit`] / aligned by the stack's [`Alignment`].
-    pub fn from_parent_data(pd: &StackParentData) -> Option<Self> {
+    pub fn from_parent_data(pd: &StackParentData, text_direction: TextDirection) -> Option<Self> {
         if !pd.is_positioned() {
             return None;
         }
+        let (left, right) = pd.horizontal.resolve(text_direction);
         Some(Self {
             top: pd.top,
-            right: pd.right,
+            right,
             bottom: pd.bottom,
-            left: pd.left,
+            left,
             width: pd.width,
             height: pd.height,
         })
@@ -212,6 +218,9 @@ struct StackSizes {
 pub struct RenderStack {
     fit: StackFit,
     alignment: Alignment,
+    /// Reading direction used to resolve a positioned child's `start`/`end`
+    /// into physical `left`/`right`.
+    text_direction: TextDirection,
     clip_behavior: Clip,
     /// Computed during layout — read by
     /// [`RenderStack::has_visual_overflow`].
@@ -229,6 +238,7 @@ impl RenderStack {
         Self {
             fit: StackFit::Loose,
             alignment: Alignment::TOP_LEFT,
+            text_direction: TextDirection::Ltr,
             clip_behavior: Clip::HardEdge,
             has_visual_overflow: false,
             child_count: 0,
@@ -249,6 +259,13 @@ impl RenderStack {
     #[must_use]
     pub const fn with_alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
+        self
+    }
+
+    /// Builder: set the reading direction used to resolve `start`/`end`.
+    #[must_use]
+    pub const fn with_text_direction(mut self, text_direction: TextDirection) -> Self {
+        self.text_direction = text_direction;
         self
     }
 
@@ -299,6 +316,18 @@ impl RenderStack {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.alignment = alignment;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
+    /// Updates the reading direction and reports layout when changed.
+    pub fn set_text_direction(
+        &mut self,
+        text_direction: TextDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.text_direction == text_direction {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.text_direction = text_direction;
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
@@ -472,7 +501,7 @@ impl RenderBox for RenderStack {
         for i in 0..child_count {
             specs.push(
                 ctx.child_parent_data(i)
-                    .and_then(PositionedSpec::from_parent_data),
+                    .and_then(|pd| PositionedSpec::from_parent_data(pd, self.text_direction)),
             );
         }
 
@@ -527,7 +556,7 @@ impl RenderBox for RenderStack {
         for i in 0..child_count {
             specs.push(
                 ctx.child_parent_data_as::<StackParentData>(i)
-                    .and_then(PositionedSpec::from_parent_data),
+                    .and_then(|pd| PositionedSpec::from_parent_data(pd, self.text_direction)),
             );
         }
         // PositionedSpec is Copy — no reference to ctx survives into the closure.
@@ -561,7 +590,7 @@ impl RenderBox for RenderStack {
         let specs: Vec<_> = (0..ctx.child_count())
             .map(|i| {
                 ctx.child_parent_data_as::<StackParentData>(i)
-                    .and_then(PositionedSpec::from_parent_data)
+                    .and_then(|pd| PositionedSpec::from_parent_data(pd, self.text_direction))
             })
             .collect();
         let sized = self.compute_size(constraints, &specs, |i, c| ctx.child_dry_layout(i, c))?;
@@ -696,6 +725,13 @@ impl RenderIndexedStack {
         self
     }
 
+    /// Builder: set the reading direction used to resolve `start`/`end`.
+    #[must_use]
+    pub const fn with_text_direction(mut self, text_direction: TextDirection) -> Self {
+        self.stack.text_direction = text_direction;
+        self
+    }
+
     /// Builder: set the clip behavior used when any child geometry overflows.
     #[must_use]
     pub const fn with_clip_behavior(mut self, clip_behavior: Clip) -> Self {
@@ -752,6 +788,14 @@ impl RenderIndexedStack {
         self.stack.set_alignment(alignment)
     }
 
+    /// Updates the reading direction and reports its exact impact.
+    pub fn set_text_direction(
+        &mut self,
+        text_direction: TextDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.stack.set_text_direction(text_direction)
+    }
+
     /// Updates the clip behavior and reports its exact impact.
     pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         self.stack.set_clip_behavior(clip_behavior)
@@ -770,37 +814,42 @@ impl RenderIndexedStack {
     }
 
     fn build_specs_from_layout_ctx(
+        &self,
         ctx: &BoxLayoutContext<'_, Variable, StackParentData>,
     ) -> Vec<Option<PositionedSpec>> {
         let mut specs = Vec::with_capacity(ctx.child_count());
         for i in 0..ctx.child_count() {
-            specs.push(
-                ctx.child_parent_data(i)
-                    .and_then(PositionedSpec::from_parent_data),
-            );
+            specs
+                .push(ctx.child_parent_data(i).and_then(|pd| {
+                    PositionedSpec::from_parent_data(pd, self.stack.text_direction)
+                }));
         }
         specs
     }
 
-    fn build_specs_from_dry_layout_ctx(ctx: &BoxDryLayoutCtx<'_>) -> Vec<Option<PositionedSpec>> {
+    fn build_specs_from_dry_layout_ctx(
+        &self,
+        ctx: &BoxDryLayoutCtx<'_>,
+    ) -> Vec<Option<PositionedSpec>> {
         let mut specs = Vec::with_capacity(ctx.child_count());
         for i in 0..ctx.child_count() {
             specs.push(
                 ctx.child_parent_data_as::<StackParentData>(i)
-                    .and_then(PositionedSpec::from_parent_data),
+                    .and_then(|pd| PositionedSpec::from_parent_data(pd, self.stack.text_direction)),
             );
         }
         specs
     }
 
     fn build_specs_from_dry_baseline_ctx(
+        &self,
         ctx: &BoxDryBaselineCtx<'_>,
     ) -> Vec<Option<PositionedSpec>> {
         let mut specs = Vec::with_capacity(ctx.child_count());
         for i in 0..ctx.child_count() {
             specs.push(
                 ctx.child_parent_data_as::<StackParentData>(i)
-                    .and_then(PositionedSpec::from_parent_data),
+                    .and_then(|pd| PositionedSpec::from_parent_data(pd, self.stack.text_direction)),
             );
         }
         specs
@@ -839,7 +888,7 @@ impl RenderBox for RenderIndexedStack {
         self.reported_baselines = [None; 2];
         let displayed_index = self.displayed_index(child_count);
 
-        let specs = Self::build_specs_from_layout_ctx(ctx);
+        let specs = self.build_specs_from_layout_ctx(ctx);
         let sized = self
             .stack
             .compute_size(incoming, &specs, |i, c| ctx.layout_child(i, c))?;
@@ -891,7 +940,7 @@ impl RenderBox for RenderIndexedStack {
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
     ) -> flui_rendering::RenderResult<Size> {
-        let specs = Self::build_specs_from_dry_layout_ctx(ctx);
+        let specs = self.build_specs_from_dry_layout_ctx(ctx);
         self.stack
             .compute_size(constraints, &specs, |i, c| ctx.child_dry_layout(i, c))
             .map(|sized| sized.size)
@@ -947,7 +996,7 @@ impl RenderBox for RenderIndexedStack {
         let Some(displayed_index) = self.displayed_index(child_count) else {
             return Ok(None);
         };
-        let specs = Self::build_specs_from_dry_baseline_ctx(ctx);
+        let specs = self.build_specs_from_dry_baseline_ctx(ctx);
         let size = self
             .stack
             .compute_size(constraints, &specs, |i, c| ctx.child_dry_layout(i, c))?

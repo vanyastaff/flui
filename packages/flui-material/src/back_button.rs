@@ -22,11 +22,10 @@
 //! codepoint `0xE092`, font family `"Material Icons"`, `match_text_direction:
 //! true` — rather than inventing a substitute glyph or a hand-drawn path (no
 //! such drawn-path convention exists in this crate). **Named limitation:** no
-//! iOS/macOS-specific glyph switch, and (per `Icon`'s own docs)
-//! `match_text_direction` is carried on the data but not yet applied by
-//! `Icon::build` — both wait on their respective missing substrates
-//! (platform detection; RTL mirroring), not on anything specific to this
-//! type.
+//! iOS/macOS-specific glyph switch: it waits on platform detection, not on
+//! anything specific to this type. `match_text_direction` is applied: under a
+//! right-to-left `Directionality`, `Icon` mirrors the arrow so it points to the
+//! reading start.
 
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{Icon, IconData, NavigatorHandle};

@@ -1057,6 +1057,110 @@ impl<V: RenderView> Default for RenderBehavior<V> {
     }
 }
 
+impl<V: RenderView> RenderBehavior<V> {
+    /// Push the current view's configuration onto the live render object
+    /// through `RenderView::update_render_object`.
+    ///
+    /// It runs from `build_into_views`: a render element that took a new view
+    /// (the dispatch marks it dirty, and every update caller schedules a dirty
+    /// child) and one an inherited provider notified both reach it, so the hook
+    /// runs once per rebuild. Inside a `build_scope` drain the context carries
+    /// the borrowed tree, so `RenderObjectContext::depend_on` resolves and
+    /// records. The two behaviors that build their child themselves
+    /// (`LayoutBuilder`, the persistent headers) call it from `on_update`
+    /// instead, with a tree-less context.
+    ///
+    /// The user hook runs under `catch_unwind`, inside the `with_mut` borrow
+    /// that hands it the render object, and the unwind resumes only after that
+    /// borrow is released. A caught panic is staged through the armed lifecycle
+    /// handoff, so the `build_scope` seam replaces this element with the
+    /// registered `ErrorView` (ADR-0287), and the half-applied render object
+    /// goes with it; `apply_render_update_impact` is not reached for it. From
+    /// `on_update` no handoff is armed and the unwind reaches the update's own
+    /// containment window, which substitutes the same way.
+    ///
+    /// An element mounted with no `PipelineOwner` in scope (a render-less
+    /// unit-test tree) minted no render object in `on_mount` — that path warns
+    /// and continues — so there is nothing here to update either. The symmetric
+    /// tolerance keeps such a tree usable. Every other half-state is the
+    /// invariant violation it always was: an owner without a render id means
+    /// `on_mount` failed to mint, a render id without an owner means the owner
+    /// was withdrawn under a live node.
+    pub(crate) fn push_config<A>(
+        &mut self,
+        core: &ElementCore<V, A>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) where
+        A: ElementArity,
+        flui_rendering::storage::RenderNode:
+            From<Box<dyn flui_rendering::traits::RenderObject<V::Protocol>>>,
+    {
+        let (render_id, pipeline_owner) = match (self.render_id, core.pipeline_owner()) {
+            (Some(render_id), Some(owner)) => (render_id, owner),
+            (None, None) => {
+                tracing::trace!(
+                    "RenderBehavior::push_config skipped: mounted without a PipelineOwner, \
+                     no render object to update"
+                );
+                return;
+            }
+            (None, Some(_)) => {
+                panic!("BUG: RenderBehavior with a PipelineOwner must own a RenderId during update")
+            }
+            (Some(_), None) => {
+                panic!("BUG: active RenderBehavior must have a PipelineOwner during update")
+            }
+        };
+        let ctx = match (owner.build_view, core.self_id()) {
+            (Some(handle), Some(element_id)) => crate::RenderObjectContext::for_rebuild(
+                owner.interaction_dispatch.as_ref(),
+                Some(owner.reactive),
+                handle.tree,
+                element_id,
+                core.depth(),
+                handle.dep_sink,
+            ),
+            _ => crate::RenderObjectContext::new(
+                owner.interaction_dispatch.as_ref(),
+                Some(owner.reactive),
+            ),
+        };
+        let outcome = pipeline_owner.with_mut(|pipeline_owner| {
+            let node = pipeline_owner
+                .render_tree_mut()
+                .get_mut(render_id)
+                .expect("BUG: RenderBehavior's RenderId must resolve to a live node during update");
+            let render_object = node.downcast_render_object_mut::<V::RenderObject>().expect(
+                "BUG: RenderBehavior's live node must match RenderView::RenderObject during update",
+            );
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a view's update_render_object panic replaces the element with an ErrorView"
+            )]
+            std::panic::catch_unwind(AssertUnwindSafe(|| {
+                core.view().update_render_object(&ctx, render_object)
+            }))
+        });
+        let impact = match outcome {
+            Ok(impact) => impact,
+            Err(payload) => {
+                owner.record_armed_lifecycle_panic(
+                    core.self_id(),
+                    core.creation_site(),
+                    TypeId::of::<V>(),
+                    LifecycleHook::Update,
+                    payload.as_ref(),
+                    "updating the render object of RenderElement",
+                );
+                std::panic::resume_unwind(payload);
+            }
+        };
+        pipeline_owner.with_mut(|pipeline_owner| {
+            pipeline_owner.apply_render_update_impact(render_id, impact);
+        });
+    }
+}
+
 impl<V, A> ElementBehavior<V, A> for RenderBehavior<V>
 where
     V: RenderView,
@@ -1081,7 +1185,7 @@ where
     fn build_into_views(
         &mut self,
         core: &mut ElementCore<V, A>,
-        _owner: &mut crate::ElementOwner<'_>,
+        owner: &mut crate::ElementOwner<'_>,
     ) -> Vec<Box<dyn View>> {
         if !core.should_build() {
             tracing::trace!(
@@ -1107,6 +1211,11 @@ where
                 child_views.push(dyn_clone::clone_box(child_view));
             });
         }
+
+        // Every rebuild pushes the configuration: a swapped view (`on_update`
+        // pushes nothing) and an inherited-data change both arrive here, with
+        // the tree borrowed so `update_render_object`'s `depend_on` resolves.
+        self.push_config(core, owner);
 
         core.clear_dirty();
 
@@ -1274,53 +1383,18 @@ where
         self.render_id = None;
     }
 
-    fn on_update(&mut self, core: &ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        // Apply the widget's new configuration to the *existing* render object
-        // before marking it dirty (`update_render_object`). Without this the
-        // render object keeps its `create_render_object()` configuration and a
-        // `setState` that changes a render-object widget (padding, size, text,
-        // colour, …) would never be reflected after the first frame.
-        // An element mounted with no `PipelineOwner` in scope (a render-less
-        // unit-test tree) minted no render object in `on_mount` — that path
-        // warns and continues — so there is nothing here to update either.
-        // The symmetric tolerance keeps such a tree usable. Every other
-        // half-state is still the invariant violation it always was: an owner
-        // without a render id means `on_mount` failed to mint, a render id
-        // without an owner means the owner was withdrawn under a live node.
-        let (render_id, pipeline_owner) = match (self.render_id, core.pipeline_owner()) {
-            (Some(render_id), Some(owner)) => (render_id, owner),
-            (None, None) => {
-                tracing::trace!(
-                    "RenderBehavior::on_update skipped: mounted without a PipelineOwner, \
-                     no render object to update"
-                );
-                return;
-            }
-            (None, Some(_)) => {
-                panic!("BUG: RenderBehavior with a PipelineOwner must own a RenderId during update")
-            }
-            (Some(_), None) => {
-                panic!("BUG: active RenderBehavior must have a PipelineOwner during update")
-            }
-        };
-        let ctx = crate::RenderObjectContext::new(
-            owner.interaction_dispatch.as_ref(),
-            Some(owner.reactive),
-        );
-        let impact = pipeline_owner.with_mut(|pipeline_owner| {
-            let node = pipeline_owner
-                .render_tree_mut()
-                .get_mut(render_id)
-                .expect("BUG: RenderBehavior's RenderId must resolve to a live node during update");
-            let render_object = node.downcast_render_object_mut::<V::RenderObject>().expect(
-                "BUG: RenderBehavior's live node must match RenderView::RenderObject during update",
-            );
-            core.view().update_render_object(&ctx, render_object)
-        });
-        pipeline_owner.with_mut(|pipeline_owner| {
-            pipeline_owner.apply_render_update_impact(render_id, impact);
-        });
-    }
+    /// A view swap pushes nothing here. The dispatch that swapped the view
+    /// marked the element dirty, and every caller of an element update
+    /// schedules a dirty child (the dense and sparse reconcilers, and the
+    /// `GlobalKey` retakes through the reconcile result), so `build_into_views`
+    /// runs in the same drain and pushes the configuration once, with the tree
+    /// borrowed so that `RenderObjectContext::depend_on` resolves. Pushing a
+    /// tree-less configuration here as well would publish a stand-in value
+    /// (`Ltr` for a widget under `Rtl`) and invalidate twice. A view equal to
+    /// the held one (`View::should_skip_rebuild`) leaves the element clean: its
+    /// configuration did not change, and an inherited change reaches it as a
+    /// dependency rebuild.
+    fn on_update(&mut self, _core: &ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {}
 }
 
 // Helper function for RenderObject insertion

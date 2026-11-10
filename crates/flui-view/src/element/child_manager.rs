@@ -112,6 +112,18 @@ pub(crate) trait ChildManager {
     /// subtree.
     fn forget_child(&mut self, child: flui_foundation::ElementId);
 
+    /// Whether `child` is the resident at `logical_index`.
+    fn holds_resident(&self, logical_index: usize, child: flui_foundation::ElementId) -> bool;
+
+    /// Re-point `logical_index` from `failed` to `replacement`, the error child
+    /// mounted in its place after `failed` panicked while it rebuilt.
+    fn replace_resident(
+        &mut self,
+        logical_index: usize,
+        failed: flui_foundation::ElementId,
+        replacement: flui_foundation::ElementId,
+    );
+
     /// Ownership edges for lifecycle traversal, distinct from dense reconcile slots.
     fn snapshot_children(&self) -> Vec<flui_foundation::ElementId>;
 

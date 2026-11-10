@@ -88,8 +88,9 @@ pub use base::ParentData;
 pub use box_parent_data::BoxParentData;
 // Box variants
 pub use box_variants::{
-    ContainerBoxParentData, FlexFit, FlexParentData, FlowParentData, ListBodyParentData,
-    ListWheelParentData, MultiChildLayoutParentData, StackParentData, WrapParentData,
+    ContainerBoxParentData, FlexFit, FlexParentData, FlowParentData, HorizontalInsets,
+    ListBodyParentData, ListWheelParentData, MultiChildLayoutParentData, StackParentData,
+    WrapParentData,
 };
 // Mixins
 pub use container_mixin::ContainerParentDataMixin;
@@ -133,8 +134,9 @@ pub mod prelude {
     pub use super::{BoxParentData, SliverParentData};
     // Box variants
     pub use super::{
-        ContainerBoxParentData, FlexFit, FlexParentData, FlowParentData, ListBodyParentData,
-        ListWheelParentData, MultiChildLayoutParentData, StackParentData, WrapParentData,
+        ContainerBoxParentData, FlexFit, FlexParentData, FlowParentData, HorizontalInsets,
+        ListBodyParentData, ListWheelParentData, MultiChildLayoutParentData, StackParentData,
+        WrapParentData,
     };
     // Mixins
     pub use super::ContainerParentDataMixin;
@@ -155,8 +157,8 @@ pub mod prelude {
 pub mod r#box {
     pub use super::{
         BoxParentData, ContainerBoxParentData, FlexFit, FlexParentData, FlowParentData,
-        ListBodyParentData, ListWheelParentData, MultiChildLayoutParentData, StackParentData,
-        TableCellParentData, TableCellVerticalAlignment, WrapParentData,
+        HorizontalInsets, ListBodyParentData, ListWheelParentData, MultiChildLayoutParentData,
+        StackParentData, TableCellParentData, TableCellVerticalAlignment, WrapParentData,
     };
 }
 

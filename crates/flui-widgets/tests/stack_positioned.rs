@@ -4,8 +4,9 @@
 //! family end-to-end (offsets and resolved sizes).
 
 use crate::common::{lay_out, offset, size, tight};
+use flui_painting::typography::TextDirection;
 use flui_widgets::row;
-use flui_widgets::{Positioned, SizedBox, Stack};
+use flui_widgets::{Directionality, Positioned, SizedBox, Stack};
 
 pub(crate) fn positioned_places_child_at_explicit_edges() {
     // A 200×200 stack with a 50×50 child pinned 10 from the left, 20 from top.
@@ -24,6 +25,36 @@ pub(crate) fn positioned_places_child_at_explicit_edges() {
     let child = laid.only_child(root);
     assert_eq!(laid.size(child), size(50.0, 50.0));
     assert_eq!(laid.offset(child), offset(10.0, 20.0));
+}
+
+/// `Positioned::directional`'s `start`/`end` resolve against the ambient `Directionality`:
+/// `start` is the left edge in LTR and the right edge in RTL.
+pub(crate) fn positioned_start_resolves_against_directionality() {
+    let child = || {
+        Positioned::directional(SizedBox::new(50.0, 50.0))
+            .start(10.0)
+            .top(20.0)
+    };
+
+    let ltr = lay_out(
+        Directionality::new(TextDirection::Ltr, Stack::new(row![child()])),
+        tight(200.0, 200.0),
+    );
+    assert_eq!(
+        ltr.offset(ltr.only_child(ltr.root())),
+        offset(10.0, 20.0),
+        "start = left in LTR"
+    );
+
+    let rtl = lay_out(
+        Directionality::new(TextDirection::Rtl, Stack::new(row![child()])),
+        tight(200.0, 200.0),
+    );
+    assert_eq!(
+        rtl.offset(rtl.only_child(rtl.root())),
+        offset(140.0, 20.0),
+        "start = right in RTL: 200 - 10 - 50"
+    );
 }
 
 // ============================================================================

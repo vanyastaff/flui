@@ -1521,8 +1521,7 @@ impl BuildOwner {
         let _ = self.drain_prepared_build_target(tree, target, live_scopes.as_ref());
     }
 
-    /// Finish a parented lifecycle recovery after the panicking element has
-    /// been restored to its slab slot.
+    /// Finish a parented lifecycle recovery once the panicking element is back in its slab slot.
     ///
     /// The configurable view factory is the last fallible step before the
     /// destructive replacement transaction begins. A factory unwind retains
@@ -1545,7 +1544,7 @@ impl BuildOwner {
         staged.locate_in(tree);
         let error = crate::view::FrameworkError::from_panic(
             payload.as_ref(),
-            "running a stateful lifecycle hook during rebuild",
+            "running a lifecycle hook during rebuild",
         );
         #[expect(
             clippy::disallowed_methods,
@@ -1564,7 +1563,15 @@ impl BuildOwner {
         self.dirty_reasons.remove(&failed);
         self.pending_dependency_changes.remove(&failed);
         let mut element_owner = self.element_owner_mut();
-        tree.replace_child_with(parent, slot, &recovery_view, &mut element_owner);
+        let substitute = crate::element::sparse_children::replace_failed_child(
+            parent,
+            slot,
+            failed,
+            &recovery_view,
+            tree,
+            &mut element_owner,
+        );
+        staged.substituted_by(substitute, parent, slot);
         element_owner.commit_staged_lifecycle_panic(staged);
     }
 
@@ -1799,10 +1806,10 @@ impl BuildOwner {
             // Run the build half under `catch_unwind` so the extracted element
             // is ALWAYS restored to its slot before this seam decides whether
             // to substitute or propagate. User `build()` is already recovered
-            // one level down. The two stateful lifecycle calls reachable here
-            // catch only their literal user-hook expressions, stage only when
-            // this parented seam arms them, and rethrow into this guard. Any
-            // other unwind remains unrecorded and propagates after restoration.
+            // one level down. The lifecycle calls reachable here (stateful hooks,
+            // `update_render_object`) catch only their literal user-hook expressions,
+            // stage only when this parented seam arms them, and rethrow into this
+            // guard. Any other unwind remains unrecorded and propagates after restoration.
             // `AssertUnwindSafe` is sound because the sole cross-unwind
             // invariant — the slot is whole again — is re-established by the
             // unconditional `put_element` below.

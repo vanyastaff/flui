@@ -2248,8 +2248,8 @@ impl ElementTree {
     }
 
     /// [`update`](Self::update)'s fallible core: the element's own `update`
-    /// (`ViewState::did_update_view` / `RenderView::update_render_object`)
-    /// is the containment window, and a caught panic comes back as `Err`
+    /// (`ViewState::did_update_view`, or a self-building behavior's
+    /// `update_render_object`) is the containment window, and a caught panic comes back as `Err`
     /// instead of unwinding through this call. Reading and cloning the new
     /// view's key happens before that literal window, so a key implementation
     /// panic remains an unbounded framework-input failure and user `update`
