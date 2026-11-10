@@ -247,13 +247,12 @@ pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
 // Monotonic time source (OS / virtual clock) — foundational primitive injected
 // by deadline- and frame-driven subsystems (gesture arena, headless binding).
 pub use clock::{ManualClock, MonotonicClock, SystemClock, event_epoch};
+pub use consts::EPSILON;
 pub use creation_site::CreationSite;
 pub use sequence::{AtomicIdMint, DragSessionId, IdExhausted, IdMint, InputSequenceId, MintedId};
 pub use text_direction::TextDirection;
 pub use ticket::{Ticket, TicketSource};
 pub use tree_error::{PathEntry, TREE_CONTEXT_DEPTH, TreeContext, TreeError};
-// Constants
-pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};
 // Window-runtime generation/version counters + commit-time freshness gate.
 pub use epoch::{
     FrameEpoch, GenerationGate, GpuResourceGeneration, ResourceGeneration, SurfaceGeneration,
@@ -319,14 +318,9 @@ pub mod prelude {
     pub use crate::{
         // Change notification
         ChangeNotifier,
-        // Constants
-        DEBUG_MODE,
         EPSILON,
         // IDs
         ElementId,
-        IS_DESKTOP,
-        IS_MOBILE,
-        IS_WEB,
         // Generic ID system
         Id,
         Identifier,
@@ -339,7 +333,6 @@ pub mod prelude {
         ListenerId,
         PresentationAddress,
         PresentationId,
-        RELEASE_MODE,
         RenderId,
         SemanticsId,
         TreeId,

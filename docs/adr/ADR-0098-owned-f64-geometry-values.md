@@ -84,7 +84,7 @@ doc comment names the invariant (§5's `DevicePixelRatio` and `DeviceF64` are tw
   before moving it.
 - **One widening point.** Parley's `f32` metrics widen at the text boundary; widening is exact.
 - **Tolerances follow Flutter's scale.** Scroll-axis comparisons use Flutter's
-  `precisionErrorTolerance` (1e-10). Every `EPSILON_F32` and `1e-3` layout tolerance is
+  `precisionErrorTolerance` (1e-10). Every single-precision epsilon and `1e-3` layout tolerance is
   re-derived.
 
 ### 3. Public value types
