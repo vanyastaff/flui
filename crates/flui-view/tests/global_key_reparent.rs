@@ -15,13 +15,6 @@
 //! new parent, and emits `from_parent: Some(old_parent)`.
 
 #![cfg(feature = "testing")]
-// ADR-0027: ElementBuildContext's current test/prod seam still takes
-// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
-// Send + Sync to satisfy clippy. Future UiRuntime/Rc migration should remove this.
-#![expect(clippy::arc_with_non_send_sync)]
-
-use std::sync::Arc;
-
 use flui_foundation::ViewKey;
 use flui_view::{
     BuildContext, BuildOwner, ElementTree, GlobalKey, IntoView, StatefulView, View, ViewExt,
@@ -31,7 +24,8 @@ use flui_view::{
         test_utils::{CollectedEvent, reconcile_children},
     },
 };
-use parking_lot::RwLock;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use crate::reconcile_capture::capture;
 
@@ -119,9 +113,9 @@ impl View for KeyedCounter {
 // Helpers
 // ============================================================================
 
-fn fresh_tree() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>) {
-    let tree = Arc::new(RwLock::new(ElementTree::new()));
-    let owner = Arc::new(RwLock::new(BuildOwner::new()));
+fn fresh_tree() -> (Rc<RefCell<ElementTree>>, Rc<RefCell<BuildOwner>>) {
+    let tree = Rc::new(RefCell::new(ElementTree::new()));
+    let owner = Rc::new(RefCell::new(BuildOwner::new()));
     flui_view::test_only_set_global_key_registry(&tree, &owner);
     (tree, owner)
 }
@@ -152,8 +146,8 @@ pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() 
     let (tree, owner) = fresh_tree();
 
     let parent_a = tree
-        .write()
-        .mount_root(&Spacer, &mut owner.write().element_owner_mut());
+        .borrow_mut()
+        .mount_root(&Spacer, &mut owner.borrow_mut().element_owner_mut());
     let key = GlobalKey::<CounterState>::new();
     let counter = KeyedCounter {
         key: key.clone(),
@@ -163,12 +157,12 @@ pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() 
 
     let initial_views: Vec<Box<dyn View>> = vec![Box::new(Spacer), Box::new(counter.clone())];
     reconcile_children(
-        &mut tree.write(),
+        &mut tree.borrow_mut(),
         parent_a,
         &initial_views,
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
-    let initial_children = direct_children_in_slot_order(&tree.read(), parent_a);
+    let initial_children = direct_children_in_slot_order(&tree.borrow(), parent_a);
     let parent_b = initial_children[0];
     let original_id = initial_children[1];
     assert_eq!(
@@ -181,22 +175,22 @@ pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() 
     let events = capture(|| {
         let views: Vec<Box<dyn View>> = vec![Box::new(counter.clone())];
         reconcile_children(
-            &mut tree.write(),
+            &mut tree.borrow_mut(),
             parent_b,
             &views,
-            &mut owner.write().element_owner_mut(),
+            &mut owner.borrow_mut().element_owner_mut(),
         );
         migrated_id.set(
-            direct_children_in_slot_order(&tree.read(), parent_b)
+            direct_children_in_slot_order(&tree.borrow(), parent_b)
                 .first()
                 .copied(),
         );
         let donor_views: Vec<Box<dyn View>> = vec![Box::new(Spacer)];
         reconcile_children(
-            &mut tree.write(),
+            &mut tree.borrow_mut(),
             parent_a,
             &donor_views,
-            &mut owner.write().element_owner_mut(),
+            &mut owner.borrow_mut().element_owner_mut(),
         );
     });
     let migrated_id = migrated_id.get().expect("active insert returned an id");
@@ -212,7 +206,7 @@ pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() 
     );
 
     {
-        let tree = tree.read();
+        let tree = tree.borrow();
         assert!(
             !direct_children_in_slot_order(&tree, parent_a).contains(&original_id),
             "old active parent must forget the moved GlobalKey child",

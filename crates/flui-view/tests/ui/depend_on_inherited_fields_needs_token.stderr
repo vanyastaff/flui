@@ -9,8 +9,8 @@ error[E0603]: module `build_context` is private
 note: the module `build_context` is defined here
  --> src/context/mod.rs
   |
-  | mod build_context;
-  | ^^^^^^^^^^^^^^^^^
+  | pub(crate) mod build_context;
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error[E0624]: associated function `new` is private
  --> tests/ui/depend_on_inherited_fields_needs_token.rs:8:72

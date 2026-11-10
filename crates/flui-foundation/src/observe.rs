@@ -169,14 +169,14 @@ impl ElementUnmounted {
 /// "mounts during build, unmounts at end of frame" would be false and is
 /// not the contract.
 ///
-/// # Threading, re-entrancy, and deadlock
+/// # Threading and re-entrancy
 ///
 /// Callbacks run on the UI runtime's owner thread, inside frame phases, while
-/// the UI runtime's locks are held. The contract is absolute: an observer
-/// callback must not call **any** flui-view binding, UI runtime, or owner API —
-/// the natural accessors take a non-reentrant read lock while the frame
-/// drive holds the write lock, which deadlocks the UI runtime thread in release
-/// builds. A callback may touch only its own state (atomics, lock-free
+/// the owner-local state is borrowed (ADR-0266: one owner thread, `Rc`/`RefCell`
+/// rather than locks). The contract is absolute: an observer callback must not
+/// call **any** flui-view binding, UI runtime, or owner API — the natural
+/// accessors re-borrow the owner-local `RefCell`s, which panics on a re-entrant
+/// borrow. A callback may touch only its own state (atomics, lock-free
 /// structures, `try_send` into a channel it owns) and must return promptly.
 /// Inspection-driven mutation must go through out-of-frame channels (a
 /// `RebuildHandle` used from *outside* the callback), never synchronously

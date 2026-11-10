@@ -201,8 +201,6 @@ positions = [
     { item = "impl flui_view::background::Background::compute", at = "impl-trait", marker = "Send" },
     { item = "impl flui_view::background::Background::io", at = "bound", marker = "Send", count = 2 },
     { item = "impl flui_view::background::Background::io", at = "impl-trait", marker = "Send" },
-    { item = "impl flui_view::binding::WidgetsBinding::set_on_need_frame", at = "bound", marker = "Send" },
-    { item = "impl flui_view::binding::WidgetsBinding::set_on_need_frame", at = "bound", marker = "Sync" },
     { item = "impl flui_view::dev_reload::ReloadWake::new", at = "bound", marker = "Send" },
     { item = "impl flui_view::dev_reload::ReloadWake::new", at = "bound", marker = "Sync" },
     { item = "impl flui_view::dev_reload::ReloadWake::new", at = "impl-trait", marker = "Send" },

@@ -76,11 +76,6 @@
 // `element/element.rs`, `view/view.rs`: a one-type family module named after
 // its type is the catalog's house style (matches flui-widgets/flui-objects).
 #![expect(clippy::module_inception)]
-// ADR-0027: the owner-plane view/element/build/global-key graph is intentionally
-// `!Send`, while existing internal handles are still `Arc`-shaped. Do not restore
-// `Send + Sync` to UI callbacks or tree owners to satisfy this lint; a focused
-// owner-local handle migration can replace these with `Rc` later.
-#![expect(clippy::arc_with_non_send_sync)]
 
 // ============================================================================
 // Modules
@@ -108,6 +103,8 @@ pub mod owner;
 pub mod persist;
 pub mod reactive;
 pub mod seq;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod tree;
 pub mod view;
 
@@ -117,9 +114,7 @@ pub mod view;
 // the registry handle owned by `WidgetsBinding`; integration fixtures that
 // bypass a binding still need this entrypoint until they adopt scoped harnesses.
 mod test_only_global_key_registry {
-    use std::sync::Arc;
-
-    use parking_lot::RwLock;
+    use std::{cell::RefCell, rc::Rc};
 
     use crate::{
         key::registry::{GlobalKeyRegistryHandle, install_registry, take_registry},
@@ -138,15 +133,15 @@ mod test_only_global_key_registry {
     /// binding handle only inside `UiRuntime::enter`.
     #[doc(hidden)]
     pub fn test_only_set_global_key_registry(
-        tree: &Arc<RwLock<ElementTree>>,
-        owner: &Arc<RwLock<BuildOwner>>,
+        tree: &Rc<RefCell<ElementTree>>,
+        owner: &Rc<RefCell<BuildOwner>>,
     ) {
-        let owner_for_lookup = Arc::clone(owner);
-        let tree_for_visit = Arc::clone(tree);
+        let owner_for_lookup = Rc::clone(owner);
+        let tree_for_visit = Rc::clone(tree);
         let handle = GlobalKeyRegistryHandle::new(
-            move |key| Ok(owner_for_lookup.read().element_for_global_key(key)),
+            move |key| Ok(owner_for_lookup.borrow().element_for_global_key(key)),
             move |id, f| {
-                let tree = tree_for_visit.read();
+                let tree = tree_for_visit.borrow();
                 if let Some(node) = tree.get(id) {
                     f(node.element());
                 }
@@ -199,10 +194,7 @@ pub use binding::{
 // Child helpers
 pub use child::{Child, Children};
 // Context
-pub use context::{
-    BuildContext, BuildContextExt, ElementBuildContext, ElementBuildContextBuilder,
-    LifecycleContext, LifecycleContextExt,
-};
+pub use context::{BuildContext, BuildContextExt, LifecycleContext, LifecycleContextExt};
 // Element types
 pub use element::Lifecycle;
 // Notification system

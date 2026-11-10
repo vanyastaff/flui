@@ -29,7 +29,7 @@
 //! `for<'a> Fn(&'a mut ElementOwner<'a>)` HRTB fallback.
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     rc::Rc,
     sync::Arc,
@@ -39,7 +39,6 @@ use std::any::{Any, TypeId};
 
 use flui_foundation::{CreationSite, ElementId, RenderId, ViewKey};
 use flui_interaction::FocusManager;
-use parking_lot::Mutex;
 
 use flui_objects::BuildDuringLayoutCell;
 
@@ -806,23 +805,23 @@ impl ElementOwner<'_> {
     /// Tell the lazy sliver whose render node is `host_render_id` — if one is
     /// registered — that `child` was grafted away by a `GlobalKey` retake.
     ///
-    /// The manager `Arc` is cloned out first so the registry lock is not
-    /// held across the call. The manager's own lock is taken with
-    /// `try_lock`: the only way it can already be held is a retake running
-    /// *inside* that same manager's `service` (a child moving within one
-    /// list, which the retake path rejects earlier as a duplicate), so a
-    /// contended lock here is a bug worth a loud debug failure, never a
-    /// hang.
+    /// The manager `Rc` is cloned out first so the registry borrow is not
+    /// held across the call. The manager itself is borrowed with
+    /// `try_borrow_mut`: the only way it can already be borrowed is a retake
+    /// running *inside* that same manager's `service` (a child moving within
+    /// one list, which the retake path rejects earlier as a duplicate), so a
+    /// refused borrow here is a bug worth a loud debug failure, never a
+    /// release-build panic.
     pub(crate) fn forget_sparse_child(&self, host_render_id: RenderId, child: ElementId) {
         let manager = self
             .child_manager_registry
-            .lock()
+            .borrow()
             .get(&host_render_id)
-            .map(Arc::clone);
+            .map(Rc::clone);
         let Some(manager) = manager else {
             return;
         };
-        if let Some(mut manager) = manager.try_lock() {
+        if let Ok(mut manager) = manager.try_borrow_mut() {
             manager.forget_child(child);
         } else {
             debug_assert!(
@@ -840,10 +839,10 @@ impl ElementOwner<'_> {
     pub(crate) fn register_child_manager(
         &mut self,
         render_id: RenderId,
-        manager: Arc<Mutex<dyn ChildManager>>,
+        manager: Rc<RefCell<dyn ChildManager>>,
     ) {
         self.child_manager_registry
-            .lock()
+            .borrow_mut()
             .insert(render_id, manager);
     }
 
@@ -853,7 +852,7 @@ impl ElementOwner<'_> {
     /// registry entry for the dismounted sliver cannot be serviced post-frame.
     /// No-op if the id is not present.
     pub(crate) fn unregister_child_manager(&mut self, render_id: RenderId) {
-        let _prev = self.child_manager_registry.lock().remove(&render_id);
+        let _prev = self.child_manager_registry.borrow_mut().remove(&render_id);
     }
 
     /// Register a build-during-layout node.
