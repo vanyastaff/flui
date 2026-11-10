@@ -1,5 +1,5 @@
 //! Application-scoped widgets: the [`WidgetsApp`] shell, [`SafeArea`],
-//! the [`InheritedTheme`] trait, and [`app_root`], the root wrapper every
+//! the [`InheritedTheme`] trait, and [`app_root()`], the root wrapper every
 //! composition root installs.
 //!
 //! These are infrastructure widgets that sit
