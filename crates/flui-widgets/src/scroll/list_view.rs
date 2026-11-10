@@ -3,8 +3,6 @@
 use std::fmt;
 use std::rc::Rc;
 
-use flui_foundation::geometry::Axis;
-use flui_rendering::constraints::AxisDirection;
 use flui_rendering::view::ScrollPosition;
 use flui_view::element::StaticChildren;
 use flui_view::prelude::StatelessView;
@@ -14,22 +12,16 @@ use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::list_focus::{FocusableList, ListFocusConfig, ListItemFocus};
 use crate::scroll::{
-    ShrinkWrappingViewport, SliverChildBuilderDelegate, SliverFixedExtentList, SliverList, Viewport,
+    ScrollView, ScrollViewConfig, Scrollable, ShrinkWrappingViewport, SliverChildBuilderDelegate,
+    SliverFixedExtentList, SliverList, Viewport,
 };
 
-/// Where the composed [`Viewport`] gets its scroll offset from — mirrors
-/// [`Viewport`]'s own `OffsetSource`, since this widget is a thin
-/// pixels-or-position passthrough onto it. Not shared with `Viewport`'s
-/// private enum of the same name; duplicated per composing widget, matching
-/// [`crate::SingleChildScrollView`]'s template.
-#[derive(Clone, Debug)]
-enum OffsetSource {
-    Fixed(f64),
-    Position(ScrollPosition),
-}
-
-/// A scrollable list that lays out its children sequentially along
-/// `scroll_direction`.
+/// A scrollable list that lays out its children sequentially along its
+/// scroll axis.
+///
+/// The list scrolls itself: drag, fling, wheel, keys and assistive scroll
+/// actions move it, through the [`Scrollable`] it composes. Its controller,
+/// axis, `reverse` and gesture policy are the [`ScrollView`] builders.
 ///
 /// Two construction modes:
 ///
@@ -50,22 +42,24 @@ enum OffsetSource {
 ///   dirty. See [`SliverChildBuilderDelegate`] for the full rationale.
 ///
 /// Both modes compose a [`Viewport`] over their respective sliver, or a
-/// [`ShrinkWrappingViewport`] when [`ListView::shrink_wrap`] is enabled.
-/// `offset` is a programmatic scroll position in logical pixels.
+/// [`ShrinkWrappingViewport`] when [`ListView::shrink_wrap`] is enabled. A
+/// [`ScrollController`](crate::ScrollController) reads and moves the offset;
+/// [`ScrollController::with_initial_scroll_offset`](crate::ScrollController::with_initial_scroll_offset)
+/// starts it elsewhere than `0.0`.
 ///
-/// A horizontal `scroll_direction` resolves its `AxisDirection` from the
-/// ambient [`Directionality`](crate::Directionality) (`RightToLeft` under an
-/// RTL ancestor); the vertical axis never consults it.
-/// `ListView` has no `reverse` flag yet.
+/// A horizontal axis resolves its `AxisDirection` from the ambient
+/// [`Directionality`](crate::Directionality) (`RightToLeft` under an RTL
+/// ancestor); the vertical axis never consults it. [`ScrollView::reverse`]
+/// flips whichever direction that resolves to.
 #[derive(Clone, StatelessView)]
 pub struct ListView {
-    scroll_direction: Axis,
+    /// How the list scrolls (see [`ScrollView`]).
+    config: ScrollViewConfig,
     /// Per-item extent for the static variant ([`ListView::new`]).
     item_extent: f64,
     /// Per-item extent estimate for the lazy variant ([`ListView::builder`]).
     /// Seeds the virtualizer until real measurements arrive.
     item_extent_estimate: f64,
-    offset_source: OffsetSource,
     shrink_wrap: bool,
     /// Children for the static variant. Empty in the lazy variant.
     /// The static children as handed in — a shared delegate, so a `ListView`
@@ -101,10 +95,9 @@ impl ListView {
     /// lists.
     pub fn new(item_extent: f64, children: impl ViewSeq) -> Self {
         Self {
-            scroll_direction: Axis::Vertical,
+            config: ScrollViewConfig::default(),
             item_extent,
             item_extent_estimate: item_extent,
-            offset_source: OffsetSource::Fixed(0.0),
             shrink_wrap: false,
             children: StaticChildren::new(children.into_boxed_vec()),
             children_in_boundaries: std::cell::OnceCell::new(),
@@ -136,10 +129,9 @@ impl ListView {
         F: Fn(usize) -> Option<BoxedView> + 'static,
     {
         Self {
-            scroll_direction: Axis::Vertical,
+            config: ScrollViewConfig::default(),
             item_extent: item_extent_estimate,
             item_extent_estimate,
-            offset_source: OffsetSource::Fixed(0.0),
             shrink_wrap: false,
             children: StaticChildren::new(Vec::new()),
             children_in_boundaries: std::cell::OnceCell::new(),
@@ -186,38 +178,6 @@ impl ListView {
         self
     }
 
-    /// Set the scroll axis (default [`Axis::Vertical`]).
-    #[must_use]
-    pub fn scroll_direction(mut self, scroll_direction: Axis) -> Self {
-        self.scroll_direction = scroll_direction;
-        self
-    }
-
-    /// Set the programmatic scroll offset in logical pixels.
-    ///
-    /// Fixed mode: the composed [`Viewport`] (or [`ShrinkWrappingViewport`]
-    /// under [`ListView::shrink_wrap`]) owns a private `ScrollPosition` and
-    /// this value is pushed into it on every rebuild. Mutually exclusive with
-    /// [`ListView::position`] — whichever is called last wins.
-    #[must_use]
-    pub fn offset(mut self, offset: f64) -> Self {
-        self.offset_source = OffsetSource::Fixed(offset);
-        self
-    }
-
-    /// Inject a shared [`ScrollPosition`] as the composed [`Viewport`]'s (or
-    /// [`ShrinkWrappingViewport`]'s, under [`ListView::shrink_wrap`]) offset
-    /// — see [`Viewport::position`] for the full contract, including under
-    /// shrink-wrap: [`ShrinkWrappingViewport::position`] mirrors it exactly,
-    /// so `RenderShrinkWrappingViewport`'s committed content extents flush
-    /// back into `position` the same way `RenderViewport`'s do. Mutually
-    /// exclusive with [`ListView::offset`] — whichever is called last wins.
-    #[must_use]
-    pub fn position(mut self, position: ScrollPosition) -> Self {
-        self.offset_source = OffsetSource::Position(position);
-        self
-    }
-
     /// Whether the list should size itself to its sliver contents in the scroll
     /// axis.
     ///
@@ -241,8 +201,7 @@ impl ListView {
     /// End go to the first and last row. A row's focus goes to its first
     /// focusable descendant, so the row's button activates and shows its ring
     /// as on a click. A row not built yet is scrolled to and focused when it
-    /// mounts; that needs a shared [`position`](Self::position), as every
-    /// list inside a `Scrollable` has.
+    /// mounts.
     ///
     /// The focused row stays built and announced while the pointer scrolls it
     /// away (ADR-0265), and an arrow key moves from it.
@@ -300,8 +259,7 @@ fn wrap_row(index: usize, row: BoxedView, focusable: bool, boundary: bool) -> Bo
 impl fmt::Debug for ListView {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut s = f.debug_struct("ListView");
-        s.field("scroll_direction", &self.scroll_direction)
-            .field("offset_source", &self.offset_source)
+        s.field("config", &self.config)
             .field("shrink_wrap", &self.shrink_wrap)
             .field("focusable", &self.focusable)
             .field("semantics_label", &self.semantics_label)
@@ -323,22 +281,64 @@ impl fmt::Debug for ListView {
     }
 }
 
+impl ScrollView for ListView {
+    fn scroll_config_mut(&mut self) -> &mut ScrollViewConfig {
+        &mut self.config
+    }
+}
+
 impl StatelessView for ListView {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        // `reverse` isn't modeled on `ListView` yet, so it's always `false`
-        // here — the resolution still consults ambient `Directionality` for
-        // a horizontal `scroll_direction`.
-        let axis_direction =
-            axis_direction_from_axis_reverse_and_directionality(ctx, self.scroll_direction, false);
-        // Both arms produce `Viewport<(BoxedView,)>` by boxing the sliver so
-        // the opaque return type is the same concrete type in both branches.
-        //
-        // `SliverList::new` is used directly (not `SliverList::builder`) because
-        // `SliverList` is now defined in `flui-view` and the `builder` method
-        // that accepted a `SliverChildBuilderDelegate` lived only on the old
-        // widgets-side wrapper. The element's `view_type_id()` now returns
-        // `TypeId::of::<SliverList>()`, fixing BLOCKER 1 (element identity).
-        let sliver: BoxedView = if let Some(ref delegate) = self.builder_source {
+        let axis_direction = axis_direction_from_axis_reverse_and_directionality(
+            ctx,
+            self.config.scroll_direction,
+            self.config.reverse,
+        );
+        let sliver = self.sliver();
+        let shrink_wrap = self.shrink_wrap;
+        let focus = self.focusable.then(|| ListFocusConfig {
+            item_count: self.item_count(),
+            axis: self.config.scroll_direction,
+            reversed: axis_direction.is_reversed(),
+            position: None,
+            extent_estimate: self.item_extent_estimate,
+            empty_list_label: self.collection_label(),
+            sliver: false,
+            grid: false,
+        });
+        Scrollable::with_config(
+            self.config.clone(),
+            Rc::new(move |position: ScrollPosition| {
+                let viewport = if shrink_wrap {
+                    ShrinkWrappingViewport::new(position.clone(), (sliver.clone(),))
+                        .axis_direction(axis_direction)
+                        .boxed()
+                } else {
+                    Viewport::new(position.clone(), (sliver.clone(),))
+                        .axis_direction(axis_direction)
+                        .boxed()
+                };
+                match &focus {
+                    None => viewport,
+                    Some(focus) => {
+                        let config = ListFocusConfig {
+                            position: Some(position),
+                            ..focus.clone()
+                        };
+                        FocusableList::new(config, viewport).boxed()
+                    }
+                }
+            }),
+        )
+    }
+}
+
+impl ListView {
+    /// The list's sliver: its rows, each in its focus marker and repaint
+    /// boundary as configured. Built once per list value, so the static rows
+    /// keep their identity across builds (ADR-0053).
+    fn sliver(&self) -> BoxedView {
+        if let Some(ref delegate) = self.builder_source {
             let builder = match (self.focusable, self.add_repaint_boundaries) {
                 (false, false) => Rc::clone(&delegate.builder),
                 (false, true) => {
@@ -407,38 +407,6 @@ impl StatelessView for ListView {
                 None => sliver,
             }
             .boxed()
-        };
-        let viewport = if self.shrink_wrap {
-            let viewport = ShrinkWrappingViewport::new((sliver,)).axis_direction(axis_direction);
-            match &self.offset_source {
-                OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
-                OffsetSource::Position(position) => viewport.position(position.clone()),
-            }
-            .boxed()
-        } else {
-            let viewport = Viewport::new((sliver,)).axis_direction(axis_direction);
-            match &self.offset_source {
-                OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
-                OffsetSource::Position(position) => viewport.position(position.clone()),
-            }
-            .boxed()
-        };
-        if !self.focusable {
-            return viewport;
         }
-        let config = ListFocusConfig {
-            item_count: self.item_count(),
-            axis: self.scroll_direction,
-            reversed: axis_direction == AxisDirection::RightToLeft,
-            position: match &self.offset_source {
-                OffsetSource::Fixed(_) => None,
-                OffsetSource::Position(position) => Some(position.clone()),
-            },
-            extent_estimate: self.item_extent_estimate,
-            empty_list_label: self.collection_label(),
-            sliver: false,
-            grid: false,
-        };
-        FocusableList::new(config, viewport).boxed()
     }
 }

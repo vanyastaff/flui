@@ -1,9 +1,9 @@
-//! [`CustomScrollView`] — a viewport over an arbitrary sequence of sliver
+//! [`CustomScrollView`] — a scroll view over an arbitrary sequence of sliver
 //! children.
 
 use std::fmt;
+use std::rc::Rc;
 
-use flui_foundation::geometry::Axis;
 use flui_painting::paint::Clip;
 use flui_rendering::view::{ScrollPosition, SliverPaintOrder};
 use flui_view::prelude::StatelessView;
@@ -11,15 +11,7 @@ use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
-use crate::scroll::{ShrinkWrappingViewport, Viewport};
-
-/// Where the composed viewport gets its scroll offset from, as in
-/// [`GridView`](crate::GridView).
-#[derive(Clone, Debug)]
-enum OffsetSource {
-    Fixed(f64),
-    Position(ScrollPosition),
-}
+use crate::scroll::{ScrollView, ScrollViewConfig, Scrollable, ShrinkWrappingViewport, Viewport};
 
 /// A scrollable area whose scroll body is composed from an arbitrary list of
 /// **sliver** widgets.
@@ -31,30 +23,25 @@ enum OffsetSource {
 /// [`SliverToBoxAdapter`] header, a [`SliverFixedExtentList`] body, and a
 /// [`SliverFillRemaining`] footer.
 ///
-/// `offset` is a programmatic scroll position in logical pixels.
-/// Gesture-driven scrolling is provided by [`Scrollable`] + a
-/// [`ScrollController`].
-/// Set [`CustomScrollView::shrink_wrap`] when the scroll view is placed under
-/// unbounded constraints in the scroll axis.
+/// It scrolls itself through the [`Scrollable`] it composes; its
+/// controller, axis, `reverse` and gesture policy are the [`ScrollView`]
+/// builders. Set [`CustomScrollView::shrink_wrap`] when the scroll view is
+/// placed under unbounded constraints in the scroll axis.
 ///
-/// A horizontal `scroll_direction` resolves its `AxisDirection` from the
-/// ambient [`Directionality`] (`RightToLeft` under an RTL ancestor); the
-/// vertical axis never consults it. `CustomScrollView` has no `reverse` flag yet,
-/// unlike [`SingleChildScrollView`].
+/// A horizontal axis resolves its `AxisDirection` from the ambient
+/// [`Directionality`] (`RightToLeft` under an RTL ancestor); the vertical
+/// axis never consults it. [`ScrollView::reverse`] flips whichever direction
+/// that resolves to.
 ///
 /// [`Directionality`]: crate::Directionality
-/// [`SingleChildScrollView`]: crate::SingleChildScrollView
 /// [`ListView`]: crate::ListView
 /// [`GridView`]: crate::GridView
 /// [`SliverToBoxAdapter`]: crate::SliverToBoxAdapter
 /// [`SliverFixedExtentList`]: crate::SliverFixedExtentList
 /// [`SliverFillRemaining`]: crate::SliverFillRemaining
-/// [`Scrollable`]: crate::Scrollable
-/// [`ScrollController`]: crate::ScrollController
 #[derive(Clone, StatelessView)]
 pub struct CustomScrollView {
-    scroll_direction: Axis,
-    offset_source: OffsetSource,
+    config: ScrollViewConfig,
     shrink_wrap: bool,
     center: Option<usize>,
     anchor: f64,
@@ -67,8 +54,7 @@ impl CustomScrollView {
     /// A vertical custom scroll view over `slivers`.
     pub fn new(slivers: impl ViewSeq) -> Self {
         Self {
-            scroll_direction: Axis::Vertical,
-            offset_source: OffsetSource::Fixed(0.0),
+            config: ScrollViewConfig::default(),
             shrink_wrap: false,
             center: None,
             anchor: 0.0,
@@ -76,33 +62,6 @@ impl CustomScrollView {
             clip_behavior: Clip::HardEdge,
             slivers: slivers.into_boxed_vec(),
         }
-    }
-
-    /// Set the scroll axis (default [`Axis::Vertical`]).
-    #[must_use]
-    pub fn scroll_direction(mut self, scroll_direction: Axis) -> Self {
-        self.scroll_direction = scroll_direction;
-        self
-    }
-
-    /// Set the programmatic scroll offset in logical pixels. Mutually
-    /// exclusive with [`CustomScrollView::position`]: whichever is called last
-    /// wins.
-    #[must_use]
-    pub fn offset(mut self, offset: f64) -> Self {
-        self.offset_source = OffsetSource::Fixed(offset);
-        self
-    }
-
-    /// Inject a shared [`ScrollPosition`] as the composed viewport's offset,
-    /// as [`ListView::position`](crate::ListView::position) does: a
-    /// [`Scrollable`](crate::Scrollable) drives it, and the viewport flushes its committed
-    /// content extents back into it. Mutually exclusive with
-    /// [`CustomScrollView::offset`]: whichever is called last wins.
-    #[must_use]
-    pub fn position(mut self, position: ScrollPosition) -> Self {
-        self.offset_source = OffsetSource::Position(position);
-        self
     }
 
     /// Whether the scroll view should size itself to its sliver contents in the
@@ -158,11 +117,16 @@ impl CustomScrollView {
     }
 }
 
+impl ScrollView for CustomScrollView {
+    fn scroll_config_mut(&mut self) -> &mut ScrollViewConfig {
+        &mut self.config
+    }
+}
+
 impl fmt::Debug for CustomScrollView {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CustomScrollView")
-            .field("scroll_direction", &self.scroll_direction)
-            .field("offset_source", &self.offset_source)
+            .field("config", &self.config)
             .field("shrink_wrap", &self.shrink_wrap)
             .field("center", &self.center)
             .field("anchor", &self.anchor)
@@ -175,34 +139,31 @@ impl fmt::Debug for CustomScrollView {
 
 impl StatelessView for CustomScrollView {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        // `reverse` isn't modeled on `CustomScrollView` yet (unlike
-        // `SingleChildScrollView`), so it's always `false` here — the
-        // resolution still consults ambient `Directionality` for a
-        // horizontal `scroll_direction`.
-        let axis_direction =
-            axis_direction_from_axis_reverse_and_directionality(ctx, self.scroll_direction, false);
-        if self.shrink_wrap {
-            let viewport = ShrinkWrappingViewport::new(self.slivers.clone())
-                .axis_direction(axis_direction)
-                .paint_order(self.paint_order)
-                .clip_behavior(self.clip_behavior);
-            match &self.offset_source {
-                OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
-                OffsetSource::Position(position) => viewport.position(position.clone()),
-            }
-            .boxed()
-        } else {
-            let viewport = Viewport::new(self.slivers.clone())
-                .axis_direction(axis_direction)
-                .center(self.center)
-                .anchor(self.anchor)
-                .paint_order(self.paint_order)
-                .clip_behavior(self.clip_behavior);
-            match &self.offset_source {
-                OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
-                OffsetSource::Position(position) => viewport.position(position.clone()),
-            }
-            .boxed()
-        }
+        let axis_direction = axis_direction_from_axis_reverse_and_directionality(
+            ctx,
+            self.config.scroll_direction,
+            self.config.reverse,
+        );
+        let view = self.clone();
+        Scrollable::with_config(
+            self.config.clone(),
+            Rc::new(move |position: ScrollPosition| {
+                if view.shrink_wrap {
+                    ShrinkWrappingViewport::new(position, view.slivers.clone())
+                        .axis_direction(axis_direction)
+                        .paint_order(view.paint_order)
+                        .clip_behavior(view.clip_behavior)
+                        .boxed()
+                } else {
+                    Viewport::new(position, view.slivers.clone())
+                        .axis_direction(axis_direction)
+                        .center(view.center)
+                        .anchor(view.anchor)
+                        .paint_order(view.paint_order)
+                        .clip_behavior(view.clip_behavior)
+                        .boxed()
+                }
+            }),
+        )
     }
 }

@@ -301,14 +301,15 @@ pub use scroll::{
     PageIndicatorStyleError, PageSnap, PageView, PageViewState, RefreshController,
     RefreshIndicator, RefreshIndicatorPhase, RefreshIndicatorState, RefreshIndicatorStyle,
     RefreshIntent, ScrollCause, ScrollController, ScrollDevice, ScrollEndReason, ScrollMetrics,
-    ScrollPhysics, ScrollStep, Scrollable, Scrollbar, SharedScrollPhysics, SharedSnapPolicy,
-    ShrinkWrappingViewport, SingleChildScrollView, SliverAnimatedList, SliverAnimatedListState,
-    SliverChildBuilderDelegate, SliverConstrainedCrossAxis, SliverCrossAxisGroup,
-    SliverCrossAxisItem, SliverFillRemaining, SliverFillRemainingAndOverscroll,
-    SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
-    SliverIgnorePointer, SliverList, SliverMainAxisGroup, SliverOffstage, SliverOpacity,
-    SliverPadding, SliverPersistentHeader, SliverPersistentHeaderDelegate, SliverToBoxAdapter,
-    SnapPolicy, StretchTriggerSignal, Viewport, ViewportFraction, WheelScrollDistances,
+    ScrollPhysics, ScrollStep, ScrollView, ScrollViewConfig, Scrollable, Scrollbar,
+    SharedScrollPhysics, SharedSnapPolicy, ShrinkWrappingViewport, SingleChildScrollView,
+    SliverAnimatedList, SliverAnimatedListState, SliverChildBuilderDelegate,
+    SliverConstrainedCrossAxis, SliverCrossAxisGroup, SliverCrossAxisItem, SliverFillRemaining,
+    SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+    SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverMainAxisGroup,
+    SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
+    SliverPersistentHeaderDelegate, SliverToBoxAdapter, SnapPolicy, StretchTriggerSignal, Viewport,
+    ViewportFraction, WheelScrollDistances,
 };
 pub use scroll::{
     Carousel, CarouselAutoplay, CarouselAutoplayError, CarouselController, CarouselItemScope,
@@ -389,10 +390,10 @@ pub use flui_interaction::events::ButtonChange;
 pub use flui_rendering::hit_testing::{
     CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerDispatch, PointerEvent,
 };
-// The shared scroll state `ScrollController::position()` returns and
-// `Viewport`/`SingleChildScrollView::position()` accept — a widget author
-// composing a custom scrollable directly on `Viewport` needs to name this
-// type without reaching past `flui-widgets` into `flui-rendering`.
+// The shared scroll state `ScrollController::position()` returns,
+// `Scrollable::new`'s closure receives and `Viewport::new` takes — a widget
+// author composing a custom scrollable directly on `Viewport` needs to name
+// this type without reaching past `flui-widgets` into `flui-rendering`.
 pub use flui_rendering::view::ScrollPosition;
 // Details a `GestureDetector` drag slot hands its callbacks.
 pub use flui_interaction::{
@@ -444,17 +445,17 @@ pub mod prelude {
         PasteTextIntent, PhysicalModel, PhysicalShape, PopScope, PopupRoute, Positioned,
         PreferredSize, PreferredSizeView, PreviousFocusAction, PreviousFocusIntent, RawButton,
         RawTextField, RawTextFieldState, RawTextFormField, RepaintBoundary, RichText, RotatedBox,
-        Routable, RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController, Scrollable,
-        Scrollbar, SelectAllTextIntent, SelectionArea, SelectionContainer, SelectionController,
-        SelectionHandles, SelectionStyle, Semantics, Shortcuts, ShrinkWrappingViewport,
-        SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox, Slider,
-        SliderState, SliverChildBuilderDelegate, SliverFadeTransition, SliverFillRemaining,
-        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder,
-        SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController, TickerMode,
-        Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility, VisibilityGate,
-        WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
+        Routable, RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController, ScrollView,
+        Scrollable, Scrollbar, SelectAllTextIntent, SelectionArea, SelectionContainer,
+        SelectionController, SelectionHandles, SelectionStyle, Semantics, Shortcuts,
+        ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox,
+        SizedOverflowBox, Slider, SliderState, SliverChildBuilderDelegate, SliverFadeTransition,
+        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
+        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
+        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack,
+        StreamBuilder, SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController,
+        TickerMode, Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility,
+        VisibilityGate, WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
         WidgetStatesController, WidgetsApp, WidgetsLocalizations, Wrap,
     };
 

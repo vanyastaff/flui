@@ -95,13 +95,20 @@ pub(crate) fn directional_geometry_registers_a_direction_dependency_only_when_di
 /// direction, so it must depend on it; a horizontal one lays a fixed
 /// top-to-bottom cross axis and must not.
 pub(crate) fn a_vertical_viewport_depends_on_directionality_but_a_horizontal_one_does_not() {
-    let vertical = render_dependents(Viewport::new((SizedBox::square(10.0),)));
+    let vertical = render_dependents(Viewport::new(
+        flui_rendering::view::ScrollPosition::fixed(0.0),
+        (SizedBox::square(10.0),),
+    ));
     assert_eq!(
         vertical, 1,
         "a vertical viewport's cross axis is horizontal (reading)"
     );
     let horizontal = render_dependents(
-        Viewport::new((SizedBox::square(10.0),)).axis_direction(AxisDirection::LeftToRight),
+        Viewport::new(
+            flui_rendering::view::ScrollPosition::fixed(0.0),
+            (SizedBox::square(10.0),),
+        )
+        .axis_direction(AxisDirection::LeftToRight),
     );
     assert_eq!(
         horizontal, 0,

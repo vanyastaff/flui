@@ -23,8 +23,8 @@ use flui_view::prelude::*;
 use flui_view::{BoxedView, Signal, SignalWriteExt, View, ViewExt};
 use flui_widgets::{
     ColoredBox, Directionality, InteractiveViewer, NestedScroll, PageController, PageView,
-    ScrollCause, ScrollController, ScrollEndReason, Scrollable, SizedBox, Transform,
-    TransformationController, WheelScaleGate,
+    ScrollCause, ScrollController, ScrollEndReason, ScrollView, SingleChildScrollView, SizedBox,
+    Transform, TransformationController, WheelScaleGate,
 };
 
 use crate::common::{LaidOut, lay_out, tight, viewer_alternatives};
@@ -496,7 +496,7 @@ pub(crate) fn plain_wheel_pans_the_viewer_then_leaves_its_edge_to_the_list() {
         .boundary_margin(EdgeInsets::all(60.0))
         .child(SizedBox::new(300.0, 300.0));
     let mut laid = lay_out(
-        Scrollable::new()
+        SingleChildScrollView::new()
             .controller(list.clone())
             .child(SizedBox::new(300.0, 1000.0).child(viewer)),
         tight(300.0, 300.0),
@@ -554,7 +554,7 @@ fn focus_viewer(laid: &mut LaidOut) {
 pub(crate) fn viewer_keys_pan_and_zoom_from_the_focused_row() {
     let (transform, list) = (TransformationController::new(), ScrollController::new());
     let mut laid = lay_out(
-        Scrollable::new()
+        SingleChildScrollView::new()
             .controller(list.clone())
             .child(flui_widgets::Column::new(vec![
                 SizedBox::new(300.0, 300.0)

@@ -15,7 +15,8 @@ use flui_view::environment::VsyncScope;
 use flui_view::{SignalWriteExt, ViewExt};
 use flui_widgets::{
     ActivityIndicator, Alternative, Center, ControlSpec, GestureAlternatives, RefreshController,
-    RefreshIndicator, RefreshIntent, Row, ScrollController, Scrollable, SizedBox, TickerMode,
+    RefreshIndicator, RefreshIntent, Row, ScrollController, ScrollView, SingleChildScrollView,
+    SizedBox, TickerMode,
 };
 
 use crate::common::{LaidOut, lay_out, lay_out_animated, loose, tight};
@@ -729,7 +730,7 @@ fn refresh_indicator_spins_while_refreshing() {
             VsyncScope::new(
                 vsync.clone(),
                 RefreshIndicator::new(
-                    Scrollable::new()
+                    SingleChildScrollView::new()
                         .controller(ScrollController::new())
                         .child(SizedBox::new(250.0, 5000.0)),
                     GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
@@ -851,7 +852,7 @@ fn refresh_style_builds_the_indicator_from_the_phase() {
                         }
                     },
                     RefreshIndicator::new(
-                        Scrollable::new()
+                        SingleChildScrollView::new()
                             .controller(ScrollController::new())
                             .child(SizedBox::new(300.0, 5000.0)),
                         GestureAlternatives::try_new(Alternative::VisibleControl(

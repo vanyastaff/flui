@@ -13,6 +13,7 @@ use flui_runtime::ui_runtime::UiRuntime;
 use crate::HostInputExt as _;
 use flui_view::prelude::*;
 use flui_widgets::MotionBuilder;
+use flui_widgets::ScrollView;
 
 type ObservedMetrics = Rc<RefCell<Vec<(Size<f64>, f64)>>>;
 
@@ -1817,7 +1818,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         .expect("ordered extents");
     runtime
         .attach_root_widget_with_size(
-            &flui_widgets::Scrollable::new()
+            &flui_widgets::SingleChildScrollView::new()
                 .controller(controller.clone())
                 .child(flui_widgets::SizedBox::new(300.0, 5000.0)),
             300.0,
@@ -3236,7 +3237,7 @@ fn wheel_preferences_reach_the_next_mounted_input() {
             .attach_root_widget_with_size(
                 &NestedWheelScroll {
                     authored_gestures,
-                    child: flui_widgets::Scrollable::new()
+                    child: flui_widgets::SingleChildScrollView::new()
                         .controller(scroll.clone())
                         .child(flui_widgets::SizedBox::new(800.0, 5000.0)),
                 },
@@ -3427,7 +3428,7 @@ fn wheel_preferences_reach_the_next_mounted_input() {
 #[derive(Clone, StatelessView)]
 struct NestedWheelScroll {
     authored_gestures: bool,
-    child: flui_widgets::Scrollable,
+    child: flui_widgets::SingleChildScrollView,
 }
 
 impl StatelessView for NestedWheelScroll {
@@ -4003,7 +4004,7 @@ fn queued_preferences_are_not_coalesced_across_an_input() {
         .attach_root_widget_with_size(
             &NestedWheelScroll {
                 authored_gestures: false,
-                child: flui_widgets::Scrollable::new()
+                child: flui_widgets::SingleChildScrollView::new()
                     .controller(scroll.clone())
                     .child(flui_widgets::SizedBox::new(800.0, 5000.0)),
             },

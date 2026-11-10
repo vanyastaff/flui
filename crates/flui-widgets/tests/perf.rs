@@ -26,7 +26,9 @@ use flui_testing::widgets::SharedSignal;
 use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners};
 use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
 use flui_widgets::prelude::*;
-use flui_widgets::{ColoredBox, Column, Expanded, ListView, SizedBox, Text, app_root};
+use flui_widgets::{
+    ColoredBox, Column, Expanded, RepaintBoundary, SizedBox, SliverList, Text, Viewport, app_root,
+};
 
 /// One 60 Hz frame of virtual time.
 const FRAME: Duration = Duration::from_nanos(16_666_667);
@@ -78,15 +80,23 @@ struct PerfApp {
 impl StatelessView for PerfApp {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         // Each row paints, so a retained row carries a picture layer that a
-        // graft reuses; an empty row would retain nothing to count.
-        let list = ListView::builder(ROWS, ROW_HEIGHT, |index| {
-            (index < ROWS).then(|| {
-                SizedBox::new(WIDTH, ROW_HEIGHT)
-                    .child(ColoredBox::new(Color::rgb(40, 80, 120)))
-                    .boxed()
-            })
-        })
-        .position(self.position.clone());
+        // graft reuses; an empty row would retain nothing to count. The
+        // viewport is passive: the scenario moves the shared position itself.
+        let rows = SliverList::new(
+            ROWS,
+            ROW_HEIGHT,
+            std::rc::Rc::new(|index| {
+                (index < ROWS).then(|| {
+                    RepaintBoundary::new()
+                        .child(
+                            SizedBox::new(WIDTH, ROW_HEIGHT)
+                                .child(ColoredBox::new(Color::rgb(40, 80, 120))),
+                        )
+                        .boxed()
+                })
+            }),
+        );
+        let list = Viewport::new(self.position.clone(), (rows,));
         Column::new(vec![
             SizedBox::height(LABEL_HEIGHT)
                 .child(Label {

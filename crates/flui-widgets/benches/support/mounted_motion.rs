@@ -15,7 +15,9 @@ use flui_testing::widgets::{LaidOut, SharedSignal, lay_out_animated, tight};
 use flui_view::ViewExt;
 use flui_view::environment::VsyncScope;
 use flui_widgets::prelude::*;
-use flui_widgets::{AnimatedContainer, AnimatedOpacity, ScrollController, Scrollable};
+use flui_widgets::{
+    AnimatedContainer, AnimatedOpacity, ScrollController, ScrollView, SingleChildScrollView,
+};
 
 pub(super) const FRAME: Duration = Duration::from_millis(17);
 pub(super) const RUN: Duration = Duration::from_secs(2);
@@ -342,7 +344,7 @@ impl MountedScroll {
         let mut laid = lay_out_animated(
             VsyncScope::new(
                 vsync.clone(),
-                Scrollable::new()
+                SingleChildScrollView::new()
                     .controller(controller.clone())
                     .child(SizedBox::new(800.0, 5000.0).child(Stack::new(vec![marker.boxed()]))),
             ),

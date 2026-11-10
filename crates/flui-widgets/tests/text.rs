@@ -966,7 +966,7 @@ pub(crate) fn assistive_technology_focuses_a_link() {
 pub(crate) fn tab_to_a_link_below_the_view_scrolls_it_into_view() {
     use flui_painting::typography::TextSpan;
     use flui_platform::keyboard::{Key, NamedKey};
-    use flui_widgets::{RichText, Scrollable, SizedBox};
+    use flui_widgets::{RichText, SingleChildScrollView, SizedBox};
 
     const VIEWPORT: f64 = 120.0;
     let filler = "words to scroll past ".repeat(40);
@@ -976,7 +976,7 @@ pub(crate) fn tab_to_a_link_below_the_view_scrolls_it_into_view() {
     };
     let mut laid = lay_out(
         SizedBox::new(200.0, VIEWPORT).child(
-            Scrollable::new().child(
+            SingleChildScrollView::new().child(
                 RichText::new(
                     TextSpan::new("start ")
                         .with_child(TextSpan::new("top").with_link("app://top"))

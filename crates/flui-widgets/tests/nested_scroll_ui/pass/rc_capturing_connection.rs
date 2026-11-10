@@ -5,7 +5,7 @@ use flui_foundation::geometry::Vec2;
 use flui_interaction::InputSequenceId;
 use flui_widgets::{
     FlingHandoff, FlingStep, NestedScroll, NestedScrollConnection, ScrollEndReason, ScrollStep,
-    Scrollable, SizedBox,
+    ScrollView, SingleChildScrollView, SizedBox,
 };
 
 /// Counts what reaches it in `Rc` and `Cell` state, which a `Send` bound on
@@ -39,7 +39,7 @@ fn main() {
     });
     let _view = NestedScroll::new(
         counter,
-        Scrollable::new().child(SizedBox::new(100.0, 1000.0)),
+        SingleChildScrollView::new().child(SizedBox::new(100.0, 1000.0)),
     );
     assert_send_sync::<ScrollStep>();
     assert_send_sync::<FlingStep>();

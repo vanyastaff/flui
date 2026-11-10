@@ -365,7 +365,7 @@ pub trait NestedScrollConnection {
 /// let overscroll = Rc::new(Overscroll::default());
 /// let view = NestedScroll::new(
 ///     overscroll.clone(),
-///     Scrollable::new().child(SizedBox::new(300.0, 1400.0)),
+///     SingleChildScrollView::new().child(SizedBox::new(300.0, 1400.0)),
 /// );
 /// ```
 #[derive(Clone, StatefulView)]

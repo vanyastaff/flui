@@ -1056,6 +1056,10 @@ fn scroll_physics_and_activity() {
                 crate::scroll::a_command_queued_before_mount_is_serviced_outside_build,
             ),
             (
+                "scroll::standard_scroll_views_scroll_themselves",
+                crate::scroll::standard_scroll_views_scroll_themselves,
+            ),
+            (
                 "scroll::scrollable_drag_up_increases_scroll_offset",
                 crate::scroll::scrollable_drag_up_increases_scroll_offset,
             ),

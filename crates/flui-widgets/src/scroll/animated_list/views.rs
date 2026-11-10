@@ -3,9 +3,9 @@
 
 use std::fmt;
 use std::hash::Hash;
+use std::rc::Rc;
 
 use flui_animation::{MotionSpec, Stagger};
-use flui_foundation::geometry::Axis;
 use flui_rendering::delegates::SliverGridDelegate;
 use flui_rendering::view::ScrollPosition;
 use flui_view::prelude::StatelessView;
@@ -14,53 +14,37 @@ use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 use super::SliverAnimatedList;
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::motion::{Effects, Transition};
-use crate::scroll::{ShrinkWrappingViewport, Viewport};
+use crate::scroll::{ScrollView, ScrollViewConfig, Scrollable, ShrinkWrappingViewport, Viewport};
 
-/// Where the composed viewport takes its scroll offset from, as
-/// [`ListView`](crate::ListView) does.
-#[derive(Clone, Debug)]
-enum OffsetSource {
-    Fixed(f64),
-    Position(ScrollPosition),
-}
-
-/// The viewport both scroll views compose.
-#[derive(Clone, Debug)]
+/// The scroll view both widgets compose over their sliver.
+#[derive(Clone, Debug, Default)]
 struct Scrolling {
-    direction: Axis,
-    offset: OffsetSource,
+    config: ScrollViewConfig,
     shrink_wrap: bool,
 }
 
-impl Default for Scrolling {
-    fn default() -> Self {
-        Self {
-            direction: Axis::Vertical,
-            offset: OffsetSource::Fixed(0.0),
-            shrink_wrap: false,
-        }
-    }
-}
-
 impl Scrolling {
-    fn wrap(&self, ctx: &dyn BuildContext, sliver: BoxedView) -> BoxedView {
-        let axis_direction =
-            axis_direction_from_axis_reverse_and_directionality(ctx, self.direction, false);
-        if self.shrink_wrap {
-            let viewport = ShrinkWrappingViewport::new((sliver,)).axis_direction(axis_direction);
-            match &self.offset {
-                OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
-                OffsetSource::Position(position) => viewport.position(position.clone()),
-            }
-            .boxed()
-        } else {
-            let viewport = Viewport::new((sliver,)).axis_direction(axis_direction);
-            match &self.offset {
-                OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
-                OffsetSource::Position(position) => viewport.position(position.clone()),
-            }
-            .boxed()
-        }
+    fn wrap(&self, ctx: &dyn BuildContext, sliver: BoxedView) -> Scrollable {
+        let axis_direction = axis_direction_from_axis_reverse_and_directionality(
+            ctx,
+            self.config.scroll_direction,
+            self.config.reverse,
+        );
+        let shrink_wrap = self.shrink_wrap;
+        Scrollable::with_config(
+            self.config.clone(),
+            Rc::new(move |position: ScrollPosition| {
+                if shrink_wrap {
+                    ShrinkWrappingViewport::new(position, (sliver.clone(),))
+                        .axis_direction(axis_direction)
+                        .boxed()
+                } else {
+                    Viewport::new(position, (sliver.clone(),))
+                        .axis_direction(axis_direction)
+                        .boxed()
+                }
+            }),
+        )
     }
 }
 
@@ -97,36 +81,18 @@ macro_rules! scroll_view_methods {
                 self
             }
 
-            /// The scroll axis (default [`Axis::Vertical`]). A horizontal
-            /// axis follows the ambient [`Directionality`](crate::Directionality).
-            #[must_use]
-            pub fn scroll_direction(mut self, direction: Axis) -> Self {
-                self.scrolling.direction = direction;
-                self
-            }
-
-            /// A programmatic scroll offset in logical pixels; exclusive with
-            /// [`position`](Self::position), the last call wins.
-            #[must_use]
-            pub fn offset(mut self, offset: f64) -> Self {
-                self.scrolling.offset = OffsetSource::Fixed(offset);
-                self
-            }
-
-            /// A shared scroll position — see [`Viewport::position`];
-            /// exclusive with [`offset`](Self::offset), the last call wins.
-            #[must_use]
-            pub fn position(mut self, position: ScrollPosition) -> Self {
-                self.scrolling.offset = OffsetSource::Position(position);
-                self
-            }
-
             /// Size to the content along the scroll axis (default `false`),
             /// for a parent with unbounded main-axis constraints.
             #[must_use]
             pub fn shrink_wrap(mut self, shrink_wrap: bool) -> Self {
                 self.scrolling.shrink_wrap = shrink_wrap;
                 self
+            }
+        }
+
+        impl<T, K> ScrollView for $view<T, K> {
+            fn scroll_config_mut(&mut self) -> &mut ScrollViewConfig {
+                &mut self.scrolling.config
             }
         }
 
@@ -161,7 +127,7 @@ macro_rules! scroll_view_methods {
 }
 
 /// A scrollable list over keyed items that animates every change to them:
-/// a [`SliverAnimatedList`] in a viewport, as [`ListView`](crate::ListView)
+/// a [`SliverAnimatedList`] in a scroll view, as [`ListView`](crate::ListView)
 /// is a lazy sliver list in one.
 ///
 /// Rebuild it with new items; insertions enter, removals leave from where

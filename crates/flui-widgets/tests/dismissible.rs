@@ -1313,7 +1313,7 @@ pub(crate) fn a_dismissible_goes_out_only_where_its_direction_and_threshold_allo
 /// sliding it, and the release dismisses it.
 pub(crate) fn a_row_scrolled_out_of_a_lazy_list_mid_slide_keeps_its_slide() {
     use flui_view::{IntoView, ViewExt};
-    use flui_widgets::{ListView, ScrollController, Scrollable, SizedBox};
+    use flui_widgets::{ListView, ScrollController, ScrollView, SizedBox};
 
     let dismissed = Rc::new(Cell::new(0));
     let on_dismissed = Rc::clone(&dismissed);
@@ -1333,15 +1333,7 @@ pub(crate) fn a_row_scrolled_out_of_a_lazy_list_mid_slide_keeps_its_slide() {
         })
     });
     let scroll = ScrollController::new();
-    let list = Scrollable::new()
-        .controller(scroll.clone())
-        .viewport_builder(Rc::new(move |position| {
-            let row = Rc::clone(&row);
-            ListView::builder(200, 50.0, move |index| row(index))
-                .position(position)
-                .into_view()
-                .boxed()
-        }));
+    let list = ListView::builder(200, 50.0, move |index| row(index)).controller(scroll.clone());
     let vsync = Vsync::new();
     let mut laid = lay_out_animated(
         VsyncScope::new(vsync.clone(), list),

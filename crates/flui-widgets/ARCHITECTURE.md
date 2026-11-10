@@ -1013,6 +1013,19 @@ and the drag's own unmount takes the proxy with it in the same frame. Rows
 `reduced_motion_moves_the_rows_at_once`, `a_drag_that_does_not_drop_moves_nothing` and
 `a_dragged_tile_makes_room_across_the_rows` pin these.
 
+### Scroll views scroll themselves
+
+`ListView`, `GridView`, `CustomScrollView`, `SingleChildScrollView`, `AnimatedList` and
+`AnimatedGrid` each hold one `ScrollViewConfig` and implement `ScrollView`, whose provided methods
+are the scroll builders; a scroll widget a package writes does the same. Each builds a
+`Scrollable` over a passive viewport: `Scrollable::new` takes the closure that builds the viewport
+from its shared `ScrollPosition`, and `Viewport::new` takes that position, so the gestures, the
+controller and the viewport's committed extents meet in one position. A viewport never owns an
+offset of its own; one that never moves is given `ScrollPosition::fixed`. The axis direction is
+resolved once from the configured axis, `reverse` and the ambient `Directionality`, and the
+scrollable orients its gestures by the same value. `standard_scroll_views_scroll_themselves`
+drags and wheels each of them, forward and reversed, with no `Scrollable` of the caller's.
+
 ### Programmatic scroll replacement preserves the published velocity
 
 `ScrollController::animate_to` services its command through the existing owning

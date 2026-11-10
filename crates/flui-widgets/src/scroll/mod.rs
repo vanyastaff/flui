@@ -6,9 +6,10 @@
 //! path; [`SingleChildScrollView`] and [`ListView`] are the common user-facing
 //! widgets.
 //!
-//! For gesture-driven interactive scrolling use [`Scrollable`] + a
-//! [`ScrollController`], and optionally wrap them in a [`Scrollbar`] for a
-//! visual position indicator.
+//! The user-facing views scroll themselves (see [`ScrollView`]): give one a
+//! [`ScrollController`] to read or move its offset, and wrap it in a
+//! [`Scrollbar`] for a visual position indicator. [`Scrollable`] puts the
+//! scroll gestures over a viewport of your own.
 
 mod anchored_drag;
 mod carousel;
@@ -20,6 +21,7 @@ pub(crate) use interactive_viewer::zoom_keys;
 pub(crate) use refresh_indicator::refresh_keys;
 mod animated_list;
 mod collapsing_header;
+mod config;
 mod custom_scroll_view;
 mod drag_autoscroll;
 mod focusable_sliver;
@@ -67,6 +69,7 @@ pub use carousel::{
 pub use collapsing_header::{
     CollapsingHeader, CollapsingHeaderState, HeaderExtents, HeaderExtentsError, HeaderOrder,
 };
+pub use config::{ScrollView, ScrollViewConfig};
 pub use custom_scroll_view::CustomScrollView;
 pub use flui_objects::InvalidSliverCrossAxisExtent;
 pub use focusable_sliver::{FocusableSliver, FocusableSliverParts, IntoFocusableSliver};

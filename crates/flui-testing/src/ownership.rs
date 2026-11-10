@@ -39,7 +39,8 @@ use flui_view::{BoxedView, LifecycleContext, ViewState};
 use flui_widgets::{
     Alternative, ColoredBox, Column, GestureAlternatives, GestureCommand, GestureDetector,
     InteractiveViewer, Listener, MenuSpec, PageController, PageIntent, PageView, ScrollController,
-    Scrollable, SizedBox, SwipeAction, SwipeActions, SwipeAlternative, ZoomIntent,
+    ScrollView, SingleChildScrollView, SizedBox, SwipeAction, SwipeActions, SwipeAlternative,
+    ZoomIntent,
 };
 
 use crate::{
@@ -709,7 +710,9 @@ fn anchored_leaf_in_orthogonal_ancestor(device: PointerKind) {
         let list = ScrollController::new();
         let content = Column::new(vec![swipe_row(), SizedBox::new(300.0, 1000.0).boxed()]);
         let mut laid = lay_out(
-            Scrollable::new().controller(list.clone()).child(content),
+            SingleChildScrollView::new()
+                .controller(list.clone())
+                .child(content),
             tight(PAGE, PAGE),
         );
         assert_eq!(

@@ -2,6 +2,7 @@
 
 use crate::common::{lay_out, loose};
 use flui_rendering::semantics::{ActionCall, ActionDecodeError, SemanticsAction};
+use flui_widgets::ScrollView;
 use flui_widgets::{MergeSemantics, Semantics, SemanticsRole, SizedBox};
 
 struct CollectionChanges;
@@ -57,7 +58,9 @@ pub(crate) fn lazy_collection_totals_reach_the_real_consumer_after_incremental_u
                     .boxed(),
             )
         })
-        .offset(offset)
+        .controller(flui_widgets::ScrollController::with_initial_scroll_offset(
+            offset,
+        ))
         .repaint_boundaries(false)
     };
     let mut laid = lay_out(content(100, 0.0), crate::common::tight(100.0, 100.0));
@@ -103,49 +106,55 @@ pub(crate) fn collection_consumer_preserves_unknown_and_explicit_nested_sets() {
     use flui_widgets::{IndexedSemantics, SliverList, Viewport};
 
     let content = |known_inner: bool, explicit: bool| {
-        Viewport::new((SliverList::new(
-            3,
-            100.0,
-            Rc::new(move |index| {
-                let body = if index == 0 && explicit {
-                    IndexedSemantics::new(7)
-                        .child(SizedBox::new(100.0, 100.0))
-                        .boxed()
-                } else if index == 0 {
-                    let count = if known_inner {
-                        ItemCount::Exact(2)
+        Viewport::new(
+            flui_rendering::view::ScrollPosition::fixed(0.0),
+            (SliverList::new(
+                3,
+                100.0,
+                Rc::new(move |index| {
+                    let body = if index == 0 && explicit {
+                        IndexedSemantics::new(7)
+                            .child(SizedBox::new(100.0, 100.0))
+                            .boxed()
+                    } else if index == 0 {
+                        let count = if known_inner {
+                            ItemCount::Exact(2)
+                        } else {
+                            ItemCount::Unknown
+                        };
+                        SizedBox::new(100.0, 100.0)
+                            .child(Viewport::new(
+                                flui_rendering::view::ScrollPosition::fixed(0.0),
+                                (SliverList::new(
+                                    count,
+                                    20.0,
+                                    Rc::new(|inner| {
+                                        (inner < 2).then(|| {
+                                            Semantics::new()
+                                                .container(true)
+                                                .role(SemanticsRole::ListItem)
+                                                .label(format!("inner member {inner}"))
+                                                .child(SizedBox::new(100.0, 20.0))
+                                                .boxed()
+                                        })
+                                    }),
+                                ),),
+                            ))
+                            .boxed()
                     } else {
-                        ItemCount::Unknown
+                        SizedBox::new(100.0, 100.0).boxed()
                     };
-                    SizedBox::new(100.0, 100.0)
-                        .child(Viewport::new((SliverList::new(
-                            count,
-                            20.0,
-                            Rc::new(|inner| {
-                                (inner < 2).then(|| {
-                                    Semantics::new()
-                                        .container(true)
-                                        .role(SemanticsRole::ListItem)
-                                        .label(format!("inner member {inner}"))
-                                        .child(SizedBox::new(100.0, 20.0))
-                                        .boxed()
-                                })
-                            }),
-                        ),)))
-                        .boxed()
-                } else {
-                    SizedBox::new(100.0, 100.0).boxed()
-                };
-                Some(
-                    Semantics::new()
-                        .container(true)
-                        .role(SemanticsRole::ListItem)
-                        .label(format!("outer member {index}"))
-                        .child(body)
-                        .boxed(),
-                )
-            }),
-        ),))
+                    Some(
+                        Semantics::new()
+                            .container(true)
+                            .role(SemanticsRole::ListItem)
+                            .label(format!("outer member {index}"))
+                            .child(body)
+                            .boxed(),
+                    )
+                }),
+            ),),
+        )
     };
     let mut laid = lay_out(content(true, false), crate::common::tight(100.0, 300.0));
     laid.enable_semantics();
@@ -278,7 +287,10 @@ pub(crate) fn collection_consumer_uses_member_totals_for_separated_and_composed_
                     .composed_at(3, flui_widgets::SetSize::Known(5)),
             );
         }
-        Viewport::new((first, second))
+        Viewport::new(
+            flui_rendering::view::ScrollPosition::fixed(0.0),
+            (first, second),
+        )
     };
     let mut laid = lay_out(content(false), crate::common::tight(100.0, 100.0));
     laid.enable_semantics();
@@ -460,15 +472,18 @@ pub(crate) fn sliver_fade_keeps_geometry_and_retargets_paint_and_semantics() {
     use std::time::Duration;
     let first = Rc::new(AnimationController::builder(Duration::from_millis(100)).build());
     let view = |opacity: Rc<dyn Animation<f64>>| {
-        Viewport::new((SliverFadeTransition::new(
-            opacity,
-            SliverToBoxAdapter::new().child(
-                Semantics::new()
-                    .container(true)
-                    .label("fading sliver")
-                    .child(SizedBox::new(100.0, 50.0)),
-            ),
-        ),))
+        Viewport::new(
+            flui_rendering::view::ScrollPosition::fixed(0.0),
+            (SliverFadeTransition::new(
+                opacity,
+                SliverToBoxAdapter::new().child(
+                    Semantics::new()
+                        .container(true)
+                        .label("fading sliver")
+                        .child(SizedBox::new(100.0, 50.0)),
+                ),
+            ),),
+        )
     };
     let mut laid = lay_out(view(first.clone()), crate::common::tight(100.0, 100.0));
     laid.enable_semantics();
@@ -541,19 +556,22 @@ pub(crate) fn sliver_fade_keeps_geometry_and_retargets_paint_and_semantics() {
 pub(crate) fn sliver_annotations_update_and_exclude_without_adapting_geometry() {
     use flui_widgets::{SliverSemantics, SliverToBoxAdapter, Viewport};
     let content = |label: &str, excluding| {
-        Viewport::new((SliverSemantics::new()
-            .container(true)
-            .explicit_child_nodes(true)
-            .label(label)
-            .exclude_semantics(excluding)
-            .child(
-                SliverToBoxAdapter::new().child(
-                    Semantics::new()
-                        .container(true)
-                        .label("section member")
-                        .child(SizedBox::new(40.0, 30.0)),
-                ),
-            ),))
+        Viewport::new(
+            flui_rendering::view::ScrollPosition::fixed(0.0),
+            (SliverSemantics::new()
+                .container(true)
+                .explicit_child_nodes(true)
+                .label(label)
+                .exclude_semantics(excluding)
+                .child(
+                    SliverToBoxAdapter::new().child(
+                        Semantics::new()
+                            .container(true)
+                            .label("section member")
+                            .child(SizedBox::new(40.0, 30.0)),
+                    ),
+                ),),
+        )
     };
     let mut laid = lay_out(
         content("section A", false),
@@ -1769,12 +1787,12 @@ pub(crate) fn numeric_range_admission_and_owner_payload_validation() {
 /// A horizontal scrollable's item step is a character, as AccessKit defines
 /// it for horizontal scrolling: 16 by default, not the vertical line.
 pub(crate) fn a_horizontal_item_scroll_moves_one_character() {
-    use flui_widgets::{ScrollController, Scrollable};
+    use flui_widgets::{ScrollController, ScrollView, SingleChildScrollView};
 
     let scroll = ScrollController::new();
     let (mut laid, tree, _host) = pump_labelled(
         host().child(
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .scroll_direction(flui_foundation::geometry::Axis::Horizontal)
                 .controller(scroll.clone())
                 .child(SizedBox::new(1000.0, 40.0)),
@@ -1807,7 +1825,7 @@ pub(crate) fn a_horizontal_item_scroll_moves_one_character() {
 /// offset by most of a viewport and each item request by one line, clamped to
 /// the extents.
 pub(crate) fn assistive_scroll_actions_move_a_scrollable() {
-    use flui_widgets::{ScrollController, Scrollable};
+    use flui_widgets::{ScrollController, ScrollView, SingleChildScrollView};
 
     let scroll = ScrollController::new();
     scroll
@@ -1815,7 +1833,7 @@ pub(crate) fn assistive_scroll_actions_move_a_scrollable() {
         .expect("ordered extents");
     let (mut laid, tree, _host) = pump_labelled(
         host().child(
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(scroll.clone())
                 .child(SizedBox::new(100.0, 1000.0)),
         ),
@@ -2177,7 +2195,7 @@ fn assert_rect_near(
 /// of the control.
 pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
     use flui_view::ViewExt as _;
-    use flui_widgets::{Column, ScrollController, Scrollable};
+    use flui_widgets::{Column, ScrollController, ScrollView, SingleChildScrollView};
     use std::sync::{Arc, Mutex};
 
     let controller = ScrollController::new();
@@ -2193,7 +2211,7 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
         SizedBox::new(200.0, 600.0).boxed(),
     ));
     let mut laid = lay_out(
-        Scrollable::new()
+        SingleChildScrollView::new()
             .controller(controller.clone())
             .child(content.boxed()),
         crate::common::tight(200.0, 200.0),

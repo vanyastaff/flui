@@ -10,6 +10,7 @@ use flui_platform::input_regions::{DeviceInputRegion, InputRegionKind};
 use flui_platform::{DisplayId, DisplayKey, DisplayRegistry};
 use flui_testing::log_capture;
 use flui_view::{IntoView, View};
+use flui_widgets::ScrollView;
 use flui_widgets::row;
 use flui_widgets::{
     ClipRect, ColoredBox, Positioned, SizedBox, Stack, SystemGestureExclusion, Transform,
@@ -227,7 +228,9 @@ pub(crate) fn a_region_in_a_scrolled_list_item_reports_the_scrolled_rect() {
             }
         })
     })
-    .offset(120.0);
+    .controller(flui_widgets::ScrollController::with_initial_scroll_offset(
+        120.0,
+    ));
     let laid = lay_out(list, tight(200.0, 200.0));
     // Item 3 starts at 150 in the list; scrolled by 120 it sits at 30.
     assert_eq!(

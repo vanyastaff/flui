@@ -16,8 +16,8 @@ use flui_view::{BoxedView, IntoView, ViewExt};
 use flui_widgets::{
     Alternative, AnchorIntent, AnchoredDrag, AnchoredDragController, AnchorsError, ColoredBox,
     ControlPlacement, ControlSpec, Directionality, DraggableAnchors, GestureAlternatives,
-    GestureCommand, NestedScroll, ScrollCause, ScrollController, ScrollDevice, Scrollable,
-    SizedBox,
+    GestureCommand, NestedScroll, ScrollCause, ScrollController, ScrollDevice, ScrollView,
+    SingleChildScrollView, SizedBox,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};
@@ -339,7 +339,7 @@ pub(crate) fn anchored_drag_refuses_degenerate_anchor_sets() {
         let paged = |page: BoxedView| {
             let (vsync, pager) = (Vsync::new(), ScrollController::new());
             let pages = flui_widgets::Row::new(vec![page, SizedBox::new(300.0, 300.0).boxed()]);
-            let view = Scrollable::new()
+            let view = SingleChildScrollView::new()
                 .controller(pager.clone())
                 .scroll_direction(Axis::Horizontal)
                 .child(pages);
@@ -352,7 +352,7 @@ pub(crate) fn anchored_drag_refuses_degenerate_anchor_sets() {
         let moved = paged(drag_view(&held, Axis::Horizontal).boxed());
         // A scrollable with no room is the reference: the drag goes up the
         // chain from where the inner contact won it.
-        let full = Scrollable::new()
+        let full = SingleChildScrollView::new()
             .scroll_direction(Axis::Horizontal)
             .child(SizedBox::new(300.0, 300.0));
         let reference = paged(SizedBox::new(300.0, 300.0).child(full).boxed());
@@ -689,7 +689,9 @@ pub(crate) fn anchored_drag_is_a_bounded_leaf_and_a_participant() {
                 .boxed(),
             SizedBox::new(300.0, 1000.0).boxed(),
         ]);
-        let view = Scrollable::new().controller(list.clone()).child(rows);
+        let view = SingleChildScrollView::new()
+            .controller(list.clone())
+            .child(rows);
         let mut laid = mount(view, &vsync);
         laid.replay(&slow(device, at(100.0, 50.0), at(200.0, 50.0)));
         settle(&mut laid);
@@ -711,7 +713,7 @@ pub(crate) fn anchored_drag_is_a_bounded_leaf_and_a_participant() {
         let vsync = Vsync::new();
         let sheet = controller(stops(&[(Stop::Closed, 0.0), (Stop::Open, 200.0)]));
         let list = ScrollController::new();
-        let content = Scrollable::new()
+        let content = SingleChildScrollView::new()
             .controller(list.clone())
             .child(SizedBox::new(300.0, 1000.0));
         let view = AnchoredDrag::new(
@@ -775,7 +777,9 @@ pub(crate) fn anchored_drag_is_a_bounded_leaf_and_a_participant() {
         SizedBox::new(300.0, 1000.0).boxed(),
     ]);
     let mut laid = mount(
-        Scrollable::new().controller(outer.clone()).child(content),
+        SingleChildScrollView::new()
+            .controller(outer.clone())
+            .child(content),
         &vsync,
     );
     outer.jump_to(100.0).expect("no build is running");

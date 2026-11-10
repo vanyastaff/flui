@@ -156,7 +156,7 @@ pub enum HeaderOrder {
 /// let view = CollapsingHeader::new(
 ///     extents,
 ///     SizedBox::new(400.0, 200.0),
-///     Scrollable::new().child(SizedBox::new(400.0, 2000.0)),
+///     SingleChildScrollView::new().child(SizedBox::new(400.0, 2000.0)),
 /// )
 /// .semantic_label("Inbox");
 /// ```
