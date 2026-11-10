@@ -20,6 +20,8 @@ mod layout;
 mod leader_watch;
 mod paint;
 mod poison;
+#[cfg(any(test, feature = "testing"))]
+mod presented;
 mod query;
 mod reassemble;
 mod relocation;
@@ -30,6 +32,8 @@ pub use cell::{PipelineCell, WeakPipelineCell};
 pub use counters::PipelineCounters;
 pub(crate) use leader_watch::LeaderWatches;
 pub use leader_watch::{LeaderGeometry, LeaderWatch};
+#[cfg(any(test, feature = "testing"))]
+pub use presented::{PresentedKind, PresentedNode};
 pub use relocation::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
     DetachedRenderSubtrees, ReleaseDetachedRenderSubtreesError,

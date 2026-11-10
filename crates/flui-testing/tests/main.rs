@@ -55,6 +55,8 @@ mod lifecycle_panic_containment;
 mod log_capture;
 #[path = "memory_storage.rs"]
 mod memory_storage;
+#[path = "motion_gate.rs"]
+mod motion_gate;
 #[path = "mount_bootstrap.rs"]
 mod mount_bootstrap;
 #[path = "multi_presentation_clock.rs"]
@@ -408,6 +410,61 @@ fn background_work() {
                 "background_work::work_handed_to_on_complete_is_cancelled_when_its_runtime_ends",
                 background_work::work_handed_to_on_complete_is_cancelled_when_its_runtime_ends
                     as fn(),
+            ),
+        ],
+    );
+}
+
+#[test]
+fn motion_gate_rules() {
+    run_table(
+        "motion_gate_rules",
+        &[
+            (
+                "motion_gate::a_padding_change_jumps_unless_it_animates",
+                motion_gate::a_padding_change_jumps_unless_it_animates as fn(),
+            ),
+            (
+                "motion_gate::an_opacity_change_snaps_unless_it_fades",
+                motion_gate::an_opacity_change_snaps_unless_it_fades as fn(),
+            ),
+            (
+                "motion_gate::a_node_that_appears_at_once_pops_in_and_one_that_enters_does_not",
+                motion_gate::a_node_that_appears_at_once_pops_in_and_one_that_enters_does_not
+                    as fn(),
+            ),
+            (
+                "motion_gate::a_node_that_vanishes_pops_out",
+                motion_gate::a_node_that_vanishes_pops_out as fn(),
+            ),
+            (
+                "motion_gate::an_opacity_dip_that_comes_back_flickers",
+                motion_gate::an_opacity_dip_that_comes_back_flickers as fn(),
+            ),
+            (
+                "motion_gate::a_bouncy_spring_overshoots_and_a_critical_one_does_not",
+                motion_gate::a_bouncy_spring_overshoots_and_a_critical_one_does_not as fn(),
+            ),
+            (
+                "motion_gate::motion_still_running_at_the_end_never_settles",
+                motion_gate::motion_still_running_at_the_end_never_settles as fn(),
+            ),
+            (
+                "motion_gate::frames_asked_for_after_the_motion_ends_wake_after_end",
+                motion_gate::frames_asked_for_after_the_motion_ends_wake_after_end as fn(),
+            ),
+            (
+                "motion_gate::a_finding_is_charged_to_the_outermost_node_that_shows_it",
+                motion_gate::a_finding_is_charged_to_the_outermost_node_that_shows_it as fn(),
+            ),
+            (
+                "motion_gate::the_allowlist_covers_with_a_reason_and_refuses_rows_that_match_nothing",
+                motion_gate::the_allowlist_covers_with_a_reason_and_refuses_rows_that_match_nothing
+                    as fn(),
+            ),
+            (
+                "motion_gate::presented_nodes_compose_opacity_and_clip",
+                motion_gate::presented_nodes_compose_opacity_and_clip as fn(),
             ),
         ],
     );

@@ -126,6 +126,13 @@ substrate driver over raw owners, which the raw-owner suites still use.
   function `flui-app`'s runners call, before the UI runtime adds its scopes,
   so Tab, Shift+Tab and the clipboard chords work headlessly as on screen.
   Tests: `tab_moves_focus_in_a_headless_host_attached_app`.
+- **The motion gate samples what paint would show, one sample per pump.**
+  `motion::MotionRun` records `PipelineOwner::presented_nodes` after each
+  `LaidOut` pump, with the time from the harness's `ManualClock`, so a
+  recording holds no wall time and every frame is a `UiRuntime::pump`. A
+  finding is charged to the outermost node that shows it
+  (`charge_to_outermost`), and an allowlist row that matches nothing fails the
+  gate (ADR-0321). Pinned by the `motion_gate_rules` table in `tests/main.rs`.
 - **A recording crosses the wire only through mirror types.**
   `flui_protocol::input_recording` declares the rows and header with pinned
   spellings, `flui-runtime` converts `InputRecord` rows to and from them
