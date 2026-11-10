@@ -222,6 +222,21 @@ pub(crate) fn an_opacity_dip_that_comes_back_flickers() {
         !found.contains(&Rule::FadeSnap),
         "no step of a gradual dip snaps: {found:?}"
     );
+
+    // An older, higher peak does not hide a recent dip from a lower one: 1.0, 0.9, 0.5, 0.9.
+    let tree = |value: f64| Opacity::new(value).child(square());
+    let mut laid = lay_out_animated(tree(1.0), loose(200.0), Vsync::new());
+    let mut run = MotionRun::new(&mut laid);
+    for (dt, value) in [(100, 0.9), (100, 0.5), (150, 0.9)] {
+        run.frame(Duration::from_millis(dt));
+        run.act(|laid| laid.pump_widget(tree(value)));
+    }
+    run.play(Duration::from_secs(1), FRAME);
+    let found = rules(&run.finish());
+    assert!(
+        found.contains(&Rule::Flicker),
+        "a dip back to a lower recent peak flickers: {found:?}"
+    );
 }
 
 pub(crate) fn a_blink_through_opacity_zero_flickers() {
@@ -299,6 +314,29 @@ pub(crate) fn a_bouncy_spring_overshoots_and_a_critical_one_does_not() {
     assert!(
         critical.is_empty(),
         "bounce 0 lands without passing: {critical:?}"
+    );
+
+    // The same bounce under a shut clip of a fixed size is never seen.
+    let description = SpringDescription::with_duration_and_bounce(Duration::from_millis(400), 0.5)
+        .expect("a valid spring");
+    let vsync = Vsync::new();
+    let hidden = record(
+        &vsync,
+        |inset| {
+            VsyncScope::new(
+                vsync.clone(),
+                SizedBox::new(100.0, 100.0).child(ClipRect::new().clipper(Rect::ZERO).child(
+                    AnimatedPadding::new(EdgeInsets::all(inset), square()).spring(description),
+                )),
+            )
+        },
+        0.0,
+        60.0,
+    );
+    let found = rules(&hidden);
+    assert!(
+        !found.contains(&Rule::Overshoot),
+        "a bounce the clip hides is not an overshoot: {found:?}"
     );
 }
 

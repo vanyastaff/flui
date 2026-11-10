@@ -90,8 +90,8 @@ own frame. `check_all(&Recording, &MotionConfig) -> Vec<Finding>` applies:
 | `pop-out` | a node unmounts while drawn at `pop_opacity` or more |
 | `jump` | an edge moves `jump` or more in one frame between frames where it holds still, outside a `direct` frame |
 | `fade-snap` | a drawn node's opacity steps by `fade_snap` or more in one frame |
-| `flicker` | opacity falls by `flicker_dip` or more from a peak and climbs back to it within `flicker_window`, in one step or many; a frame the node is left out of, or drawn wholly clipped in, counts as opacity 0 |
-| `overshoot` | after the last input an edge that travels `still` or more passes where it comes to rest by more than `overshoot` |
+| `flicker` | opacity falls by `flicker_dip` or more from any peak within `flicker_window` before it and climbs back to that peak within the window, in one step or many; a frame the node is left out of, or drawn wholly clipped in, counts as opacity 0 |
+| `overshoot` | after the last input an edge that travels `still` or more passes where it comes to rest by more than `overshoot` in a frame that shows it |
 | `never-settles` | something shown still moves, fades or changes its visible part in the last `settle_window`, which lies after the last input |
 | `wakes-after-end` | a frame is still asked for `wake_after_end` after the last frame that changed what the window shows (a hidden node, or the part of a box past its clip, or hidden nodes mounting and unmounting, changes nothing; each frame is compared with the last one that changed, so a slow drift adds up) |
 

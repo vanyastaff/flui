@@ -264,32 +264,35 @@ fn flicker(
     let mut at = 1;
     while at < series.len() {
         let (frame, time, opacity) = series[at];
-        let peak = series[..at]
+        // Every earlier frame within the window that this one dips far enough below is a
+        // candidate peak; the dip counts when opacity climbs back to any of them within the
+        // window from it. A higher, older peak does not hide a lower, recent one.
+        let dip = series[..at]
             .iter()
-            .filter(|(_, earlier, _)| time.saturating_sub(*earlier) <= config.flicker_window)
-            .max_by(|a, b| a.2.total_cmp(&b.2))
-            .copied();
-        if let Some((_, peak_time, peak_opacity)) = peak
-            && peak_opacity - opacity >= config.flicker_dip
-        {
-            let back = series[at + 1..]
-                .iter()
-                .take_while(|(_, later, _)| {
-                    later.saturating_sub(peak_time) <= config.flicker_window
-                })
-                .position(|(_, _, later)| *later >= peak_opacity - RETURN_OPACITY);
-            if let Some(offset) = back {
-                out.push(finding(
-                    recording,
-                    Rule::Flicker,
-                    id,
-                    frame,
-                    locator,
-                    format!("opacity dipped {peak_opacity:.2} to {opacity:.2} and came back"),
-                ));
-                at += offset + 2;
-                continue;
-            }
+            .filter(|&&(_, earlier, peak)| {
+                time.saturating_sub(earlier) <= config.flicker_window
+                    && peak - opacity >= config.flicker_dip
+            })
+            .find_map(|&(_, peak_time, peak_opacity)| {
+                series[at + 1..]
+                    .iter()
+                    .take_while(|(_, later, _)| {
+                        later.saturating_sub(peak_time) <= config.flicker_window
+                    })
+                    .position(|(_, _, later)| *later >= peak_opacity - RETURN_OPACITY)
+                    .map(|offset| (peak_opacity, offset))
+            });
+        if let Some((peak_opacity, offset)) = dip {
+            out.push(finding(
+                recording,
+                Rule::Flicker,
+                id,
+                frame,
+                locator,
+                format!("opacity dipped {peak_opacity:.2} to {opacity:.2} and came back"),
+            ));
+            at += offset + 2;
+            continue;
         }
         at += 1;
     }
@@ -343,7 +346,8 @@ fn overshoot(
         if distance.abs() < config.still {
             continue;
         }
-        for &(frame, sample) in travel {
+        // Only a pass the window shows counts: a bounce wholly clipped or faded out is unseen.
+        for &(frame, sample) in travel.iter().filter(|(_, sample)| sample.is_shown()) {
             let past = (sample.edges()[edge] - to) * distance.signum();
             if past > config.overshoot && worst.is_none_or(|(_, w)| past > w) {
                 worst = Some((frame, past));
