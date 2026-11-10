@@ -5,10 +5,13 @@
 use std::time::Duration;
 
 use flui_animation::{SpringDescription, Vsync};
-use flui_foundation::geometry::{EdgeInsets, Rect};
+use flui_foundation::geometry::{EdgeInsets, Matrix4, Rect, Size};
 use flui_interaction::events::PointerEvent;
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
+use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::delegates::{FlowDelegate, FlowPaintingContext};
+use flui_rendering::traits::PaintOpacity;
 use flui_testing::motion::{
     Allow, MotionConfig, MotionRun, Recording, Rule, assert_smooth, charge_to_outermost, check,
     check_all, gate,
@@ -19,8 +22,8 @@ use flui_view::prelude::*;
 use flui_view::{IntoView, View, ViewExt};
 use flui_widgets::navigator::{Navigator, NavigatorHandle, PopupRoute, SimpleRoute};
 use flui_widgets::{
-    Align, AnimatedLerp, AnimatedOpacity, AnimatedPadding, ClipRect, ColoredBox, HitTestBehavior,
-    Listener, MotionBuilder, Opacity, Padding, SizedBox, UnconstrainedBox,
+    Align, AnimatedLerp, AnimatedOpacity, AnimatedPadding, ClipRect, ColoredBox, Column, Flow,
+    HitTestBehavior, Listener, MotionBuilder, Opacity, Padding, SizedBox, UnconstrainedBox,
 };
 
 const FRAME: Duration = Duration::from_millis(16);
@@ -391,6 +394,45 @@ pub(crate) fn wakes_after_end_reads_what_the_window_shows() {
         "clipped motion keeps waking: {found:?}"
     );
 
+    // Children mounted and unmounted wholly outside the clip: the hidden membership changes
+    // every few frames, what the window shows does not.
+    let vsync = Vsync::new();
+    let tree = |target: f64| {
+        VsyncScope::new(
+            vsync.clone(),
+            ClipRect::new().child(
+                SizedBox::new(40.0, 40.0).child(
+                    UnconstrainedBox::new()
+                        .alignment(Alignment::TOP_LEFT)
+                        .child(
+                            Padding::only(60.0, 0.0, 0.0, 0.0).child(
+                                AnimatedLerp::new(target, |value: &f64| {
+                                    // `value` is finite and non-negative: the run goes 0 to 100.
+                                    let count = 1 + usize::from((value * 10.0) as u64 % 2 == 1);
+                                    SizedBox::new(20.0, 20.0).child(Column::new(
+                                        (0..count)
+                                            .map(|_| SizedBox::new(10.0, 10.0).boxed())
+                                            .collect::<Vec<_>>(),
+                                    ))
+                                })
+                                .duration(Duration::from_secs(10)),
+                            ),
+                        ),
+                ),
+            ),
+        )
+    };
+    let mut laid = lay_out_animated(tree(0.0), loose(200.0), vsync.clone());
+    let found = rules(&run_change(
+        &mut laid,
+        || tree(100.0),
+        Duration::from_secs(2),
+    ));
+    assert!(
+        found.contains(&Rule::WakesAfterEnd),
+        "hidden churn keeps waking: {found:?}"
+    );
+
     // A drift slower than `still` per frame, in view, is motion that adds up: the frames it asks
     // for change what the window shows.
     let vsync = Vsync::new();
@@ -503,6 +545,22 @@ pub(crate) fn presented_nodes_compose_opacity_and_clip() {
         "the leaf lies right of the clip: {outside:#?}"
     );
     assert!(outside.visible.is_none(), "the clip hides it: {outside:#?}");
+
+    // A flow delegate fades its child through a paint scope, not through a paint effect.
+    let tree = |alpha: f64| Flow::new(FadingFlow { alpha }, vec![square().into_view().boxed()]);
+    let mut laid = lay_out_animated(tree(1.0), loose(200.0), Vsync::new());
+    let mut run = MotionRun::new(&mut laid);
+    run.act(|laid| laid.pump_widget(tree(0.2)));
+    let recording = run.finish();
+    let faded = recording.frames()[1]
+        .samples
+        .iter()
+        .find(|sample| sample.locator.ends_with("RenderDecoratedBox"))
+        .expect("the flow's child");
+    assert!(
+        (faded.opacity - 0.2).abs() < 1e-9,
+        "the child is drawn at the delegate's opacity: {faded:#?}"
+    );
 }
 
 pub(crate) fn a_page_under_a_popup_stays_presented() {
@@ -602,4 +660,40 @@ pub(crate) fn a_drag_step_moves_on_its_direct_frame() {
         !found.contains(&Rule::Jump),
         "a step that follows the hand is not a jump: {found:?}"
     );
+}
+
+/// Paints its one child at `alpha` through the flow delegate's opacity scope.
+#[derive(Debug)]
+struct FadingFlow {
+    alpha: f64,
+}
+
+impl FlowDelegate for FadingFlow {
+    fn get_size(&self, constraints: BoxConstraints) -> Size {
+        constraints.biggest()
+    }
+
+    fn get_constraints_for_child(
+        &self,
+        _index: usize,
+        constraints: BoxConstraints,
+    ) -> BoxConstraints {
+        BoxConstraints::loose(constraints.biggest())
+    }
+
+    fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
+        context.paint_child_with_opacity(0, Matrix4::IDENTITY, PaintOpacity::new(self.alpha));
+    }
+
+    fn should_relayout(&self, _old: &dyn FlowDelegate) -> bool {
+        false
+    }
+
+    fn should_repaint(&self, _old: &dyn FlowDelegate) -> bool {
+        true
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }

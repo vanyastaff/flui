@@ -827,6 +827,9 @@ impl PipelineOwner<PaintPhase> {
         }
 
         let mut painted_children = ChildPaintOrder::new();
+        // The group opacity of each scope the fragment has open, so a child painted inside
+        // one (a flow delegate's `paint_child_with_opacity`) records what it is drawn at.
+        let mut scope_opacity: SmallVec<[f64; 4]> = SmallVec::new();
         for op in fragment.ops {
             match op {
                 FragmentOp::Run(list) => composer.append_run(list),
@@ -837,22 +840,33 @@ impl PipelineOwner<PaintPhase> {
                     // this fragment-op replay loop, and `push_layer` hands
                     // back the freshly-minted LayerId.
                     let is_follower = matches!(*scope, FragmentScope::Follower(_));
+                    scope_opacity.push(match &*scope {
+                        FragmentScope::Opacity(opacity) => opacity.alpha(),
+                        _ => 1.0,
+                    });
                     let layer_id = composer.push_layer(scope_layer(*scope, origin));
                     if is_follower {
                         composer.record_follower_correlation(node_id, layer_id, origin);
                     }
                 }
                 FragmentOp::PushTransform(matrix) => {
+                    scope_opacity.push(1.0);
                     composer.push_layer(Layer::Transform(TransformLayer::new(conjugate(
                         *matrix, origin,
                     ))));
                 }
-                FragmentOp::Pop => composer.pop_layer(),
+                FragmentOp::Pop => {
+                    scope_opacity.pop();
+                    composer.pop_layer();
+                }
                 FragmentOp::Child {
                     index,
                     offset_override,
                 } => {
-                    painted_children.push(index);
+                    painted_children.push(PaintedChild {
+                        slot: index,
+                        opacity: scope_opacity.iter().product(),
+                    });
                     let Some(&child_id) = child_ids.get(index) else {
                         debug_assert!(
                             false,
@@ -914,18 +928,19 @@ impl PipelineOwner<PaintPhase> {
             }
         }
 
-        // The children that went down, in the order they lie over each other: what the
-        // input-region and presented walks follow. Most parents paint every child first to
-        // last; only the rest keep their list, a parent that leaves children out included.
+        // The children that went down, in the order they lie over each other and at the
+        // opacity of the scopes around them: what the input-region and presented walks
+        // follow. Most parents paint every child first to last outside any scope; only the
+        // rest keep their list, a parent that leaves children out included.
         if !child_ids.is_empty() {
-            let every_child_in_order = painted_children.len() == child_ids.len()
+            let plain = painted_children.len() == child_ids.len()
                 && painted_children
                     .iter()
                     .enumerate()
-                    .all(|(position, &slot)| position == slot);
+                    .all(|(position, child)| child.slot == position && child.opacity == 1.0);
             composer
                 .child_paint_orders
-                .push((node_id, (!every_child_in_order).then_some(painted_children)));
+                .push((node_id, (!plain).then_some(painted_children)));
         }
 
         for _ in 0..effect_layers {
@@ -1933,8 +1948,16 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
     }
 }
 
-/// The slots a parent painted its children from, in the order it painted them.
-pub(super) type ChildPaintOrder = SmallVec<[usize; 4]>;
+/// The children a parent painted, in the order it painted them.
+pub(super) type ChildPaintOrder = SmallVec<[PaintedChild; 4]>;
+
+/// One child a parent painted: its slot, and the product of the group opacities of the
+/// fragment scopes the parent had open around it (`1.0` outside any).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct PaintedChild {
+    pub(super) slot: usize,
+    pub(super) opacity: f64,
+}
 
 /// Whether [`capture`](FragmentComposer::capture) refuses a region that holds
 /// `layer`.

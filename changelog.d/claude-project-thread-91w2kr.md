@@ -5,7 +5,8 @@
   never-settles, wakes-after-end), with an allowlist whose rows need a reason and fail when they
   match nothing ([ADR-0321](/docs/adr/ADR-0321-a-motion-gate-reads-what-the-window-shows-each-frame.md)).
 - **`flui-rendering`** (feature `testing`): `PipelineOwner::presented_nodes`, each node's box,
-  visible part and opacity as the window shows them.
+  visible part and opacity as the window shows them, a child's opacity including the paint
+  scope its parent drew it in.
 
 ### Fixed
 

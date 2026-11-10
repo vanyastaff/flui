@@ -143,7 +143,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let painted = self.last_child_paint_orders.get(&id);
         let count = painted.map_or(children.len(), smallvec::SmallVec::len);
         for position in 0..count {
-            let slot = painted.map_or(position, |order| order[position]);
+            let slot = painted.map_or(position, |order| order[position].slot);
             let Some(&child_id) = children.get(slot) else {
                 continue;
             };

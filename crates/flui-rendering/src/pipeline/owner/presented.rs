@@ -7,7 +7,8 @@
 //! [`RenderObject::apply_paint_transform`](crate::traits::RenderObject::apply_paint_transform)
 //! with the follower placement the last composite resolved, a clip is the parent's
 //! [`describe_approximate_paint_clip`](crate::traits::RenderObject::describe_approximate_paint_clip),
-//! and opacity is the product of the
+//! and opacity is the product of the group opacity of the scopes a parent painted the child in
+//! and the
 //! [`PaintEffects::opacity`](crate::traits::PaintEffects::opacity) of the node and its ancestors.
 //! Every hook it calls is pure in `(self, size)` and runs no user code.
 
@@ -162,7 +163,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let painted = self.last_child_paint_orders.get(&id);
         let count = painted.map_or(children.len(), smallvec::SmallVec::len);
         for position in 0..count {
-            let slot = painted.map_or(position, |order| order[position]);
+            let (slot, scope_opacity) = painted.map_or((position, 1.0), |order| {
+                (order[position].slot, order[position].opacity)
+            });
             let Some(&child_id) = children.get(slot) else {
                 continue;
             };
@@ -200,7 +203,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     slot,
                     transform,
                     clip,
-                    opacity,
+                    opacity: opacity * scope_opacity,
                 },
                 out,
             );

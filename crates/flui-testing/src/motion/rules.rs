@@ -461,22 +461,22 @@ fn wakes_after_end(
     }
 }
 
-/// Whether the window shows the same thing in two frames: the same nodes, each hidden in both
-/// or drawn in both over the same visible part at the same opacity. Where a hidden box lies, or
-/// how far a clipped box reaches past its clip, changes nothing on screen.
+/// Whether the window shows the same thing in two frames: the same shown nodes, in the same
+/// order, each over the same visible part at the same opacity. Hidden nodes are left out of
+/// the comparison: where a hidden box lies, how many there are, or how far a clipped box reaches
+/// past its clip, changes nothing on screen.
 fn same_frame(before: &[Sample], after: &[Sample], config: &MotionConfig) -> bool {
-    before.len() == after.len()
-        && before
-            .iter()
-            .zip(after)
-            .all(|(a, b)| a.id == b.id && same_view(a, b, config.still))
-}
-
-fn same_view(a: &Sample, b: &Sample, still: f64) -> bool {
-    match (a.is_shown(), b.is_shown()) {
-        (false, false) => true,
-        (true, true) => same_visible(a, b, still) && (a.opacity - b.opacity).abs() < SAME_OPACITY,
-        _ => false,
+    let mut before = before.iter().filter(|sample| sample.is_shown());
+    let mut after = after.iter().filter(|sample| sample.is_shown());
+    loop {
+        match (before.next(), after.next()) {
+            (None, None) => return true,
+            (Some(a), Some(b))
+                if a.id == b.id
+                    && same_visible(a, b, config.still)
+                    && (a.opacity - b.opacity).abs() < SAME_OPACITY => {}
+            _ => return false,
+        }
     }
 }
 

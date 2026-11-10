@@ -61,7 +61,7 @@ pub struct PresentedNode {
     pub kind: PresentedKind,
     pub rect: Rect,                // the laid-out box in window-logical points
     pub visible: Option<Rect>,     // what every ancestor clip and the window leave of it
-    pub opacity: f64,              // its own and every ancestor's group opacity, multiplied
+    pub opacity: f64,              // its own, every ancestor's and their paint scopes', multiplied
 }
 ```
 
@@ -70,9 +70,11 @@ an invisible sliver, a child its parent left out of the last paint: the children
 painted are what it visits, not the semantics predicate, which drops a page a popup covers but
 still shows), composes each step with `RenderObject::apply_paint_transform` and the
 follower transform the last composite resolved, intersects each parent's
-`describe_approximate_paint_clip`, and multiplies `PaintEffects::opacity`. Each of those is pure in
-`(self, size)` and runs no user code. A node whose transform is not finite, or whose corners reach
-the perspective horizon, is left out with its subtree, so no non-finite geometry is published.
+`describe_approximate_paint_clip`, and multiplies `PaintEffects::opacity` with the group opacity
+of the scopes the last paint drew each child in (a flow delegate's per-child opacity). Each of
+those is pure in `(self, size)` and runs no user code. A node whose transform is not finite, or
+whose corners reach the perspective horizon, is left out with its subtree, so no non-finite
+geometry is published.
 Geometry stays window-logical (ADR-0098); a caller that needs device pixels multiplies by the
 window's scale factor.
 
@@ -91,7 +93,7 @@ own frame. `check_all(&Recording, &MotionConfig) -> Vec<Finding>` applies:
 | `flicker` | opacity falls by `flicker_dip` or more from a peak and climbs back to it within `flicker_window`, in one step or many; a frame the node is left out of, or drawn wholly clipped in, counts as opacity 0 |
 | `overshoot` | after the last input an edge that travels `still` or more passes where it comes to rest by more than `overshoot` |
 | `never-settles` | something shown still moves, fades or changes its visible part in the last `settle_window`, which lies after the last input |
-| `wakes-after-end` | a frame is still asked for `wake_after_end` after the last frame that changed what the window shows (a hidden node, or the part of a box past its clip, changes nothing; each frame is compared with the last one that changed, so a slow drift adds up) |
+| `wakes-after-end` | a frame is still asked for `wake_after_end` after the last frame that changed what the window shows (a hidden node, or the part of a box past its clip, or hidden nodes mounting and unmounting, changes nothing; each frame is compared with the last one that changed, so a slow drift adds up) |
 
 Frame 0 is the settled start: what it draws loaded with the view and is not an entrance. The
 thresholds live in one `#[non_exhaustive] MotionConfig` with defaults. `check` is
