@@ -908,3 +908,27 @@ mod tests;
 #[cfg(test)]
 #[path = "sparse_children/reconcile_tests.rs"]
 mod reconcile_tests;
+
+/// Replace the failed child `failed` of `parent` with `view`.
+///
+/// A lazy host keeps its residents out of `child_ids`, in its own residency
+/// map under their logical index as `slot`: those go through
+/// [`replace_failed_resident`], every other parent through
+/// [`ElementTree::replace_child_with`].
+pub(crate) fn replace_failed_child(
+    parent: ElementId,
+    slot: usize,
+    failed: ElementId,
+    view: &dyn View,
+    tree: &mut ElementTree,
+    owner: &mut ElementOwner<'_>,
+) -> ElementId {
+    let sparse_parent = tree
+        .get(parent)
+        .is_some_and(|node| node.element().hosts_sparse_children());
+    if sparse_parent {
+        replace_failed_resident(parent, slot, failed, view, tree, owner)
+    } else {
+        tree.replace_child_with(parent, slot, view, owner)
+    }
+}
