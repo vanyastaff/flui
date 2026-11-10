@@ -103,7 +103,7 @@ impl Decoration {
         if self.draws_own {
             self.absence()
         } else {
-            Some(CapabilityAbsence::NotOnThisDevice)
+            Some(CapabilityAbsence::NOT_ON_THIS_DEVICE)
         }
     }
 
@@ -130,7 +130,7 @@ impl Decoration {
             decided && matches!(answered_with, Some(FrameDrawer::Compositor)) != self.requested
         };
         if overruled || (!self.offered && !self.draws_own) {
-            Some(CapabilityAbsence::NotOnThisDevice)
+            Some(CapabilityAbsence::NOT_ON_THIS_DEVICE)
         } else {
             None
         }
@@ -148,7 +148,7 @@ mod tests {
     fn a_window_has_the_frame_its_compositor_leaves_it() {
         use Drawn::{Client as Own, Compositor as Theirs, Nobody};
         use FrameDrawer::{Client, Compositor};
-        let overruled = Some(CapabilityAbsence::NotOnThisDevice);
+        let overruled = Some(CapabilityAbsence::NOT_ON_THIS_DEVICE);
         let decoration = |offered, requested, told, answered| Decoration {
             offered,
             draws_own: true,
@@ -238,7 +238,7 @@ mod tests {
             told,
             answered,
         };
-        let overruled = Some(CapabilityAbsence::NotOnThisDevice);
+        let overruled = Some(CapabilityAbsence::NOT_ON_THIS_DEVICE);
         let bare = none(false, true, None, false);
         assert_eq!(bare.drawn(), Drawn::Nobody);
         assert_eq!(bare.absence(), overruled);

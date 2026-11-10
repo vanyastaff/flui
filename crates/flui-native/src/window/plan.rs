@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn open_plan_modes() {
-        let device = CapabilityAbsence::NotOnThisDevice;
+        let device = CapabilityAbsence::NOT_ON_THIS_DEVICE;
         let no_modes = ALL
             .unavailable(&WindowCommand::SetMode(WindowMode::Maximized), device)
             .unavailable(&WindowCommand::SetMode(WindowMode::Fullscreen), device);

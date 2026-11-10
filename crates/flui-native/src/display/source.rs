@@ -516,7 +516,7 @@ mod mapping {
             density_dpi: 420,
             refresh_hz: hertz as f32,
             max_refresh_hz: None,
-            color: Err(flui_platform::CapabilityAbsence::NotOnThisDevice),
+            color: Err(flui_platform::CapabilityAbsence::NOT_ON_THIS_DEVICE),
         };
         display
             .info(id)

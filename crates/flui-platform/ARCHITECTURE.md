@@ -146,8 +146,9 @@ this one path (ADR-0151 §9).
   capability is `Unavailable` exactly when admission refuses its command as
   `Unsupported`; a command admitted and then refused by the operating system
   is `ApplyError::Platform`, a failure rather than a missing capability. A
-  command's capability carries where it is missing, a `CapabilityAbsence` a
-  host sets with `WindowCapabilities::unavailable(command, absence)`:
+  command's capability carries where it is missing, a `CapabilityAbsence` (an
+  `UnsupportedReason` narrowed to the three lasting reasons below, one byte)
+  a host sets with `WindowCapabilities::unavailable(command, absence)`:
   `NotOnThisDevice` where this device or its OS build lacks what its platform
   has (a version gate that refused), `NotYetOnThisHost` where the OS has it
   and the host does not implement it yet, `NotOnThisPlatform` otherwise. The

@@ -459,7 +459,7 @@ fn platform_recordings_replay_on_the_headless_host() {
     );
     assert_eq!(
         displays[1].1.color,
-        Err(CapabilityAbsence::NotYetOnThisHost)
+        Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
     );
     assert!(
         matches!(&target.reads[4], Read::Displays(Err(failure)) if failure.kind == FailureKind::Displays),
@@ -500,7 +500,7 @@ fn window_state_recordings_replay_on_the_headless_host() {
     );
     assert_eq!(
         last.capabilities.into_parts().maximizes,
-        Err(CapabilityAbsence::NotYetOnThisHost),
+        Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
         "an absence survives the replay"
     );
     assert_eq!(
@@ -520,7 +520,7 @@ fn app_title_bar_snapshots_keep_their_wire_values_and_replay() {
     use flui_testing::window_commands::AdmitAndApply as _;
 
     let mut capabilities = WindowCapabilities::ALL.into_parts();
-    capabilities.sets_frame = Err(CapabilityAbsence::NotYetOnThisHost);
+    capabilities.sets_frame = Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     let platform =
         HeadlessPlatform::new().with_window_capabilities(capabilities.into_capabilities());
     let window = platform
@@ -584,7 +584,7 @@ fn app_title_bar_snapshots_keep_their_wire_values_and_replay() {
         let capabilities = state.capabilities.into_parts();
         assert_eq!(
             capabilities.sets_frame,
-            Err(CapabilityAbsence::NotYetOnThisHost)
+            Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
         );
         assert_eq!(capabilities.app_title_bar, Ok(Availability::Native));
     }

@@ -280,23 +280,25 @@ pub(crate) mod configure {
         let mut capabilities = WindowCapabilities::ALL
             // The text-input protocol reports no keyboard geometry, and a
             // desktop compositor keeps no edges for system gestures.
-            .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
-            .without_system_gestures(CapabilityAbsence::NotOnThisPlatform)
+            .without_keyboard_inset(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
+            .without_system_gestures(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
             .unavailable(
                 &WindowCommand::SetPosition(flui_foundation::geometry::Point::new(0.0, 0.0)),
-                CapabilityAbsence::NotOnThisPlatform,
+                CapabilityAbsence::NOT_ON_THIS_PLATFORM,
             )
-            .unavailable(&WindowCommand::Hide, CapabilityAbsence::NotOnThisPlatform)
-            .unavailable(&WindowCommand::Show, CapabilityAbsence::NotOnThisPlatform)
+            .unavailable(&WindowCommand::Hide, CapabilityAbsence::NOT_ON_THIS_PLATFORM)
+            .unavailable(&WindowCommand::Show, CapabilityAbsence::NOT_ON_THIS_PLATFORM)
             .unavailable(
                 &WindowCommand::SetMaterial(flui_platform::WindowMaterial::System),
-                CapabilityAbsence::NotOnThisPlatform,
+                CapabilityAbsence::NOT_ON_THIS_PLATFORM,
             );
         match activation {
             Activation::Offered => capabilities.activates = Availability::Emulated,
             Activation::Missing => {
-                capabilities = capabilities
-                    .unavailable(&WindowCommand::Activate, CapabilityAbsence::NotOnThisDevice);
+                capabilities = capabilities.unavailable(
+                    &WindowCommand::Activate,
+                    CapabilityAbsence::NOT_ON_THIS_DEVICE,
+                );
             }
         }
         if let Some(absence) = decoration {
@@ -309,7 +311,7 @@ pub(crate) mod configure {
         if states.tiled_by_compositor() {
             capabilities = capabilities.unavailable(
                 &WindowCommand::SetSize(Size::new(1.0, 1.0)),
-                CapabilityAbsence::NotOnThisDevice,
+                CapabilityAbsence::NOT_ON_THIS_DEVICE,
             );
         }
         capabilities.sets_resizable = Availability::Emulated;
@@ -321,19 +323,19 @@ pub(crate) mod configure {
             if !announced.maximize {
                 capabilities = capabilities.unavailable(
                     &WindowCommand::SetMode(WindowMode::Maximized),
-                    CapabilityAbsence::NotOnThisDevice,
+                    CapabilityAbsence::NOT_ON_THIS_DEVICE,
                 );
             }
             if !announced.fullscreen {
                 capabilities = capabilities.unavailable(
                     &WindowCommand::SetMode(WindowMode::Fullscreen),
-                    CapabilityAbsence::NotOnThisDevice,
+                    CapabilityAbsence::NOT_ON_THIS_DEVICE,
                 );
             }
             if !announced.minimize {
                 capabilities = capabilities.unavailable(
                     &WindowCommand::SetMode(WindowMode::Minimized),
-                    CapabilityAbsence::NotOnThisDevice,
+                    CapabilityAbsence::NOT_ON_THIS_DEVICE,
                 );
             }
         }
@@ -631,8 +633,8 @@ pub(crate) mod configure {
             let free = ToplevelStates::default();
             let unannounced = capabilities(
                 None,
-                Some(CapabilityAbsence::NotOnThisDevice),
-                Some(CapabilityAbsence::NotOnThisDevice),
+                Some(CapabilityAbsence::NOT_ON_THIS_DEVICE),
+                Some(CapabilityAbsence::NOT_ON_THIS_DEVICE),
                 free,
                 Activation::Missing,
             );
@@ -1105,7 +1107,7 @@ pub(crate) mod presented {
         if offered {
             capabilities
         } else {
-            capabilities.without_presentation_feedback(CapabilityAbsence::NotOnThisDevice)
+            capabilities.without_presentation_feedback(CapabilityAbsence::NOT_ON_THIS_DEVICE)
         }
     }
 

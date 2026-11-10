@@ -131,7 +131,7 @@ impl RandrState {
             refresh_period,
             is_primary: monitor.is_primary,
             persistent_key,
-            color: Err(CapabilityAbsence::NotYetOnThisHost),
+            color: Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
         })
     }
 }

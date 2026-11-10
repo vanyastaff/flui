@@ -195,7 +195,7 @@ fn a_profile_change_reaches_the_snapshot_as_a_new_revision() {
     let platform = HeadlessPlatform::new().with_displays(vec![
         DisplaySpec::new("Panel", 1920, 1080),
         DisplaySpec::new("Projector", 1280, 720)
-            .with_color(Err(CapabilityAbsence::NotOnThisDevice)),
+            .with_color(Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)),
     ]);
     let controls = platform.display_controls();
     let before = platform.display_snapshot().expect("snapshot");
@@ -298,7 +298,7 @@ fn windows_displays_report_their_colour() {
             }
             Err(absence) => assert_eq!(
                 absence,
-                CapabilityAbsence::NotOnThisDevice,
+                CapabilityAbsence::NOT_ON_THIS_DEVICE,
                 "{}: an output's colour space went unread",
                 display.name
             ),

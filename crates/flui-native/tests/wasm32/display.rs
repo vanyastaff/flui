@@ -647,7 +647,7 @@ async fn web_colour_follows_the_media_queries() {
         colour(&after),
         Some(Ok(DisplayColor::high(
             ColorGamut::DisplayP3,
-            Err(CapabilityAbsence::NotOnThisPlatform)
+            Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
         )))
     );
     running.quit();

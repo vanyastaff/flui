@@ -65,7 +65,7 @@ impl PlatformWindow for Faulty {
             Fault::DisclaimsPresentation => {
                 state.capabilities = state
                     .capabilities
-                    .without_presentation_feedback(CapabilityAbsence::NotOnThisPlatform);
+                    .without_presentation_feedback(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
             }
             _ => {}
         }

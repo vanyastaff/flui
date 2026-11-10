@@ -166,7 +166,7 @@ mod tests {
             refresh_period: None,
             is_primary: false,
             persistent_key: None,
-            color: Err(CapabilityAbsence::NotYetOnThisHost),
+            color: Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
         }
     }
 

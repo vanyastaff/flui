@@ -13,7 +13,8 @@
   with re-arms on every paint and spins the loop.
 - **Amended:** 2026-10-27 — decision 6, following the owner's decision of 2026-10-27 that adds
   `NotYetOnThisHost` to the reasons (ADR-0152): a command's capability carries where it is
-  missing, a `CapabilityAbsence` (`NotOnThisPlatform`, `NotOnThisDevice`, `NotYetOnThisHost`),
+  missing, a `CapabilityAbsence` (an `UnsupportedReason` narrowed to `NotOnThisPlatform`,
+  `NotOnThisDevice` or `NotYetOnThisHost`, one byte; converting from a reason refuses the rest),
   set with `WindowCapabilities::unavailable(command, absence)`, and admission refuses the command
   with that reason. The type admits no retryable reason, since a capability stays `Unavailable`
   until the host publishes it again; an absence counts for equality only while its capability is

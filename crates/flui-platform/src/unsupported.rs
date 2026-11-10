@@ -63,47 +63,111 @@ pub enum UnsupportedReason {
     NoWindow,
 }
 
-/// Where a capability that is not here is missing: the platform, this device
-/// or this host. These are the reasons a capability that lasts can be absent
-/// for, which a host records against the capability and every refusal of it
-/// answers ([`WindowCapabilities::unavailable`](crate::WindowCapabilities::unavailable)).
+/// Why a capability that lasts is not here: an [`UnsupportedReason`] that no
+/// later attempt changes. A host records it against the capability and every
+/// refusal of it answers it
+/// ([`WindowCapabilities::unavailable`](crate::WindowCapabilities::unavailable)).
 ///
-/// None of them is [retryable](Unsupported::is_retryable): a capability is
-/// published as `Unavailable` until the host publishes it again, so a reason
-/// that asks to be tried again ([`UnsupportedReason::Unavailable`]) is not one
-/// a capability can carry, nor are the reasons about a window or a
-/// registration that has gone ([`NoWindow`](UnsupportedReason::NoWindow),
-/// [`NotRegistered`](UnsupportedReason::NotRegistered)).
+/// It holds one of three reasons:
+/// [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform),
+/// [`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice) or
+/// [`NotYetOnThisHost`](UnsupportedReason::NotYetOnThisHost), named by the
+/// constants of the same names and read back with [`reason`](Self::reason).
+/// The vocabulary is [`UnsupportedReason`]'s; this type only narrows it. A
+/// capability is published as `Unavailable` until the host publishes it
+/// again, so a reason that asks to be tried again
+/// ([`Unavailable`](UnsupportedReason::Unavailable)) is not one it can carry,
+/// nor are the reasons about a declaration, a window or a registration
+/// ([`NotDeclared`](UnsupportedReason::NotDeclared),
+/// [`NoWindow`](UnsupportedReason::NoWindow),
+/// [`NotRegistered`](UnsupportedReason::NotRegistered)). Converting from a
+/// reason refuses those, so none of them reaches a capability:
+///
+/// ```
+/// use flui_platform::{CapabilityAbsence, Unsupported, UnsupportedReason};
+///
+/// let device = CapabilityAbsence::try_from(UnsupportedReason::NotOnThisDevice);
+/// assert_eq!(device, Ok(CapabilityAbsence::NOT_ON_THIS_DEVICE));
+/// assert_eq!(
+///     CapabilityAbsence::try_from(UnsupportedReason::Unavailable),
+///     Err(UnsupportedReason::Unavailable)
+/// );
+/// assert!(!Unsupported::from(CapabilityAbsence::NOT_ON_THIS_DEVICE).is_retryable());
+/// ```
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct CapabilityAbsence(Lasting);
+
+/// The storage of a [`CapabilityAbsence`]: one byte, so a capability table
+/// that records one per capability stays small. Each value maps to one
+/// [`UnsupportedReason`] in [`CapabilityAbsence::reason`],
+/// and [`CapabilityAbsence::try_from`] matches every reason, so a reason
+/// added to [`UnsupportedReason`] does not compile until it is classed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum CapabilityAbsence {
-    /// No device of this platform has it
-    /// ([`UnsupportedReason::NotOnThisPlatform`]).
+enum Lasting {
     #[default]
-    NotOnThisPlatform,
+    Platform,
+    Device,
+    Host,
+}
+
+const _: () = assert!(
+    size_of::<CapabilityAbsence>() == 1,
+    "a capability table records one absence per capability"
+);
+
+impl CapabilityAbsence {
+    /// No device of this platform has it
+    /// ([`UnsupportedReason::NotOnThisPlatform`]). What a capability set to
+    /// `Unavailable` by hand answers, and the default.
+    pub const NOT_ON_THIS_PLATFORM: Self = Self(Lasting::Platform);
     /// The platform has it and this device or its operating system build
     /// lacks it ([`UnsupportedReason::NotOnThisDevice`]).
-    NotOnThisDevice,
+    pub const NOT_ON_THIS_DEVICE: Self = Self(Lasting::Device);
     /// The operating system has it and this host does not implement it yet
     /// ([`UnsupportedReason::NotYetOnThisHost`]).
-    NotYetOnThisHost,
+    pub const NOT_YET_ON_THIS_HOST: Self = Self(Lasting::Host);
+
+    /// The reason a refusal of the capability answers.
+    #[must_use]
+    pub const fn reason(self) -> UnsupportedReason {
+        match self.0 {
+            Lasting::Platform => UnsupportedReason::NotOnThisPlatform,
+            Lasting::Device => UnsupportedReason::NotOnThisDevice,
+            Lasting::Host => UnsupportedReason::NotYetOnThisHost,
+        }
+    }
+}
+
+/// The reason, as a capability records it; the reasons a capability cannot
+/// carry come back as the error.
+impl TryFrom<UnsupportedReason> for CapabilityAbsence {
+    type Error = UnsupportedReason;
+
+    fn try_from(reason: UnsupportedReason) -> Result<Self, Self::Error> {
+        Ok(Self(match reason {
+            UnsupportedReason::NotOnThisPlatform => Lasting::Platform,
+            UnsupportedReason::NotOnThisDevice => Lasting::Device,
+            UnsupportedReason::NotYetOnThisHost => Lasting::Host,
+            UnsupportedReason::NotDeclared { .. }
+            | UnsupportedReason::Unavailable
+            | UnsupportedReason::NotRegistered
+            | UnsupportedReason::NoWindow => return Err(reason),
+        }))
+    }
+}
+
+/// Prints the reason it holds: `CapabilityAbsence(NotOnThisDevice)`.
+impl fmt::Debug for CapabilityAbsence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("CapabilityAbsence")
+            .field(&self.reason())
+            .finish()
+    }
 }
 
 impl From<CapabilityAbsence> for UnsupportedReason {
     fn from(absence: CapabilityAbsence) -> Self {
         absence.reason()
-    }
-}
-
-impl CapabilityAbsence {
-    /// The reason a refusal of the capability answers.
-    #[must_use]
-    pub const fn reason(self) -> UnsupportedReason {
-        match self {
-            Self::NotOnThisPlatform => UnsupportedReason::NotOnThisPlatform,
-            Self::NotOnThisDevice => UnsupportedReason::NotOnThisDevice,
-            Self::NotYetOnThisHost => UnsupportedReason::NotYetOnThisHost,
-        }
     }
 }
 

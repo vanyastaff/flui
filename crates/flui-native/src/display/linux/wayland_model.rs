@@ -146,10 +146,10 @@ fn color_of(description: &ColorDescription) -> Result<DisplayColor, CapabilityAb
                 _ => ColorGamut::Srgb,
             })
         })
-        .ok_or(CapabilityAbsence::NotYetOnThisHost)?;
+        .ok_or(CapabilityAbsence::NOT_YET_ON_THIS_HOST)?;
     let peak = match description
         .transfer
-        .ok_or(CapabilityAbsence::NotYetOnThisHost)?
+        .ok_or(CapabilityAbsence::NOT_YET_ON_THIS_HOST)?
     {
         TransferRange::Standard => return Ok(DisplayColor::standard(gamut)),
         TransferRange::Pq => description.target_max,
@@ -157,11 +157,11 @@ fn color_of(description: &ColorDescription) -> Result<DisplayColor, CapabilityAb
     };
     let headroom = peak
         .zip(description.reference)
-        .ok_or(CapabilityAbsence::NotOnThisDevice)
+        .ok_or(CapabilityAbsence::NOT_ON_THIS_DEVICE)
         .and_then(|(peak, reference)| {
             // Both are whole cd/m²: exact in `f32` up to 2^24, finite beyond.
             Headroom::from_luminance(peak as f32, reference as f32)
-                .map_err(|_| CapabilityAbsence::NotOnThisDevice)
+                .map_err(|_| CapabilityAbsence::NOT_ON_THIS_DEVICE)
         });
     Ok(DisplayColor::high(gamut, headroom))
 }
@@ -233,7 +233,7 @@ impl WaylandOutputs {
             pending: OutputState::default(),
             applied: None,
             awaiting_logical_size: false,
-            color: Err(CapabilityAbsence::NotOnThisDevice),
+            color: Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
             describing: None,
         });
     }
@@ -290,7 +290,7 @@ impl WaylandOutputs {
             return false;
         }
         output.describing = None;
-        output.set_color(Err(CapabilityAbsence::NotOnThisDevice))
+        output.set_color(Err(CapabilityAbsence::NOT_ON_THIS_DEVICE))
     }
 
     fn output_mut(&mut self, global: u32) -> Option<&mut Output> {
@@ -913,7 +913,7 @@ mod tests {
             colour_of(&HDR10[..4]),
             Ok(DisplayColor::high(
                 ColorGamut::Rec2020,
-                Err(CapabilityAbsence::NotOnThisDevice)
+                Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)
             )),
             "PQ without a target peak has no headroom: the 10 000 cd/m² maximum is the \
              curve's ceiling, not the output's"
@@ -957,13 +957,13 @@ mod tests {
             ]),
             Ok(DisplayColor::high(
                 ColorGamut::Rec2020,
-                Err(CapabilityAbsence::NotOnThisDevice)
+                Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)
             )),
             "a zero reference white gives no headroom, not an infinite one"
         );
         assert_eq!(
             colour_of(&[ColorEvent::Transfer(TransferRange::Standard)]),
-            Err(CapabilityAbsence::NotYetOnThisHost),
+            Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
             "an ICC-only description is not read"
         );
     }
@@ -975,7 +975,7 @@ mod tests {
         announce(&mut outputs, GLOBAL, vec![mode(1920, 1080, 60_000)]);
         assert_eq!(
             only(&outputs).color,
-            Err(CapabilityAbsence::NotOnThisDevice),
+            Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
             "no colour before any description: a compositor without the protocol"
         );
         assert!(describe(&mut outputs, 0, &SDR_SRGB), "the first colour");
@@ -1021,7 +1021,7 @@ mod tests {
         );
         assert_eq!(
             only(&outputs).color,
-            Err(CapabilityAbsence::NotOnThisDevice)
+            Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)
         );
     }
 

@@ -734,7 +734,7 @@ command_capabilities! {
 
 /// The absence of a capability nothing marked: the platform's.
 const NOT_ON_THIS_PLATFORM: [CapabilityAbsence; Slot::COUNT] =
-    [CapabilityAbsence::NotOnThisPlatform; Slot::COUNT];
+    [CapabilityAbsence::NOT_ON_THIS_PLATFORM; Slot::COUNT];
 
 impl WindowCapabilities {
     /// Every field but the revision, for equality and hashing. Destructured,
@@ -821,7 +821,7 @@ impl WindowCapabilities {
         reports_keyboard_inset: Availability::Unavailable,
         reports_system_gestures: Availability::Unavailable,
         absences: NOT_ON_THIS_PLATFORM,
-        report_absences: [CapabilityAbsence::NotOnThisPlatform; Report::COUNT],
+        report_absences: [CapabilityAbsence::NOT_ON_THIS_PLATFORM; Report::COUNT],
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -852,7 +852,7 @@ impl WindowCapabilities {
         reports_keyboard_inset: Availability::Native,
         reports_system_gestures: Availability::Native,
         absences: NOT_ON_THIS_PLATFORM,
-        report_absences: [CapabilityAbsence::NotOnThisPlatform; Report::COUNT],
+        report_absences: [CapabilityAbsence::NOT_ON_THIS_PLATFORM; Report::COUNT],
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -898,12 +898,12 @@ impl WindowCapabilities {
     /// `absence`, which admission then answers for `command`.
     ///
     /// The absence says where the capability is missing:
-    /// [`NotOnThisDevice`](CapabilityAbsence::NotOnThisDevice) where the
+    /// [`NotOnThisDevice`](CapabilityAbsence::NOT_ON_THIS_DEVICE) where the
     /// platform has it and this device — its operating system build or its
     /// hardware — lacks it,
-    /// [`NotYetOnThisHost`](CapabilityAbsence::NotYetOnThisHost) where the
+    /// [`NotYetOnThisHost`](CapabilityAbsence::NOT_YET_ON_THIS_HOST) where the
     /// operating system has it and the host does not implement it yet, and
-    /// [`NotOnThisPlatform`](CapabilityAbsence::NotOnThisPlatform), what a
+    /// [`NotOnThisPlatform`](CapabilityAbsence::NOT_ON_THIS_PLATFORM), what a
     /// field set to `Unavailable` by hand answers, where no device of the
     /// platform has it. The mode every window has ([`WindowMode::Normal`])
     /// cannot be taken away.
@@ -915,7 +915,7 @@ impl WindowCapabilities {
     ///
     /// let material = WindowCommand::SetMaterial(WindowMaterial::System);
     /// let capabilities =
-    ///     WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NotYetOnThisHost);
+    ///     WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     /// let refused = material.admit(&capabilities).unwrap_err();
     /// assert_eq!(
     ///     refused.unsupported().map(|absent| absent.reason),
@@ -950,7 +950,7 @@ impl WindowCapabilities {
 
     /// Why admission refuses `command` when its capability is `Unavailable`:
     /// the absence [`unavailable`](Self::unavailable) gave it or, for a field
-    /// set by hand, [`NotOnThisPlatform`](CapabilityAbsence::NotOnThisPlatform).
+    /// set by hand, [`NotOnThisPlatform`](CapabilityAbsence::NOT_ON_THIS_PLATFORM).
     /// While the capability is available there is no refusal, and this answers
     /// `NotOnThisPlatform` too.
     #[must_use]
@@ -958,9 +958,9 @@ impl WindowCapabilities {
         match Self::slot(command) {
             Some(slot) => match self.absence_in_force(slot) {
                 Some(absence) => absence,
-                None => CapabilityAbsence::NotOnThisPlatform,
+                None => CapabilityAbsence::NOT_ON_THIS_PLATFORM,
             },
-            None => CapabilityAbsence::NotOnThisPlatform,
+            None => CapabilityAbsence::NOT_ON_THIS_PLATFORM,
         }
     }
 
@@ -972,7 +972,7 @@ impl WindowCapabilities {
     /// use flui_platform::{CapabilityAbsence, UnsupportedReason, WindowCapabilities};
     ///
     /// let capabilities = WindowCapabilities::ALL
-    ///     .without_presentation_feedback(CapabilityAbsence::NotYetOnThisHost);
+    ///     .without_presentation_feedback(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     /// assert_eq!(
     ///     capabilities.presentation_feedback().map_err(|absent| absent.reason),
     ///     Err(UnsupportedReason::NotYetOnThisHost)

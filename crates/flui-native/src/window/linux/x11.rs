@@ -424,21 +424,21 @@ pub(crate) mod support {
     /// moves and resizes at the window's request (ADR-0286 §10), so it needs a
     /// window manager that takes `_NET_WM_MOVERESIZE`.
     pub(crate) fn capabilities(support: WindowManagerSupport) -> WindowCapabilities {
-        let device = CapabilityAbsence::NotOnThisDevice;
+        let device = CapabilityAbsence::NOT_ON_THIS_DEVICE;
         let mut capabilities = WindowCapabilities::ALL
             .unavailable(
                 &WindowCommand::SetMaterial(WindowMaterial::System),
-                CapabilityAbsence::NotOnThisPlatform,
+                CapabilityAbsence::NOT_ON_THIS_PLATFORM,
             )
             // The GPU driver presents through the Present extension on a
             // connection of its own, and the server reports a present's
             // completion to that connection alone: no other client learns when
             // the window's frames reached the screen.
-            .without_presentation_feedback(CapabilityAbsence::NotOnThisPlatform)
+            .without_presentation_feedback(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
             // X11 has no on-screen keyboard protocol and no system gesture
             // edges.
-            .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
-            .without_system_gestures(CapabilityAbsence::NotOnThisPlatform);
+            .without_keyboard_inset(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
+            .without_system_gestures(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
         capabilities.frame_rate_hint = Availability::Unavailable;
         if !support.moves_and_resizes {
             capabilities = capabilities.without_app_title_bar(device);
