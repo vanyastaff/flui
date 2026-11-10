@@ -740,6 +740,27 @@ Two behaviours worth knowing before you write an assertion:
   remaining events, so a harness hit-test hook fires once per contact, not once
   per event. Give each contact its own `PointerId`.
 
+### Motion a person would notice
+
+`flui_testing::motion` records what the window shows each frame and fails on motion a person
+would notice: something that pops in or out, jumps, snaps its opacity, flickers, overshoots,
+never settles, or keeps the window asking for frames after it ends
+([ADR-0321](adr/ADR-0321-a-motion-gate-reads-what-the-window-shows-each-frame.md)). Drive the
+change through a `MotionRun` over a `LaidOut`, then gate the recording:
+
+```rust,ignore
+let mut run = MotionRun::new(&mut laid);
+run.act(|laid| laid.pump_widget(tree(true)));
+run.play(Duration::from_secs(1), Duration::from_millis(16));
+assert_smooth(&run.finish(), &[
+    Allow::new(Rule::Jump, "RenderPadding", "the inset changes at once by design"),
+]);
+```
+
+An `Allow` row names a part of a node's locator and a reason; a row that matches nothing fails
+the gate, so the list shrinks as the motion it excused is fixed. The thresholds are
+`MotionConfig`. Examples of every rule: `crates/flui-testing/tests/motion_gate.rs`.
+
 ### Scripted gestures
 
 `flui_testing::replay` scripts a gesture as data with explicit virtual-time

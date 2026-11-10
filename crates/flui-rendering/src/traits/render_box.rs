@@ -432,6 +432,17 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
         PaintEffects::NONE
     }
 
+    /// The transform this box's own drawing is placed under, in its local space.
+    ///
+    /// Default: [`Self::paint_effects`]'s transform. See [`RenderObject::drawn_transform`]:
+    /// override when `paint` moves the box's own drawing as a plain offset instead of a layer.
+    fn drawn_transform(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
+        <Self as RenderBox>::paint_effects(self, size).transform
+    }
+
     /// Composes onto `transform` the mapping from child `child`'s local space
     /// into this box's local space.
     ///
@@ -869,6 +880,13 @@ where
 
     fn paint_effects(&self, size: flui_foundation::geometry::Size) -> PaintEffects {
         <T as RenderBox>::paint_effects(self, size)
+    }
+
+    fn drawn_transform(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
+        <T as RenderBox>::drawn_transform(self, size)
     }
 
     fn apply_paint_transform(

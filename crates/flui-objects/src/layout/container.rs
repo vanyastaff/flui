@@ -724,6 +724,12 @@ impl RenderBox for RenderContainer {
         }
     }
 
+    /// The whole transform, a pure translation included: `paint` applies that
+    /// one to the decoration and color as an offset rather than a layer.
+    fn drawn_transform(&self, _size: Size) -> Option<Matrix4> {
+        self.transform
+    }
+
     /// Folds the transform and the child's offset into a child-to-parent
     /// mapping.
     ///

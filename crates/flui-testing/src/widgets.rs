@@ -1047,6 +1047,24 @@ impl LaidOut {
         self.host.pump(dt);
     }
 
+    /// Every node the last frame drew, with the geometry and opacity the window shows it at
+    /// (ADR-0321 §1): what [`crate::motion::MotionRun`] samples each frame.
+    pub(crate) fn presented_nodes(&self) -> Vec<flui_rendering::pipeline::PresentedNode> {
+        self.pipeline_owner
+            .with(flui_rendering::pipeline::PipelineOwner::presented_nodes)
+    }
+
+    /// Virtual time since this harness mounted.
+    pub(crate) fn elapsed(&self) -> Duration {
+        self.host.clock().elapsed()
+    }
+
+    /// Whether the host's loop would run another frame at once: an animation, a scheduled
+    /// frame or pending work asks for one.
+    pub(crate) fn wants_frame(&self) -> bool {
+        self.host.ui_runtime().time_to_next_frame() == Some(Duration::ZERO)
+    }
+
     /// Run `f` over the tree's `BuildOwner`, for a test that needs to reach a
     /// knob the public widget surface does not expose (the fixpoint's
     /// lazy-band pass budget, a planted layout-builder entry). The UI runtime
