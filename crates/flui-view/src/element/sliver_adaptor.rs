@@ -47,8 +47,10 @@
 //!
 //! `build_into_views` returns an empty `Vec` so the dense reconciler in
 //! `build_scope` never touches the lazy children. The lazy children live only
-//! in `SparseChildren::by_logical_index`; they are managed solely by
-//! `service_child_requests`.
+//! in `SparseChildren::by_logical_index`; they are managed by
+//! `service_child_requests`, and a resident whose lifecycle hook panics as it
+//! rebuilds is replaced through `sparse_children::replace_failed_resident`,
+//! which re-points that map.
 
 use std::{
     cell::RefCell,
@@ -812,6 +814,20 @@ impl<R: LazyMultiBoxRender> ChildManager for SliverAdaptorManager<R> {
 
     fn forget_child(&mut self, child: ElementId) {
         self.sparse_children.forget(child);
+    }
+
+    fn holds_resident(&self, logical_index: usize, child: ElementId) -> bool {
+        self.sparse_children.get(logical_index) == Some(child)
+    }
+
+    fn replace_resident(
+        &mut self,
+        logical_index: usize,
+        failed: ElementId,
+        replacement: ElementId,
+    ) {
+        self.sparse_children
+            .replace_resident(logical_index, failed, replacement);
     }
 
     fn snapshot_children(&self) -> Vec<ElementId> {

@@ -1563,7 +1563,23 @@ impl BuildOwner {
         self.dirty_reasons.remove(&failed);
         self.pending_dependency_changes.remove(&failed);
         let mut element_owner = self.element_owner_mut();
-        let substitute = tree.replace_child_with(parent, slot, &recovery_view, &mut element_owner);
+        // A lazy host keeps its residents out of `child_ids`, in its own residency map, under
+        // their logical index as `slot`.
+        let sparse_parent = tree
+            .get(parent)
+            .is_some_and(|node| node.element().hosts_sparse_children());
+        let substitute = if sparse_parent {
+            crate::element::sparse_children::replace_failed_resident(
+                parent,
+                slot,
+                failed,
+                &recovery_view,
+                tree,
+                &mut element_owner,
+            )
+        } else {
+            tree.replace_child_with(parent, slot, &recovery_view, &mut element_owner)
+        };
         staged.substituted_by(substitute, parent, slot);
         element_owner.commit_staged_lifecycle_panic(staged);
     }
