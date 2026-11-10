@@ -115,23 +115,25 @@ fn an_atomic_mint_admits_exactly_one_of_concurrent_requests_for_the_last_identit
 }
 
 #[test]
-fn a_pointer_width_bounded_id_refuses_past_its_type_ceiling() {
-    let exhausted = IdMint::<ListenerId>::starting_after(usize::MAX as u64);
+fn listener_and_scheduler_ids_span_the_full_64_bit_space() {
+    let listener_mint = IdMint::<ListenerId>::starting_after(u64::MAX - 1);
     assert_eq!(
-        exhausted.next(),
-        Err(IdExhausted),
-        "starting at the type's ceiling is already exhausted"
+        listener_mint.next().expect("one id remains").get(),
+        u64::MAX
     );
-    let listener_mint = IdMint::<ListenerId>::starting_after(usize::MAX as u64 - 1);
-    let last = listener_mint.next().expect("one id remains");
-    assert_eq!(last.get(), usize::MAX);
     assert_eq!(
         listener_mint.next(),
         Err(IdExhausted),
-        "refusal past the type's ceiling is permanent"
+        "refusal past the last 64-bit id is permanent"
     );
-    let task_mint = AtomicIdMint::<TaskId>::starting_after(usize::MAX as u64 - 1);
-    assert_eq!(task_mint.next().expect("one id remains").get(), usize::MAX);
+    let callback_mint = IdMint::<FrameCallbackId>::starting_after(u64::MAX - 1);
+    assert_eq!(
+        callback_mint.next().expect("one id remains").get(),
+        u64::MAX
+    );
+    assert_eq!(callback_mint.next(), Err(IdExhausted));
+    let task_mint = AtomicIdMint::<TaskId>::starting_after(u64::MAX - 1);
+    assert_eq!(task_mint.next().expect("one id remains").get(), u64::MAX);
     assert_eq!(task_mint.next(), Err(IdExhausted));
 }
 
@@ -144,7 +146,7 @@ fn scheduler_and_listener_ids_are_minted_by_the_family() {
     assert_eq!(second.get(), 2);
     assert!(first < second, "listener ids sort by issue order");
 
-    let callbacks = AtomicIdMint::<FrameCallbackId>::new();
+    let callbacks = IdMint::<FrameCallbackId>::new();
     let first = callbacks.next().expect("a fresh mint has ids to issue");
     let second = callbacks.next().expect("a fresh mint has ids to issue");
     assert_eq!(first.get(), 1);

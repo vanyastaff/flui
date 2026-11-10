@@ -32,7 +32,7 @@
 use crate::panic::RecoveryScope;
 use std::{fmt, ops::Deref, rc::Rc};
 
-use crate::{id::ListenerId, notifier_generic::Notifier};
+use crate::{notifier_generic::Notifier, sequence::ListenerId};
 
 /// A listener callback function.
 // Stored callbacks own their captures for the subscription's lifetime.
