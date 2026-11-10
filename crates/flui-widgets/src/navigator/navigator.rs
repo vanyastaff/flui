@@ -1170,7 +1170,7 @@ impl NavigatorHandle {
     /// A navigator a [`Router`](crate::Router) drives admits only pageless
     /// popups here (`PopupRoute`); any other route has no path and is refused
     /// (ADR-0093 §4): it is disposed unpushed, the returned result is already
-    /// complete with `None`, the refusal is logged, and a debug build panics.
+    /// complete with `Ok(None)`, the refusal is logged, and a debug build panics.
     /// `seed_initial`, `push_replacement[_with]` and `push_and_remove_until`
     /// refuse a popup too, the same way: what they replace, sweep or seed
     /// beneath belongs to the Router.
@@ -1218,7 +1218,7 @@ impl NavigatorHandle {
 
     /// Push `route` and complete the current top **as replaced** — observers see
     /// `did_replace`, never `did_remove`, and the replaced route's future resolves
-    /// with `None`.
+    /// with `Ok(None)`.
     ///
     /// # Panics
     ///
@@ -1294,7 +1294,7 @@ impl NavigatorHandle {
 
     /// Push `route`, then walk downward from the old top completing every present
     /// route until `keep` answers `true` — the addition and all removals share one
-    /// flush. Removed routes complete their futures with `None` and
+    /// flush. Removed routes complete their futures with `Ok(None)` and
     /// observers see `did_remove` for each.
     ///
     /// `keep` receives each route's [`RouteId`]; `|_| false` clears everything
@@ -1421,7 +1421,7 @@ impl NavigatorHandle {
     /// Pop the top route with no result.
     ///
     /// The popped route's future resolves with its `current_result()` fallback, or
-    /// `None`. Returns whether a present route was found. A route that refuses
+    /// `Ok(None)`. Returns whether a present route was found. A route that refuses
     /// (`Route::did_pop` → `false`) stays, and this still returns `true`.
     ///
     /// Under a [`Router`](crate::Router) the Router's last page is never
@@ -1438,8 +1438,9 @@ impl NavigatorHandle {
     ///
     /// `T` is checked at **delivery**, not at the call site: the navigator holds a
     /// heterogeneous stack and cannot know the top route's `Output`. Passing the
-    /// wrong type logs an error and completes the future with `None` rather than
-    /// panicking.
+    /// wrong type does not panic: the route completes with
+    /// [`RouteResultError::TypeMismatch`](crate::RouteResultError::TypeMismatch),
+    /// and the value is reported and dropped outside the history lock.
     pub fn pop_with<T: 'static>(&self, result: T) -> bool {
         self.pop_erased(Some(AnyResult::new(result)))
     }
@@ -1485,7 +1486,7 @@ impl NavigatorHandle {
     /// Remove `id` without popping it.
     ///
     /// **The removed route still completes its future**, with its
-    /// `current_result()` fallback or `None`. Completing only on `pop` would hang
+    /// `current_result()` fallback or `Ok(None)`. Completing only on `pop` would hang
     /// every awaiter.
     pub fn remove_route(&self, id: RouteId) -> bool {
         self.remove_route_erased(id, None)
@@ -2181,7 +2182,7 @@ impl NavigatorHandle {
     }
 
     /// Resolve `request` and [`push_replacement`](Self::push_replacement). The
-    /// replaced route's [`RouteResult`] resolves with `None`.
+    /// replaced route's [`RouteResult`] resolves with `Ok(None)`.
     ///
     /// **The route to replace is captured before resolving.** A factory that
     /// reaches the navigator can move the top between resolution and the
@@ -2222,8 +2223,8 @@ impl NavigatorHandle {
     ///
     /// `result` carries the same delivery-time type contract as
     /// [`pop_with`](Self::pop_with): the navigator cannot know the replaced
-    /// route's `Output`, so a mismatch logs and completes that route with
-    /// `None`.
+    /// route's `Output`, so a mismatch completes that route with
+    /// [`RouteResultError::TypeMismatch`](crate::RouteResultError::TypeMismatch).
     ///
     /// # Errors
     ///

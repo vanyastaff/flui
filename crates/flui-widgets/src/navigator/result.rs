@@ -56,7 +56,7 @@ impl std::fmt::Display for RouteResultError {
 impl std::error::Error for RouteResultError {}
 
 /// Completed-ness and the value are distinct: a route may legitimately complete
-/// with `None`, which is not the same as "not completed".
+/// with `Ok(None)`, which is not the same as "not completed".
 enum Completion<T> {
     Pending,
     /// The route completed, with this result.
@@ -249,7 +249,7 @@ impl<T> RouteResult<T> {
         }
     }
 
-    /// Whether the route has completed (even with `None`).
+    /// Whether the route has completed (even with `Ok(None)` or an error).
     #[must_use]
     pub fn is_completed(&self) -> bool {
         self.shared.borrow().value.is_done()

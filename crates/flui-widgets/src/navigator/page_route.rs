@@ -387,7 +387,7 @@ delegate_modal_route!(PageRoute);
 /// ```
 ///
 /// A dismissible barrier pops the route with no value, so `RouteResult<bool>`
-/// resolves to `None`.
+/// resolves to `Ok(None)`.
 ///
 /// A popup given no transitions adopts the [`PageTransitions`](super::PageTransitions)
 /// popup builder in scope where its navigator is mounted, as a [`PageRoute`] adopts

@@ -1426,7 +1426,7 @@ variant delivers to the departing route keeps the ordinary delivery-time
 contract (`pop_with`'s), because the navigator still cannot know the departing
 route's `Output`. Only `push_named_typed`'s `T` is checked early. So
 `push_replacement_named_with(name, Wrong)` still completes the replaced route
-with `None` and a log line, exactly as `push_replacement_with` does.
+with `RouteResultError::TypeMismatch`, exactly as `push_replacement_with` does.
 
 **Replacement tests:** in `tests/navigator_public.rs` —
 `push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing`

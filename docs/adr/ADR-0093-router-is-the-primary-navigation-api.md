@@ -6,7 +6,8 @@
   registration, `RouteKey<T>` and the named-route errors);
   [ADR-0019](ADR-0019-navigator-routing-seam.md) §2 (the navigator looked up from a build context
   through `Navigator::of`, `maybe_of` and `maybe_of_root`) and §3 only where the pop result
-  crosses as `Box<dyn Any + Send>` and a mismatched type completes with `None`
+  crosses as `Box<dyn Any + Send>`, a mismatched type completes with `None` and `RouteResult<T>`
+  is a `Future<Output = Option<T>>`
 - **Related:** [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md) §6 (the
   router's stack restored from the application's own document),
   [ADR-0254](ADR-0254-window-contract.md) (the URLs the platform opens reach `AppHandler`),
