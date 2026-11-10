@@ -186,7 +186,7 @@ pub(crate) type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 ///
 /// The standard scroll views ([`ListView`](crate::ListView),
 /// [`GridView`](crate::GridView), [`CustomScrollView`](crate::CustomScrollView),
-/// [`SingleChildScrollView`]) compose a `Scrollable` themselves; reach for it
+/// [`SingleChildScrollView`](crate::SingleChildScrollView)) compose a `Scrollable` themselves; reach for it
 /// directly only to scroll a viewport of your own. The closure given to
 /// [`Scrollable::new`] receives the position and must hand it to the
 /// viewport it builds ([`Viewport::new`](crate::Viewport::new)), so the

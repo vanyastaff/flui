@@ -42,7 +42,7 @@ use crate::scroll::{
 ///   paints blank; content lands on the next frame (~16 ms @ 60 fps).  See
 ///   [`SliverChildBuilderDelegate`] for the full rationale.
 ///
-/// The grid scrolls itself through the [`Scrollable`](crate::Scrollable) it
+/// The grid scrolls itself through the [`Scrollable`] it
 /// composes; its controller, axis, `reverse` and gesture policy are the
 /// [`ScrollView`] builders.
 /// Set [`GridView::shrink_wrap`] when the grid is placed under unbounded

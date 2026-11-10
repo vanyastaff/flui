@@ -39,7 +39,7 @@ use flui::view::element::ElementKind;
 use flui::view::persist::{DecodeError, Document, PersistError, Persisted, Revision, SaveStatus};
 use flui::view::{AsyncDriver, CloseGuard, StaleClose, TaskToken, View};
 use flui::widgets::{
-    AnimatedBuilder, BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea, Scrollable,
+    AnimatedBuilder, BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea,
     WidgetStateProperty, column,
 };
 use serde::{Deserialize, Serialize};

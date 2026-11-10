@@ -5,7 +5,7 @@ use flui_foundation::geometry::Vec2;
 use flui_interaction::InputSequenceId;
 use flui_widgets::{
     FlingHandoff, FlingStep, NestedScroll, NestedScrollConnection, ScrollEndReason, ScrollStep,
-    ScrollView, SingleChildScrollView, SizedBox,
+    SingleChildScrollView, SizedBox,
 };
 
 /// Counts what reaches it in `Rc` and `Cell` state, which a `Send` bound on
