@@ -134,7 +134,7 @@ pub(crate) fn lazy_list_view_builder_stateful_items_init_and_dispose_with_the_ba
                 })
             })
             .repaint_boundaries(false)
-            .offset(offset)
+            .controller(ScrollController::with_initial_scroll_offset(offset))
         }
     };
     let mut laid = lay_out(list(0.0), tight(200.0, 200.0));
@@ -253,10 +253,24 @@ fn pathological_extents_defer(nesting: usize) {
                 (SEED / 2_f64.powi((i - ENTRY) as i32 + 1)).max(0.25)
             }
         };
-        ListView::builder(ITEM_COUNT, SEED, move |i| {
-            (i < ITEM_COUNT).then(|| SizedBox::new(200.0, height_of(i)).boxed())
-        })
-        .offset(ENTRY as f64 * SEED)
+        // A passive viewport at a fixed offset: a scroll view would clamp
+        // the entry offset to its shrinking estimate, and the band under
+        // test is the sliver's alone.
+        let rows = SliverList::new(
+            ITEM_COUNT,
+            SEED,
+            Rc::new(move |i| {
+                (i < ITEM_COUNT).then(|| {
+                    RepaintBoundary::new()
+                        .child(SizedBox::new(200.0, height_of(i)))
+                        .boxed()
+                })
+            }),
+        );
+        Viewport::new(
+            flui_widgets::ScrollPosition::fixed(ENTRY as f64 * SEED),
+            (rows,),
+        )
         .boxed()
     });
     let mut laid = lay_out(
@@ -448,7 +462,10 @@ pub(crate) fn lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_st
         let row = d.remove(1);
         d.insert(60, row);
     }
-    laid.pump_widget(keyed_list(&data, &inits, true).offset(58.0 * EXTENT));
+    laid.pump_widget(
+        keyed_list(&data, &inits, true)
+            .controller(ScrollController::with_initial_scroll_offset(58.0 * EXTENT)),
+    );
     let top = laid
         .absolute_offset(
             laid.find_text("row1")
@@ -522,7 +539,7 @@ fn announces_pinned(laid: &LaidOut) -> bool {
 /// the accessibility tree; releasing the pin evicts it on the next frame,
 /// with no scroll to prompt a relayout.
 pub(crate) fn a_pinned_row_stays_announced_until_its_pin_is_released() {
-    use flui_widgets::{ScrollController, Scrollable};
+    use flui_widgets::{ScrollController, ScrollView};
 
     let lease = Rc::new(RefCell::new(None));
     let disposed = Rc::new(Cell::new(false));
@@ -543,14 +560,7 @@ pub(crate) fn a_pinned_row_stays_announced_until_its_pin_is_released() {
         })
     };
     let scroll = ScrollController::new();
-    let list = Scrollable::new()
-        .controller(scroll.clone())
-        .viewport_builder(Rc::new(move |position| {
-            let row = Rc::clone(&row);
-            ListView::builder(500, 48.0, move |i| row(i))
-                .position(position)
-                .boxed()
-        }));
+    let list = ListView::builder(500, 48.0, move |i| row(i)).controller(scroll.clone());
     let mut laid = lay_out(list, tight(200.0, 200.0));
     laid.enable_semantics();
     laid.tick();

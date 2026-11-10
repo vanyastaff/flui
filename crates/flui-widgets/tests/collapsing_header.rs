@@ -16,8 +16,8 @@ use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
     CollapsingHeader, Column, Focus, HeaderExtents, HeaderExtentsError, HeaderOrder, NestedScroll,
-    PageSnap, ScrollCause, ScrollController, ScrollEndReason, Scrollable, Semantics, SemanticsRole,
-    SizedBox, ViewportFraction,
+    PageSnap, ScrollCause, ScrollController, ScrollEndReason, ScrollView, Semantics, SemanticsRole,
+    SingleChildScrollView, SizedBox, ViewportFraction,
 };
 
 use crate::common::LaidOut;
@@ -84,10 +84,14 @@ impl Screen {
                 })
                 .collect::<Vec<_>>(),
         );
-        let scrollable = Focus::new(Scrollable::new().controller(list.clone()).child(content))
-            .focus_node(Rc::clone(&body))
-            .can_request_focus(false)
-            .skip_traversal(true);
+        let scrollable = Focus::new(
+            SingleChildScrollView::new()
+                .controller(list.clone())
+                .child(content),
+        )
+        .focus_node(Rc::clone(&body))
+        .can_request_focus(false)
+        .skip_traversal(true);
         let header =
             configure(CollapsingHeader::new(extents, header, scrollable)).semantic_label("Inbox");
         let tree: BoxedView = NestedScroll::new(probe.connection(), header).boxed();

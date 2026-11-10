@@ -50,7 +50,7 @@ const DEFAULT_THUMB_WIDTH_PX: f64 = 6.0;
 /// Scrollbar::new()
 ///     .controller(controller.clone())
 ///     .child(
-///         Scrollable::new()
+///         SingleChildScrollView::new()
 ///             .controller(controller)
 ///             .child(MyContent::new()),
 ///     )

@@ -18,7 +18,7 @@ use flui::view::BoxedView;
 use flui::widgets::{
     AnimatedSwitcher, CustomMultiChildLayout, CustomPaint, CustomPainter, CustomSingleChildLayout,
     Flow, FlowDelegate, FlowPaintingContext, MetaData, MultiChildLayoutContext,
-    MultiChildLayoutDelegate, ScrollMetrics, ScrollPhysics, Scrollable, SingleChildLayoutDelegate,
+    MultiChildLayoutDelegate, ScrollMetrics, ScrollPhysics, ScrollView, SingleChildLayoutDelegate, SingleChildScrollView,
     WidgetStateProperty, WidgetStates,
 };
 
@@ -158,7 +158,7 @@ fn owner_local_values_fit_every_flip_position() {
         .switch_in_curve(CountingCurve(shared.clone()));
 
     // Scroll physics.
-    let _scrollable = Scrollable::new().physics(Rc::new(ClampingWithState(shared.clone())));
+    let _scrollable = SingleChildScrollView::new().physics(Rc::new(ClampingWithState(shared.clone())));
 
     // A widget-state resolver.
     let observed = shared.clone();

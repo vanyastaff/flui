@@ -33,6 +33,7 @@ use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
     axis_direction_from_axis_reverse_and_directionality,
 };
+use crate::scroll::ScrollView;
 use crate::scroll::scroll_owner::SharedSnapPolicy;
 use crate::scroll::{ScrollController, Scrollable, Viewport};
 use crate::{
@@ -705,16 +706,14 @@ impl ViewState<Carousel> for CarouselState {
             count,
             items,
         );
-        let mut scrollable = Scrollable::new()
-            .controller(self.scroll.clone())
-            .scroll_direction(Axis::Horizontal)
-            .axis_direction(axis_direction)
-            .viewport_builder(Rc::new(move |position| {
-                Viewport::new((sliver.clone(),))
-                    .axis_direction(axis_direction)
-                    .position(position)
-                    .boxed()
-            }));
+        let mut scrollable = Scrollable::new(move |position| {
+            Viewport::new(position, (sliver.clone(),))
+                .axis_direction(axis_direction)
+                .boxed()
+        })
+        .controller(self.scroll.clone())
+        .scroll_direction(Axis::Horizontal)
+        .axis_direction(axis_direction);
         if let Some(snap) = &self.snap {
             scrollable = scrollable.snap_policy(Rc::clone(snap));
         }

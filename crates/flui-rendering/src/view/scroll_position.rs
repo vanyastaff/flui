@@ -795,21 +795,6 @@ impl ScrollPosition {
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.inner, &other.inner)
     }
-
-    /// Whether `self` is the only live handle to its underlying position —
-    /// no clone of it and no [`ScrollOffsetWriter`] for it is held anywhere
-    /// else.
-    ///
-    /// A composer that owns a private position (creates it itself and never
-    /// hands out a clone) can use this to detect that the position currently
-    /// installed somewhere is instead a *foreign* one — e.g. `Viewport`
-    /// switching from an injected, externally-shared position (Position
-    /// mode) back to its own private fixed one (Fixed mode) uses this to
-    /// decide whether the installed position is its own or must be replaced.
-    #[must_use]
-    pub fn is_uniquely_held(&self) -> bool {
-        Rc::strong_count(&self.inner) == 1
-    }
 }
 
 /// Why a [`ScrollOffsetWriter`] moved its position.

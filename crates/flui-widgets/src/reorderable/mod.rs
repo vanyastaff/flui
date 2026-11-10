@@ -56,6 +56,7 @@ use flui_rendering::pipeline::WeakPipelineCell;
 
 use crate::__private::AnchoredBox;
 use crate::interaction::FeedbackFrame;
+use crate::scroll::ScrollView;
 use crate::{
     AnimatedBuilder, DecoratedBox, DefaultFocusRingStyle, Opacity, PhysicalModel, Transform,
 };
@@ -80,7 +81,7 @@ use crate::localization::{
 };
 use crate::{
     Center, ColoredBox, Column, ContextMenuArea, Draggable, DropTarget, Expanded, GestureDetector,
-    GridView, ListView, Listener, PanClaimRegion, Row, Scrollable, SizedBox, Text,
+    GridView, ListView, Listener, PanClaimRegion, Row, SizedBox, Text,
 };
 
 /// An item's move, as [`ReorderableList`] or [`ReorderableGrid`] reports it
@@ -1344,57 +1345,48 @@ impl Shared {
         );
         let shared = Rc::clone(self);
         let config = view.clone();
-        let scrollable = Scrollable::new()
-            .scroll_direction(view.scroll_direction)
-            .viewport_builder(Rc::new(move |position| {
-                let shared = Rc::clone(&shared);
-                let rows = config.clone();
-                let keys = config.clone();
-                let grid = Rc::clone(&shared.grid);
-                let row = move |slot: usize| {
-                    (slot < rows.item_count).then(|| {
-                        let index = Gap::item_at(gap, slot);
-                        let key = (rows.key_of)(index);
-                        let record = shared.record(&*key);
-                        ReorderRow {
-                            index,
-                            hidden: shared.is_gap(&*key),
-                            anchor: record.map_or_else(SubtreeAnchor::new, |record| record.anchor),
-                            key,
-                            list: Rc::clone(&shared),
-                        }
-                        .boxed()
-                    })
-                };
-                let find = move |key: &dyn ViewKey| {
-                    keys.index_of(key).map(|index| Gap::slot_of(gap, index))
-                };
-                match &config.layout {
-                    Layout::List {
-                        item_extent_estimate,
-                    } => ListView::builder(config.item_count, *item_extent_estimate, row)
-                        .scroll_direction(config.scroll_direction)
-                        .find_index_by_key(find)
-                        .placement(placement.clone())
-                        .focusable(true)
-                        .position(position)
-                        .boxed(),
-                    Layout::Grid { delegate } => {
-                        let recorder = ShapeRecorder {
-                            inner: Rc::clone(delegate),
-                            shape: Rc::clone(&grid),
-                        };
-                        GridView::builder(recorder, config.item_count, row)
-                            .scroll_direction(config.scroll_direction)
-                            .find_index_by_key(find)
-                            .placement(placement.clone())
-                            .focusable(true)
-                            .position(position)
-                            .boxed()
-                    }
+        let rows = config.clone();
+        let keys = config.clone();
+        let grid = Rc::clone(&shared.grid);
+        let row = move |slot: usize| {
+            (slot < rows.item_count).then(|| {
+                let index = Gap::item_at(gap, slot);
+                let key = (rows.key_of)(index);
+                let record = shared.record(&*key);
+                ReorderRow {
+                    index,
+                    hidden: shared.is_gap(&*key),
+                    anchor: record.map_or_else(SubtreeAnchor::new, |record| record.anchor),
+                    key,
+                    list: Rc::clone(&shared),
                 }
-            }))
-            .boxed();
+                .boxed()
+            })
+        };
+        let find =
+            move |key: &dyn ViewKey| keys.index_of(key).map(|index| Gap::slot_of(gap, index));
+        let scrollable = match &config.layout {
+            Layout::List {
+                item_extent_estimate,
+            } => ListView::builder(config.item_count, *item_extent_estimate, row)
+                .scroll_direction(config.scroll_direction)
+                .find_index_by_key(find)
+                .placement(placement)
+                .focusable(true)
+                .boxed(),
+            Layout::Grid { delegate } => {
+                let recorder = ShapeRecorder {
+                    inner: Rc::clone(delegate),
+                    shape: grid,
+                };
+                GridView::builder(recorder, config.item_count, row)
+                    .scroll_direction(config.scroll_direction)
+                    .find_index_by_key(find)
+                    .placement(placement)
+                    .focusable(true)
+                    .boxed()
+            }
+        };
         // The rows report where a drag is. The list, which answers each move
         // after the rows under it, hears a move no row answered (the space
         // after the last row) and the drag leaving it; a row's own leave

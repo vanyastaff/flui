@@ -12,7 +12,8 @@ use flui_interaction::events::{Code, Key, NamedKey};
 use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
-    NestedScroll, ScrollCause, ScrollController, ScrollDevice, ScrollEndReason, SizedBox,
+    NestedScroll, ScrollCause, ScrollController, ScrollDevice, ScrollEndReason, ScrollView,
+    SizedBox,
 };
 
 use crate::common::LaidOut;

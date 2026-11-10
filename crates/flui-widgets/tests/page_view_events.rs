@@ -4,6 +4,7 @@
 //! — every recorded page, in order, through whichever callback is current
 //! when it runs.
 
+use flui_widgets::ScrollView;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -182,7 +183,9 @@ fn a_page_view_unmounted_after_queueing_a_change_delivers_nothing() {
                 });
                 Some(SizedBox::new(PAGE, PAGE).child(pages).into_view().boxed())
             })
-            .offset(offset.get())
+            .controller(flui_widgets::ScrollController::with_initial_scroll_offset(
+                offset.get(),
+            ))
         })
     };
     let mut app = mounted(&probe);

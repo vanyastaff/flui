@@ -3,8 +3,9 @@
 //! `Scrollable` composes:
 //! - A [`GestureDetector`] whose drag runs on the scroll axis and turns its
 //!   motion into steps of the nested scroll channel.
-//! - A [`SingleChildScrollView`] as the layout/paint host, sharing the
-//!   controller's `ScrollPosition` (not a pushed pixel value).
+//! - The viewport its caller builds (a [`Viewport`](crate::Viewport) over
+//!   slivers), sharing the controller's `ScrollPosition` (not a pushed
+//!   pixel value).
 //!
 //! # One offset primitive (ADR-0209)
 //!
@@ -88,17 +89,15 @@ use crate::localization::{
 };
 use crate::scroll::drag_autoscroll::{DragAutoscroll, DragAutoscrollAnchor};
 use crate::scroll::nested::{
-    NestedScrollScope, OverscrollBehavior, ScrollCause, ScrollDevice,
-    presentation_device_pixel_ratio,
+    NestedScrollScope, ScrollCause, ScrollDevice, presentation_device_pixel_ratio,
 };
-use crate::scroll::scroll_owner::{
-    MoveOutcome, OwnerConfig, OwnerEnv, ScrollOwner, SharedSnapPolicy,
-};
+use crate::scroll::scroll_owner::{MoveOutcome, OwnerConfig, OwnerEnv, ScrollOwner};
 use crate::scroll::{
-    ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics, SnapPolicy,
+    ClampingScrollPhysics, ScrollController, ScrollMetrics, ScrollView, ScrollViewConfig,
+    SharedScrollPhysics, SnapPolicy,
 };
 use crate::support::command_modifiers;
-use crate::{DragSlot, Focus, GestureDetector, Listener, Semantics, SingleChildScrollView};
+use crate::{DragSlot, Focus, GestureDetector, Listener, Semantics};
 use flui_interaction::focus::{FocusNode, FocusNodeRegistration, KeyEventResult};
 use flui_interaction::pointer::EventPropagation;
 use flui_interaction::{
@@ -169,32 +168,36 @@ impl Default for WheelScrollDistances {
         }
     }
 }
-
-/// A caller-supplied composition of the scrollable content, receiving the
-/// [`Scrollable`]'s shared [`ScrollPosition`] and returning the view to
-/// scroll. See [`Scrollable::viewport_builder`].
+/// The composition of the scrollable content: receives the [`Scrollable`]'s
+/// shared [`ScrollPosition`] and returns the view to scroll.
 ///
-/// `Rc`, not `Arc + Send + Sync`: `BoxedView` erases to `Box<dyn View>`, and
-/// `View` carries no `Send`/`Sync` supertrait (widget trees are built and
-/// laid out on one thread), so a closure that captures pre-built view
-/// content (e.g. an eager child list) can never satisfy `+ Send + Sync` —
-/// same reason `AnimatedBuilder`'s own builder closure
-/// (`transitions/animated_builder.rs`) is `Rc<dyn Fn() -> BoxedView>`, not
-/// `Arc<... + Send + Sync>`.
-pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
+/// `Rc`, not `Arc + Send + Sync`: a view is built and laid out on its owner
+/// thread, so a closure that captures pre-built view content (an eager child
+/// list) never needs to cross threads.
+pub(crate) type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 
 // ---------------------------------------------------------------------------
 // View (configuration)
 // ---------------------------------------------------------------------------
 
-/// Detects pan gestures on its child and maps them to scroll-offset changes
-/// on the given [`ScrollController`], including a ballistic fling simulation
-/// after the user lifts their finger.
+/// The scroll gestures over a viewport of the caller's: drag, fling, wheel,
+/// keys and assistive scroll actions, each a step of the nested scroll
+/// channel that moves one shared [`ScrollPosition`].
 ///
-/// Scrolling rebuilds nothing. A write of the controller's offset writer notifies the
-/// shared [`ScrollPosition`], and `RenderViewport` — which subscribes to it
-/// directly — marks itself needing layout; no element in the subtree is
-/// dirtied. See this module's docs.
+/// The standard scroll views ([`ListView`](crate::ListView),
+/// [`GridView`](crate::GridView), [`CustomScrollView`](crate::CustomScrollView),
+/// [`SingleChildScrollView`](crate::SingleChildScrollView)) compose a `Scrollable` themselves; reach for it
+/// directly only to scroll a viewport of your own. The closure given to
+/// [`Scrollable::new`] receives the position and must hand it to the
+/// viewport it builds ([`Viewport::new`](crate::Viewport::new)), so the
+/// gestures drive what paints and the viewport's committed content extents
+/// flow back into the same position. Its configuration is the
+/// [`ScrollView`] builders.
+///
+/// Scrolling rebuilds nothing. A write of the controller's offset writer
+/// notifies the shared [`ScrollPosition`], and `RenderViewport` — which
+/// subscribes to it directly — marks itself needing layout; no element in
+/// the subtree is dirtied. See this module's docs.
 ///
 /// A `flui_view::environment::VsyncScope` must be above the `Scrollable` in the
 /// tree (or provided by the application's binding) for fling, `animate_to` and notched-wheel
@@ -207,59 +210,37 @@ pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 ///
 /// ```rust
 /// use flui_animation::Vsync;
+/// use flui_view::ViewExt;
 /// use flui_view::environment::VsyncScope;
-/// use flui_widgets::{ScrollController, Scrollable, SizedBox};
+/// use flui_widgets::{ScrollController, ScrollView, Scrollable, SizedBox, SliverToBoxAdapter, Viewport};
 ///
 /// let controller = ScrollController::new();
 ///
 /// let view = VsyncScope::new(
 ///     Vsync::new(),
-///     Scrollable::new()
-///         .controller(controller)
-///         .child(SizedBox::new(300.0, 1400.0)),
+///     Scrollable::new(|position| {
+///         Viewport::new(position, (SliverToBoxAdapter::new().child(SizedBox::new(300.0, 1400.0)),))
+///             .boxed()
+///     })
+///     .controller(controller),
 /// );
 /// ```
-///
-/// [`Listenable`]: flui_foundation::Listenable
 #[derive(Clone, StatefulView)]
 pub struct Scrollable {
-    /// The shared position + notification hub, when the application holds
-    /// it; `None` uses one the state keeps for its lifetime, so a rebuild
-    /// of a parent never swaps the position under a drag.
-    controller: Option<ScrollController>,
-    wheel_distances: WheelScrollDistances,
-    /// An authored boundary / fling policy; `None` uses the owner's default.
-    physics: Option<SharedScrollPhysics>,
-    /// Where a release comes to rest, when not where the physics coasts.
-    snap: Option<SharedSnapPolicy>,
-    /// Whether this scrollable's remainder goes up its scroll chain.
-    overscroll: OverscrollBehavior,
-    /// The pointer kinds whose drags and presses this scrollable admits.
-    devices: PointerKindSet,
-    /// What assistive technology reads for the scroll view.
-    semantic_label: Option<String>,
-    /// Take the keyboard focus when mounted.
-    autofocus: bool,
-    /// The axis along which the child scrolls.
-    scroll_direction: Axis,
+    /// How the content scrolls (see [`ScrollView`]).
+    config: ScrollViewConfig,
     /// Overrides the resolved [`AxisDirection`] used to orient gesture
     /// deltas/velocity, bypassing this widget's own ambient-`Directionality`
-    /// resolution. `None` (the default) means: resolve it the same way the
-    /// `.child()` fast path's internally-composed [`SingleChildScrollView`]
-    /// does — [`axis_direction_from_axis_reverse_and_directionality`] against
-    /// `scroll_direction` with `reverse: false`. Set this explicitly when
-    /// composing a [`Scrollable::viewport_builder`] whose content already
-    /// resolved its own `AxisDirection` (e.g. [`PageView`](crate::PageView)):
-    /// passing that SAME value here keeps gesture orientation in sync with
-    /// what the composed content actually paints, instead of `Scrollable`
-    /// re-deriving a value that has no visibility into the builder's content.
+    /// resolution. `None` (the default) resolves it the way the standard
+    /// scroll views resolve their viewport's:
+    /// [`axis_direction_from_axis_reverse_and_directionality`] against the
+    /// configured axis and `reverse`. Set it when the composed viewport
+    /// resolved its own `AxisDirection` another way (e.g.
+    /// [`PageView`](crate::PageView)), passing that same value, so gesture
+    /// orientation follows what the viewport paints.
     axis_direction: Option<AxisDirection>,
-    /// The content to make scrollable.
-    child: Child,
-    /// Overrides the scrollable content's composition entirely; `None`
-    /// keeps the `SingleChildScrollView`-over-`child` fast path. See
-    /// [`Scrollable::viewport_builder`].
-    viewport_builder: Option<ViewportBuilder>,
+    /// The composition of the content to scroll.
+    viewport: ViewportBuilder,
     /// Set when an [`AnchoredDrag`](super::AnchoredDrag) drives this
     /// scrollable: see [`Scrollable::anchored`].
     anchored: Option<AnchoredLeaf>,
@@ -268,178 +249,49 @@ pub struct Scrollable {
 impl std::fmt::Debug for Scrollable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Scrollable")
-            .field("scroll_direction", &self.scroll_direction)
+            .field("config", &self.config)
             .field("axis_direction", &self.axis_direction)
-            .field("controller", &self.controller)
-            .field("physics", &self.physics)
-            .field("snap", &self.snap)
-            .field("overscroll", &self.overscroll)
-            .field("devices", &self.devices)
-            .field("autofocus", &self.autofocus)
-            .field("has_viewport_builder", &self.viewport_builder.is_some())
             .field("anchored", &self.anchored.is_some())
             .finish_non_exhaustive()
     }
 }
 
-impl Default for Scrollable {
-    fn default() -> Self {
-        Self {
-            controller: None,
-            wheel_distances: WheelScrollDistances::default(),
-            physics: None,
-            snap: None,
-            overscroll: OverscrollBehavior::Auto,
-            devices: PointerKindSet::all(),
-            semantic_label: None,
-            autofocus: false,
-            scroll_direction: Axis::Vertical,
-            axis_direction: None,
-            child: Child::empty(),
-            viewport_builder: None,
-            anchored: None,
-        }
+impl ScrollView for Scrollable {
+    fn scroll_config_mut(&mut self) -> &mut ScrollViewConfig {
+        &mut self.config
     }
 }
 
 impl Scrollable {
-    /// A new vertical `Scrollable` with clamping physics and a position of
-    /// its own, which it keeps across rebuilds for as long as it is mounted.
-    /// Call `.controller(...)` to share the position with a
+    /// A vertical `Scrollable` over the viewport `viewport` builds, with
+    /// clamping physics and a position of its own, which it keeps across
+    /// rebuilds for as long as it is mounted. Call
+    /// [`ScrollView::controller`] to share the position with a
     /// [`Scrollbar`](super::Scrollbar) or to read the offset programmatically.
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(viewport: impl Fn(ScrollPosition) -> BoxedView + 'static) -> Self {
+        Self::with_config(ScrollViewConfig::default(), Rc::new(viewport))
     }
 
-    /// Attach a [`ScrollController`] (position + notification hub). Multiple
-    /// clones of the same controller share state, so a `Scrollbar` can listen
-    /// to the same controller.
-    #[must_use]
-    pub fn controller(mut self, controller: ScrollController) -> Self {
-        self.controller = Some(controller);
-        self
-    }
-
-    /// Author the logical distance of one translated line or raw wheel character.
-    ///
-    /// These distances are application scroll policy, not measurements of glyphs
-    /// or native typography. Raw detents additionally use system counts; translated
-    /// line packets use only the line distance and pixel packets remain unchanged.
-    #[must_use]
-    pub fn wheel_distances(mut self, distances: WheelScrollDistances) -> Self {
-        self.wheel_distances = distances;
-        self
-    }
-
-    /// Override the boundary / fling behaviour (default:
-    /// [`ClampingScrollPhysics`]).
-    #[must_use]
-    pub fn physics(mut self, physics: SharedScrollPhysics) -> Self {
-        self.physics = Some(physics);
-        self
-    }
-
-    /// Settle every release on the target `policy` picks — a page, an
-    /// anchor — instead of where the physics would coast (ADR-0209 §9).
-    /// A snapping scrollable keeps its fling: no residual goes up its chain.
-    #[must_use]
-    pub fn snap_policy(mut self, policy: SharedSnapPolicy) -> Self {
-        self.snap = Some(policy);
-        self
-    }
-
-    /// Whether drag remainders and fling residuals this scrollable and the
-    /// scrollables inside it leave go on up the nested scroll chain
-    /// (default [`OverscrollBehavior::Auto`]) or stop here
-    /// ([`OverscrollBehavior::Contain`]).
-    #[must_use]
-    pub fn overscroll_behavior(mut self, behavior: OverscrollBehavior) -> Self {
-        self.overscroll = behavior;
-        self
-    }
-
-    /// Admit only drags and presses of these pointer kinds (default: all). A
-    /// refused contact never reaches this scrollable's arena, so a pen that
-    /// draws beside a finger that scrolls leaves the scrollable alone. Wheel
-    /// and trackpad scrolling, keys, assistive actions and the controller are
-    /// not contacts and are unaffected.
-    #[must_use]
-    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
-        self.devices = devices;
-        self
-    }
-
-    /// What assistive technology reads for the scroll view, in place of
-    /// nothing.
-    #[must_use]
-    pub fn semantic_label(mut self, label: impl Into<String>) -> Self {
-        self.semantic_label = Some(label.into());
-        self
-    }
-
-    /// Take the keyboard focus when mounted, so the scroll keys work without a
-    /// click first (default `false`).
-    ///
-    /// A focused scrollable, or one holding the focus in its subtree, scrolls
-    /// by the arrow keys along its axis, PageUp/PageDown and Space/Shift+Space
-    /// by a page, and Home/End to its extents. Each key press is a sequence
-    /// from the keyboard device in the nested scroll chain; a scrollable at
-    /// the end of its range lets the key bubble to the enclosing one. It is
-    /// not a Tab stop, and a drag on it takes the focus.
-    #[must_use]
-    pub fn autofocus(mut self, autofocus: bool) -> Self {
-        self.autofocus = autofocus;
-        self
-    }
-
-    /// The scroll axis (default [`Axis::Vertical`]).
-    #[must_use]
-    pub fn scroll_direction(mut self, axis: Axis) -> Self {
-        self.scroll_direction = axis;
-        self
+    /// The scrollable a standard scroll view composes: its own configuration
+    /// over its own viewport.
+    pub(crate) fn with_config(config: ScrollViewConfig, viewport: ViewportBuilder) -> Self {
+        Self {
+            config,
+            axis_direction: None,
+            viewport,
+            anchored: None,
+        }
     }
 
     /// Override the resolved [`AxisDirection`] gestures are oriented by
-    /// (default: `None`, resolved from ambient `Directionality` — see the
-    /// field docs). Pass the exact `AxisDirection` a
-    /// [`Scrollable::viewport_builder`]'s composed content resolved for
-    /// itself, so a drag in a given physical direction moves the offset the
-    /// way that content actually paints.
+    /// (default: `None`, resolved from the configured axis, `reverse` and the
+    /// ambient `Directionality` — see the field docs). Pass the exact
+    /// `AxisDirection` the composed viewport resolved for itself, so a drag
+    /// in a given physical direction moves the offset the way that viewport
+    /// actually paints.
     #[must_use]
     pub fn axis_direction(mut self, direction: AxisDirection) -> Self {
         self.axis_direction = Some(direction);
-        self
-    }
-
-    /// The scrollable content.
-    ///
-    /// Ignored when [`Scrollable::viewport_builder`] is set — the builder
-    /// closure is responsible for its own content in that case.
-    #[must_use]
-    pub fn child(mut self, child: impl IntoView) -> Self {
-        self.child = Child::some(child.into_view());
-        self
-    }
-
-    /// Override the scrollable content's composition entirely.
-    ///
-    /// By default (`None`) `Scrollable` composes a [`SingleChildScrollView`]
-    /// wrapping [`Scrollable::child`] — the fast path most callers want. Set
-    /// this to compose an arbitrary scrollable widget instead — e.g. a
-    /// [`Viewport`](super::Viewport) over several slivers, a `ListView`, or a
-    /// `CustomScrollView` — when a single child in a `SingleChildScrollView`
-    /// isn't the right shape.
-    ///
-    /// The closure receives this `Scrollable`'s controller's shared
-    /// [`ScrollPosition`] and must inject it into whatever it builds
-    /// (typically via that widget's own `.position(...)`) so the drag/fling
-    /// gesture wiring above still drives it, and `RenderViewport`'s
-    /// committed content extents still flush back into the same controller.
-    ///
-    /// When this is `Some`, [`Scrollable::child`] is ignored.
-    #[must_use]
-    pub fn viewport_builder(mut self, builder: ViewportBuilder) -> Self {
-        self.viewport_builder = Some(builder);
         self
     }
 
@@ -614,7 +466,7 @@ impl StatefulView for Scrollable {
             default_physics: Rc::new(ClampingScrollPhysics::new()),
             focus: Rc::clone(&focus),
             reveal: Rc::new(ScrollReveal::new(focus)),
-            scroll_controller: self.controller.clone().unwrap_or_default(),
+            scroll_controller: self.config.controller.clone().unwrap_or_default(),
             hooks: None,
             build_phase: flui_foundation::BuildPhase::new(),
             fling_controller,
@@ -669,10 +521,10 @@ impl ScrollableState {
             controller: self.scroll_controller.clone(),
             fling: self.fling_controller.controller().clone(),
             physics: physics.clone(),
-            snap: view.snap.clone(),
-            axis: view.scroll_direction,
+            snap: view.config.snap.clone(),
+            axis: view.config.scroll_direction,
             reversed: axis_direction.is_reversed(),
-            overscroll: view.overscroll,
+            overscroll: view.config.overscroll,
             parent: NestedScrollScope::parent_of(ctx),
         };
         let existing = self.owner.borrow().clone();
@@ -912,18 +764,22 @@ impl ViewState<Scrollable> for ScrollableState {
 
     fn apply_view(&mut self, view: &Scrollable, ctx: &dyn BuildContext) {
         let physics = view
+            .config
             .physics
             .as_ref()
             .unwrap_or(&self.default_physics)
             .clone();
-        // No explicit override: resolve the same way the `.child()` fast
-        // path's internally-composed `SingleChildScrollView` resolves its
-        // own `AxisDirection` — same helper, same ambient `Directionality`
-        // ancestor, same `reverse: false` — so the two stay in agreement
-        // without `Scrollable` needing to see what `SingleChildScrollView`
-        // computed. See `axis_direction`'s field docs for the override case.
+        // No explicit override: resolve the way the standard scroll views
+        // resolve their viewport's `AxisDirection` — same helper, same
+        // ambient `Directionality`, same axis and `reverse` — so the two
+        // agree without `Scrollable` seeing what the viewport computed. See
+        // `axis_direction`'s field docs for the override case.
         let axis_direction = view.axis_direction.unwrap_or_else(|| {
-            axis_direction_from_axis_reverse_and_directionality(ctx, view.scroll_direction, false)
+            axis_direction_from_axis_reverse_and_directionality(
+                ctx,
+                view.config.scroll_direction,
+                view.config.reverse,
+            )
         });
         let owner = self.owner(view, &physics, axis_direction, ctx);
         let motion = view.anchored.as_ref().map(|leaf| {
@@ -949,7 +805,7 @@ impl ViewState<Scrollable> for ScrollableState {
                 Some(RevealMove {
                     move_to: Rc::clone(&move_to),
                     controller: self.scroll_controller.clone(),
-                    axis: view.scroll_direction,
+                    axis: view.config.scroll_direction,
                     reversed: axis_direction.is_reversed(),
                 }),
                 ctx,
@@ -974,7 +830,7 @@ impl ViewState<Scrollable> for ScrollableState {
             .clone()
             .expect("BUG: `apply_view` runs before every build");
         let anchored = view.anchored.is_some();
-        let devices = view.devices;
+        let devices = view.config.devices;
         let fling_controller = self.fling_controller.controller().clone();
 
         // The viewport re-lays itself out from the render side:
@@ -994,7 +850,7 @@ impl ViewState<Scrollable> for ScrollableState {
             listener
         } else {
             let pan_position = self.scroll_controller.position();
-            listener.scroll_axis(view.scroll_direction, move || {
+            listener.scroll_axis(view.config.scroll_direction, move || {
                 pan_position.max_scroll_extent() > pan_position.min_scroll_extent()
             })
         };
@@ -1039,7 +895,7 @@ impl ViewState<Scrollable> for ScrollableState {
         let scope = NestedScrollScope::new(Rc::clone(applied.owner.node()), content);
         Focus::new(scope)
             .focus_node(Rc::clone(&self.focus))
-            .autofocus(view.autofocus)
+            .autofocus(view.config.autofocus)
             .can_request_focus(true)
             // No stop of traversal, and no semantics of its own: an
             // anchored drag's stop is the row of its gesture
@@ -1052,7 +908,7 @@ impl ViewState<Scrollable> for ScrollableState {
     fn did_update_view(&mut self, old_view: &Scrollable, new_view: &Scrollable) {
         // Without a controller of its own, a rebuild keeps the position this
         // state made; one taken away from the application gets a fresh one.
-        let incoming = match (&new_view.controller, &old_view.controller) {
+        let incoming = match (&new_view.config.controller, &old_view.config.controller) {
             (Some(controller), _) => controller.clone(),
             (None, None) => return,
             (None, Some(_)) => ScrollController::new(),
@@ -1112,45 +968,28 @@ impl ViewState<Scrollable> for ScrollableState {
 
 /// The pieces `ScrollableState::build` composes.
 impl ScrollableState {
-    /// What scrolls: the anchored drag's content, a custom viewport, or the
-    /// single-child scroll view over the view's child.
+    /// What scrolls: the anchored drag's content, or the caller's viewport
+    /// under a scope that publishes this position.
     ///
-    /// Position mode, not `.offset(pixels)`: the composed viewport's
-    /// offset IS this controller's shared `ScrollPosition`, so a
-    /// gesture write is observed directly (no push from this rebuild)
-    /// and `RenderViewport::perform_layout`'s committed content
-    /// extents flush back into the same position — see
-    /// `ScrollPosition`'s docs and `Viewport::position`.
+    /// The composed viewport's offset IS this controller's shared
+    /// `ScrollPosition`, so a gesture write is observed directly (no push
+    /// from this rebuild) and `RenderViewport::perform_layout`'s committed
+    /// content extents flush back into the same position — see
+    /// `ScrollPosition`'s docs and `Viewport::new`.
     fn viewport_content(&self, view: &Scrollable) -> BoxedView {
         let scroll_controller = &self.scroll_controller;
-        if let Some(build_viewport) = &view.viewport_builder
-            && view.anchored.is_some()
-        {
+        let content = (view.viewport)(scroll_controller.position());
+        if view.anchored.is_some() {
             // An anchored drag's content is no scroll view: nothing
             // inside it scrolls with this position.
-            build_viewport(scroll_controller.position())
-        } else if let Some(build_viewport) = &view.viewport_builder {
-            // Custom composition: the closure owns injecting the shared
-            // position into whatever it builds. The scope re-publishes
-            // that same position to the built subtree, so content INSIDE
-            // the scrolled slivers (a floating header's snap trigger, a
-            // scrollbar) can subscribe to the position the gestures
-            // actually drive, and a focusable list inside can ask this
-            // controller to jump.
-            ScrollPositionScope::new(
-                scroll_controller,
-                build_viewport(scroll_controller.position()),
-            )
-            .boxed()
-        } else {
-            let mut scsv = SingleChildScrollView::new()
-                .scroll_direction(view.scroll_direction)
-                .position(scroll_controller.position());
-            if let Some(content) = view.child.clone().into_inner() {
-                scsv = scsv.child(content);
-            }
-            scsv.boxed()
+            return content;
         }
+        // The scope re-publishes the position to the built subtree, so
+        // content INSIDE the scrolled slivers (a floating header's snap
+        // trigger, a scrollbar) can subscribe to the position the gestures
+        // actually drive, and a focusable list inside can ask this
+        // controller to jump.
+        ScrollPositionScope::new(scroll_controller, content).boxed()
     }
 
     /// The drag over `content`: grab, update, release and cancel, each
@@ -1161,7 +1000,7 @@ impl ScrollableState {
         applied: &Applied,
         content: BoxedView,
     ) -> GestureDetector {
-        let scroll_direction = view.scroll_direction;
+        let scroll_direction = view.config.scroll_direction;
         let anchored = view.anchored.is_some();
         let admission = view
             .anchored
@@ -1171,7 +1010,7 @@ impl ScrollableState {
             .anchored
             .as_ref()
             .and_then(|leaf| leaf.cancelled.clone());
-        let devices = view.devices;
+        let devices = view.config.devices;
         // Clones for the gesture callbacks; each closure needs its own
         // `Arc`-counted handle (no refcount bump at call time).
         let fling_stop = self.fling_controller.controller().clone();
@@ -1328,8 +1167,8 @@ impl ScrollableState {
         applied: &Applied,
         wheel_preferences: WheelPreferencesProvider,
     ) -> impl Fn(&ScrollEvent) -> EventPropagation + use<> {
-        let wheel_distances = view.wheel_distances;
-        let scroll_direction = view.scroll_direction;
+        let wheel_distances = view.config.wheel_distances;
+        let scroll_direction = view.config.scroll_direction;
         let anchored = view.anchored.is_some();
         let axis_direction = applied.axis_direction;
         let ctrl_wheel = self.scroll_controller.clone();
@@ -1548,16 +1387,16 @@ impl ScrollableState {
         let Some(move_to) = applied.move_to.clone() else {
             return listener;
         };
-        let wheel_distances = view.wheel_distances;
+        let wheel_distances = view.config.wheel_distances;
         let (viewport_semantics, position_semantics) = scroll_semantics(
             self.scroll_controller.clone(),
             applied.axis_direction,
             move_to,
-            view.semantic_label.clone(),
+            view.config.semantic_label.clone(),
             applied.position_label,
             // AccessKit's item: a line when scrolling vertically, a
             // character when scrolling horizontally.
-            match view.scroll_direction {
+            match view.config.scroll_direction {
                 Axis::Vertical => wheel_distances.line,
                 Axis::Horizontal => wheel_distances.character,
             },
@@ -1576,15 +1415,15 @@ impl ScrollableState {
         view: &Scrollable,
         applied: &Applied,
     ) -> impl Fn(&mut EventCx<'_>, &KeyEvent) -> KeyEventResult + use<> {
-        let wheel_distances = view.wheel_distances;
-        let scroll_direction = view.scroll_direction;
+        let wheel_distances = view.config.wheel_distances;
+        let scroll_direction = view.config.scroll_direction;
         let anchored = view.anchored.is_some();
         let axis_direction = applied.axis_direction;
         let key_item_step = match scroll_direction {
             Axis::Vertical => wheel_distances.line,
             Axis::Horizontal => wheel_distances.character,
         };
-        let key_snap = view.snap.clone();
+        let key_snap = view.config.snap.clone();
         let key_owner = Rc::clone(&applied.owner);
         let key_pipeline = self.pipeline.clone();
         let key_controller = self.scroll_controller.clone();

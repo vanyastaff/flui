@@ -44,6 +44,7 @@ use flui_view::{
     ViewExt, ViewState,
 };
 
+use super::ScrollView;
 use super::nested::presentation_device_pixel_ratio;
 use super::nested::{
     AnchorSnap, ChainNode, FlingHandoff, FlingStep, NestedScrollConnection, NestedScrollScope,
@@ -1232,7 +1233,7 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
             .child(view.child.clone())
             .boxed();
         let anchor = self.plane.anchor();
-        let content = Rc::new(move |_position| {
+        let content = move |_position| {
             // A move patches the transform's layer: nothing rebuilds.
             AnchoredBox::new(
                 anchor.clone(),
@@ -1249,13 +1250,12 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
                 ),
             )
             .boxed()
-        });
-        let scrollable = Scrollable::new()
+        };
+        let scrollable = Scrollable::new(content)
             .controller(controller.inner.scroll.clone())
             .scroll_direction(axis)
             .axis_direction(axis_direction)
             .snap_policy(Rc::clone(&anchors.policy))
-            .viewport_builder(content)
             .anchored(AnchoredLeaf {
                 motion: Rc::clone(&self.motion),
                 slot: Rc::clone(&controller.inner.slot),

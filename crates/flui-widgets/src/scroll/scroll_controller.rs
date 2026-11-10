@@ -166,7 +166,7 @@ struct CommandSlot {
 ///
 /// ```rust,ignore
 /// let controller = ScrollController::new();
-/// Scrollable::new()
+/// SingleChildScrollView::new()
 ///     .controller(controller.clone())
 ///     .child(/* … */)
 /// ```

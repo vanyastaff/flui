@@ -1429,15 +1429,11 @@ fn autoscroll_through(fixed_extent: bool) {
         }
     };
     let row = Rc::new(row);
-    let list = flui_widgets::Scrollable::new().viewport_builder(Rc::new(move |position| {
-        let list = if fixed_extent {
-            flui_widgets::ListView::new(50.0, (0..10).map(|index| row(index)).collect::<Vec<_>>())
-        } else {
-            let row = Rc::clone(&row);
-            flui_widgets::ListView::builder(10, 50.0, move |index| (index < 10).then(|| row(index)))
-        };
-        list.position(position).into_view().boxed()
-    }));
+    let list = if fixed_extent {
+        flui_widgets::ListView::new(50.0, (0..10).map(|index| row(index)).collect::<Vec<_>>())
+    } else {
+        flui_widgets::ListView::builder(10, 50.0, move |index| (index < 10).then(|| row(index)))
+    };
     let card = Draggable::try_new(
         quiet_commands(),
         || vec![DragItem::new().with_value("Alice")],
@@ -1537,13 +1533,7 @@ pub(crate) fn a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag() {
         }
     };
     let row = Rc::new(row);
-    let list = flui_widgets::Scrollable::new().viewport_builder(Rc::new(move |position| {
-        let row = Rc::clone(&row);
-        flui_widgets::ListView::builder(200, 50.0, move |index| row(index))
-            .position(position)
-            .into_view()
-            .boxed()
-    }));
+    let list = flui_widgets::ListView::builder(200, 50.0, move |index| row(index));
     let target = DropTarget::try_new(
         DropCommands::new(CommandAppearance::new("Paste", Text::new("v"))),
         |drag| drag.value::<&'static str>().map(|_| TransferActions::MOVE),

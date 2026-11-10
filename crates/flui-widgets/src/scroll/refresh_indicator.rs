@@ -325,8 +325,8 @@ type RefreshCallback = Rc<dyn Fn(&mut EventCx<'_>) -> BoxedTask>;
 ///
 /// ```rust
 /// use flui_widgets::{
-///     Alternative, ControlSpec, GestureAlternatives, RefreshIndicator, RefreshIntent, Scrollable,
-///     SizedBox, Text,
+///     Alternative, ControlSpec, GestureAlternatives, RefreshIndicator, RefreshIntent,
+///     SingleChildScrollView, SizedBox, Text,
 /// };
 ///
 /// let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
@@ -335,7 +335,7 @@ type RefreshCallback = Rc<dyn Fn(&mut EventCx<'_>) -> BoxedTask>;
 /// )))
 /// .expect("one labelled command");
 /// let inbox = RefreshIndicator::new(
-///     Scrollable::new().child(SizedBox::new(300.0, 1400.0)),
+///     SingleChildScrollView::new().child(SizedBox::new(300.0, 1400.0)),
 ///     alternatives,
 /// )
 /// .on_refresh(|_cx| async { /* fetch the messages */ });

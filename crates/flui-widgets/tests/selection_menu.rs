@@ -23,8 +23,8 @@ use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
     Actions, CallbackAction, CaretHandle, Column, ContextMenuArea, DefaultSelectionControls,
     Directionality, EditableText, Focus, GestureCommand, HandleInfo, Intent, LongPressSelection,
-    ScrollController, Scrollable, SelectionHandles, SelectionMenuPolicy, ShowContextMenuIntent,
-    SizedBox, Text, TextEditingController, WidgetsApp,
+    ScrollController, ScrollView, SelectionHandles, SelectionMenuPolicy, ShowContextMenuIntent,
+    SingleChildScrollView, SizedBox, Text, TextEditingController, WidgetsApp,
 };
 
 use crate::common::{LaidOut, SignalProbe, lay_out, tight};
@@ -487,7 +487,7 @@ pub(crate) fn the_toolbar_follows_a_scroll() {
             // Room over the field, so the scrolled toolbar still stands
             // over the line, and below it, so the page scrolls.
             let room = SizedBox::new(400.0, 100.0);
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(page)
                 .child(Column::new((room, content, SizedBox::new(400.0, 600.0))))
                 .boxed()

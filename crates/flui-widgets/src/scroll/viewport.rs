@@ -18,26 +18,6 @@ use flui_view::seq::ViewSeq;
 use crate::__private::generic_render_view_element;
 use crate::localization::{Directionality, resolve_horizontal_axis_direction};
 
-/// Where a [`Viewport`] or [`ShrinkWrappingViewport`]'s render object gets
-/// its scroll offset from. Shared by both widgets — they're two `RenderBox`
-/// front ends over the same `ViewportOffset` injection mechanics, just with
-/// different `RenderObject`s (`RenderViewport` vs
-/// `RenderShrinkWrappingViewport`) underneath.
-///
-/// - `Fixed`: the widget owns a private [`ScrollPosition::fixed`] at this
-///   value, and a rebuild with another value installs a new one — today's
-///   programmatic-offset behavior, with no external subscriber.
-/// - `Position`: an external `ScrollPosition` (typically a
-///   `ScrollController`'s) is injected directly. Its writer moves it, and the
-///   render object's committed content extents (`RenderViewport` or
-///   `RenderShrinkWrappingViewport::perform_layout`) flush back into it — the
-///   content-dimension feedback loop.
-#[derive(Clone, Debug)]
-enum OffsetSource {
-    Fixed(f64),
-    Position(ScrollPosition),
-}
-
 /// The cross-axis direction for a scroll `axis_direction`. A horizontal scroll
 /// axis lays its cross axis top-to-bottom and never calls `text_direction`, so
 /// it registers no `Directionality` dependency; a vertical one lays its
@@ -67,14 +47,19 @@ fn resolve_cross_axis_direction(
 ///
 /// Backed by `RenderViewport`. The viewport sizes to its (bounded) incoming constraints — place it under a
 /// bounded main-axis constraint, not directly inside an unbounded `Column`.
-/// `offset` is a programmatic scroll position in logical pixels (interactive
-/// drag-to-scroll arrives with the `Scrollable`/`ScrollController` layer).
+///
+/// A viewport is passive: it shows its slivers at the offset of the
+/// [`ScrollPosition`] it is given and never moves it. The standard scroll
+/// views ([`CustomScrollView`](crate::CustomScrollView),
+/// [`ListView`](crate::ListView), …) compose one under a
+/// [`Scrollable`](crate::Scrollable) that does; a viewport of your own goes
+/// in [`Scrollable::new`](crate::Scrollable::new)'s closure.
 ///
 /// Generic over `C: ViewSeq` of sliver child views.
 #[derive(Clone)]
 pub struct Viewport<C = Vec<BoxedView>> {
     axis_direction: AxisDirection,
-    offset_source: OffsetSource,
+    position: ScrollPosition,
     cache_extent: Option<(f64, CacheExtentStyle)>,
     paint_order: SliverPaintOrder,
     anchor: f64,
@@ -84,11 +69,20 @@ pub struct Viewport<C = Vec<BoxedView>> {
 }
 
 impl<C> Viewport<C> {
-    /// A vertical viewport (scrolls top-to-bottom) over `children`.
-    pub fn new(children: C) -> Self {
+    /// A vertical viewport (scrolls top-to-bottom) over `children`, at the
+    /// offset of `position`.
+    ///
+    /// The render object's offset IS `position`: whatever writes it (a
+    /// [`Scrollable`](crate::Scrollable)'s gestures, a
+    /// [`ScrollController`](crate::ScrollController)) is observed directly,
+    /// with no push from this widget, and `RenderViewport::perform_layout`'s
+    /// committed content extents flush back into it. A rebuild with another
+    /// position (by identity) installs it; one that never moves is
+    /// [`ScrollPosition::fixed`], kept across builds by whoever holds it.
+    pub fn new(position: ScrollPosition, children: C) -> Self {
         Self {
             axis_direction: AxisDirection::TopToBottom,
-            offset_source: OffsetSource::Fixed(0.0),
+            position,
             cache_extent: None,
             paint_order: SliverPaintOrder::FirstIsTop,
             anchor: 0.0,
@@ -102,31 +96,6 @@ impl<C> Viewport<C> {
     #[must_use]
     pub fn axis_direction(mut self, axis_direction: AxisDirection) -> Self {
         self.axis_direction = axis_direction;
-        self
-    }
-
-    /// Set the programmatic scroll offset in logical pixels.
-    ///
-    /// Fixed mode: the render object's offset is a private `ScrollPosition`
-    /// this widget owns and pushes `offset` into on every rebuild. Mutually
-    /// exclusive with [`Viewport::position`] — whichever is called last wins.
-    #[must_use]
-    pub fn offset(mut self, offset: f64) -> Self {
-        self.offset_source = OffsetSource::Fixed(offset);
-        self
-    }
-
-    /// Inject a shared [`ScrollPosition`] as the render object's offset.
-    ///
-    /// Position mode: the render object's offset IS `position` — a
-    /// gesture handler or `ScrollController` writing to the same
-    /// `ScrollPosition` is observed directly (no push from this widget), and
-    /// `RenderViewport::perform_layout`'s committed content extents flush
-    /// back into it. Mutually exclusive with [`Viewport::offset`] —
-    /// whichever is called last wins.
-    #[must_use]
-    pub fn position(mut self, position: ScrollPosition) -> Self {
-        self.offset_source = OffsetSource::Position(position);
         self
     }
 
@@ -185,12 +154,11 @@ impl<C> Viewport<C> {
         ctx: &flui_view::RenderObjectContext<'_>,
     ) -> RenderViewport<ScrollPosition> {
         let cross_axis_direction = resolve_cross_axis_direction(self.axis_direction, ctx);
-        let position = match &self.offset_source {
-            OffsetSource::Fixed(pixels) => ScrollPosition::fixed(*pixels),
-            OffsetSource::Position(position) => position.clone(),
-        };
-        let mut render_object =
-            RenderViewport::with_offset(self.axis_direction, cross_axis_direction, position);
+        let mut render_object = RenderViewport::with_offset(
+            self.axis_direction,
+            cross_axis_direction,
+            self.position.clone(),
+        );
         if let Some((extent, style)) = self.cache_extent {
             // The returned impact is deliberately dropped. This runs before the
             // render object joins a tree, so there is nothing to invalidate —
@@ -215,7 +183,7 @@ impl<C: ViewSeq> fmt::Debug for Viewport<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Viewport")
             .field("axis_direction", &self.axis_direction)
-            .field("offset_source", &self.offset_source)
+            .field("position", &self.position.pixels())
             .field("cache_extent", &self.cache_extent)
             .field("paint_order", &self.paint_order)
             .field("anchor", &self.anchor)
@@ -258,33 +226,11 @@ where
         impact |= render_object.set_anchor(self.anchor);
         impact |= render_object.set_center(self.center);
         impact |= render_object.set_clip_behavior(self.clip_behavior);
-        match &self.offset_source {
-            OffsetSource::Fixed(pixels) => {
-                // Compat with today's behavior: the rebuild's value is the
-                // offset. A fixed position has no writer, so a new value is
-                // a new private position. The installed one is kept only
-                // when it is this widget's own at that value — never a
-                // foreign one left over from a PRIOR Position-mode build (a
-                // mode switch on the same render object;
-                // `update_render_object` only sees this rebuild's config, so
-                // identity is the only signal available). `is_uniquely_held`
-                // distinguishes the two: a private, widget-owned position
-                // has no other clone alive; an injected one is always
-                // shared with at least the controller that owns it.
-                let installed = render_object.offset();
-                if !(installed.is_uniquely_held() && installed.pixels() == *pixels) {
-                    impact |= render_object.set_offset(ScrollPosition::fixed(*pixels));
-                }
-            }
-            OffsetSource::Position(position) => {
-                // Swap in the injected position only on an actual identity
-                // change. Never push pixels here: the shared position is
-                // written directly by gestures/`ScrollController`, so
-                // pushing a rebuild-time value would stomp live drag state.
-                if !render_object.offset().ptr_eq(position) {
-                    impact |= render_object.set_offset(position.clone());
-                }
-            }
+        // Swap in the position only on an actual identity change. Never push
+        // pixels here: the shared position is written directly by its writer,
+        // so pushing a rebuild-time value would stomp live drag state.
+        if !render_object.offset().ptr_eq(&self.position) {
+            impact |= render_object.set_offset(self.position.clone());
         }
         impact
     }
@@ -307,23 +253,24 @@ generic_render_view_element!(Viewport);
 /// main-axis size from the accumulated sliver content, constrained by its
 /// parent.
 ///
-/// Mirrors [`Viewport`]'s `Fixed`-vs-`Position` `offset_source` mechanics —
-/// see [`ShrinkWrappingViewport::position`] for the injection contract.
+/// Passive like [`Viewport`]: it shows its slivers at the offset of the
+/// position it is given.
 #[derive(Clone)]
 pub struct ShrinkWrappingViewport<C = Vec<BoxedView>> {
     axis_direction: AxisDirection,
-    offset_source: OffsetSource,
+    position: ScrollPosition,
     paint_order: SliverPaintOrder,
     clip_behavior: Clip,
     children: C,
 }
 
 impl<C> ShrinkWrappingViewport<C> {
-    /// A vertical shrink-wrapping viewport over `children`.
-    pub fn new(children: C) -> Self {
+    /// A vertical shrink-wrapping viewport over `children`, at the offset of
+    /// `position` — the contract of [`Viewport::new`].
+    pub fn new(position: ScrollPosition, children: C) -> Self {
         Self {
             axis_direction: AxisDirection::TopToBottom,
-            offset_source: OffsetSource::Fixed(0.0),
+            position,
             paint_order: SliverPaintOrder::FirstIsTop,
             clip_behavior: Clip::HardEdge,
             children,
@@ -334,32 +281,6 @@ impl<C> ShrinkWrappingViewport<C> {
     #[must_use]
     pub fn axis_direction(mut self, axis_direction: AxisDirection) -> Self {
         self.axis_direction = axis_direction;
-        self
-    }
-
-    /// Set the programmatic scroll offset in logical pixels.
-    ///
-    /// Fixed mode: the render object's offset is a private `ScrollPosition`
-    /// this widget owns and pushes `offset` into on every rebuild. Mutually
-    /// exclusive with [`ShrinkWrappingViewport::position`] — whichever is
-    /// called last wins.
-    #[must_use]
-    pub fn offset(mut self, offset: f64) -> Self {
-        self.offset_source = OffsetSource::Fixed(offset);
-        self
-    }
-
-    /// Inject a shared [`ScrollPosition`] as the render object's offset.
-    ///
-    /// Position mode: the render object's offset IS `position` — a gesture
-    /// handler or `ScrollController` writing to the same `ScrollPosition` is
-    /// observed directly (no push from this widget), and
-    /// `RenderShrinkWrappingViewport::perform_layout`'s committed content
-    /// extents flush back into it. Mutually exclusive with
-    /// [`ShrinkWrappingViewport::offset`] — whichever is called last wins.
-    #[must_use]
-    pub fn position(mut self, position: ScrollPosition) -> Self {
-        self.offset_source = OffsetSource::Position(position);
         self
     }
 
@@ -385,14 +306,10 @@ impl<C> ShrinkWrappingViewport<C> {
         ctx: &flui_view::RenderObjectContext<'_>,
     ) -> RenderShrinkWrappingViewport<ScrollPosition> {
         let cross_axis_direction = resolve_cross_axis_direction(self.axis_direction, ctx);
-        let position = match &self.offset_source {
-            OffsetSource::Fixed(pixels) => ScrollPosition::fixed(*pixels),
-            OffsetSource::Position(position) => position.clone(),
-        };
         let mut render_object = RenderShrinkWrappingViewport::with_offset(
             self.axis_direction,
             cross_axis_direction,
-            position,
+            self.position.clone(),
         );
         // The setter runs; its returned impact is what is dropped. This is
         // before the node joins a tree, so there is nothing to invalidate —
@@ -408,7 +325,7 @@ impl<C: ViewSeq> fmt::Debug for ShrinkWrappingViewport<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ShrinkWrappingViewport")
             .field("axis_direction", &self.axis_direction)
-            .field("offset_source", &self.offset_source)
+            .field("position", &self.position.pixels())
             .field("paint_order", &self.paint_order)
             .field("clip_behavior", &self.clip_behavior)
             .field("children", &self.children.len())
@@ -443,23 +360,10 @@ where
             .set_cross_axis_direction(resolve_cross_axis_direction(self.axis_direction, ctx));
         impact |= render_object.set_paint_order(self.paint_order);
         impact |= render_object.set_clip_behavior(self.clip_behavior);
-        match &self.offset_source {
-            OffsetSource::Fixed(pixels) => {
-                // See `Viewport::update_render_object`'s matching arm for the
-                // full rationale: keep the installed offset only when it is
-                // this widget's own fixed one at the requested value.
-                let installed = render_object.offset();
-                if !(installed.is_uniquely_held() && installed.pixels() == *pixels) {
-                    impact |= render_object.set_offset(ScrollPosition::fixed(*pixels));
-                }
-            }
-            OffsetSource::Position(position) => {
-                // Swap in the injected position only on an actual identity
-                // change — see `Viewport::update_render_object`'s matching arm.
-                if !render_object.offset().ptr_eq(position) {
-                    impact |= render_object.set_offset(position.clone());
-                }
-            }
+        // Swap in the position only on an actual identity change — see
+        // `Viewport::update_render_object`.
+        if !render_object.offset().ptr_eq(&self.position) {
+            impact |= render_object.set_offset(self.position.clone());
         }
         impact
     }

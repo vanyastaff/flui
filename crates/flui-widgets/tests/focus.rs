@@ -1288,24 +1288,17 @@ struct ControllerInBuild;
 
 impl StatelessView for ControllerInBuild {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        use flui_widgets::{ListView, ScrollController, Scrollable, Text};
+        use flui_widgets::{ListView, ScrollController, ScrollView, Text};
 
-        Scrollable::new()
-            .controller(ScrollController::new())
-            .viewport_builder(Rc::new(|position| {
-                let rows: Vec<_> = (0..40)
-                    .map(|row| {
-                        SizedBox::height(50.0)
-                            .child(Text::new(format!("row {row}")))
-                            .into_view()
-                            .boxed()
-                    })
-                    .collect();
-                ListView::new(50.0, rows)
-                    .position(position)
+        let rows: Vec<_> = (0..40)
+            .map(|row| {
+                SizedBox::height(50.0)
+                    .child(Text::new(format!("row {row}")))
                     .into_view()
                     .boxed()
-            }))
+            })
+            .collect();
+        ListView::new(50.0, rows).controller(ScrollController::new())
     }
 }
 
