@@ -498,9 +498,9 @@ impl SceneOwner {
         self.cost.footprint.pairing_reads
     }
 
-    /// Entries applies have folded to read what foreground image filters
-    /// take in: one fold of a filtered node's content once the damage meets
-    /// its footprint, none for a filter the damage does not reach.
+    /// Entries applies have read to close damage over what filters take in:
+    /// each filtered node's closure entries (never its other chunks), and
+    /// one fold of its content once the damage meets its footprint.
     #[cfg(feature = "testing")]
     #[must_use]
     pub fn filter_input_reads(&self) -> u64 {

@@ -203,10 +203,11 @@ pub struct BoundaryContent {
     textures: Box<[(TextureId, EntryIndex)]>,
     /// Each slot's entry, by its node's key.
     slot_entries: Box<[(SceneNodeId, EntryIndex)]>,
-    /// Whether an entry reads pixels other than those it draws: a filter,
-    /// a colour filter painting transparent pixels, a chunk that reads the
-    /// destination.
-    filtered: bool,
+    /// Each entry that reads pixels other than those it draws, in paint
+    /// order: a backdrop or image filter, a colour filter painting
+    /// transparent pixels, a chunk that reads the destination. A node with
+    /// one is filtered, and closing damage visits only these entries.
+    closure_entries: Box<[EntryIndex]>,
 }
 
 impl BoundaryContent {
@@ -248,15 +249,20 @@ impl BoundaryContent {
         (node.key() == child).then_some(entry)
     }
 
+    /// The entries closing damage visits, in paint order.
+    pub(crate) fn closure_entries(&self) -> &[EntryIndex] {
+        &self.closure_entries
+    }
+
     pub(crate) fn is_filtered(&self) -> bool {
-        self.filtered
+        !self.closure_entries.is_empty()
     }
 
     /// Whether `other` puts the same entries into the three indexes.
     pub(crate) fn same_indexes(&self, other: &Self) -> bool {
         self.links == other.links
             && self.textures == other.textures
-            && self.filtered == other.filtered
+            && self.is_filtered() == other.is_filtered()
     }
 }
 
@@ -308,10 +314,12 @@ impl ContentBuilder {
         let mut links = Vec::new();
         let mut textures = Vec::new();
         let mut slots = Vec::new();
-        let mut filtered = false;
+        let mut closure_entries = Vec::new();
         for (position, entry) in self.entries.iter().enumerate() {
             let index = EntryIndex::at(position);
-            filtered |= entry_has_closure(entry);
+            if entry_has_closure(entry) {
+                closure_entries.push(index);
+            }
             match entry {
                 Entry::Effect { layer, .. } => match layer {
                     Layer::Leader(leader) => links.push((leader.link(), LinkRole::Leader, index)),
@@ -333,7 +341,7 @@ impl ContentBuilder {
             links: links.into_boxed_slice(),
             textures: textures.into_boxed_slice(),
             slot_entries: slots.into_boxed_slice(),
-            filtered,
+            closure_entries: closure_entries.into_boxed_slice(),
         }
     }
 
