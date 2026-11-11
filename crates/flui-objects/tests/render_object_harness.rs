@@ -79,6 +79,7 @@
 //! | `RenderIgnoreBaseline` | `harness_ignore_baseline_*` | yes | yes | — | yes | baseline hidden |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
 //! | `RenderMouseRegion` | `harness_mouse_region_*` | yes | yes | — | yes | cursor/annotation |
+//! | `RenderInteractive` | `harness_interactive_*` | yes | yes | yes | yes | targets, semantics, baseline |
 //! | `RenderSliverCarousel` | `harness_sliver_carousel_*` | yes | — | — | yes | frames |
 //! | `RenderSliverFixedExtentList` | `harness_sliver_fixed_extent_list_*` | yes | — | — | yes | — |
 //! | `RenderSliverGrid` | `harness_render_sliver_grid_*` | yes | yes | — | yes | — |
@@ -272,6 +273,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderIgnorePointer",
     "RenderIgnoreBaseline",
     "RenderListener",
+    "RenderInteractive",
     "RenderMouseRegion",
     "RenderSliverCarousel",
     "RenderSliverFixedExtentList",
@@ -1460,6 +1462,276 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
             .any(|entry| entry.pointer_target == Some(target)),
         "the listener's hit entry must carry its pointer target:\n{}",
         run.render_snapshot(),
+    );
+}
+
+/// One hit entry of a `RenderInteractive` answers both dispatch paths: the
+/// pointer target for contacts and the mouse target for tracking.
+fn harness_interactive_carries_its_pointer_and_mouse_targets_on_one_entry() {
+    let enters = Rc::new(Cell::new(0));
+    let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
+    let (pointer_target, mouse_target) = lane.enter(|| {
+        let handle = lane.dispatch_handle();
+        let enter_counter = Rc::clone(&enters);
+        (
+            handle
+                .register_pointer(|_event| {})
+                .expect("register no-op pointer target"),
+            handle
+                .register_mouse_region(MouseRegionCallbacks {
+                    on_enter: Some(Rc::new(move |_device, _position| {
+                        enter_counter.set(enter_counter.get() + 1);
+                    })),
+                    on_exit: None,
+                    on_hover: None,
+                })
+                .expect("register mouse-region target"),
+        )
+    });
+
+    let mut interactive = RenderInteractive::new(HitTestBehavior::Opaque);
+    let _ = interactive.set_pointer_target(Some(pointer_target), true);
+    interactive.set_mouse_region_target(Some(mouse_target));
+
+    // The child fills a quarter of the box; an opaque control is hit over
+    // all of it.
+    let run = RenderTester::mount(
+        box_node(RenderAlign::new(Alignment::TOP_LEFT)).child(
+            box_node(interactive)
+                .label("interactive")
+                .child(box_node(RenderSizedBox::new(Some(60.0), Some(30.0))).label("child")),
+        ),
+    )
+    .with_constraints(BoxConstraints::tight(Size::new(200.0, 100.0)))
+    .run_frame();
+    let id = run.id("interactive");
+    assert_eq!(run.box_geometry(id), Size::new(60.0, 30.0));
+
+    let position = Offset::new(50.0, 20.0);
+    let mut result = HitTestResult::new();
+    run.pipeline().hit_test(
+        position,
+        flui_interaction::events::PointerKind::Mouse,
+        &mut result,
+    );
+    assert!(
+        result
+            .path()
+            .iter()
+            .any(|entry| entry.pointer_target == Some(pointer_target)),
+        "the hit entry carries the pointer target:\n{}",
+        run.render_snapshot(),
+    );
+
+    let tracker = MouseTracker::new();
+    let event = flui_interaction::events::make_move_event(
+        position,
+        flui_interaction::events::PointerKind::Mouse,
+    )
+    .expect("finite mouse position");
+    lane.enter(|| {
+        tracker.update_with_motion(&event, PointerMotionKind::Hover, &result);
+    });
+    assert_eq!(enters.get(), 1, "the same entry enters the mouse target");
+
+    assert!(
+        !run.hit(120.0, 20.0).contains(&id),
+        "outside its box the control is not hit",
+    );
+}
+
+/// The three behaviours differ only where no child is hit.
+fn harness_interactive_behavior_decides_the_hit_outside_its_child() {
+    for (behavior, hit_on_empty, blocks_behind) in [
+        (HitTestBehavior::Opaque, true, true),
+        (HitTestBehavior::DeferToChild, false, false),
+        (HitTestBehavior::Translucent, true, false),
+    ] {
+        // Two layers in a stack: a hittable box behind, the control in
+        // front with no child to be hit.
+        let run = RenderTester::mount(
+            box_node(RenderStack::new())
+                .child(box_node(RenderColoredBox::red(80.0, 80.0)).label("behind"))
+                .child(box_node(RenderInteractive::new(behavior)).label("interactive")),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        let hit = run.hit(40.0, 40.0);
+        assert_eq!(
+            hit.contains(&run.id("interactive")),
+            hit_on_empty,
+            "{behavior:?}: the control's own entry",
+        );
+        assert_eq!(
+            !hit.contains(&run.id("behind")),
+            blocks_behind,
+            "{behavior:?}: what is behind the control",
+        );
+    }
+}
+
+/// The configuration is described whole, and an object with no semantics
+/// adds no node.
+fn harness_interactive_describes_one_semantics_configuration() {
+    let mut configuration = labelled("Submit");
+    configuration.set_role(SemanticsRole::Button);
+    configuration.set_enabled(Some(true));
+    configuration.set_semantics_boundary(true);
+
+    let mut interactive = RenderInteractive::new(HitTestBehavior::Opaque);
+    assert_eq!(
+        interactive.set_semantics(configuration.clone()),
+        flui_rendering::RenderUpdateImpact::SEMANTICS,
+    );
+    assert_eq!(
+        interactive.set_semantics(configuration),
+        flui_rendering::RenderUpdateImpact::NONE,
+        "an equal configuration invalidates nothing",
+    );
+
+    let run = RenderTester::mount(
+        box_node(interactive)
+            .label("interactive")
+            .child(box_node(RenderSizedBox::new(Some(40.0), Some(20.0)))),
+    )
+    .with_constraints(loose(200.0))
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    let owner = run.semantics_owner().expect("semantics enabled");
+    let root_id = owner.root().expect("root semantics node");
+    let node = owner.get(root_id).expect("root id must resolve");
+    assert_eq!(owner.tree().len(), 1);
+    assert_eq!(node.label(), Some("Submit"));
+    assert_eq!(node.config().role(), SemanticsRole::Button);
+    assert_eq!(node.config().is_enabled(), Some(true));
+
+    let labelled_child = || {
+        box_node(RenderSemanticsAnnotations::from_configuration(labelled(
+            "Label",
+        )))
+        .child(box_node(RenderSizedBox::new(Some(40.0), Some(20.0))))
+    };
+    let trees = [
+        box_node(RenderAlign::new(Alignment::TOP_LEFT)).child(
+            box_node(RenderInteractive::new(HitTestBehavior::Opaque)).child(labelled_child()),
+        ),
+        box_node(RenderAlign::new(Alignment::TOP_LEFT)).child(labelled_child()),
+    ]
+    .map(|tree| {
+        let run = RenderTester::mount(tree)
+            .with_constraints(loose(200.0))
+            .with_semantics_enabled()
+            .run_to_semantics();
+        let owner = run.semantics_owner().expect("semantics enabled");
+        let root = owner.get(owner.root().expect("root node")).expect("root");
+        (owner.tree().len(), root.label().map(str::to_owned))
+    });
+    assert_eq!(
+        trees[0], trees[1],
+        "a control with no semantics leaves its child's tree as it is",
+    );
+}
+
+/// The ring is the last thing painted, inside the box, and only while shown.
+fn harness_interactive_paints_the_focus_ring_over_its_child() {
+    let commands = |ring: Option<FocusRingStyle>| {
+        let mut interactive = RenderInteractive::new(HitTestBehavior::Opaque);
+        let _ = interactive.set_focus_ring(ring);
+        let run = RenderTester::mount(
+            box_node(interactive).child(box_node(RenderColoredBox::blue(40.0, 40.0))),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        run.display_commands()
+            .into_iter()
+            .map(|cmd| cmd.line)
+            .filter(|line| line.contains("Draw"))
+            .collect::<Vec<String>>()
+    };
+
+    let plain = commands(None);
+    assert_eq!(
+        plain.len(),
+        1,
+        "only the child paints:\n{}",
+        plain.join("\n")
+    );
+
+    let ringed = commands(Some(FocusRingStyle::BUILT_IN));
+    assert_eq!(
+        ringed[0],
+        plain[0],
+        "the child paints first:\n{}",
+        ringed.join("\n")
+    );
+    let ring = &ringed[1..];
+    assert_eq!(
+        ring.len(),
+        2,
+        "one command per band:\n{}",
+        ringed.join("\n")
+    );
+    assert!(
+        ring[0].contains("#FFFFFFFF") && ring[1].contains("#000000FF"),
+        "the inner band, then the outer band over its outer part:\n{}",
+        ringed.join("\n"),
+    );
+
+    let mut interactive = RenderInteractive::new(HitTestBehavior::Opaque);
+    assert_eq!(
+        interactive.set_focus_ring(Some(FocusRingStyle::BUILT_IN)),
+        flui_rendering::RenderUpdateImpact::PAINT,
+    );
+    assert_eq!(
+        interactive.set_focus_ring(Some(FocusRingStyle::BUILT_IN)),
+        flui_rendering::RenderUpdateImpact::NONE,
+    );
+}
+
+/// A control that takes presses is cut out of a window's move area.
+fn harness_interactive_claims_presses_for_the_input_regions() {
+    let mut interactive = RenderInteractive::new(HitTestBehavior::Opaque);
+    assert_eq!(
+        interactive.set_pointer_target(None, true),
+        flui_rendering::RenderUpdateImpact::PAINT,
+        "the regions are collected at paint",
+    );
+    assert_eq!(
+        interactive.set_pointer_target(None, true),
+        flui_rendering::RenderUpdateImpact::NONE,
+    );
+}
+
+fn harness_interactive_preserves_child_baselines() {
+    let run = RenderTester::mount(
+        box_node(
+            RenderFlex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Baseline)
+                .with_text_baseline(TextBaseline::Alphabetic),
+        )
+        .child(
+            box_node(RenderInteractive::new(HitTestBehavior::Opaque))
+                .label("interactive")
+                .child(box_node(SizedBaselineProbe {
+                    box_size: Size::new(100.0, 50.0),
+                    alphabetic_offset: Some(40.0),
+                })),
+        )
+        .child(
+            box_node(SizedBaselineProbe {
+                box_size: Size::new(100.0, 60.0),
+                alphabetic_offset: Some(10.0),
+            })
+            .label("peer"),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    assert_eq!(
+        run.offset(run.id("peer")).dy,
+        30.0,
+        "the peer aligns to the baseline the control forwards",
     );
 }
 
@@ -14743,6 +15015,30 @@ fn family_pointer() {
             (
                 "mouse_region_preserves_child_baselines",
                 harness_mouse_region_preserves_child_baselines,
+            ),
+            (
+                "interactive_carries_its_pointer_and_mouse_targets_on_one_entry",
+                harness_interactive_carries_its_pointer_and_mouse_targets_on_one_entry,
+            ),
+            (
+                "interactive_behavior_decides_the_hit_outside_its_child",
+                harness_interactive_behavior_decides_the_hit_outside_its_child,
+            ),
+            (
+                "interactive_describes_one_semantics_configuration",
+                harness_interactive_describes_one_semantics_configuration,
+            ),
+            (
+                "interactive_paints_the_focus_ring_over_its_child",
+                harness_interactive_paints_the_focus_ring_over_its_child,
+            ),
+            (
+                "interactive_claims_presses_for_the_input_regions",
+                harness_interactive_claims_presses_for_the_input_regions,
+            ),
+            (
+                "interactive_preserves_child_baselines",
+                harness_interactive_preserves_child_baselines,
             ),
             (
                 "listener_passes_layout_through_and_attaches_handler",

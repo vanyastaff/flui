@@ -5,7 +5,8 @@
 use flui_foundation::geometry::{RRect, Rect};
 use flui_painting::Canvas;
 use flui_painting::paint::Paint;
-use flui_painting::styling::Color;
+use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_painting::{DecorationPaintOptions, paint_box_decoration};
 
 /// The colors and widths of a focus ring: two bands, `outer` the farther
 /// from what is focused and `inner` against it.
@@ -66,6 +67,28 @@ impl FocusRingStyle {
             );
         }
     }
+
+    /// The two bands as borders of a box, `(outer, inner)`, for a ring drawn
+    /// inside the box it marks. The inner border is as wide as both bands;
+    /// the outer one is drawn over its outer part.
+    #[must_use]
+    pub fn bands_inside(&self) -> (BoxDecoration<f64>, BoxDecoration<f64>) {
+        let (outer, inner) = (self.outer_band(), self.inner_band());
+        let inner = if inner > 0.0 {
+            band_border(self.inner, outer + inner)
+        } else {
+            BoxDecoration::new()
+        };
+        (band_border(self.outer, outer), inner)
+    }
+
+    /// Paints the ring just inside `rect`, over what is already drawn
+    /// there: the outer band along the edge and the inner band within it.
+    pub(crate) fn paint_inside(&self, canvas: &mut Canvas, rect: Rect<f64>) {
+        let (outer, inner) = self.bands_inside();
+        paint_box_decoration(canvas, rect, &inner, DecorationPaintOptions::default());
+        paint_box_decoration(canvas, rect, &outer, DecorationPaintOptions::default());
+    }
 }
 
 impl Default for FocusRingStyle {
@@ -79,5 +102,18 @@ fn band(width: f64) -> f64 {
         width
     } else {
         0.0
+    }
+}
+
+/// A uniform `width` border in `color`, or no border for a zero width.
+fn band_border(color: Color, width: f64) -> BoxDecoration<f64> {
+    if width > 0.0 {
+        BoxDecoration::new().set_border(Some(Border::all(BorderSide::new(
+            color,
+            width,
+            BorderStyle::Solid,
+        ))))
+    } else {
+        BoxDecoration::new()
     }
 }
