@@ -15,9 +15,9 @@ struct MaskMapping {
     attachment_to_root: vec4<f32>,
     translation: vec4<f32>,
     extent_counts: vec4<u32>,
-    // Mask pixels [x0, x1) x [y0, y1) at full coverage: every sample passes
-    // every node.
-    interior: vec4<u32>,
+    // Mask pixels resolved at full coverage, two boxes each [x0, x1) x
+    // [y0, y1) packed as (x0, y0, x1, y1): every sample passes every node.
+    interior: array<vec4<u32>, 2>,
 };
 @group(0) @binding(0) var<uniform> nodes: array<ClipNode, 64>;
 @group(0) @binding(1) var<uniform> edges: array<vec4<f32>, 512>;
@@ -81,7 +81,9 @@ fn contains(n: ClipNode, root: vec2<f32>) -> bool {
     // The host proved every sample of every node agrees here (`MaskInterior`),
     // so full coverage is the answer the samples would give.
     let texel = vec2<u32>(pixel);
-    if (all(texel >= mapping.interior.xy) && all(texel < mapping.interior.zw)) {
+    let first = mapping.interior[0];
+    let second = mapping.interior[1];
+    if ((all(texel >= first.xy) && all(texel < first.zw)) || (all(texel >= second.xy) && all(texel < second.zw))) {
         return 1.0;
     }
     let center = root_point(pixel + vec2<f32>(0.5));

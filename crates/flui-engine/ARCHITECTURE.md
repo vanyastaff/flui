@@ -1375,10 +1375,12 @@ coordinates, node count, edge count or sample count. Each newly materialized
 pipeline is admitted as a prepared object before creation.
 
 A mask resolves its uniform interior without sampling. `uniform_interior`
-finds, from the tape and mapping the shader reads in their `f32` values, a box
-of mask pixels whose whole square lies inside every intersected node (a
-rectangle's bounds, or the larger arm of a rounded rectangle or superellipse
-clear of its corners) and outside every subtracted node's bounds, by more than
+finds, from the tape and mapping the shader reads in their `f32` values, two boxes
+of mask pixels, each of whose squares lies inside every intersected node (a
+rectangle's bounds in both, and a rounded rectangle's or superellipse's larger arm
+in the first and its other arm in the second, so one rounded rectangle leaves the
+cross of its arms and only its corners sample) and outside every subtracted
+node's bounds, by more than
 the rounding of the shader's `f32` arithmetic. The shader returns full coverage
 there, which is what all 64 samples resolve to, and admission charges one unit
 for each such pixel. Rotated or skewed mappings, path nodes and non-finite
