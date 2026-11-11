@@ -44,29 +44,22 @@ jobs:
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9
-      - name: Whole suite, as the nightly runs it
-        run: cargo xtask platform-test
-      - name: Whole window contract again
+      - name: Build
+        run: cargo nextest run -p flui-native --locked --test platform_it --no-run
+      - name: Rows alone, under nextest and under cargo test
         if: ${{ !cancelled() }}
-        run: cargo test -p flui-native --locked --test platform_it -- --exact contract::test_window_lifecycle_contract
-
-  main:
-    runs-on: windows-latest
-    timeout-minutes: 60
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: main
-      - name: Install pinned Rust
-        uses: ./.github/actions/rust-toolchain
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
-        with:
-          tool: cargo-nextest@0.9
-      - name: Whole suite on main
-        run: cargo xtask platform-test
-      - name: Whole window contract again
+        run: |
+          for row in a_pointer_routed_mouse_hovers_the_window a_leave_callback_that_hovers_again_keeps_the_hover unhandled_system_key_closes_window two_injected_touches_arrive_as_one_pointer_frame; do
+            echo "::group::nextest $row"
+            FLUI_NATIVE_WINDOW_CONTRACT_CHILD=$row cargo nextest run -p flui-native --locked --test platform_it --no-capture -E 'test(=contract::test_window_lifecycle_contract)' 2>&1 | grep -E "panicked|assertion|left|right|CANNOT_VERIFY|PASS|FAIL|hover" ; echo "exit ${PIPESTATUS[0]}"
+            echo "::endgroup::"
+            echo "::group::cargo test $row"
+            FLUI_NATIVE_WINDOW_CONTRACT_CHILD=$row cargo test -p flui-native --locked --test platform_it -- --exact contract::test_window_lifecycle_contract --nocapture 2>&1 | grep -E "panicked|assertion|left|right|CANNOT_VERIFY|test result|hover" ; echo "exit ${PIPESTATUS[0]}"
+            echo "::endgroup::"
+          done
+      - name: Whole window contract under nextest
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p flui-native --locked --test platform_it -E 'test(=contract::test_window_lifecycle_contract)'
+      - name: Whole window contract under cargo test
         if: ${{ !cancelled() }}
         run: cargo test -p flui-native --locked --test platform_it -- --exact contract::test_window_lifecycle_contract
