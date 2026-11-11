@@ -77,6 +77,14 @@ leak-timeout = "1s"
 filter = 'binary_id(flui::facade_consumer) & test(=acceptance_app_runs_through_the_facade)'
 slow-timeout = { period = "600s", terminate-after = 3 }
 
+# The live counter scenario builds a generated app for a device and launches
+# it there (`FLUI_CLI_LIVE_DEVICE`, set only by the nightly platform
+# workflow): a cold Android build of the app, its APK and an emulator boot run
+# well past the nested budget. Without the variable it returns at once.
+[[profile.default.overrides]]
+filter = 'binary_id(flui-cli::cli_it) & test(=cli_live_agent::an_agent_presses_the_counter_on_a_live_device)'
+slow-timeout = { period = "600s", terminate-after = 6 }
+
 [[profile.default.overrides]]
 filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | binary_id(flui-interaction::compile_fail) | binary_id(flui-platform::compile_fail) | binary_id(flui-widgets::routable_ui) | binary_id(flui-widgets::nested_scroll_ui) | binary_id(flui::thread_boundary_ui) | (binary_id(flui-painting::painting_it) & test(=compile_fail::trybuild_ui)) | test(=trybuild_ui::ui_tests)'
 slow-timeout = { period = "300s", terminate-after = 4 }

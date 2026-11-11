@@ -569,7 +569,9 @@ mod cases {
 
         let mut fixture = open("size within the constraints");
         let min = Size::new(400.0, 300.0);
-        let max = Size::new(900.0, 700.0);
+        // Inside the small screen of a hosted runner, where AppKit held the
+        // content to 648 points high before the constraints.
+        let max = Size::new(640.0, 480.0);
         fixture
             .window
             .admit_and_apply(WindowCommand::SetConstraints(SizeConstraints::new(
@@ -580,7 +582,7 @@ mod cases {
         for (asked, held) in [
             (Size::new(200.0, 100.0), min),
             (Size::new(2000.0, 2000.0), max),
-            (Size::new(200.0, 2000.0), Size::new(400.0, 700.0)),
+            (Size::new(200.0, 2000.0), Size::new(400.0, 480.0)),
         ] {
             fixture
                 .window

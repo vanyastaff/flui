@@ -454,6 +454,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 - A page's agent is reached through the browser's own remote protocol (ADR-0288 §6): `flui run --agent` speaks WebDriver BiDi to Firefox and the DevTools protocol to Chrome, Chromium, Edge, Brave and Opera, which need no driver of their own. Safari has neither: `safaridriver` speaks classic WebDriver, which has no channel or binding a page can report through, so `flui run --agent --device browser:safari` is refused, naming this entry.
 - The likely shape is a third dialect of the CLI's `BrowserLink` once `safaridriver` serves WebDriver BiDi, or one over classic WebDriver that polls the page for its lines.
+
+### The driver agent cannot reach an app in the iOS Simulator
+
+> **Environments:** iOS · **Who it hurts:** Agents and tests that drive a FLUI app on iOS · **Parity:** none yet (the driver agent has no row)
+
+- `flui run --device <simulator>` builds the app, installs it and launches it once through `simctl`, and hands it no agent endpoint or launch token, so `flui run --agent` on a Simulator is refused, naming this entry. The nightly iOS run of the counter scenario (`an_agent_presses_the_counter_on_a_live_device`) fails as this entry.
+- The likely shape: the Simulator shares the Mac's file system, so the desktop's Unix socket and token can reach the app through `simctl launch`'s `SIMCTL_CHILD_` environment, and the iOS runner serves the agent as the desktop runners do. A device needs a transport of its own (a forwarded port, as on Android).
+- The check is the counter scenario passing on a Simulator, then on a device.
 - The check is `flui run --agent` in Safari on macOS, `flui mcp` reading the app and acting on it, and a reload reconnecting.
 
 ### An interactive widget costs eighteen elements

@@ -109,11 +109,13 @@ meaning = 'Not audited yet'
 id = "windows"
 environment = 'Windows'
 runner = 'Win32 (native)'
+nightly = 'windows-latest'
 
 [[host]]
 id = "macos"
 environment = 'macOS'
 runner = 'AppKit (native)'
+nightly = 'macos-latest'
 
 [[host]]
 id = "wayland"
@@ -129,11 +131,13 @@ runner = 'X11 (native)'
 id = "ios"
 environment = 'iOS'
 runner = 'UIKit (native)'
+nightly = 'macos-latest, iOS Simulator'
 
 [[host]]
 id = "android"
 environment = 'Android'
 runner = 'android-activity (native)'
+nightly = 'ubuntu-24.04, Android emulator'
 
 [[host]]
 id = "web"
@@ -155,6 +159,7 @@ name = 'App lifecycle'
 
 [[group.section.row]]
 id = "event-loop-startup-and-wake-ups"
+nightly = { windows = "an_agent_presses_the_counter_on_a_live_device", macos = "an_agent_presses_the_counter_on_a_live_device", android = "an_agent_presses_the_counter_on_a_live_device" }
 feature = 'Event loop, startup and wake-ups'
 status = { windows = "yes", macos = "yes", wayland = "yes", x11 = "yes", ios = "yes", android = "yes", web = "yes", headless = "yes" }
 note = 'Runs: a manual Windows run, the macOS live check, an application of `flui-app` on the native Wayland host under Weston and the native X11 host under Xvfb (`native_linux`, in CI), the iOS Simulator, the Android emulator, the Web counter. Owed: idle checks on hidden and occluded windows, which may get no frame callbacks on Wayland.'
@@ -439,6 +444,7 @@ evidence = "A window's capabilities say whether it reports (`WindowCapabilities:
 
 [[group.section.row]]
 id = "gpu-surface"
+nightly = { windows = "an_agent_presses_the_counter_on_a_live_device", macos = "an_agent_presses_the_counter_on_a_live_device", android = "an_agent_presses_the_counter_on_a_live_device" }
 feature = 'GPU surface'
 status = { windows = "yes", macos = "yes", wayland = "yes", x11 = "yes", ios = "yes", android = "yes", web = "yes", headless = "na" }
 note = 'Rendered in every run above'
