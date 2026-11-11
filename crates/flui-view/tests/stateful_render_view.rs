@@ -203,7 +203,7 @@ fn opacities(harness: &Harness) -> Vec<f64> {
             .iter()
             .filter_map(|(_, node)| node.downcast_render_object::<RenderOpacity>())
             .map(RenderOpacity::opacity)
-            .collect()
+            .collect::<Vec<f64>>()
     })
 }
 
