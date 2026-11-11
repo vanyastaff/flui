@@ -81,10 +81,15 @@ handwriting, and brings Gradle and AppCompat with it. The research note compares
    JNI in UTF-16 code units. This amends ADR-0090's Android row and rejects its GameActivity
    hypothesis.
 7. **Drag and drop.** `onDragEvent` is the target: an offer is minted from the
-   `ClipDescription` when a drag enters, the drop is answered from the target's cached feedback,
-   and the drop copies the clip's text, HTML and URIs out, holding the drop's URI permissions,
-   per offer, until the target concludes it (a refused drop releases them at once); a URI's bytes are read through the content resolver when
-   requested. A drag from another app permits a copy; one this process started permits what its
+   `ClipDescription` when a drag enters, and the drop is answered from the target's cached
+   feedback. The view holds the drop's `ClipData` and its URI permissions under the offer's key
+   before it asks for the drop, so nothing of the clip crosses JNI then; a request reads one
+   representation from the held clip under its limits, the length counted before anything is
+   copied: the text, HTML and URI list at once, a URI's bytes through the content resolver on a
+   thread of their own, at most four at once. Concluding the drop lets go of its clip and
+   permissions, and of nothing else; a refused drop, or the view leaving the window, lets go of
+   them at once, and a read whose offer ended answers `SourceGone`. A drag from another app
+   permits a copy; one this process started permits what its
    source advertised. `startDragAndDrop` (API 24) is the source when a drag leaves its window
    (`OsDragStart::OnLeavingWindow`); Android takes the whole clip at the start, `file:` URIs and
    bytes stay out of it, and the drag is global. Below API 24, or without the view,
