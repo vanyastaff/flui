@@ -129,6 +129,25 @@ impl FirstPanic {
         Self::fold(&mut self.0, Some(payload));
     }
 
+    /// Hold `later`'s panic unless an earlier one is held here; a panic it
+    /// held after this one is discarded under containment.
+    pub fn absorb(&mut self, later: Self) {
+        Self::fold(&mut self.0, later.into_payload());
+    }
+
+    /// Whether a panic is held.
+    #[must_use]
+    pub const fn is_held(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// The held panic's payload, to report it before it is resumed or
+    /// discarded.
+    #[must_use]
+    pub fn held(&self) -> Option<&(dyn Any + Send)> {
+        self.0.as_deref()
+    }
+
     /// Fold `next` into `first`: the first payload stays, a later one is
     /// discarded under containment.
     pub fn fold(first: &mut Option<Box<dyn Any + Send>>, next: Option<Box<dyn Any + Send>>) {

@@ -15,6 +15,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 use flui_foundation::PresentationId;
+use flui_foundation::panic::FirstPanic;
 use flui_protocol::method::{self, Method, WindowMethod};
 use flui_protocol::{
     ActOutcome, ActParams, ActionRequest, ActionabilityParams, AnnouncementJournal,
@@ -74,7 +75,7 @@ pub(super) struct ServeCx<'a, T> {
     pub(super) if_panics: PanicAnswer,
     /// A panic a step caught and handed back instead of unwinding (the hit-test's): the first
     /// failure, resumed once the request is answered.
-    pub(super) caught: Option<Box<dyn std::any::Any + Send>>,
+    pub(super) caught: FirstPanic,
     /// The input lease the call was asked through, if any.
     pub(super) lease: Option<LeaseId>,
     /// The owner's frame is woken once the answer is sent.
@@ -137,7 +138,7 @@ impl UiRuntime {
             reply: ReplySender::new(reply, window, Rc::clone(&issued), M::record),
             issued,
             if_panics: PanicAnswer(RefCell::new(AgentError::Panicked)),
-            caught: None,
+            caught: FirstPanic::new(),
             lease,
             wake_after: false,
         };
@@ -153,7 +154,7 @@ impl UiRuntime {
             wake_after,
             ..
         } = cx;
-        match (served, caught) {
+        match (served, caught.into_payload()) {
             (Ok(answer), None) => {
                 let stale = matches!(answer, Answer::Now(Err(AgentError::PresentationGone)));
                 if stale {
@@ -179,13 +180,10 @@ impl UiRuntime {
             }
             // A caught panic is the first failure; one after it is traced and not resumed.
             (Err(second), Some(payload)) => {
-                let mut first = Some(payload);
-                super::input::preserve_first_input_panic(
-                    &mut first,
-                    Some(second),
-                    "a window method after a caught panic",
-                );
-                let payload = first.expect("BUG: the caught panic is kept");
+                let mut first = FirstPanic::new();
+                first.record(payload);
+                first.record(second);
+                let payload = first.into_payload().expect("BUG: the caught panic is kept");
                 self.fail_agent_job(&reply, None, Err(if_panics.take()), payload);
             }
             (Err(payload), None) => {

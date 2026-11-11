@@ -4,6 +4,7 @@
 use super::{DrainReport, UiRuntime};
 use crate::pump::{FrameClockSource, FrameOutcome};
 use crate::sink::FrameSink;
+use flui_foundation::panic::FirstPanic;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 enum DeadlineWork {
@@ -231,15 +232,11 @@ impl UiRuntime {
         self.deliver_input_records();
         // An anchor an earlier turn owes runs before this frame builds. The
         // frame runs even when it fails: that failure came first, and is
-        // raised once the frame is done.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the owed anchor runs contained so the frame still runs"
-        )]
-        let paid = catch_unwind(AssertUnwindSafe(|| {
+        // The owed anchor runs contained so the frame still runs.
+        let mut paid = FirstPanic::new();
+        paid.contain(|| {
             self.enter(UiRuntime::pay_owed_anchor);
-        }))
-        .err();
+        });
         let sampled = clock.frame_time();
         let pending = self.pending_frame_request();
         let request = pending.map(|(request, _)| request);
@@ -295,17 +292,15 @@ impl UiRuntime {
         let admitted = frame_time.is_some();
         drop(geometry_turn);
         drop(frame_time);
-        let outcome = match paid {
-            None => outcome,
-            Some(failure) => {
-                let mut first = Some(failure);
-                crate::lifecycle_state::preserve_first_lifecycle_panic(
-                    &mut first,
-                    outcome.err(),
-                    "frame after the owed anchor",
-                );
-                Err(first.expect("BUG: the owed anchor's failure stays first"))
+        let outcome = if paid.is_held() {
+            if let Err(payload) = outcome {
+                paid.record(payload);
             }
+            Err(paid
+                .into_payload()
+                .expect("BUG: the owed anchor's failure stays first"))
+        } else {
+            outcome
         };
         let outcome = self.wake_for_owed_anchor(outcome);
         self.clear_frame_requests();
@@ -372,16 +367,12 @@ impl UiRuntime {
         let turn = self.begin_geometry_turn();
         // The owed anchor first; the inbox drains even if it fails, so the
         // bounded inbox never fills behind a failing grant.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the owed anchor runs contained so the inbox still drains"
-        )]
-        let mut first = catch_unwind(AssertUnwindSafe(|| self.pay_owed_anchor())).err();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the inbox drains contained even when the owed anchor failed"
-        )]
-        let drained = catch_unwind(AssertUnwindSafe(|| {
+        let mut first = FirstPanic::new();
+        first.contain(|| self.pay_owed_anchor());
+        // The inbox drains contained even when the owed anchor failed; its
+        // failure joins `first` once the geometry turn is closed.
+        let mut drain_failure = FirstPanic::new();
+        let drained = drain_failure.contain(|| {
             let report = self.drain_commands();
             if report != DrainReport::default() {
                 tracing::trace!(?report, "owner inbox drained");
@@ -390,18 +381,15 @@ impl UiRuntime {
             // A wake at an agent wait's deadline may run no frame: the wait still ends.
             self.evaluate_agent_waits(false);
             self.take_redraw_request()
-        }));
+        });
         drop(turn);
-        let outcome = match drained {
-            Ok(redraw) => first.map_or(Ok(redraw), Err),
-            Err(failure) => {
-                crate::lifecycle_state::preserve_first_lifecycle_panic(
-                    &mut first,
-                    Some(failure),
-                    "owner inbox drain",
-                );
-                Err(first.expect("BUG: a failed drain keeps a failure"))
-            }
+        let outcome = if let Some(redraw) = drained {
+            first.into_payload().map_or(Ok(redraw), Err)
+        } else {
+            first.absorb(drain_failure);
+            Err(first
+                .into_payload()
+                .expect("BUG: a failed drain keeps a failure"))
         };
         let outcome = self.wake_for_owed_anchor(outcome);
         self.finish_owner_activity(outcome, DeadlineWork::Observe)
@@ -415,21 +403,18 @@ impl UiRuntime {
         if !self.owes_anchor() {
             return outcome;
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the redraw wake runs contained so the turn's outcome is kept"
-        )]
-        let woke = catch_unwind(AssertUnwindSafe(|| self.request_redraw())).err();
+        // The redraw wake runs contained so the turn's outcome is kept.
+        let mut woke = FirstPanic::new();
+        woke.contain(|| self.request_redraw());
         match outcome {
-            Ok(value) => woke.map_or(Ok(value), Err),
+            Ok(value) => woke.into_payload().map_or(Ok(value), Err),
             Err(failure) => {
-                let mut first = Some(failure);
-                crate::lifecycle_state::preserve_first_lifecycle_panic(
-                    &mut first,
-                    woke,
-                    "owed anchor wake",
-                );
-                Err(first.expect("BUG: the turn's own failure stays first"))
+                let mut first = FirstPanic::new();
+                first.record(failure);
+                first.absorb(woke);
+                Err(first
+                    .into_payload()
+                    .expect("BUG: the turn's own failure stays first"))
             }
         }
     }
@@ -441,21 +426,22 @@ impl UiRuntime {
         outcome: std::thread::Result<T>,
         deadlines: DeadlineWork,
     ) -> T {
-        let (value, mut first) = match outcome {
-            Ok(value) => (Some(value), None),
-            Err(failure) => (None, Some(failure)),
+        let mut first = FirstPanic::new();
+        let value = match outcome {
+            Ok(value) => Some(value),
+            Err(failure) => {
+                first.record(failure);
+                None
+            }
         };
-        let state = if first.is_some() {
+        let state = if first.is_held() {
             crate::owner::RecoveryState::PreservingFailure
         } else {
             crate::owner::RecoveryState::Healthy
         };
         let outer_turn_finished = self.geometry_turn.borrow().is_none();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: deadline refresh runs contained so the pump finishes its turn"
-        )]
-        let refresh = catch_unwind(AssertUnwindSafe(|| {
+        // Deadline refresh runs contained so the pump finishes its turn.
+        first.contain(|| {
             match deadlines {
                 // An inbox drain can precede its enclosing frame's sampling.
                 // Discovery waits for the completed owner transaction, so a
@@ -468,31 +454,16 @@ impl UiRuntime {
                 // deadlines must still progress while frame gates are closed.
                 DeadlineWork::Poll => self.sample_background_deadlines(state),
             }
-        }))
-        .err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first,
-            refresh,
-            "owner scheduling observation",
-        );
+        });
         // An inbox drain can run inside a larger pump/background transaction.
         // Its reports wait for that enclosing turn as well as any owner lease.
         if outer_turn_finished {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: sampling reports deliver contained after the enclosing turn"
-            )]
-            let delivery = catch_unwind(AssertUnwindSafe(|| {
+            // Sampling reports deliver contained after the enclosing turn.
+            first.contain(|| {
                 self.deliver_sampling_reports_if_unleased();
-            }))
-            .err();
-            crate::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first,
-                delivery,
-                "owner scheduling reports",
-            );
+            });
         }
-        if let Some(failure) = first {
+        if let Some(failure) = first.into_payload() {
             resume_unwind(failure);
         }
         value.expect("BUG: a successful owner operation retains its result")

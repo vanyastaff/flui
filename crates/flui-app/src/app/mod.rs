@@ -39,7 +39,7 @@ pub(crate) mod window_registry;
 // The ui_runtime core lives in the frame runtime (ADR-0083); these aliases keep
 // its `crate::app::…` paths for the runners and the dispatch layer that
 // drive it from here.
-pub(crate) use flui_runtime::{lifecycle_state, presentation, ui_runtime};
+pub(crate) use flui_runtime::{presentation, ui_runtime};
 #[cfg(test)]
 pub(crate) mod window_test_support;
 
