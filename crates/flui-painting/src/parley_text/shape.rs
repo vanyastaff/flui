@@ -6,14 +6,13 @@
 //! paragraph paints from the layout that measured it.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::fmt;
 use std::sync::OnceLock;
 
 use super::caret::PlacedLine;
 use crate::display_list::paragraph::{RunData, SpanDescription};
 use crate::display_list::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph};
-use crate::glyphs::{Synthesis, fake_bold_width};
+use crate::glyphs::{FaceKey, Synthesis, fake_bold_width};
 use crate::styling::Color;
 use crate::typography::{FontStyle, TextAlign, TextDirection, TextStyle};
 use flui_foundation::geometry::{Rect, Size};
@@ -470,13 +469,25 @@ impl ParagraphLayout {
         };
         let sources = casts.map(|_| SpanSourceMap::of(&self.spans));
         let metrics = self.metrics();
-        let mut faces: Vec<FontFace> = Vec::new();
-        let mut face_index: HashMap<(u64, u32), u32> = HashMap::new();
-        let mut em_bounds: Vec<Option<[f32; 4]>> = Vec::new();
-        let mut runs = Vec::new();
-        let mut glyphs = Vec::new();
-        let mut coords = Vec::new();
-        let mut baselines = Vec::new();
+        // Sized from the kept lines up front, so a paragraph that casts every
+        // glyph fills each list once and boxes it without reallocating. A
+        // paragraph names a face or two: they are found by a scan.
+        let (run_count, glyph_count) = self
+            .layout
+            .lines()
+            .take(self.kept())
+            .flat_map(|line| line.items())
+            .fold((0_usize, 0_usize), |(runs, glyphs), item| match item {
+                PositionedLayoutItem::GlyphRun(glyph_run) => {
+                    (runs + 1, glyphs + glyph_run.glyphs().count())
+                }
+                PositionedLayoutItem::InlineBox(_) => (runs, glyphs),
+            });
+        let mut faces: Vec<FontFace> = Vec::with_capacity(1);
+        let mut runs: Vec<RunData> = Vec::with_capacity(run_count);
+        let mut glyphs: Vec<ShapedGlyph> = Vec::with_capacity(glyph_count);
+        let mut coords: Vec<i16> = Vec::new();
+        let mut baselines: Vec<f32> = Vec::with_capacity(self.kept());
         let mut ink = InkBounds::default();
         // For `casts`: the line item the glyph runs come from, the byte its
         // clusters start at for each of its glyphs in glyph order, and how
@@ -510,13 +521,19 @@ impl ParagraphLayout {
                     0
                 };
                 let font = run.font();
-                let face = *face_index
-                    .entry((font.data.id(), font.index))
-                    .or_insert_with(|| {
-                        em_bounds.push(head_bounds(font));
+                let key = FaceKey {
+                    blob_id: font.data.id(),
+                    index: font.index,
+                };
+                let position = faces
+                    .iter()
+                    .position(|face| face.key() == key)
+                    .unwrap_or_else(|| {
                         faces.push(face_of(font));
-                        u32::try_from(faces.len() - 1).unwrap_or(u32::MAX)
+                        faces.len() - 1
                     });
+                let face = u32::try_from(position).unwrap_or(u32::MAX);
+                let em_bounds = head_bounds(font);
                 let synthesis = synthesis_of(&run.synthesis());
                 let font_size = run.font_size();
                 let coords_start = coords.len();
@@ -539,13 +556,7 @@ impl ParagraphLayout {
                     };
                     let x = glyph.x;
                     let dy = glyph.y - baseline;
-                    ink.add(
-                        em_bounds.get(face as usize).copied().flatten(),
-                        x,
-                        glyph.y,
-                        font_size,
-                        synthesis,
-                    );
+                    ink.add(em_bounds, x, glyph.y, font_size, synthesis);
                     glyphs.push(ShapedGlyph { id, x, dy });
                 }
                 if casts.is_some() && glyphs.len() == glyph_start {
