@@ -125,45 +125,44 @@ fn handled_nested_failure_destroys_completion_envelope() {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-    use std::task::{Context, Wake, Waker};
+    use std::task::Context;
     struct RefusedCapture;
     impl Drop for RefusedCapture {
         fn drop(&mut self) {
             panic!("refused capture failure");
         }
     }
-    struct CompletionProbe(Arc<AtomicUsize>);
-    impl Drop for CompletionProbe {
+    /// Counts the completion envelope's destruction: the waker's capture.
+    struct Retired(Arc<AtomicUsize>);
+    impl Drop for Retired {
         fn drop(&mut self) {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
     }
-    impl Wake for CompletionProbe {
-        fn wake(self: Arc<Self>) {
-            self.wake_by_ref();
-        }
-        fn wake_by_ref(self: &Arc<Self>) {
-            let owner = EXECUTING_OWNER
-                .with(|slot| slot.borrow().as_ref().expect("installed owner").clone());
-            let capture = RefusedCapture;
-            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                owner.pump_background(move || {
-                    let _ = &capture;
-                    panic!("nested body must not run");
-                })
-            }))
-            .expect_err("refused envelope destructor failed");
-            assert_eq!(
-                flui_foundation::panic::payload_text(&*failure),
-                Some("refused capture failure")
-            );
-        }
+    /// The wake re-enters the owner with a body whose capture fails as it is refused.
+    fn reenter_with_refused_capture() {
+        let owner =
+            EXECUTING_OWNER.with(|slot| slot.borrow().as_ref().expect("installed owner").clone());
+        let capture = RefusedCapture;
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owner.pump_background(move || {
+                let _ = &capture;
+                panic!("nested body must not run");
+            })
+        }))
+        .expect_err("refused envelope destructor failed");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*failure),
+            Some("refused capture failure")
+        );
     }
     let scheduler = UpdateScheduler::new();
     let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
     EXECUTING_OWNER.with(|slot| *slot.borrow_mut() = Some(owner.clone()));
     let drops = Arc::new(AtomicUsize::new(0));
-    let waker = Waker::from(Arc::new(CompletionProbe(drops.clone())));
+    let waker = flui_foundation::testing::CountingWaker::new()
+        .shared()
+        .retiring_waker(reenter_with_refused_capture, Retired(drops.clone()));
     let mut completion = scheduler.end_of_frame();
     assert!(
         std::pin::Pin::new(&mut completion)
