@@ -1297,14 +1297,23 @@ dot segments are literal path data, not form decoding or relative-URL operations
 `route_locations_preserve_encoded_segment_identity` pins canonical spellings and
 rejection through the public routing API.
 
-### Scrollbar drag takes ownership of scroll activity
+### A scrollbar observes the scroll view nearest below it
 
-A minimum thumb length is capped by the available track. Thumb dragging jumps
-the position through its activity protocol, cancelling animation before later
-ticks can overwrite the drag. The `scroll_physics_and_activity` rows
-`scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded` and
-`dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick` drive
-actual pointer input, timed ticks and a subsequent animation.
+`Scrollbar` installs a scroll observer scope over its child; the `Scrollable` at depth zero
+below it (no other scroll view between them, found by comparing the nearest
+`ScrollPositionScope` each side sees) attaches its position and axis direction, re-attaches
+when its controller changes and detaches on unmount. The bar paints as a `CustomPaint`
+foreground whose repaint source is the position and the fade, so a scroll frame repaints and
+builds no element. Its painter takes the hit over the thumb and track, which keeps the scroll
+view's own drag out of the arena there; the bar takes every device, moves the position by
+`jump_to` (cancelling a running animation first), pages the track by 0.8 of the viewport and
+hands a wheel tick that reaches it to the scrollable's own wheel handling (through the
+controller's hooks), so a tick over the bar moves as far, through the same nested chain, as
+one over the content. A `ScrollBehavior` adds a bar through
+`build_scrollbar`, except over a scroll view an explicit bar above already follows. The
+`scrollbar` contract rows (`tests/scrollbar.rs`) pin geometry on both axes, RTL, reverse and
+overscroll, zero rebuilds per scroll frame, thumb drag by mouse and touch, paging, the fade
+under full and reduced motion, the nesting rule and the behavior's bar.
 
 ### Editable text separates its document from the visible viewport
 

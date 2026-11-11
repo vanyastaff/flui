@@ -461,8 +461,19 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** all · **Who it hurts:** Every screen with many controls; every catalog built on the wrappers · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
 - `RawButton` mounts one element and one render object for its behaviours (the private node of [ADR-0322](adr/ADR-0322-a-control-mounts-one-element-for-its-behaviours.md) §1; `crates/flui-widgets/src/interaction/raw_button.rs`). The Material and Cupertino controls are still built from the wrappers (`Semantics`, `GestureDetector`, `Actions`, `Focus`, `FocusRing`), each with its own elements, render object and state: on the wrappers a button holding a `Text` was 18 elements, 8 render nodes, 421 allocations and 46 KB at mount.
-- What a `RawButton` adds to the `Text` it holds is counted by `perf_raw_button_over_text` (`crates/flui-widgets/tests/perf.rs`) and recorded in `crates/flui-widgets/perf/baseline.toml`, `[raw_button_over_text]`: the elements and render nodes are at the entry's numbers, the allocations and bytes are not. What is left of them is the semantics description, 1.1 KB that the view, the element and the render object each hold; the tap recognizer and its callbacks, mounted before any contact; the semantics action route, registered while semantics are off; the focus node with its listener; and the scope map a publishing element copies.
-- The entry closes when a `RawButton` adds to its child at most 2 elements, 1 render node, 40 allocations and 3 KB, asserted by that scenario. The `Text` itself, 105 allocations for one short line, is recorded by the same scenario and is not this entry's condition. Until then no new widget family starts on the wrappers (`AGENTS.md`, "Working here").
+- What a `RawButton` adds to the `Text` it holds is counted by `perf_raw_button_over_text` (`crates/flui-widgets/tests/perf.rs`) and recorded in `crates/flui-widgets/perf/baseline.toml`, `[raw_button_over_text]`: the elements and render nodes are at the entry's numbers, the allocations and bytes are not. What is left of them is the semantics description, half a kilobyte that the view, the element and the render object each hold; the tap recognizer and its callbacks, mounted before any contact; the semantics action route, registered while semantics are off; the focus node with its listener; and the scope map a publishing element copies.
+- The entry closes when a `RawButton` adds to its child at most 2 elements, 1 render node, 40 allocations and 3 KB, asserted by that scenario. The `Text` itself is recorded by the same scenario (`text_allocations`, `text_bytes`) and is not this entry's condition. Until then no new widget family starts on the wrappers (`AGENTS.md`, "Working here").
+
+### A label change allocates about 150 times a frame
+
+> **Environments:** all · **Who it hurts:** Every app that updates text while it animates or scrolls · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- `perf_scaling_a_label_change_costs_the_same_on_any_tree_size` (`crates/flui-widgets/tests/perf.rs`) changes one label over 500 and 5 000 buttons. The cost no longer grows with the tree: its allocations are equal at both sizes, and `perf --instructions` holds the instruction counts within 5%. Each frame still allocates about 150 times. The `label_change_*` rows of `crates/flui-widgets/perf/baseline.toml` hold the count, four frames per row.
+- From a backtrace per allocation of that scenario, where each part goes:
+  - **Text** (shaping and the shaped paragraph, about half): Parley builds a fresh `Layout` per shaping, and FLUI copies the spans' text, styles and run colours around it. This lane is `flui-painting`'s `TextContext` and `TextPainter`, and it outlives the retained scene.
+  - **Paint and layers** (about a third): fragment op vectors, display-list commands, and the `LayerTree` and `FragmentComposer` rebuilt every frame. This lane is the retained scene, `docs/plans/specs/render-scaling/` (RS4, RS8).
+  - **View rebuild** (about a sixth): each rebuilt level boxes its child view, collects it into a `Vec` and clones it into the element. This lane is `flui-view`'s element update path.
+- The entry closes when a label change allocates at most 40 times a frame, held by those rows. It is measured after the retained scene lands, and until then each change that lowers a row re-blesses it.
 
 ### Accepted ADR sections not built yet
 
@@ -497,6 +508,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - **ADR-0312 §7.** `ClipboardFormat`, `ClipboardAsk`, `ClipboardHandle::read` and `ClipboardWrite::with` do not exist; they land with the first widget that reads or writes more than text (a `SelectionArea` copied as HTML, a pasted image), with its headless tests.
 - **ADR-0313 §3.** The render slab keeps its hand-rolled slot generations (`crates/flui-rendering/src/storage/node_slab.rs`, its `RETIRED` sentinel) instead of the ledger; the adoption lands with #2241.
 - **ADR-0322 §1–§3, §7.** Built: §4 (`StatefulRenderView`, `RenderViewState`), §5 (`ProvidedValue`, `Provided`, `provide`), with `Focus`, `FocusScope` and `Actions` publishing from their own elements, and of §1 `RenderInteractive`, the `FocusHost` and `RecognizerHost` that the wrappers and the node run on, and the node itself with its pointer, tap, focus, focus-ring, action and semantics parts, which `RawButton` mounts; §6 holds for `RawButton` (`raw_button_a11y_tree_matches_wrappers`, `raw_button_in_scrollable_contests_like_gesture_detector`, `nested_raw_button_contests_like_gesture_detector`). Not built: the node is `pub(crate)` and has no mouse part, recognizer slots beyond tap, or states controller, so no catalog control can mount it (§1, §7); enablement is still each part's own switch (§2); `WidgetStates` is a `u8` without `FocusVisible` (`crates/flui-widgets/src/widget_state.rs`), and `InkWell` rebuilds on every state change (`packages/flui-material/src/ink_well.rs`) (§3). The order is §2 and §3 on the node, then the control families; the numbers that close it are in [An interactive widget costs eighteen elements](#an-interactive-widget-costs-eighteen-elements).
+
+### No scroll notifications
+
+> **Environments:** all · **Who it hurts:** Widgets that react to a scroll view below them (a pull-down header, an infinite-scroll loader, a scroll-linked fade) · **Parity:** none yet (scrolling widgets have no row)
+
+- Flutter's `ScrollNotification`, `ScrollMetricsNotification` and `NotificationListener` have no FLUI counterpart. An ancestor reaches the scroll view nearest below it only through the crate-private scroll observer scope (`crates/flui-widgets/src/scroll/scroll_observer.rs`), whose one user is `Scrollbar`; other code shares a `ScrollController` by hand.
+- The likely shape is a public listener that installs the observer scope and reads the attached position, so a scroll frame costs one listener call and nothing bubbles through the tree.
+- The entry closes when a public listener reports a scroll start, update, end and a change of extents for the scroll view at depth zero below it, with headless tests over a nested list.
 
 ### No widget hot reload on Android and the Web
 

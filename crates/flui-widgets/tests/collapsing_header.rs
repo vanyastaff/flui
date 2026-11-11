@@ -16,8 +16,8 @@ use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
     CollapsingHeader, Column, Focus, HeaderExtents, HeaderExtentsError, HeaderOrder, NestedScroll,
-    PageSnap, ScrollCause, ScrollController, ScrollEndReason, ScrollView, Semantics, SemanticsRole,
-    SingleChildScrollView, SizedBox, ViewportFraction,
+    PageSnap, ScrollCause, ScrollController, ScrollEndReason, ScrollView, Scrollbar, Semantics,
+    SemanticsRole, SingleChildScrollView, SizedBox, ViewportFraction,
 };
 
 use crate::common::LaidOut;
@@ -51,10 +51,24 @@ impl Screen {
         Self::under(extents, configure, None)
     }
 
+    /// The screen with a scrollbar over its list.
+    fn with_scrollbar(extents: HeaderExtents) -> Self {
+        Self::build(extents, |header| header, None, true)
+    }
+
     fn under(
         extents: HeaderExtents,
         configure: impl FnOnce(CollapsingHeader) -> CollapsingHeader,
         presets: Option<GestureProfiles>,
+    ) -> Self {
+        Self::build(extents, configure, presets, false)
+    }
+
+    fn build(
+        extents: HeaderExtents,
+        configure: impl FnOnce(CollapsingHeader) -> CollapsingHeader,
+        presets: Option<GestureProfiles>,
+        scrollbar: bool,
     ) -> Self {
         let (list, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
         let body = FocusNode::with_debug_label("body");
@@ -92,6 +106,11 @@ impl Screen {
         .focus_node(Rc::clone(&body))
         .can_request_focus(false)
         .skip_traversal(true);
+        let scrollable: BoxedView = if scrollbar {
+            Scrollbar::new(scrollable).thumb_visibility(true).boxed()
+        } else {
+            scrollable.boxed()
+        };
         let header =
             configure(CollapsingHeader::new(extents, header, scrollable)).semantic_label("Inbox");
         let tree: BoxedView = NestedScroll::new(probe.connection(), header).boxed();
@@ -343,6 +362,30 @@ pub(crate) fn collapsing_header_expands_first_or_last() {
             screen.extent()
         );
     }
+}
+
+/// A wheel over the list's scrollbar collapses the header as one over the
+/// list does: the bar hands the tick to the list's own wheel handling, a
+/// user scroll the header takes first.
+pub(crate) fn collapsing_header_takes_a_wheel_over_the_list_scrollbar() {
+    let mut screen = Screen::with_scrollbar(extents());
+    let mut wheel = MouseScript::new("wheel down over the bar").move_to(at(297.0, 280.0));
+    for _ in 0..2 {
+        wheel = wheel.wheel(1.0).wait(Duration::from_millis(30)).frame();
+    }
+    let wheel = wheel.build().expect("a hovering mouse");
+    screen.laid.replay_with(&wheel, |laid, _| laid.tick());
+    screen.settle();
+    assert!(
+        screen.extent() < EXPANDED - 20.0,
+        "the header collapsed first, to {}",
+        screen.extent()
+    );
+    assert_eq!(
+        screen.list.pixels(),
+        0.0,
+        "and the list stayed at its start"
+    );
 }
 
 /// A fling collapses the header with its own steps before it moves the
