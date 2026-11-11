@@ -365,7 +365,11 @@ impl<B: SlotBackend> RasterExecutor<B> {
             }
             if surface_lost {
                 state.generation = state.generation.next();
-                slot.applied = state.generation;
+                // A resize still pending keeps its barrier: only its success
+                // authorises frames of the size it asked for.
+                if state.size.is_none() {
+                    slot.applied = state.generation;
+                }
             }
             state.settle(&frame, verdict);
             failure.and_then(|failure| state.hold_failure(failure))

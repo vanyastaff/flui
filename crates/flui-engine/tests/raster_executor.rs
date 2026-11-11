@@ -1156,3 +1156,60 @@ fn a_refusal_whose_error_panics_when_formatted_still_commits() {
         "the resize stayed pending and was retried"
     );
 }
+
+/// A surface lost while a resize is still pending keeps the resize's
+/// barrier: a frame stamped with the generation the owner is told to use
+/// does not render into the old-sized target until a resize succeeds.
+#[test]
+fn a_surface_loss_keeps_the_barrier_of_a_pending_resize() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    let _ = rig
+        .sender
+        .send(RasterCommand::Configure {
+            slot: at.slot,
+            change: SlotChange::Size(DeviceSize::new(16, 16)),
+        })
+        .expect("accepted");
+    rig.backend
+        .script_resize(ScriptedAnswer::Fail(EngineError::Timeout));
+    rig.backend
+        .script_render(ScriptedAnswer::Fail(EngineError::SurfaceLost));
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(1, RasterVerdict::SurfaceStale)]
+    );
+
+    let required = Attached {
+        generation: rig
+            .sender
+            .record(at.slot)
+            .expect("the owner holds the slot")
+            .required_generation,
+        ..at
+    };
+    rig.backend
+        .script_resize(ScriptedAnswer::Fail(EngineError::Timeout));
+    let _ = rig.sender.send(frame(required, 2)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(2, RasterVerdict::SurfaceStale)],
+        "no frame renders before the resize it is stamped for"
+    );
+    assert_eq!(
+        rig.backend.renders().len(),
+        1,
+        "only the first frame rendered"
+    );
+
+    let _ = rig.sender.send(frame(required, 3)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(3, RasterVerdict::Presented)],
+        "the resize that succeeds authorises the frame"
+    );
+}
