@@ -115,7 +115,7 @@ priority = 100
 [test-groups]
 gpu-readback = { max-threads = 1 }
 system-clipboard = { max-threads = 1 }
-# flui-native's Win32 tests share the one desktop (see
+# flui-native's Win32 window tests share the one desktop's foreground (see
 # `desktop-foreground` below).
 desktop-foreground = { max-threads = 1 }
 # xtask's binary test spawns the built `cargo xtask` binary, which runs
@@ -146,22 +146,13 @@ priority = 90
 filter = 'package(flui-native) & test(/clipboard/)'
 test-group = 'system-clipboard'
 
-# flui-native's Win32 tests share the one desktop: a shown window asks for the
-# foreground and lands under the cursor, and the pointer cases inject mouse
-# and touch input and read the hover from where the cursor is. Another test's
-# window shown meanwhile takes the foreground from the foreground cases
-# (`windows_foreground::`, which run a second process) and the cursor from the
-# pointer cases (the contract's `a_pointer_routed_mouse_hovers_the_window`
-# passes alone and loses its hover beside `os_extensions`' and the library's
-# window tests). Every test binary of the package shows windows on Windows, so
-# there the group holds the whole package; elsewhere it holds the window and
-# contract cases of `platform_it`, run one process each, so no in-process lock
-# can keep them apart.
-[[profile.default.overrides]]
-platform = 'cfg(windows)'
-filter = 'package(flui-native)'
-test-group = 'desktop-foreground'
-
+# flui-native's Win32 window tests show real windows on the one desktop, and a
+# shown window asks for the foreground; the foreground cases
+# (`windows_foreground::`, which run a second process) read where the
+# foreground is, so another test's window shown meanwhile takes it from under
+# them. They are modules of `platform_it`, run one process each, so no
+# in-process lock can keep them apart: the group runs them one at a time, the
+# contract's Win32 cases with them.
 [[profile.default.overrides]]
 filter = 'package(flui-native) & binary(platform_it) & (test(/^windows_/) | test(/^contract::/))'
 test-group = 'desktop-foreground'

@@ -165,9 +165,9 @@ it skips itself without `Xvfb` or `weston`, and fails then under
 13 has no `xdg_activation_v1`, so there
 `an_activation_asks_the_compositor_with_a_token` checks only the refusal; the
 token's whole path (asked, answered, handed back, the window left behind its
-cover) runs only against a sway started by hand. On Windows every flui-native
-test shares the desktop's foreground and cursor and runs one at a time (test
-group `desktop-foreground`).
+cover) runs only against a sway started by hand. On Windows the Win32 window
+tests and the contract's share the desktop's foreground and run one at a time
+(test group `desktop-foreground`).
 
 `flui_foundation::inspect::Untyped::new`, the untyped escape hatch that describes a field by its
 `Debug` text, is deprecated: each site outside a derive carries
