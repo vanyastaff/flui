@@ -1109,7 +1109,7 @@ impl GestureAlternativesState {
         if current {
             return;
         }
-        let GesturePolicy { arena, settings } = &policy;
+        let (arena, settings) = (policy.arena(), policy.settings());
         let branch = match &self.given_hold {
             Some(branch) => Some(Rc::clone(branch)),
             None => match arena.sequenced() {
