@@ -1,15 +1,15 @@
 //! The decidable half of the Android backend's drag and drop
 //! (`drag::android::clip`, ADR-0247, ADR-0211): what a `DragEvent`'s clip
-//! offers, what a drop holds and answers, what a FLUI drag puts in its
-//! `ClipData`, and how its source learns the end. The JNI side runs on a
-//! device.
+//! offers, how a read of the held clip answers a request, what a FLUI drag
+//! puts in its `ClipData`, and how its source learns the end. The JNI side
+//! runs on a device.
 
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use super::{
-    ClipSource, DRAG_FLAG_GLOBAL, DRAG_FLAG_GLOBAL_URI_READ, DroppedClip, Held, clip_parts, held,
-    incoming_allowed, offered, source_end, uri_bytes,
+    ClipSource, DRAG_FLAG_GLOBAL, DRAG_FLAG_GLOBAL_URI_READ, ViewRead, clip_parts, delivered,
+    incoming_allowed, offered, source_end,
 };
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
@@ -77,12 +77,12 @@ fn a_description_offers_its_media_types() {
     );
 }
 
-/// The drop holds the clip's text, HTML and URIs (as a `text/uri-list`) in
-/// memory, and the bytes of a typed representation as its first URI, read when
-/// requested and resolved as the format it announced: an image as the bytes of
-/// its container, another type as raw bytes of its essence; what the clip did
-/// not carry is missing.
-fn a_drop_holds_what_the_clip_carried() {
+/// Each representation resolves from what the view read of the held clip:
+/// text and HTML from their UTF-8, the URIs as a `text/uri-list`, a URI's
+/// bytes as the format they were announced as (an image as the bytes of its
+/// container, another type as raw bytes of its essence), and the session
+/// identity from its descriptor alone, with nothing read.
+fn a_read_of_the_held_clip_resolves_as_announced() {
     let offer = offered([
         "text/plain",
         "text/html",
@@ -90,62 +90,77 @@ fn a_drop_holds_what_the_clip_carried() {
         "text/uri-list",
         "application/pdf; q=1",
     ]);
-    let clip = DroppedClip {
-        text: Some("hello".to_owned()),
-        html: None,
-        uris: vec![
-            "content://media/1".to_owned(),
-            "content://media/2".to_owned(),
-        ],
+    let limits = TransferLimits::default();
+    let resolve = |at: usize, read: ViewRead| {
+        let (source, descriptor) = &offer[at];
+        delivered(*source, descriptor, read, limits)
     };
-    let holds: Vec<Held> = offer
-        .iter()
-        .map(|(source, descriptor)| held(source, descriptor, &clip))
-        .collect();
-    assert!(matches!(&holds[0], Held::Payload(TransferPayload::Text(text)) if text == "hello"));
-    assert!(matches!(holds[1], Held::Missing), "no HTML");
-    let Held::Uri(image) = &holds[2] else {
-        panic!("the image is read from the clip's URI, not {:?}", holds[2]);
-    };
-    assert_eq!(image.uri, "content://media/1");
+    assert!(matches!(
+        resolve(0, ViewRead::Bytes("héllo".as_bytes().to_vec())),
+        Ok(TransferPayload::Text(text)) if text == "héllo"
+    ));
+    assert!(matches!(
+        resolve(1, ViewRead::Bytes(b"<b>hi</b>".to_vec())),
+        Ok(TransferPayload::Html(html)) if html == "<b>hi</b>"
+    ));
     assert!(
         matches!(
-            image.payload(vec![1, 2, 3]),
-            TransferPayload::Custom { mime, bytes }
+            resolve(2, ViewRead::Bytes(vec![1, 2, 3])),
+            Ok(TransferPayload::Custom { mime, bytes })
                 if mime.as_str() == "image/png" && *bytes == [1, 2, 3]
         ),
         "an image offer resolves as the bytes of the image it announced"
     );
     assert!(matches!(
-        &holds[3],
-        Held::Payload(TransferPayload::Custom { mime, bytes })
+        resolve(3, ViewRead::Uris(vec![
+            "content://media/1".to_owned(),
+            "content://media/2".to_owned(),
+        ])),
+        Ok(TransferPayload::Custom { mime, bytes })
             if mime.as_str() == "text/uri-list"
-                && **bytes == *b"content://media/1\r\ncontent://media/2\r\n"
+                && *bytes == *b"content://media/1\r\ncontent://media/2\r\n"
     ));
-    let Held::Uri(document) = &holds[4] else {
-        panic!(
-            "the document is read from the clip's URI, not {:?}",
-            holds[4]
-        );
-    };
     assert!(matches!(
-        document.payload(vec![4]),
-        TransferPayload::Custom { mime, bytes }
+        resolve(4, ViewRead::Bytes(vec![4])),
+        Ok(TransferPayload::Custom { mime, bytes })
             if mime.as_str() == "application/pdf" && *bytes == [4]
+    ));
+    let session = identity();
+    assert!(matches!(
+        delivered(ClipSource::Identity, &session, ViewRead::Stopped { read: 0 }, limits),
+        Ok(TransferPayload::Custom { mime, bytes })
+            if TransferFormat::Custom { mime: mime.clone() } == session.format && bytes.is_empty()
     ));
 }
 
-/// A dropped URI read to its end is its bytes; one the view stopped reading
-/// past the limit is too large, with what it had read, and one it could not
-/// read is gone.
-fn a_dropped_uri_read_reports_how_it_ended() {
+/// A read the view stopped past the limit is too large, with the length it
+/// counted; one with nothing to read (the clip did not carry it, the drop was
+/// let go of, the provider failed) is gone; a read within the view's count but
+/// past the limit once delivered is still too large; text that is not UTF-8
+/// does not decode.
+fn a_read_of_the_held_clip_is_held_to_its_limits() {
     let limit = |max_bytes| TransferLimits::default().with_max_bytes(max_bytes);
-    assert!(matches!(uri_bytes(Some(vec![1, 2]), 2, limit(4)), Ok(bytes) if bytes == [1, 2]));
+    let text = RepresentationDescriptor {
+        format: TransferFormat::Text,
+        declared_len: None,
+    };
+    let list = RepresentationDescriptor {
+        format: TransferFormat::UriList,
+        declared_len: None,
+    };
     assert!(
-        matches!(uri_bytes(Some(vec![1, 2]), 2, limit(2)), Ok(bytes) if bytes == [1, 2]),
+        matches!(
+            delivered(ClipSource::Text, &text, ViewRead::Bytes(b"ab".to_vec()), limit(2)),
+            Ok(TransferPayload::Text(text)) if text == "ab"
+        ),
         "a read of exactly the limit is admitted"
     );
-    let over = uri_bytes(None, 16_384, limit(10));
+    let over = delivered(
+        ClipSource::UriBytes,
+        &text,
+        ViewRead::Stopped { read: 16_384 },
+        limit(10),
+    );
     assert!(
         matches!(
             over,
@@ -156,14 +171,70 @@ fn a_dropped_uri_read_reports_how_it_ended() {
         ),
         "a read stopped past the limit is too large, not gone: {over:?}"
     );
+    for read in [0, 3] {
+        assert!(matches!(
+            delivered(
+                ClipSource::Text,
+                &text,
+                ViewRead::Stopped { read },
+                limit(10)
+            ),
+            Err(TransferError::SourceGone)
+        ));
+    }
+    assert!(
+        matches!(
+            delivered(
+                ClipSource::Html,
+                &text,
+                ViewRead::Bytes(vec![0; 11]),
+                limit(10)
+            ),
+            Err(TransferError::TooLarge {
+                actual: 11,
+                limit: 10
+            })
+        ),
+        "what the view delivers is held to the limit again"
+    );
+    assert!(
+        matches!(
+            delivered(
+                ClipSource::UriList,
+                &list,
+                ViewRead::Uris(vec!["content://a/1".to_owned()]),
+                limit(14),
+            ),
+            Err(TransferError::TooLarge {
+                actual: 15,
+                limit: 14
+            })
+        ),
+        "the list is held to the limit with its line ends"
+    );
     assert!(matches!(
-        uri_bytes(None, 3, limit(10)),
-        Err(TransferError::SourceGone)
+        delivered(
+            ClipSource::Text,
+            &text,
+            ViewRead::Bytes(vec![0xff]),
+            limit(10)
+        ),
+        Err(TransferError::Decode {
+            format: TransferFormat::Text
+        })
     ));
-    assert!(matches!(
-        uri_bytes(None, 0, limit(10)),
-        Err(TransferError::SourceGone)
-    ));
+    assert!(
+        matches!(
+            delivered(
+                ClipSource::UriList,
+                &list,
+                ViewRead::Uris(Vec::new()),
+                limit(10)
+            ),
+            Err(TransferError::SourceGone)
+        ),
+        "a clip with no URI carries no list"
+    );
 }
 
 /// Android has no drop effects: a drag from another app is a copy, and one
@@ -266,12 +337,12 @@ fn android_drag_mapping() {
                 a_description_offers_its_media_types,
             ),
             (
-                "a_drop_holds_what_the_clip_carried",
-                a_drop_holds_what_the_clip_carried,
+                "a_read_of_the_held_clip_resolves_as_announced",
+                a_read_of_the_held_clip_resolves_as_announced,
             ),
             (
-                "a_dropped_uri_read_reports_how_it_ended",
-                a_dropped_uri_read_reports_how_it_ended,
+                "a_read_of_the_held_clip_is_held_to_its_limits",
+                a_read_of_the_held_clip_is_held_to_its_limits,
             ),
             (
                 "a_foreign_drag_is_a_copy_and_ours_permits_what_it_advertised",

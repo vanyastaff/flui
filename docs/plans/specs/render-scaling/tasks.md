@@ -1,6 +1,6 @@
 # render-scaling: задачи
 
-- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS3, RS5, RS6, RS7, RS14. Следующие: RS8 с RS4, RS15 (не
+- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS3, RS5, RS6, RS7, RS14, RS15a. Следующие: RS8 с RS4, RS15b (не
   зависят друг от друга); RS4 сливается в одной серии с RS8.
 - **Design:** [design.md](design.md); требования и ворота G1–G7: [requirements.md](requirements.md)
 - **База:** `main` @ `da69efa`. Пути и строки в ADR даны на `e5ba8fe8f`; перед правкой сверить.
@@ -245,8 +245,12 @@
 
 ### RS15. Фабрика поверхностей, команды слота, расчёт по штампу
 
-- **Что:** ADR-0305 §2–§6: `SurfaceFactory` (`!Send`), закрытые команды слота, расчёт кадра по
-  штампу, темп и `SurfaceGeneration` на слот.
+- **Что:** ADR-0305 §2–§6 без удаления оси ресурсов (она в RS19): `SurfaceFactory` (`!Send`),
+  закрытые команды слота, расчёт кадра по штампу, темп и `SurfaceGeneration` на слот. Три PR:
+  (a) исполнитель, команды и кольцо расчётов в `flui-engine`; (b) `Queued` и `settle_frame` в
+  `flui-runtime`; (c) `DisplayConnection`, `SurfaceFactory`, `bootstrap` и оконные слоты; в (c)
+  отказ resize повторяется только после паники или переходной ошибки, а размер, который backend
+  отклоняет всегда, пишет warn один раз.
 - **Тесты:** compile-fail `surface_factory_is_owner_local`, `surface_factory_rejects_borrowed_window`;
   `a_full_lifecycle_queue_returns_the_command`, `a_stale_slot_id_is_refused_after_detach`,
   `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released`,
@@ -254,7 +258,8 @@
   `a_stopped_executor_settles_every_pending_frame_failed`;
   `a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored` (`flui-runtime`);
   протокольные тесты `raster_owner` переписаны на слот (список в ADR-0305, Confirmation).
-- **Ворота:** все перечисленные тесты; ни одного `Mutex` в типах слота и исполнителя.
+- **Ворота:** все перечисленные тесты; в `RasterExecutor`, слоте и `RasterHost` нет `Mutex`;
+  единственный замок у inbox слота, держится только на обмен значений.
 - **Зависит:** RS14. **Размер:** L. **Ревью сильной модели.**
 
 ### RS16. Настольные раннеры на слотах
@@ -284,7 +289,10 @@
 ### RS19. Паника на команду, пересборка устройства, остановка, замер доли растра
 
 - **Что:** ADR-0305 §7–§9: паника сдерживается на команду и стоит общих кэшей, но не пайплайнов;
-  потерянное устройство пересобирается с сохранением поверхностей; остановка ограничена по времени.
+  потерянное устройство пересобирается с сохранением поверхностей; остановка ограничена по времени;
+  ось `GpuResourceGeneration` удаляется (§6), раз пересборка у контекста.
+  `shut_down` закрывает очередь жизненного цикла (`Receiver` в `Option`), чтобы
+  `Attach`, прошедший проверку health до остановки, получил `Gone`, а не остался `Attaching`.
   Плюс замер: доля растра в кадре на сцене-сетке, записанная в теле PR, как вход для решения о
   потоке растра по ADR-0305 §10.
 - **Тесты:** `a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines`,
@@ -304,4 +312,5 @@
 | RS14 | #2382 | готова; `RasterExecutor` переходит в RS15 вместе с командами, его единственный API это ход по ним | `every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format` (lavapipe): 3 слота в двух форматах дают 1 instance, 1 device, 1 атлас, 2 набора пайплайнов, 0 сборок на перерисовке; до: 3/3/3/3 |
 | RS6 | #2399 | готова | `layer_it scene_patch_damage` (девятнадцать строк, каждая падает без своей части: следа `Place` с размещением корня, сравнения эффектов, разрешения последователей, выбора присоединённого лидера, глубины цепочки последователей, цепочек до общего предка (12 вложенных последователей: 24 разрешения вместо 531 440), спаривания последователей за один проход (2 000 соседей: 4 001 чтение ссылок вместо 8 006 001), бахромы билинейной выборки лупы, ветви лидера под `LeaderClip::Hide` и последователя, чья цепочка идёт через скрытого, цепочки из 30 000 эффектов на стеке в 256 КиБ, клипа над сжатым фильтром в той же границе и в дочерней, ленивого чтения входов фильтров (50 размытий над 200 кусками: 0 чтений при далёком сдвиге, 500 при правке под ними), ядра фильтра под сжимающим предком, суммы ядер вдоль цепочки (три фильтра и лупа между ними; с максимумом вместо суммы строка падает), `damage_extent` картинки, замыкания над подложкой); `patch_damage_covers_diff_damage`: 10 000 случаев по три патча (метки, сдвиги, эффекты, добавление и удаление кусков, перестановки, сдвиг лидера) зелёные за 0,7 с, подсаженный патч без следа одной операции пойман; `the_renderer_kernel_stays_inside_read_closure` (flui-engine); `damage_readback_tests` на lavapipe без правки ожиданий; в тестах differ четыре ожидания следуют правилу §6 (подложка берёт и то, что читает, цветовой фильтр без границы даёт `Full(Unbounded)`); счётчики `followers_resolved`, `follower_pairing_reads`, `filter_input_reads`, `depth_updates`; у differ нет своих `backdrops` и `foreground`, у `frame_protocol.rs` нет своего радиуса: оба зовут `read_closure` и `close_over` |
 | RS7 | #2401 | готова | `layer_it pending_log_contract`: пять строк ADR (`a_full_log_folds_its_two_oldest_entries`, `damage_from_an_older_base_covers_the_newer_one`, `a_base_from_another_lineage_renders_full`, `a_lost_completion_over_reports_and_never_under_reports`, `a_surface_change_in_the_log_publishes_full`) и пробы повторного входа `a_released_content_drops_after_the_owner_is_released`, `a_fold_releases_its_contents_after_the_owner_is_released` (40 кадров без подтверждения: журнал не больше 16 записей, свёрнутая запись сохраняет `Full(SurfaceChanged)`); каждая строка падает без своей проверки (линия, «только вперёд», сворачивание, отпускание после заимствования, сброс записей по подтверждению); счётчик `pending_log_folds`; `apply` (в `Applied::released`), `completed` и `renew` возвращают `ReleasedContents` для `Outbox` (ADR-0287), включая заменённую версию и содержимое, отпущенное сворачиванием; память журнала ограничена 16 записями |
-| RS2, RS4, RS8–RS13, RS15–RS19 | | не начата | |
+| RS15a | #2396 | готова (ревью принято); RS15b, RS15c не начаты | `engine_it` 17 тестов; без фикса падают `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released` (взаимоблокировка), `a_full_settlement_ring_holds_the_next_frame`, `a_stopped_executor_settles_every_pending_frame_failed`, `a_failed_resize_is_held_in_the_record_and_retried_next_turn`, `a_panicking_subscriber_cannot_strand_a_refused_slot`, `an_untaken_panic_payload_is_dropped_outside_the_slot_table`, `a_refusal_whose_error_panics_when_formatted_still_commits`, `a_surface_loss_keeps_the_barrier_of_a_pending_resize` |
+| RS2, RS4, RS8–RS13, RS15b–RS19 | | не начата | |

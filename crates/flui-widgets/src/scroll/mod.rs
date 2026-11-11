@@ -36,6 +36,7 @@ mod page_view;
 mod refresh_indicator;
 mod scroll_behavior;
 mod scroll_controller;
+mod scroll_observer;
 mod scroll_owner;
 mod scroll_physics;
 mod scroll_position_scope;
@@ -96,6 +97,7 @@ pub use refresh_indicator::{
 };
 pub use scroll_behavior::{
     DefaultScrollBehavior, ScrollBehavior, ScrollBehaviorDetails, ScrollConfiguration,
+    ScrollableDetails,
 };
 pub use scroll_controller::{InvalidExtents, ScrollController};
 pub use scroll_owner::SharedSnapPolicy;
@@ -106,7 +108,7 @@ pub use scroll_physics::{
 pub use scroll_position_scope::ScrollPositionScope;
 use scrollable::wheel_axis_delta;
 pub use scrollable::{InvalidWheelScrollDistance, Scrollable, WheelScrollDistances};
-pub use scrollbar::Scrollbar;
+pub use scrollbar::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 pub use single_child_scroll_view::SingleChildScrollView;
 pub use sliver_constrained_cross_axis::SliverConstrainedCrossAxis;
 pub use sliver_cross_axis_group::{SliverCrossAxisGroup, SliverCrossAxisItem};

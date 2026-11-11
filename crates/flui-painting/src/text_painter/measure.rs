@@ -67,9 +67,12 @@ impl TextPainter {
         let paragraph = Arc::new(layout.to_shaped(root));
         let decor = super::decor::SpanDecor::of(&resolved.spans);
 
-        // Precompute intrinsic widths (shape once, query many).
-        let (min_intrinsic_width, max_intrinsic_width) =
-            self.intrinsic_widths(text_cx, &resolved)?;
+        // The intrinsic widths come from the same shaping unless an ellipsis
+        // replaced the text it shaped.
+        let (min_intrinsic_width, max_intrinsic_width) = match layout.authored_content_widths() {
+            Some(widths) => self.floored_at_ellipsis(text_cx, &resolved, widths)?,
+            None => self.intrinsic_widths(text_cx, &resolved)?,
+        };
 
         self.layout_cache = Some(TextLayoutCache {
             fonts,
@@ -183,8 +186,7 @@ impl TextPainter {
         text_cx: &mut TextContext,
         text: &ResolvedText,
     ) -> Result<(f64, f64), TextLayoutError> {
-        let floor = self.ellipsis_width_floor(text_cx, text)?;
-        let (min, max) = self
+        let widths = self
             .parley_paragraph(
                 text_cx,
                 text,
@@ -193,6 +195,18 @@ impl TextPainter {
                 LineOverflow::IgnoreForWidthIntrinsic,
             )?
             .content_widths();
+        self.floored_at_ellipsis(text_cx, text, widths)
+    }
+
+    /// `(min, max)` content widths floored at the ellipsis width when
+    /// truncation can leave only the ellipsis.
+    fn floored_at_ellipsis(
+        &self,
+        text_cx: &mut TextContext,
+        text: &ResolvedText,
+        (min, max): (f64, f64),
+    ) -> Result<(f64, f64), TextLayoutError> {
+        let floor = self.ellipsis_width_floor(text_cx, text)?;
         Ok((min.max(floor), max.max(floor)))
     }
 

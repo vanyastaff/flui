@@ -9,20 +9,22 @@
 //! caches takes no lock: the context is `Send`, so a raster thread can own it,
 //! and `!Sync`, so no `&GpuContext` crosses a thread.
 //!
-//! Today the context serves offscreen slots, which the headless renderer is
-//! made of; window surfaces, the command queue and the settlement record are
-//! the steps ADR-0305's Migration names next.
+//! Today the context serves offscreen slots: the headless renderer is made of
+//! one, and the raster executor drives it as its backend. Window surfaces are
+//! the step ADR-0305's Migration names next.
 
 use std::{cell::Cell, marker::PhantomData, sync::Arc};
 
-use flui_foundation::{Marker, generation::GenSlots, id::GenId};
-use flui_layer::LayerTree;
+use flui_foundation::{geometry::DeviceSize, memory::MemoryPressureLevel};
+use flui_layer::{DamageRegion, LayerTree, Scene};
 
 use crate::{
     device_domain::DeviceDomain,
     error::{EngineError, EngineResult},
     layer_dispatcher::LayerDispatcher,
     painter::WgpuPainter,
+    raster::PresentDisposition,
+    raster_executor::{SlotBackend, SlotId, SlotTarget},
 };
 
 #[cfg(test)]
@@ -36,16 +38,6 @@ thread_local! {
     pub(crate) static INSTANCES_CREATED: Cell<usize> = const { Cell::new(0) };
 }
 
-/// The slot domain of [`SlotId`].
-#[derive(Debug)]
-pub(crate) enum SlotDomain {}
-
-impl Marker for SlotDomain {}
-
-/// A presentation's slot in its [`GpuContext`]: a generational key, so an id
-/// kept after its slot detached never names the slot's next occupant.
-pub(crate) type SlotId = GenId<SlotDomain>;
-
 /// What one slot renders into.
 struct SurfaceSlot {
     /// The slot's target, which the executor reads back.
@@ -54,56 +46,47 @@ struct SurfaceSlot {
     size: (u32, u32),
 }
 
-/// The slots of one context and the generations of their ids.
+/// The slots of one context, by the index of the id the owner minted.
 #[derive(Default)]
 struct SlotTable {
-    entries: Vec<Option<SurfaceSlot>>,
-    generations: GenSlots,
-    /// Detached slots whose generation can still advance, taken before a
-    /// fresh slot.
-    free: Vec<u32>,
+    entries: Vec<Option<(SlotId, SurfaceSlot)>>,
 }
 
 impl SlotTable {
-    fn insert(&mut self, slot: SurfaceSlot) -> EngineResult<SlotId> {
-        if let Some(index) = self.free.pop() {
-            let generation = self.generations.mint_recycled(index);
-            self.entries[index as usize] = Some(slot);
-            return Ok(SlotId::new_gen(index, generation));
+    /// Hold `slot` under `id`; `false` when `id`'s index is taken.
+    fn insert(&mut self, id: SlotId, slot: SurfaceSlot) -> bool {
+        let index = id.index() as usize;
+        if self.entries.len() <= index {
+            self.entries.resize_with(index + 1, || None);
         }
-        let index = u32::try_from(self.entries.len())
-            .map_err(|_overflow| EngineError::SlotIdentityExhausted)?;
-        let generation = self.generations.mint_fresh();
-        self.entries.push(Some(slot));
-        Ok(SlotId::new_gen(index, generation))
+        if self.entries[index].is_some() {
+            return false;
+        }
+        self.entries[index] = Some((id, slot));
+        true
     }
 
     fn get_mut(&mut self, id: SlotId) -> Option<&mut SurfaceSlot> {
-        if self.generations.generation(id.index()) != Some(id.generation()) {
-            return None;
+        match self.entries.get_mut(id.index() as usize)? {
+            Some((held, slot)) if *held == id => Some(slot),
+            _ => None,
         }
-        self.entries.get_mut(id.index() as usize)?.as_mut()
     }
 
     fn get(&self, id: SlotId) -> Option<&SurfaceSlot> {
-        if self.generations.generation(id.index()) != Some(id.generation()) {
-            return None;
+        match self.entries.get(id.index() as usize)? {
+            Some((held, slot)) if *held == id => Some(slot),
+            _ => None,
         }
-        self.entries.get(id.index() as usize)?.as_ref()
     }
 
     /// Takes the slot out; `None` for a stale id or one already detached.
-    #[cfg(test)]
     fn remove(&mut self, id: SlotId) -> Option<SurfaceSlot> {
-        if self.generations.generation(id.index()) != Some(id.generation()) {
-            return None;
+        let entry = self.entries.get_mut(id.index() as usize)?;
+        if entry.as_ref().is_some_and(|(held, _)| *held == id) {
+            return entry.take().map(|(_, slot)| slot);
         }
-        let slot = self.entries.get_mut(id.index() as usize)?.take()?;
-        // An index whose generation cannot advance is retired, never reused.
-        if self.generations.peek(id.index()).is_some() {
-            self.free.push(id.index());
-        }
-        Some(slot)
+        None
     }
 }
 
@@ -125,7 +108,7 @@ pub(crate) struct ContextBuilds {
 /// Owned by the code that rasterises; never a `static` and never reached
 /// ambiently (ADR-0097). `Send`, so a raster thread can take it, and not
 /// `Sync`, so it has one mutator and its caches need no lock.
-pub(crate) struct GpuContext {
+pub struct GpuContext {
     /// Kept for the device's life; the surfaces of later windows are made
     /// on it (ADR-0305 §2).
     #[cfg_attr(
@@ -247,18 +230,19 @@ impl GpuContext {
         self.domain.device().limits().max_texture_dimension_2d
     }
 
-    /// Attach an offscreen slot of `size` device pixels in `format`, an
-    /// encoded RGBA8 or BGRA8 colour format.
+    /// Attach an offscreen slot under `slot`, of `size` device pixels in
+    /// `format`, an encoded RGBA8 or BGRA8 colour format.
     ///
     /// # Errors
     /// [`EngineError::InvalidTargetSize`] for a zero or over-limit side;
-    /// [`EngineError::InvalidRenderTarget`] for another format;
-    /// [`EngineError::SlotIdentityExhausted`] when no slot id is left.
+    /// [`EngineError::InvalidRenderTarget`] for another format or an id
+    /// whose index holds a slot.
     pub(crate) fn attach_offscreen(
         &mut self,
+        slot: SlotId,
         size: (u32, u32),
         format: wgpu::TextureFormat,
-    ) -> EngineResult<SlotId> {
+    ) -> EngineResult<()> {
         if !matches!(
             format,
             wgpu::TextureFormat::Rgba8Unorm
@@ -271,11 +255,20 @@ impl GpuContext {
             });
         }
         let texture = self.slot_texture(size, format)?;
-        self.slots.insert(SurfaceSlot {
-            texture,
-            format,
-            size,
-        })
+        if self.slots.insert(
+            slot,
+            SurfaceSlot {
+                texture,
+                format,
+                size,
+            },
+        ) {
+            Ok(())
+        } else {
+            Err(EngineError::InvalidRenderTarget {
+                reason: "the slot's index holds another slot",
+            })
+        }
     }
 
     /// Give `slot` a target of `size` device pixels; its previous contents
@@ -297,9 +290,7 @@ impl GpuContext {
         Ok(())
     }
 
-    /// Detach `slot`; `false` for a stale id or one already detached. Its id
-    /// never names a slot again.
-    #[cfg(test)]
+    /// Detach `slot`; `false` for a stale id or one already detached.
     pub(crate) fn detach(&mut self, slot: SlotId) -> bool {
         self.slots.remove(slot).is_some()
     }
@@ -439,10 +430,61 @@ impl GpuContext {
     }
 }
 
+/// The context as the raster executor's backend: its offscreen slots render
+/// in full each frame and count as presented once submitted.
+impl SlotBackend for GpuContext {
+    fn attach(&mut self, slot: SlotId, target: SlotTarget) -> EngineResult<()> {
+        match target {
+            SlotTarget::Offscreen { size, format } => {
+                self.attach_offscreen(slot, device_extent(size)?, format)
+            }
+        }
+    }
+
+    fn resize(&mut self, slot: SlotId, size: DeviceSize) -> EngineResult<()> {
+        self.resize_slot(slot, device_extent(size)?)
+    }
+
+    fn render(
+        &mut self,
+        slot: SlotId,
+        scene: &Scene,
+        _damage: DamageRegion,
+    ) -> EngineResult<PresentDisposition> {
+        self.render_slot(slot, scene.tree())?;
+        Ok(PresentDisposition::Presented)
+    }
+
+    fn detach(&mut self, slot: SlotId) {
+        GpuContext::detach(self, slot);
+    }
+
+    fn reclaim(&mut self, level: MemoryPressureLevel) {
+        if let Some(painter) = self.painter.as_mut() {
+            painter.reclaim(level);
+        }
+    }
+}
+
+/// `size` as a texture extent; a side of zero or less is refused.
+fn device_extent(size: DeviceSize) -> EngineResult<(u32, u32)> {
+    match (u32::try_from(size.width), u32::try_from(size.height)) {
+        (Ok(width), Ok(height)) if width > 0 && height > 0 => Ok((width, height)),
+        _ => Err(EngineError::InvalidTargetSize {
+            width: u32::try_from(size.width).unwrap_or(0),
+            height: u32::try_from(size.height).unwrap_or(0),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use flui_foundation::geometry::{Offset, Rect};
-    use flui_layer::{LayerTree, SceneBuilder};
+    use flui_foundation::{
+        FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId,
+        SurfaceGeneration, UiRuntimeId,
+        geometry::{DeviceSize, Offset, Rect},
+    };
+    use flui_layer::{DamageRegion, LayerTree, Scene, SceneBuilder, SceneSnapshot};
     use flui_painting::{
         Canvas, TextPainter,
         paint::Paint,
@@ -452,6 +494,9 @@ mod tests {
 
     use super::{GpuContext, INSTANCES_CREATED};
     use crate::error::EngineError;
+    use crate::raster_executor::{
+        RasterCommand, RasterExecutor, RasterVerdict, SendReceipt, SlotConfig, SlotId, SlotTarget,
+    };
 
     /// A red square beside a black glyph, so a frame samples both the shape
     /// pipelines and the glyph atlas.
@@ -496,11 +541,33 @@ mod tests {
         }
     }
 
-    /// ADR-0305 §1 and the two-slot gate of the render-scaling spec: every
-    /// slot of a context draws through its one instance, one device and one
-    /// glyph atlas, a pipeline set is built once per target format, and
-    /// drawing every slot again builds nothing. Before the context, each
-    /// headless capture and each window built all of them for itself.
+    /// A frame of `tree` for the slot at `address`, stamped with `generation`.
+    fn frame(
+        slot: SlotId,
+        address: PresentationAddress,
+        generation: SurfaceGeneration,
+        tree: LayerTree,
+    ) -> RasterCommand {
+        RasterCommand::Frame {
+            slot,
+            snapshot: SceneSnapshot::new(
+                FrameStamp::new(
+                    address,
+                    FrameEpoch::ZERO,
+                    generation,
+                    GpuResourceGeneration::ZERO,
+                ),
+                DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+                Scene::new(tree),
+            ),
+        }
+    }
+
+    /// Gate G5: slots of two formats and two sizes, driven through the raster
+    /// executor, share one instance, one device, one glyph atlas and one
+    /// pipeline set per format, and drawing every slot again builds nothing.
+    /// Before the context, each headless capture and each window built all of
+    /// them for itself.
     ///
     /// Red-check: build a painter per slot instead of sharing the context's
     /// (or rebuild it when the format changes) and the counts grow.
@@ -508,24 +575,58 @@ mod tests {
     fn every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format() {
         let instances = || INSTANCES_CREATED.with(std::cell::Cell::get);
         let before = instances();
-        let Some(mut context) = context_or_skip() else {
+        let Some(context) = context_or_skip() else {
             return;
         };
-        let tree = square_and_glyph();
-        let rgba = context
-            .attach_offscreen((32, 16), wgpu::TextureFormat::Rgba8Unorm)
-            .expect("an RGBA slot attaches");
-        let wider = context
-            .attach_offscreen((48, 16), wgpu::TextureFormat::Rgba8Unorm)
-            .expect("a second RGBA slot attaches");
-        let bgra = context
-            .attach_offscreen((32, 16), wgpu::TextureFormat::Bgra8Unorm)
-            .expect("a BGRA slot attaches");
-        let slots = [rgba, wider, bgra];
-        for slot in slots {
-            context.render_slot(slot, &tree).expect("each slot draws");
-        }
-        let first = context.builds();
+        let (mut executor, sender) = RasterExecutor::new(context, || {});
+        let targets = [
+            ((32, 16), wgpu::TextureFormat::Rgba8Unorm),
+            ((48, 16), wgpu::TextureFormat::Rgba8Unorm),
+            ((32, 16), wgpu::TextureFormat::Bgra8Unorm),
+        ];
+        let slots = targets.map(|((width, height), format)| {
+            let slot = sender.mint_slot().expect("a slot id is left");
+            let address = PresentationAddress {
+                ui_runtime_id: UiRuntimeId::new(1),
+                presentation_id: PresentationId::new(slot.index() as usize + 1),
+            };
+            let receipt = sender
+                .send(RasterCommand::Attach {
+                    slot,
+                    address,
+                    target: SlotTarget::Offscreen {
+                        size: DeviceSize::new(width, height),
+                        format,
+                    },
+                    config: SlotConfig::new(),
+                })
+                .expect("the attach is accepted");
+            let SendReceipt::Configured(generation) = receipt else {
+                panic!("an attach of a positive size configures the slot: {receipt:?}");
+            };
+            (slot, address, generation)
+        });
+        let draw_all = |executor: &mut RasterExecutor<GpuContext>| {
+            for (slot, address, generation) in slots {
+                sender
+                    .send(frame(slot, address, generation, square_and_glyph()))
+                    .expect("the frame is accepted");
+            }
+            let _ = executor.turn();
+            let mut settled = Vec::new();
+            for (slot, ..) in slots {
+                sender.drain_settlements(slot, &mut settled);
+            }
+            assert!(
+                settled
+                    .iter()
+                    .all(|settlement| settlement.verdict == RasterVerdict::Presented),
+                "every slot presents: {settled:?}"
+            );
+            assert_eq!(settled.len(), slots.len());
+        };
+        draw_all(&mut executor);
+        let first = executor.backend().builds();
         assert_eq!(instances() - before, 1, "one instance serves every slot");
         assert_eq!(first.devices, 1, "one device serves every slot");
         assert_eq!(first.glyph_atlases, 1, "one glyph atlas serves every slot");
@@ -534,21 +635,18 @@ mod tests {
             "one pipeline set per target format, two formats"
         );
 
-        for _ in 0..2 {
-            for slot in slots {
-                context
-                    .render_slot(slot, &tree)
-                    .expect("each slot draws again");
-            }
-        }
+        draw_all(&mut executor);
+        draw_all(&mut executor);
         assert_eq!(
-            context.builds(),
+            executor.backend().builds(),
             first,
             "drawing every slot again builds no device, atlas or pipeline"
         );
 
         // The shared painter draws the same pixels into either format, and
         // a slot's size is its own.
+        let [(rgba, ..), (wider, ..), (bgra, ..)] = slots;
+        let context = executor.backend();
         let rgba_pixels = context.read_slot(rgba).expect("the RGBA slot reads back");
         let bgra_pixels = context.read_slot(bgra).expect("the BGRA slot reads back");
         let swizzled: Vec<u8> = bgra_pixels
@@ -574,23 +672,9 @@ mod tests {
                 .len(),
             48 * 16 * 4
         );
-
-        // A detached slot's id never names a slot again, even the one that
-        // reuses its index.
-        assert!(context.detach(wider));
-        assert!(!context.detach(wider), "a slot detaches once");
-        let reused = context
-            .attach_offscreen((8, 8), wgpu::TextureFormat::Rgba8Unorm)
-            .expect("a slot attaches in the freed index");
-        assert_eq!(reused.index(), wider.index());
-        assert_ne!(reused, wider);
         assert!(matches!(
-            context.render_slot(wider, &tree),
+            context.read_slot(sender.mint_slot().expect("a slot id is left")),
             Err(EngineError::InvalidRenderTarget { .. })
         ));
-        context
-            .render_slot(reused, &tree)
-            .expect("the new slot draws");
-        assert_eq!(context.builds(), first, "a new slot builds nothing either");
     }
 }

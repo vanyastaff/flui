@@ -372,6 +372,10 @@ pub(super) struct FrameRecoveryOutcome {
 /// without consuming frame work; contention during submission returns `Retry`.
 /// A busy post-frame check also retains a wake without claiming device loss.
 #[cfg(not(target_arch = "wasm32"))]
+#[expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+)]
 pub(super) fn pump_with_device_recovery<B>(
     ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
     lane: &parking_lot::Mutex<crate::app::raster_lane::RasterLane<B>>,
@@ -504,6 +508,10 @@ where
 /// failing device is retried on a bounded, non-blocking, growing deadline that
 /// is never slept on, and given up after [`DEVICE_RECOVERY_ATTEMPTS_AT_CAP`]
 /// failures at its ceiling until the application asks for a rebuild again.
+#[expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+)]
 #[cfg(all(
     test,
     not(target_os = "android"),
@@ -563,6 +571,10 @@ mod device_recovery_tests {
     /// path drives (`pump_with_device_recovery` takes a lane, not
     /// a bare backend, since the desktop/Android runners adopted the
     /// mailbox) — the size matches the scripted backends' own `size()`.
+    #[expect(
+        deprecated,
+        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+    )]
     fn lane_over<B: RasterBackend>(
         backend: B,
     ) -> parking_lot::Mutex<crate::app::raster_lane::RasterLane<B>> {

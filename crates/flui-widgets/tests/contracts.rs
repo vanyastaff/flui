@@ -15,6 +15,8 @@ fn input_regions() {
             ("system_gesture_exclusion::a_transformed_region_reports_its_bounding_box", crate::system_gesture_exclusion::a_transformed_region_reports_its_bounding_box),
             ("system_gesture_exclusion::a_clipped_region_reports_the_intersection", crate::system_gesture_exclusion::a_clipped_region_reports_the_intersection),
             ("system_gesture_exclusion::a_region_beyond_the_window_is_clamped_to_it", crate::system_gesture_exclusion::a_region_beyond_the_window_is_clamped_to_it),
+            ("system_gesture_exclusion::regions_in_separate_branches_come_out_in_paint_order", crate::system_gesture_exclusion::regions_in_separate_branches_come_out_in_paint_order),
+            ("system_gesture_exclusion::a_tree_without_a_region_reports_none", crate::system_gesture_exclusion::a_tree_without_a_region_reports_none),
             ("system_gesture_exclusion::a_region_in_a_scrolled_list_item_reports_the_scrolled_rect", crate::system_gesture_exclusion::a_region_in_a_scrolled_list_item_reports_the_scrolled_rect),
             ("system_gesture_exclusion::a_scale_change_resends_unchanged_logical_regions", crate::system_gesture_exclusion::a_scale_change_resends_unchanged_logical_regions),
             ("system_gesture_exclusion::a_display_change_at_equal_scale_resends_regions", crate::system_gesture_exclusion::a_display_change_at_equal_scale_resends_regions),
@@ -1010,8 +1012,6 @@ fn scroll_physics_and_activity() {
             ("scroll::precise_and_unknown_wheels_interrupt_synthetic_motion_once", crate::scroll::precise_and_unknown_wheels_interrupt_synthetic_motion_once),
             ("scroll::replacing_or_unmounting_a_scrollable_retires_its_notched_motion", crate::scroll::replacing_or_unmounting_a_scrollable_retires_its_notched_motion),
             ("scroll::dragging_interrupts_notched_motion_and_windows_progress_independently", crate::scroll::dragging_interrupts_notched_motion_and_windows_progress_independently),
-            ("scroll::scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded", crate::scroll::scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded as fn()),
-            ("scroll::dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick", crate::scroll::dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick),
             ("scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting", crate::scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting as fn()),
             ("scroll::replacing_vsync_releases_old_seats_and_drives_fresh_contacts", crate::scroll::replacing_vsync_releases_old_seats_and_drives_fresh_contacts),
             ("scroll::controller_mutation_during_build_is_refused", crate::scroll::controller_mutation_during_build_is_refused),
@@ -1754,6 +1754,7 @@ fn nested_scroll_channel() {
             ("swipe_actions::swipe_actions_refuse_rows_without_distinct_actions", crate::swipe_actions::swipe_actions_refuse_rows_without_distinct_actions),
             ("collapsing_header::collapsing_header_collapses_before_or_after_the_content", crate::collapsing_header::collapsing_header_collapses_before_or_after_the_content),
             ("collapsing_header::collapsing_header_expands_first_or_last", crate::collapsing_header::collapsing_header_expands_first_or_last),
+            ("collapsing_header::collapsing_header_takes_a_wheel_over_the_list_scrollbar", crate::collapsing_header::collapsing_header_takes_a_wheel_over_the_list_scrollbar),
             ("collapsing_header::collapsing_header_inherits_the_fling_across_its_collapse", crate::collapsing_header::collapsing_header_inherits_the_fling_across_its_collapse),
             ("collapsing_header::collapsing_header_snaps_to_an_extent", crate::collapsing_header::collapsing_header_snaps_to_an_extent),
             ("collapsing_header::collapsing_header_rests_within_half_a_device_pixel", crate::collapsing_header::collapsing_header_rests_within_half_a_device_pixel),
@@ -1966,6 +1967,71 @@ fn context_menu_area() {
             (
                 "context_menu_area::assistive_technology_reads_a_menu_of_menu_items",
                 crate::context_menu_area::assistive_technology_reads_a_menu_of_menu_items,
+            ),
+        ],
+    );
+}
+
+/// `Scrollbar`: geometry on both axes and directions, its input, its fade, and
+/// the scroll observer scope that binds it to the nearest scroll view.
+#[test]
+fn scrollbar() {
+    run_cases(
+        "scrollbar",
+        &[
+            (
+                "scrollbar::the_thumb_follows_the_position_on_both_axes_and_directions",
+                crate::scrollbar::the_thumb_follows_the_position_on_both_axes_and_directions
+                    as fn(),
+            ),
+            (
+                "scrollbar::the_thumb_stays_inside_short_tracks_and_shrinks_with_overscroll",
+                crate::scrollbar::the_thumb_stays_inside_short_tracks_and_shrinks_with_overscroll,
+            ),
+            (
+                "scrollbar::scrolling_repaints_the_bar_without_rebuilding",
+                crate::scrollbar::scrolling_repaints_the_bar_without_rebuilding,
+            ),
+            (
+                "scrollbar::dragging_the_thumb_moves_the_position_with_any_device",
+                crate::scrollbar::dragging_the_thumb_moves_the_position_with_any_device,
+            ),
+            (
+                "scrollbar::the_track_pages_and_the_wheel_scrolls_over_the_bar",
+                crate::scrollbar::the_track_pages_and_the_wheel_scrolls_over_the_bar,
+            ),
+            (
+                "scrollbar::the_bar_fades_in_while_scrolling_and_out_after_it_stops",
+                crate::scrollbar::the_bar_fades_in_while_scrolling_and_out_after_it_stops,
+            ),
+            (
+                "scrollbar::a_bar_follows_the_nearest_scroll_view_and_ignores_nested_ones",
+                crate::scrollbar::a_bar_follows_the_nearest_scroll_view_and_ignores_nested_ones,
+            ),
+            (
+                "scrollbar::a_bar_follows_a_replaced_scroll_view_or_controller",
+                crate::scrollbar::a_bar_follows_a_replaced_scroll_view_or_controller,
+            ),
+            (
+                "scrollbar::a_scroll_behavior_builds_the_bar_of_its_scroll_views",
+                crate::scrollbar::a_scroll_behavior_builds_the_bar_of_its_scroll_views,
+            ),
+            (
+                "scrollbar::a_wheel_over_the_bar_keeps_the_scroll_views_line_distance",
+                crate::scrollbar::a_wheel_over_the_bar_keeps_the_scroll_views_line_distance,
+            ),
+            (
+                "scrollbar::a_bar_attached_mid_scroll_shows_for_the_run_under_way",
+                crate::scrollbar::a_bar_attached_mid_scroll_shows_for_the_run_under_way,
+            ),
+            (
+                "scrollbar::a_second_finger_leaves_the_thumb_drag_to_the_first",
+                crate::scrollbar::a_second_finger_leaves_the_thumb_drag_to_the_first,
+            ),
+            #[cfg(debug_assertions)]
+            (
+                "scrollbar::a_shown_thumb_without_a_scroll_view_fails_loudly",
+                crate::scrollbar::a_shown_thumb_without_a_scroll_view_fails_loudly,
             ),
         ],
     );
