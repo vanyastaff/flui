@@ -199,19 +199,35 @@ struct BindingTable {
     is_enabled: fn(&dyn Any, &dyn Any) -> bool,
     invoke: fn(&dyn Any, &mut EventCx<'_>, &dyn Any) -> ActionOutcome,
     to_key_event_result: fn(&dyn Any, &dyn Any, ActionOutcome) -> KeyEventResult,
+    /// The same binding as a disabled control declares it: never enabled.
+    /// `None` on a table that is that already.
+    switched_off: Option<&'static BindingTable>,
 }
 
 /// Names the [`BindingTable`] of action type `A` for intent type `T`.
 struct Binding<T, A>(std::marker::PhantomData<fn(&T, &A)>);
 
 impl<T: Intent, A: Action<T> + 'static> Binding<T, A> {
-    const TABLE: BindingTable = BindingTable {
-        is_enabled: |action, intent| bound::<A>(action).is_enabled(typed::<T>(intent)),
-        invoke: |action, cx, intent| bound::<A>(action).invoke(cx, typed::<T>(intent)),
-        to_key_event_result: |action, intent, outcome| {
-            bound::<A>(action).to_key_event_result(typed::<T>(intent), outcome)
-        },
-    };
+    const TABLE: BindingTable = Self::table(
+        |action, intent| bound::<A>(action).is_enabled(typed::<T>(intent)),
+        Some(&Self::SWITCHED_OFF),
+    );
+
+    const SWITCHED_OFF: BindingTable = Self::table(|_action, _intent| false, None);
+
+    const fn table(
+        is_enabled: fn(&dyn Any, &dyn Any) -> bool,
+        switched_off: Option<&'static BindingTable>,
+    ) -> BindingTable {
+        BindingTable {
+            is_enabled,
+            invoke: |action, cx, intent| bound::<A>(action).invoke(cx, typed::<T>(intent)),
+            to_key_event_result: |action, intent, outcome| {
+                bound::<A>(action).to_key_event_result(typed::<T>(intent), outcome)
+            },
+            switched_off,
+        }
+    }
 }
 
 /// One `Action<T>` behind `dyn Any` intents, so a heterogeneous map can hold
@@ -255,6 +271,15 @@ impl ErasedAction {
             action,
             table: &Binding::<T, A>::TABLE,
             enablement_changes,
+        }
+    }
+
+    /// This binding as a disabled control declares it: still bound, so the
+    /// intent stops here, and never enabled.
+    pub(crate) fn switched_off(&self) -> Self {
+        Self {
+            table: self.table.switched_off.unwrap_or(self.table),
+            ..self.clone()
         }
     }
 
