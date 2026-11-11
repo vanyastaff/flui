@@ -168,6 +168,65 @@ impl Drop for Mcp {
     }
 }
 
+/// `flui run` and everything it launched: the `cargo run` under it and the
+/// app under that. Dropping it, on success or on a failed assertion, stops
+/// the whole tree: Ctrl-C first, so `flui run` stops the app the way a
+/// developer's Ctrl-C does (an Android session force-stops its package),
+/// then a kill of whatever is left.
+struct Session {
+    child: Child,
+}
+
+impl Session {
+    fn spawn(mut command: Command) -> Self {
+        // Its own process group, so the interrupt reaches the tree and not
+        // the test runner.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        Self {
+            child: command.spawn().expect("start flui run"),
+        }
+    }
+
+    /// Waits up to `within` for `flui run` to end.
+    #[cfg(unix)]
+    fn wait_up_to(&mut self, within: Duration) {
+        let deadline = Instant::now() + within;
+        while Instant::now() < deadline {
+            if !matches!(self.child.try_wait(), Ok(None)) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use rustix::process::{Pid, Signal, kill_process_group};
+            let group = Pid::from_child(&self.child);
+            let _ = kill_process_group(group, Signal::INT);
+            self.wait_up_to(Duration::from_secs(15));
+            // The app and `cargo run` share the group; whatever outlived
+            // the interrupt goes now.
+            let _ = kill_process_group(group, Signal::KILL);
+        }
+        // No console interrupt reaches one process tree on Windows; the
+        // tree is killed whole.
+        #[cfg(windows)]
+        {
+            let _ = Command::new("taskkill")
+                .args(["/T", "/F", "/PID"])
+                .arg(self.child.id().to_string())
+                .output();
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 /// Every node of `tree`, depth first.
 fn nodes(tree: &Value) -> Vec<&Value> {
     fn walk<'a>(node: &'a Value, into: &mut Vec<&'a Value>) {
@@ -219,17 +278,18 @@ fn an_agent_presses_the_counter_on_a_live_device() {
     let workdir = TempDir::new().expect("scaffold workdir");
     let project = counter_project(workdir.path());
 
-    let mut run = flui()
+    let mut command = flui();
+    command
         .current_dir(&project)
         .env("CARGO_NET_OFFLINE", "true")
         .args(["--json", "run", "--agent", "--no-hot-reload", "--device"])
         .arg(&device)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("start flui run");
+        .stdout(Stdio::piped());
+    // Dropped last, after `mcp`: on every exit, a failed assertion included.
+    let mut run = Session::spawn(command);
     let (events, received) = mpsc::channel::<Value>();
-    let stdout = run.stdout.take().expect("BUG: stdout is piped");
+    let stdout = run.child.stdout.take().expect("BUG: stdout is piped");
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             eprintln!("flui run: {line}");
@@ -252,8 +312,6 @@ fn an_agent_presses_the_counter_on_a_live_device() {
     };
 
     if let Some(gap) = known_gap {
-        let _ = run.kill();
-        let _ = run.wait();
         match started {
             Err(message) if message.contains(&format!("docs/gaps.md#{gap}")) => {
                 eprintln!("expected failure: docs/gaps.md#{gap} is open on {platform}");
@@ -296,8 +354,4 @@ fn an_agent_presses_the_counter_on_a_live_device() {
     mcp.call("flui_act", json!({ "element": button, "action": "invoke" }))
         .unwrap_or_else(|error| panic!("pressing Increment failed: {error}"));
     mcp.read_until("count of 1", |tree| (count(tree) == Some(1)).then_some(()));
-    drop(mcp);
-
-    let _ = run.kill();
-    let _ = run.wait();
 }
