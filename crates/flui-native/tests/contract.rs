@@ -446,6 +446,21 @@ mod native_windows {
             "focus_loss_and_minimising_end_the_held_press",
             focus_loss_and_minimising_end_the_held_press,
         ),
+        // The mouse's hover rows run before the first injected touch. On a
+        // hosted `windows-latest` runner that touch starts the touch keyboard's
+        // host (`TabTip.exe`), and from then on the same rows fail where they
+        // passed before it: a capture lost outside the window no longer reads
+        // as a leave, and a leave's callback no longer brings the hover back.
+        // The system-key rows above stop closing the window then too, with the
+        // window still foreground and active.
+        (
+            "a_pointer_routed_mouse_hovers_the_window",
+            a_pointer_routed_mouse_hovers_the_window,
+        ),
+        (
+            "a_leave_callback_that_hovers_again_keeps_the_hover",
+            a_leave_callback_that_hovers_again_keeps_the_hover,
+        ),
         (
             "focus_loss_ends_a_touch_and_silences_its_tail",
             focus_loss_ends_a_touch_and_silences_its_tail,
@@ -493,14 +508,6 @@ mod native_windows {
         (
             "native_mouse_wheels_keep_hover_identity_and_signed_units",
             native_mouse_wheels_keep_hover_identity_and_signed_units,
-        ),
-        (
-            "a_pointer_routed_mouse_hovers_the_window",
-            a_pointer_routed_mouse_hovers_the_window,
-        ),
-        (
-            "a_leave_callback_that_hovers_again_keeps_the_hover",
-            a_leave_callback_that_hovers_again_keeps_the_hover,
         ),
         (
             "fractional_native_wheel_packets_preserve_observed_precision_and_source",
@@ -1579,12 +1586,6 @@ mod native_windows {
         // Direct system-key dispatch also supplies the owner thread's logical
         // Alt state. This is a synthetic default-processing fixture, not a
         // hardware-input or GetAsyncKeyState modifier-fidelity claim.
-        // FLUI_DIAG (temporary): who is active when the system key arrives.
-        eprintln!(
-            "FLUI_DIAG system key: foreground={} active={}",
-            unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() } == hwnd,
-            unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow() } == hwnd,
-        );
         let mut keyboard_state = ThreadKeyboardState::with_alt_pressed();
         // SAFETY: this wrapper owns HWND on its creating thread. The message
         // carries only integer F4, scan-code and documented Alt-context data.
