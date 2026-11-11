@@ -49,8 +49,8 @@ a route already on the stack. Changing it mid-flight would replace a running tra
 one at a different progress mapping.
 
 **D3 — Policy lives in packages.** `flui-material` maps `TargetPlatform` to a `PageTransition`
-in its theme and installs the matching `PageTransitions` in `MaterialApp`. `flui-cupertino`
-builds its route through the same trait.
+in its theme and installs, in `MaterialApp`, the `PageTransitions` the tree's `PlatformConvention`
+selects (ADR-0028). `flui-cupertino` builds its route through the same trait.
 
 **D4 — Shared transitions move down, not sideways.** A transition used by more than one package
 lives in `flui-widgets`. The iOS parallax slide moves out of `flui-cupertino` into

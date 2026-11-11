@@ -50,10 +50,12 @@ trybuild = { workspace = true }
 name = "platform_api_it"
 path = "tests/main.rs"
 
-# Compiler contracts invoke Cargo in a separate test process.
+# Compiler contracts invoke Cargo in a separate test process. The snapshots
+# name `WindowId::try_from_raw`, which only the `testing` feature declares.
 [[test]]
 name = "compile_fail"
 path = "tests/compile_fail.rs"
+required-features = ["testing"]
 
 # cargo-shear reports the trybuild compile-fail inputs as unlinked: the
 # `compile_fail` test hands them to rustc by glob, no module declares them.

@@ -50,7 +50,7 @@ use flui_view::environment::FocusTreeRoot;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
 
-use super::actions::{ActionChain, ActionChainProvider, as_node_context};
+use super::actions::{ActionChainProvider, FocusRecord};
 use super::focus_reveal::{FocusRevealScope, SharedRevealTarget};
 
 /// Reports whether this widget's node gained or lost the primary focus, with
@@ -648,7 +648,7 @@ pub struct FocusState {
     rect_provider_registration: Option<FocusNodeRegistration>,
     /// The `Actions` chain visible at this widget, recorded on the node so a
     /// `Shortcuts` above resolves intents from here (ADR-0079).
-    action_chain: Option<ActionChain>,
+    action_chain: Option<FocusRecord>,
     /// Generation-checked ownership of that record on the current node.
     context_registration: Option<FocusNodeRegistration>,
     /// Lifecycle-acquired rebuild capability used by the node subscription.
@@ -810,19 +810,22 @@ pub(crate) fn request_autofocus(
     }
 }
 
-/// Record the `Actions` chain visible at a widget on its focus `node`, and
-/// depend on it, so a changed chain is recorded again (ADR-0079). Shared by
-/// `Focus` and `FocusScope`: either widget's node can hold the primary focus,
-/// and a `Shortcuts` above resolves its intent from that node's record.
+/// Record the `Actions` chain visible at a widget and the platform convention
+/// it is built under on its focus `node`, and depend on both, so a changed
+/// one is recorded again (ADR-0079). Shared by `Focus` and `FocusScope`:
+/// either widget's node can hold the primary focus, and a `Shortcuts` above
+/// resolves its intent from that node's record.
 fn record_action_chain(
     ctx: &dyn BuildContext,
     node: &Rc<FocusNode>,
-    held: &mut Option<ActionChain>,
+    held: &mut Option<FocusRecord>,
     registration: &mut Option<FocusNodeRegistration>,
 ) {
-    let chain = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+    let chain = ctx
+        .depend_on::<ActionChainProvider, _>(|provider| provider.data().clone())
+        .map(|chain| FocusRecord::at(ctx, chain));
     let unchanged = match (&chain, &*held) {
-        (Some(new), Some(held)) => Rc::ptr_eq(new, held),
+        (Some(new), Some(held)) => new.same_as(held),
         (None, None) => true,
         _ => false,
     };
@@ -835,9 +838,7 @@ fn record_action_chain(
     }
     // Register the new record before the old token drops: the old one is no
     // longer current then, so dropping it leaves the new one in place.
-    *registration = chain
-        .as_ref()
-        .map(|chain| node.register_context(as_node_context(chain)));
+    *registration = chain.as_ref().map(|record| record.register_on(node));
     *held = chain;
 }
 
@@ -931,7 +932,7 @@ impl ViewState<Focus> for FocusState {
             let replacement_context_registration = self
                 .action_chain
                 .as_ref()
-                .map(|chain| replacement.register_context(as_node_context(chain)));
+                .map(|record| record.register_on(&replacement));
             let replacement_focus_subscription = self.add_focus_listener(&replacement);
 
             // Observe the replacement before the core transaction delivers
@@ -1308,7 +1309,7 @@ pub struct FocusScopeState {
     focus_subscription: Option<Subscription>,
     /// The `Actions` chain visible at this scope, recorded on its backing
     /// node: the node itself can hold the primary focus (ADR-0079).
-    action_chain: Option<ActionChain>,
+    action_chain: Option<FocusRecord>,
     /// Generation-checked ownership of that record.
     context_registration: Option<FocusNodeRegistration>,
 }
@@ -1414,11 +1415,10 @@ impl ViewState<FocusScope> for FocusScopeState {
             replacement.set_traversal_edge_behavior(edge);
         }
         let replacement_subscription = self.add_focus_listener(replacement.as_focus_node());
-        let replacement_context_registration = self.action_chain.as_ref().map(|chain| {
-            replacement
-                .as_focus_node()
-                .register_context(as_node_context(chain))
-        });
+        let replacement_context_registration = self
+            .action_chain
+            .as_ref()
+            .map(|record| record.register_on(replacement.as_focus_node()));
         let attachment = self
             .attachment
             .take()

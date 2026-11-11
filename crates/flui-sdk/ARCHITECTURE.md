@@ -71,8 +71,8 @@ constructors and parser (ADR-0173). Package authors can handle malformed authore
 language tags without depending on an internal crate. The surface and identity
 tests pin this export alongside the locale value.
 
-`platform::TargetPlatform` keys Material's `PageTransitionsTheme` and its
-`ThemeData::platform` (ADR-0221 D3). The page-transition hook it feeds,
+`platform::TargetPlatform` keys Material's `PageTransitionsTheme`, which resolves against the
+tree's `view::environment::PlatformConvention` (ADR-0221 D3). The page-transition hook it feeds,
 `widgets::PageTransitionBuilder`, `widgets::PageTransitions` and the shared
 `widgets::ParallaxPageTransition`, arrives through the whole `widgets`
 re-export; the surface test pins all four and the identity test the platform value.

@@ -30,9 +30,13 @@
 
 /// Target platform identification.
 ///
-/// Use [`TargetPlatform::current()`] for compile-time detection of the host
-/// platform. The `Unknown` variant covers targets that do not match any of
-/// the recognised platforms (for example unusual embedded targets).
+/// A widget reads the platform whose conventions it follows from
+/// `flui_view::environment::PlatformConvention::of`, which the runtime
+/// installs at the root; [`TargetPlatform::current()`] is the compile-time
+/// default only the app runner takes (a clippy `disallowed-methods` entry).
+/// The `Unknown` variant covers targets that do not match any of the
+/// recognised platforms (for example unusual embedded targets) and is the
+/// platform-neutral convention a tree outside a runtime follows.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -135,13 +139,6 @@ impl TargetPlatform {
             Self::Fuchsia => "fuchsia",
             Self::Unknown => "unknown",
         }
-    }
-}
-
-impl Default for TargetPlatform {
-    #[inline]
-    fn default() -> Self {
-        Self::current()
     }
 }
 
