@@ -760,7 +760,7 @@ impl<T: Clone + 'static> FormFieldState<T> {
 impl<T: Clone + 'static> StatefulView for FormField<T> {
     type State = FormFieldState<T>;
 
-    fn create_state(&self) -> FormFieldState<T> {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> FormFieldState<T> {
         FormFieldState::attach(self)
     }
 }

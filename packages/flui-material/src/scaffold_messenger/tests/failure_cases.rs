@@ -14,7 +14,7 @@ struct RebuildProbeState {
 }
 impl StatefulView for RebuildProbe {
     type State = RebuildProbeState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         RebuildProbeState {
             handle: Rc::clone(&self.handle),
         }

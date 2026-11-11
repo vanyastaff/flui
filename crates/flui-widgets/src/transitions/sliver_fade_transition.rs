@@ -1,5 +1,6 @@
 //! An animation-driven fade over a sliver subtree.
 
+use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_animation::{Animation, ProxyAnimation};
@@ -50,7 +51,7 @@ pub struct SliverFadeTransitionState {
 impl StatefulView for SliverFadeTransition {
     type State = SliverFadeTransitionState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SliverFadeTransitionState {
             opacity: ProxySlot::new(&self.opacity),
         }

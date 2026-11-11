@@ -105,8 +105,8 @@ static_assertions = { workspace = true }
 # The adapter is isolated from the production UI runtime-activation stack, but the
 # fixture tests still share assumptions about explicit install/clear pairing.
 serial_test = "4"
-# trybuild drives the `tests/ui/` compile-fail corpus: the column! 17-children
-# case and the `#[diagnostic::on_unimplemented]` messages on the view traits.
+# trybuild drives the `tests/ui/` compile-fail corpus: the
+# `#[diagnostic::on_unimplemented]` messages on the view traits.
 trybuild = { workspace = true }
 
 [[test]]

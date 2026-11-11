@@ -28,7 +28,7 @@
 
 use flui_native::HostWindow;
 use flui_native::{IOSSceneEvent, IOSSceneSessionId};
-use flui_view::{StatelessView, View};
+use flui_view::View;
 use flui_widgets::app_root;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -184,7 +184,7 @@ fn stop_process() {
 
 pub(super) fn run_ios<V>(root: V, config: AppConfig) -> Result<(), LaunchError>
 where
-    V: View + StatelessView + Clone + 'static,
+    V: View + Clone + 'static,
 {
     use flui_native::{IOSPlatform, Platform};
     // Before the platform, whose registries report only to a capture already installed.
@@ -291,7 +291,7 @@ fn bootstrap_ios<V>(
     host: Rc<dyn HostWindow>,
 ) -> anyhow::Result<super::installed_host::Installation>
 where
-    V: View + StatelessView + Clone + 'static,
+    V: View + Clone + 'static,
 {
     use std::sync::Arc;
 

@@ -195,7 +195,7 @@ struct LabelState {
 
 impl StatefulView for Label {
     type State = LabelState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         LabelState {
             text: self.text.clone(),
         }
@@ -655,7 +655,7 @@ struct CaretState {
 
 impl StatefulView for Caret {
     type State = CaretState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         CaretState {
             shown: self.shown.clone(),
         }

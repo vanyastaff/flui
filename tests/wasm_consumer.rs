@@ -27,7 +27,7 @@ struct CountedState {
 impl StatefulView for Counted {
     type State = CountedState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         CountedState {
             view: self.clone(),
             listener: None,

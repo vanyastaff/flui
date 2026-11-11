@@ -172,7 +172,7 @@ impl fmt::Debug for GestureInspectorOverlayState {
 impl StatefulView for GestureInspectorOverlay {
     type State = GestureInspectorOverlayState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         GestureInspectorOverlayState {
             positions: Rc::default(),
         }
@@ -369,7 +369,7 @@ impl fmt::Debug for OverlayLayerState {
 impl StatefulView for OverlayLayer {
     type State = OverlayLayerState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         OverlayLayerState {
             controller: self.controller.clone(),
             live: None,

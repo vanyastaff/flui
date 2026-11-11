@@ -300,7 +300,7 @@ mod emission {
         }
         tree.get_mut(parent)
             .expect("seeded parent resolves")
-            .set_child_ids(ids);
+            .set_child_ids(&ids);
     }
 
     /// The S_3 permutation corpus (FR-024(b)) on the slab:

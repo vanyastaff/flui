@@ -62,7 +62,7 @@ pub struct AnimatedOpacityState {
 impl StatefulView for AnimatedOpacity {
     type State = AnimatedOpacityState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // A non-finite opacity paints as transparent.
         let animation = ImplicitMotion::new("AnimatedOpacity", self.opacity, 0.0, &self.motion);
         let proxy = ProxyAnimation::new(Rc::new(animation.stream()));

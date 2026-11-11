@@ -1135,7 +1135,7 @@ impl std::fmt::Debug for DefaultTabControllerState {
 impl StatefulView for DefaultTabController {
     type State = DefaultTabControllerState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DefaultTabControllerState {
             controller: TabController::new(self.length, self.initial_index)
                 .with_motion(self.motion.clone()),

@@ -6,12 +6,13 @@
 use std::any::TypeId;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::panic::AssertUnwindSafe;
+
 use std::rc::Rc;
 
 #[cfg(test)]
 use flui_foundation::generation::Generation;
 use flui_foundation::generation::{GenSlots, Release};
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_rendering::{parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell};
 use slab::Slab;
@@ -20,7 +21,7 @@ use crate::element::ElementKind;
 use crate::owner::LifecycleHook;
 use crate::view::{ElementBase, View};
 
-use super::containment::ChildHookPanic;
+use super::containment::{ChildHookPanic, contain_window};
 
 mod inherited_scope;
 pub(crate) use inherited_scope::InheritedScope;
@@ -357,8 +358,19 @@ impl ElementNode {
     /// previous list wholesale — the caller is responsible for having
     /// already inserted / removed the corresponding slab nodes so the
     /// stored ids all resolve.
-    pub(crate) fn set_child_ids(&mut self, ids: Vec<ElementId>) {
-        self.child_ids = ids;
+    ///
+    /// The list keeps its buffer, so a rebuild that keeps the child count
+    /// allocates nothing. A list that outgrows its buffer, or shrank to
+    /// under a quarter of it, gets a buffer of exactly its own size: growing
+    /// in place would round a one-child list up to four slots.
+    pub(crate) fn set_child_ids(&mut self, ids: &[ElementId]) {
+        let capacity = self.child_ids.capacity();
+        if capacity < ids.len() || capacity / 4 > ids.len() {
+            self.child_ids = ids.to_vec();
+        } else {
+            self.child_ids.clear();
+            self.child_ids.extend_from_slice(ids);
+        }
     }
 
     fn commit_child_replacement(
@@ -964,11 +976,7 @@ impl ElementTree {
         // unwind that follows, the same way the out-parameter it replaces
         // always did.
         let mut inserted: Option<InsertedChild> = None;
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a view's create_element and mount run contained; inserts get undone"
-        )]
-        let mount_result = std::panic::catch_unwind(AssertUnwindSafe(|| -> ElementId {
+        let mount_result = contain_window(|| -> ElementId {
             let mut element = view.create_element();
 
             // Read the parent's render-tree propagation context in ONE fresh,
@@ -1041,7 +1049,7 @@ impl ElementTree {
                 .mount(Some(parent), slot, owner);
 
             id
-        }));
+        });
 
         let id = match mount_result {
             Ok(id) => id,
@@ -2251,11 +2259,7 @@ impl ElementTree {
         let stored_key = view.key().map(ViewKey::clone_key);
         let update_result = {
             let element = node.element_mut();
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: an element's update panic is recorded and the child is replaced"
-            )]
-            std::panic::catch_unwind(AssertUnwindSafe(|| element.update(view, owner)))
+            contain_window(|| element.update(view, owner))
         };
         if let Err(payload) = update_result {
             return Err(ChildHookPanic {
@@ -2288,18 +2292,14 @@ impl ElementTree {
 
     /// Activate an element (re-insertion after deactivation).
     pub fn activate(&mut self, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: an activated subtree's panic is recorded before it propagates"
-        )]
-        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            self.activate_subtree(id, owner);
-        })) {
+        let mut caught = FirstPanic::new();
+        caught.contain(|| self.activate_subtree(id, owner));
+        if caught.is_held() {
             // Public activation has no substituting caller to consume the
             // handoff. Clear it before resuming so a caught unwind cannot
             // suppress an unrelated later recovery on this owner.
             owner.take_staged_lifecycle_panic();
-            std::panic::resume_unwind(payload);
+            caught.resume();
         }
     }
 
@@ -2683,13 +2683,7 @@ fn retake_inactive_global_key(
     // `StatefulBehavior::on_activate`) stages it under its own identity
     // and re-raises, so this still observes the unwind.
     owner.arm_lifecycle_panic_handoff();
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a retaken subtree's activate panic is recorded, not unwound"
-    )]
-    if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        tree.activate_subtree(candidate_id, owner);
-    })) {
+    if let Err(payload) = contain_window(|| tree.activate_subtree(candidate_id, owner)) {
         let staged = owner.take_staged_lifecycle_panic();
         return Some(Err(ChildHookPanic {
             inserted: Some(inserted),
@@ -2718,11 +2712,7 @@ fn retake_inactive_global_key(
         .expect("BUG: a retaken candidate must still be live for its own update");
     let update_result = {
         let element = node.element_mut();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a retaken element's update panic is recorded, not unwound"
-        )]
-        std::panic::catch_unwind(AssertUnwindSafe(|| element.update(view, owner)))
+        contain_window(|| element.update(view, owner))
     };
 
     match update_result {
@@ -2896,13 +2886,7 @@ fn retake_active_global_key(
     // own (see `StatefulBehavior::on_activate`) stages it under its own
     // identity and re-raises, so this still observes the unwind.
     owner.arm_lifecycle_panic_handoff();
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a retaken subtree's activate panic is recorded, not unwound"
-    )]
-    if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        tree.activate_subtree(candidate_id, owner);
-    })) {
+    if let Err(payload) = contain_window(|| tree.activate_subtree(candidate_id, owner)) {
         let staged = owner.take_staged_lifecycle_panic();
         return Some(Err(ChildHookPanic {
             inserted: Some(inserted),
@@ -2931,11 +2915,7 @@ fn retake_active_global_key(
         .expect("BUG: a retaken candidate must still be live for its own update");
     let update_result = {
         let element = node.element_mut();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a retaken element's update panic is recorded, not unwound"
-        )]
-        std::panic::catch_unwind(AssertUnwindSafe(|| element.update(view, owner)))
+        contain_window(|| element.update(view, owner))
     };
 
     match update_result {
@@ -3062,7 +3042,7 @@ mod tests {
     impl crate::StatefulView for ActiveRetakePanicsOnActivate {
         type State = ActiveRetakePanicState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             ActiveRetakePanicState {
                 armed: std::rc::Rc::clone(&self.armed),
             }
@@ -3182,12 +3162,10 @@ mod tests {
             0,
             &mut owner.element_owner_mut(),
         );
-        tree.get_mut(root)
-            .expect("root")
-            .set_child_ids(vec![wrapper]);
+        tree.get_mut(root).expect("root").set_child_ids(&[wrapper]);
         tree.get_mut(wrapper)
             .expect("wrapper")
-            .set_child_ids(vec![keyed]);
+            .set_child_ids(&[keyed]);
 
         assert!(
             tree.get(keyed)
@@ -3269,19 +3247,19 @@ mod tests {
         );
         tree.get_mut(root)
             .expect("root")
-            .set_child_ids(vec![donor, destination]);
+            .set_child_ids(&[donor, destination]);
         tree.get_mut(donor)
             .expect("donor")
-            .set_child_ids(vec![candidate]);
+            .set_child_ids(&[candidate]);
         tree.get_mut(candidate)
             .expect("candidate")
-            .set_child_ids(vec![first_boundary, second_boundary]);
+            .set_child_ids(&[first_boundary, second_boundary]);
         tree.get_mut(first_boundary)
             .expect("first boundary")
-            .set_child_ids(vec![nested]);
+            .set_child_ids(&[nested]);
         tree.get_mut(destination)
             .expect("destination")
-            .set_child_ids(vec![prefix, suffix]);
+            .set_child_ids(&[prefix, suffix]);
 
         let destination_render = tree
             .get(destination)

@@ -57,7 +57,7 @@ use flui::testing::rendering::render_snapshot;
 use flui::testing::replay::PointerScript;
 use flui::testing::{HeadlessBinding, MountOptions, MountOwners};
 use flui::view::environment::{FocusTreeRoot, GestureArenaScope};
-use flui::widgets::{app_root, column};
+use flui::widgets::app_root;
 
 /// The tree `flui create`'s counter template builds: `Center` → `Column` →
 /// prompt `Text` / count `Text` / `ElevatedButton`, driven by a `Signal`
@@ -73,30 +73,26 @@ struct AgentCounterState {
 impl StatefulView for AgentCounter {
     type State = AgentCounterState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         AgentCounterState {
-            count: Signal::default(),
+            count: ctx.signal(0),
         }
     }
 }
 
 impl ViewState<AgentCounter> for AgentCounterState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.count = ctx.signal(0);
-    }
-
     fn build(&self, _view: &AgentCounter, ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count;
 
         Center::new().child(
-            Column::new(column![
+            Column::new((
                 Text::new("You have pushed the button this many times:"),
                 SizedBox::height(16.0),
                 Text::new(count.get(ctx).to_string()),
                 SizedBox::height(16.0),
                 ElevatedButton::new(Text::new("Increment"))
                     .on_pressed(move |cx| count.update(cx, |n| *n += 1)),
-            ])
+            ))
             .main_axis_alignment(MainAxisAlignment::Center),
         )
     }

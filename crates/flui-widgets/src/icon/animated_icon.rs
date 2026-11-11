@@ -154,7 +154,7 @@ impl fmt::Debug for AnimatedIconState {
 impl StatefulView for AnimatedIcon {
     type State = AnimatedIconState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let draw = AnimationController::builder(PathEffect::DRAW_DURATION)
             .debug_label("PathEffect")
             .build_on(None);

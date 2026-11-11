@@ -257,7 +257,7 @@ struct MenuPanelState {
 impl StatefulView for MenuPanel {
     type State = MenuPanelState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         MenuPanelState {
             nodes: self
                 .items

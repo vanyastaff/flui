@@ -256,7 +256,7 @@ struct ClosesAgainOnDetachState {
 impl StatefulView for ClosesAgainOnDetach {
     type State = ClosesAgainOnDetachState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ClosesAgainOnDetachState {
             view: self.clone(),
             observation: None,
@@ -451,7 +451,7 @@ fn a_mouse_and_a_touch_get_their_own_preset_and_min_target() {
     let mut host = HeadlessHost::new(window);
     let count = Rc::new(Cell::new(0));
     let output = Rc::clone(&count);
-    host.attach(&flui_widgets::Stack::new(flui_widgets::row![
+    host.attach(&flui_widgets::Stack::new((
         flui_widgets::SizedBox::new(200.0, 200.0),
         flui_widgets::Positioned::new(
             flui_widgets::HitSlop::new().child(
@@ -460,11 +460,11 @@ fn a_mouse_and_a_touch_get_their_own_preset_and_min_target() {
                     .child(flui_widgets::SizedBox::new(20.0, 20.0).child(
                         flui_widgets::ColoredBox::new(flui_painting::styling::Color::RED),
                     )),
-            )
+            ),
         )
         .left(90.0)
         .top(90.0),
-    ]))
+    )))
     .expect("attach");
     let _ = host.pump(Duration::from_millis(16));
 

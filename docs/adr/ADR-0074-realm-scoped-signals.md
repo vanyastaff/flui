@@ -39,7 +39,7 @@ state went to the ecosystem (Provider, Riverpod, Bloc, GetX, MobX), so every siz
 one and pays a rebuild tax the framework cannot see. `setState` has no granularity — it rebuilds
 the whole `State` — and the only escape is slicing widgets by hand.
 
-FLUI was at exactly that floor: `ViewState::set_state_scheduled` (whole element),
+FLUI was at exactly that floor: a state field plus a `RebuildHandle` rebuild (whole element),
 `ValueNotifier`/`ChangeNotifier` + `RebuildHandle` (one listener closure per element), and
 `InheritedView` + `depend_on` (per element, per provider type, all-or-nothing, #1090). These are
 wiring, not an application-state model.
@@ -137,7 +137,7 @@ impl<T> Signal<T> {
 `SignalError` is `Released`, `ForeignGraph`, `WrittenDuringBuild`, `CreatedDuringBuild`,
 `Reentrant` (`#[non_exhaustive]`).
 
-- **Creation is owned.** The idiom is `cx.signal(value)` from `init_state` (or
+- **Creation is owned.** The idiom is `cx.signal(value)` from `create_state` (or
   `did_change_dependencies`): the slot is owned by that element and released when it unmounts.
   App-level state uses `Reactive::signal(value)`, released with the UI runtime;
   `Reactive::signal_owned_by(element, value)` is the explicit form. All have `try_` variants.
@@ -280,14 +280,18 @@ nobody; a field reader still rebuilds on its own field after an unrelated change
 **Counter** — the handle is `Copy`; the write happens in the tap callback, outside `build`:
 
 ```rust
-struct CounterState { count: Option<Signal<u32>> }
+struct CounterState { count: Signal<u32> }
+
+impl StatefulView for Counter {
+    type State = CounterState;
+    fn create_state(&self, cx: &dyn LifecycleContext) -> CounterState {
+        CounterState { count: cx.signal(0u32) }              // owned by this element
+    }
+}
 
 impl ViewState<Counter> for CounterState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        self.count = Some(cx.signal(0u32));                  // owned by this element
-    }
     fn build(&self, _v: &Counter, cx: &dyn BuildContext) -> impl IntoView {
-        let count = self.count.expect("BUG: init_state ran before build");
+        let count = self.count;
         let r = cx.reactive();
         Column::new((
             Text::new(format!("{}", count.get(cx))),         // this element is a reader
@@ -309,7 +313,7 @@ A headless test builds the model with the binding's `reactive()`, writes with
 
 ### 5.7 Rules without hooks
 
-- A signal is created explicitly (`cx.signal(v)` in `init_state`, or `r.signal(v)` at the app
+- A signal is created explicitly (`cx.signal(v)` in `create_state`, or `r.signal(v)` at the app
   root) and held in a field. There is no `use_signal()` whose identity is its call index; `build`
   may read signals in any order, conditionally, or in loops.
 - `build` stays a pure function of `(View, State, reads)`; reads are recorded, not ordered.
@@ -341,10 +345,11 @@ them, writes, pumps a frame, and asserts the value seen and **which elements reb
 
 ### 5.10 `setState`, `ValueNotifier`, `InheritedView` — what happens to them
 
-Nothing is removed.
+What stays, and what each is for:
 
-- `set_state_scheduled` stays for widget-local, short-lived state read by one element; shared,
-  long-lived state read by a handful of elements is a signal.
+- Widget-local, short-lived state read by one element is a field of the state, and the state
+  rebuilds its element through the `RebuildHandle` it takes in `create_state`; shared, long-lived
+  state read by a handful of elements is a signal.
 - **Choosing by reader count.** A signal write costs about 1.3–1.8 µs per reader on top of one
   `setState` on the readers' common parent (§8.1, 600 readers), because each reader is scheduled
   individually. **A value with fewer than ~50 readers is a `Signal`; a value read by hundreds of

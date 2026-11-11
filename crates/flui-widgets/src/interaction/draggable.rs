@@ -733,7 +733,7 @@ impl View for FeedbackAnchor {
 impl StatefulView for FeedbackAnchor {
     type State = FeedbackAnchorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FeedbackAnchorState {
             place: Rc::clone(&self.place),
         }
@@ -804,7 +804,7 @@ impl std::fmt::Debug for DraggableState {
 impl StatefulView for Draggable {
     type State = DraggableState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DraggableState {
             source: Rc::new(Source {
                 config: RefCell::new(SourceConfig::of(self)),
@@ -882,7 +882,7 @@ impl DraggableState {
         let Some(policy) = self.policy.clone() else {
             return;
         };
-        let GesturePolicy { arena, settings } = policy.clone();
+        let (arena, settings) = (policy.arena().clone(), policy.settings().clone());
         let built_for = BuiltFor {
             policy,
             trigger,

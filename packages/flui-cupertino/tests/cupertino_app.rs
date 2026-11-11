@@ -147,7 +147,7 @@ struct BrightnessRootState {
 impl flui_sdk::view::StatefulView for BrightnessRoot {
     type State = BrightnessRootState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         BrightnessRootState {
             source: Rc::clone(&self.source),
         }

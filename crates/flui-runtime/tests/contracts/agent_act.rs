@@ -16,7 +16,7 @@ use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::Signal;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook};
 use flui_view::prelude::*;
-use flui_widgets::{Center, Column, RawButton, Text, column};
+use flui_widgets::{Center, Column, RawButton, Text};
 use parking_lot::Mutex;
 
 /// A button named "Go" that moves under a new parent each time it is pressed, so every press
@@ -33,18 +33,14 @@ struct MovingState {
 impl StatefulView for Moving {
     type State = MovingState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         MovingState {
-            moved: Signal::default(),
+            moved: ctx.signal(0),
         }
     }
 }
 
 impl ViewState<Moving> for MovingState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.moved = ctx.signal(0);
-    }
-
     fn build(&self, view: &Moving, ctx: &dyn BuildContext) -> impl IntoView {
         let moved = self.moved;
         let presses = Arc::clone(&view.presses);
@@ -57,11 +53,11 @@ impl ViewState<Moving> for MovingState {
         } else {
             Center::new().child(go).into_view().boxed()
         };
-        Column::new(column![
+        Column::new((
             go,
             RawButton::new(Text::new("Same")).on_press(|_| {}),
             RawButton::new(Text::new("Same")).on_press(|_| {}),
-        ])
+        ))
     }
 }
 

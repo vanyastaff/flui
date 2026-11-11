@@ -5,6 +5,7 @@ use flui_objects::RenderBackdropFilter;
 use flui_painting::paint::{BlendMode, ImageFilter};
 use flui_rendering::layer::BackdropGroupKey;
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::LifecycleContext;
 use flui_view::prelude::{BuildContext, BuildContextExt, StatefulView, StatelessView, ViewState};
 use flui_view::{
     BoxedView, Child, CreationSite, InheritedView, IntoView, RenderView, View, ViewExt,
@@ -169,7 +170,7 @@ pub struct BackdropGroupState {
 impl StatefulView for BackdropGroup {
     type State = BackdropGroupState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         BackdropGroupState {
             key: BackdropGroupKey::new(),
         }

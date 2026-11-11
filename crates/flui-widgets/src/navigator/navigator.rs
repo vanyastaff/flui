@@ -2585,7 +2585,7 @@ impl View for Navigator {
 impl StatefulView for Navigator {
     type State = NavigatorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         NavigatorState {
             shared: Arc::clone(&self.handle.shared),
         }

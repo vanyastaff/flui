@@ -58,7 +58,7 @@ impl CounterAppState {
 impl StatefulView for CounterApp {
     type State = CounterAppState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.count.store(self.initial, Ordering::Relaxed);
         CounterAppState {
             count: Arc::clone(&self.count),

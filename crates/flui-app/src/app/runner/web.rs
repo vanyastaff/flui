@@ -1,4 +1,4 @@
-use flui_view::{StatelessView, View};
+use flui_view::View;
 use flui_widgets::app_root;
 
 use super::frame_pacing::{FallbackGate, WakeAction, wake_action};
@@ -14,7 +14,7 @@ use crate::app::AppConfig;
 #[cfg(target_arch = "wasm32")]
 pub(super) fn run_web<V>(root: V, config: AppConfig) -> Result<(), crate::app::LaunchError>
 where
-    V: View + StatelessView + Clone + 'static,
+    V: View + Clone + 'static,
 {
     use std::sync::Arc;
 
@@ -57,7 +57,7 @@ where
     /// half-built page.
     fn bootstrap_web<V>(root: V, config: AppConfig) -> anyhow::Result<()>
     where
-        V: View + StatelessView + Clone + 'static,
+        V: View + Clone + 'static,
     {
         fn owner_platform_installed<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> R {
             with_owner_platform(f)

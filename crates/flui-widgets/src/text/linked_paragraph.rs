@@ -143,7 +143,7 @@ impl View for LinkedParagraph {
 impl StatefulView for LinkedParagraph {
     type State = LinkedParagraphState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let live = Rc::new(LiveLinks {
             on_link: RefCell::new(Rc::clone(&self.on_link)),
             mounted: Cell::new(true),
@@ -207,8 +207,8 @@ pub(super) struct LinkedParagraphState {
 /// `link`'s tap recognizer, in `mount`'s arena.
 fn tap(live: &Rc<LiveLinks>, mount: &Mount, link: TextLink) -> Rc<TapGestureRecognizer> {
     let (live, writer) = (Rc::clone(live), mount.writer.clone());
-    TapGestureRecognizer::builder(mount.policy.arena.clone())
-        .settings(mount.policy.settings.clone())
+    TapGestureRecognizer::builder(mount.policy.arena().clone())
+        .settings(mount.policy.settings().clone())
         .on_tap(move |_| writer.write(|cx| live.open(cx, &link)))
         .build()
 }

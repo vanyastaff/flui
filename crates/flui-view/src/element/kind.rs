@@ -273,7 +273,7 @@ impl ElementKind {
     {
         Self::Stateful(Box::new(Element::<V, Single, StatefulBehavior<V>>::new(
             view,
-            StatefulBehavior::new(view),
+            StatefulBehavior::new(),
         )))
     }
 
@@ -326,7 +326,7 @@ impl ElementKind {
         Self::RenderVariable(Box::new(
             Element::<V, Variable, StatefulRenderBehavior<V>>::new(
                 view,
-                StatefulRenderBehavior::new(view),
+                StatefulRenderBehavior::new(),
             ),
         ))
     }
@@ -340,7 +340,7 @@ impl ElementKind {
     {
         Self::Stateful(Box::new(Element::<V, Single, AnimatedBehavior<V>>::new(
             view,
-            AnimatedBehavior::new(view),
+            AnimatedBehavior::new(),
         )))
     }
 

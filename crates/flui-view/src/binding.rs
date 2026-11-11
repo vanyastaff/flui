@@ -45,6 +45,7 @@ use std::{
 
 use flui_foundation::ElementId;
 use flui_foundation::inspect::{SnapshotError, SnapshotNode, SnapshotQuery};
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::FocusManager;
 use flui_rendering::pipeline::PipelineCell;
 use tree_cell::TreeCell;
@@ -655,20 +656,20 @@ impl WidgetsBinding {
         observer: std::sync::Arc<dyn flui_foundation::observe::TreeObserver>,
     ) {
         let mut inner = self.inner.write();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a tree observer's replay runs contained so install can abort"
-        )]
-        let replay_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            inner.element_tree.replay_mounts(&*observer);
-        }))
-        .is_ok();
-        if replay_ok {
+        let mut caught = FirstPanic::new();
+        if caught
+            .contain(|| inner.element_tree.replay_mounts(&*observer))
+            .is_some()
+        {
             inner.build_owner.set_tree_observer(observer);
         } else {
-            tracing::error!(
-                "TreeObserver panicked during seeded replay; install aborted, nothing registered"
-            );
+            // The replay's payload is destroyed under containment when
+            // `caught` drops; the log is contained the same way.
+            FirstPanic::new().contain(|| {
+                tracing::error!(
+                    "TreeObserver panicked during seeded replay; install aborted, nothing registered"
+                );
+            });
         }
     }
 
@@ -893,25 +894,16 @@ impl WidgetsBinding {
             }
             keys
         };
-        let mut first = None;
+        let mut first = FirstPanic::new();
         for key in keys {
             if preserving {
                 // The host already owns the failure this close preserves.
                 crate::drop_contained(key);
             } else {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: a closed key's drop runs contained; the first panic is kept"
-                )]
-                crate::lifecycle::preserve(
-                    &mut first,
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(key))).err(),
-                );
+                first.contain(|| drop(key));
             }
         }
-        if let Some(payload) = first {
-            std::panic::resume_unwind(payload);
-        }
+        first.resume();
     }
 
     // ========================================================================
@@ -1397,28 +1389,18 @@ impl WidgetsBinding {
     }
 
     pub(crate) fn notify_lifecycle(&self, state: AppLifecycleState) {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: observer callbacks run contained; later observers still hear it"
-        )]
-        let mut first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // An observer that panics ends the observers' walk, as any binding
+        // notification does; the scoped subscribers still hear the state,
+        // and the observer's panic is the one resumed.
+        let mut first = FirstPanic::new();
+        first.contain(|| {
             let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
             for observer in &observers {
                 observer.did_change_app_lifecycle_state(state);
             }
-        }))
-        .err();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the lifecycle drain runs contained and keeps the first failure"
-        )]
-        crate::lifecycle::preserve(
-            &mut first,
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.lifecycle.drain())).err(),
-        );
-        if let Some(payload) = first {
-            std::panic::resume_unwind(payload);
-        }
+        });
+        first.contain(|| self.lifecycle.drain());
+        first.resume();
     }
 
     /// Get the number of elements in the tree.
@@ -1675,7 +1657,7 @@ mod tests {
     impl crate::StatefulView for RegistryStateView {
         type State = RegistryState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             RegistryState(self.value)
         }
     }
@@ -1761,7 +1743,7 @@ mod tests {
     impl crate::StatefulView for KeyedLookupParent {
         type State = RegistryState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             RegistryState(self.value)
         }
     }
@@ -1857,7 +1839,7 @@ mod tests {
     impl crate::StatefulView for DisposeMarkerView {
         type State = DisposeMarkerState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             DisposeMarkerState {
                 disposed: Arc::clone(&self.disposed),
             }

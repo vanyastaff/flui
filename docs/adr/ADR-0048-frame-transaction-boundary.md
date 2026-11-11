@@ -374,7 +374,7 @@ benchmarks showed no statistically supported regression above 5%.
 - A `did_unmount_render_object` panic can leave a registration owned by that
   hook's own lane behind; framework tree removal still continues.
 - A mounted state whose initialization never completed skips `dispose`;
-  `create_state` therefore must not acquire lifecycle resources.
+  what `create_state` acquires is therefore released by the state's drop, not by `dispose`.
 - `ParentDataView` validation and parent-data application straddle the bounded
   child regions and are not yet locally recovered.
 - A deterministic update panic can oscillate between the failing view and its

@@ -177,7 +177,7 @@ No widget can reach haptics today.
    `unstable-input` feature on the `flui-sdk` and facade re-exports, kept until every backend
    passes the degradation table and the conformance rows. The Stable
    `perform(HapticFeedback)` is unchanged until the gate is lifted.
-10. **Widget path.** Widgets reach haptics through a capability acquired in `init_state` or
+10. **Widget path.** Widgets reach haptics through a capability acquired in `create_state`, `init_state` or
     `did_change_dependencies` (`LifecycleContext`, ADR-0078), bound to the element's
     presentation and owner thread. An inherited subtree switch turns it off: requests under it
     resolve to `Suppressed`. Headless resolves `FramePresented` at the harness's frame boundary.

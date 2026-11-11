@@ -24,7 +24,7 @@ struct StorageRoot {
 impl StatefulView for StorageRoot {
     type State = Self;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.clone()
     }
 }

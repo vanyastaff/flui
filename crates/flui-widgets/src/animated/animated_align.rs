@@ -99,7 +99,7 @@ pub struct AnimatedAlignState {
 impl StatefulView for AnimatedAlign {
     type State = AnimatedAlignState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let notifications = Rc::new(ChangeNotifier::new());
         let alignment = if self.alignment.to_vector().iter().all(|v| v.is_finite()) {
             self.alignment

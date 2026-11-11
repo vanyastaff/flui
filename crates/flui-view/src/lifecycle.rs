@@ -3,12 +3,11 @@
 //! Two observations share one presentation: the app lifecycle state, and the
 //! host's one-off system notices ([`HostNotice`]). Both run on the delivery
 //! machinery of [`crate::observation`].
-pub(crate) use crate::observation::preserve;
-use crate::observation::{CloseWindow, Observation, Panic, Phase, Subscription, WeakObservation};
+use crate::observation::{CloseWindow, Observation, Phase, Subscription, WeakObservation};
+use flui_foundation::panic::FirstPanic;
 use flui_platform::HostNotice;
 use flui_scheduler::AppLifecycleState;
 use std::cell::Cell;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 
 /// The presentation has closed or no longer accepts subscriptions.
@@ -242,10 +241,8 @@ impl LifecycleSource {
     /// All eligible callbacks run before the first panic resumes.
     pub fn drain(&self) {
         let mut first = self.states.drain();
-        preserve(&mut first, self.notices.drain());
-        if let Some(payload) = first {
-            resume_unwind(payload);
-        }
+        first.absorb(self.notices.drain());
+        first.resume();
     }
     /// Invalidate capabilities and release callbacks before widget disposal.
     /// Cleanup completes before any callback-capture destructor panic resumes.
@@ -320,20 +317,16 @@ impl std::fmt::Debug for LifecycleCloseWindow {
 }
 impl Drop for LifecycleSource {
     fn drop(&mut self) {
-        let mut first: Option<Panic> = None;
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: lifecycle releases run contained so Drop keeps the first failure"
-        )]
-        let failure = catch_unwind(AssertUnwindSafe(|| {
+        // A release's failure comes first; one that escapes both releases
+        // comes after it. A drop raises neither: the payload is discarded
+        // when `first` drops.
+        let mut first = FirstPanic::new();
+        let mut escaped = FirstPanic::new();
+        escaped.contain(|| {
             self.states.release(&mut first);
             self.notices.release(&mut first);
-        }))
-        .err();
-        preserve(&mut first, failure);
-        if let Some(payload) = first {
-            flui_foundation::panic::discard_payload(payload);
-        }
+        });
+        first.absorb(escaped);
     }
 }
 
@@ -341,6 +334,7 @@ impl Drop for LifecycleSource {
 mod tests {
     use super::*;
     use AppLifecycleState::{Detached, Hidden, Inactive, Resumed};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::{cell::RefCell, rc::Rc};
     static_assertions::assert_not_impl_any!(LifecycleHandle: Send, Sync);
     static_assertions::assert_not_impl_any!(LifecycleSubscription: Send, Sync);

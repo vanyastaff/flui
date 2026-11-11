@@ -513,7 +513,7 @@ impl std::fmt::Debug for ShortcutsState {
 impl StatefulView for Shortcuts {
     type State = ShortcutsState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ShortcutsState {
             focus_manager: None,
         }
@@ -917,7 +917,7 @@ impl std::fmt::Debug for DefaultFocusTraversalState {
 impl StatefulView for DefaultFocusTraversal {
     type State = DefaultFocusTraversalState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DefaultFocusTraversalState {
             focus_owner: None,
             keys: FocusNode::with_debug_label("Shortcuts"),

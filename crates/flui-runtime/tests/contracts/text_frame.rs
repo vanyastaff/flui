@@ -17,7 +17,7 @@ struct AuthoredTextState(Arc<parking_lot::Mutex<Option<flui_view::RebuildHandle>
 impl StatefulView for AuthoredText {
     type State = AuthoredTextState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AuthoredTextState(Arc::clone(&self.rebuild))
     }
 }
@@ -263,7 +263,7 @@ struct TextFrameCompletionState {
 impl StatefulView for TextFrameCompletion {
     type State = TextFrameCompletionState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         TextFrameCompletionState {
             completed: Arc::clone(&self.completed),
             rebuild: Arc::clone(&self.rebuild),
@@ -449,7 +449,7 @@ struct CompletionScopeProbeState(
 impl StatefulView for CompletionScopeProbe {
     type State = CompletionScopeProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         CompletionScopeProbeState(std::rc::Rc::clone(&self.handle))
     }
 }
@@ -575,7 +575,7 @@ struct PartialTextFrameState(
 impl StatefulView for PartialTextFrame {
     type State = PartialTextFrameState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         PartialTextFrameState(
             std::rc::Rc::clone(&self.rebuild),
             std::rc::Rc::clone(&self.hit_test),
@@ -956,7 +956,7 @@ struct PreparedTextProbeState {
 impl StatefulView for PreparedTextProbe {
     type State = PreparedTextProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         PreparedTextProbeState {
             rebuild: std::rc::Rc::clone(&self.rebuild),
             post_frame: std::rc::Rc::clone(&self.post_frame),
@@ -1356,7 +1356,7 @@ struct ReentrantPreparedTextState(
 impl StatefulView for ReentrantPreparedText {
     type State = ReentrantPreparedTextState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ReentrantPreparedTextState(std::rc::Rc::clone(&self.rebuild))
     }
 }
@@ -1958,7 +1958,7 @@ struct LazyPreparedTextState;
 impl StatefulView for LazyPreparedText {
     type State = LazyPreparedTextState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         LazyPreparedTextState
     }
 }
@@ -2077,7 +2077,7 @@ struct PreparedSiblingState {
 impl StatefulView for PreparedSibling {
     type State = PreparedSiblingState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         PreparedSiblingState {
             animation: std::rc::Rc::clone(&self.animation),
             post_frame: std::rc::Rc::clone(&self.post_frame),
@@ -2287,7 +2287,7 @@ struct AuthorityAnimatedTextState {
 impl StatefulView for AuthorityAnimatedText {
     type State = AuthorityAnimatedTextState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AuthorityAnimatedTextState {
             owner: None,
             mounted: std::rc::Rc::clone(&self.mounted),

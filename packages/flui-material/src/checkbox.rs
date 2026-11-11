@@ -317,7 +317,7 @@ impl std::fmt::Debug for CheckboxState {
 impl StatefulView for Checkbox {
     type State = CheckboxState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // `Selected` is seeded from the initial view (`&self` here IS that
         // initial view; an indeterminate value counts as selected), so it is
         // correct before the first `build` rather than needing a same-frame

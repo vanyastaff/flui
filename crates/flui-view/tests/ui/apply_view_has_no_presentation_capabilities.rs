@@ -15,7 +15,7 @@ struct ProbeState;
 impl StatefulView for Probe {
     type State = ProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ProbeState
     }
 }

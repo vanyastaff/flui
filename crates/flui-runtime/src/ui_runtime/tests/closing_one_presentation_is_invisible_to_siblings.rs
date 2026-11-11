@@ -79,7 +79,7 @@ struct CloseCapabilities {
 impl StatefulView for CloseObserver {
     type State = Self;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.clone()
     }
 }
@@ -297,7 +297,7 @@ fn run_custom_key_child(fail: bool) {
     };
     let first = KeyedCloseView(key(1, Arc::clone(&first_drops)));
     let second = KeyedCloseView(key(2, Arc::clone(&second_drops)));
-    let root = flui_widgets::Column::new(flui_widgets::column![first, second]);
+    let root = flui_widgets::Column::new((first, second));
     ui_runtime
         .attach_root_widget(&root)
         .expect("custom global keys mount");
@@ -419,7 +419,7 @@ struct SiblingProbe {
 impl StatefulView for SiblingProbe {
     type State = Self;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.clone()
     }
 }
@@ -1828,7 +1828,7 @@ struct FailingTeardownState;
 impl StatefulView for FailingTeardownRoot {
     type State = FailingTeardownState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FailingTeardownState
     }
 }

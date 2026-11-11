@@ -153,7 +153,7 @@ impl WindowTitleBar {
 impl StatefulView for WindowTitleBar {
     type State = WindowChromeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         WindowChromeState::default()
     }
 }
@@ -203,7 +203,7 @@ impl WindowResizeArea {
 impl StatefulView for WindowResizeArea {
     type State = WindowChromeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         WindowChromeState::default()
     }
 }
@@ -268,7 +268,7 @@ impl WindowCaptionButton {
 impl StatefulView for WindowCaptionButton {
     type State = WindowChromeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         WindowChromeState::default()
     }
 }

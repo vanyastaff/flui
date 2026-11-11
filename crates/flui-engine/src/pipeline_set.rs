@@ -724,6 +724,11 @@ impl PipelineLibrary {
         &self.sets[self.current].1
     }
 
+    /// The format the selected set draws into.
+    pub(crate) fn current_format(&self) -> wgpu::TextureFormat {
+        self.sets[self.current].0
+    }
+
     /// The set of the selected format, for the pipelines its caches build on
     /// first use.
     pub(crate) fn current_mut(&mut self) -> &mut PipelineSet {

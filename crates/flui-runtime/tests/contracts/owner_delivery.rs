@@ -811,7 +811,7 @@ struct DeliveredAuthoredTextState(Rc<RefCell<Option<flui_view::RebuildHandle>>>)
 impl StatefulView for DeliveredAuthoredText {
     type State = DeliveredAuthoredTextState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DeliveredAuthoredTextState(Rc::clone(&self.rebuild))
     }
 }

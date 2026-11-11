@@ -258,7 +258,7 @@ pub(crate) struct ButtonStyleButtonCoreState {
 impl StatefulView for ButtonStyleButtonCore {
     type State = ButtonStyleButtonCoreState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ButtonStyleButtonCoreState {
             states: WidgetStatesController::default(),
             states_listener: None,

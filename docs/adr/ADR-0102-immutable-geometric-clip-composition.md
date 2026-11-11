@@ -138,14 +138,16 @@ row pins that ordinary frame's admission and corner/interior pixels.
 Inside an antialiased expression, a mask pixel whose every sample passes every
 leaf resolves to full coverage without the samples. The host derives that
 uniform interior from the lowered tape and mapping in the `f32` values the
-shader reads: a box of pixels whose whole square lies inside each intersected
-leaf (a rectangle's bounds, or the larger arm of a rounded rectangle or
-superellipse clear of its corners) and outside each subtracted leaf's bounds,
+shader reads: two boxes of pixels, each of whose squares lies inside each intersected
+leaf (a rectangle's bounds in both; a rounded rectangle's or
+superellipse's larger arm clear of its corners in the first and its other arm
+in the second, so the cross of the arms is skipped) and outside each subtracted
+leaf's bounds,
 with a margin for the shader's `f32` rounding. Admission charges one unit for
 an interior pixel and the full samples-times-leaves for every other pixel, so a
-window-sized clip pays for its edges: a 6016×3384 window under one antialiased
+window-sized clip pays for its corners: a 6016×3384 window under one antialiased
 rounded rectangle of radius 12 was 1,302,921,216 units and refused on every
-full frame, and is 26,655,876. Rotated or skewed mappings, path leaves and
+full frame, and is 21,578,580. Rotated or skewed mappings, path leaves and
 non-finite values have no interior, and their cost is unchanged. The interior
 never changes a coverage value: the public
 `an_antialiased_clip_resolves_its_interior_without_sampling` row reads clip

@@ -4,6 +4,7 @@
 //! four 90° steps of 300 ms every 1.5 s), the controller's registration over
 //! the indicator's life, and the static frame without ticks.
 
+use flui_view::LifecycleContext;
 use std::f64::consts::{FRAC_PI_2, TAU};
 use std::time::Duration;
 
@@ -168,15 +169,15 @@ fn zero_dt() {
 
 fn indicator_ticks_preserve_surrounding_paint_content() {
     use flui_painting::styling::Color;
-    use flui_widgets::{ColoredBox, row};
+    use flui_widgets::ColoredBox;
     let vsync = Vsync::new();
     let mut laid = lay_out_animated(
         VsyncScope::new(
             vsync.clone(),
-            Row::new(row![
+            Row::new((
                 SizedBox::new(160.0, 200.0).child(ColoredBox::new(Color::RED)),
                 ActivityIndicator::new(),
-            ]),
+            )),
         ),
         tight(200.0, 200.0),
         vsync,
@@ -322,7 +323,7 @@ impl flui_view::View for KeyedIndicator {
 
 impl flui_view::StatefulView for KeyedIndicator {
     type State = KeyedIndicatorState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         KeyedIndicatorState {
             registry: self.registry.clone(),
             inits: self.inits.clone(),

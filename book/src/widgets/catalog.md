@@ -28,7 +28,7 @@ let range = match NumericRange::try_new(volume.get(ctx), 0.0, 100.0, 5.0) {
     Err(error) => return Text::new(format!("Invalid volume range: {error}")).boxed(),
 };
 
-Column::new(column![
+Column::new((
     Slider::new(range)
         .label("Volume")
         .on_changed(move |cx, proposed| volume.set(cx, proposed)),
@@ -38,7 +38,7 @@ Column::new(column![
         Text::new("Additional settings"),
     )
     .on_changed(move |cx, proposed| expansion.set(cx, proposed)),
-])
+))
 .boxed()
 ```
 

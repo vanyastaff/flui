@@ -321,7 +321,7 @@ impl fmt::Debug for AnimateState {
 impl StatefulView for Animate {
     type State = AnimateState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // Bound to the ambient clock in `init_state`.
         let driver = AnimationController::builder(self.choreography.duration())
             .debug_label("Animate")

@@ -51,7 +51,7 @@
 //! impl StatefulView for Counter {
 //!     type State = CounterState;
 //!
-//!     fn create_state(&self) -> Self::State {
+//!     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
 //!         CounterState { count: self.initial }
 //!     }
 //! }
@@ -98,7 +98,6 @@ pub mod element;
 pub mod environment;
 mod inspect;
 pub mod key;
-pub mod macros;
 pub mod owner;
 pub mod persist;
 pub mod reactive;

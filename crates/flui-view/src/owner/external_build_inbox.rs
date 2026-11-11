@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ElementId, RebuildReasons};
 use parking_lot::Mutex;
 
@@ -243,31 +244,19 @@ impl ExternalBuildInbox {
         has_fresh_work: bool,
         request_frame: Option<&(dyn Fn() + Send + Sync)>,
     ) {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the frame request hook runs contained so the caller is not unwound"
-        )]
-        let wake = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.request_frame_if_needed(has_fresh_work, request_frame);
-        }));
-        if let Err(payload) = wake {
+        let mut wake = FirstPanic::new();
+        wake.contain(|| self.request_frame_if_needed(has_fresh_work, request_frame));
+        if let Some(payload) = wake.held() {
             // A panicking log is contained too, so the report never unwinds
-            // into the caller either.
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a panicking log is contained so the report never unwinds"
-            )]
-            let report = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // into the caller either. Both payloads are destroyed under
+            // containment when their collectors drop.
+            FirstPanic::new().contain(|| {
                 tracing::error!(
-                    panic_message = flui_foundation::panic::payload_text(payload.as_ref())
-                        .unwrap_or("<opaque>"),
+                    panic_message =
+                        flui_foundation::panic::payload_text(payload).unwrap_or("<opaque>"),
                     "a frame request failed; the work stays queued and the wake owed"
                 );
-            }));
-            flui_foundation::panic::discard_payload(payload);
-            if let Err(diagnostic) = report {
-                flui_foundation::panic::discard_payload(diagnostic);
-            }
+            });
         }
     }
 
@@ -305,30 +294,18 @@ impl ExternalBuildInbox {
             }
         }
 
-        let mut first_panic = None;
+        let mut first_panic = FirstPanic::new();
         let mut may_compensate = true;
         loop {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: the frame request hook runs contained so the wake state settles"
-            )]
-            let wake = std::panic::catch_unwind(std::panic::AssertUnwindSafe(request_frame));
+            // The hook runs contained so the wake state settles.
+            let woke = first_panic.contain(request_frame).is_some();
             let reentered = {
                 let mut state = self.wake_state.lock();
                 state.reentrant_threads.remove(&current_thread)
             };
 
-            match wake {
-                Ok(()) => {
-                    token.store(true, Ordering::Release);
-                }
-                Err(payload) => {
-                    if first_panic.is_none() {
-                        first_panic = Some(payload);
-                    } else {
-                        flui_foundation::panic::discard_payload(payload);
-                    }
-                }
+            if woke {
+                token.store(true, Ordering::Release);
             }
 
             let compensation = (reentered && may_compensate)
@@ -344,9 +321,7 @@ impl ExternalBuildInbox {
                 .lock()
                 .active_threads
                 .remove(&current_thread);
-            if let Some(payload) = first_panic {
-                std::panic::resume_unwind(payload);
-            }
+            first_panic.resume();
             return;
         }
     }

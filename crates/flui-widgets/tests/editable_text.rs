@@ -53,7 +53,7 @@ pub(crate) mod native_actions {
     impl StatefulView for FieldHost {
         type State = FieldHostState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
             FieldHostState {
                 pipeline: Rc::clone(&self.pipeline),
             }
@@ -1395,10 +1395,10 @@ pub(crate) fn moving_focus_off_a_composing_field_commits_it_in_either_mount_orde
             FocusNode::with_debug_label("earlier field"),
             FocusNode::with_debug_label("later field"),
         ];
-        let fields = flui_widgets::Column::new(flui_widgets::column![
+        let fields = flui_widgets::Column::new((
             EditableText::new(controllers[0].clone(), Rc::clone(&nodes[0])),
             EditableText::new(controllers[1].clone(), Rc::clone(&nodes[1])),
-        ]);
+        ));
         let mut harness: Harness = if pull {
             mount_with_ime(fields)
         } else {

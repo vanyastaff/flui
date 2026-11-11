@@ -186,7 +186,7 @@ struct KeptState;
 impl StatefulView for Kept {
     type State = KeptState;
 
-    fn create_state(&self) -> KeptState {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> KeptState {
         KeptState
     }
 }
@@ -238,7 +238,7 @@ struct ReaderState(Seen);
 impl<K: Tone> StatefulView for Reader<K> {
     type State = ReaderState;
 
-    fn create_state(&self) -> ReaderState {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> ReaderState {
         ReaderState(self.probe.clone())
     }
 }
@@ -349,7 +349,7 @@ struct KeyedState;
 impl StatefulView for Keyed {
     type State = KeyedState;
 
-    fn create_state(&self) -> KeyedState {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> KeyedState {
         KeyedState
     }
 }

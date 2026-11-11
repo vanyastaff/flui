@@ -938,7 +938,7 @@ impl View for SelectionGestures {
 impl StatefulView for SelectionGestures {
     type State = SelectionGesturesState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SelectionGesturesState {
             model: Rc::clone(&self.model),
             built_for: None,
@@ -991,7 +991,7 @@ impl SelectionGesturesState {
         if self.built_for.as_ref() == Some(&policy) {
             return;
         }
-        let GesturePolicy { arena, settings } = policy.clone();
+        let (arena, settings) = (policy.arena().clone(), policy.settings().clone());
         let weak = Rc::downgrade(&self.model);
         let tap_and_drag = {
             let (up, start, update, end, cancel) = (

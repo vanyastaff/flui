@@ -12,7 +12,7 @@ struct DependencyPanicState {
 impl crate::StatefulView for DependencyPanicView {
     type State = DependencyPanicState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         DependencyPanicState {
             hook_calls: Arc::clone(&self.hook_calls),
         }
@@ -52,7 +52,7 @@ struct InitPanicState {
 impl crate::StatefulView for InitPanicView {
     type State = InitPanicState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         InitPanicState {
             failed_id: Arc::clone(&self.failed_id),
         }

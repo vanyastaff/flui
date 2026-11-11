@@ -3,6 +3,7 @@
 //! presentation-owned arena through the hit-test + binding dispatch path. The
 //! binding alone closes and sweeps the shared arena.
 
+use flui_view::LifecycleContext;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -479,7 +480,7 @@ struct SwitchingScopeState {
 
 impl flui_view::StatefulView for SwitchingScope {
     type State = SwitchingScopeState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SwitchingScopeState {
             claimed: self.claimed.clone(),
             handles: None,
@@ -707,7 +708,7 @@ struct RebuildingState {
 
 impl flui_view::StatefulView for Rebuilding {
     type State = RebuildingState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         RebuildingState {
             revision: self.revision.clone(),
         }
@@ -827,7 +828,7 @@ struct ComposedDetectorState {
 
 impl flui_view::StatefulView for ComposedDetector {
     type State = ComposedDetectorState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ComposedDetectorState { branch: None }
     }
 }
@@ -899,7 +900,7 @@ struct ConfiguredGestureState {
 impl flui_view::StatefulView for ConfiguredGesture {
     type State = ConfiguredGestureState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ConfiguredGestureState { arena: None }
     }
 }
@@ -2032,7 +2033,7 @@ struct CountsMountsState;
 
 impl flui_view::StatefulView for CountsMounts {
     type State = CountsMountsState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.0.fetch_add(1, Ordering::SeqCst);
         CountsMountsState
     }
@@ -2787,4 +2788,84 @@ pub(crate) fn a_smart_zoom_reaches_only_the_innermost_detector_under_it() {
             "{name}: local to its detector"
         );
     }
+}
+
+/// Reads the gesture policy where it is mounted, at its first build and at
+/// each change of the scope above it.
+#[derive(Clone, flui_view::prelude::StatefulView)]
+struct PolicyReader {
+    seen: std::rc::Rc<std::cell::RefCell<Vec<flui_interaction::gesture::VelocityEstimator>>>,
+}
+
+struct PolicyReaderState {
+    seen: std::rc::Rc<std::cell::RefCell<Vec<flui_interaction::gesture::VelocityEstimator>>>,
+}
+
+impl PolicyReaderState {
+    fn read(&self, ctx: &dyn flui_view::LifecycleContext) {
+        let policy = flui_view::environment::GesturePolicy::of(ctx);
+        self.seen.borrow_mut().push(
+            policy
+                .settings()
+                .snapshot_for(flui_interaction::events::PointerKind::Touch)
+                .velocity_estimator(),
+        );
+    }
+}
+
+impl flui_view::StatefulView for PolicyReader {
+    type State = PolicyReaderState;
+
+    fn create_state(&self, ctx: &dyn flui_view::LifecycleContext) -> Self::State {
+        let state = PolicyReaderState {
+            seen: std::rc::Rc::clone(&self.seen),
+        };
+        state.read(ctx);
+        state
+    }
+}
+
+impl flui_view::ViewState<PolicyReader> for PolicyReaderState {
+    fn did_change_dependencies(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        self.read(ctx);
+    }
+
+    fn build(&self, _: &PolicyReader, _: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        ColoredBox::new(Color::RED)
+    }
+}
+
+/// A scope that authors no settings publishes the policy of the scope above
+/// it, and publishes the new one when that scope's settings change. A
+/// rebuild that changes nothing reaches no consumer.
+pub(crate) fn a_scope_without_settings_follows_the_scope_above() {
+    use std::{cell::RefCell, rc::Rc};
+
+    use crate::gesture_settings::SettingsScope;
+    use flui_interaction::{GestureSettings, gesture::VelocityEstimator};
+
+    let seen = Rc::new(RefCell::new(Vec::<VelocityEstimator>::new()));
+    let tree = |estimator| {
+        SettingsScope::new(
+            GestureSettings::default().with_velocity_estimator(estimator),
+            SettingsScope::inheriting(PolicyReader {
+                seen: Rc::clone(&seen),
+            }),
+        )
+    };
+    let mut laid = lay_out(tree(VelocityEstimator::LeastSquares), tight(100.0, 100.0));
+    assert_eq!(seen.borrow().as_slice(), [VelocityEstimator::LeastSquares]);
+
+    laid.pump_widget(tree(VelocityEstimator::LeastSquares));
+    assert_eq!(
+        seen.borrow().len(),
+        1,
+        "equal settings are the same policy to a consumer"
+    );
+
+    laid.pump_widget(tree(VelocityEstimator::Impulse));
+    assert_eq!(
+        seen.borrow().as_slice(),
+        [VelocityEstimator::LeastSquares, VelocityEstimator::Impulse]
+    );
 }

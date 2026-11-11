@@ -784,7 +784,7 @@ impl std::fmt::Debug for DismissibleState {
 impl StatefulView for Dismissible {
     type State = DismissibleState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DismissibleState {
             controller: AnchoredDragController::try_new(self.config().anchors(None), Stop::Closed)
                 .expect("BUG: every dismissible has a closed stop"),

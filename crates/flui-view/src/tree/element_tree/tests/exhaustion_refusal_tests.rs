@@ -2,6 +2,8 @@
 //! §3): the preflight peek happens before any teardown runs, the occupant
 //! stays live, and the refusal does not expose the slot to the next insert.
 
+use std::panic::AssertUnwindSafe;
+
 use super::*;
 
 /// A slot's terminal seed: only this injection is private; refusal and reuse
@@ -51,7 +53,7 @@ fn exhausted_generation_refuses_removal(mode: u8) {
         .set_self_id(candidate);
     tree.get_mut(root)
         .expect("root")
-        .set_child_ids(vec![candidate]);
+        .set_child_ids(&[candidate]);
     for _ in 0..2 {
         let failure = std::panic::catch_unwind(AssertUnwindSafe(|| match mode {
             0 => tree.remove(candidate, &mut owner.element_owner_mut()),
@@ -102,15 +104,11 @@ fn exhausted_subtree_refuses_before_teardown(target: usize, mode: SubtreeRemoval
     let mut ids = [root, middle, leaf, sibling];
     ids[target] = terminal_generation(&mut tree, ids[target]);
     let [root, middle, leaf, sibling] = ids;
-    tree.get_mut(parent)
-        .expect("parent")
-        .set_child_ids(vec![root]);
+    tree.get_mut(parent).expect("parent").set_child_ids(&[root]);
     tree.get_mut(root)
         .expect("root")
-        .set_child_ids(vec![middle, sibling]);
-    tree.get_mut(middle)
-        .expect("middle")
-        .set_child_ids(vec![leaf]);
+        .set_child_ids(&[middle, sibling]);
+    tree.get_mut(middle).expect("middle").set_child_ids(&[leaf]);
     for (child, parent) in [
         (root, parent),
         (middle, root),
@@ -211,13 +209,11 @@ fn exhausted_wrapper_refuses_before_keyed_descendant_deactivation() {
     let leaf = tree.insert(&view, keyed, 0, &mut owner.element_owner_mut());
     tree.get_mut(parent)
         .expect("parent")
-        .set_child_ids(vec![wrapper]);
+        .set_child_ids(&[wrapper]);
     tree.get_mut(wrapper)
         .expect("wrapper")
-        .set_child_ids(vec![keyed]);
-    tree.get_mut(keyed)
-        .expect("keyed")
-        .set_child_ids(vec![leaf]);
+        .set_child_ids(&[keyed]);
+    tree.get_mut(keyed).expect("keyed").set_child_ids(&[leaf]);
     for _ in 0..2 {
         std::panic::catch_unwind(AssertUnwindSafe(|| {
             tree.remove_subtree(
@@ -274,13 +270,11 @@ fn terminal_keyed_subtree_soft_removal_needs_no_generation_advance() {
     let leaf = terminal_generation(&mut tree, leaf);
     tree.get_mut(parent)
         .expect("parent")
-        .set_child_ids(vec![wrapper]);
+        .set_child_ids(&[wrapper]);
     tree.get_mut(wrapper)
         .expect("wrapper")
-        .set_child_ids(vec![keyed]);
-    tree.get_mut(keyed)
-        .expect("keyed")
-        .set_child_ids(vec![leaf]);
+        .set_child_ids(&[keyed]);
+    tree.get_mut(keyed).expect("keyed").set_child_ids(&[leaf]);
     tree.remove_subtree(
         wrapper,
         &mut owner.element_owner_mut(),

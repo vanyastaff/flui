@@ -998,7 +998,7 @@ type MenuOpener = Rc<dyn Fn(&mut EventCx<'_>, MenuCause, Option<Offset<f64>>)>;
 impl StatefulView for GestureAlternatives {
     type State = GestureAlternativesState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         GestureAlternativesState {
             warned_for: Cell::new(None),
             opener: OpenerSlot::new(Rc::new(|_cx, _cause, _position| {})),
@@ -1109,7 +1109,7 @@ impl GestureAlternativesState {
         if current {
             return;
         }
-        let GesturePolicy { arena, settings } = &policy;
+        let (arena, settings) = (policy.arena(), policy.settings());
         let branch = match &self.given_hold {
             Some(branch) => Some(Rc::clone(branch)),
             None => match arena.sequenced() {
@@ -1561,7 +1561,7 @@ struct FocusDecorationsState {
 impl StatefulView for FocusDecorations {
     type State = FocusDecorationsState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FocusDecorationsState {
             focus_manager: None,
             rebuild: None,

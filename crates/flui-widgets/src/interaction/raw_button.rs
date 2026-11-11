@@ -10,8 +10,7 @@ use super::actions::{
     Action, ActionOutcome, ActivateIntent, ActivationPressIntent, ButtonActivateIntent,
 };
 use super::focus_host::FocusConfig;
-use super::node::InteractiveNode;
-use crate::Semantics;
+use super::node::{Description, InteractiveNode};
 use crate::support::event_callback;
 use crate::widget_state::WidgetStatesController;
 
@@ -87,7 +86,7 @@ impl RawButton {
     }
 
     /// Name the button's node for tests and automation (ADR-0240); see
-    /// [`Semantics::identifier`]. Never announced.
+    /// [`Semantics::identifier`](crate::Semantics::identifier). Never announced.
     #[must_use]
     pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
         self.identifier = Some(identifier.into());
@@ -155,10 +154,10 @@ impl StatelessView for RawButton {
         let enabled = self.on_press.is_some();
         let press = Rc::new(Press(self.on_press.clone()));
         // One node for assistive technology: the button.
-        let semantics = Semantics::new()
-            .container(true)
-            .role(crate::SemanticsRole::Button)
-            .identifier_if(self.identifier.as_ref());
+        let description = Description {
+            role: crate::SemanticsRole::Button,
+            identifier: self.identifier.clone(),
+        };
         // The bindings are the node's own, so its focus node records them
         // and the root bindings resolve the activation here (ADR-0079).
         let mut node = InteractiveNode::new(self.child.clone())
@@ -180,6 +179,6 @@ impl StatelessView for RawButton {
         if let Some(states) = self.states.clone() {
             node = node.states(states);
         }
-        node.semantics(semantics)
+        node.semantics(description)
     }
 }

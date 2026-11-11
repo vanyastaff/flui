@@ -67,7 +67,7 @@ pub trait LifecycleContext: BuildContext {
 }
 ```
 
-`ViewState::init_state` and `ViewState::did_change_dependencies` receive
+`StatefulView::create_state`, `ViewState::init_state` and `ViewState::did_change_dependencies` receive
 `&dyn LifecycleContext`; `build` receives `&dyn BuildContext`. The runtime passes the same
 object to both — only the static type differs — so there is no runtime cost and no second
 code path. A capability acquired in `build`, directly or through any helper, is a compile
