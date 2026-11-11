@@ -1839,7 +1839,12 @@ mod raw {
         let width = usize::try_from(pointers).ok()?;
         let rows = usize::try_from(filled_entries).ok()?;
         values.truncate(rows.checked_mul(width)?);
-        Some(values.chunks(width).map(<[T]>::to_vec).collect())
+        Some(
+            values
+                .chunks(width)
+                .map(<[T]>::to_vec)
+                .collect::<Vec<Vec<T>>>(),
+        )
     }
 
     /// Whether the `WM_POINTER` id `raw` is the mouse's. A stale or invented id
@@ -1918,7 +1923,7 @@ mod raw {
             .borrow_mut()
             .cancel_contact(SURFACE, contact, time, reason)
             .into_iter()
-            .collect()
+            .collect::<Assembled>()
     }
 
     /// The input `message`'s newest-first `packets` of pointer `raw` make.
