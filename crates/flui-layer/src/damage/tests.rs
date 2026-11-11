@@ -537,7 +537,8 @@ fn damage_meeting_a_foreground_blur_takes_its_footprint() {
 
 /// A foreground transform filter draws its children where the transform
 /// sends them: moved 100 px right, a child over 100..150 shows over
-/// 200..250, a texel past for a bilinear read. Damage there takes that
+/// 200..250, with half a source pixel of bilinear read and a pixel past it.
+/// Damage there takes that
 /// footprint; damage over the child's own place, which no longer shows it,
 /// stays small.
 #[test]
@@ -569,7 +570,7 @@ fn a_foreground_transforms_footprint_follows_its_moved_content() {
     differ.diff(&build(&moving, Offset::new(220.0, 120.0)), SURFACE);
     assert_eq!(
         partial(differ.diff(&build(&moving, Offset::new(220.0, 124.0)), SURFACE)),
-        covering(199.0, 99.0, 251.0, 151.0)
+        covering(198.5, 98.5, 251.5, 151.5)
     );
 }
 
@@ -629,11 +630,19 @@ fn layers_that_paint_transparent_pixels_damage_everything() {
             frame.push(layer, picture(Rect::from_xywh(100.0, 100.0, 10.0, 10.0)));
             frame.scene()
         };
+        // A colour filter has no bound on what it writes, so damage under it
+        // is the whole surface by its read closure (ADR-0304 §6); the opacity
+        // layer's own extent is the whole surface.
+        let expected = if matches!(effect, Layer::ColorFilter(_)) {
+            FullReason::Unbounded
+        } else {
+            FullReason::AboveThreshold
+        };
         let mut differ = LayerDiffer::default();
         differ.diff(&build(&ContentToken::mint()), SURFACE);
         assert_eq!(
             differ.diff(&build(&ContentToken::mint()), SURFACE),
-            DamageRegion::Full(FullReason::AboveThreshold),
+            DamageRegion::Full(expected),
             "{effect:?}"
         );
     }
@@ -799,7 +808,9 @@ fn damage_meeting_a_backdrop_includes_the_backdrop() {
         SURFACE,
     );
     let region = differ.diff(&backdrop_scene(&[root, ContentToken::mint()], at), SURFACE);
-    assert_eq!(partial(region), covering(190.0, 190.0, 300.0, 300.0));
+    // The backdrop's bounds and what its blur reads around them (three sigma
+    // and a pixel), which must be redrawn before it samples them.
+    assert_eq!(partial(region), covering(190.0, 190.0, 307.0, 307.0));
 }
 
 #[test]
@@ -895,8 +906,9 @@ fn a_boundary_stamped_twice_is_full() {
 
 /// A transform backdrop reads where its inverse sends its bounds: shrunk to
 /// half about its centre, the backdrop over 200..300 shows 150..350, so a
-/// change at 160..180 outside it still repaints it, and a magnifier about the
-/// centre, which reads 225..275, leaves the same change alone.
+/// change at 160..180 outside it repaints it and what it reads (a texel and a
+/// pixel past 150..350), and a magnifier about the centre, which reads
+/// 225..275, leaves the same change alone.
 #[test]
 fn damage_under_a_transform_backdrop_follows_what_it_reads() {
     let centre = Point::new(250.0, 250.0);
@@ -907,7 +919,7 @@ fn damage_under_a_transform_backdrop_follows_what_it_reads() {
     let magnify = ImageFilter::try_magnify(centre, 2.0).expect("a valid scale");
     let at = Offset::new(160.0, 160.0);
     for (filter, expected) in [
-        (shrink, covering(160.0, 160.0, 300.0, 300.0)),
+        (shrink, covering(148.0, 148.0, 352.0, 352.0)),
         (magnify, covering(160.0, 160.0, 180.0, 180.0)),
     ] {
         let root = ContentToken::mint();
@@ -929,7 +941,7 @@ fn damage_under_a_transform_backdrop_follows_what_it_reads() {
 /// `(x, y) -> (x + y, y)` cover 100..200 by 50..100, and a filter that shows
 /// what lies 10 units down and right reads 20 px right of them, past the
 /// local reach scaled by the longest axis (14 px). A change 17 px right of
-/// them still repaints them.
+/// them still repaints them and what they read.
 #[test]
 fn a_sheared_transform_backdrop_reads_on_the_surface() {
     let shift = ImageFilter::Transform {
@@ -967,5 +979,5 @@ fn a_sheared_transform_backdrop_reads_on_the_surface() {
     let mut differ = LayerDiffer::default();
     differ.diff(&build(&ContentToken::mint(), &root), SURFACE);
     let region = differ.diff(&build(&ContentToken::mint(), &root), SURFACE);
-    assert_eq!(partial(region), covering(100.0, 50.0, 218.0, 106.0));
+    assert_eq!(partial(region), covering(78.0, 28.0, 222.0, 122.0));
 }

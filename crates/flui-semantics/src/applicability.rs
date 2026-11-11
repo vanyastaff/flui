@@ -161,13 +161,21 @@ const FIELDS: [Field; 18] = [
     },
     Field {
         attribute: RoleAttribute::NumericRange,
-        declared: |a| a.numeric_range.is_some(),
-        clear: |a| a.numeric_range = None,
+        declared: |a| a.rare().numeric_range.is_some(),
+        clear: |a| {
+            if let Some(rare) = a.rare_if_declared() {
+                rare.numeric_range = None;
+            }
+        },
     },
     Field {
         attribute: RoleAttribute::Placeholder,
-        declared: |a| a.placeholder.is_some(),
-        clear: |a| a.placeholder = None,
+        declared: |a| a.rare().placeholder.is_some(),
+        clear: |a| {
+            if let Some(rare) = a.rare_if_declared() {
+                rare.placeholder = None;
+            }
+        },
     },
     Field {
         attribute: RoleAttribute::HeadingLevel,
@@ -434,6 +442,7 @@ pub(crate) fn retain_applicable(attrs: &SemanticsAttributes) -> Cow<'_, Semantic
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attributes::{Rare, RareAttributes};
 
     /// Rows from WAI-ARIA 1.2's "Supported States and Properties" per role,
     /// with FLUI's text-input kinds read as `textbox` and a node with no
@@ -556,9 +565,12 @@ mod tests {
         for (focusable, kept) in [(Some(true), true), (Some(false), false), (None, false)] {
             let mut attrs = SemanticsAttributes {
                 role: SemanticsRole::Separator,
-                numeric_range: Some(
-                    crate::NumericRange::try_new(4.0, 0.0, 10.0, 2.0).expect("finite fixture"),
-                ),
+                rare: Rare::from(RareAttributes {
+                    numeric_range: Some(
+                        crate::NumericRange::try_new(4.0, 0.0, 10.0, 2.0).expect("finite fixture"),
+                    ),
+                    ..RareAttributes::default()
+                }),
                 ..SemanticsAttributes::default()
             };
             attrs.states.focusable = focusable;
@@ -576,7 +588,10 @@ mod tests {
     fn the_view_drops_what_the_report_names() {
         let mut attrs = SemanticsAttributes {
             role: SemanticsRole::Button,
-            placeholder: Some("Search".into()),
+            rare: Rare::from(RareAttributes {
+                placeholder: Some("Search".into()),
+                ..RareAttributes::default()
+            }),
             ..SemanticsAttributes::default()
         };
         attrs.states.selected = Some(true);
@@ -588,11 +603,11 @@ mod tests {
         let view = retain_applicable(&attrs);
         assert!(matches!(view, Cow::Owned(_)));
         assert_eq!(view.states.selected, None);
-        assert_eq!(view.placeholder, None);
+        assert_eq!(view.rare().placeholder, None);
         assert_eq!(view.states.expanded, Some(true), "a supported state stays");
 
         attrs.states.selected = None;
-        attrs.placeholder = None;
+        attrs.rare_mut().placeholder = None;
         assert!(matches!(retain_applicable(&attrs), Cow::Borrowed(_)));
     }
 }

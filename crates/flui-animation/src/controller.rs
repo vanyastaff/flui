@@ -30,7 +30,7 @@ use crate::curve::Curve;
 use crate::error::AnimationError;
 use crate::origin::ControllerOrigin;
 use crate::run_future::{RunCompleter, RunDelivery};
-use crate::simulation::{Simulation, SpringDescription, Tolerance};
+use crate::simulation::{Simulation, SpeedLimit, SpringDescription, Tolerance};
 use crate::status::AnimationStatus;
 use flui_foundation::notifier_generic::NotificationCallback;
 use flui_foundation::panic::{FailureClass, RecoveryScope};
@@ -51,7 +51,7 @@ fn default_fling_spring() -> SpringDescription {
 /// Default tolerance for fling animations.
 const FLING_TOLERANCE: Tolerance = Tolerance {
     distance: 0.01,
-    velocity: f64::INFINITY,
+    speed: SpeedLimit::Derived,
 };
 
 /// Whether transition delivery must notify value listeners,

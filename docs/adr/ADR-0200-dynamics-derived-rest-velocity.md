@@ -25,8 +25,25 @@ lose the presentation density and the simulation's natural time scale.
 
 `Tolerance::for_device_pixel_ratio(r)` supplies distance `0.5 / r` logical pixels
 and a dynamics-derived speed criterion. The ratio and resulting distance must be
-finite and positive. The tolerance's infinite speed value selects derivation;
-it does not mean that speed is ignored.
+finite and positive. A tolerance names its speed criterion as a `SpeedLimit`:
+
+```rust
+pub enum SpeedLimit {
+    /// Derived from the motion's own time scale; speed still counts.
+    Derived,
+    /// At most this speed (finite, > 0), in position units per second.
+    AtMost(f64),
+}
+
+impl Tolerance {
+    pub fn try_new(distance: f64, speed: SpeedLimit) -> Result<Self, SimulationError>;
+}
+```
+
+Flutter's `Tolerance.velocity` is one `double`. Derivation is a variant here,
+not a sentinel float: a match over the limit covers both cases, and
+`try_new` refuses a NaN, infinite or non-positive `AtMost` speed, naming
+`SimulationParameter::SpeedLimit`.
 
 A spring derives its speed limit as distance times its natural angular frequency.
 Its conservative rest time bounds both displacement and speed for the remaining
@@ -46,7 +63,9 @@ Ignoring speed would disagree with the approved conservative-rest contract.
 A fixed speed unrelated to the dynamics would require authors to choose a second
 unit-sensitive threshold. Derivation keeps a displacement tolerance meaningful
 for both a spring and a remaining friction glide without making frame cadence
-part of physical rest.
+part of physical rest. Carrying derivation as `f64::INFINITY` in a speed field
+would give one float a hidden mode: every reader has to know the sentinel, and
+an overflowed limit would silently switch to derivation.
 
 ## Consequences and verification
 
@@ -58,7 +77,8 @@ tolerance, while rest also accounts for motion still capable of leaving it.
 the independent displacement/speed bounds and timing. The public
 `tolerance_constructors_validate_and_scale_with_dpr` and
 `friction_preserves_small_decay_and_position_time_roundtrips` families pin valid
-construction, density scaling and remaining glide.
+construction, density scaling and remaining glide; the first family's refused cases pin
+the refusal of a non-finite or non-positive `AtMost` speed.
 `scroll_fling_rest_scales_with_device_pixel_ratio` pins the actual mounted scroll
 producer. Their existing execution evidence is unchanged by this documentation
 reconciliation; no new native or performance result is claimed.

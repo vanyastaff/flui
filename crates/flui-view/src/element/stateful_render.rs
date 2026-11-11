@@ -29,8 +29,9 @@ pub struct StatefulRenderBehavior<V: StatefulRenderView> {
     state: V::State,
     initialized: bool,
     /// The view `create_state` saw, held while a parent updates this element
-    /// before its first build.
-    pending_update: Option<V>,
+    /// before its first build. Boxed: it is held only in that window, and a
+    /// view can be a kilobyte.
+    pending_update: Option<Box<V>>,
     render_id: Option<RenderId>,
     /// The values the state publishes to its subtree.
     publication: Publication,
@@ -180,7 +181,9 @@ where
             core,
             owner,
             "StatefulRenderBehavior",
-            |_cx, _render_object: &mut V::RenderObject| {},
+            |cx, render_object: &mut V::RenderObject| {
+                core.view().did_unmount_render_object(cx, render_object);
+            },
         );
     }
 
@@ -223,7 +226,7 @@ where
         // delivers the update after `init_state`.
         if !self.initialized {
             if self.pending_update.is_none() {
-                self.pending_update = Some(old_view.clone());
+                self.pending_update = Some(Box::new(old_view.clone()));
             }
             return;
         }

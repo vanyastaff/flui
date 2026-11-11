@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_painting::styling::BoxDecoration;
 use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
 
@@ -20,19 +20,6 @@ use crate::DecoratedBox;
 /// child's bounds, `outer` along the edge and `inner` just within it. A
 /// focused link draws the same bands just outside its glyphs.
 pub use flui_objects::FocusRingStyle;
-
-/// A uniform `width` border in `color`, or no border for a zero width.
-fn ring_band(color: Color, width: f64) -> BoxDecoration<f64> {
-    if width > 0.0 {
-        BoxDecoration::new().set_border(Some(Border::all(BorderSide::new(
-            color,
-            width,
-            BorderStyle::Solid,
-        ))))
-    } else {
-        BoxDecoration::new()
-    }
-}
 
 /// Draws the keyboard focus indicator over `child` while the nearest
 /// enclosing [`Focus`] has visible focus.
@@ -92,16 +79,7 @@ impl StatelessView for FocusRing {
         let visible = Focus::maybe_of(ctx).is_some_and(|node| node.has_visible_focus());
         let style = self.style.unwrap_or_else(|| DefaultFocusRingStyle::of(ctx));
         let (outer, inner) = if visible {
-            let outer_width = style.outer_band();
-            let inner_width = style.inner_band();
-            // The inner band is drawn as far in as both bands reach; the
-            // outer band is then drawn over its outer part.
-            let inner = if inner_width > 0.0 {
-                ring_band(style.inner, outer_width + inner_width)
-            } else {
-                BoxDecoration::new()
-            };
-            (ring_band(style.outer, outer_width), inner)
+            style.bands_inside()
         } else {
             (BoxDecoration::new(), BoxDecoration::new())
         };

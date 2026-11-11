@@ -26,7 +26,7 @@ use crate::action::{
     ActionCall, ActionDecodeError, CustomActionId, ScrollUnit, SemanticsAction, UnroutedAction,
 };
 use crate::applicability::prohibits_name;
-use crate::attributes::SemanticsAttributes;
+use crate::attributes::{RareAttributes, SemanticsAttributes};
 use crate::collection::{Collection, SetSize, SortDirection};
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
@@ -233,10 +233,14 @@ fn publish_scroll(node: &mut Node, attrs: &SemanticsAttributes) {
     use flui_foundation::geometry::{Axis, AxisDirection};
 
     let direction = attrs
+        .rare()
         .scroll_axis_direction
         .unwrap_or(AxisDirection::TopToBottom);
-    let (min, max) = (attrs.scroll_extent_min, attrs.scroll_extent_max);
-    let position = attrs.scroll_position.and_then(|pixels| {
+    let (min, max) = (
+        attrs.rare().scroll_extent_min,
+        attrs.rare().scroll_extent_max,
+    );
+    let position = attrs.rare().scroll_position.and_then(|pixels| {
         if !direction.is_reversed() {
             return Some(pixels);
         }
@@ -407,9 +411,9 @@ fn apply_state(node: &mut Node, attrs: &SemanticsAttributes) {
 /// instead would hide the write that works.
 fn value_writable(data: &PublishView<'_>, role: Role) -> bool {
     let has_text_value = data.attrs.value.is_some() && role != Role::Label;
-    let text_reaches = data.attrs.numeric_range.is_none() || has_text_value;
+    let text_reaches = data.attrs.rare().numeric_range.is_none() || has_text_value;
     (text_reaches && has_action(data.actions, SemanticsAction::SetValue))
-        || (data.attrs.numeric_range.is_some()
+        || (data.attrs.rare().numeric_range.is_some()
             && has_action(data.actions, SemanticsAction::SetNumericValue))
 }
 
@@ -676,9 +680,9 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     } else {
         data
     };
-    // Exhaustive: an attribute added to `SemanticsAttributes` does not compile
-    // until it is published here or its reason for not being published is
-    // written down.
+    // Exhaustive: an attribute added to `SemanticsAttributes` or
+    // `RareAttributes` does not compile until it is published here or its
+    // reason for not being published is written down.
     let SemanticsAttributes {
         // Published below or by the helpers this function calls.
         role: _,
@@ -687,23 +691,30 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         live_atomic: _,
         label: _,
         value: _,
-        numeric_range: _,
         hint: _,
+        identifier: _,
+        heading_level: _,
+        text_direction: _,
+        // Published as the `TextRun` children `text_run_nodes` builds.
+        text: _,
+        // Published by `apply_collection`.
+        collection: _,
+        // Destructured below.
+        rare: _,
+    } = data.attrs;
+    let RareAttributes {
+        // Published below or by the helpers this function calls.
+        numeric_range: _,
         tooltip: _,
         placeholder: _,
         keyboard_shortcut: _,
         language: _,
         url: _,
         role_description: _,
-        identifier: _,
-        heading_level: _,
-        text_direction: _,
         scroll_position: _,
         scroll_axis_direction: _,
         scroll_extent_max: _,
         scroll_extent_min: _,
-        // Published by `apply_collection`.
-        collection: _,
         // Resolved against the anchor index by `to_published_node`.
         anchors: _,
         relations: _,
@@ -722,13 +733,11 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         platform_view_id: _,
         max_value_length: _,
         current_value_length: _,
-        // Published as the `TextRun` children `text_run_nodes` builds.
-        text: _,
         // Resolved against the runs beneath the node by `publish_view`.
         document_selection: _,
         // Resolved against the enclosing text's runs by `publish_view`.
         hosted_runs: _,
-    } = data.attrs;
+    } = data.attrs.rare();
     let role = resolve_role(data);
     let mut node = Node::new(role);
 
@@ -758,7 +767,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     } else if let Some(value) = &data.attrs.value {
         node.set_value(value.as_str());
     }
-    if let Some(range) = data.attrs.numeric_range {
+    if let Some(range) = data.attrs.rare().numeric_range {
         node.set_numeric_value(range.value());
         node.set_min_numeric_value(range.min());
         node.set_max_numeric_value(range.max());
@@ -789,22 +798,22 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         (Some(text), None) | (None, Some(text)) => node.set_description(text.as_str()),
         (None, None) => {}
     }
-    if let Some(tooltip) = &data.attrs.tooltip {
+    if let Some(tooltip) = &data.attrs.rare().tooltip {
         node.set_tooltip(tooltip.as_str());
     }
-    if let Some(placeholder) = &data.attrs.placeholder {
+    if let Some(placeholder) = &data.attrs.rare().placeholder {
         node.set_placeholder(placeholder.as_str());
     }
-    if let Some(shortcut) = &data.attrs.keyboard_shortcut {
+    if let Some(shortcut) = &data.attrs.rare().keyboard_shortcut {
         node.set_keyboard_shortcut(shortcut.as_str());
     }
-    if let Some(language) = &data.attrs.language {
+    if let Some(language) = &data.attrs.rare().language {
         node.set_language(language.as_str());
     }
-    if let Some(url) = &data.attrs.url {
+    if let Some(url) = &data.attrs.rare().url {
         node.set_url(url.as_str());
     }
-    if let Some(description) = &data.attrs.role_description {
+    if let Some(description) = &data.attrs.rare().role_description {
         node.set_role_description(description.as_str());
     }
     // The author's identifier (ADR-0240): adapters map `author_id` to UI
@@ -1163,6 +1172,7 @@ fn apply_relations(node: &mut Node, data: &PublishView<'_>, anchors: &AnchorInde
     let targets = |kind: SemanticsRelation| -> Vec<&AnchorTarget> {
         let mut targets: Vec<&AnchorTarget> = data
             .attrs
+            .rare()
             .relations
             .iter()
             .filter(|(relation, _)| *relation == kind)
@@ -1394,6 +1404,7 @@ mod tests {
 
     use super::*;
     use crate::action::TextSelection;
+    use crate::attributes::Rare;
     use crate::identity::AccessibilityNodeId;
     use crate::properties::HeadingLevel;
     use crate::tree::SemanticsTree;
@@ -1457,12 +1468,12 @@ mod tests {
                 SemanticsAction::Expand => attrs.states.expanded = Some(false),
                 SemanticsAction::Collapse => attrs.states.expanded = Some(true),
                 SemanticsAction::SetNumericValue => {
-                    attrs.numeric_range = Some(
+                    attrs.rare_mut().numeric_range = Some(
                         crate::NumericRange::try_new(0.0, 0.0, 1.0, 0.1).expect("finite fixture"),
                     );
                 }
                 SemanticsAction::CustomAction => {
-                    attrs.custom_actions = smallvec::smallvec!["Archive".into()];
+                    attrs.rare_mut().custom_actions = smallvec::smallvec!["Archive".into()];
                 }
                 _ => {}
             }
@@ -1734,7 +1745,10 @@ mod tests {
                 let node = translate_with(
                     &SemanticsAttributes {
                         value: value.map(Into::into),
-                        numeric_range: Some(range),
+                        rare: Rare::from(RareAttributes {
+                            numeric_range: Some(range),
+                            ..RareAttributes::default()
+                        }),
                         ..Default::default()
                     },
                     actions,
@@ -1831,7 +1845,10 @@ mod tests {
                 invalid: Some(Invalid::True),
                 ..States::default()
             },
-            placeholder: Some("name@example.com".into()),
+            rare: Rare::from(RareAttributes {
+                placeholder: Some("name@example.com".into()),
+                ..RareAttributes::default()
+            }),
             ..Default::default()
         });
         assert!(node.is_required());
@@ -1939,7 +1956,10 @@ mod tests {
 
         let node = translate_with(
             &SemanticsAttributes {
-                custom_actions: smallvec::smallvec!["Archive".into(), "Pin".into()],
+                rare: Rare::from(RareAttributes {
+                    custom_actions: smallvec::smallvec!["Archive".into(), "Pin".into()],
+                    ..RareAttributes::default()
+                }),
                 ..Default::default()
             },
             bit,

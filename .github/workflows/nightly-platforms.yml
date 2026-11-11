@@ -1,0 +1,278 @@
+name: Nightly platforms
+
+# The platform code that pull-request CI only type-checks, run every night on
+# GitHub's hosted runners against main (the repository is public, so they are
+# free). CI on pull requests runs Linux and wasm32 only, and stays that fast:
+# this workflow runs on a schedule, by hand, and on a pull request that edits
+# this file or the live scenario, never on any other.
+#
+#   desktop — on windows-latest and macos-latest: flui-native's suite
+#             (`cargo xtask platform-test`: Win32, AppKit), the GPU readback
+#             suites (`cargo xtask gpu-test`) on Direct3D 12, which a runner
+#             without a GPU answers with WARP (ADR-0244 §1), and on Metal, and
+#             the counter scenario on the desktop.
+#   linux   — the counter scenario on the native X11 host under Xvfb.
+#   ios     — the counter scenario on a booted iOS Simulator.
+#   android — the counter scenario on an Android emulator (x86_64, KVM).
+#
+# The counter scenario is one test, `an_agent_presses_the_counter_on_a_live_device`
+# in crates/flui-cli/tests/cli_live_agent.rs: it creates the counter app, runs
+# it with `flui run --agent --device $FLUI_CLI_LIVE_DEVICE`, and through
+# `flui mcp` presses Increment and reads the count change. Where FLUI cannot
+# drive the device yet it fails as that device's docs/gaps.md entry.
+#
+# Each leg runs the local command, so a run here and one on a developer's
+# machine cannot drift. A row of crates/flui-native/platform-parity.toml that
+# one of these runs holds names the run in its `nightly` table, and the
+# document marks that cell as passed on a runner.
+#
+# No build cache: the hosted runners of other systems would each add an entry
+# beside ci.yml's, and the repository's 10 GB would evict the pull-request
+# entries first. A cold build is the price of a nightly run, not of a merge.
+# A red run on main keeps the "Nightly platforms are red on main" issue open,
+# and a green one closes it.
+
+on:
+  schedule:
+    - cron: "43 1 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/nightly-platforms.yml"
+      - "crates/flui-cli/tests/cli_live_agent.rs"
+
+permissions:
+  contents: read
+
+# Bash on every runner, Windows included, so a step reads its environment
+# the same way everywhere.
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  RUST_BACKTRACE: 1
+  RUSTUP_HOME: ${{ github.workspace }}/../flui-nightly-rustup
+  SCENARIO: cli_live_agent::an_agent_presses_the_counter_on_a_live_device
+
+jobs:
+  desktop:
+    name: ${{ matrix.os }} (flui-native, GPU readback on ${{ matrix.gpu }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            gpu: dx12
+          - os: macos-latest
+            gpu: metal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9
+
+      - name: cargo xtask platform-test
+        run: cargo xtask platform-test
+
+      # `FLUI_REQUIRE_GPU` (set by the task) turns a missing adapter into a
+      # failure. A Windows runner has no GPU, so Direct3D 12 answers with
+      # WARP, the fallback ADR-0244 §1 names.
+      - name: cargo xtask gpu-test --backend ${{ matrix.gpu }}
+        if: ${{ !cancelled() }}
+        run: cargo xtask gpu-test --backend ${{ matrix.gpu }}
+
+      # The scenario's app builds offline from the workspace's lockfile.
+      - name: cargo fetch
+        if: ${{ !cancelled() }}
+        run: cargo fetch --locked
+
+      - name: Counter scenario on the desktop
+        if: ${{ !cancelled() }}
+        env:
+          FLUI_CLI_LIVE_DEVICE: desktop
+        run: cargo nextest run -p flui-cli --locked --no-capture --test cli_it -E "test(=$SCENARIO)"
+
+  # Linux's suites run on every pull request; this leg runs the scenario on
+  # the native X11 host under Xvfb, so a scenario broken everywhere shows as
+  # broken here too and not as three platform failures.
+  linux:
+    name: Linux X11 (counter scenario)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9
+
+      # The X server, the libraries the X11 host loads at run time, and Mesa's
+      # llvmpipe and lavapipe for the window's surface, as in ci.yml.
+      - name: Install Xvfb, libxcb, xkbcommon and Mesa
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends xvfb libxcb1 libxkbcommon-x11-0 \
+            libxkbcommon0 mesa-vulkan-drivers libegl-mesa0 libgl1-mesa-dri
+
+      - name: cargo fetch (the scenario's app builds offline)
+        run: cargo fetch --locked
+
+      - name: Counter scenario on the desktop
+        env:
+          FLUI_CLI_LIVE_DEVICE: desktop
+          WAYLAND_DISPLAY: ""
+        run: >-
+          xvfb-run -a -s "-screen 0 1280x1024x24 -noreset"
+          cargo nextest run -p flui-cli --locked --no-capture --test cli_it -E "test(=$SCENARIO)"
+
+  ios:
+    name: iOS Simulator (counter scenario)
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+        with:
+          targets: aarch64-apple-ios-sim
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9
+
+      - name: cargo fetch (the scenario's app builds offline)
+        run: cargo fetch --locked
+
+      # The newest iPhone of the newest iOS runtime the image carries.
+      - name: Boot an iPhone Simulator
+        run: |
+          set -euo pipefail
+          udid=$(xcrun simctl list devices available --json | jq -r '
+            [.devices | to_entries[]
+             | select(.key | startswith("com.apple.CoreSimulator.SimRuntime.iOS-"))
+             | .value[] | select(.name | startswith("iPhone"))] | last | .udid')
+          [ -n "$udid" ] && [ "$udid" != null ]
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          echo "FLUI_CLI_LIVE_DEVICE=$udid" >> "$GITHUB_ENV"
+
+      - name: Counter scenario on the Simulator
+        run: cargo nextest run -p flui-cli --locked --no-capture --test cli_it -E "test(=$SCENARIO)"
+
+  android:
+    name: Android emulator (counter scenario)
+    # 24.04: the image the emulator runner's KVM and emulator dependencies are
+    # documented on.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Let the runner's user open /dev/kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # The emulator is x86_64, so `flui run` builds the app for that ABI.
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+        with:
+          targets: x86_64-linux-android
+
+      - name: Install cargo-nextest and cargo-ndk
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9,cargo-ndk
+
+      # The image carries the SDK (`ANDROID_HOME`) and several NDKs.
+      - name: Point flui at the newest NDK
+        run: echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+
+      # The scenario's own binary is built before the emulator boots, so the
+      # emulator's time goes to the app.
+      - name: Build the scenario
+        run: |
+          cargo fetch --locked
+          cargo nextest run -p flui-cli --locked --test cli_it --no-run
+
+      - name: Counter scenario on the emulator
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        env:
+          FLUI_CLI_LIVE_DEVICE: emulator-5554
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          # No Vulkan in the guest: the emulator's SwiftShader Vulkan
+          # translator crashes the emulator itself when the app creates its
+          # first pipeline (the device goes away under a running app), so
+          # the app takes the GLES fallback (ADR-0244 §1), the path a device
+          # without Vulkan takes.
+          emulator-options: -no-window -gpu swiftshader_indirect -feature -Vulkan -noaudio -no-boot-anim -no-snapshot
+          disable-animations: true
+          # `flui run` follows the app's own log only; a native crash is in
+          # the crash buffer, printed when the scenario fails, and bounded
+          # in case the device has gone.
+          script: cargo nextest run -p flui-cli --locked --no-capture --test cli_it -E "test(=$SCENARIO)" || { timeout 60 adb logcat -d -b crash; exit 1; }
+
+  report:
+    name: report
+    needs: [desktop, linux, ios, android]
+    if: ${{ always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-26.04
+    permissions:
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Keep the tracking issue
+        uses: ./.github/actions/tracking-issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        with:
+          title: Nightly platforms are red on main
+          outcome: ${{ contains(needs.*.result, 'failure') && 'failure' || (contains(needs.*.result, 'cancelled') && 'cancelled' || 'success') }}
+          body: >-
+            A nightly platform run failed on main. The run names the leg and
+            the failing test; fix it or file it as a gap:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

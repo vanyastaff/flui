@@ -286,9 +286,10 @@ by default, not part of the public API, and the same name and meaning as
 flui-layer's and flui-rendering's `testing`. `cargo xtask gpu-test` sets
 `FLUI_REQUIRE_GPU=1` for both the engine and facade readback suites, so
 missing adapter/device initialization fails instead of silently skipping, and
-`--backend` pins `WGPU_BACKEND`, which every test instance here reads. CI runs
-the suites on Mesa's lavapipe (Vulkan) and llvmpipe (GL); Metal, D3D12 and
-hardware drivers stay local runs.
+`--backend` pins `WGPU_BACKEND`, which every test instance here reads. Pull-request CI runs
+the suites on Mesa's lavapipe (Vulkan) and llvmpipe (GL); the nightly platform runs
+run them on Metal (`macos-latest`) and on D3D12 through WARP (`windows-latest`); hardware
+drivers stay local runs.
 
 ---
 

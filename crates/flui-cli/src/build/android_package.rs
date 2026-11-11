@@ -79,12 +79,15 @@ const _: () = assert!(MIN_COMPILE_SDK >= 31);
 const MIN_BUILD_TOOLS: u32 = 35;
 
 /// The `zipalign` arguments that page-align `base` into `aligned`: every
-/// uncompressed library at a 16 KB boundary.
+/// uncompressed library at a 16 KB boundary, every other entry at 4 bytes.
+/// The alignment operand is required: without it `zipalign` prints its usage
+/// and exits with 2.
 fn zipalign_args(base: &Path, aligned: &Path) -> Vec<std::ffi::OsString> {
     vec![
         "-f".into(),
         "-P".into(),
         "16".into(),
+        "4".into(),
         base.as_os_str().to_owned(),
         aligned.as_os_str().to_owned(),
     ]
@@ -448,7 +451,7 @@ mod tests {
 
     fn libraries_are_aligned_for_16_kb_pages() {
         let args = zipalign_args(Path::new("base.apk"), Path::new("aligned.apk"));
-        assert_eq!(args, ["-f", "-P", "16", "base.apk", "aligned.apk"]);
+        assert_eq!(args, ["-f", "-P", "16", "4", "base.apk", "aligned.apk"]);
     }
 
     #[test]

@@ -52,7 +52,7 @@ use flui_view::{
     RenderObjectContextError, RenderView, WriterSource, impl_render_view,
 };
 
-use crate::support::{ValueCallback, event_callback, ref_callback, value_callback};
+use crate::support::{ValueCallback, ref_callback, value_callback};
 
 #[derive(Clone, Copy, Debug, Default)]
 struct SemanticsOptions {
@@ -1199,8 +1199,8 @@ impl Semantics {
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        let handler = event_callback(handler);
-        let handler: EventActionHandler = Rc::new(move |cx, _call| handler(cx));
+        let handler: EventActionHandler =
+            Rc::new(move |cx: &mut EventCx<'_>, _call| handler(cx).report());
         let entry = CustomEntry {
             label,
             handler,
@@ -1251,9 +1251,12 @@ impl Semantics {
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        let handler = event_callback(handler);
-        self.event_actions
-            .insert(action, Rc::new(move |cx, _call| handler(cx)));
+        // One allocation: the outcome is reported here, as `event_callback`
+        // reports it (ADR-0086).
+        self.event_actions.insert(
+            action,
+            Rc::new(move |cx: &mut EventCx<'_>, _call| handler(cx).report()),
+        );
         self
     }
 
@@ -1381,6 +1384,15 @@ impl Semantics {
     }
 }
 
+/// Release the action table `part` holds in the owner lane: what a
+/// [`Semantics`] element does when it unmounts, for any owner of a
+/// [`RenderSemanticsAnnotations`].
+pub(crate) fn release_part(ctx: &RenderObjectContext<'_>, part: &mut RenderSemanticsAnnotations) {
+    if let Some(route) = part.set_action_route(None) {
+        release_actions(ctx, &route);
+    }
+}
+
 /// Remove a node's action table from the owner lane.
 fn release_actions(ctx: &RenderObjectContext<'_>, route: &SemanticsActionRoute) {
     if let Err(error) = ctx.unregister_local_payload(route.target()) {
@@ -1449,9 +1461,7 @@ impl RenderView for Semantics {
         ctx: &RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) {
-        if let Some(route) = render_object.set_action_route(None) {
-            release_actions(ctx, &route);
-        }
+        release_part(ctx, render_object);
     }
 
     flui_view::single_child_view_children!();

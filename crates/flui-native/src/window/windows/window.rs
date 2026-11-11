@@ -145,9 +145,13 @@ fn device_pair(x: f64, y: f64, scale: f64) -> Result<(i32, i32), ApplyError> {
 /// of a borderless window sized to its monitor. It takes no refresh-rate
 /// request: the display's rate is the user's setting. The material is
 /// `DWMWA_SYSTEMBACKDROP_TYPE`; a Win32 window opens with
-/// [`WindowMaterial::System`] where the build draws it.
+/// [`WindowMaterial::System`] where the build draws it. The windows report
+/// when their frames reached the screen unless `presentation` names why the
+/// machine's display cannot tell
+/// ([`presentation_absence`](super::frame_timing::presentation_absence)).
 pub(crate) const fn window_capabilities(
     gate: &Result<Since<SystemBackdrop>, Unsupported>,
+    presentation: Option<CapabilityAbsence>,
 ) -> WindowCapabilities {
     use flui_platform::Availability::{Emulated, Native};
     // A tablet shows a touch keyboard (`InputPane`), whose occlusion this host
@@ -177,6 +181,9 @@ pub(crate) const fn window_capabilities(
     // From the frame statistics of the swap chain the renderer presents
     // through, which it hands the surface target before each present.
     capabilities.reports_presentation = Native;
+    if let Some(absence) = presentation {
+        capabilities = capabilities.without_presentation_feedback(absence);
+    }
     super::material::below_the_gate(capabilities, gate)
 }
 

@@ -64,7 +64,9 @@ use crate::window::apple::geometry::{
     mode::{ANIMATION_LIMIT, FixedSize, ModeSequence, ModeStep, WindowFlags, capabilities_of},
     title_bar::{ControlsLayout, FrameStyle},
 };
-use crate::window::capabilities::{appkit_window_capabilities, frame_rate_absence};
+use crate::window::capabilities::{
+    appkit_presentation, appkit_window_capabilities, frame_rate_absence,
+};
 use parking_lot::Mutex;
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
@@ -163,6 +165,10 @@ pub struct MacOSWindow {
     /// equivalent to "on the owner lane" for
     /// [`crate::owner::apple::macos::on_owner_thread`].
     owner_is_main: bool,
+
+    /// Why the machine's display tells this window nothing of its frames
+    /// reaching the screen; the platform's, copied at open.
+    presentation: Option<flui_platform::CapabilityAbsence>,
 
     /// What the table's positions made for this window once its content view
     /// was installed: the accessibility bridge, subclassed onto that view;
@@ -425,9 +431,10 @@ impl MacOSWindow {
         // the window is made on.
         let owner = crate::owner::apple::macos::owner_queue();
         let owner_is_main = true;
-        options.frame = options
-            .frame
-            .at_open(&appkit_window_capabilities(owner_is_main));
+        options.frame = options.frame.at_open(&appkit_window_capabilities(
+            owner_is_main,
+            windows.presentation,
+        ));
         let style = FrameStyle::of(options.frame);
         // SAFETY: AppKit makes and configures an NSWindow only on the main
         // thread, which the `MainThreadMarker` this takes proves this is; all
@@ -658,6 +665,7 @@ impl MacOSWindow {
                 loop_control: OnceLock::new(),
                 owner,
                 owner_is_main,
+                presentation: windows.presentation,
                 facets,
                 redraw: OnceCell::new(),
                 displays: OnceLock::new(),
@@ -1130,6 +1138,9 @@ pub struct MacOSWindows {
     /// that built the platform, never one twice: AppKit reuses the address
     /// of a released `NSWindow`, so an address is never an id.
     ids: OwnerCell<WindowIdMint>,
+    /// Why the machine's display tells no window when its frames reached the
+    /// screen, read once with the platform; `None` where it tells.
+    presentation: Option<flui_platform::CapabilityAbsence>,
 }
 
 impl MacOSWindows {
@@ -1139,8 +1150,30 @@ impl MacOSWindows {
         Self {
             positions,
             ids: OwnerCell::new(),
+            presentation: appkit_presentation(hypervisor_guest()),
         }
     }
+}
+
+/// Whether this Mac runs as a hypervisor's guest: `kern.hv_vmm_present`,
+/// the sysctl Apple names for it. A system that does not answer is taken as
+/// none.
+fn hypervisor_guest() -> bool {
+    let mut present: libc::c_int = 0;
+    let mut size = std::mem::size_of::<libc::c_int>();
+    // SAFETY: the name is a NUL-terminated literal; `present` and `size` are
+    // live locals the call writes at most `size` bytes into, and no new value
+    // is passed.
+    let read = unsafe {
+        libc::sysctlbyname(
+            c"kern.hv_vmm_present".as_ptr(),
+            (&raw mut present).cast(),
+            &raw mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    read == 0 && present == 1
 }
 
 /// Turn a position and a normal rectangle measured on a display into global
@@ -1239,10 +1272,10 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         owner.windows.get(&key).map(|window| window.id())
     }
 
-    fn capabilities(_: &MacOSLoop, _: &MacOSWindows) -> WindowCapabilities {
+    fn capabilities(_: &MacOSLoop, windows: &MacOSWindows) -> WindowCapabilities {
         // Every window the platform opens routes through the AppKit main lane
         // (`MacOSWindow::try_new`).
-        appkit_window_capabilities(true)
+        appkit_window_capabilities(true, windows.presentation)
     }
 
     fn frame_inset(owner: &MacOSLoop, _: &MacOSWindows, _scale_factor: f64) -> Size<f64> {
@@ -1805,7 +1838,7 @@ impl MacOSWindow {
                 capabilities: capabilities_of(
                     flags,
                     heading,
-                    appkit_window_capabilities(self.owner_is_main),
+                    appkit_window_capabilities(self.owner_is_main, self.presentation),
                 ),
             }
             .onto(state)

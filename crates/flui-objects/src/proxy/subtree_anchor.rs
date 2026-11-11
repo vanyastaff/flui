@@ -89,11 +89,11 @@ impl SubtreeAnchor {
         self.get().is_some()
     }
 
-    fn publish(&self, id: RenderId) {
+    pub(crate) fn publish(&self, id: RenderId) {
         *self.published.lock() = Some(id);
     }
 
-    fn clear(&self, id: RenderId) {
+    pub(crate) fn clear(&self, id: RenderId) {
         let mut published = self.published.lock();
         if *published == Some(id) {
             *published = None;

@@ -5,10 +5,15 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use flui_rendering::hit_testing::HitTestBehavior;
 use flui_testing::{Action, ActionRequest, NodeId, TreeId};
 use flui_view::prelude::*;
 use flui_view::{SignalError, WriterSource};
-use flui_widgets::{Column, RawButton, Text, column};
+use flui_widgets::interaction::{
+    Action as IntentAction, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent,
+    ButtonActivateIntent, Focus, FocusRing, GestureDetector,
+};
+use flui_widgets::{Column, RawButton, Semantics, SemanticsRole, Text, column};
 
 use crate::common::{LaidOut, lay_out, loose};
 
@@ -210,4 +215,300 @@ pub(crate) fn raw_button_activates_from_the_keyboard() {
             .is_some_and(|node| Rc::ptr_eq(&node, &focused)),
         "Tab stays on the enabled button: the disabled one is not a Tab stop"
     );
+}
+
+/// The same button made two ways, so one test body compares them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Made {
+    /// [`RawButton`].
+    Raw,
+    /// The public wrappers a button is composed from by hand.
+    Wrappers,
+}
+
+type OnPress = Rc<dyn Fn(&mut EventCx<'_>)>;
+
+/// A button composed from the public wrappers: what `RawButton` must stay
+/// indistinguishable from to assistive technology and to the gesture arena
+/// (ADR-0322 §6).
+#[derive(Clone, StatelessView)]
+struct WrapperButton {
+    on_press: Option<OnPress>,
+    child: BoxedView,
+}
+
+#[derive(Clone)]
+struct WrapperPress(Option<OnPress>);
+
+impl WrapperPress {
+    fn run(&self, cx: &mut EventCx<'_>) -> ActionOutcome {
+        match &self.0 {
+            Some(on_press) => {
+                on_press(cx);
+                ActionOutcome::Performed
+            }
+            None => ActionOutcome::NotPerformed,
+        }
+    }
+}
+
+impl IntentAction<ActivateIntent> for WrapperPress {
+    fn is_enabled(&self, _intent: &ActivateIntent) -> bool {
+        self.0.is_some()
+    }
+
+    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+        self.run(cx)
+    }
+}
+
+impl IntentAction<ButtonActivateIntent> for WrapperPress {
+    fn is_enabled(&self, _intent: &ButtonActivateIntent) -> bool {
+        self.0.is_some()
+    }
+
+    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
+        self.run(cx)
+    }
+}
+
+impl IntentAction<ActivationPressIntent> for WrapperPress {
+    fn is_enabled(&self, _intent: &ActivationPressIntent) -> bool {
+        self.0.is_some()
+    }
+
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+        ActionOutcome::Performed
+    }
+}
+
+impl StatelessView for WrapperButton {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        let enabled = self.on_press.is_some();
+        let press = WrapperPress(self.on_press.clone());
+        let actions = Actions::new(
+            Focus::new(FocusRing::new(self.child.clone()))
+                .can_request_focus(enabled)
+                .debug_label("RawButton"),
+        )
+        .action::<ActivateIntent>(press.clone())
+        .action::<ButtonActivateIntent>(press.clone())
+        .action::<ActivationPressIntent>(press);
+        let mut detector = GestureDetector::new()
+            .behavior(HitTestBehavior::Opaque)
+            .child(actions);
+        if let Some(handler) = self.on_press.clone() {
+            detector = detector.on_tap(move |cx| handler(cx));
+        }
+        Semantics::new()
+            .container(true)
+            .role(SemanticsRole::Button)
+            .enabled(enabled)
+            .child(detector)
+    }
+}
+
+/// A button over `child`, made as `made` says; `on_press` absent disables it.
+fn button(made: Made, on_press: Option<OnPress>, child: impl IntoView) -> BoxedView {
+    match made {
+        Made::Raw => {
+            let button = RawButton::new(child);
+            match on_press {
+                Some(on_press) => button.on_press(move |cx| on_press(cx)).boxed(),
+                None => button.boxed(),
+            }
+        }
+        Made::Wrappers => WrapperButton {
+            on_press,
+            child: child.into_view().boxed(),
+        }
+        .boxed(),
+    }
+}
+
+/// What a scene's presses recorded, in order.
+type PressLog = Rc<RefCell<Vec<&'static str>>>;
+
+fn logging(log: &PressLog, name: &'static str) -> OnPress {
+    let log = Rc::clone(log);
+    Rc::new(move |_cx: &mut EventCx<'_>| {
+        log.borrow_mut().push(name);
+    })
+}
+
+/// The accessibility tree of a button is the tree of the wrappers it
+/// replaces: every node, property, action and bound, enabled and disabled,
+/// with and without the keyboard focus.
+///
+/// Red-check: drop the `on_click` the node takes from its tap slot (the
+/// enabled rows lose the click action).
+pub(crate) fn raw_button_a11y_tree_matches_wrappers() {
+    for enabled in [true, false] {
+        for focused in [false, true] {
+            let tree = |made: Made| {
+                let log = PressLog::default();
+                let on_press = enabled.then(|| logging(&log, "press"));
+                let mut app = lay_out(
+                    Column::new(column![
+                        Text::new("Above"),
+                        button(made, on_press, Text::new("Press")),
+                    ]),
+                    loose(400.0),
+                );
+                if focused {
+                    let manager = app.focus_manager();
+                    let moved = app.enter_owner_scope(|| crate::keyboard_focus::tab(&manager));
+                    assert_eq!(moved, enabled, "Tab reaches an enabled button only");
+                    app.pump();
+                }
+                app.enable_semantics();
+                app.pump();
+                let tree = app.a11y_tree().expect("semantics enabled before the frame");
+                let clicks = tree
+                    .find_by_label("Press")
+                    .expect("the button is one node named by its label")
+                    .supports_action(Action::Click);
+                assert_eq!(
+                    clicks, enabled,
+                    "{made:?}: only an enabled button offers a click"
+                );
+                format!("{:#?}", tree.raw())
+            };
+            let (raw, wrappers) = (tree(Made::Raw), tree(Made::Wrappers));
+            assert!(
+                raw.contains("Button"),
+                "the tree describes a button:\n{raw}"
+            );
+            assert_eq!(
+                raw, wrappers,
+                "enabled={enabled} focused={focused}: the button's tree is the wrappers' tree"
+            );
+        }
+    }
+}
+
+/// One contact with a scene.
+#[derive(Clone, Copy, Debug)]
+enum Contact {
+    Tap,
+    DragPastSlop,
+    LongPress,
+    Cancel,
+}
+
+const CONTACTS: [Contact; 4] = [
+    Contact::Tap,
+    Contact::DragPastSlop,
+    Contact::LongPress,
+    Contact::Cancel,
+];
+
+/// Makes `contact` starting at `(x, y)` and settles.
+fn contact(app: &mut LaidOut, contact: Contact, x: f64, y: f64) {
+    use std::time::Duration;
+
+    app.dispatch_pointer_down(x, y);
+    match contact {
+        Contact::Tap => app.dispatch_pointer_up(x, y),
+        Contact::DragPastSlop => {
+            for step in 1..=6 {
+                let moved = y - 10.0 * f64::from(step);
+                app.dispatch_pointer_move_after(x, moved, Duration::from_millis(16));
+                app.pump_for(Duration::from_millis(16));
+            }
+            app.dispatch_pointer_up(x, y - 60.0);
+        }
+        Contact::LongPress => {
+            app.pump_for(Duration::from_millis(800));
+            app.dispatch_pointer_up(x, y);
+        }
+        Contact::Cancel => app.dispatch_pointer_cancel(),
+    }
+    app.pump_for(Duration::from_millis(400));
+}
+
+/// A button at the top of a vertical scrollable, over content taller than
+/// the viewport.
+fn scrollable_scene(made: Made, log: &PressLog) -> flui_widgets::SizedBox {
+    use flui_widgets::{SingleChildScrollView, SizedBox};
+
+    SizedBox::new(300.0, 200.0).child(SingleChildScrollView::new().child(Column::new(column![
+        button(
+            made,
+            Some(logging(log, "press")),
+            SizedBox::new(300.0, 60.0).child(Text::new("Press"))
+        ),
+        SizedBox::new(300.0, 2_000.0),
+    ])))
+}
+
+/// What a contact left behind: the presses, and where the label ended up.
+fn outcome(app: &LaidOut, log: &PressLog) -> (Vec<&'static str>, String) {
+    let label = app.find_text("Press").expect("the button's label");
+    (
+        log.borrow().clone(),
+        format!("{:?}", app.absolute_offset(label)),
+    )
+}
+
+/// A button in a scrollable enters the arena as a `GestureDetector` does: a
+/// tap presses it, a drag past the slop scrolls and presses nothing, and a
+/// long press and a cancel end as they do for the wrappers.
+///
+/// Red-check: give the node's recognizers no arena admission (the drag
+/// presses the button or the scrollable never wins).
+pub(crate) fn raw_button_in_scrollable_contests_like_gesture_detector() {
+    for made_contact in CONTACTS {
+        let run = |made: Made| {
+            let log = PressLog::default();
+            let mut app = lay_out(scrollable_scene(made, &log), loose(400.0));
+            let before = outcome(&app, &log).1;
+            contact(&mut app, made_contact, 150.0, 30.0);
+            let (presses, after) = outcome(&app, &log);
+            (presses, before != after)
+        };
+        let (raw, wrappers) = (run(Made::Raw), run(Made::Wrappers));
+        assert_eq!(raw, wrappers, "{made_contact:?}");
+        match made_contact {
+            Contact::Tap => assert_eq!(raw, (vec!["press"], false)),
+            Contact::DragPastSlop => assert_eq!(raw, (vec![], true), "the drag scrolls"),
+            Contact::Cancel => assert_eq!(raw, (vec![], false)),
+            Contact::LongPress => {}
+        }
+    }
+}
+
+/// A button inside a button: the inner one wins a contact over it, the outer
+/// one a contact beside it, as nested `GestureDetector`s do.
+///
+/// Red-check: make the node's hit test skip its child (the outer button
+/// takes the inner one's taps).
+pub(crate) fn nested_raw_button_contests_like_gesture_detector() {
+    use flui_widgets::SizedBox;
+
+    for made_contact in CONTACTS {
+        for (place, y) in [("inner", 60.0), ("outer", 20.0)] {
+            let run = |made: Made| {
+                let log = PressLog::default();
+                let inner = button(
+                    made,
+                    Some(logging(&log, "inner")),
+                    SizedBox::new(200.0, 40.0),
+                );
+                let outer = button(
+                    made,
+                    Some(logging(&log, "outer")),
+                    Column::new(column![SizedBox::new(200.0, 40.0), inner]),
+                );
+                let mut app = lay_out(outer, loose(400.0));
+                contact(&mut app, made_contact, 100.0, y);
+                log.borrow().clone()
+            };
+            let (raw, wrappers) = (run(Made::Raw), run(Made::Wrappers));
+            assert_eq!(raw, wrappers, "{made_contact:?} over the {place} button");
+            if matches!(made_contact, Contact::Tap) {
+                assert_eq!(raw, [place], "a tap presses the button under it");
+            }
+        }
+    }
 }

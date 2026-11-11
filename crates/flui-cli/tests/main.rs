@@ -32,6 +32,8 @@ mod cli_devices;
 mod cli_doctor;
 #[path = "cli_errors.rs"]
 mod cli_errors;
+#[path = "cli_live_agent.rs"]
+mod cli_live_agent;
 #[path = "cli_platform.rs"]
 mod cli_platform;
 #[path = "cli_record.rs"]
