@@ -14,10 +14,11 @@ use windows::Win32::{
 };
 
 use flui_platform::{
-    PlatformWindow, Unsupported, WindowCapabilities, WindowHandler, WindowId, WindowIdMint,
-    WindowOptions,
+    CapabilityAbsence, PlatformWindow, Unsupported, WindowCapabilities, WindowHandler, WindowId,
+    WindowIdMint, WindowOptions,
 };
 
+use super::frame_timing::{DisplayAdapter, presentation_absence};
 use super::material::{self, SystemBackdrop};
 use super::proc::{WindowRef, to_screen, with_window_context_checked};
 use super::window::{WindowsWindow, window_capabilities};
@@ -54,6 +55,43 @@ pub struct WindowSet {
     /// Whether the build the platform runs on draws a material behind a
     /// window, read once with the platform.
     pub(super) material: Result<Since<SystemBackdrop>, Unsupported>,
+    /// Why the machine's display tells no window when its frames reached the
+    /// screen, read once with the platform; `None` where it tells.
+    presentation: Option<CapabilityAbsence>,
+}
+
+/// The machine's DXGI adapters, each with the number of its outputs the
+/// desktop is on; none where DXGI cannot be asked.
+fn display_adapters() -> Vec<DisplayAdapter> {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+
+    // SAFETY: a plain factory creation, no arguments.
+    let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
+        return Vec::new();
+    };
+    // DXGI lists adapters from 0 until `DXGI_ERROR_NOT_FOUND`, and outputs of
+    // each the same way.
+    // SAFETY: each call takes an index and returns an owned COM interface.
+    (0..)
+        .map_while(|index| unsafe { factory.EnumAdapters1(index) }.ok())
+        .filter_map(|adapter| {
+            // SAFETY: a read of the live adapter's description, returned by
+            // value.
+            let description = unsafe { adapter.GetDesc1() }.ok()?;
+            let desktop_outputs = (0..)
+                // SAFETY: as above, an index into the live adapter's outputs.
+                .map_while(|index| unsafe { adapter.EnumOutputs(index) }.ok())
+                // SAFETY: a read of the live output's description, returned
+                // by value.
+                .filter(|output| unsafe { output.GetDesc() }.is_ok_and(|d| d.AttachedToDesktop.as_bool()))
+                .count();
+            Some(DisplayAdapter {
+                vendor_id: description.VendorId,
+                device_id: description.DeviceId,
+                desktop_outputs: u32::try_from(desktop_outputs).unwrap_or(u32::MAX),
+            })
+        })
+        .collect()
 }
 
 impl WindowSet {
@@ -70,12 +108,13 @@ impl WindowSet {
             config,
             positions,
             material: material::gate(build),
+            presentation: presentation_absence(&display_adapters()),
         }
     }
 
     /// What every window of this platform honours and observes.
     pub(super) const fn capabilities(&self) -> WindowCapabilities {
-        window_capabilities(&self.material)
+        window_capabilities(&self.material, self.presentation)
     }
 
     /// Stops tracking the window `hwnd` names, when it is the one with
@@ -124,6 +163,7 @@ impl std::fmt::Debug for WindowSet {
             .field("config", &self.config)
             .field("positions", &self.positions)
             .field("material", &self.material)
+            .field("presentation", &self.presentation)
             .finish()
     }
 }

@@ -330,16 +330,23 @@ mod cases {
             }
             self.handler.take_calls();
             self.window.request_redraw();
-            self.settle();
-            let request = self
-                .handler
-                .take_calls()
-                .into_iter()
-                .rev()
-                .find_map(|call| match call {
-                    HandlerCall::FrameRequested(request) => Some(request),
-                    _ => None,
-                });
+            // Until the request arrives, not until the window settles: the
+            // checks time its stamps against their reading as this returns,
+            // and a settle waits a quiet second after it.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut request = None;
+            while request.is_none() && Instant::now() < deadline {
+                appkit::run_for(Duration::from_millis(10));
+                request = self
+                    .handler
+                    .take_calls()
+                    .into_iter()
+                    .rev()
+                    .find_map(|call| match call {
+                        HandlerCall::FrameRequested(request) => Some(request),
+                        _ => None,
+                    });
+            }
             if let Some(request) = request {
                 eprintln!(
                     "the next frame request: vsync {:?}, presented {:?}",
@@ -442,7 +449,8 @@ mod cases {
 
     /// A backdrop material makes an `NSVisualEffectView` the window's content
     /// view and moves FLUI's view inside it; the view keeps its own layer, and
-    /// the frames drawn into it are still reported shown.
+    /// the frames drawn into it are still reported shown where the window
+    /// says it reports presentation.
     fn a_window_behind_a_backdrop_still_reports_its_frames() {
         let mut fixture = open("presented behind a backdrop");
         fixture
@@ -451,12 +459,17 @@ mod cases {
             .unwrap_or_else(|refusal| panic!("SetMaterial(System) was refused: {refusal:?}"));
         fixture.settle();
         assert_eq!(fixture.material(), Some(WindowMaterial::System));
+        let claimed = fixture.window.state().capabilities.presentation_feedback();
         let request = fixture
             .present_and_request_frame()
             .expect("the window asks for a frame");
-        assert!(
+        // A display that never tells (a hypervisor's guest) reports nothing
+        // behind a backdrop or anywhere, as the window says.
+        assert_eq!(
             request.presented.is_some(),
-            "a frame shown behind a backdrop was reported: {request:?}"
+            claimed.is_ok(),
+            "a frame shown behind a backdrop, where presentation feedback is {claimed:?}: \
+             {request:?}"
         );
     }
 
