@@ -84,7 +84,7 @@ impl OffscreenRenderer {
         &mut self,
         surface_format: wgpu::TextureFormat,
     ) -> &BlitPipeline {
-        if self.blit_pipeline.is_none() {
+        if !self.blit_pipelines.contains_key(&surface_format) {
             tracing::debug!("Creating intermediate-blit pipeline");
 
             let bind_group_layout =
@@ -223,16 +223,19 @@ impl OffscreenRenderer {
                     usage: wgpu::BufferUsages::VERTEX,
                 });
 
-            self.blit_pipeline = Some(BlitPipeline {
-                pipeline: Arc::new(pipeline),
-                bind_group_layout: Arc::new(bind_group_layout),
-                sampler: Arc::new(sampler),
-                vertex_buffer: Arc::new(vertex_buffer),
-            });
+            let _ = self.blit_pipelines.insert(
+                surface_format,
+                BlitPipeline {
+                    pipeline: Arc::new(pipeline),
+                    bind_group_layout: Arc::new(bind_group_layout),
+                    sampler: Arc::new(sampler),
+                    vertex_buffer: Arc::new(vertex_buffer),
+                },
+            );
         }
-        self.blit_pipeline
-            .as_ref()
-            .expect("blit_pipeline was set above")
+        self.blit_pipelines
+            .get(&surface_format)
+            .expect("BUG: the pipeline of this format was inserted above")
     }
 
     /// Blit the intermediate texture 1:1 onto the swapchain surface view.

@@ -378,12 +378,15 @@ pub(crate) mod state_stack;
 // scope where its intra-doc links resolve differently (rustdoc quirk).
 mod glyph_atlas;
 mod surface_color;
+mod surface_factory;
 mod surface_lease;
+mod surface_present;
 mod tessellator;
 pub(crate) mod texture_cache;
 mod texture_pool;
 mod uniform_pool;
 mod vertex;
+mod window_slot;
 // What a windowed `Renderer` draws into: an owned, `'static`, `Send + Sync`
 // handle source (issue #1043). Exported here beside `Renderer`. See the
 // module's own `//!` doc for details; no outer doc here for the same reason
@@ -517,8 +520,9 @@ pub use flui_foundation::GpuResourceGeneration;
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;
 // The one GPU context every slot renders through (ADR-0305 §1).
-pub use gpu_context::GpuContext;
+pub use gpu_context::{GpuBootstrap, GpuContext};
 pub use painter::WgpuPainter;
+pub use surface_factory::{SurfaceFactory, UnconfiguredSurface};
 // Renderer (the one externally-consumed wgpu/* type)
 pub use frame_latency::FrameLatency;
 pub use gpu_backend::{BackendFailure, GpuBackend};

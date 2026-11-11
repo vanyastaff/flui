@@ -1,30 +1,38 @@
-//! One GPU context serves every presentation as a slot (ADR-0305 §1).
+//! One GPU context serves every presentation as a slot (ADR-0305 §1, §2).
 //!
 //! [`GpuContext`] owns the instance, the adapter, the device and its queue,
 //! and one painter, whose pipeline library (one set per target format), glyph
-//! atlas, image and path caches every slot shares. What is keyed by the
-//! presentation is the slot's: its target texture, its size and its format.
+//! atlas, image and path caches every slot shares, and the presentation blit
+//! pipelines (one per surface format). What is keyed by the presentation is
+//! the slot's: an offscreen slot's target texture, or a window slot's
+//! surface, configuration and frame protocol (`window_slot`).
 //!
 //! Slots render one at a time on the context's one mutator, so sharing the
 //! caches takes no lock: the context is `Send`, so a raster thread can own it,
 //! and `!Sync`, so no `&GpuContext` crosses a thread.
 //!
-//! Today the context serves offscreen slots: the headless renderer is made of
-//! one, and the raster executor drives it as its backend. Window surfaces are
-//! the step ADR-0305's Migration names next.
+//! [`GpuContext::bootstrap`] makes the application's one context on the
+//! host's display connection, and the [`SurfaceFactory`] the owner makes
+//! every window's surface with on the same instance.
 
 use std::{cell::Cell, marker::PhantomData, sync::Arc};
 
 use flui_foundation::{geometry::DeviceSize, memory::MemoryPressureLevel};
 use flui_layer::{DamageRegion, LayerTree, Scene};
+use flui_platform::{DisplayColor, DisplayConnection, SurfaceTarget};
 
 use crate::{
+    FrameLatency,
     device_domain::DeviceDomain,
     error::{EngineError, EngineResult},
+    gpu_backend::{Attempt, GpuBackend},
     layer_dispatcher::LayerDispatcher,
+    offscreen::OffscreenRenderer,
     painter::WgpuPainter,
     raster::PresentDisposition,
-    raster_executor::{SlotBackend, SlotId, SlotTarget},
+    raster_executor::{SlotBackend, SlotConfig, SlotId, SlotTarget},
+    surface_factory::{SurfaceFactory, UnconfiguredSurface, checked_target, instance_descriptor},
+    window_slot::{Gpu, WindowSlot},
 };
 
 #[cfg(test)]
@@ -38,12 +46,17 @@ thread_local! {
     pub(crate) static INSTANCES_CREATED: Cell<usize> = const { Cell::new(0) };
 }
 
-/// What one slot renders into.
-struct SurfaceSlot {
-    /// The slot's target, which the executor reads back.
+/// An offscreen slot: a texture the executor reads back.
+struct OffscreenSlot {
     texture: wgpu::Texture,
     format: wgpu::TextureFormat,
     size: (u32, u32),
+}
+
+/// What one slot renders into.
+enum SurfaceSlot {
+    Offscreen(OffscreenSlot),
+    Window(Box<WindowSlot>),
 }
 
 /// The slots of one context, by the index of the id the owner minted.
@@ -109,19 +122,18 @@ pub(crate) struct ContextBuilds {
 /// ambiently (ADR-0097). `Send`, so a raster thread can take it, and not
 /// `Sync`, so it has one mutator and its caches need no lock.
 pub struct GpuContext {
-    /// Kept for the device's life; the surfaces of later windows are made
-    /// on it (ADR-0305 §2).
+    /// The instance the factory makes every window surface on (ADR-0305 §2),
+    /// made on the host's display connection. The executor makes no surface
+    /// on it; the device rebuild (§8) requests its adapter here.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "held for the device's life; window slots create surfaces on it"
+            reason = "ADR-0305 §8: the device rebuild requests its adapter on it"
         )
     )]
     instance: wgpu::Instance,
-    /// Kept so a test's feature-reduced twin comes from this adapter and
-    /// instance (`HeadlessRenderer::without_dual_source_blending`).
-    #[cfg_attr(not(test), expect(dead_code, reason = "held for the device's life"))]
+    /// The adapter the first surface picked, for the context's life.
     adapter: wgpu::Adapter,
     domain: Arc<DeviceDomain>,
     /// The painter every slot records and replays with: its pipelines per
@@ -131,6 +143,10 @@ pub struct GpuContext {
     /// discards it and the next frame builds a fresh one; only a complete
     /// frame puts it back.
     painter: Option<WgpuPainter>,
+    /// The presentation blit of window slots whose frames render into a
+    /// retained target, one pipeline per surface format; built at the first
+    /// window frame.
+    blit: Option<OffscreenRenderer>,
     slots: SlotTable,
     #[cfg(test)]
     builds: ContextBuilds,
@@ -143,7 +159,152 @@ pub struct GpuContext {
 static_assertions::assert_impl_all!(GpuContext: Send);
 static_assertions::assert_not_impl_any!(GpuContext: Sync);
 
+/// The application's one GPU context, the factory its windows' surfaces are
+/// made with, and the first window's surface when there was one
+/// ([`GpuContext::bootstrap`]).
+#[non_exhaustive]
+pub struct GpuBootstrap {
+    /// The context, for the raster executor.
+    pub context: GpuContext,
+    /// The owner's factory over the context's instance.
+    pub factory: SurfaceFactory,
+    /// The first window's surface, for its slot's attach.
+    pub first: Option<UnconfiguredSurface>,
+}
+
+impl std::fmt::Debug for GpuBootstrap {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GpuBootstrap")
+            .field("first", &self.first.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// One backend attempt's instance, adapter, device and the first window's
+/// surface.
+struct Answered {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    first: Option<wgpu::Surface<'static>>,
+}
+
 impl GpuContext {
+    /// The application's one context, on the host's `display`, with the
+    /// factory the owner makes every window's surface with (ADR-0305 §2).
+    ///
+    /// Runs ADR-0244 decision 1's probe once: the preferred backend, then its
+    /// fallback, each in an instance of its own, over the `first` window when
+    /// there is one, so the adapter chosen presents to it; `WGPU_BACKEND`
+    /// keeps only the backends it names. The winning instance is the
+    /// context's and the factory's, for the context's life. `first` is
+    /// `None` for a context of offscreen slots only.
+    ///
+    /// # Errors
+    /// - [`EngineError::SurfaceTargetUnavailable`] or
+    ///   [`EngineError::SurfaceOnForeignDisplay`]: `first` fails the factory's
+    ///   checks, before any GPU work.
+    /// - [`EngineError::NoSupportedGpu`]: no backend gave a device, with why
+    ///   each one failed.
+    pub async fn bootstrap(
+        display: Arc<dyn DisplayConnection>,
+        first: Option<Arc<dyn SurfaceTarget>>,
+    ) -> EngineResult<GpuBootstrap> {
+        let first = first
+            .map(|target| checked_target(&*display, &target).map(|leased| (leased, target)))
+            .transpose()?;
+        let attempts = crate::gpu_backend::attempts(
+            crate::gpu_backend::Family::CURRENT.order(),
+            wgpu::Backends::from_env(),
+        );
+        let leased = first.as_ref().map(|(leased, _)| leased);
+        let display_ref = &display;
+        let answered = crate::gpu_backend::first_answering(&attempts, |attempt| async move {
+            Self::answer(attempt, display_ref, leased)
+                .await
+                .map_err(|error| error.to_string())
+        })
+        .await;
+        let (backend, answered) =
+            answered.map_err(|tried| EngineError::NoSupportedGpu { tried })?;
+        tracing::info!(%backend, adapter = %answered.adapter.get_info().name, "GPU backend selected");
+        let Answered {
+            instance,
+            adapter,
+            device,
+            queue,
+            first: surface,
+        } = answered;
+        let first = match (first, surface) {
+            (Some((leased, target)), Some(surface)) => {
+                Some(UnconfiguredSurface::new(leased, target, surface))
+            }
+            _ => None,
+        };
+        let factory = SurfaceFactory::new(instance.clone(), display);
+        let context = Self::from_device(instance, adapter, device, queue);
+        Ok(GpuBootstrap {
+            context,
+            factory,
+            first,
+        })
+    }
+
+    /// One backend attempt: an instance over `display` for `attempt` alone,
+    /// the first window's surface on it, an adapter that presents to it, and
+    /// its device.
+    async fn answer(
+        attempt: Attempt,
+        display: &Arc<dyn DisplayConnection>,
+        first: Option<&Arc<dyn crate::WindowTarget>>,
+    ) -> EngineResult<Answered> {
+        #[cfg(test)]
+        INSTANCES_CREATED.with(|created| created.set(created.get() + 1));
+        let instance = wgpu::Instance::new(instance_descriptor(
+            display,
+            attempt.backends,
+            wgpu::BackendOptions {
+                dx12: crate::surface_present::dx12_options(),
+                ..Default::default()
+            },
+        ));
+        let surface = |instance: &wgpu::Instance| {
+            first
+                .map(|target| {
+                    instance
+                        .create_surface(Arc::clone(target))
+                        .map_err(EngineError::surface_creation)
+                })
+                .transpose()
+        };
+        // A canvas keeps the first context kind it hands out, so WebGPU gets
+        // its device before it claims the canvas (as `Renderer::new` does).
+        if attempt.backend == GpuBackend::WebGpu {
+            let (adapter, _, device, queue) =
+                crate::Renderer::adapter_and_device(&instance, attempt, None).await?;
+            let first = surface(&instance)?;
+            return Ok(Answered {
+                instance,
+                adapter,
+                device,
+                queue,
+                first,
+            });
+        }
+        let first = surface(&instance)?;
+        let (adapter, _, device, queue) =
+            crate::Renderer::adapter_and_device(&instance, attempt, first.as_ref()).await?;
+        Ok(Answered {
+            instance,
+            adapter,
+            device,
+            queue,
+            first,
+        })
+    }
+
     /// A context with no window: offscreen slots only (headless, tests).
     ///
     /// Requests whichever of `wanted_features` the adapter offers.
@@ -194,12 +355,23 @@ impl GpuContext {
             })
             .await
             .map_err(EngineError::device_creation)?;
+        Ok(Self::from_device(instance, adapter, device, queue))
+    }
+
+    fn from_device(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+    ) -> Self {
         let domain = DeviceDomain::new(Arc::new(device), Arc::new(queue));
-        Ok(Self {
+        install_device_diagnostics(&domain);
+        Self {
             instance,
             adapter,
             domain,
             painter: None,
+            blit: None,
             slots: SlotTable::default(),
             #[cfg(test)]
             builds: ContextBuilds {
@@ -210,7 +382,7 @@ impl GpuContext {
             #[cfg(test)]
             panic_mid_frame: false,
             _one_mutator: PhantomData,
-        })
+        }
     }
 
     /// The device domain every slot submits through.
@@ -255,14 +427,40 @@ impl GpuContext {
             });
         }
         let texture = self.slot_texture(size, format)?;
-        if self.slots.insert(
+        self.insert(
             slot,
-            SurfaceSlot {
+            SurfaceSlot::Offscreen(OffscreenSlot {
                 texture,
                 format,
                 size,
-            },
-        ) {
+            }),
+        )
+    }
+
+    /// Attach a window slot under `slot`, presenting to `surface`.
+    ///
+    /// # Errors
+    /// [`EngineError::IncompatibleSurface`] when the context's adapter cannot
+    /// present to `surface`; [`EngineError::InvalidRenderTarget`] for an id
+    /// whose index holds a slot.
+    fn attach_window(
+        &mut self,
+        slot: SlotId,
+        surface: UnconfiguredSurface,
+        config: SlotConfig,
+    ) -> EngineResult<()> {
+        let window = WindowSlot::attach(
+            &self.gpu(),
+            surface,
+            config.color,
+            config.display,
+            config.latency,
+        )?;
+        self.insert(slot, SurfaceSlot::Window(Box::new(window)))
+    }
+
+    fn insert(&mut self, slot: SlotId, surface: SurfaceSlot) -> EngineResult<()> {
+        if self.slots.insert(slot, surface) {
             Ok(())
         } else {
             Err(EngineError::InvalidRenderTarget {
@@ -271,23 +469,29 @@ impl GpuContext {
         }
     }
 
-    /// Give `slot` a target of `size` device pixels; its previous contents
-    /// are dropped. Nothing changes for a size the slot already has.
+    /// Give `slot` a target of `size` device pixels; an offscreen slot's
+    /// previous contents are dropped. Nothing changes for a size the slot
+    /// already has.
     ///
     /// # Errors
     /// [`EngineError::InvalidTargetSize`] for a zero or over-limit side,
     /// which leaves the slot as it was; [`EngineError::InvalidRenderTarget`]
     /// for a slot that is not attached.
     pub(crate) fn resize_slot(&mut self, slot: SlotId, size: (u32, u32)) -> EngineResult<()> {
-        let format = self.slot(slot)?.format;
-        if self.slot(slot)?.size == size {
-            return Ok(());
+        let max_dim = self.max_texture_dimension();
+        let (adapter, domain) = (&self.adapter, &self.domain);
+        match self.slots.get_mut(slot) {
+            Some(SurfaceSlot::Offscreen(entry)) => {
+                if entry.size == size {
+                    return Ok(());
+                }
+                entry.texture = offscreen_texture(domain, max_dim, size, entry.format)?;
+                entry.size = size;
+                Ok(())
+            }
+            Some(SurfaceSlot::Window(window)) => window.resize(&gpu_of(adapter, domain), size),
+            None => Err(not_attached()),
         }
-        let texture = self.slot_texture(size, format)?;
-        let entry = self.slot_mut(slot)?;
-        entry.texture = texture;
-        entry.size = size;
-        Ok(())
     }
 
     /// Detach `slot`; `false` for a stale id or one already detached.
@@ -295,14 +499,15 @@ impl GpuContext {
         self.slots.remove(slot).is_some()
     }
 
-    /// Clear `slot` to the frame background and draw `tree` over it.
+    /// Clear offscreen `slot` to the frame background and draw `tree` over it.
     ///
     /// # Errors
-    /// [`EngineError::InvalidRenderTarget`] for a slot that is not attached,
-    /// or the frame's own render and submission errors.
+    /// [`EngineError::InvalidRenderTarget`] for a slot that is not an
+    /// attached offscreen slot, or the frame's own render and submission
+    /// errors.
     pub(crate) fn render_slot(&mut self, slot: SlotId, tree: &LayerTree) -> EngineResult<()> {
         let (texture, format, size) = {
-            let entry = self.slot(slot)?;
+            let entry = self.offscreen_slot(slot)?;
             (entry.texture.clone(), entry.format, entry.size)
         };
         let _submission_scope = self.domain.begin_frame_scope()?;
@@ -333,14 +538,68 @@ impl GpuContext {
         Ok(())
     }
 
-    /// The pixels `slot` holds, tightly packed, top row first, four bytes a
-    /// pixel in the slot format's channel order.
+    /// Render `scene` into window `slot` and present it, repainting at least
+    /// `damage`.
     ///
     /// # Errors
-    /// [`EngineError::InvalidRenderTarget`] for a slot that is not attached;
-    /// a readback error.
+    /// [`EngineError::DeviceLost`] once the device is lost; the frame's
+    /// acquire, render and submission errors.
+    fn render_window(
+        &mut self,
+        slot: SlotId,
+        scene: &Scene,
+        damage: DamageRegion,
+    ) -> EngineResult<PresentDisposition> {
+        if self.domain.is_lost() {
+            return Err(EngineError::DeviceLost);
+        }
+        let target = match self.slots.get(slot) {
+            Some(SurfaceSlot::Window(window)) => window.target_format(),
+            Some(SurfaceSlot::Offscreen(_)) | None => return Err(not_attached()),
+        };
+        let Some((format, size)) = target else {
+            // Released, or not sized yet: nothing to present into.
+            return Ok(PresentDisposition::NotShown);
+        };
+        let mut painter = self.take_painter(format, size);
+        painter.resize(size.0, size.1);
+        let mut blit = self
+            .blit
+            .take()
+            .unwrap_or_else(|| OffscreenRenderer::with_domain(Arc::clone(&self.domain)));
+        let Self {
+            adapter,
+            domain,
+            slots,
+            ..
+        } = self;
+        let Some(SurfaceSlot::Window(window)) = slots.get_mut(slot) else {
+            unreachable!("BUG: the window slot was found above and nothing removed it");
+        };
+        let rendered = window.render(
+            &gpu_of(adapter, domain),
+            &mut painter,
+            &mut blit,
+            scene,
+            damage,
+        );
+        self.blit = Some(blit);
+        // An error leaves the painter as a renderer keeps its own after one:
+        // acquire errors come before it records, and a recording error is
+        // closed by the frame protocol's cleanup. Only an unwind, which never
+        // reaches here, rebuilds the shared caches.
+        self.painter = Some(painter);
+        rendered
+    }
+
+    /// The pixels offscreen `slot` holds, tightly packed, top row first,
+    /// four bytes a pixel in the slot format's channel order.
+    ///
+    /// # Errors
+    /// [`EngineError::InvalidRenderTarget`] for a slot that is not an
+    /// attached offscreen slot; a readback error.
     pub(crate) fn read_slot(&self, slot: SlotId) -> EngineResult<Vec<u8>> {
-        let entry = self.slot(slot)?;
+        let entry = self.offscreen_slot(slot)?;
         crate::headless::readback_rgba(&self.domain, &entry.texture, entry.size.0, entry.size.1)
     }
 
@@ -377,64 +636,121 @@ impl GpuContext {
         painter
     }
 
-    fn slot(&self, slot: SlotId) -> EngineResult<&SurfaceSlot> {
-        self.slots
-            .get(slot)
-            .ok_or(EngineError::InvalidRenderTarget {
-                reason: "the slot is not attached to this context",
-            })
+    fn gpu(&self) -> Gpu<'_> {
+        gpu_of(&self.adapter, &self.domain)
     }
 
-    fn slot_mut(&mut self, slot: SlotId) -> EngineResult<&mut SurfaceSlot> {
-        self.slots
-            .get_mut(slot)
-            .ok_or(EngineError::InvalidRenderTarget {
-                reason: "the slot is not attached to this context",
-            })
+    fn offscreen_slot(&self, slot: SlotId) -> EngineResult<&OffscreenSlot> {
+        match self.slots.get(slot) {
+            Some(SurfaceSlot::Offscreen(entry)) => Ok(entry),
+            Some(SurfaceSlot::Window(_)) => Err(EngineError::InvalidRenderTarget {
+                reason: "the slot is a window slot, which is not read back",
+            }),
+            None => Err(not_attached()),
+        }
     }
 
-    /// A slot target of `size` in `format`, bounded by the device's limit
-    /// here, where the size enters: `create_texture` reports an over-limit
-    /// size through wgpu's uncaptured-error path, which panics by default,
-    /// and wgpu rejects a zero-sized texture and readback buffer by panicking.
+    fn window_slot(&mut self, slot: SlotId) -> Option<(&mut WindowSlot, Gpu<'_>)> {
+        let Self {
+            adapter,
+            domain,
+            slots,
+            ..
+        } = self;
+        match slots.get_mut(slot) {
+            Some(SurfaceSlot::Window(window)) => Some((window, gpu_of(adapter, domain))),
+            Some(SurfaceSlot::Offscreen(_)) | None => None,
+        }
+    }
+
+    /// A slot target of `size` in `format`, bounded by the device's limit.
     fn slot_texture(
         &self,
         size: (u32, u32),
         format: wgpu::TextureFormat,
     ) -> EngineResult<wgpu::Texture> {
-        let (width, height) = size;
-        let max_dim = self.max_texture_dimension();
-        if width == 0 || height == 0 || width > max_dim || height > max_dim {
-            return Err(EngineError::InvalidTargetSize { width, height });
-        }
-        Ok(self
-            .domain
-            .device()
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("FLUI Offscreen Slot Target"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            }))
+        offscreen_texture(&self.domain, self.max_texture_dimension(), size, format)
     }
 }
 
-/// The context as the raster executor's backend: its offscreen slots render
-/// in full each frame and count as presented once submitted.
+fn gpu_of<'a>(adapter: &'a wgpu::Adapter, domain: &'a DeviceDomain) -> Gpu<'a> {
+    Gpu {
+        adapter,
+        device: domain.device(),
+        queue: domain.queue(),
+    }
+}
+
+fn not_attached() -> EngineError {
+    EngineError::InvalidRenderTarget {
+        reason: "the slot is not attached to this context",
+    }
+}
+
+/// An offscreen slot's target of `size` in `format`, bounded by the device's
+/// limit `max_dim` here, where the size enters: `create_texture` reports an
+/// over-limit size through wgpu's uncaptured-error path, and wgpu rejects a
+/// zero-sized texture and readback buffer by panicking.
+fn offscreen_texture(
+    domain: &DeviceDomain,
+    max_dim: u32,
+    size: (u32, u32),
+    format: wgpu::TextureFormat,
+) -> EngineResult<wgpu::Texture> {
+    let (width, height) = size;
+    if width == 0 || height == 0 || width > max_dim || height > max_dim {
+        return Err(EngineError::InvalidTargetSize { width, height });
+    }
+    Ok(domain.device().create_texture(&wgpu::TextureDescriptor {
+        label: Some("FLUI Offscreen Slot Target"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    }))
+}
+
+/// Route the device's faults through `tracing`, and mark the domain lost when
+/// the driver reports the device gone, so the next window frame answers
+/// [`EngineError::DeviceLost`] instead of failing blind.
+///
+/// wgpu's default turns an uncaptured error into a panic; the callbacks run on
+/// whichever thread wgpu reports from and reach the domain through a weak
+/// reference, since the device the domain holds owns them.
+fn install_device_diagnostics(domain: &Arc<DeviceDomain>) {
+    let device = domain.device();
+    device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
+        tracing::error!(
+            %error,
+            "wgpu uncaptured error (validation / out-of-memory / internal)",
+        );
+    }));
+    let lost = Arc::downgrade(domain);
+    device.set_device_lost_callback(move |reason, message| {
+        tracing::error!(?reason, %message, "wgpu device lost: the GPU context is gone");
+        if let Some(domain) = lost.upgrade() {
+            domain.mark_lost();
+        }
+    });
+}
+
+/// The context as the raster executor's backend. An offscreen slot renders in
+/// full each frame and counts as presented once submitted; a window slot
+/// renders its damage and presents.
 impl SlotBackend for GpuContext {
-    fn attach(&mut self, slot: SlotId, target: SlotTarget) -> EngineResult<()> {
+    fn attach(&mut self, slot: SlotId, target: SlotTarget, config: SlotConfig) -> EngineResult<()> {
         match target {
+            SlotTarget::Window(surface) => self.attach_window(slot, surface, config),
             SlotTarget::Offscreen { size, format } => {
                 self.attach_offscreen(slot, device_extent(size)?, format)
             }
@@ -445,14 +761,47 @@ impl SlotBackend for GpuContext {
         self.resize_slot(slot, device_extent(size)?)
     }
 
+    fn release(&mut self, slot: SlotId) {
+        if let Some((window, _)) = self.window_slot(slot) {
+            window.release();
+        }
+    }
+
+    fn restore(&mut self, slot: SlotId, surface: UnconfiguredSurface) -> EngineResult<()> {
+        let Some((window, gpu)) = self.window_slot(slot) else {
+            return Err(EngineError::InvalidRenderTarget {
+                reason: "a surface is restored to an attached window slot",
+            });
+        };
+        window.restore(&gpu, surface)
+    }
+
+    fn set_display_color(&mut self, slot: SlotId, color: DisplayColor) -> EngineResult<()> {
+        match self.window_slot(slot) {
+            Some((window, gpu)) => window.set_display_color(&gpu, color),
+            None => Ok(()),
+        }
+    }
+
+    fn set_latency(&mut self, slot: SlotId, latency: FrameLatency) {
+        if let Some((window, gpu)) = self.window_slot(slot) {
+            window.set_latency(&gpu, latency);
+        }
+    }
+
     fn render(
         &mut self,
         slot: SlotId,
         scene: &Scene,
-        _damage: DamageRegion,
+        damage: DamageRegion,
     ) -> EngineResult<PresentDisposition> {
-        self.render_slot(slot, scene.tree())?;
-        Ok(PresentDisposition::Presented)
+        match self.slots.get(slot) {
+            Some(SurfaceSlot::Window(_)) => self.render_window(slot, scene, damage),
+            Some(SurfaceSlot::Offscreen(_)) | None => {
+                self.render_slot(slot, scene.tree())?;
+                Ok(PresentDisposition::Presented)
+            }
+        }
     }
 
     fn detach(&mut self, slot: SlotId) {
@@ -676,5 +1025,232 @@ mod tests {
             context.read_slot(sender.mint_slot().expect("a slot id is left")),
             Err(EngineError::InvalidRenderTarget { .. })
         ));
+    }
+
+    /// A window whose surface the context's adapter cannot present to is
+    /// refused at attach with `IncompatibleSurface`, before any configure: the
+    /// no-op adapter reports no surface capabilities, as an adapter of another
+    /// GPU than the window's would.
+    ///
+    /// Red-check: let `WindowSlot::attach` skip the support check and the
+    /// attach answers `Ok`.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_window_its_adapter_cannot_present_to_is_refused_at_attach() {
+        use std::sync::Arc;
+
+        use crate::raster_executor::SlotBackend;
+        use crate::testing::{FakeDisplay, FakeWindow};
+
+        let display: Arc<dyn flui_platform::DisplayConnection> = Arc::new(FakeDisplay);
+        let instance = crate::testing::noop_instance(&display);
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .expect("the no-op backend has an adapter");
+        let mut context = pollster::block_on(GpuContext::on_adapter(
+            instance.clone(),
+            adapter,
+            wgpu::Features::empty(),
+        ))
+        .expect("the no-op adapter gives a device");
+        let factory = crate::SurfaceFactory::new(instance, display);
+        let surface = factory
+            .create(Arc::new(FakeWindow::new(7)))
+            .expect("the no-op backend makes a surface for any window");
+        let (_executor, sender) = RasterExecutor::new(crate::testing::ScriptedSlots::new(), || {});
+        let slot = sender.mint_slot().expect("a slot id is left");
+        assert!(matches!(
+            context.attach(slot, SlotTarget::Window(surface), SlotConfig::new()),
+            Err(EngineError::IncompatibleSurface)
+        ));
+        assert!(!context.detach(slot), "a refused window holds no slot");
+    }
+
+    /// A context and its factory on wgpu's no-op backend: no GPU, and
+    /// surfaces for any window, which no adapter presents to.
+    #[cfg(feature = "testing")]
+    fn noop_context() -> (GpuContext, crate::SurfaceFactory) {
+        use std::sync::Arc;
+
+        let display: Arc<dyn flui_platform::DisplayConnection> =
+            Arc::new(crate::testing::FakeDisplay);
+        let instance = crate::testing::noop_instance(&display);
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .expect("the no-op backend has an adapter");
+        let context = pollster::block_on(GpuContext::on_adapter(
+            instance.clone(),
+            adapter,
+            wgpu::Features::empty(),
+        ))
+        .expect("the no-op adapter gives a device");
+        (context, crate::SurfaceFactory::new(instance, display))
+    }
+
+    /// A window frame that fails before it records (the no-op surface never
+    /// hands out a texture) puts the shared painter back: the next frame, of
+    /// this window or any other slot, builds no glyph atlas and no pipelines.
+    ///
+    /// Red-check: keep the painter only after a frame that succeeded, and the
+    /// second frame builds a second atlas.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_failed_window_frame_keeps_the_shared_caches() {
+        use std::sync::Arc;
+
+        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+
+        let (mut context, factory) = noop_context();
+        let surface = factory
+            .create(Arc::new(crate::testing::FakeWindow::new(7)))
+            .expect("the no-op backend makes a surface for any window");
+        let window = WindowSlot::configured_without_capabilities(
+            surface,
+            (32, 16),
+            ScriptedAcquire::Timeout,
+        );
+        let (_executor, sender) = RasterExecutor::new(crate::testing::ScriptedSlots::new(), || {});
+        let slot = sender.mint_slot().expect("a slot id is left");
+        context
+            .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
+            .expect("the slot's index is free");
+        let scene = Scene::new(square_and_glyph());
+        for _ in 0..2 {
+            assert!(
+                context
+                    .render_window(
+                        slot,
+                        &scene,
+                        DamageRegion::Full(flui_layer::FullReason::FirstFrame)
+                    )
+                    .is_err(),
+                "the no-op surface hands out no texture"
+            );
+        }
+        assert_eq!(
+            context.builds().glyph_atlases,
+            1,
+            "the failed frame left the painter for the next one"
+        );
+        assert_eq!(context.builds().pipeline_sets, 1);
+    }
+
+    /// A window surface still lost after a reconfigure is dropped, not made
+    /// again: the executor may not be on the thread the window system serves,
+    /// so the frame answers `SurfaceReplacementNeeded` for the owner to make a
+    /// new surface with its factory, and the slot's next frame finds it
+    /// released (ADR-0305 §2, §8).
+    ///
+    /// Red-check: drop the released-surface check from `WindowSlot::present`
+    /// and the frame answers `Ok(NotShown)`: the owner never hears that it
+    /// owes a surface.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_lost_window_surface_is_left_for_its_owner_to_replace() {
+        use std::sync::Arc;
+
+        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+
+        let (mut context, factory) = noop_context();
+        let surface = factory
+            .create(Arc::new(crate::testing::FakeWindow::new(7)))
+            .expect("the no-op backend makes a surface for any window");
+        let window =
+            WindowSlot::configured_without_capabilities(surface, (32, 16), ScriptedAcquire::Lost);
+        let (_executor, sender) = RasterExecutor::new(crate::testing::ScriptedSlots::new(), || {});
+        let slot = sender.mint_slot().expect("a slot id is left");
+        context
+            .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
+            .expect("the slot's index is free");
+        let scene = Scene::new(square_and_glyph());
+        let full = DamageRegion::Full(flui_layer::FullReason::FirstFrame);
+        assert!(matches!(
+            context.render_window(slot, &scene, full),
+            Err(EngineError::SurfaceReplacementNeeded)
+        ));
+        assert!(
+            matches!(
+                context.render_window(slot, &scene, full),
+                Ok(crate::raster::PresentDisposition::NotShown)
+            ),
+            "the slot holds no surface until its owner restores one"
+        );
+    }
+
+    /// A resize whose surface configure unwinds leaves the window at the size
+    /// its surface last took, so the executor's retry of that size configures
+    /// again instead of finding it already applied.
+    ///
+    /// Red-check: write the new size into the slot before the configure, and
+    /// the slot reports the size the surface never took.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_resize_whose_configure_panics_leaves_the_old_size() {
+        use std::sync::Arc;
+
+        use flui_foundation::panic::FirstPanic;
+
+        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+
+        let (context, factory) = noop_context();
+        let surface = factory
+            .create(Arc::new(crate::testing::FakeWindow::new(7)))
+            .expect("the no-op backend makes a surface for any window");
+        let mut window = WindowSlot::configured_without_capabilities(
+            surface,
+            (32, 16),
+            ScriptedAcquire::Timeout,
+        );
+        window.panic_in_next_configure = true;
+        let gpu = context.gpu();
+        let mut caught = FirstPanic::new();
+        assert!(
+            caught.contain(|| window.resize(&gpu, (64, 32))).is_none(),
+            "the injected configure panicked"
+        );
+        if let Some(payload) = caught.into_payload() {
+            flui_foundation::panic::discard_payload(payload);
+        }
+        let size = |window: &WindowSlot| window.target_format().map(|(_, size)| size);
+        assert_eq!(
+            size(&window),
+            Some((32, 16)),
+            "the surface never took 64×32"
+        );
+        window
+            .resize(&gpu, (64, 32))
+            .expect("the retry configures the surface");
+        assert_eq!(size(&window), Some((64, 32)));
+    }
+
+    /// A latency change reconfigures the swapchain, which may hold none of
+    /// the pixels shown, so the next frame of an unchanged scene repaints in
+    /// full instead of skipping.
+    ///
+    /// Red-check: drop the `surface_changed` from `WindowSlot::set_latency`
+    /// and the unchanged frame is skipped.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_latency_change_repaints_the_next_frame() {
+        use std::sync::Arc;
+
+        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+
+        let (context, factory) = noop_context();
+        let surface = factory
+            .create(Arc::new(crate::testing::FakeWindow::new(7)))
+            .expect("the no-op backend makes a surface for any window");
+        let mut window = WindowSlot::configured_without_capabilities(
+            surface,
+            (32, 16),
+            ScriptedAcquire::Timeout,
+        );
+        window.settle_presented();
+        assert!(!window.owes_a_frame(), "a presented slot owes nothing");
+        window.set_latency(&context.gpu(), crate::FrameLatency::Low);
+        assert!(
+            window.owes_a_frame(),
+            "the reconfigured swapchain is repainted"
+        );
     }
 }

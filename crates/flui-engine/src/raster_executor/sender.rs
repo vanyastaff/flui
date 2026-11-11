@@ -22,7 +22,7 @@ use super::{
     inbox::{SlotFailure, SlotInbox, SlotPhase, SlotRecord},
     slot::SlotMint,
 };
-use crate::error::EngineResult;
+use crate::{UnconfiguredSurface, error::EngineResult};
 
 /// A lifecycle command as it travels the queue: the owner's command plus the
 /// inbox it shares with the executor.
@@ -34,6 +34,16 @@ pub(crate) enum Lifecycle {
         /// The generation the attach configured, minted at send.
         generation: SurfaceGeneration,
         inbox: Arc<SlotInbox>,
+    },
+    Release {
+        slot: SlotId,
+    },
+    Restore {
+        slot: SlotId,
+        surface: UnconfiguredSurface,
+        /// The generation the restore minted at send: frames stamped before
+        /// it are refused.
+        generation: SurfaceGeneration,
     },
     Detach {
         slot: SlotId,
@@ -56,6 +66,8 @@ impl Lifecycle {
                 target,
                 config,
             },
+            Self::Release { slot } => RasterCommand::Release { slot },
+            Self::Restore { slot, surface, .. } => RasterCommand::Restore { slot, surface },
             Self::Detach { slot, .. } => RasterCommand::Detach { slot },
         }
     }
@@ -230,6 +242,8 @@ impl RasterSender {
                 target,
                 config,
             } => self.attach(slot, address, target, config),
+            RasterCommand::Release { slot } => self.release(slot),
+            RasterCommand::Restore { slot, surface } => self.restore(slot, surface),
             RasterCommand::Detach { slot } => self.detach(slot),
             RasterCommand::Frame { slot, snapshot } => self.frame(slot, snapshot),
             RasterCommand::Configure { slot, change } => self.configure(slot, change),
@@ -287,7 +301,7 @@ impl RasterSender {
         target: SlotTarget,
         config: SlotConfig,
     ) -> Result<SendReceipt, RasterSendError> {
-        let (generation, receipt) = if has_area(target.size()) {
+        let (generation, receipt) = if target.size().is_some_and(has_area) {
             let generation = SurfaceGeneration::ZERO.next();
             (generation, SendReceipt::Configured(generation))
         } else {
@@ -347,6 +361,83 @@ impl RasterSender {
         }
     }
 
+    fn release(&self, slot: SlotId) -> Result<SendReceipt, RasterSendError> {
+        let Some(inbox) = self.commanded(slot) else {
+            return Err(RasterSendError::stale_slot(RasterCommand::Release { slot }));
+        };
+        if !inbox.lock().phase.takes_commands() {
+            return Err(self.refusal(RasterCommand::Release { slot }));
+        }
+        self.send_lifecycle(Lifecycle::Release { slot })
+            .map(|()| SendReceipt::Accepted)
+    }
+
+    fn restore(
+        &self,
+        slot: SlotId,
+        surface: UnconfiguredSurface,
+    ) -> Result<SendReceipt, RasterSendError> {
+        let Some(inbox) = self.commanded(slot) else {
+            return Err(RasterSendError::stale_slot(RasterCommand::Restore {
+                slot,
+                surface,
+            }));
+        };
+        // Minted before the send, so the owner stamps its next frame with it,
+        // and taken back if the send fails, unless something minted since.
+        let (previous, generation) = {
+            let mut state = inbox.lock();
+            if !state.phase.takes_commands() {
+                drop(state);
+                return Err(self.refusal(RasterCommand::Restore { slot, surface }));
+            }
+            let previous = state.generation;
+            if previous != SurfaceGeneration::ZERO {
+                state.generation = previous.next();
+            }
+            (previous, state.generation)
+        };
+        let sent = self.send_lifecycle(Lifecycle::Restore {
+            slot,
+            surface,
+            generation,
+        });
+        match sent {
+            Ok(()) if generation == SurfaceGeneration::ZERO => Ok(SendReceipt::Unconfigured),
+            Ok(()) => Ok(SendReceipt::Configured(generation)),
+            Err(error) => {
+                let mut state = inbox.lock();
+                if state.generation == generation {
+                    state.generation = previous;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Queue `message`, or hand its command back: `Full` while the queue is
+    /// full, `Gone` once the executor stopped.
+    fn send_lifecycle(&self, message: Lifecycle) -> Result<(), RasterSendError> {
+        self.shared.lifecycle.try_send(message).map_err(|refused| {
+            let full = matches!(refused, TrySendError::Full(_));
+            let command = refused.into_inner().into_command();
+            if full {
+                RasterSendError::full(command)
+            } else {
+                RasterSendError::gone(command)
+            }
+        })
+    }
+
+    /// The refusal of a command to a slot that takes none: refused or
+    /// detached while the executor runs, gone once it stopped.
+    fn refusal(&self, command: RasterCommand) -> RasterSendError {
+        if self.shared.health() == ExecutorHealth::Running {
+            RasterSendError::stale_slot(command)
+        } else {
+            RasterSendError::gone(command)
+        }
+    }
     fn detach(&self, slot: SlotId) -> Result<SendReceipt, RasterSendError> {
         let inbox = {
             let mut slots = self.slots.borrow_mut();
@@ -446,6 +537,14 @@ impl RasterSender {
                 SendReceipt::Configured(state.generation)
             }
             SlotChange::Size(_) => SendReceipt::Unconfigured,
+            SlotChange::Color(color) => {
+                state.color = Some(color);
+                SendReceipt::Accepted
+            }
+            SlotChange::Latency(latency) => {
+                state.latency = Some(latency);
+                SendReceipt::Accepted
+            }
             SlotChange::Shown(visibility) => {
                 state.visibility = Some(visibility);
                 SendReceipt::Accepted

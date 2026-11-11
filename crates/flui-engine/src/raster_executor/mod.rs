@@ -78,6 +78,9 @@ struct ExecSlot {
     /// the slot was just attached, resized or shown again, or a frame of it
     /// failed.
     full_redraw: Option<FullReason>,
+    /// The size the backend last refused, so a size refused again on every
+    /// turn or every send warns once.
+    refused_size: Option<flui_foundation::geometry::DeviceSize>,
 }
 
 /// The raster executor: owns the backend and every slot, and renders them on
@@ -165,6 +168,18 @@ impl<B: SlotBackend> RasterExecutor<B> {
                     generation,
                     inbox,
                 } => self.attach(slot, target, config, generation, inbox, &mut first),
+                Lifecycle::Release { slot } => {
+                    self.release(slot, &mut first);
+                    0
+                }
+                Lifecycle::Restore {
+                    slot,
+                    surface,
+                    generation,
+                } => {
+                    self.restore(slot, surface, generation, &mut first);
+                    0
+                }
                 Lifecycle::Detach { slot, inbox } => {
                     self.detach(slot, &inbox, &mut first);
                     0
@@ -194,7 +209,16 @@ impl<B: SlotBackend> RasterExecutor<B> {
         let mut settled = 0;
         while let Ok(message) = self.lifecycle.try_recv() {
             let inbox = match message {
-                Lifecycle::Attach { inbox, .. } => inbox,
+                Lifecycle::Attach { inbox, target, .. } => {
+                    // A window target's destructor can be user code.
+                    first.contain(move || drop(target));
+                    inbox
+                }
+                Lifecycle::Release { .. } => continue,
+                Lifecycle::Restore { surface, .. } => {
+                    first.contain(move || drop(surface));
+                    continue;
+                }
                 Lifecycle::Detach { slot, inbox } => {
                     self.detach(slot, &inbox, &mut first);
                     inbox
@@ -224,7 +248,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
         first: &mut FirstPanic,
     ) -> usize {
         let mut caught = FirstPanic::new();
-        let failure = match caught.contain(|| self.backend.attach(slot, target)) {
+        let failure = match caught.contain(|| self.backend.attach(slot, target, config)) {
             Some(Ok(())) => None,
             Some(Err(error)) => Some(SlotFailure::Refused(error)),
             None => {
@@ -245,6 +269,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 applied: generation,
                 visibility: config.visibility,
                 full_redraw: Some(FullReason::FirstFrame),
+                refused_size: None,
             });
             return 0;
         };
@@ -288,6 +313,81 @@ impl<B: SlotBackend> RasterExecutor<B> {
         retire(frame, None, first);
     }
 
+    /// The attached slot `slot` names; `None` for a stale or refused one.
+    fn attached(&mut self, slot: SlotId) -> Option<&mut ExecSlot> {
+        self.slots
+            .get_mut(slot.index() as usize)
+            .and_then(Option::as_mut)
+            .filter(|held| held.id == slot)
+    }
+
+    fn release(&mut self, slot: SlotId, first: &mut FirstPanic) {
+        let Self { backend, slots, .. } = self;
+        let Some(held) = slots
+            .get_mut(slot.index() as usize)
+            .and_then(Option::as_mut)
+            .filter(|held| held.id == slot)
+        else {
+            return;
+        };
+        held.owe_full(RESET);
+        let mut caught = FirstPanic::new();
+        if caught.contain(|| backend.release(slot)).is_none() {
+            hold_panic(&held.inbox, caught, first);
+        }
+    }
+
+    fn restore(
+        &mut self,
+        slot: SlotId,
+        surface: crate::UnconfiguredSurface,
+        generation: SurfaceGeneration,
+        first: &mut FirstPanic,
+    ) {
+        if self.attached(slot).is_none() {
+            // The slot was refused or detached: the surface leaves with it.
+            first.contain(move || drop(surface));
+            return;
+        }
+        let Self { backend, slots, .. } = self;
+        let held = slots[slot.index() as usize]
+            .as_mut()
+            .expect("BUG: the slot was found attached above");
+        // The restore answers for every frame stamped before it, whatever its
+        // outcome: a refused or panicked one leaves the slot released, whose
+        // frames settle not shown. It authorises its generation only while
+        // that is still the slot's newest: a loss settled after the restore
+        // was sent minted (and, without a barrier, authorised) a newer one,
+        // which the restored surface serves. A size still pending or refused
+        // keeps its barrier: the restored surface is configured at the size
+        // the slot has, and only a size the backend accepts authorises frames
+        // laid out for a newer one.
+        let newest = {
+            let state = held.inbox.lock();
+            state.generation == generation && state.size.is_none()
+        };
+        if newest && held.refused_size.is_none() {
+            held.applied = generation;
+        }
+        held.owe_full(FullReason::SurfaceChanged);
+        let mut caught = FirstPanic::new();
+        match caught.contain(|| backend.restore(slot, surface)) {
+            Some(Ok(())) => held.inbox.lock().wants_surface = false,
+            Some(Err(error)) => {
+                let extra = held.inbox.lock().hold_failure(SlotFailure::Refused(error));
+                retire(None, extra, first);
+                report(
+                    Report::Refused {
+                        slot,
+                        cause: "refused",
+                    },
+                    first,
+                );
+            }
+            None => hold_panic(&held.inbox, caught, first),
+        }
+    }
+
     /// Apply slot `index`'s pending changes and render its pending frame;
     /// answers how many settlements it wrote.
     fn service(&mut self, index: usize, first: &mut FirstPanic) -> usize {
@@ -295,7 +395,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
         let Some(slot) = slots.get_mut(index).and_then(Option::as_mut) else {
             return 0;
         };
-        let (size, generation, visibility, frame) = {
+        let (size, generation, visibility, color, latency, frame) = {
             let mut state = slot.inbox.lock();
             // A full ring holds the next frame where it is.
             let frame = if state.settlements.len() < INLINE_DEPTH {
@@ -307,30 +407,64 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 state.size.take(),
                 state.generation,
                 state.visibility.take(),
+                state.color.take(),
+                state.latency.take(),
                 frame,
             )
         };
-        let mut failure = None;
-        // A resize that failed stays pending, so the next turn retries it:
-        // the owner already stamps frames with the generation it minted.
-        let mut retry = None;
-        let mut resize_report = None;
         if let Some(visibility) = visibility {
             if !slot.visibility.is_shown() && visibility.is_shown() {
                 slot.owe_full(RESET);
             }
             slot.visibility = visibility;
         }
+        if let Some(latency) = latency {
+            let mut caught = FirstPanic::new();
+            if caught
+                .contain(|| backend.set_latency(slot.id, latency))
+                .is_none()
+            {
+                hold_panic(&slot.inbox, caught, first);
+            }
+        }
+        if let Some(color) = color {
+            let mut caught = FirstPanic::new();
+            match caught.contain(|| backend.set_display_color(slot.id, color)) {
+                Some(Ok(())) => slot.owe_full(FullReason::SurfaceChanged),
+                Some(Err(error)) => {
+                    let extra = slot.inbox.lock().hold_failure(SlotFailure::Refused(error));
+                    retire(None, extra, first);
+                }
+                None => hold_panic(&slot.inbox, caught, first),
+            }
+        }
+        let mut failure = None;
+        // A resize that panicked or was refused for now stays pending, so the
+        // next turn retries it: the owner already stamps frames with the
+        // generation it minted. One the backend always refuses is not retried:
+        // the slot keeps its configuration until the owner sends another size.
+        let mut retry = None;
+        let mut resize_report = None;
         if let Some(size) = size {
             let mut caught = FirstPanic::new();
             match caught.contain(|| backend.resize(slot.id, size)) {
                 Some(Ok(())) => {
                     slot.applied = generation;
+                    slot.refused_size = None;
                     slot.owe_full(FullReason::SurfaceChanged);
                 }
                 Some(Err(error)) => {
-                    retry = Some(size);
-                    resize_report = Some(Report::ResizeRefused { slot: slot.id });
+                    let transient = error.recoverability() == Recoverability::Recoverable;
+                    if transient {
+                        retry = Some(size);
+                    }
+                    // One warning a size, however often it is refused.
+                    if slot.refused_size.replace(size) != Some(size) {
+                        resize_report = Some(Report::ResizeRefused {
+                            slot: slot.id,
+                            retried: transient,
+                        });
+                    }
                     failure = Some(SlotFailure::Refused(error));
                 }
                 None => {
@@ -351,7 +485,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             report_each([resize_report, None], first);
             return 0;
         };
-        let (verdict, render_failure, surface_lost, render_report) = render(backend, slot, &frame);
+        let (verdict, render_failure, surface_loss, render_report) = render(backend, slot, &frame);
         let discarded = if failure.is_none() {
             failure = render_failure;
             None
@@ -363,13 +497,16 @@ impl<B: SlotBackend> RasterExecutor<B> {
             if let Some(size) = retry {
                 state.size.get_or_insert(size);
             }
-            if surface_lost {
+            if surface_loss != SurfaceLoss::Kept {
                 state.generation = state.generation.next();
-                // A resize still pending keeps its barrier: only its success
-                // authorises frames of the size it asked for.
-                if state.size.is_none() {
+                // A resize still pending or refused keeps its barrier: only a
+                // size the backend accepts authorises frames laid out for it.
+                if state.size.is_none() && slot.refused_size.is_none() {
                     slot.applied = state.generation;
                 }
+            }
+            if surface_loss == SurfaceLoss::Dropped {
+                state.wants_surface = true;
             }
             state.settle(&frame, verdict);
             failure.and_then(|failure| state.hold_failure(failure))
@@ -398,16 +535,21 @@ impl<B: SlotBackend> Drop for RasterExecutor<B> {
 }
 
 /// Render `frame` into `slot`: its verdict, the slot failure it raised,
-/// whether the surface was lost, and what to report once the frame settled.
+/// what it did to the surface, and what to report once the frame settled.
 fn render<B: SlotBackend>(
     backend: &mut B,
     slot: &mut ExecSlot,
     frame: &SceneSnapshot,
-) -> (RasterVerdict, Option<SlotFailure>, bool, Option<Report>) {
+) -> (
+    RasterVerdict,
+    Option<SlotFailure>,
+    SurfaceLoss,
+    Option<Report>,
+) {
     let stamped = frame.stamp.surface_generation;
     if !slot.visibility.is_shown() {
         slot.owe_full(RESET);
-        return (RasterVerdict::NotShown, None, false, None);
+        return (RasterVerdict::NotShown, None, SurfaceLoss::Kept, None);
     }
     if stamped == SurfaceGeneration::ZERO || stamped != slot.applied {
         slot.owe_full(FullReason::SurfaceChanged);
@@ -416,7 +558,12 @@ fn render<B: SlotBackend>(
             stamped,
             applied: slot.applied,
         };
-        return (RasterVerdict::SurfaceStale, None, false, Some(report));
+        return (
+            RasterVerdict::SurfaceStale,
+            None,
+            SurfaceLoss::Kept,
+            Some(report),
+        );
     }
     let damage = slot.full_redraw.map_or(frame.damage, DamageRegion::Full);
     let mut caught = FirstPanic::new();
@@ -429,29 +576,31 @@ fn render<B: SlotBackend>(
         return (
             RasterVerdict::Retry,
             Some(SlotFailure::Panicked(payload)),
-            false,
+            SurfaceLoss::Kept,
             None,
         );
     };
     match rendered {
         Ok(PresentDisposition::Presented) => {
             slot.full_redraw = None;
-            (RasterVerdict::Presented, None, false, None)
+            (RasterVerdict::Presented, None, SurfaceLoss::Kept, None)
         }
-        Ok(PresentDisposition::NoDamage) => (RasterVerdict::NoPresent, None, false, None),
+        Ok(PresentDisposition::NoDamage) => {
+            (RasterVerdict::NoPresent, None, SurfaceLoss::Kept, None)
+        }
         Ok(PresentDisposition::NotShown) => {
             slot.owe_full(RESET);
-            (RasterVerdict::NotShown, None, false, None)
+            (RasterVerdict::NotShown, None, SurfaceLoss::Kept, None)
         }
         Err(error) => {
             slot.owe_full(RESET);
-            let (verdict, surface_lost) = classify(&error);
+            let (verdict, surface_loss) = classify(&error);
             let report = Report::FrameFailed {
                 slot: slot.id,
                 error,
                 verdict,
             };
-            (verdict, None, surface_lost, Some(report))
+            (verdict, None, surface_loss, Some(report))
         }
     }
 }
@@ -465,6 +614,8 @@ enum Report {
     },
     ResizeRefused {
         slot: SlotId,
+        /// Whether the next turn retries it.
+        retried: bool,
     },
     Stale {
         slot: SlotId,
@@ -497,10 +648,11 @@ fn report(report: Report, first: &mut FirstPanic) {
                 "raster executor: slot refused; the record holds why"
             );
         }
-        Report::ResizeRefused { slot } => {
+        Report::ResizeRefused { slot, retried } => {
             tracing::warn!(
                 ?slot,
-                "raster executor: resize refused; the record holds why, retried next turn"
+                retried,
+                "raster executor: resize refused; the record holds why"
             );
         }
         Report::Stale {
@@ -527,20 +679,33 @@ fn report_each<const N: usize>(reports: [Option<Report>; N], first: &mut FirstPa
     }
 }
 
-/// A render error's verdict, and whether it lost the surface (which mints the
-/// slot's next generation).
-fn classify(error: &EngineError) -> (RasterVerdict, bool) {
+/// What a frame did to its slot's surface.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SurfaceLoss {
+    /// The surface is as it was.
+    Kept,
+    /// The surface was lost, and the backend configures it again: the slot's
+    /// next generation is minted.
+    Lost,
+    /// The surface was lost for good and dropped: the next generation is
+    /// minted and the record asks the owner for a new surface.
+    Dropped,
+}
+
+/// A render error's verdict, and what it did to the surface.
+fn classify(error: &EngineError) -> (RasterVerdict, SurfaceLoss) {
     match error {
+        EngineError::SurfaceReplacementNeeded => (RasterVerdict::NotShown, SurfaceLoss::Dropped),
         EngineError::DeviceLost | EngineError::GpuUnavailable | EngineError::GpuProgress { .. } => {
-            (RasterVerdict::DeviceLost, false)
+            (RasterVerdict::DeviceLost, SurfaceLoss::Kept)
         }
         EngineError::SurfaceLost | EngineError::SurfaceValidation => {
-            (RasterVerdict::SurfaceStale, true)
+            (RasterVerdict::SurfaceStale, SurfaceLoss::Lost)
         }
         other if other.recoverability() == Recoverability::Recoverable => {
-            (RasterVerdict::Retry, false)
+            (RasterVerdict::Retry, SurfaceLoss::Kept)
         }
-        _ => (RasterVerdict::Failed, false),
+        _ => (RasterVerdict::Failed, SurfaceLoss::Kept),
     }
 }
 
@@ -575,4 +740,14 @@ fn retire(frame: Option<SceneSnapshot>, extra: Option<SlotFailure>, first: &mut 
         }
         None => {}
     }
+}
+
+/// Hold the panic `caught` contained in `inbox`'s record, or discard it when
+/// the record holds a failure already.
+fn hold_panic(inbox: &SlotInbox, caught: FirstPanic, first: &mut FirstPanic) {
+    let Some(payload) = caught.into_payload() else {
+        return;
+    };
+    let extra = inbox.lock().hold_failure(SlotFailure::Panicked(payload));
+    retire(None, extra, first);
 }
