@@ -688,7 +688,7 @@ mod tests {
         binding.defer_first_frame();
         let mut host = flui_rendering::testing::SceneHost::new();
         let cell = binding.root_pipeline_owner();
-        let (shown, _) = host.drive_cell(&cell, |writer| binding.draw_frame(writer));
+        let (shown, _) = host.drive_cell(cell, |writer| binding.draw_frame(writer));
         assert!(!shown, "deferred first frame must withhold the layer tree");
         binding.allow_first_frame();
 
@@ -697,7 +697,7 @@ mod tests {
         binding
             .root_pipeline_owner()
             .with_mut(|owner| owner.mark_needs_layout(root_id));
-        let (shown, tree) = host.drive_cell(&cell, |writer| binding.draw_frame(writer));
+        let (shown, tree) = host.drive_cell(cell, |writer| binding.draw_frame(writer));
         assert!(
             shown,
             "non-deferred frame with dirty work must return the layer tree"

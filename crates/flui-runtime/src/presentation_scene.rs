@@ -116,8 +116,7 @@ impl PresentationScene {
         let wanted = frame.into_iter().chain(overlay);
         let slotted = current
             .node(root)
-            .map(|node| node.content().slots().eq(wanted.clone()))
-            .unwrap_or(false);
+            .is_some_and(|node| node.content().slots().eq(wanted.clone()));
         if slotted {
             return;
         }

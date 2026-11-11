@@ -12,7 +12,7 @@ use flui_foundation::sequence::IdMint;
 use super::content::BoundaryContent;
 use super::footprint::{self, FootprintCost};
 use super::id::{ContentVersion, Lineage, NodeKey, SceneNodeId, SceneVersionId};
-use super::pending::PendingLog;
+use super::pending::{Contents, PendingLog};
 use super::table::{Table, TableCost};
 use super::version::{NodeRecord, SceneVersion, VersionInner};
 use crate::scene_snapshot::{DamageRegion, FullReason, NonFinite, ResyncReason};
@@ -135,7 +135,7 @@ pub struct ScenePublication {
 #[derive(Debug, Default)]
 #[expect(dead_code, reason = "the fields are held for their drop, never read")]
 pub struct ReleasedContents {
-    contents: Vec<Arc<BoundaryContent>>,
+    contents: Contents,
     version: Option<SceneVersion>,
 }
 
@@ -305,6 +305,8 @@ struct Scratch {
     placed: Vec<NodeKey>,
     /// Nodes whose new content enters the indexes; drained by every patch.
     added: Vec<(NodeKey, Arc<BoundaryContent>)>,
+    /// The damage pass's working vectors.
+    damage: footprint::DamageScratch,
 }
 
 impl Scratch {
@@ -671,13 +673,19 @@ impl SceneOwner {
             self.slots.state[key.slot() as usize] = SlotState::Free;
             self.slots.free.push(key.slot());
         }
-        for slot in std::mem::take(&mut self.slots.minted) {
-            let state = &mut self.slots.state[slot as usize];
+        let Slots {
+            state: states,
+            free,
+            minted,
+            ..
+        } = &mut self.slots;
+        for slot in minted.drain(..) {
+            let state = &mut states[slot as usize];
             if next.nodes.get(u64::from(slot)).is_some() {
                 *state = SlotState::Live;
             } else if *state == SlotState::Minted {
                 *state = SlotState::Free;
-                self.slots.free.push(slot);
+                free.push(slot);
             }
         }
         self.cost.table.copies += cost.copies;
@@ -760,7 +768,7 @@ struct Built {
     depth_updates: u64,
     damage: DamageRegion,
     footprint: FootprintCost,
-    replaced: Vec<Arc<BoundaryContent>>,
+    replaced: Contents,
 }
 
 /// One patch's application to a copy of the current version; dropped
@@ -820,6 +828,7 @@ impl<'a> Patch<'a> {
                 },
                 surface,
                 &mut patch.cost,
+                &mut patch.scratch.damage,
             )
         });
         let footprint = footprint.map(|footprint| {
@@ -828,7 +837,7 @@ impl<'a> Patch<'a> {
             let replaced = order
                 .iter()
                 .filter_map(|&key| patch.changed(key).and_then(|change| change.before))
-                .collect::<Vec<Arc<BoundaryContent>>>();
+                .collect::<Contents>();
             (footprint, replaced)
         });
         patch.scratch.order = order;

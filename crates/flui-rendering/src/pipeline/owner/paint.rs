@@ -171,35 +171,38 @@ impl PipelineOwner<PaintPhase> {
         // Deepest first, the order ADR-0304 §8 paints owed boundaries in.
         self.scheduler.sort_paint_deep_first();
 
-        // Which queued nodes the paint actually reached — the residue scan's
-        // oracle. Empty when there is no root to paint from, which correctly
-        // makes every queued entry unreached.
-        let mut reached: FxHashSet<RenderId> = FxHashSet::default();
+        // The pass's working collections, back in the owner once it commits;
+        // a pass that fails or unwinds leaves the next one fresh ones.
+        let mut scratch = self.paint_scratch.take().unwrap_or_default();
+        scratch.dirty_ids.clear();
+        scratch.layer_updates.clear();
+        // Whether the walk finished, so the composer's `visited` holds which
+        // queued nodes it reached — the residue scan's oracle. False when
+        // there is no root to paint from, which correctly makes every queued
+        // entry unreached.
+        let mut walked = false;
         if let Some(root_id) = self.root_id
             && let Some(root) = self.render_tree.get(root_id)
         {
-            let dirty_ids: FxHashSet<RenderId> = self
-                .scheduler
-                .nodes_needing_paint()
-                .iter()
-                .map(|d| d.id)
-                .collect();
+            let PaintScratch {
+                dirty_ids,
+                layer_updates,
+                composer: work,
+            } = &mut *scratch;
+            dirty_ids.extend(self.scheduler.nodes_needing_paint().iter().map(|d| d.id));
             // Boundaries queued only to have some node's own effect layers
             // rebuilt. The queue carries its own reason, so there is no second
             // record to reconcile and nothing here reads a node flag: after a
             // pass that failed partway the queue is what the retry runs on,
             // while every flag the walk touched is already clear.
-            let layer_updates: FxHashMap<RenderId, SmallVec<[RenderId; 2]>> = self
-                .scheduler
-                .nodes_needing_paint()
-                .iter()
-                .filter_map(|e| match &e.kind {
+            layer_updates.extend(self.scheduler.nodes_needing_paint().iter().filter_map(|e| {
+                match &e.kind {
                     crate::pipeline::PaintKind::LayerUpdate(targets) => {
                         Some((e.id, targets.clone()))
                     }
                     crate::pipeline::PaintKind::Repaint => None,
-                })
-                .collect();
+                }
+            }));
             let root_is_boundary = root.is_repaint_boundary();
             // The frame node is repainted when there is none, when the root
             // paints inline and is queued, or when the root changed: anything
@@ -213,22 +216,15 @@ impl PipelineOwner<PaintPhase> {
                 }
             };
             let inputs = PaintInputs {
-                dirty_set: &dirty_ids,
-                layer_updates: &layer_updates,
+                dirty_set: dirty_ids,
+                layer_updates,
                 frame_dirty,
             };
-            let mut composer = FragmentComposer::new(writer);
+            let mut composer = FragmentComposer::new(writer, work);
             let painted = self.paint_owed(&mut composer, root_id, root_is_boundary, &inputs);
             match painted {
                 Ok(()) => {
-                    let PaintOutcome {
-                        staged,
-                        consumed_updates,
-                        visited,
-                        counts,
-                        child_paint_orders,
-                    } = composer.finish(self, lineage);
-                    reached = visited;
+                    let PaintOutcome { staged, counts } = composer.finish(self, lineage);
                     self.counters.nodes_painted += counts.nodes_painted;
                     self.counters.layers_produced += counts.layers_produced;
                     self.counters.layers_reused += counts.layers_reused;
@@ -241,7 +237,7 @@ impl PipelineOwner<PaintPhase> {
                     // the flags set so the retry re-derives them; a mark refuses
                     // itself while its flag is set, so a flag never cleared would
                     // stop the boundary being re-queued.
-                    for render_id in consumed_updates {
+                    for render_id in work.consumed_updates.drain(..) {
                         if let Some(node) = self.render_tree.get(render_id) {
                             node.clear_needs_composited_layer_update();
                         }
@@ -249,7 +245,7 @@ impl PipelineOwner<PaintPhase> {
                     // Child paint orders: a node repainted this pass replaces what it
                     // recorded before; one left clean keeps it. A node that left the
                     // tree takes its entry with it.
-                    for (render_id, order) in child_paint_orders {
+                    for (render_id, order) in work.child_paint_orders.drain(..) {
                         match order {
                             Some(order) => {
                                 self.last_child_paint_orders.insert(render_id, order);
@@ -262,6 +258,7 @@ impl PipelineOwner<PaintPhase> {
                     let tree = &self.render_tree;
                     self.last_child_paint_orders
                         .retain(|render_id, _| tree.get(*render_id).is_some());
+                    walked = true;
                 }
                 Err(e) => {
                     // Nothing of the pass is kept: the patch buffered in
@@ -286,9 +283,8 @@ impl PipelineOwner<PaintPhase> {
         // that failed partway the flag test skips exactly the entries this scan
         // exists to catch.
         for dirty_node in self.scheduler.nodes_needing_paint() {
-            if !reached.contains(&dirty_node.id)
-                && let Some(render_node) = self.render_tree.get(dirty_node.id)
-            {
+            let reached = walked && scratch.composer.visited.contains(&dirty_node.id);
+            if !reached && let Some(render_node) = self.render_tree.get(dirty_node.id) {
                 tracing::warn!(
                     id = dirty_node.id.as_u64(),
                     depth = dirty_node.depth,
@@ -308,6 +304,8 @@ impl PipelineOwner<PaintPhase> {
         }
         // `clear()` retains capacity (preserve Vec backing across frames).
         self.scheduler.clear_paint_queue();
+        scratch.recycle();
+        self.paint_scratch = Some(scratch);
 
         // exit_phase clears debug_doing_paint AND drains mid-paint marks back
         // into dirty so paint marks made during this pass become next-frame
@@ -334,7 +332,7 @@ impl PipelineOwner<PaintPhase> {
     /// twice, it would cost twice.
     fn paint_owed(
         &self,
-        composer: &mut FragmentComposer<'_, '_>,
+        composer: &mut FragmentComposer<'_, '_, '_>,
         root_id: RenderId,
         root_is_boundary: bool,
         inputs: &PaintInputs<'_>,
@@ -447,7 +445,7 @@ impl PipelineOwner<PaintPhase> {
     /// record says it stands.
     fn serve_alone(
         &self,
-        composer: &mut FragmentComposer<'_, '_>,
+        composer: &mut FragmentComposer<'_, '_, '_>,
         id: RenderId,
         inputs: &PaintInputs<'_>,
     ) -> crate::error::RenderResult<()> {
@@ -482,7 +480,7 @@ impl PipelineOwner<PaintPhase> {
     /// erasing the evidence.
     fn paint_subtree(
         &self,
-        composer: &mut FragmentComposer<'_, '_>,
+        composer: &mut FragmentComposer<'_, '_, '_>,
         node_id: RenderId,
         origin: Offset,
         anchor: Option<AnchorFrame>,
@@ -491,7 +489,8 @@ impl PipelineOwner<PaintPhase> {
         ensure_stack(|| self.paint_subtree_impl(composer, node_id, origin, anchor, inputs))
     }
 
-    /// The effect-layer replacements `record`'s content needs this frame, or
+    /// Fills `patches` with the effect-layer replacements `record`'s content
+    /// needs this frame and returns the nodes whose requests they serve, or
     /// `Ok(None)` when one of them cannot be expressed as a patch.
     ///
     /// Walks the nodes whose own effect layers this content holds and rebuilds
@@ -524,14 +523,15 @@ impl PipelineOwner<PaintPhase> {
         &self,
         record: &BoundaryRecord,
         targets: &[RenderId],
-    ) -> crate::error::RenderResult<Option<LayerPatch>> {
+        patches: &mut Vec<(EntryIndex, Layer)>,
+    ) -> crate::error::RenderResult<Option<SmallVec<[RenderId; 2]>>> {
         if targets
             .iter()
             .any(|target| !record.effect_slots.iter().any(|(owner, _)| owner == target))
         {
             return Ok(None);
         }
-        let mut patches = Vec::new();
+        patches.clear();
         // Nodes whose request this patch serves, cleared by `run_paint` only
         // once the frame commits: the walk can still fail after this point.
         let mut consumed: SmallVec<[RenderId; 2]> = SmallVec::new();
@@ -580,14 +580,14 @@ impl PipelineOwner<PaintPhase> {
             }
             consumed.push(render_id);
         }
-        Ok(Some(LayerPatch { patches, consumed }))
+        Ok(Some(consumed))
     }
 
     /// Body of [`Self::paint_subtree`]; split out so every recursion
     /// level enters through the [`ensure_stack`] probe.
     fn paint_subtree_impl(
         &self,
-        composer: &mut FragmentComposer<'_, '_>,
+        composer: &mut FragmentComposer<'_, '_, '_>,
         node_id: RenderId,
         origin: Offset,
         anchor: Option<AnchorFrame>,
@@ -605,7 +605,7 @@ impl PipelineOwner<PaintPhase> {
         // unconditional insert would cost a hash write per render object per
         // frame to answer a question about a handful of ids.
         if inputs.dirty_set.contains(&node_id) {
-            composer.visited.insert(node_id);
+            composer.work.visited.insert(node_id);
         }
 
         let is_repaint_boundary = render_node.is_repaint_boundary();
@@ -665,7 +665,7 @@ impl PipelineOwner<PaintPhase> {
         // Recorded before the early returns below: a node skipped for layout
         // must not strand the request either.
         if render_node.needs_composited_layer_update() {
-            composer.consumed_updates.push(node_id);
+            composer.work.consumed_updates.push(node_id);
         }
 
         // Fully transparent subtree: skip recording entirely. Children
@@ -885,6 +885,7 @@ impl PipelineOwner<PaintPhase> {
                     .enumerate()
                     .all(|(position, child)| child.slot == position && child.opacity == 1.0);
             composer
+                .work
                 .child_paint_orders
                 .push((node_id, (!plain).then_some(painted_children)));
         }
@@ -905,7 +906,7 @@ impl PipelineOwner<PaintPhase> {
     /// and `anchor` the paint-anchor frame in force at the parent.
     fn place_boundary(
         &self,
-        composer: &mut FragmentComposer<'_, '_>,
+        composer: &mut FragmentComposer<'_, '_, '_>,
         child_id: RenderId,
         origin: Offset,
         offset_override: Option<Offset>,
@@ -919,7 +920,7 @@ impl PipelineOwner<PaintPhase> {
 
     fn place_boundary_impl(
         &self,
-        composer: &mut FragmentComposer<'_, '_>,
+        composer: &mut FragmentComposer<'_, '_, '_>,
         child_id: RenderId,
         origin: Offset,
         offset_override: Option<Offset>,
@@ -979,7 +980,7 @@ impl PipelineOwner<PaintPhase> {
     /// with that node's effects rebuilt, every other entry shared.
     fn refresh_boundary(
         &self,
-        composer: &mut FragmentComposer<'_, '_>,
+        composer: &mut FragmentComposer<'_, '_, '_>,
         id: RenderId,
         committed: Option<&BoundaryRecord>,
         region_anchor: Option<AnchorFrame>,
@@ -987,7 +988,7 @@ impl PipelineOwner<PaintPhase> {
     ) -> crate::error::RenderResult<Option<BoundaryRecord>> {
         composer.mark_served(id);
         if inputs.dirty_set.contains(&id) {
-            composer.visited.insert(id);
+            composer.work.visited.insert(id);
         }
         let update_targets = inputs.layer_updates.get(&id);
         let kept = committed.filter(|record| {
@@ -997,12 +998,14 @@ impl PipelineOwner<PaintPhase> {
             let Some(targets) = update_targets else {
                 return Ok(None);
             };
-            if let Some(LayerPatch { patches, consumed }) =
-                self.layer_patches_for(record, targets)?
-            {
-                composer.consumed_updates.extend(consumed);
+            // Lent out of the composer while the patch is built; an error
+            // leaves the composer a fresh one.
+            let mut patches = std::mem::take(&mut composer.work.layer_patches);
+            let served = self.layer_patches_for(record, targets, &mut patches)?;
+            let fresh = served.map(|consumed| {
+                composer.work.consumed_updates.extend(consumed);
                 if patches.is_empty() {
-                    return Ok(None);
+                    return None;
                 }
                 tracing::trace!(
                     boundary = id.as_u64(),
@@ -1012,7 +1015,7 @@ impl PipelineOwner<PaintPhase> {
                 let rebuilt = patches.len() as u64;
                 let content = record
                     .content
-                    .with_effects(patches)
+                    .with_effects(patches.drain(..))
                     .expect("BUG: a layer patch names effects of the content it patches");
                 composer.counts.layers_produced += rebuilt;
                 composer.counts.layers_reused +=
@@ -1023,10 +1026,16 @@ impl PipelineOwner<PaintPhase> {
                 };
                 // The patched content keeps every slot of the one it replaces.
                 composer
+                    .work
                     .slotted
                     .extend(fresh.children.iter().map(|&(_, node)| node));
                 composer.publish(fresh.node, Arc::clone(&fresh.content));
-                return Ok(Some(fresh));
+                Some(fresh)
+            });
+            patches.clear();
+            composer.work.layer_patches = patches;
+            if let Some(fresh) = fresh {
+                return Ok(fresh);
             }
         }
         composer.begin_boundary(Some(id));
@@ -1156,14 +1165,14 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             return;
         };
         let StagedScene {
-            records,
-            placed,
-            stale,
+            mut records,
+            mut placed,
+            mut stale,
             frame,
             orphans,
             ops: _,
         } = staged;
-        for (id, record) in records {
+        for (id, record) in records.drain() {
             if let Some(record) = record {
                 if record.followers.is_empty() {
                     self.follower_boundaries.remove(&id);
@@ -1176,15 +1185,18 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
                 self.boundary_records.remove(&id);
             }
         }
-        for (id, placed) in placed {
+        for (id, placed) in placed.drain() {
             if let Some(record) = self.boundary_records.get_mut(&id) {
                 record.placed = placed;
             }
         }
-        for id in stale {
+        for id in stale.drain(..) {
             if let Some(record) = self.boundary_records.get_mut(&id) {
                 record.stale = true;
             }
+        }
+        if let Some(scratch) = self.paint_scratch.as_mut() {
+            scratch.recycle_staged(records, placed, stale);
         }
         if let Some(frame) = frame {
             self.scene_frame = Some(frame);
@@ -1194,8 +1206,8 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
         // Follower hit-testing: each follower's composite-resolved transform,
         // read off the applied version the engine resolves against, one
         // algorithm for pixels and hit-tests.
-        let mut follower_transforms = FxHashMap::default();
-        let mut hidden_follower_ids = FxHashSet::default();
+        self.last_follower_transforms.clear();
+        self.last_hidden_follower_ids.clear();
         let frame_followers = self.scene_frame.iter().flat_map(|frame| {
             frame
                 .followers
@@ -1221,15 +1233,14 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
                 // origin: conjugating by it gives them the mapping paint
                 // applies.
                 Some(transform) => {
-                    follower_transforms.insert(render_id, conjugate(transform, -origin));
+                    self.last_follower_transforms
+                        .insert(render_id, conjugate(transform, -origin));
                 }
                 None => {
-                    hidden_follower_ids.insert(render_id);
+                    self.last_hidden_follower_ids.insert(render_id);
                 }
             }
         }
-        self.last_follower_transforms = follower_transforms;
-        self.last_hidden_follower_ids = hidden_follower_ids;
         // Queued, not run: listeners run in the post-frame lane.
         self.leader_watches.check(version);
     }
@@ -1260,13 +1271,6 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
         self.staged_scene = None;
         self.orphaned_nodes.clear();
     }
-}
-
-/// The patch half of a composited-layer update: the effect entries to
-/// replace, and the nodes whose requests it serves.
-struct LayerPatch {
-    patches: Vec<(EntryIndex, Layer)>,
-    consumed: SmallVec<[RenderId; 2]>,
 }
 
 /// The effect entries one node pushed in a content, and the origin it
@@ -1376,32 +1380,29 @@ impl PaintInputs<'_> {
 struct BoundaryBuild {
     /// The boundary, `None` for the frame node.
     boundary: Option<RenderId>,
+    /// Which content of the pass this is: the key its render objects'
+    /// ordinals and effect slots are filed under in the composer.
+    serial: u64,
     builder: ContentBuilder,
     open: DisplayList,
     /// The render object whose runs `open` holds, `None` while it is empty: a
     /// chunk holds one render object's output (ADR-0304 §2), so a run of
     /// another seals it first.
     open_owner: Option<RenderId>,
-    /// Per render object, the effects and chunks it has added so far: their
-    /// next ordinals.
-    ordinals: FxHashMap<RenderId, (u32, u32)>,
     effect_slots: Vec<(RenderId, EffectSlots)>,
-    /// Where each node's entry in `effect_slots` is.
-    effect_owner: FxHashMap<RenderId, usize>,
     followers: SmallVec<[(RenderId, EntryIndex, Offset); 1]>,
     children: SmallVec<[(RenderId, SceneNodeId); 4]>,
 }
 
 impl BoundaryBuild {
-    fn new(boundary: Option<RenderId>) -> Self {
+    fn new(boundary: Option<RenderId>, serial: u64) -> Self {
         Self {
             boundary,
+            serial,
             builder: BoundaryContent::builder(),
             open: DisplayList::new(),
             open_owner: None,
-            ordinals: FxHashMap::default(),
             effect_slots: Vec::new(),
-            effect_owner: FxHashMap::default(),
             followers: SmallVec::new(),
             children: SmallVec::new(),
         }
@@ -1421,13 +1422,149 @@ impl BoundaryBuild {
     }
 }
 
+/// The collections a paint pass fills and empties, kept by the owner across
+/// frames so a pass allocates only when it outgrows them.
+///
+/// A pass takes them out of the owner and puts them back once it committed;
+/// one that fails or unwinds leaves empty ones behind, which serve the next
+/// pass the same. Each is cleared when it is taken, so what a failed pass
+/// left in one is never read.
+#[derive(Debug, Default)]
+pub(super) struct PaintScratch {
+    /// The queued nodes, as a set.
+    dirty_ids: FxHashSet<RenderId>,
+    /// The boundaries queued only for composited-layer updates.
+    layer_updates: FxHashMap<RenderId, SmallVec<[RenderId; 2]>>,
+    composer: ComposerScratch,
+}
+
+impl PaintScratch {
+    /// Empties every collection for the next pass, dropping one this pass
+    /// grew past [`KEPT_CAPACITY`]: clearing a hash table costs its capacity,
+    /// so a large frame must not make every later small one pay for it.
+    fn recycle(&mut self) {
+        recycle_set(&mut self.dirty_ids);
+        recycle_map(&mut self.layer_updates);
+        let composer = &mut self.composer;
+        recycle_vec(&mut composer.builds);
+        recycle_vec(&mut composer.publishes);
+        recycle_vec(&mut composer.places);
+        recycle_set(&mut composer.served);
+        recycle_set(&mut composer.slotted);
+        recycle_vec(&mut composer.child_paint_orders);
+        recycle_vec(&mut composer.consumed_updates);
+        recycle_set(&mut composer.visited);
+        recycle_map(&mut composer.ordinals);
+        recycle_map(&mut composer.effect_owner);
+        recycle_vec(&mut composer.layer_patches);
+        recycle_set(&mut composer.republished);
+        recycle_vec(&mut composer.retired);
+        recycle_set(&mut composer.retired_set);
+        recycle_vec(&mut composer.unslotted);
+        recycle_map(&mut composer.records);
+        recycle_map(&mut composer.placed);
+        recycle_vec(&mut composer.stale);
+    }
+
+    /// Hands back the maps a staged patch held, for the next pass to stage
+    /// into.
+    fn recycle_staged(
+        &mut self,
+        mut records: FxHashMap<RenderId, Option<BoundaryRecord>>,
+        mut placed: FxHashMap<RenderId, Placed>,
+        mut stale: Vec<RenderId>,
+    ) {
+        recycle_map(&mut records);
+        recycle_map(&mut placed);
+        recycle_vec(&mut stale);
+        let composer = &mut self.composer;
+        composer.records = records;
+        composer.placed = placed;
+        composer.stale = stale;
+    }
+}
+
+/// The most entries a collection [`PaintScratch`] keeps between passes may
+/// have room for.
+const KEPT_CAPACITY: usize = 1024;
+
+fn recycle_map<K, V>(map: &mut FxHashMap<K, V>) {
+    if map.capacity() > KEPT_CAPACITY {
+        *map = FxHashMap::default();
+    } else {
+        map.clear();
+    }
+}
+
+fn recycle_set<K>(set: &mut FxHashSet<K>) {
+    if set.capacity() > KEPT_CAPACITY {
+        *set = FxHashSet::default();
+    } else {
+        set.clear();
+    }
+}
+
+fn recycle_vec<T>(vec: &mut Vec<T>) {
+    if vec.capacity() > KEPT_CAPACITY {
+        *vec = Vec::new();
+    } else {
+        vec.clear();
+    }
+}
+
+/// What [`FragmentComposer`] works in, between passes.
+#[derive(Debug, Default)]
+struct ComposerScratch {
+    builds: Vec<BoundaryBuild>,
+    publishes: Vec<(SceneNodeId, Arc<BoundaryContent>)>,
+    places: Vec<(SceneNodeId, Offset)>,
+    served: FxHashSet<RenderId>,
+    slotted: FxHashSet<SceneNodeId>,
+    child_paint_orders: Vec<(RenderId, Option<ChildPaintOrder>)>,
+    consumed_updates: Vec<RenderId>,
+    visited: FxHashSet<RenderId>,
+    ordinals: FxHashMap<(u64, RenderId), (u32, u32)>,
+    effect_owner: FxHashMap<(u64, RenderId), usize>,
+    layer_patches: Vec<(EntryIndex, Layer)>,
+    republished: FxHashSet<SceneNodeId>,
+    retired: Vec<SceneNodeId>,
+    retired_set: FxHashSet<SceneNodeId>,
+    unslotted: Vec<RenderId>,
+    /// A staged patch's maps, handed back by `scene_applied`.
+    records: FxHashMap<RenderId, Option<BoundaryRecord>>,
+    placed: FxHashMap<RenderId, Placed>,
+    stale: Vec<RenderId>,
+}
+
+impl ComposerScratch {
+    /// Empties every collection; each was emptied when the last pass that
+    /// used it ended, so this costs nothing unless that pass failed.
+    fn clear(&mut self) {
+        self.builds.clear();
+        self.publishes.clear();
+        self.places.clear();
+        self.served.clear();
+        self.slotted.clear();
+        self.child_paint_orders.clear();
+        self.consumed_updates.clear();
+        self.visited.clear();
+        self.ordinals.clear();
+        self.effect_owner.clear();
+        self.layer_patches.clear();
+        self.republished.clear();
+        self.retired.clear();
+        self.retired_set.clear();
+        self.unslotted.clear();
+        self.records.clear();
+        self.placed.clear();
+        self.stale.clear();
+    }
+}
+
 /// What a paint pass leaves for `run_paint` to commit.
 struct PaintOutcome {
     staged: StagedScene,
-    consumed_updates: Vec<RenderId>,
-    visited: FxHashSet<RenderId>,
     counts: PaintCounts,
-    child_paint_orders: Vec<(RenderId, Option<ChildPaintOrder>)>,
 }
 
 /// Replays paint fragments into the contents of the boundaries a pass
@@ -1443,49 +1580,36 @@ struct PaintOutcome {
 /// Operations are buffered here and handed to the writer when the pass ends,
 /// in the order the owner applies them: every content child first, then
 /// placements, then retirements.
-struct FragmentComposer<'w, 'o> {
+struct FragmentComposer<'w, 'o, 's> {
     writer: &'w mut SceneWriter<'o>,
-    /// The contents being built, innermost last.
-    builds: Vec<BoundaryBuild>,
-    publishes: Vec<(SceneNodeId, Arc<BoundaryContent>)>,
-    places: Vec<(SceneNodeId, Offset)>,
+    /// The pass's working collections, which the owner keeps between passes.
+    work: &'s mut ComposerScratch,
+    /// The serial the next content begun takes.
+    next_serial: u64,
     staged: StagedScene,
-    /// Boundaries this pass decided on: painted, patched or left clean.
-    served: FxHashSet<RenderId>,
-    /// Nodes a content published this pass slots.
-    slotted: FxHashSet<SceneNodeId>,
     /// Set when the owner's sequence ran out for a chunk: the patch is then
     /// refused by `apply` too, which renews the lineage (ADR-0304 §10).
     exhausted: bool,
-    /// For each node painted this pass that has children, the children it
-    /// painted in the order it painted them when that is not every child first
-    /// to last (`None` when it is).
-    child_paint_orders: Vec<(RenderId, Option<ChildPaintOrder>)>,
-    /// Nodes whose pending-update flag this pass's patches serve, cleared by
-    /// `run_paint` on the commit path only — see [`LayerPatch::consumed`].
-    consumed_updates: Vec<RenderId>,
-    /// Every queued node this pass actually reached, the residue scan's
-    /// oracle.
-    visited: FxHashSet<RenderId>,
     /// Nodes painted and layers created or kept this pass, folded into the
     /// owner's `PipelineCounters` by `run_paint` on the commit path only.
     counts: PaintCounts,
 }
 
-impl<'w, 'o> FragmentComposer<'w, 'o> {
-    fn new(writer: &'w mut SceneWriter<'o>) -> Self {
+impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
+    fn new(writer: &'w mut SceneWriter<'o>, work: &'s mut ComposerScratch) -> Self {
+        work.clear();
+        let staged = StagedScene {
+            records: std::mem::take(&mut work.records),
+            placed: std::mem::take(&mut work.placed),
+            stale: std::mem::take(&mut work.stale),
+            ..StagedScene::default()
+        };
         Self {
             writer,
-            builds: Vec::new(),
-            publishes: Vec::new(),
-            places: Vec::new(),
-            staged: StagedScene::default(),
-            served: FxHashSet::default(),
-            slotted: FxHashSet::default(),
+            work,
+            next_serial: 0,
+            staged,
             exhausted: false,
-            child_paint_orders: Vec::new(),
-            consumed_updates: Vec::new(),
-            visited: FxHashSet::default(),
             counts: PaintCounts::default(),
         }
     }
@@ -1495,34 +1619,40 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
     }
 
     fn build(&mut self) -> &mut BoundaryBuild {
-        self.builds
+        self.work
+            .builds
             .last_mut()
             .expect("BUG: paint replays only inside a boundary's content")
     }
 
     /// The boundary whose content is being built, `None` for the frame node.
     fn current_boundary(&self) -> Option<RenderId> {
-        self.builds.last().and_then(|build| build.boundary)
+        self.work.builds.last().and_then(|build| build.boundary)
     }
 
     fn begin_boundary(&mut self, boundary: Option<RenderId>) {
-        self.builds.push(BoundaryBuild::new(boundary));
+        let serial = self.next_serial;
+        self.next_serial = serial
+            .checked_add(1)
+            .expect("BUG: a pass begins fewer than 2^64 contents");
+        self.work.builds.push(BoundaryBuild::new(boundary, serial));
     }
 
     /// Ends the innermost content, its open run sealed.
     fn end_boundary(&mut self) -> BoundaryBuild {
         self.seal_picture();
-        self.builds
+        self.work
+            .builds
             .pop()
             .expect("BUG: a boundary's content ends after it began")
     }
 
     fn served(&self, id: RenderId) -> bool {
-        self.served.contains(&id)
+        self.work.served.contains(&id)
     }
 
     fn mark_served(&mut self, id: RenderId) {
-        self.served.insert(id);
+        self.work.served.insert(id);
     }
 
     /// The node of a boundary served this pass.
@@ -1553,11 +1683,11 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
     }
 
     fn publish(&mut self, node: SceneNodeId, content: Arc<BoundaryContent>) {
-        self.publishes.push((node, content));
+        self.work.publishes.push((node, content));
     }
 
     fn place(&mut self, node: SceneNodeId, placement: Offset) {
-        self.places.push((node, placement));
+        self.work.places.push((node, placement));
     }
 
     /// Slots the child boundary `id`, published at `node`, where the
@@ -1567,7 +1697,7 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
         let build = self.build();
         build.builder.slot(node);
         build.children.push((id, node));
-        self.slotted.insert(node);
+        self.work.slotted.insert(node);
     }
 
     /// Merges a sealed run of `owner`'s paint while keeping its canvas clips
@@ -1584,7 +1714,7 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
     }
 
     fn seal_picture(&mut self) {
-        let Some(build) = self.builds.last_mut() else {
+        let Some(build) = self.work.builds.last_mut() else {
             return;
         };
         let owner = build.open_owner.take();
@@ -1606,10 +1736,16 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
             return;
         };
         let build = self
+            .work
             .builds
             .last_mut()
             .expect("BUG: the content sealed is still open");
-        let ordinal = &mut build.ordinals.entry(owner).or_default().1;
+        let ordinal = &mut self
+            .work
+            .ordinals
+            .entry((build.serial, owner))
+            .or_default()
+            .1;
         let chunk = Chunk::new(owner, *ordinal, version, list);
         *ordinal += 1;
         build.builder.chunk(Arc::new(chunk));
@@ -1619,8 +1755,17 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
     /// Pushes `layer`, an effect `owner` painted, and opens it.
     fn push_layer(&mut self, owner: RenderId, layer: Layer) -> EntryIndex {
         self.seal_picture();
-        let build = self.build();
-        let ordinal = &mut build.ordinals.entry(owner).or_default().0;
+        let build = self
+            .work
+            .builds
+            .last_mut()
+            .expect("BUG: paint replays only inside a boundary's content");
+        let ordinal = &mut self
+            .work
+            .ordinals
+            .entry((build.serial, owner))
+            .or_default()
+            .0;
         let index = build.builder.push_effect(layer, owner, *ordinal);
         *ordinal += 1;
         self.counts.layers_produced += 1;
@@ -1641,13 +1786,17 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
     /// Files the effect at `index` as one of `render_id`'s own, built at
     /// `origin`, for a later composited-layer update.
     fn record_effect_layer(&mut self, render_id: RenderId, index: EntryIndex, origin: Offset) {
-        let build = self.build();
-        if let Some(&at) = build.effect_owner.get(&render_id) {
+        let build = self
+            .work
+            .builds
+            .last_mut()
+            .expect("BUG: paint replays only inside a boundary's content");
+        if let Some(&at) = self.work.effect_owner.get(&(build.serial, render_id)) {
             build.effect_slots[at].1.indices.push(index);
         } else {
-            build
+            self.work
                 .effect_owner
-                .insert(render_id, build.effect_slots.len());
+                .insert((build.serial, render_id), build.effect_slots.len());
             let mut indices = SmallVec::new();
             indices.push(index);
             build
@@ -1691,20 +1840,26 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
     }
 
     /// Retires what no content names any longer, hands the buffered patch to
-    /// the writer, and returns what the owner commits.
+    /// the writer, and returns what the owner commits; the pass's consumed
+    /// updates, reached nodes and child paint orders stay in its working
+    /// collections.
     fn finish(mut self, owner: &PipelineOwner<PaintPhase>, lineage: Lineage) -> PaintOutcome {
         debug_assert!(
-            self.builds.is_empty(),
+            self.work.builds.is_empty(),
             "BUG: a boundary's content was left open"
         );
-        let republished: FxHashSet<SceneNodeId> =
-            self.publishes.iter().map(|(node, _)| *node).collect();
-        let mut retired: Vec<SceneNodeId> = Vec::new();
-        let mut retired_set: FxHashSet<SceneNodeId> = FxHashSet::default();
+        let mut republished = std::mem::take(&mut self.work.republished);
+        let mut retired = std::mem::take(&mut self.work.retired);
+        let mut retired_set = std::mem::take(&mut self.work.retired_set);
         // The children a republished content no longer slots, with every
         // boundary recorded under them: unplaced by their parent's latest
         // layout, or moved to a parent that did not slot them this pass.
-        let mut unslotted: Vec<RenderId> = Vec::new();
+        let mut unslotted = std::mem::take(&mut self.work.unslotted);
+        republished.clear();
+        retired.clear();
+        retired_set.clear();
+        unslotted.clear();
+        republished.extend(self.work.publishes.iter().map(|(node, _)| *node));
         let old_children = |id: &Option<RenderId>| -> &[(RenderId, SceneNodeId)] {
             match id {
                 Some(id) => owner
@@ -1728,7 +1883,7 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
         }
         for boundary in &republished_boundaries {
             for &(child, node) in old_children(boundary) {
-                if !self.slotted.contains(&node) && retired_set.insert(node) {
+                if !self.work.slotted.contains(&node) && retired_set.insert(node) {
                     retired.push(node);
                     unslotted.push(child);
                 }
@@ -1746,7 +1901,7 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
             };
             self.staged.records.insert(id, None);
             for (child, node) in below {
-                if !self.slotted.contains(&node) && retired_set.insert(node) {
+                if !self.work.slotted.contains(&node) && retired_set.insert(node) {
                     retired.push(node);
                     unslotted.push(child);
                 }
@@ -1770,7 +1925,7 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
                 let free = parent.is_none_or(|parent| {
                     republished.contains(&parent) || retired_set.contains(&parent)
                 });
-                if free && !self.slotted.contains(&node) {
+                if free && !self.work.slotted.contains(&node) {
                     retired_set.insert(node);
                     retired.push(node);
                     false
@@ -1785,11 +1940,11 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
         self.staged.orphans = orphans;
 
         let mut ops = 0u64;
-        for (node, content) in self.publishes.drain(..) {
+        for (node, content) in self.work.publishes.drain(..) {
             self.writer.push(SceneOp::Publish { node, content });
             ops += 1;
         }
-        for (node, offset) in self.places.drain(..) {
+        for (node, offset) in self.work.places.drain(..) {
             let placement = Placement::try_new(offset).unwrap_or_else(|_| {
                 tracing::warn!(?offset, "paint: a boundary placed at a non-finite offset");
                 Placement::ZERO
@@ -1797,21 +1952,21 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
             self.writer.push(SceneOp::Place { node, placement });
             ops += 1;
         }
-        for node in retired {
+        for node in retired.drain(..) {
             self.writer.push(SceneOp::Retire { node });
             ops += 1;
         }
         if self.exhausted {
             tracing::warn!("paint: scene content versions exhausted; the patch will be refused");
         }
+        self.work.republished = republished;
+        self.work.retired = retired;
+        self.work.retired_set = retired_set;
+        self.work.unslotted = unslotted;
         self.staged.ops = ops;
-        PaintOutcome {
-            staged: self.staged,
-            consumed_updates: self.consumed_updates,
-            visited: self.visited,
-            counts: self.counts,
-            child_paint_orders: self.child_paint_orders,
-        }
+        let staged = std::mem::take(&mut self.staged);
+        let counts = self.counts;
+        PaintOutcome { staged, counts }
     }
 }
 

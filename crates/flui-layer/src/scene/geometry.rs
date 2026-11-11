@@ -183,6 +183,17 @@ fn mapped(matrix: &Matrix4, rect: Rect<f64>) -> Reach {
     if !matrix.m.iter().all(|value| value.is_finite()) {
         return Reach::NonFinite;
     }
+    // Most steps of a chain are placements and offsets: a translation maps a
+    // rect to the same rect moved, which is what the general map computes
+    // for it, corner for corner.
+    if let Some((dx, dy)) = matrix.as_translation() {
+        return Reach::rect(Rect::from_ltrb(
+            rect.min.x + dx,
+            rect.min.y + dy,
+            rect.max.x + dx,
+            rect.max.y + dy,
+        ));
+    }
     match DamageExtent::rect(rect).transformed(matrix).covering_rect() {
         Some(rect) => Reach::rect(rect),
         // A projective map past the camera has no bound.
@@ -215,41 +226,51 @@ pub(crate) fn map_out_spread(links: &[Link<'_>], reach: Reach, kernel: f64) -> R
 }
 
 fn map_through(links: &[Link<'_>], reach: Reach, kernel: f64, spread: Spread) -> Reach {
-    // The map from each step's space into the outermost.
-    let mut ctms: SmallVec<[Matrix4; 16]> = SmallVec::with_capacity(links.len());
+    // The map from the space of each step that reads it (a clip, a filter,
+    // an extent) into the outermost, in chain order.
+    let mut ctms: SmallVec<[Matrix4; 4]> = SmallVec::new();
     let mut ctm = Matrix4::IDENTITY;
     for link in links {
-        if let Link::Matrix(matrix) = link {
-            ctm *= *matrix;
+        match link {
+            Link::Matrix(matrix) => ctm *= *matrix,
+            Link::Clip(_) | Link::Filter(_) | Link::Extent(_) => ctms.push(ctm),
+            Link::Hidden | Link::Everywhere => {}
         }
-        ctms.push(ctm);
     }
     let mut out = match reach {
         Reach::Rect(rect) => mapped(&ctm, rect).spread(kernel),
         other => other,
     };
-    for (link, ctm) in links.iter().zip(&ctms).rev() {
+    for link in links.iter().rev() {
         out = match *link {
             Link::Matrix(_) => out,
             Link::Hidden => Reach::Nothing,
-            Link::Clip(clip) => match (out, mapped(ctm, clip)) {
-                (Reach::Rect(inside), Reach::Rect(clip)) => {
-                    inside.intersect(&clip).map_or(Reach::Nothing, Reach::rect)
-                }
-                (Reach::Unbounded, clip @ (Reach::Rect(_) | Reach::Nothing)) => clip,
-                (Reach::Rect(_), Reach::Nothing) => Reach::Nothing,
-                (out, _) => out,
-            },
-            Link::Filter(filter) => match out {
-                Reach::Rect(input) => match spread {
-                    Spread::Reach => footprint(filter, input, ctm),
-                    Spread::Kernel => moved(filter, input, ctm),
-                }
-                .map_or(Reach::Unbounded, Reach::rect),
-                other => other,
-            },
-            Link::Extent(rect) => out.union(mapped(ctm, rect)),
             Link::Everywhere => Reach::Unbounded,
+            Link::Clip(_) | Link::Filter(_) | Link::Extent(_) => {
+                let ctm = ctms
+                    .pop()
+                    .expect("BUG: every clip, filter and extent of the chain has its map");
+                match *link {
+                    Link::Clip(clip) => match (out, mapped(&ctm, clip)) {
+                        (Reach::Rect(inside), Reach::Rect(clip)) => {
+                            inside.intersect(&clip).map_or(Reach::Nothing, Reach::rect)
+                        }
+                        (Reach::Unbounded, clip @ (Reach::Rect(_) | Reach::Nothing)) => clip,
+                        (Reach::Rect(_), Reach::Nothing) => Reach::Nothing,
+                        (out, _) => out,
+                    },
+                    Link::Filter(filter) => match out {
+                        Reach::Rect(input) => match spread {
+                            Spread::Reach => footprint(filter, input, &ctm),
+                            Spread::Kernel => moved(filter, input, &ctm),
+                        }
+                        .map_or(Reach::Unbounded, Reach::rect),
+                        other => other,
+                    },
+                    Link::Extent(rect) => out.union(mapped(&ctm, rect)),
+                    Link::Matrix(_) | Link::Hidden | Link::Everywhere => out,
+                }
+            }
         };
     }
     out

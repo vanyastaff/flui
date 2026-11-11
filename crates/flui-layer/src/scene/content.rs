@@ -213,22 +213,22 @@ pub(crate) struct EffectScope {
 /// content an effect update derives from it.
 #[derive(Debug)]
 struct Stream {
-    entries: Box<[Entry]>,
+    entries: Vec<Entry>,
     /// The entry of each effect, ascending: the effect at `effects[i]` has
     /// the layer `layers[i]` of the content.
-    effects: Box<[EntryIndex]>,
+    effects: Vec<EntryIndex>,
     /// Each effect's scope, as `effects` orders them.
-    scopes: Box<[EffectScope]>,
+    scopes: Vec<EffectScope>,
     /// Each effect and slot entry, ascending.
-    structural: Box<[EntryIndex]>,
+    structural: Vec<EntryIndex>,
     /// The union of what the top-level chunks draw, in the boundary's space.
     top_chunks: Reach,
     /// Each slot's entry, by its node's key.
-    slot_entries: Box<[(SceneNodeId, EntryIndex)]>,
+    slot_entries: Vec<(SceneNodeId, EntryIndex)>,
     /// Each chunk that draws an external texture, by texture.
-    chunk_textures: Box<[(TextureId, EntryIndex)]>,
+    chunk_textures: Vec<(TextureId, EntryIndex)>,
     /// Each chunk that reads the destination, in paint order.
-    chunk_closures: Box<[EntryIndex]>,
+    chunk_closures: Vec<EntryIndex>,
 }
 
 impl Stream {
@@ -242,7 +242,7 @@ impl Stream {
         let mut chunk_closures = Vec::new();
         // The effects the current entry sits under, innermost last, as
         // positions in `effects`.
-        let mut open: Vec<usize> = Vec::new();
+        let mut open: SmallVec<[usize; 8]> = SmallVec::new();
         for (position, entry) in entries.iter().enumerate() {
             let index = EntryIndex::at(position);
             let parent = entry.parent();
@@ -287,14 +287,14 @@ impl Stream {
         }
         slots.sort_unstable_by_key(|(node, _)| node.key().table_key());
         Self {
-            entries: entries.into_boxed_slice(),
-            effects: effects.into_boxed_slice(),
-            scopes: scopes.into_boxed_slice(),
-            structural: structural.into_boxed_slice(),
+            entries,
+            effects,
+            scopes,
+            structural,
             top_chunks,
-            slot_entries: slots.into_boxed_slice(),
-            chunk_textures: chunk_textures.into_boxed_slice(),
-            chunk_closures: chunk_closures.into_boxed_slice(),
+            slot_entries: slots,
+            chunk_textures,
+            chunk_closures,
         }
     }
 }
@@ -303,12 +303,12 @@ impl Stream {
 #[derive(Debug, Default)]
 struct LayerIndexes {
     /// Each link layer, in paint order.
-    links: Box<[(LayerLink, LinkRole, EntryIndex)]>,
+    links: Vec<(LayerLink, LinkRole, EntryIndex)>,
     /// Each texture layer, by texture, in paint order.
-    textures: Box<[(TextureId, EntryIndex)]>,
+    textures: Vec<(TextureId, EntryIndex)>,
     /// Each effect that reads pixels other than those it draws, in paint
     /// order.
-    closures: Box<[EntryIndex]>,
+    closures: Vec<EntryIndex>,
 }
 
 impl LayerIndexes {
@@ -330,9 +330,9 @@ impl LayerIndexes {
             }
         }
         Self {
-            links: links.into_boxed_slice(),
-            textures: textures.into_boxed_slice(),
-            closures: closures.into_boxed_slice(),
+            links,
+            textures,
+            closures,
         }
     }
 }
@@ -348,7 +348,7 @@ impl LayerIndexes {
 pub struct BoundaryContent {
     stream: Arc<Stream>,
     /// One layer per effect, in paint order.
-    layers: Box<[Layer]>,
+    layers: Vec<Layer>,
     indexes: LayerIndexes,
 }
 
@@ -359,7 +359,7 @@ impl BoundaryContent {
         ContentBuilder::default()
     }
 
-    fn of(stream: Arc<Stream>, layers: Box<[Layer]>) -> Self {
+    fn of(stream: Arc<Stream>, layers: Vec<Layer>) -> Self {
         let indexes = LayerIndexes::of(&stream.effects, &layers);
         Self {
             stream,
@@ -537,7 +537,7 @@ impl Default for BoundaryContent {
 pub struct ContentBuilder {
     entries: Vec<Entry>,
     layers: Vec<Layer>,
-    open: Vec<EntryIndex>,
+    open: SmallVec<[EntryIndex; 8]>,
 }
 
 impl ContentBuilder {
@@ -571,10 +571,7 @@ impl ContentBuilder {
     /// The content, with every open effect closed.
     #[must_use]
     pub fn finish(self) -> BoundaryContent {
-        BoundaryContent::of(
-            Arc::new(Stream::of(self.entries)),
-            self.layers.into_boxed_slice(),
-        )
+        BoundaryContent::of(Arc::new(Stream::of(self.entries)), self.layers)
     }
 
     fn push(&mut self, entry: impl FnOnce(Option<EntryIndex>) -> Entry) -> EntryIndex {

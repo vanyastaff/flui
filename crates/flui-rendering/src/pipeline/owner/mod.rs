@@ -298,6 +298,9 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// applied as.
     staged_scene: Option<paint::StagedScene>,
 
+    /// The collections a paint pass works in, kept between passes.
+    paint_scratch: Option<Box<paint::PaintScratch>>,
+
     /// Nodes of removed boundaries, retired by the paint that republishes
     /// the parent that named them.
     orphaned_nodes: Vec<flui_layer::SceneNodeId>,
@@ -444,6 +447,7 @@ where
         follower_boundaries: from.follower_boundaries,
         scene_frame: from.scene_frame,
         staged_scene: from.staged_scene,
+        paint_scratch: from.paint_scratch,
         orphaned_nodes: from.orphaned_nodes,
         retained_pixel_ratio: from.retained_pixel_ratio,
         last_hidden_follower_ids: from.last_hidden_follower_ids,

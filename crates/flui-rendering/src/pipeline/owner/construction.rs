@@ -150,6 +150,7 @@ impl PipelineOwner<Idle> {
             follower_boundaries: FxHashSet::default(),
             scene_frame: None,
             staged_scene: None,
+            paint_scratch: None,
             orphaned_nodes: Vec::new(),
             retained_pixel_ratio: 1.0,
             last_hidden_follower_ids: FxHashSet::default(),
