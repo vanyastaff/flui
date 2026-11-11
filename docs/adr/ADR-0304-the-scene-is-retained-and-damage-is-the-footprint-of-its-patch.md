@@ -251,7 +251,8 @@ version before and after it:
 - `Retire` damages nothing, since only a node no slot names can be retired.
 - After the operations every follower is resolved again (O(followers × depth), counted as
   `followers_resolved`); one whose transform changed damages its subtree footprint under the old and
-  the new transform. A follower is no longer damaged every frame.
+  the new transform. A follower is no longer damaged every frame. The followers of a republished
+  boundary pair with its old ones in one pass over each side's links (`follower_pairing_reads`).
 
 A subtree's footprint is its `subtree_bounds` mapped through the chain to the surface, grown by
 its kernel and rounded outward (ADR-0098 §6). A node's `subtree_bounds`, in its own space, covers
@@ -260,8 +261,10 @@ effects above its slot. Its kernel is how far, in device pixels, the filters in 
 past those bounds once mapped: the renderer takes a blur or morphology kernel in physical pixels
 whatever the transform, so a bound in the boundary's space, which a shrinking ancestor shrinks,
 cannot hold it; a magnifier scales the kernel it takes, and a transform filter that is not a uniform
-scale has no kernel bound inside its boundary. `Publish` recomputes both exactly from the children
-(O(children)); every other change grows the ancestors' bounds by union and their kernel by maximum
+scale has no kernel bound inside its boundary. A filter adds its own kernel to the maximum of its
+children's, so kernels sum along a chain and take the maximum across siblings. `Publish`
+recomputes both exactly from the children (O(children)); every other change grows the ancestors'
+bounds by union and their kernel by maximum
 up to the root (O(depth)) and never shrinks them, so a footprint can over-report and never
 under-report. The engine culls with the same bounds. A chain, placement or
 bound that is not finite makes the frame `Full(NonFinite)`; a singular chain draws nothing and

@@ -492,51 +492,133 @@ pub(crate) fn a_filter_under_a_shrinking_ancestor_damages_its_device_kernel() {
     );
 }
 
-/// Nested filters under a shrinking ancestor spread by both device kernels:
-/// two radius-20 dilates over 10 000..10 100 under a 0.01 scale draw over
-/// 60..141, and moving the boundary damages both edges of that.
-pub(crate) fn nested_filters_under_a_shrinking_ancestor_damage_both_kernels() {
+/// Followers pair across a patch in one pass over a republished boundary's
+/// links and none over a kept one: two thousand sibling followers read
+/// nothing when another node moves, and each side's links once when their
+/// boundary is republished.
+pub(crate) fn sibling_followers_pair_in_one_pass_over_their_links() {
+    const FOLLOWERS: u32 = 2_000;
+    let links: Vec<LayerLink> = (0..4).map(|_| LayerLink::new()).collect();
+    let crowd = |extra: u32| {
+        let mut content = BoundaryContent::builder();
+        for ordinal in 0..FOLLOWERS + extra {
+            let link = links[usize::try_from(ordinal).expect("a small index") % links.len()];
+            content.push_effect(
+                Layer::from(FollowerLayer::new(link)),
+                RenderId::new(1),
+                ordinal,
+            );
+            content.pop_effect();
+        }
+        content.finish()
+    };
     let mut owner = SceneOwner::new();
     let mut writer = owner.writer();
     let root = writer.current().root();
-    let filtered = writer.mint_node();
-    let version = writer.next_content_version().expect("a version");
-    let mut content = BoundaryContent::builder();
-    for ordinal in 0..2 {
-        content.push_effect(
-            Layer::from(ImageFilterLayer::new(ImageFilter::Dilate { radius: 20.0 })),
-            RenderId::new(1),
-            ordinal,
-        );
-    }
-    content.chunk(chunk(
-        1,
-        version,
-        Rect::from_ltrb(10_000.0, 10_000.0, 10_100.0, 10_100.0),
-    ));
-    writer.push(publish(filtered, content.finish()));
+    let (crowded, mover) = (writer.mint_node(), writer.mint_node());
+    writer.push(publish(crowded, crowd(0)));
+    writer.push(publish(mover, BoundaryContent::builder().finish()));
     let mut top = BoundaryContent::builder();
-    top.push_effect(
-        Layer::from(TransformLayer::new(Matrix4::scaling(0.01, 0.01, 1.0))),
-        RenderId::new(2),
-        0,
-    );
-    top.slot(filtered);
+    top.slot(crowded);
+    top.slot(mover);
     writer.push(publish(root, top.finish()));
-    owner.apply(SURFACE).expect("two dilates under a shrink");
+    owner
+        .apply(SURFACE)
+        .expect("two thousand sibling followers");
+
+    let reads = owner.follower_pairing_reads();
+    let mut writer = owner.writer();
+    writer.push(place(mover, 5.0, 5.0));
+    owner.apply(SURFACE).expect("another node moves");
+    assert_eq!(owner.follower_pairing_reads(), reads, "a kept boundary");
 
     let mut writer = owner.writer();
-    writer.push(place(filtered, 100.0, 0.0));
-    owner.apply(SURFACE).expect("the boundary moves");
-    let damage = rects(owner.patch_damage());
-    assert!(
-        covered(&damage, covering(60.0, 80.0, 61.0, 81.0)),
-        "the old left edge: {damage:?}"
+    writer.push(publish(crowded, crowd(1)));
+    owner.apply(SURFACE).expect("one follower more");
+    assert_eq!(
+        owner.follower_pairing_reads() - reads,
+        u64::from(2 * FOLLOWERS + 1),
+        "each side's links once"
     );
-    assert!(
-        covered(&damage, covering(141.0, 80.0, 142.0, 81.0)),
-        "the new right edge: {damage:?}"
-    );
+}
+
+/// Filters spread by the sum of the kernels along a chain and the maximum
+/// across siblings, a magnifier scaling what it takes: each stack, inside a
+/// boundary under a 0.01 scale over 10 000..10 100, draws over the device
+/// span given, and moving the boundary by one device pixel damages both
+/// ends of it.
+pub(crate) fn nested_filter_kernels_add_along_the_chain() {
+    let dilate = || ImageFilter::Dilate { radius: 20.0 };
+    let blur = || ImageFilter::blur(10.0);
+    let magnify = || {
+        ImageFilter::try_magnify(Point::new(10_050.0, 10_050.0), 2.0).expect("a finite magnifier")
+    };
+    // Outermost first; the renderer's span: a dilate grows 20 px, a blur of
+    // sigma 10 grows ceil(sqrt(3) * 10) = 18 px, a 2x magnifier about the
+    // centre doubles what it takes, half a source pixel of read and one of
+    // rounding included. Three deep, so that the outermost filter's own
+    // closure, which sees its input's kernel, does not stand in for the sum.
+    let stacks: [(&str, Vec<ImageFilter>, (f64, f64)); 4] = [
+        (
+            "three dilates",
+            vec![dilate(), dilate(), dilate()],
+            (40.0, 161.0),
+        ),
+        (
+            "dilate over two blurs",
+            vec![dilate(), blur(), blur()],
+            (44.0, 157.0),
+        ),
+        ("three blurs", vec![blur(), blur(), blur()], (46.0, 155.0)),
+        (
+            "two dilates over a magnifier over a dilate",
+            vec![dilate(), dilate(), magnify(), dilate()],
+            (18.0, 183.0),
+        ),
+    ];
+    for (name, filters, (left, right)) in stacks {
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        let root = writer.current().root();
+        let filtered = writer.mint_node();
+        let version = writer.next_content_version().expect("a version");
+        let mut content = BoundaryContent::builder();
+        for (ordinal, filter) in (0_u32..).zip(filters) {
+            content.push_effect(
+                Layer::from(ImageFilterLayer::new(filter)),
+                RenderId::new(1),
+                ordinal,
+            );
+        }
+        content.chunk(chunk(
+            1,
+            version,
+            Rect::from_ltrb(10_000.0, 10_000.0, 10_100.0, 10_100.0),
+        ));
+        writer.push(publish(filtered, content.finish()));
+        let mut top = BoundaryContent::builder();
+        top.push_effect(
+            Layer::from(TransformLayer::new(Matrix4::scaling(0.01, 0.01, 1.0))),
+            RenderId::new(2),
+            0,
+        );
+        top.slot(filtered);
+        writer.push(publish(root, top.finish()));
+        owner.apply(SURFACE).expect("a filter stack under a shrink");
+
+        let mut writer = owner.writer();
+        writer.push(place(filtered, 100.0, 0.0));
+        owner.apply(SURFACE).expect("the boundary moves");
+        let damage = rects(owner.patch_damage());
+        assert!(
+            covered(&damage, covering(left, 100.0, left + 1.0, 101.0)),
+            "{name}: the old left end {left}: {damage:?}"
+        );
+        assert!(
+            covered(&damage, covering(right, 100.0, right + 1.0, 101.0)),
+            "{name}: the new right end {right}: {damage:?}"
+        );
+    }
 }
 
 /// A picture effect changes what its damage extent covers: one that fills

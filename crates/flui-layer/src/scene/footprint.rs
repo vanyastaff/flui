@@ -4,6 +4,7 @@
 
 use std::cell::Cell;
 use std::cmp::Reverse;
+use std::sync::Arc;
 
 use flui_foundation::geometry::{Matrix4, Rect};
 
@@ -37,6 +38,18 @@ pub(crate) struct PatchFacts<'p> {
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct FootprintCost {
     pub(crate) followers_resolved: u64,
+    /// Follower link entries read to pair a republished boundary's followers.
+    pub(crate) pairing_reads: u64,
+}
+
+impl FootprintCost {
+    /// Adds `other`'s counts to these.
+    pub(crate) fn add(&mut self, other: Self) {
+        self.followers_resolved = self
+            .followers_resolved
+            .saturating_add(other.followers_resolved);
+        self.pairing_reads = self.pairing_reads.saturating_add(other.pairing_reads);
+    }
 }
 
 /// The footprints a patch damages, in surface pixels.
@@ -165,10 +178,11 @@ fn moved_followers(
             .hiding_leader(at)
             .is_some_and(|leader| geometry.path_up(leader).any(changed))
     };
+    let pairs = FollowerPairs::of(base, next, facts.touched, &mut cost.pairing_reads);
     let mut moved = Vec::new();
     for (_, users) in next.links.iter() {
         for &after in &users.followers {
-            let Some(before) = paired_follower(base, next, after) else {
+            let Some(before) = pairs.before(base, next, after) else {
                 continue;
             };
             let then = old.resolve(before, 0);
@@ -182,36 +196,98 @@ fn moved_followers(
     moved
 }
 
-/// The follower in `base` that `after` (in `next`) continues.
-fn paired_follower(base: &VersionInner, next: &VersionInner, after: Address) -> Option<Address> {
-    let content = next.record(after.node)?.content();
-    let (link, rank) = follower_rank(content, after.entry)?;
-    let before = base.record(after.node)?.content();
-    before
-        .links()
-        .iter()
-        .filter(|(other, role, _)| *other == link && *role == LinkRole::Follower)
-        .nth(rank)
-        .map(|(_, _, entry)| Address {
+/// How the followers of each republished boundary pair across the patch:
+/// per node, sorted by table key, its followers' entries after the patch
+/// with the entry each continues, sorted by the entry after.
+struct FollowerPairs(Vec<(u64, Vec<(EntryIndex, EntryIndex)>)>);
+
+impl FollowerPairs {
+    /// The pairing of every node the patch republished, built in one pass
+    /// over each content's links.
+    fn of(base: &VersionInner, next: &VersionInner, touched: &[NodeKey], reads: &mut u64) -> Self {
+        let mut keys: Vec<NodeKey> = touched.to_vec();
+        keys.sort_unstable_by_key(|key| key.table_key());
+        keys.dedup();
+        let mut nodes: Vec<(u64, Vec<(EntryIndex, EntryIndex)>)> = Vec::new();
+        for key in keys {
+            let (Some(before), Some(after)) = (base.record(key), next.record(key)) else {
+                continue;
+            };
+            if Arc::ptr_eq(before.content(), after.content()) {
+                continue;
+            }
+            nodes.push((
+                key.table_key(),
+                pair_followers(before.content(), after.content(), reads),
+            ));
+        }
+        Self(nodes)
+    }
+
+    /// The follower in `base` that `after` (in `next`) continues: the same
+    /// entry when the node kept its content, the one of the same link and
+    /// rank among that link's followers when it was republished.
+    fn before(&self, base: &VersionInner, next: &VersionInner, after: Address) -> Option<Address> {
+        let (old, new) = (base.record(after.node)?, next.record(after.node)?);
+        if Arc::ptr_eq(old.content(), new.content()) {
+            return Some(after);
+        }
+        let at = self
+            .0
+            .binary_search_by_key(&after.node.table_key(), |(key, _)| *key)
+            .ok()?;
+        let pairs = &self.0[at].1;
+        let pair = pairs
+            .binary_search_by_key(&after.entry, |(entry, _)| *entry)
+            .ok()?;
+        Some(Address {
             node: after.node,
-            entry: *entry,
+            entry: pairs[pair].1,
         })
+    }
 }
 
-fn follower_rank(
-    content: &BoundaryContent,
-    entry: EntryIndex,
-) -> Option<(crate::link::LayerLink, usize)> {
-    let (link, _, _) = content
-        .links()
-        .iter()
-        .find(|(_, role, at)| *at == entry && *role == LinkRole::Follower)?;
-    let rank = content
-        .links()
-        .iter()
-        .filter(|(other, role, at)| other == link && *role == LinkRole::Follower && *at < entry)
-        .count();
-    Some((*link, rank))
+/// Each follower of `after` with the follower of `before` of the same link
+/// and rank among that link's followers, sorted by the entry in `after`,
+/// counting each link it reads into `reads`.
+fn pair_followers(
+    before: &BoundaryContent,
+    after: &BoundaryContent,
+    reads: &mut u64,
+) -> Vec<(EntryIndex, EntryIndex)> {
+    let mut followers = |content: &BoundaryContent| {
+        let links = content.links();
+        *reads = reads.saturating_add(u64::try_from(links.len()).unwrap_or(u64::MAX));
+        let mut out: Vec<(u64, EntryIndex)> = links
+            .iter()
+            .filter(|(_, role, _)| *role == LinkRole::Follower)
+            .map(|(link, _, entry)| (link.id(), *entry))
+            .collect();
+        // Within a link, by entry: its followers in paint order.
+        out.sort_unstable();
+        out
+    };
+    let (old, new) = (followers(before), followers(after));
+    let mut pairs: Vec<(EntryIndex, EntryIndex)> = Vec::with_capacity(new.len().min(old.len()));
+    let mut cursor = 0;
+    let mut previous: Option<(u64, usize)> = None;
+    for &(link, entry) in &new {
+        let rank = match previous {
+            Some((last, rank)) if last == link => rank + 1,
+            _ => 0,
+        };
+        previous = Some((link, rank));
+        while cursor < old.len() && old[cursor].0 < link {
+            cursor += 1;
+        }
+        if let Some(&(other, before_entry)) = old.get(cursor + rank)
+            && other == link
+        {
+            pairs.push((entry, before_entry));
+        }
+    }
+    pairs.sort_unstable_by_key(|(entry, _)| *entry);
+    pairs
 }
 
 /// Recomputes, deepest first, the subtree bounds of every node the patch

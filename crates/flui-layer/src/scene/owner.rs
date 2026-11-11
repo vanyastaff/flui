@@ -10,7 +10,7 @@ use flui_foundation::geometry::Offset;
 use flui_foundation::sequence::IdMint;
 
 use super::content::BoundaryContent;
-use super::footprint;
+use super::footprint::{self, FootprintCost};
 use super::id::{ContentVersion, Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::table::{Table, TableCost};
 use super::version::{NodeRecord, SceneVersion, VersionInner};
@@ -301,7 +301,7 @@ impl Scratch {
 struct ApplyCost {
     table: TableCost,
     depth_updates: u64,
-    followers_resolved: u64,
+    footprint: FootprintCost,
 }
 
 /// Owns one presentation's retained scene: mints its ids and applies its
@@ -486,7 +486,16 @@ impl SceneOwner {
     #[cfg(feature = "testing")]
     #[must_use]
     pub fn followers_resolved(&self) -> u64 {
-        self.cost.followers_resolved
+        self.cost.footprint.followers_resolved
+    }
+
+    /// Follower link entries every apply so far read to pair the followers
+    /// of a republished boundary with the ones before the patch: each such
+    /// boundary's links once on either side, none for a boundary it kept.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn follower_pairing_reads(&self) -> u64 {
+        self.cost.footprint.pairing_reads
     }
 
     /// The last applied patch's damage against the version before it: the
@@ -555,7 +564,7 @@ impl SceneOwner {
             cost,
             depth_updates,
             damage,
-            followers_resolved,
+            footprint,
         } = built;
         let id = SceneVersionId::new(self.lineage, seq);
         next.id = id;
@@ -575,7 +584,7 @@ impl SceneOwner {
         self.cost.table.copies += cost.copies;
         self.cost.table.created += cost.created;
         self.cost.depth_updates += depth_updates;
-        self.cost.followers_resolved += followers_resolved;
+        self.cost.footprint.add(footprint);
         // A patch applied for another surface than the last one: its pixels
         // are not the ones the damage is relative to.
         self.patch_damage = match self.surface {
@@ -644,7 +653,7 @@ struct Built {
     cost: TableCost,
     depth_updates: u64,
     damage: DamageRegion,
-    followers_resolved: u64,
+    footprint: FootprintCost,
 }
 
 /// One patch's application to a copy of the current version; dropped
@@ -713,7 +722,7 @@ impl<'a> Patch<'a> {
             cost: patch.cost,
             depth_updates: patch.depth_updates,
             damage,
-            followers_resolved: footprint_cost.followers_resolved,
+            footprint: footprint_cost,
         })
     }
 

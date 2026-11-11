@@ -222,7 +222,8 @@ under both. Both chains of a follower stop at the lowest common ancestor of it a
 `resolve_follower_transform` walks them, so nested followers cost their unshared chains. A picture
 or canvas effect changes its display list's damage extent. A subtree carries, beside its local
 bounds, the device-pixel kernel its filters spread by (the renderer takes a kernel in physical
-pixels, which bounds in a boundary's space would shrink under a shrinking ancestor), and a
+pixels, which bounds in a boundary's space would shrink under a shrinking ancestor; a filter adds
+its own to the maximum of its children's, a sum along a chain), and a
 footprint adds it once mapped to the surface. The region then closes over the filtered nodes of
 both versions. A follower under `LeaderClip::Hide` is damaged when the patch changes a node on its
 leader's branch. A surface change between applies is
