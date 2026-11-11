@@ -46,20 +46,22 @@ jobs:
           tool: cargo-nextest@0.9
       - name: Build
         run: cargo nextest run -p flui-native --locked --test platform_it --no-run
-      - name: Rows alone, under nextest and under cargo test
+      - name: Rows in order on a fresh session
         if: ${{ !cancelled() }}
         run: |
-          for row in a_pointer_routed_mouse_hovers_the_window a_leave_callback_that_hovers_again_keeps_the_hover unhandled_system_key_closes_window two_injected_touches_arrive_as_one_pointer_frame; do
-            echo "::group::nextest $row"
-            FLUI_NATIVE_WINDOW_CONTRACT_CHILD=$row cargo nextest run -p flui-native --locked --test platform_it --no-capture -E 'test(=contract::test_window_lifecycle_contract)' 2>&1 | grep -E "panicked|assertion|left|right|CANNOT_VERIFY|PASS|FAIL|hover" ; echo "exit ${PIPESTATUS[0]}"
+          one() {
+            echo "::group::$1"
+            FLUI_NATIVE_WINDOW_CONTRACT_CHILD=$1 cargo nextest run -p flui-native --locked --test platform_it --no-capture -E 'test(=contract::test_window_lifecycle_contract)' 2>&1 | grep -E "panicked|assertion|left:|right:|CANNOT_VERIFY|PASS|FAIL|hover"
             echo "::endgroup::"
-            echo "::group::cargo test $row"
-            FLUI_NATIVE_WINDOW_CONTRACT_CHILD=$row cargo test -p flui-native --locked --test platform_it -- --exact contract::test_window_lifecycle_contract --nocapture 2>&1 | grep -E "panicked|assertion|left|right|CANNOT_VERIFY|test result|hover" ; echo "exit ${PIPESTATUS[0]}"
-            echo "::endgroup::"
-          done
-      - name: Whole window contract under nextest
-        if: ${{ !cancelled() }}
-        run: cargo nextest run -p flui-native --locked --test platform_it -E 'test(=contract::test_window_lifecycle_contract)'
-      - name: Whole window contract under cargo test
-        if: ${{ !cancelled() }}
-        run: cargo test -p flui-native --locked --test platform_it -- --exact contract::test_window_lifecycle_contract
+          }
+          one unhandled_system_key_closes_window
+          one a_pointer_routed_mouse_hovers_the_window
+          one two_injected_touches_arrive_as_one_pointer_frame
+          one a_pointer_routed_mouse_hovers_the_window
+          one a_leave_callback_that_hovers_again_keeps_the_hover
+          one unhandled_system_key_closes_window
+          sleep 20
+          one a_pointer_routed_mouse_hovers_the_window
+          one unhandled_system_key_closes_window
+          one two_injected_touches_arrive_as_one_pointer_frame
+          one a_pointer_routed_mouse_hovers_the_window
