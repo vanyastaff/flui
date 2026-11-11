@@ -455,6 +455,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The likely shape is a third dialect of the CLI's `BrowserLink` once `safaridriver` serves WebDriver BiDi, or one over classic WebDriver that polls the page for its lines.
 - The check is `flui run --agent` in Safari on macOS, `flui mcp` reading the app and acting on it, and a reload reconnecting.
 
+### An interactive widget costs eighteen elements
+
+> **Environments:** all · **Who it hurts:** Every screen with many controls; every catalog built on the wrappers · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- `RawButton` is five wrappers around its child (`Semantics`, `GestureDetector`, `Actions`, `Focus`, `FocusRing`; `crates/flui-widgets/src/interaction/raw_button.rs`), and each brings its own elements, render object and state. The Material and Cupertino controls are built the same way.
+- Measured at `main` `da69efa` (Linux x86_64, 4 cores, release, headless, semantics off), one `RawButton` holding a `Text`: 18 elements, 8 render nodes, 421 allocations and 46 KB at mount, 58–127 µs to mount. A `Text` alone is 3 elements, 1 render node, 105 allocations and 9 KB; a `SizedBox` holding a `ColoredBox` is 2 elements, 2 render nodes, 31 allocations and 4.6 KB, although an `ElementNode` is 112 bytes and a `RenderEntry` 232.
+- The entry closes when a `RawButton` mounts in at most 4 elements, 2 render nodes, 60 allocations and 6 KB, held by a counted scenario of `crates/flui-widgets/tests/perf.rs`. Until then no new widget family starts on the wrappers (`AGENTS.md`, "Working here").
+
 ### Accepted ADR sections not built yet
 
 > **Environments:** all · **Who it hurts:** Anyone who reads an accepted ADR as the code's current shape · **Parity:** [Quality bar](platform-parity.md#quality-bar)
