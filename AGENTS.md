@@ -81,7 +81,8 @@ conversation:
   sections the code does not follow yet
   ([Accepted ADR sections not built yet](docs/gaps.md#accepted-adr-sections-not-built-yet)).
   While ADR-0304, ADR-0305 or ADR-0306 has a bullet there, a change to `flui-layer`,
-  `flui-rendering`, `flui-painting` or `flui-engine` builds what those records decide or fixes a
+  `flui-rendering`, `flui-painting` or `flui-engine` builds a task of
+  `docs/plans/specs/render-scaling/` or fixes a
   defect, and it writes a new ADR for that pipeline only when the step it builds cannot be built
   without one. While `docs/gaps.md` has
   [An interactive widget costs eighteen elements](docs/gaps.md#an-interactive-widget-costs-eighteen-elements),
