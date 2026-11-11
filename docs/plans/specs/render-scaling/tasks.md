@@ -245,8 +245,12 @@
 
 ### RS15. Фабрика поверхностей, команды слота, расчёт по штампу
 
-- **Что:** ADR-0305 §2–§6: `SurfaceFactory` (`!Send`), закрытые команды слота, расчёт кадра по
-  штампу, темп и `SurfaceGeneration` на слот.
+- **Что:** ADR-0305 §2–§6 без удаления оси ресурсов (она в RS19): `SurfaceFactory` (`!Send`),
+  закрытые команды слота, расчёт кадра по штампу, темп и `SurfaceGeneration` на слот. Три PR:
+  (a) исполнитель, команды и кольцо расчётов в `flui-engine`; (b) `Queued` и `settle_frame` в
+  `flui-runtime`; (c) `DisplayConnection`, `SurfaceFactory`, `bootstrap` и оконные слоты; в (c)
+  отказ resize повторяется только после паники или переходной ошибки, а размер, который backend
+  отклоняет всегда, пишет warn один раз.
 - **Тесты:** compile-fail `surface_factory_is_owner_local`, `surface_factory_rejects_borrowed_window`;
   `a_full_lifecycle_queue_returns_the_command`, `a_stale_slot_id_is_refused_after_detach`,
   `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released`,
@@ -254,7 +258,8 @@
   `a_stopped_executor_settles_every_pending_frame_failed`;
   `a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored` (`flui-runtime`);
   протокольные тесты `raster_owner` переписаны на слот (список в ADR-0305, Confirmation).
-- **Ворота:** все перечисленные тесты; ни одного `Mutex` в типах слота и исполнителя.
+- **Ворота:** все перечисленные тесты; в `RasterExecutor`, слоте и `RasterHost` нет `Mutex`;
+  единственный замок у inbox слота, держится только на обмен значений.
 - **Зависит:** RS14. **Размер:** L. **Ревью сильной модели.**
 
 ### RS16. Настольные раннеры на слотах
@@ -284,7 +289,10 @@
 ### RS19. Паника на команду, пересборка устройства, остановка, замер доли растра
 
 - **Что:** ADR-0305 §7–§9: паника сдерживается на команду и стоит общих кэшей, но не пайплайнов;
-  потерянное устройство пересобирается с сохранением поверхностей; остановка ограничена по времени.
+  потерянное устройство пересобирается с сохранением поверхностей; остановка ограничена по времени;
+  ось `GpuResourceGeneration` удаляется (§6), раз пересборка у контекста.
+  `shut_down` закрывает очередь жизненного цикла (`Receiver` в `Option`), чтобы
+  `Attach`, прошедший проверку health до остановки, получил `Gone`, а не остался `Attaching`.
   Плюс замер: доля растра в кадре на сцене-сетке, записанная в теле PR, как вход для решения о
   потоке растра по ADR-0305 §10.
 - **Тесты:** `a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines`,
@@ -302,4 +310,5 @@
 | RS3 | #2383 | готова | `layer_it region_contract` (четыре строки), `union_table`, `bounds_round_outward_with_aa_margin`; `damage_readback_tests` на lavapipe без правки ожиданий; `_ =>` над `DamageRegion`, `FullReason`, `ResyncReason` нет |
 | RS5 | #2392 | готова | `layer_it scene_apply_contract` (десять строк), `content_version_contract` (две), `scene_table_cost` (четыре): копий 4 / 5 / 5 / 6 на 100 / 1 100 / 30 000 / 100 000 узлах при одних слотах, k = 8 операций в одном листе копируют 2 / 3 / 3 / 4 узла; `scene::table::tests` (модель против `BTreeMap`, `Arc::ptr_eq`, рост 1 024 → 1 025 создаёт 3 узла и 0 копий); `Publish` корня с теми же слотами копирует 3 узла при 40 и при 1 000 детях (до разности слотов 3 и 33); новая граница над 10 и 100 узлами даёт 11 и 101 `depth_updates`; `xtask globals` со строкой `scene::id::NEXT_LINEAGE`, `send-impls` без строк |
 | RS14 | #2382 | готова; `RasterExecutor` переходит в RS15 вместе с командами, его единственный API это ход по ним | `every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format` (lavapipe): 3 слота в двух форматах дают 1 instance, 1 device, 1 атлас, 2 набора пайплайнов, 0 сборок на перерисовке; до: 3/3/3/3 |
-| RS2, RS4, RS6–RS13, RS15–RS19 | | не начата | |
+| RS15a | #2396 | готова (ревью принято); RS15b, RS15c не начаты | `engine_it` 17 тестов; без фикса падают `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released` (взаимоблокировка), `a_full_settlement_ring_holds_the_next_frame`, `a_stopped_executor_settles_every_pending_frame_failed`, `a_failed_resize_is_held_in_the_record_and_retried_next_turn`, `a_panicking_subscriber_cannot_strand_a_refused_slot`, `an_untaken_panic_payload_is_dropped_outside_the_slot_table`, `a_refusal_whose_error_panics_when_formatted_still_commits`, `a_surface_loss_keeps_the_barrier_of_a_pending_resize` |
+| RS2, RS4, RS6–RS13, RS15b–RS19 | | не начата | |

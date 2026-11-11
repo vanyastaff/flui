@@ -9,6 +9,11 @@
 //! repaint would overwrite, a pixel the old position left behind, a pixel
 //! whose colour depends on whether the partial clear ran first.
 
+#![expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+)]
+
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_layer::{
