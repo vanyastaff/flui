@@ -553,14 +553,14 @@ struct RareRegistrations {
 }
 
 impl RareRegistrations {
-    fn new() -> Box<Self> {
-        Box::new(Self {
+    fn new() -> Self {
+        Self {
             on_key_cancel: Registered::new(),
             traversal_entry: Registered::new(),
             traversal_group: Registered::new(),
             traversal_overrides: RefCell::new(FocusTraversalOverrides::default()),
             traversal_overrides_generation: Cell::new(0),
-        })
+        }
     }
 }
 
@@ -966,7 +966,7 @@ impl FocusNode {
 
     /// The rarely used registrations, made on first use.
     fn rare(&self) -> &RareRegistrations {
-        self.rare.get_or_init(RareRegistrations::new)
+        self.rare.get_or_init(|| Box::new(RareRegistrations::new()))
     }
 
     fn next_property_generation(generation: &Cell<u64>) -> u64 {
