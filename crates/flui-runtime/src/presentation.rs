@@ -887,6 +887,10 @@ impl PresentationState {
             capabilities.close.notify.clone(),
         );
         let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
+        // A window nobody reads through collects no semantics: the pipeline
+        // starts with them off, and `reconcile_semantics_enablement` turns
+        // both on together.
+        widgets.set_collects_semantics(false);
         widgets.set_pipeline_owner(pipeline.clone());
         widgets.with_build_owner_mut(|owner| {
             owner.set_global_key_scope(capabilities.global_key_scope);
@@ -1169,6 +1173,10 @@ impl PresentationState {
 
         let textures = flui_layer::TextureRegistry::new(Arc::new(|| {}));
         let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
+        // A window nobody reads through collects no semantics: the pipeline
+        // starts with them off, and `reconcile_semantics_enablement` turns
+        // both on together.
+        widgets.set_collects_semantics(false);
         widgets.set_pipeline_owner(pipeline.clone());
 
         let renderer = RenderingBinding::new_for_test_with_pipeline(pipeline.clone());
@@ -1775,6 +1783,9 @@ impl PresentationState {
                 owner.request_semantics_full_publish();
             }
         });
+        // What a view keeps only for a collected tree (a `Semantics` action
+        // route) follows the pipeline in this frame's build.
+        self.widgets.set_collects_semantics(wanted);
     }
 
     /// Read host scheduling state without applying invalidations or calling

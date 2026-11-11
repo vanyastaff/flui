@@ -983,6 +983,7 @@ fn semantics_translation_and_routing() {
             ("semantics::rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one", crate::semantics::rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one),
             ("semantics::unmounting_a_node_releases_its_action_table", crate::semantics::unmounting_a_node_releases_its_action_table),
             ("semantics::a_detached_mount_advertises_no_actions", crate::semantics::a_detached_mount_advertises_no_actions),
+            ("semantics::semantics_turned_on_later_publish_the_tree_of_semantics_on_from_the_start", crate::semantics::semantics_turned_on_later_publish_the_tree_of_semantics_on_from_the_start),
             ("raw_button::raw_button_press_is_reachable_through_a_platform_click", crate::raw_button::raw_button_press_is_reachable_through_a_platform_click),
             ("raw_button::raw_button_a11y_tree_matches_wrappers", crate::raw_button::raw_button_a11y_tree_matches_wrappers),
         ],

@@ -299,6 +299,38 @@ the node in place of its five wrappers, with the same constructor and methods; t
 `flui-material` and `flui-cupertino` follow, each family in its own change, and none changes its
 public API for it.
 
+### §8 An action route exists while the window collects semantics
+
+A window collects semantics while someone reads them: assistive technology is attached, or an
+agent or a test holds the tree (`flui-runtime`'s `SemanticsHost` counts the holders, and
+`reconcile_semantics_enablement` carries the answer to the pipeline at the start of a frame). The
+view layer follows the same answer. `BuildOwner` holds it, every `RenderObjectContext` carries it,
+and a `Semantics` registers the route of its actions only while it holds:
+
+```rust
+impl BuildOwner {
+    pub const fn collects_semantics(&self) -> bool;
+    /// A change marks every live element dirty; returns whether any was.
+    pub fn set_collects_semantics(&mut self, tree: &mut ElementTree, collects: bool) -> bool;
+}
+
+impl RenderObjectContext<'_> {
+    pub const fn collects_semantics(&self) -> bool;
+}
+```
+
+- A presentation starts with the answer `false`, and the runtime sets it beside the pipeline's
+  flag. A tree mounted outside a runtime (`BuildOwner::new`, a detached context) has the answer
+  `true`, so its semantics are complete without anyone turning them on.
+- A change of the answer costs one full build: every element is marked dirty, each render view's
+  configuration is pushed again, and `Semantics` registers or releases its route in that pass.
+  The change is rare, and the alternative, a dependency on an inherited value, was measured: it
+  costs every node with an action two allocations and more bytes than the route it saves.
+- The tree a window publishes after semantics are turned on over a mounted tree is the tree of a
+  window that collected from the start, and its actions reach their handlers.
+- Nothing changes for a widget author: `Semantics::on_click` and the other builders are written
+  as before, and a locator or an accessibility check in a test turns semantics on as before.
+
 ### Flutter counterparts
 
 | Here | Flutter | Why it differs |
@@ -308,6 +340,7 @@ public API for it.
 | `WidgetState::FocusVisible` | `FocusManager.highlightMode` and `FocusableActionDetector.onShowFocusHighlight` | one value a painter reads, where Flutter has a state and a separate callback |
 | `StatefulRenderView` (§4) | a `RenderObjectElement` subclass that keeps state, which any Flutter library may write | FLUI's elements are one generic `Element<V, Arity, Behavior>`, so the capability is a behaviour kind and not a subclass |
 | `provide` (§5) | `Element.updateInheritance`, which any element may override to enter `_inheritedElements` | the same mechanism, typed: the value type is the key and `ProvidedValue` carries `updateShouldNotify` |
+| `collects_semantics` (§8) | `SemanticsBinding.semanticsEnabled`, kept on by `SemanticsHandle`s from `ensureSemantics`; `PipelineOwner.semanticsOwner` is absent until one is held | Flutter's semantics callbacks live in the widget's configuration, so nothing is registered per node; FLUI's handlers are owner-local and reach the render tree through a route, which is what is deferred |
 
 `InheritedView` remains the form in which an application or a widget hands a value down, as
 `InheritedWidget` is in Flutter. `StatefulRenderView` and `provide` are for a widget that owns a
@@ -364,6 +397,12 @@ render object or already owns the element the value comes from.
   `a_state_that_failed_to_initialize_is_not_disposed`,
   `an_update_panic_replaces_the_element_and_the_next_frame_runs` and
   `a_state_hook_failure_is_recorded_against_its_hook`.
+- `semantics_turned_on_later_publish_the_tree_of_semantics_on_from_the_start`: a window that
+  mounted without semantics and one that collected from the start publish the same tree, a click
+  requested through the platform listener reaches its handler on a `Semantics` and on a
+  `RawButton`, and both hold again after semantics are turned off and on.
+- `perf_semantics_action_over_text`: the allocations and bytes a `Semantics` with one action adds
+  to its child in a window that collects no semantics.
 - The node's module is absent from the facade and from every prelude: the facade's public-API
   snapshot.
 - The `render_object_harness` row of `RenderInteractive`.

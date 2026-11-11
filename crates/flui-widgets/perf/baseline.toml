@@ -42,14 +42,21 @@ reallocations = 142
 semantics_nodes_updated = 81
 
 [raw_button_over_text]
-allocations = 50
-bytes = 7972
+allocations = 47
+bytes = 7546
 elements = 2
 reallocations = 2
 render_nodes = 1
 text_allocations = 58
 text_bytes = 9293
 text_reallocations = 2
+
+[semantics_action_over_text]
+allocations = 15
+bytes = 2667
+elements = 1
+reallocations = 1
+render_nodes = 1
 
 [slide_transition_tick]
 allocated_bytes = 49352

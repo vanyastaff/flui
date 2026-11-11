@@ -588,6 +588,11 @@ pub struct BuildOwner {
     /// `None` means the owner was built detached from a runtime interaction lane;
     /// render-object lifecycle contexts report that as a typed inactive ui_runtime.
     pub(crate) interaction_dispatch: Option<flui_interaction::InteractionDispatchHandle>,
+    /// Whether the presentation collects its semantics tree: what exists
+    /// only for a collected tree (a `Semantics` action route) is kept while
+    /// this holds. `true` until a runtime says otherwise, so a tree mounted
+    /// outside one is treated as collected.
+    pub(crate) collects_semantics: bool,
     pub(crate) hit_test_handle: Option<flui_interaction::HitTestHandle>,
 
     /// This owner's identity for [`GlobalKeyScope`] claim tagging (ADR-0043).
@@ -751,6 +756,7 @@ impl BuildOwner {
             capabilities: PresentationCapabilities::default(),
             flush_registry: None,
             interaction_dispatch: None,
+            collects_semantics: true,
             hit_test_handle: None,
             owner_tag,
             global_key_scope: None,
@@ -1039,35 +1045,6 @@ impl BuildOwner {
         self.external_inbox.accepts_premise(saved)
     }
 
-    /// Mark every live element dirty so the next [`build_scope`](Self::build_scope)
-    /// re-runs all `build()` methods.
-    ///
-    /// Used by hot reload. **Does not** unmount elements or dispose `State` — stateful
-    /// elements keep their in-tree `ViewState` across the call.
-    ///
-    /// Both halves are required, and for a while only one was here: the drain
-    /// skips any element whose own `is_dirty()` is false (its guard exists so a
-    /// clean entry that reached the heap through an inherited-dependency change
-    /// cannot have its children reconciled away), so marking the *heap* without
-    /// marking the *element* queued work the drain then dropped — a hot reload
-    /// that rebuilt nothing. `tree.mark_needs_build` sets the flag;
-    /// `schedule_build_for` orders the entry. The external-inbox drain works the
-    /// same two-step way.
-    pub fn reassemble(&mut self, tree: &mut ElementTree) {
-        let ids: Vec<(ElementId, usize)> = tree
-            .iter_nodes()
-            .map(|(id, node)| (id, node.depth()))
-            .collect();
-        for (id, depth) in ids {
-            tree.mark_needs_build(id);
-            self.schedule_build_for(id, depth, RebuildReason::HotReload);
-        }
-        tracing::info!(
-            count = self.dirty_count(),
-            "BuildOwner::reassemble — all elements marked dirty for hot reload"
-        );
-    }
-
     /// Re-key every queued dirty element to its authoritative TREE depth.
     ///
     /// The dirty heap orders by depth, but `schedule_build_for` is handed a
@@ -1296,6 +1273,7 @@ impl BuildOwner {
             capabilities: &self.capabilities,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
+            collects_semantics: self.collects_semantics,
             hit_test_handle: &self.hit_test_handle,
             global_key_scope: &mut self.global_key_scope,
             owner_tag: self.owner_tag,
@@ -1854,6 +1832,7 @@ impl BuildOwner {
                     capabilities: &self.capabilities,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
+                    collects_semantics: self.collects_semantics,
                     hit_test_handle: &self.hit_test_handle,
                     global_key_scope: &mut self.global_key_scope,
                     owner_tag: self.owner_tag,
@@ -2083,6 +2062,7 @@ impl BuildOwner {
                     capabilities: &self.capabilities,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
+                    collects_semantics: self.collects_semantics,
                     hit_test_handle: &self.hit_test_handle,
                     global_key_scope: &mut self.global_key_scope,
                     owner_tag: self.owner_tag,
@@ -2509,6 +2489,7 @@ impl BuildOwner {
                 capabilities: &self.capabilities,
                 flush_registry: &self.flush_registry,
                 interaction_dispatch: &self.interaction_dispatch,
+                collects_semantics: self.collects_semantics,
                 hit_test_handle: &self.hit_test_handle,
                 global_key_scope: &mut self.global_key_scope,
                 owner_tag: self.owner_tag,
@@ -2719,6 +2700,7 @@ impl BuildOwner {
             capabilities: &self.capabilities,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
+            collects_semantics: self.collects_semantics,
             hit_test_handle: &self.hit_test_handle,
             global_key_scope: &mut self.global_key_scope,
             owner_tag: self.owner_tag,

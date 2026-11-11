@@ -1394,6 +1394,23 @@ impl Semantics {
         }
     }
 
+    /// The route this build advertises its actions through: kept in line
+    /// with the build while the presentation collects semantics, released
+    /// while it does not.
+    fn route_while_collected(
+        &self,
+        ctx: &RenderObjectContext<'_>,
+        render_object: &RenderSemanticsAnnotations,
+    ) -> Option<SemanticsActionRoute> {
+        if ctx.collects_semantics() {
+            return self.sync_actions(ctx, render_object);
+        }
+        if let Some(existing) = render_object.action_route() {
+            release_actions(ctx, existing);
+        }
+        None
+    }
+
     /// Set the child.
     #[must_use]
     pub fn child(mut self, child: impl IntoView) -> Self {
@@ -1423,7 +1440,10 @@ impl RenderView for Semantics {
     type RenderObject = RenderSemanticsAnnotations;
 
     fn create_render_object(&self, ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
-        let route = self.register_actions(ctx);
+        let route = ctx
+            .collects_semantics()
+            .then(|| self.register_actions(ctx))
+            .flatten();
         let mut render_object =
             RenderSemanticsAnnotations::from_configuration(self.configuration_with(route.as_ref()))
                 .with_container(self.options.contains(SemanticsOptions::CONTAINER))
@@ -1452,7 +1472,7 @@ impl RenderView for Semantics {
         ctx: &RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        let route = self.sync_actions(ctx, render_object);
+        let route = self.route_while_collected(ctx, render_object);
         let configuration = self.configuration_with(route.as_ref());
         let custom = self.gated_custom_actions(route.as_ref());
         let _previous = render_object.set_action_route(route);
