@@ -24,8 +24,8 @@ use flui_foundation::{
     panic::FirstPanic,
 };
 use flui_layer::{
-    AnnotatedRegionLayer, CanvasLayer, DamageRect, DamageRegion, Layer, LayerTree, Scene,
-    SceneSnapshot,
+    AnnotatedRegionLayer, CanvasLayer, DamageRect, DamageRegion, FullReason, Layer, LayerTree,
+    Region, ResyncReason, Scene, SceneSnapshot,
 };
 
 /// An executor over the testing backend, its sender, a clone of the backend
@@ -144,11 +144,14 @@ fn phase(sender: &RasterSender, slot: SlotId) -> SlotPhase {
     sender.record(slot).expect("the owner holds the slot").phase
 }
 
+/// The full repaint a slot owes after a frame of it failed or it was hidden.
+const RESET: DamageRegion = DamageRegion::Full(FullReason::Resync(ResyncReason::RasterReset));
+
 fn partial(left: f64, top: f64, right: f64, bottom: f64) -> DamageRegion {
-    DamageRegion::Partial(
-        DamageRect::covering(Rect::from_ltrb(left, top, right, bottom), (100, 100))
-            .expect("a rect on the surface"),
-    )
+    let rect = DamageRect::try_covering(Rect::from_ltrb(left, top, right, bottom), (100, 100))
+        .expect("a finite rect")
+        .expect("a rect on the surface");
+    DamageRegion::Region(Region::new(rect))
 }
 
 /// The lifecycle queue holds 64 commands; the 65th comes back whole, and
@@ -291,7 +294,12 @@ fn a_superseded_scene_is_dropped_after_the_inbox_lock_is_released() {
         .sender
         .send(RasterCommand::Frame {
             slot: at.slot,
-            snapshot: snapshot(at, 1, DamageRegion::Full, scene_that_sends_on_drop()),
+            snapshot: snapshot(
+                at,
+                1,
+                DamageRegion::Full(FullReason::FirstFrame),
+                scene_that_sends_on_drop(),
+            ),
         })
         .expect("the first frame is accepted");
     RESEND.set(Some((rig.sender.clone(), at)));
@@ -316,7 +324,12 @@ fn a_superseded_scene_is_dropped_after_the_inbox_lock_is_released() {
         .sender
         .send(RasterCommand::Frame {
             slot: at.slot,
-            snapshot: snapshot(at, 3, DamageRegion::Full, scene_that_sends_on_drop()),
+            snapshot: snapshot(
+                at,
+                3,
+                DamageRegion::Full(FullReason::FirstFrame),
+                scene_that_sends_on_drop(),
+            ),
         })
         .expect("the frame is accepted");
     RESEND.set(Some((rig.sender.clone(), at)));
@@ -473,7 +486,10 @@ fn latest_frame_wins_and_superseded_damage_folds_into_the_survivor() {
     );
     assert_eq!(
         rig.backend.renders().last(),
-        Some(&(at.slot, partial(0.0, 0.0, 30.0, 30.0))),
+        Some(&(
+            at.slot,
+            partial(20.0, 20.0, 30.0, 30.0).union(partial(0.0, 0.0, 10.0, 10.0))
+        )),
         "the survivor repaints both frames' damage"
     );
 }
@@ -526,7 +542,7 @@ fn stale_surface_generation_is_rejected_before_render() {
     );
     assert_eq!(
         rig.backend.renders(),
-        [(at.slot, DamageRegion::Full)],
+        [(at.slot, DamageRegion::Full(FullReason::FirstFrame))],
         "a resized slot redraws in full"
     );
 
@@ -571,7 +587,7 @@ fn trims_coalesce_to_the_strongest_level_and_apply_before_the_frame() {
         after_attach,
         [
             SlotCall::Reclaim(MemoryPressureLevel::Critical),
-            SlotCall::Render(at.slot, DamageRegion::Full),
+            SlotCall::Render(at.slot, DamageRegion::Full(FullReason::FirstFrame)),
         ]
     );
 }
@@ -604,37 +620,37 @@ fn every_render_outcome_settles_its_frame() {
         Case {
             answer: ScriptedAnswer::Answer(PresentDisposition::NotShown),
             verdict: RasterVerdict::NotShown,
-            next_damage: DamageRegion::Full,
+            next_damage: RESET,
             restamp: false,
         },
         Case {
             answer: ScriptedAnswer::Fail(EngineError::Timeout),
             verdict: RasterVerdict::Retry,
-            next_damage: DamageRegion::Full,
+            next_damage: RESET,
             restamp: false,
         },
         Case {
             answer: ScriptedAnswer::Fail(EngineError::DeviceLost),
             verdict: RasterVerdict::DeviceLost,
-            next_damage: DamageRegion::Full,
+            next_damage: RESET,
             restamp: false,
         },
         Case {
             answer: ScriptedAnswer::Fail(EngineError::SurfaceLost),
             verdict: RasterVerdict::SurfaceStale,
-            next_damage: DamageRegion::Full,
+            next_damage: RESET,
             restamp: true,
         },
         Case {
             answer: ScriptedAnswer::Fail(EngineError::UnsupportedMaskShader),
             verdict: RasterVerdict::Failed,
-            next_damage: DamageRegion::Full,
+            next_damage: RESET,
             restamp: false,
         },
         Case {
             answer: ScriptedAnswer::Panic,
             verdict: RasterVerdict::Retry,
-            next_damage: DamageRegion::Full,
+            next_damage: RESET,
             restamp: false,
         },
     ];
@@ -814,10 +830,7 @@ fn a_slot_that_is_not_shown_settles_not_shown_and_redraws_in_full_when_shown() {
         verdicts(&rig.sender, at.slot),
         [(3, RasterVerdict::Presented)]
     );
-    assert_eq!(
-        rig.backend.renders().last(),
-        Some(&(at.slot, DamageRegion::Full))
-    );
+    assert_eq!(rig.backend.renders().last(), Some(&(at.slot, RESET)));
 }
 
 /// The host is woken once per turn that settled a frame, and a wake that

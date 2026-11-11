@@ -557,7 +557,7 @@ mod tests {
                     generation,
                     GpuResourceGeneration::ZERO,
                 ),
-                DamageRegion::Full,
+                DamageRegion::Full(flui_layer::FullReason::FirstFrame),
                 Scene::new(tree),
             ),
         }

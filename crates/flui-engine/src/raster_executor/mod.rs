@@ -35,7 +35,7 @@ use flui_foundation::{
     SurfaceGeneration,
     panic::{FirstPanic, discard_payload},
 };
-use flui_layer::{DamageRegion, SceneSnapshot};
+use flui_layer::{DamageRegion, FullReason, ResyncReason, SceneSnapshot};
 
 pub use backend::SlotBackend;
 pub use command::{
@@ -74,9 +74,10 @@ struct ExecSlot {
     /// only when its stamp equals it.
     applied: SurfaceGeneration,
     visibility: SlotVisibility,
-    /// The next rendered frame repaints the whole target: after the slot is
-    /// shown again, resized, or a frame of it failed.
-    full_redraw: bool,
+    /// Why the next rendered frame repaints the whole target, if it does:
+    /// the slot was just attached, resized or shown again, or a frame of it
+    /// failed.
+    full_redraw: Option<FullReason>,
 }
 
 /// The raster executor: owns the backend and every slot, and renders them on
@@ -243,7 +244,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 inbox,
                 applied: generation,
                 visibility: config.visibility,
-                full_redraw: true,
+                full_redraw: Some(FullReason::FirstFrame),
             });
             return 0;
         };
@@ -321,7 +322,9 @@ impl<B: SlotBackend> RasterExecutor<B> {
         let mut retry = None;
         let mut resize_report = None;
         if let Some(visibility) = visibility {
-            slot.full_redraw |= !slot.visibility.is_shown() && visibility.is_shown();
+            if !slot.visibility.is_shown() && visibility.is_shown() {
+                slot.owe_full(RESET);
+            }
             slot.visibility = visibility;
         }
         if let Some(size) = size {
@@ -329,7 +332,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             match caught.contain(|| backend.resize(slot.id, size)) {
                 Some(Ok(())) => {
                     slot.applied = generation;
-                    slot.full_redraw = true;
+                    slot.owe_full(FullReason::SurfaceChanged);
                 }
                 Some(Err(error)) => {
                     retry = Some(size);
@@ -383,6 +386,16 @@ impl<B: SlotBackend> RasterExecutor<B> {
     }
 }
 
+/// The full repaint a slot owes after the raster side lost what it showed.
+const RESET: FullReason = FullReason::Resync(ResyncReason::RasterReset);
+
+impl ExecSlot {
+    /// Owe a full repaint for `reason`, unless one is owed already.
+    fn owe_full(&mut self, reason: FullReason) {
+        let _owed = self.full_redraw.get_or_insert(reason);
+    }
+}
+
 impl<B: SlotBackend> Drop for RasterExecutor<B> {
     fn drop(&mut self) {
         self.shut_down();
@@ -398,11 +411,11 @@ fn render<B: SlotBackend>(
 ) -> (RasterVerdict, Option<SlotFailure>, bool, Option<Report>) {
     let stamped = frame.stamp.surface_generation;
     if !slot.visibility.is_shown() {
-        slot.full_redraw = true;
+        slot.owe_full(RESET);
         return (RasterVerdict::NotShown, None, false, None);
     }
     if stamped == SurfaceGeneration::ZERO || stamped != slot.applied {
-        slot.full_redraw = true;
+        slot.owe_full(FullReason::SurfaceChanged);
         let report = Report::Stale {
             slot: slot.id,
             stamped,
@@ -410,15 +423,11 @@ fn render<B: SlotBackend>(
         };
         return (RasterVerdict::SurfaceStale, None, false, Some(report));
     }
-    let damage = if slot.full_redraw {
-        DamageRegion::Full
-    } else {
-        frame.damage
-    };
+    let damage = slot.full_redraw.map_or(frame.damage, DamageRegion::Full);
     let mut caught = FirstPanic::new();
     let rendered = caught.contain(|| backend.render(slot.id, &frame.scene, damage));
     let Some(rendered) = rendered else {
-        slot.full_redraw = true;
+        slot.owe_full(RESET);
         let payload = caught
             .into_payload()
             .expect("BUG: a contained call that did not return holds its panic");
@@ -431,16 +440,16 @@ fn render<B: SlotBackend>(
     };
     match rendered {
         Ok(PresentDisposition::Presented) => {
-            slot.full_redraw = false;
+            slot.full_redraw = None;
             (RasterVerdict::Presented, None, false, None)
         }
         Ok(PresentDisposition::NoDamage) => (RasterVerdict::NoPresent, None, false, None),
         Ok(PresentDisposition::NotShown) => {
-            slot.full_redraw = true;
+            slot.owe_full(RESET);
             (RasterVerdict::NotShown, None, false, None)
         }
         Err(error) => {
-            slot.full_redraw = true;
+            slot.owe_full(RESET);
             let (verdict, surface_lost) = classify(&error);
             let report = Report::FrameFailed {
                 slot: slot.id,
