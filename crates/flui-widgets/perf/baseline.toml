@@ -2,6 +2,7 @@
 # One table per scenario of crates/flui-widgets/tests/perf.rs.
 
 [full_reassemble]
+allocated_bytes = 806271
 allocations = 2362
 builds_run = 273
 elements_rebuilt = 147
@@ -12,15 +13,21 @@ layout_passes = 2
 layout_roots = 135
 nodes_laid_out = 137
 nodes_painted = 134
+reallocations = 92
 semantics_nodes_updated = 42
 
 [label_change_large]
+allocated_bytes = 112040
 allocations = 466
+reallocations = 20
 
 [label_change_small]
+allocated_bytes = 112040
 allocations = 466
+reallocations = 20
 
 [list_10k_scroll_one_screen]
+allocated_bytes = 1389590
 allocations = 4132
 builds_run = 126
 elements_rebuilt = 126
@@ -31,17 +38,21 @@ layout_passes = 2
 layout_roots = 128
 nodes_laid_out = 132
 nodes_painted = 134
+reallocations = 142
 semantics_nodes_updated = 81
 
 [raw_button_over_text]
 allocations = 66
 bytes = 8581
 elements = 2
+reallocations = 3
 render_nodes = 1
 text_allocations = 63
 text_bytes = 9392
+text_reallocations = 2
 
 [slide_transition_tick]
+allocated_bytes = 49352
 allocations = 78
 builds_run = 0
 elements_rebuilt = 0
@@ -52,4 +63,5 @@ layout_passes = 0
 layout_roots = 0
 nodes_laid_out = 0
 nodes_painted = 0
+reallocations = 1
 semantics_nodes_updated = 0
