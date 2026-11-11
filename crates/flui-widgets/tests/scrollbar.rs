@@ -12,7 +12,9 @@ use flui_interaction::PointerKind;
 use flui_painting::display_list::DrawOp;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
+use flui_testing::widgets::SharedSignal;
 use flui_view::environment::VsyncScope;
+use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 use flui_widgets::{
     Column, Directionality, ScrollBehavior, ScrollConfiguration, ScrollController, ScrollView,
@@ -195,6 +197,42 @@ pub(crate) fn the_thumb_follows_the_position_on_both_axes_and_directions() {
             "no thumb while nothing scrolls"
         );
     }
+    fn direction_flips_under_a_kept_bar() {
+        // The bar beside its list, handed back as the very same view while
+        // only the direction around it changes: nothing rebuilds the bar's
+        // view, only its dependency on the direction.
+        let scroll = ScrollController::new();
+        let rtl = SharedSignal::new(false);
+        let kept: BoxedView = Scrollbar::new(SizedBox::new(SIDE, 100.0))
+            .controller(
+                scroll.clone(),
+                flui_rendering::constraints::AxisDirection::TopToBottom,
+            )
+            .thumb_visibility(true)
+            .thumb_color(THUMB)
+            .boxed();
+        let mut laid = lay_out(
+            Column::new(vec![
+                SizedBox::new(SIDE, 200.0)
+                    .child(column(&scroll, 3000.0))
+                    .boxed(),
+                Directed {
+                    rtl: rtl.clone(),
+                    child: kept,
+                }
+                .boxed(),
+            ]),
+            tight(SIDE, SIDE),
+        );
+        assert_eq!(thumb(&laid, THUMB).left(), 294.0, "trailing on the right");
+        rtl.update(|rtl| *rtl = true);
+        laid.pump();
+        assert_eq!(
+            thumb(&laid, THUMB).left(),
+            0.0,
+            "the thumb moves to the left edge with the direction"
+        );
+    }
     crate::common::cases::run_cases(
         "scrollbar geometry",
         &[
@@ -204,6 +242,10 @@ pub(crate) fn the_thumb_follows_the_position_on_both_axes_and_directions() {
             ("reversed", reversed),
             ("margins and track", margins_and_track),
             ("content that fits", content_that_fits),
+            (
+                "direction flips under a kept bar",
+                direction_flips_under_a_kept_bar,
+            ),
         ],
     );
 }
@@ -753,5 +795,54 @@ pub(crate) fn a_second_finger_leaves_the_thumb_drag_to_the_first() {
             "{name}: the first finger dragged the thumb, to {}",
             scroll.pixels()
         );
+    }
+}
+
+/// `child` under the direction `rtl` names, the very same child view after
+/// every change of it.
+#[derive(Clone, StatefulView)]
+struct Directed {
+    rtl: SharedSignal<bool>,
+    child: BoxedView,
+}
+
+struct DirectedState {
+    rtl: SharedSignal<bool>,
+}
+
+impl StatefulView for Directed {
+    type State = DirectedState;
+
+    fn create_state(&self) -> Self::State {
+        DirectedState {
+            rtl: self.rtl.clone(),
+        }
+    }
+}
+
+impl ViewState<Directed> for DirectedState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.rtl.bind(ctx);
+    }
+
+    fn build(&self, view: &Directed, ctx: &dyn BuildContext) -> impl IntoView {
+        let direction = if view.rtl.get(ctx) {
+            TextDirection::Rtl
+        } else {
+            TextDirection::Ltr
+        };
+        Directionality::new(direction, view.child.clone())
+    }
+}
+
+impl std::fmt::Debug for Directed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Directed")
+    }
+}
+
+impl std::fmt::Debug for DirectedState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DirectedState")
     }
 }
