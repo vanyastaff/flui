@@ -239,11 +239,17 @@ jobs:
           api-level: 34
           arch: x86_64
           target: google_apis
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          # No Vulkan in the guest: the emulator's SwiftShader Vulkan
+          # translator crashes the emulator itself when the app creates its
+          # first pipeline (the device goes away under a running app), so
+          # the app takes the GLES fallback (ADR-0244 §1), the path a device
+          # without Vulkan takes.
+          emulator-options: -no-window -gpu swiftshader_indirect -feature -Vulkan -noaudio -no-boot-anim -no-snapshot
           disable-animations: true
           # `flui run` follows the app's own log only; a native crash is in
-          # the crash buffer, printed when the scenario fails.
-          script: cargo nextest run -p flui-cli --locked --no-capture --test cli_it -E "test(=$SCENARIO)" || { adb logcat -d -b crash; exit 1; }
+          # the crash buffer, printed when the scenario fails, and bounded
+          # in case the device has gone.
+          script: cargo nextest run -p flui-cli --locked --no-capture --test cli_it -E "test(=$SCENARIO)" || { timeout 60 adb logcat -d -b crash; exit 1; }
 
   report:
     name: report

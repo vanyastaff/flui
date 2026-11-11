@@ -55,12 +55,13 @@ fn platform_of(device: &str) -> String {
         .args(["--json", "devices"])
         .output()
         .expect("run flui devices");
-    String::from_utf8_lossy(&output.stdout)
+    let listing = String::from_utf8_lossy(&output.stdout);
+    listing
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .find(|event| event["event"] == "device" && event["id"] == device)
         .and_then(|event| event["platform"].as_str().map(str::to_owned))
-        .unwrap_or_else(|| panic!("`flui devices` lists no device {device:?}"))
+        .unwrap_or_else(|| panic!("`flui devices` lists no device {device:?}:\n{listing}"))
 }
 
 /// A counter project generated against this checkout, with the workspace's
