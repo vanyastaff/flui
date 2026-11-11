@@ -57,7 +57,8 @@ pub(crate) struct InteractiveNode {
     on_tap: Option<EventCallback>,
     focus: Option<FocusConfig>,
     focus_ring: bool,
-    actions: Vec<(TypeId, ErasedAction)>,
+    /// Shared, so a clone of the view copies no list.
+    actions: Rc<Vec<(TypeId, ErasedAction)>>,
     semantics: Option<Semantics>,
     child: BoxedView,
 }
@@ -83,7 +84,7 @@ impl InteractiveNode {
             on_tap: None,
             focus: None,
             focus_ring: false,
-            actions: Vec::new(),
+            actions: Rc::default(),
             semantics: None,
             child,
         }
@@ -131,7 +132,7 @@ impl InteractiveNode {
     /// subtree, as an [`Actions`](crate::Actions) around a `Focus` does.
     #[must_use]
     pub(crate) fn action<T: Intent>(mut self, action: impl Action<T> + 'static) -> Self {
-        self.actions.push(erased_action(action));
+        Rc::make_mut(&mut self.actions).push(erased_action(action));
         self
     }
 
@@ -151,7 +152,7 @@ pub(crate) struct InteractiveNodeState {
     recognizers: RecognizerHost,
     focus: Option<FocusHost>,
     /// The node's own bindings, as the latest view gave them.
-    own_actions: Vec<(TypeId, ErasedAction)>,
+    own_actions: Rc<Vec<(TypeId, ErasedAction)>>,
     /// The chain above the node, read in lifecycle hooks.
     ambient_actions: Option<ActionChain>,
     /// The node's bindings layered over the ambient chain. `None` while the
@@ -241,7 +242,7 @@ impl StatefulRenderView for InteractiveNode {
             recognizers: RecognizerHost::new(&tap.factories()),
             tap,
             focus: self.focus.as_ref().map(FocusHost::new),
-            own_actions: self.actions.clone(),
+            own_actions: Rc::clone(&self.actions),
             ambient_actions: None,
             chain: None,
             platform: None,
@@ -302,7 +303,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
             self.recognizers.update(&self.tap.factories());
         });
         // The replaced bindings drop here; an action is user code.
-        failure.contain(|| self.own_actions.clone_from(&new.actions));
+        failure.contain(|| self.own_actions = Rc::clone(&new.actions));
         self.layer_actions();
         let record = self.focus_record();
         if let (Some(focus), Some(config)) = (&mut self.focus, &new.focus) {

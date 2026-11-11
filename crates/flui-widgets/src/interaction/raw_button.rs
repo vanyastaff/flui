@@ -35,7 +35,7 @@ type PressCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// or Space on its release ([`ActivateIntent`], [`ButtonActivateIntent`]);
 /// or the platform's activate action on its semantics node (VoiceOver's
 /// VO-Space, `AXPress`, UI Automation's `Invoke`). While focus is visible a
-/// [`FocusRing`] marks it, in the inherited
+/// [`FocusRing`](super::FocusRing) marks it, in the inherited
 /// [`DefaultFocusRingStyle`](super::focus_ring::DefaultFocusRingStyle).
 ///
 /// Without [`on_press`](Self::on_press) the button is disabled: it takes no
@@ -144,7 +144,7 @@ impl Action<ActivationPressIntent> for Press {
 }
 
 impl StatelessView for RawButton {
-    /// One [`InteractiveNode`] carries the tap target, the focus node, the
+    /// One `InteractiveNode` carries the tap target, the focus node, the
     /// activation bindings, the semantics and the focus ring.
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         let enabled = self.on_press.is_some();

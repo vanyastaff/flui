@@ -34,7 +34,9 @@ use std::cell::Cell;
 use std::fmt::Write as _;
 use std::time::Duration;
 
+use flui_foundation::geometry::Size;
 use flui_painting::styling::Color;
+use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition};
 use flui_testing::widgets::SharedSignal;
@@ -494,31 +496,29 @@ impl StatelessView for Rows {
     }
 }
 
-/// Mounts [`Rows`] with semantics off, pumps its first frame and counts what
-/// the tree holds and what building it allocated.
+/// Counts what a tree of [`Rows`] holds, then mounts it on a headless host
+/// with semantics off, pumps its first frame, and measures what that
+/// allocated and what stays live.
 fn mount_cost(row: fn(usize) -> BoxedView) -> MountCost {
+    let (elements, render_nodes) = {
+        let mut laid = flui_testing::widgets::lay_out(
+            Rows { row },
+            BoxConstraints::tight(Size::new(WIDTH, HEIGHT)),
+        );
+        (laid.element_node_count(), laid.render_node_count())
+    };
     let (live_before, allocations_before) = (live_bytes(), allocations());
-    let mut binding = HeadlessBinding::new();
-    let root = GestureArenaScope::new(
-        binding.arena().clone(),
-        FocusTreeRoot::new(app_root(Rows { row })),
-    );
-    let _ = binding.mount_root(
-        &root,
-        MountOwners::fresh(),
-        MountOptions::tight(WIDTH, HEIGHT),
-    );
-    let _ = binding.pump_frame_report(FRAME);
+    let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
+    host.attach(&Rows { row })
+        .expect("a fresh host takes a root");
+    let _ = host.pump(FRAME);
     let cost = MountCost {
-        elements: binding.tree_mut().len(),
-        render_nodes: binding
-            .pipeline_owner()
-            .expect("tree-bound")
-            .with(|owner: &PipelineOwner| owner.render_tree().len()),
+        elements,
+        render_nodes,
         allocations: allocations() - allocations_before,
         live_bytes: live_bytes().wrapping_sub(live_before),
     };
-    drop(binding);
+    drop(host);
     cost
 }
 
@@ -527,12 +527,16 @@ fn mount_cost(row: fn(usize) -> BoxedView) -> MountCost {
 /// elements" on (ADR-0322). The `Text` alone is recorded beside them.
 #[test]
 fn perf_raw_button_over_text() {
-    let text = mount_cost(|row| Text::new(format!("Row {row}")).boxed());
-    let button = mount_cost(|row| {
+    let button_row = |row: usize| {
         RawButton::new(Text::new(format!("Row {row}")))
             .on_press(|_cx| {})
             .boxed()
-    });
+    };
+    // What the process and the thread set up once (the font system, lazy
+    // tables) is paid by a mount that is not measured.
+    let _warm_up = mount_cost(button_row);
+    let text = mount_cost(|row| Text::new(format!("Row {row}")).boxed());
+    let button = mount_cost(button_row);
     let rows = MOUNT_ROWS as u64;
     let per_row = |with: u64, without: u64| with.saturating_sub(without).div_ceil(rows);
     let elements = per_row(button.elements as u64, text.elements as u64);

@@ -192,21 +192,39 @@ impl<T: Intent> Action<T> for CallbackAction<T> {
 // Erasure
 // ============================================================================
 
+/// An `Action<T>` asked through `dyn Any` intents.
+trait AnyIntentAction {
+    fn is_enabled(&self, intent: &dyn Any) -> bool;
+    fn invoke(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> ActionOutcome;
+    fn to_key_event_result(&self, intent: &dyn Any, outcome: ActionOutcome) -> KeyEventResult;
+}
+
+/// `action` with the intent type it is bound to.
+struct Bound<T, A> {
+    action: A,
+    intent: std::marker::PhantomData<fn(&T)>,
+}
+
+impl<T: Intent, A: Action<T>> AnyIntentAction for Bound<T, A> {
+    fn is_enabled(&self, intent: &dyn Any) -> bool {
+        self.action.is_enabled(typed::<T>(intent))
+    }
+
+    fn invoke(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> ActionOutcome {
+        self.action.invoke(cx, typed::<T>(intent))
+    }
+
+    fn to_key_event_result(&self, intent: &dyn Any, outcome: ActionOutcome) -> KeyEventResult {
+        self.action.to_key_event_result(typed::<T>(intent), outcome)
+    }
+}
+
 /// One `Action<T>` behind `dyn Any` intents, so a heterogeneous map can hold
 /// it. Reached only through the matching `TypeId`, so the inner downcast
 /// cannot fail.
-/// A predicate over an erased intent (`is_enabled`).
-type ErasedPredicate = Rc<dyn Fn(&dyn Any) -> bool>;
-/// The erased `invoke`, carrying its outcome back out.
-type ErasedInvoke = Rc<dyn Fn(&mut EventCx<'_>, &dyn Any) -> ActionOutcome>;
-/// The erased `to_key_event_result`.
-type ErasedKeyResult = Rc<dyn Fn(&dyn Any, ActionOutcome) -> KeyEventResult>;
-
 #[derive(Clone)]
 pub(crate) struct ErasedAction {
-    is_enabled: ErasedPredicate,
-    invoke: ErasedInvoke,
-    to_key_event_result: ErasedKeyResult,
+    action: Rc<dyn AnyIntentAction>,
     enablement_changes: Option<ChangeNotifier>,
 }
 
@@ -222,24 +240,18 @@ fn typed<T: Intent>(intent: &dyn Any) -> &T {
 
 impl ErasedAction {
     fn new<T: Intent, A: Action<T> + 'static>(action: A) -> Self {
-        let action = Rc::new(action);
-        let enabled_action = Rc::clone(&action);
-        let key_result_action = Rc::clone(&action);
         let enablement_changes = action.enablement_changes();
         Self {
-            is_enabled: Rc::new(move |intent| enabled_action.is_enabled(typed::<T>(intent))),
-            invoke: Rc::new(move |cx: &mut EventCx<'_>, intent: &dyn Any| {
-                action.invoke(cx, typed::<T>(intent))
-            }),
-            to_key_event_result: Rc::new(move |intent, outcome| {
-                key_result_action.to_key_event_result(typed::<T>(intent), outcome)
+            action: Rc::new(Bound {
+                action,
+                intent: std::marker::PhantomData,
             }),
             enablement_changes,
         }
     }
 
     pub(crate) fn is_enabled(&self, intent: &dyn Any) -> bool {
-        (self.is_enabled)(intent)
+        self.action.is_enabled(intent)
     }
 
     /// The signal [`Action::enablement_changes`] gave when this was bound.
@@ -250,15 +262,15 @@ impl ErasedAction {
     /// Invoke outside a key dispatch: a gesture, a control's press, an
     /// assistive-technology action.
     pub(crate) fn invoke(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> ActionOutcome {
-        (self.invoke)(cx, intent)
+        self.action.invoke(cx, intent)
     }
 
     /// Invoke inside the key event's dispatch, then report what the key
     /// dispatch should do — **one** call, so the key result cannot disagree
     /// with what actually ran.
     pub(crate) fn invoke_for_key(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> KeyEventResult {
-        let outcome = (self.invoke)(cx, intent);
-        (self.to_key_event_result)(intent, outcome)
+        let outcome = self.action.invoke(cx, intent);
+        self.action.to_key_event_result(intent, outcome)
     }
 }
 
