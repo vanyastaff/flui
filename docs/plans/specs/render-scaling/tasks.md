@@ -286,4 +286,5 @@
 |---|---|---|---|
 | RS1 | #2384 | готова | `painting_it recording_contract::a_non_finite_op_is_refused_by_kind`, `…a_destructor_that_panics_during_reset_leaves_the_canvas_empty` (падает без порядка `reset`); `a_non_finite_op_is_omitted_and_the_frame_draws`, `inline_picture_replay_owns_its_root_clips` на lavapipe; `.snap` не тронуты; `rg draw_picture crates packages` пуст |
 | RS14 | #2382 | готова; `RasterExecutor` переходит в RS15 вместе с командами, его единственный API это ход по ним | `every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format` (lavapipe): 3 слота в двух форматах дают 1 instance, 1 device, 1 атлас, 2 набора пайплайнов, 0 сборок на перерисовке; до: 3/3/3/3 |
-| RS2–RS13, RS15–RS19 | | не начата | |
+| RS15a | #2396 | на ревью: исполнитель, очередь жизненного цикла, ящики слотов, кольцо расчётов; RS15b, RS15c не начаты | `engine_it` 12 тестов, среди них `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released` (без фикса взаимоблокировка), `a_full_settlement_ring_holds_the_next_frame`, `a_stopped_executor_settles_every_pending_frame_failed` |
+| RS2–RS13, RS15b–RS19 | | не начата | |
