@@ -1263,6 +1263,16 @@ impl host::Window<WebLoop> for WebWindow {
         // A canvas has no title bar or borders: its outer size is its content size.
         Size::new(0.0, 0.0)
     }
+
+    /// The web's display handle, which carries no pointer.
+    fn display_connection(
+        _: &WebLoop,
+        _: &WindowPositions<CanvasRef>,
+    ) -> std::sync::Arc<dyn flui_platform::DisplayConnection> {
+        std::sync::Arc::new(crate::display_connection::PointerlessDisplay(|| {
+            raw_window_handle::RawDisplayHandle::Web(raw_window_handle::WebDisplayHandle::new())
+        }))
+    }
 }
 
 impl PlatformWindow for WebWindow {

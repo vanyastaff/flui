@@ -709,6 +709,18 @@ impl host::Window<AndroidLoop> for AndroidWindow {
         // The Activity fills its display with no frame, title or border.
         Size::new(0.0, 0.0)
     }
+
+    /// Android's display handle, which carries no pointer.
+    fn display_connection(
+        _: &AndroidLoop,
+        _: &WindowPositions<ActivityRef>,
+    ) -> std::sync::Arc<dyn flui_platform::DisplayConnection> {
+        std::sync::Arc::new(crate::display_connection::PointerlessDisplay(|| {
+            raw_window_handle::RawDisplayHandle::Android(
+                raw_window_handle::AndroidDisplayHandle::new(),
+            )
+        }))
+    }
 }
 
 /// The light/dark half of the activity's configuration: night mode is the

@@ -122,8 +122,9 @@ trait depends on `flui-platform` instead.
   Android and wasm32. A list of what may be named fails closed: an OS binding
   a dependency brings is a finding without anyone listing it. The windows a
   host builds are crate-private: the platform hands out `Rc<dyn HostWindow>`,
-  a raw window or display handle leaves through the window's `SurfaceTarget`
-  and `raw-window-handle`, and what
+  a raw window or display handle leaves through the window's `SurfaceTarget`,
+  the host's `DisplayConnection` (`OwnerPlatform::display_connection`, from
+  the table's window position) and `raw-window-handle`, and what
   one OS offers beyond the window contract is an extension implemented for
   `dyn HostWindow` (`os::windows::WindowsWindowExt::win32`,
   `os::macos::MacOSWindowExt::appkit`) over

@@ -1653,6 +1653,16 @@ impl host::Window<IOSLoop> for IOSWindow {
         // A UIKit window has no non-client area.
         Size::new(0.0, 0.0)
     }
+
+    /// UIKit's display handle, which carries no pointer.
+    fn display_connection(
+        _: &IOSLoop,
+        _: &IOSWindows,
+    ) -> std::sync::Arc<dyn flui_platform::DisplayConnection> {
+        std::sync::Arc::new(crate::display_connection::PointerlessDisplay(|| {
+            raw_window_handle::RawDisplayHandle::UiKit(raw_window_handle::UiKitDisplayHandle::new())
+        }))
+    }
 }
 
 impl crate::host_window::CoreHostWindow for IOSWindow {

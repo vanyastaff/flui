@@ -104,3 +104,17 @@ fn the_headless_platform_is_selected_and_its_exit_policy_is_honoured() {
     closing_the_last_window_before_run_never_quits();
     flui_headless_env_var_selects_the_headless_platform();
 }
+
+/// Headless has no window system: its display connection answers no display,
+/// so a GPU instance made over it makes no window surface (ADR-0305 §2).
+#[test]
+fn the_headless_display_connection_answers_no_display() {
+    use flui_native::Platform as _;
+    use raw_window_handle::{HandleError, HasDisplayHandle as _};
+
+    let connection = HeadlessPlatform::new().display_connection();
+    assert!(matches!(
+        connection.display_handle(),
+        Err(HandleError::NotSupported)
+    ));
+}
