@@ -9,12 +9,11 @@ use std::sync::Arc;
 use flui_foundation::geometry::{Matrix4, Rect};
 
 use super::content::{BoundaryContent, Bounds, Entry, EntryIndex, LinkRole};
-use super::geometry::{Geometry, Link, Links, Reach, Watch, map_out};
+use super::geometry::{Geometry, Link, Links, Reach, Scope, Watch};
 use super::id::NodeKey;
 use super::owner::SlotMarks;
 use super::table::TableCost;
 use super::version::{Address, VersionInner};
-use crate::damage::closure::device_spread;
 use crate::damage::closure::{Closure, close_over, read_closure};
 use crate::layer::Layer;
 use crate::scene_snapshot::{DamageRect, DamageRegion, FullReason, Region};
@@ -378,18 +377,16 @@ fn growth(next: &VersionInner, child: NodeKey) -> Option<(NodeKey, Bounds, f64)>
     links.push(Link::Matrix(Matrix4::translation(
         offset.dx, offset.dy, 0.0,
     )));
-    let reach = map_out(&links, Reach::of(record.subtree()));
-    let current = Reach::of(parent_record.subtree());
-    // The filters over the slot spread the child's kernel as they do in the
+    // The effects over the slot carry the child's scope as they do in the
     // parent's own content.
-    let kernel = links
-        .iter()
-        .rev()
-        .fold(record.kernel(), |kernel, link| match link {
-            Link::Filter(filter) => device_spread(filter, kernel),
-            _ => kernel,
-        })
-        .max(parent_record.kernel());
+    let scope = Scope {
+        local: Reach::of(record.subtree()),
+        kernel: record.kernel(),
+    }
+    .through(&links);
+    let reach = scope.local;
+    let current = Reach::of(parent_record.subtree());
+    let kernel = scope.kernel.max(parent_record.kernel());
     (!current.contains(reach) || kernel > parent_record.kernel())
         .then(|| (parent, current.union(reach).bounds(), kernel))
 }

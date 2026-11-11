@@ -362,6 +362,10 @@ fn scene_patch_damage() {
                 d::a_clip_over_a_shrunk_filter_keeps_its_device_kernel,
             ),
             (
+                "a_clip_over_a_shrunk_slotted_filter_keeps_its_device_kernel",
+                d::a_clip_over_a_shrunk_slotted_filter_keeps_its_device_kernel,
+            ),
+            (
                 "filter_inputs_are_read_once_the_damage_reaches_them",
                 d::filter_inputs_are_read_once_the_damage_reaches_them,
             ),

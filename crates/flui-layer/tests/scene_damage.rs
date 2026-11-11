@@ -664,6 +664,64 @@ pub(crate) fn a_clip_over_a_shrunk_filter_keeps_its_device_kernel() {
     );
 }
 
+/// The same clip over a shrunk filter when the filter arrives in a slotted
+/// child: growing the parent's bounds keeps the device kernel through the
+/// clip, so moving the parent damages the clipped dilation.
+pub(crate) fn a_clip_over_a_shrunk_slotted_filter_keeps_its_device_kernel() {
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let (parent, child) = (writer.mint_node(), writer.mint_node());
+    writer.push(publish(child, BoundaryContent::builder().finish()));
+    let mut clipped = BoundaryContent::builder();
+    clipped.push_effect(
+        Layer::from(ClipRectLayer::new(
+            Rect::from_ltrb(80.0, 80.0, 90.0, 90.0),
+            Clip::HardEdge,
+        )),
+        RenderId::new(1),
+        0,
+    );
+    clipped.push_effect(
+        Layer::from(TransformLayer::new(Matrix4::scaling(0.01, 0.01, 1.0))),
+        RenderId::new(1),
+        1,
+    );
+    clipped.slot(child);
+    writer.push(publish(parent, clipped.finish()));
+    let mut top = BoundaryContent::builder();
+    top.slot(parent);
+    writer.push(publish(root, top.finish()));
+    owner
+        .apply(SURFACE)
+        .expect("an empty child under a clip and a shrink");
+
+    let mut writer = owner.writer();
+    let version = writer.next_content_version().expect("a version");
+    let mut filtered = BoundaryContent::builder();
+    filtered.push_effect(
+        Layer::from(ImageFilterLayer::new(ImageFilter::Dilate { radius: 20.0 })),
+        RenderId::new(2),
+        0,
+    );
+    filtered.chunk(chunk(
+        2,
+        version,
+        Rect::from_ltrb(10_000.0, 10_000.0, 10_100.0, 10_100.0),
+    ));
+    writer.push(publish(child, filtered.finish()));
+    owner.apply(SURFACE).expect("the child takes a dilation");
+
+    let mut writer = owner.writer();
+    writer.push(place(parent, 5.0, 0.0));
+    owner.apply(SURFACE).expect("the parent moves");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(80.0, 80.0, 95.0, 90.0)),
+        "the clipped dilation at both placements: {damage:?}"
+    );
+}
+
 /// A filtered boundary's filter inputs are read only once the damage meets
 /// it, and then in one fold of its content: fifty nested blurs over two
 /// hundred chunks cost nothing when a node far away moves, and each

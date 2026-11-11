@@ -66,6 +66,45 @@ impl Scope {
             kernel: self.kernel.max(other.kernel),
         }
     }
+
+    /// The scope as the space `links` (outermost first) lead out to holds
+    /// it, one step at a time from the innermost. A filter moves what it
+    /// takes and adds its spread to the kernel (`device_spread`); a clip
+    /// over a scope with a kernel bounds it by the clip, its kernel spent,
+    /// since a local bound cannot hold device pixels but the clip still
+    /// bounds all they draw.
+    pub(crate) fn through(self, links: &[Link<'_>]) -> Self {
+        links.iter().rev().fold(self, |scope, link| match *link {
+            Link::Matrix(matrix) => Self {
+                local: match scope.local {
+                    Reach::Rect(rect) => mapped(&matrix, rect),
+                    other => other,
+                },
+                ..scope
+            },
+            Link::Hidden => Self::EMPTY,
+            Link::Clip(clip) if scope.kernel > 0.0 && scope.local != Reach::Nothing => Self {
+                local: Reach::rect(clip),
+                kernel: 0.0,
+            },
+            Link::Clip(clip) => Self {
+                local: map_out(&[Link::Clip(clip)], scope.local),
+                ..scope
+            },
+            Link::Filter(filter) => Self {
+                local: map_out(&[Link::Filter(filter)], scope.local),
+                kernel: device_spread(filter, scope.kernel),
+            },
+            Link::Extent(rect) => Self {
+                local: scope.local.union(Reach::rect(rect)),
+                ..scope
+            },
+            Link::Everywhere => Self {
+                local: Reach::Unbounded,
+                ..scope
+            },
+        })
+    }
 }
 
 /// Where something lands, in one space.
@@ -487,27 +526,7 @@ impl<'v> Geometry<'v> {
                     {
                         filters.push((at.entry, held));
                     }
-                    let kernel = match layer {
-                        Layer::ImageFilter(filter) => device_spread(filter.filter(), held.kernel),
-                        _ => held.kernel,
-                    };
-                    // A local bound cannot hold the device kernel of the
-                    // filters inside, but a clip here still bounds all they
-                    // draw: the scope is the clip, its kernel spent.
-                    match map_out(&links, Reach::Unbounded) {
-                        capped @ Reach::Rect(_)
-                            if held.kernel > 0.0 && held.local != Reach::Nothing =>
-                        {
-                            Scope {
-                                local: capped,
-                                kernel: 0.0,
-                            }
-                        }
-                        _ => Scope {
-                            local: map_out(&links, held.local),
-                            kernel,
-                        },
-                    }
+                    held.through(&links)
                 }
             };
             match entry.parent() {
