@@ -15,6 +15,7 @@ use smallvec::SmallVec;
 use super::content::{BoundaryContent, Bounds, Entry, EntryIndex};
 use super::id::NodeKey;
 use super::version::{Address, NodeRecord, VersionInner};
+use crate::LeaderClip;
 use crate::damage::closure::footprint;
 use crate::layer::Layer;
 use crate::link::{MAX_FOLLOWER_NESTING, invert};
@@ -194,7 +195,38 @@ impl<'v> Geometry<'v> {
         }
     }
 
-    /// The links from the surface into `key`'s content space.
+    /// The node of the leader the follower at `at` hides behind: its leader,
+    /// when it follows one under [`LeaderClip::Hide`], since a clip on the
+    /// leader's branch then shows or hides it without changing its
+    /// transform.
+    pub(crate) fn hiding_leader(self, at: Address) -> Option<NodeKey> {
+        let Entry::Effect {
+            layer: Layer::Follower(follower),
+            ..
+        } = &self.record(at.node).content().entries()[at.entry.get()]
+        else {
+            return None;
+        };
+        if follower.leader_clip() != LeaderClip::Hide {
+            return None;
+        }
+        self.version
+            .links
+            .get(follower.link().id())
+            .and_then(|users| users.leaders.last())
+            .map(|leader| leader.node)
+    }
+
+    /// `key` and every node above it.
+    pub(crate) fn path_up(self, key: NodeKey) -> impl Iterator<Item = NodeKey> + 'v {
+        let version = self.version;
+        std::iter::successors(Some(key), move |&at| {
+            version.record(at).and_then(NodeRecord::parent)
+        })
+    }
+
+    /// The links from the surface into `key`'s content space: the root's
+    /// placement, then each slot's effects and placement down to `key`.
     pub(crate) fn node_links(
         self,
         key: NodeKey,
@@ -211,6 +243,8 @@ impl<'v> Geometry<'v> {
         if at != self.version.root || self.version.record(at).is_none() {
             return Err(Unattached);
         }
+        // The root's placement offsets the whole scene, as `flatten` draws it.
+        out.push(Link::Matrix(placement(self.record(at))));
         for pair in path.windows(2).rev() {
             let (child, parent) = (pair[0], pair[1]);
             let slot = self

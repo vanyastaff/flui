@@ -10,11 +10,11 @@ use flui_foundation::{LayerId, RenderId, SurfaceGeneration};
 use flui_layer::{
     BackdropFilterLayer, BoundaryContent, Chunk, ClipRectLayer, Closure, ContentToken,
     ContentVersion, DamageMode, DamageRect, DamageRegion, Entry, FollowerLayer, Layer, LayerDiffer,
-    LayerLink, LayerNode, LayerTree, LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer,
-    Placement, Region, Scene, SceneNodeId, SceneOp, SceneOwner, SceneVersion, SurfaceKey,
-    TransformLayer, close_over, read_closure, resolve_follower_transform,
+    LayerLink, LayerNode, LayerTree, LeaderClip, LeaderLayer, OffsetLayer, OpacityLayer,
+    PictureLayer, Placement, Region, Scene, SceneNodeId, SceneOp, SceneOwner, SceneVersion,
+    SurfaceKey, TransformLayer, close_over, read_closure, resolve_follower_transform,
 };
-use flui_painting::paint::{BlendMode, ImageFilter};
+use flui_painting::paint::{BlendMode, Clip, ImageFilter};
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, Paint};
 
@@ -108,6 +108,20 @@ pub(crate) fn a_place_damages_the_subtree_under_both_placements() {
     assert!(
         !covered(&damage, covering(200.0, 200.0, 201.0, 201.0)),
         "nothing between the two placements"
+    );
+
+    // The root's placement offsets the whole scene, as `flatten` draws it.
+    let mut writer = owner.writer();
+    writer.push(place(root, 50.0, 50.0));
+    owner.apply(SURFACE).expect("the root moves");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(410.0, 300.0, 450.0, 320.0)),
+        "{damage:?}"
+    );
+    assert!(
+        covered(&damage, covering(460.0, 350.0, 500.0, 370.0)),
+        "{damage:?}"
     );
 }
 
@@ -222,6 +236,65 @@ pub(crate) fn a_follower_resolves_after_its_leaders_boundary_moves_parents() {
     assert!(
         covered(&damage, covering(500.0, 300.0, 520.0, 320.0)),
         "{damage:?}"
+    );
+}
+
+/// A clip on the leader's branch hides a follower under `LeaderClip::Hide`
+/// without changing its transform: the follower's footprint is damaged.
+pub(crate) fn a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it() {
+    let link = LayerLink::new();
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let (p, leader, follower) = (writer.mint_node(), writer.mint_node(), writer.mint_node());
+    let mut leading = BoundaryContent::builder();
+    leading.push_effect(
+        Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
+        RenderId::new(1),
+        0,
+    );
+    writer.push(publish(leader, leading.finish()));
+    let version = writer.next_content_version().expect("a version");
+    let mut following = BoundaryContent::builder();
+    following.push_effect(
+        Layer::from(FollowerLayer::new(link).with_leader_clip(LeaderClip::Hide)),
+        RenderId::new(2),
+        0,
+    );
+    following.chunk(chunk(2, version, Rect::from_xywh(0.0, 0.0, 20.0, 20.0)));
+    writer.push(publish(follower, following.finish()));
+    let clipped = |clip: Rect<f64>| {
+        let mut content = BoundaryContent::builder();
+        content.push_effect(
+            Layer::from(ClipRectLayer::new(clip, Clip::HardEdge)),
+            RenderId::new(3),
+            0,
+        );
+        content.slot(leader);
+        content.finish()
+    };
+    writer.push(publish(p, clipped(Rect::from_xywh(0.0, 0.0, 50.0, 50.0))));
+    let mut top = BoundaryContent::builder();
+    top.slot(p);
+    top.slot(follower);
+    writer.push(publish(root, top.finish()));
+    writer.push(place(p, 100.0, 100.0));
+    owner
+        .apply(SURFACE)
+        .expect("a leader inside a clip, its follower at the root");
+
+    let mut writer = owner.writer();
+    writer.push(publish(
+        p,
+        clipped(Rect::from_xywh(200.0, 200.0, 50.0, 50.0)),
+    ));
+    owner
+        .apply(SURFACE)
+        .expect("the clip moves off the leader's anchor");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(100.0, 100.0, 120.0, 120.0)),
+        "the hidden follower's pixels: {damage:?}"
     );
 }
 
@@ -545,7 +618,7 @@ fn mutate(rng: &mut Rng, owner: &mut SceneOwner, model: &mut Model, plant: bool)
                 }
                 republish.push(node);
             }
-            1 if node > 0 => {
+            1 => {
                 ops.push(place(model.ids[node], rng.coord(400), rng.coord(300)));
             }
             2 => {
@@ -646,6 +719,7 @@ struct Oracle {
     ids: HashMap<(SceneNodeId, u8, usize), RenderId>,
     tokens: HashMap<ContentVersion, ContentToken>,
     nodes: HashMap<SceneNodeId, ContentToken>,
+    surface: ContentToken,
 }
 
 impl Oracle {
@@ -655,6 +729,7 @@ impl Oracle {
             ids: HashMap::new(),
             tokens: HashMap::new(),
             nodes: HashMap::new(),
+            surface: ContentToken::mint(),
         }
     }
 
@@ -685,8 +760,15 @@ impl Oracle {
                 .with_boundary(oracle.id((id, 0, 0)), token)
         };
         let placement = version.node(root).expect("a root").placement().offset();
-        let mut tree = LayerTree::new(node(self, root, placement));
-        let mut pending = vec![(root, tree.root())];
+        // A constant surface boundary above the root, so a root placement is
+        // a child's move the differ pairs, not an unpairable root.
+        let surface = self.surface.clone();
+        let mut tree = LayerTree::new(
+            LayerNode::new(Layer::from(OffsetLayer::new(Offset::ZERO)))
+                .with_boundary(self.id((root, 2, 0)), surface),
+        );
+        let top = tree.push_child(tree.root(), node(self, root, placement));
+        let mut pending = vec![(root, top)];
         while let Some((id, at)) = pending.pop() {
             let content = Arc::clone(version.node(id).expect("a slot's node").content());
             let mut placed: Vec<LayerId> = Vec::with_capacity(content.entries().len());

@@ -209,7 +209,7 @@ impl Slots {
 /// A set of slots cleared in O(1): a slot is in the set when its stamp is
 /// the current epoch.
 #[derive(Debug)]
-struct SlotMarks {
+pub(crate) struct SlotMarks {
     stamps: Vec<u32>,
     epoch: u32,
 }
@@ -245,7 +245,7 @@ impl SlotMarks {
         added
     }
 
-    fn contains(&self, slot: u32) -> bool {
+    pub(crate) fn contains(&self, slot: u32) -> bool {
         self.stamps.get(slot as usize) == Some(&self.epoch)
     }
 }
@@ -697,6 +697,8 @@ impl<'a> Patch<'a> {
                 &footprint::PatchFacts {
                     touched: &order,
                     placed: &patch.scratch.placed,
+                    touched_marks: &patch.scratch.touched,
+                    placed_marks: &patch.scratch.placed_marks,
                     skip,
                 },
                 surface,

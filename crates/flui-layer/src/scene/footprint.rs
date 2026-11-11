@@ -9,6 +9,7 @@ use flui_foundation::geometry::{Matrix4, Rect};
 use super::content::{BoundaryContent, Bounds, Entry, EntryIndex, LinkRole};
 use super::geometry::{Geometry, Link, Links, Reach, map_out};
 use super::id::NodeKey;
+use super::owner::SlotMarks;
 use super::table::TableCost;
 use super::version::{Address, VersionInner};
 use crate::damage::closure::{Closure, close_over, read_closure};
@@ -21,6 +22,10 @@ pub(crate) struct PatchFacts<'p> {
     pub(crate) touched: &'p [NodeKey],
     /// Every node the patch placed, each once.
     pub(crate) placed: &'p [NodeKey],
+    /// `touched` as a set.
+    pub(crate) touched_marks: &'p SlotMarks,
+    /// `placed` as a set.
+    pub(crate) placed_marks: &'p SlotMarks,
     /// A node whose operations leave no footprint: the planted defect the
     /// property test must catch.
     pub(crate) skip: Option<NodeKey>,
@@ -82,7 +87,7 @@ pub(crate) fn patch_damage(
     table: &mut TableCost,
 ) -> (DamageRegion, FootprintCost) {
     let mut cost = FootprintCost::default();
-    let moved = moved_followers(base, next, &mut cost);
+    let moved = moved_followers(base, next, facts, &mut cost);
     update_bounds(base, next, facts, &moved, table);
 
     let (old, new) = (Geometry::new(base), Geometry::new(next));
@@ -134,12 +139,26 @@ pub(crate) fn patch_damage(
 /// The followers of `next` whose transform differs from their pair's in
 /// `base`, as `(before, after)` addresses. A follower is paired with the one
 /// of the same rank on the same link in the same node.
+///
+/// A follower that hides when its leader's branch clips its anchor counts as
+/// moved too when the patch touched or placed a node on that branch, in
+/// either version: a clip there can show or hide it with the transform
+/// unchanged, and its footprint covers it either way.
 fn moved_followers(
     base: &VersionInner,
     next: &VersionInner,
+    facts: &PatchFacts<'_>,
     cost: &mut FootprintCost,
 ) -> Vec<(Address, Address)> {
     let (old, new) = (Geometry::new(base), Geometry::new(next));
+    let changed = |key: NodeKey| {
+        facts.touched_marks.contains(key.slot()) || facts.placed_marks.contains(key.slot())
+    };
+    let branch_changed = |geometry: Geometry<'_>, at: Address| {
+        geometry
+            .hiding_leader(at)
+            .is_some_and(|leader| geometry.path_up(leader).any(changed))
+    };
     let mut moved = Vec::new();
     for (_, users) in next.links.iter() {
         for &after in &users.followers {
@@ -149,7 +168,7 @@ fn moved_followers(
             cost.followers_resolved += 2;
             let then = old.resolve(before, 0);
             let now = new.resolve(after, 0);
-            if then != now {
+            if then != now || branch_changed(old, before) || branch_changed(new, after) {
                 moved.push((before, after));
             }
         }

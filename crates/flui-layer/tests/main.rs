@@ -329,6 +329,10 @@ fn scene_patch_damage() {
                 "damage_under_a_backdrop_takes_what_it_reads",
                 d::damage_under_a_backdrop_takes_what_it_reads,
             ),
+            (
+                "a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it",
+                d::a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it,
+            ),
         ],
     );
 }
