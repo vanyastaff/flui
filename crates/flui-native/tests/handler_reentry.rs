@@ -174,7 +174,7 @@ impl Reentry {
     fn new(platform: &Rc<dyn Reach>, options: fn() -> WindowOptions) -> Rc<Self> {
         Rc::new(Self {
             platform: Rc::downgrade(platform),
-            window: RefCell::new(RcWeak::<flui_native::MockWindow>::new()),
+            window: RefCell::new(RcWeak::<flui_native::HeadlessHostWindow>::new()),
             options,
             opened: RefCell::new(Vec::new()),
             done: Cell::new(false),
@@ -320,8 +320,9 @@ fn a_close_request_raised_inside_input_waits_for_it(
     settle: &dyn Fn(&dyn Fn() -> bool) -> bool,
 ) {
     let handler = RecordingWindowHandler::new();
-    let own: Rc<RefCell<RcWeak<dyn HostWindow>>> =
-        Rc::new(RefCell::new(RcWeak::<flui_native::MockWindow>::new()));
+    let own: Rc<RefCell<RcWeak<dyn HostWindow>>> = Rc::new(RefCell::new(RcWeak::<
+        flui_native::HeadlessHostWindow,
+    >::new()));
     let in_input = Rc::new(Cell::new(false));
     let asked_inside = Rc::new(Cell::new(false));
     let closed = Rc::new(Cell::new(false));
@@ -375,10 +376,10 @@ fn running_headless() -> (Rc<AppLog>, Rc<OwnerPlatform>) {
     (log, Rc::new(owner))
 }
 
-fn mock(window: &Rc<dyn HostWindow>) -> flui_native::MockWindow {
+fn mock(window: &Rc<dyn HostWindow>) -> flui_native::HeadlessHostWindow {
     window
         .as_any()
-        .downcast_ref::<flui_native::MockWindow>()
+        .downcast_ref::<flui_native::HeadlessHostWindow>()
         .expect("a headless window")
         .clone()
 }

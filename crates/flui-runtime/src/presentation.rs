@@ -241,7 +241,7 @@ impl PresentationWindow {
 
 /// A test-only conversion that bypasses any accessibility bridge the
 /// concrete window has: the presentation is built with none, even when the
-/// window is a headless `MockWindow` carrying a `FakeAccessibility`. A test
+/// window is a headless `HeadlessHostWindow` carrying a `FakeAccessibility`. A test
 /// that needs the bridge wired names it in [`PresentationWindow::new`]
 /// instead.
 #[cfg(any(test, feature = "testing"))]

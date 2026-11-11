@@ -16,7 +16,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::{Point, Size};
 use flui_native::{
-    DisplaySpec, HeadlessPlatform, HeadlessWindowPolicy, HostWindow, MockWindow, Platform as _,
+    DisplaySpec, HeadlessHostWindow, HeadlessPlatform, HeadlessWindowPolicy, HostWindow,
+    Platform as _,
 };
 use flui_platform::{
     AdmissionError, ApplyError, SizeConstraints, WindowCapabilities, WindowCommand, WindowMode,
@@ -31,11 +32,11 @@ fn open(platform: &HeadlessPlatform) -> Opened {
     Opened::on(platform, WindowOptions::default()).expect("a headless window opens")
 }
 
-fn mock(window: &Rc<dyn HostWindow>) -> &MockWindow {
+fn mock(window: &Rc<dyn HostWindow>) -> &HeadlessHostWindow {
     window
         .as_any()
-        .downcast_ref::<MockWindow>()
-        .expect("the headless platform opens mock windows")
+        .downcast_ref::<HeadlessHostWindow>()
+        .expect("the headless platform opens headless windows")
 }
 
 /// Counts the handler's `state_changed` calls from here on.
@@ -538,51 +539,51 @@ fn window_facts_arrive_only_in_the_snapshot() {
             flui_platform::KeyboardInset::try_at_rest(EdgeInsets::new(0.0, 0.0, 300.0, 0.0))
                 .expect("a finite keyboard"),
         );
-    type Report = Box<dyn Fn(&MockWindow)>;
+    type Report = Box<dyn Fn(&HeadlessHostWindow)>;
     type Holds = Box<dyn Fn(&WindowState) -> bool>;
     let rows: Vec<(&str, Report, Holds)> = vec![
         (
             "focus",
-            Box::new(|mock: &MockWindow| mock.simulate_focus(false)),
+            Box::new(|mock: &HeadlessHostWindow| mock.simulate_focus(false)),
             Box::new(|state: &WindowState| !state.focused && !state.active),
         ),
         (
             "occlusion",
-            Box::new(|mock: &MockWindow| mock.simulate_occlusion(true)),
+            Box::new(|mock: &HeadlessHostWindow| mock.simulate_occlusion(true)),
             Box::new(|state: &WindowState| state.visible && state.occluded && !state.is_seen()),
         ),
         (
             "hover",
-            Box::new(|mock: &MockWindow| mock.simulate_hover(true)),
+            Box::new(|mock: &HeadlessHostWindow| mock.simulate_hover(true)),
             Box::new(|state: &WindowState| state.hovered),
         ),
         (
             "appearance",
-            Box::new(|mock: &MockWindow| mock.simulate_appearance(WindowAppearance::Dark)),
+            Box::new(|mock: &HeadlessHostWindow| mock.simulate_appearance(WindowAppearance::Dark)),
             Box::new(|state: &WindowState| state.appearance == WindowAppearance::Dark),
         ),
         (
             "insets",
-            Box::new(move |mock: &MockWindow| mock.simulate_insets(insets)),
+            Box::new(move |mock: &HeadlessHostWindow| mock.simulate_insets(insets)),
             Box::new(move |state: &WindowState| state.insets == insets),
         ),
         (
             "execution",
-            Box::new(|mock: &MockWindow| {
+            Box::new(|mock: &HeadlessHostWindow| {
                 mock.simulate_execution_state(WindowExecutionState::Suspended);
             }),
             Box::new(|state: &WindowState| state.execution == WindowExecutionState::Suspended),
         ),
         (
             "display",
-            Box::new(move |mock: &MockWindow| {
+            Box::new(move |mock: &HeadlessHostWindow| {
                 mock.simulate_move_to(right).expect("a held display");
             }),
             Box::new(move |state: &WindowState| state.display == Some(right)),
         ),
         (
             "scale",
-            Box::new(|mock: &MockWindow| mock.simulate_scale_factor_change(2.0)),
+            Box::new(|mock: &HeadlessHostWindow| mock.simulate_scale_factor_change(2.0)),
             Box::new(|state: &WindowState| {
                 state.metrics.map(|metrics| metrics.scale().get()) == Some(2.0)
                     && state.metrics.map(WindowMetrics::physical) == Some(Size::new(1600, 1200))
@@ -590,7 +591,7 @@ fn window_facts_arrive_only_in_the_snapshot() {
         ),
         (
             "size",
-            Box::new(|mock: &MockWindow| mock.simulate_resize(1000.0, 500.0)),
+            Box::new(|mock: &HeadlessHostWindow| mock.simulate_resize(1000.0, 500.0)),
             Box::new(|state: &WindowState| {
                 state.metrics.map(WindowMetrics::physical) == Some(Size::new(2000, 1000))
             }),

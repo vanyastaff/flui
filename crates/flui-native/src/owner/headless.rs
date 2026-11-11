@@ -781,7 +781,7 @@ impl HeadlessExitReevaluation {
     /// Runs the owner-thread half of a parked re-evaluation request: if
     /// one is parked AND no window is tracked, consult the exit-policy
     /// hook exactly as the window-close path does
-    /// (`MockWindow::notify_closed`, including its "no hook -> never
+    /// (`HeadlessHostWindow::notify_closed`, including its "no hook -> never
     /// quit" headless default and its call outside the lock) and quit if
     /// the hook now allows it. Returns `true` iff a quit was actually
     /// issued.
@@ -818,7 +818,7 @@ impl HeadlessExitReevaluation {
             state.exit_reevaluation_requested = false;
         }
         // The hook is not one-shot: a veto leaves it in place for the next
-        // consult (same rule as `MockWindow::notify_closed`).
+        // consult (same rule as `HeadlessHostWindow::notify_closed`).
         consult_exit_policy(&platform_state)
     }
 }
@@ -828,7 +828,7 @@ impl HeadlessExitReevaluation {
 /// completing the [`PendingWindow`] a `HeadlessDeferredOwnerHooks` call
 /// returned. `Weak`: this handle must never keep the platform state alive
 /// past the platform's own lifetime (same rationale as
-/// `MockWindow::platform_state`).
+/// `HeadlessHostWindow::platform_state`).
 pub struct HeadlessDeferredWindowOpens {
     state: Weak<Mutex<HeadlessState>>,
 }
@@ -845,7 +845,7 @@ impl std::fmt::Debug for HeadlessDeferredWindowOpens {
 
 impl HeadlessDeferredWindowOpens {
     /// Resolves the oldest still-pending deferred open by constructing a
-    /// real mock window and delivering it through that request's
+    /// real headless window and delivering it through that request's
     /// [`ClaimSlot`] — the same registration/activation/`Created`-event
     /// bookkeeping the synchronous `Platform::open_window` path performs
     /// (`create_mock_window`), so a test cannot tell the two paths apart
@@ -863,7 +863,7 @@ impl HeadlessDeferredWindowOpens {
         let platform_state = self.state.upgrade()?;
 
         // Pop the request and build its window under one lock acquisition,
-        // then deliver OUTSIDE the lock (same discipline `MockWindow::
+        // then deliver OUTSIDE the lock (same discipline `HeadlessHostWindow::
         // notify_closed` uses) -- `deliver`'s injected wake callback is a
         // no-op here, but a future caller reusing this pattern must not
         // rely on that.
@@ -920,7 +920,7 @@ impl HeadlessDeferredWindowOpens {
         if let Err(_unclaimed) = slot.deliver(Ok(crate::owner::OpenedWindow::new(&window))) {
             tracing::debug!(
                 "resolved a deferred window open whose PendingWindow was \
-                 already abandoned by the requester; the created mock window \
+                 already abandoned by the requester; the created headless window \
                  is still handed back to resolve_next's own caller"
             );
         }

@@ -54,7 +54,7 @@ impl Fields {
 }
 
 /// Press and release Tab in `window`, with `modifiers` held.
-fn tab(window: &flui_native::MockWindow, modifiers: Modifiers) {
+fn tab(window: &flui_native::HeadlessHostWindow, modifiers: Modifiers) {
     for state in [KeyState::Down, KeyState::Up] {
         let _ = window.inject_event(PlatformInput::Keyboard(
             KeyEvent::new(
@@ -99,7 +99,7 @@ pub(crate) fn tab_moves_focus_in_every_window_a_runner_installs() {
         "the secondary window's first field autofocuses"
     );
 
-    // Each window's Tab moves its own fields; which mock window is which is
+    // Each window's Tab moves its own fields; which headless window is which is
     // the platform's order, so the pair that moved names it.
     for window in &windows {
         let before = (main.focused(), secondary.focused());

@@ -131,7 +131,7 @@ mod handler_containment {
 
     /// A routed headless window of an installed owner, torn down on drop.
     struct Routed {
-        native: flui_native::MockWindow,
+        native: flui_native::HeadlessHostWindow,
         window: Rc<dyn flui_platform::PlatformWindow>,
         routes: Rc<crate::app::runner::window_routes::WindowRoutes>,
         _clear: OwnerHostClearGuard,
@@ -155,7 +155,7 @@ mod handler_containment {
             .expect("headless windows are ready");
             let native = host_window
                 .as_any()
-                .downcast_ref::<flui_native::MockWindow>()
+                .downcast_ref::<flui_native::HeadlessHostWindow>()
                 .expect("headless window")
                 .clone();
             let window: Rc<dyn flui_platform::PlatformWindow> = host_window;

@@ -4,7 +4,7 @@
   instance has its content topmost under a point given in one window's coordinates (`WindowAt`).
   Win32 implements it through the desktop's stacking order; the other backends answer
   `WindowAt::Unknown`. **`flui-native`**: `HeadlessPlatform::with_window_placement` and
-  `MockWindow::simulate_move` place headless windows on one desktop.
+  `HeadlessHostWindow::simulate_move` place headless windows on one desktop.
 
 ### Changed
 
