@@ -8,7 +8,6 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
-use std::sync::Arc;
 
 #[cfg(test)]
 use flui_foundation::generation::Generation;
@@ -24,6 +23,7 @@ use crate::view::{ElementBase, View};
 use super::containment::ChildHookPanic;
 
 mod inherited_scope;
+pub(crate) use inherited_scope::InheritedScope;
 use inherited_scope::compute_inherited_scope;
 
 /// The render-parent edge the post-build reorder pass wants for one render
@@ -158,11 +158,12 @@ pub struct ElementNode {
     /// survives the `build_scope` take/put window and a building element can
     /// read its own scope while its `element` slot is a hole.
     ///
-    /// The map is keyed on the provider view `TypeId` and is a plain
+    /// The map is keyed on the published `TypeId` and is a plain
     /// `Arc<HashMap>` with copy-on-insert-at-providers rather than a persistent
     /// HAMT — provider counts in a UI scope are tiny, so the per-provider
-    /// O(k) clone is effectively O(1) and avoids a new dependency.
-    pub(crate) inherited: Arc<HashMap<TypeId, ElementId>>,
+    /// O(k) clone is effectively O(1) and avoids a new dependency. A node
+    /// outside every provider holds no map ([`InheritedScope::EMPTY`]).
+    pub(crate) inherited: InheritedScope,
 }
 
 impl ElementNode {
@@ -187,7 +188,7 @@ impl ElementNode {
             // Empty until the tree sets the real scope against the parent's
             // map (insert / mount_root_*), mirroring how `key`/`depth` are
             // finalised by the caller right after construction.
-            inherited: Arc::new(HashMap::new()),
+            inherited: InheritedScope::EMPTY,
         };
         // Provisional; the tree stamps the real depth before mount.
         node.set_depth(usize::from(parent.is_some()));
@@ -218,7 +219,7 @@ impl ElementNode {
     /// `depend_on` / `find_ancestor` read it via the node (which outlives the
     /// `build_scope` element hole).
     pub(crate) fn inherited_provider(&self, type_id: TypeId) -> Option<ElementId> {
-        self.inherited.get(&type_id).copied()
+        self.inherited.get(type_id)
     }
 
     /// Message for the `expect` in the element accessors — the element is
@@ -726,7 +727,7 @@ impl ElementTree {
         // Root inherited scope: empty parent map, plus self if the root is
         // itself a provider. Set before `mount` (see `insert`).
         self.nodes[slab_index].inherited = {
-            let empty = Arc::new(HashMap::new());
+            let empty = InheritedScope::EMPTY;
             let node = &self.nodes[slab_index];
             compute_inherited_scope(&empty, node.element(), id)
         };
@@ -983,9 +984,9 @@ impl ElementTree {
                     node.element().pipeline_owner(),
                     node.element().child_render_id(),
                     node.element().child_sliver_slot(slot),
-                    Arc::clone(&node.inherited),
+                    node.inherited.clone(),
                 ),
-                None => (0, None, None, None, Arc::new(HashMap::new())),
+                None => (0, None, None, None, InheritedScope::EMPTY),
             };
 
             if let Some(pipeline_owner) = parent_owner {
@@ -1581,17 +1582,17 @@ impl ElementTree {
             let node_slot = node.slot;
             let (parent_map, depth, parent_render_id, sliver_slot) = match node.parent {
                 Some(parent_id) => self.get(parent_id).map_or_else(
-                    || (Arc::new(HashMap::new()), 0, None, None),
+                    || (InheritedScope::EMPTY, 0, None, None),
                     |parent| {
                         (
-                            Arc::clone(&parent.inherited),
+                            parent.inherited.clone(),
                             parent.depth + 1,
                             parent.element().child_render_id(),
                             parent.element().child_sliver_slot(node_slot),
                         )
                     },
                 ),
-                None => (Arc::new(HashMap::new()), 0, None, None),
+                None => (InheritedScope::EMPTY, 0, None, None),
             };
             let scope = {
                 let node = self.get(id).expect("id resolved at loop top");
