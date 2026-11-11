@@ -135,7 +135,8 @@ pub trait ViewState<V: StatefulView>: 'static {
     /// capabilities stay in `init_state` and `did_change_dependencies`, ADR-0078), and runs before the first build, and before
     /// every build that follows a [`did_update_view`](Self::did_update_view)
     /// or a [`did_change_dependencies`](Self::did_change_dependencies). A
-    /// rebuild that changed neither (a `set_state`) does not call it.
+    /// rebuild that changed neither (one through the state's `RebuildHandle`) does not
+    /// call it.
     ///
     /// Keep it idempotent: the same view and dependencies may reach it again
     /// after a rebuild another path requested.

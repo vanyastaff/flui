@@ -39,7 +39,7 @@ state went to the ecosystem (Provider, Riverpod, Bloc, GetX, MobX), so every siz
 one and pays a rebuild tax the framework cannot see. `setState` has no granularity — it rebuilds
 the whole `State` — and the only escape is slicing widgets by hand.
 
-FLUI was at exactly that floor: `ViewState::set_state_scheduled` (whole element),
+FLUI was at exactly that floor: a state field plus a `RebuildHandle` rebuild (whole element),
 `ValueNotifier`/`ChangeNotifier` + `RebuildHandle` (one listener closure per element), and
 `InheritedView` + `depend_on` (per element, per provider type, all-or-nothing, #1090). These are
 wiring, not an application-state model.
@@ -341,10 +341,11 @@ them, writes, pumps a frame, and asserts the value seen and **which elements reb
 
 ### 5.10 `setState`, `ValueNotifier`, `InheritedView` — what happens to them
 
-Nothing is removed.
+What stays, and what each is for:
 
-- `set_state_scheduled` stays for widget-local, short-lived state read by one element; shared,
-  long-lived state read by a handful of elements is a signal.
+- Widget-local, short-lived state read by one element is a field of the state, and the state
+  rebuilds its element through the `RebuildHandle` it takes in `create_state`; shared, long-lived
+  state read by a handful of elements is a signal.
 - **Choosing by reader count.** A signal write costs about 1.3–1.8 µs per reader on top of one
   `setState` on the readers' common parent (§8.1, 600 readers), because each reader is scheduled
   individually. **A value with fewer than ~50 readers is a `Signal`; a value read by hundreds of
