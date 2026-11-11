@@ -59,12 +59,19 @@ jobs:
             tasklist //v //fo csv | grep -v '"N/A"'
             echo "::endgroup::"
           }
+          sc query TabletInputService
+          sc stop TabletInputService
+          sc config TabletInputService start= disabled
+          sc query TabletInputService
           one unhandled_system_key_closes_window
-          windows "before"
           one two_injected_touches_arrive_as_one_pointer_frame
-          one unhandled_system_key_closes_window
           sleep 15
-          windows "15 s after the touch"
+          windows "15 s after the touch, the service stopped"
           one unhandled_system_key_closes_window
           one a_pointer_routed_mouse_hovers_the_window
+          one a_leave_callback_that_hovers_again_keeps_the_hover
+          one two_injected_touches_arrive_as_one_pointer_frame
           exit 0
+      - name: The whole suite with the touch keyboard service stopped
+        if: ${{ !cancelled() }}
+        run: cargo xtask platform-test
