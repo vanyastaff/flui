@@ -13,7 +13,7 @@
 //! [`Scene`](crate::Scene) the raster lane is about to submit, and costs one
 //! pass over the tree. [`DamageMode::Off`] removes that cost entirely.
 
-mod closure;
+pub(crate) mod closure;
 mod differ;
 #[cfg(test)]
 mod tests;

@@ -10,6 +10,7 @@ use flui_foundation::geometry::Offset;
 use flui_foundation::sequence::IdMint;
 
 use super::content::BoundaryContent;
+use super::footprint;
 use super::id::{ContentVersion, Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::table::{Table, TableCost};
 use super::version::{NodeRecord, SceneVersion, VersionInner};
@@ -273,6 +274,9 @@ struct Scratch {
     /// The link and texture buckets those entries sat in.
     bucket_links: Vec<u64>,
     bucket_textures: Vec<u64>,
+    /// Nodes the patch placed, each once.
+    placed_marks: SlotMarks,
+    placed: Vec<NodeKey>,
     /// Nodes whose new content enters the indexes; drained by every patch.
     added: Vec<(NodeKey, Arc<BoundaryContent>)>,
 }
@@ -287,6 +291,8 @@ impl Scratch {
         self.reparented.clear();
         self.tops.clear();
         self.pending.clear();
+        self.placed_marks.clear();
+        self.placed.clear();
     }
 }
 
@@ -295,6 +301,7 @@ impl Scratch {
 struct ApplyCost {
     table: TableCost,
     depth_updates: u64,
+    followers_resolved: u64,
 }
 
 /// Owns one presentation's retained scene: mints its ids and applies its
@@ -307,6 +314,14 @@ pub struct SceneOwner {
     slots: Slots,
     ops: Vec<SceneOp>,
     scratch: Scratch,
+    /// The surface the last patch was applied for.
+    surface: Option<SurfaceKey>,
+    /// The last applied patch's damage against the version before it.
+    patch_damage: DamageRegion,
+    /// The operation whose footprint the next apply drops: a planted defect
+    /// for the property test.
+    #[cfg(feature = "testing")]
+    planted: Option<usize>,
     /// Why the next publication is full.
     full: FullReason,
     cost: ApplyCost,
@@ -350,6 +365,10 @@ impl SceneOwner {
             slots,
             ops: Vec::new(),
             scratch: Scratch::default(),
+            surface: None,
+            patch_damage: DamageRegion::Full(FullReason::FirstFrame),
+            #[cfg(feature = "testing")]
+            planted: None,
             full: FullReason::FirstFrame,
             cost: ApplyCost::default(),
         }
@@ -430,6 +449,8 @@ impl SceneOwner {
             Self::root_version(self.lineage, &self.mint, &mut self.slots),
         );
         self.full = FullReason::Resync(reason);
+        self.surface = None;
+        self.patch_damage = DamageRegion::Full(FullReason::Resync(reason));
         // The buffered patch and the old lineage's version drop last, with the
         // owner renewed.
         ops.clear();
@@ -459,6 +480,30 @@ impl SceneOwner {
         self.cost.depth_updates
     }
 
+    /// Follower resolutions every apply so far ran, in the version before a
+    /// patch and after it (ADR-0304's `followers_resolved`).
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn followers_resolved(&self) -> u64 {
+        self.cost.followers_resolved
+    }
+
+    /// The last applied patch's damage against the version before it: the
+    /// footprint of its operations, closed over what filters read
+    /// (ADR-0304 §4). The pending log folds it into a publication.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn patch_damage(&self) -> DamageRegion {
+        self.patch_damage
+    }
+
+    /// Makes the next apply drop the footprint of its `op`th operation: the
+    /// defect the property test against the full diff must catch.
+    #[cfg(feature = "testing")]
+    pub fn plant_lost_footprint(&mut self, op: usize) {
+        self.planted = Some(op);
+    }
+
     /// Applies the operations the writer buffered, all or nothing, and
     /// returns the new version's id. The surface is the key the pending log
     /// will group damage by; until it exists every publication is full.
@@ -471,10 +516,22 @@ impl SceneOwner {
     /// A [`SceneError`] naming the first operation the patch cannot apply;
     /// the version is unchanged, and the ids and content versions minted for
     /// the patch stay spent.
-    pub fn apply(&mut self, _surface: SurfaceKey) -> Result<SceneVersionId, SceneError> {
+    pub fn apply(&mut self, surface: SurfaceKey) -> Result<SceneVersionId, SceneError> {
+        #[cfg(feature = "testing")]
+        let planted = self.planted.take();
+        #[cfg(not(feature = "testing"))]
+        let planted = None;
         let mut ops = std::mem::take(&mut self.ops);
         let built =
-            Patch::build(&self.current, &self.slots, &mut self.scratch, &ops).and_then(|built| {
+            Patch::build(
+                &self.current,
+                &self.slots,
+                &mut self.scratch,
+                &ops,
+                surface.size,
+                planted,
+            )
+            .and_then(|built| {
                 let seq = self
                     .mint
                     .next()
@@ -497,6 +554,8 @@ impl SceneOwner {
             mut next,
             cost,
             depth_updates,
+            damage,
+            followers_resolved,
         } = built;
         let id = SceneVersionId::new(self.lineage, seq);
         next.id = id;
@@ -516,6 +575,14 @@ impl SceneOwner {
         self.cost.table.copies += cost.copies;
         self.cost.table.created += cost.created;
         self.cost.depth_updates += depth_updates;
+        self.cost.followers_resolved += followers_resolved;
+        // A patch applied for another surface than the last one: its pixels
+        // are not the ones the damage is relative to.
+        self.patch_damage = match self.surface {
+            Some(last) if last != surface => DamageRegion::Full(FullReason::SurfaceChanged),
+            _ => damage,
+        };
+        self.surface = Some(surface);
         let replaced = std::mem::replace(&mut self.current, SceneVersion::from_inner(next));
         // The version before and the contents it alone held drop last, with
         // the owner's state committed.
@@ -576,6 +643,8 @@ struct Built {
     next: VersionInner,
     cost: TableCost,
     depth_updates: u64,
+    damage: DamageRegion,
+    followers_resolved: u64,
 }
 
 /// One patch's application to a copy of the current version; dropped
@@ -596,6 +665,8 @@ impl<'a> Patch<'a> {
         slots: &'a Slots,
         scratch: &'a mut Scratch,
         ops: &[SceneOp],
+        surface: (u32, u32),
+        planted: Option<usize>,
     ) -> Result<Built, SceneError> {
         scratch.reset();
         let base = current.inner();
@@ -615,12 +686,32 @@ impl<'a> Patch<'a> {
         // sets, so it is lent out and put back on every exit.
         let order = std::mem::take(&mut patch.scratch.order);
         let checked = patch.check(&order);
+        let skip = planted.and_then(|index| ops.get(index)).map(|op| match op {
+            SceneOp::Publish { node, .. } | SceneOp::Place { node, .. } | SceneOp::Retire { node } => {
+                node.key()
+            }
+        });
+        let footprint = checked.map(|()| {
+            footprint::patch_damage(
+                patch.base,
+                &mut patch.next,
+                &footprint::PatchFacts {
+                    touched: &order,
+                    placed: &patch.scratch.placed,
+                    skip,
+                },
+                surface,
+                &mut patch.cost,
+            )
+        });
         patch.scratch.order = order;
-        checked?;
+        let (damage, footprint_cost) = footprint?;
         Ok(Built {
             next: patch.next,
             cost: patch.cost,
             depth_updates: patch.depth_updates,
+            damage,
+            followers_resolved: footprint_cost.followers_resolved,
         })
     }
 
@@ -688,6 +779,9 @@ impl<'a> Patch<'a> {
             }
             SceneOp::Place { node, placement } => {
                 let key = self.existing(*node)?;
+                if self.scratch.placed_marks.insert(key.slot()) {
+                    self.scratch.placed.push(key);
+                }
                 self.next
                     .nodes
                     .get_mut(key.table_key(), &mut self.cost)

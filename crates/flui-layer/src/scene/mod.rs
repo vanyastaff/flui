@@ -3,6 +3,8 @@
 //! changes by typed patches.
 
 mod content;
+mod footprint;
+mod geometry;
 mod id;
 mod owner;
 mod table;

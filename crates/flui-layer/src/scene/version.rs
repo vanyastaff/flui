@@ -5,7 +5,9 @@ use std::sync::Arc;
 use flui_painting::paint::TextureId;
 use smallvec::SmallVec;
 
-use super::content::{BoundaryContent, EntryIndex, LinkRole};
+use flui_foundation::geometry::Rect;
+
+use super::content::{BoundaryContent, Bounds, EntryIndex, LinkRole};
 use super::id::{Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::owner::Placement;
 use super::table::{Table, TableCost};
@@ -36,6 +38,9 @@ pub(crate) struct NodeRecord {
     depth: u32,
     placement: Placement,
     content: Arc<BoundaryContent>,
+    /// What the node and its subtree can change, in its own space: exact
+    /// when its content is published, grown by union after (ADR-0304 §4).
+    subtree: Bounds,
 }
 
 impl NodeRecord {
@@ -46,6 +51,7 @@ impl NodeRecord {
             depth: 0,
             placement: Placement::ZERO,
             content,
+            subtree: Bounds::Finite(Rect::ZERO),
         }
     }
 
@@ -71,6 +77,18 @@ impl NodeRecord {
 
     pub(crate) fn set_placement(&mut self, placement: Placement) {
         self.placement = placement;
+    }
+
+    pub(crate) fn placement(&self) -> Placement {
+        self.placement
+    }
+
+    pub(crate) fn subtree(&self) -> Bounds {
+        self.subtree
+    }
+
+    pub(crate) fn set_subtree(&mut self, subtree: Bounds) {
+        self.subtree = subtree;
     }
 
     pub(crate) fn set_content(&mut self, content: Arc<BoundaryContent>) {
