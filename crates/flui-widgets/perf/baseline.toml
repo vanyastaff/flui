@@ -27,8 +27,8 @@ allocations = 462
 reallocations = 20
 
 [list_10k_scroll_one_screen]
-allocated_bytes = 1389590
-allocations = 4132
+allocated_bytes = 1382310
+allocations = 3992
 builds_run = 126
 elements_rebuilt = 126
 frames_produced = 1
@@ -42,7 +42,7 @@ reallocations = 142
 semantics_nodes_updated = 81
 
 [raw_button_over_text]
-allocations = 50
+allocations = 49
 bytes = 7610
 elements = 2
 reallocations = 2
@@ -52,7 +52,7 @@ text_bytes = 9390
 text_reallocations = 2
 
 [semantics_action_over_text]
-allocations = 17
+allocations = 16
 bytes = 2699
 elements = 1
 reallocations = 1
