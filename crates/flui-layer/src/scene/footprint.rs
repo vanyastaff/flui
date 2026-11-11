@@ -40,6 +40,8 @@ pub(crate) struct FootprintCost {
     pub(crate) followers_resolved: u64,
     /// Follower link entries read to pair a republished boundary's followers.
     pub(crate) pairing_reads: u64,
+    /// Entries folded to read the inputs of foreground image filters.
+    pub(crate) filter_input_reads: u64,
 }
 
 impl FootprintCost {
@@ -49,6 +51,9 @@ impl FootprintCost {
             .followers_resolved
             .saturating_add(other.followers_resolved);
         self.pairing_reads = self.pairing_reads.saturating_add(other.pairing_reads);
+        self.filter_input_reads = self
+            .filter_input_reads
+            .saturating_add(other.filter_input_reads);
     }
 }
 
@@ -145,10 +150,8 @@ pub(crate) fn patch_damage(
         footprints.add(new.entry_reach(after.node, after.entry));
     }
     let region = footprints.region(surface);
-    let mut closures = Vec::new();
-    closures_of(old, base, &mut closures);
-    closures_of(new, next, &mut closures);
-    (close_over(region, closures, surface), cost)
+    let damage = close_filtered(region, [(old, base), (new, next)], surface, &mut cost);
+    (damage, cost)
 }
 
 /// The followers of `next` whose transform differs from their pair's in
@@ -537,54 +540,125 @@ fn out_of_order(order: &[(usize, usize)]) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// What each entry with a read closure in an attached filtered node of
-/// `version` reads and writes.
-fn closures_of(geometry: Geometry<'_>, version: &VersionInner, out: &mut Vec<Closure>) {
-    for (_, &key) in version.filtered.iter() {
-        let Some(record) = version.record(key) else {
-            continue;
-        };
-        if !geometry.is_attached(key) {
-            continue;
-        }
-        for (position, entry) in record.content().entries().iter().enumerate() {
-            let at = Address {
-                node: key,
-                entry: EntryIndex::at(position),
+/// `region` closed over what the entries of the attached filtered nodes of
+/// both versions read and write.
+///
+/// A backdrop or colour filter and a chunk that reads the destination cost
+/// their chain each. A node's foreground image filters are read, all in one
+/// fold of its content, only once the region meets the node's subtree
+/// footprint, which holds all they write: a patch pays for the filtered
+/// content its damage reaches, not for every filter in the scene. One whose
+/// filter paints transparent black has no bound and is read at once.
+fn close_filtered(
+    region: DamageRegion,
+    versions: [(Geometry<'_>, &VersionInner); 2],
+    surface: (u32, u32),
+    cost: &mut FootprintCost,
+) -> DamageRegion {
+    let mut closures = Vec::new();
+    let mut waiting = Vec::new();
+    for (geometry, version) in versions {
+        for (_, &key) in version.filtered.iter() {
+            let Some(record) = version.record(key) else {
+                continue;
             };
-            match entry {
-                Entry::Effect { layer, .. } => match layer {
-                    Layer::BackdropFilter(_) | Layer::ColorFilter(_) => {
-                        if let Some(ctm) = geometry.effect_ctm(at) {
-                            out.push(read_closure(layer, &ctm, Rect::ZERO));
-                        }
-                    }
-                    Layer::ImageFilter(_) => {
-                        // What the filter takes in, on the surface: its
-                        // scope's footprint, the filter's own spread aside.
-                        let Some(ctm) = geometry.effect_ctm(at) else {
-                            continue;
-                        };
-                        match geometry.filter_input(at) {
-                            Reach::Rect(content) => out.push(read_closure(layer, &ctm, content)),
-                            Reach::Nothing => {}
-                            Reach::Unbounded | Reach::NonFinite => out.push(Closure::Unbounded),
-                        }
-                    }
-                    _ => {}
-                },
-                Entry::Chunk { chunk, .. } if chunk.reads_destination() => {
-                    match geometry.entry_reach(key, at.entry) {
-                        Reach::Rect(bounds) => out.push(Closure::Bounded {
-                            reads: bounds,
-                            writes: bounds,
-                        }),
-                        Reach::Nothing => {}
-                        Reach::Unbounded | Reach::NonFinite => out.push(Closure::Unbounded),
-                    }
-                }
-                Entry::Chunk { .. } | Entry::Slot { .. } => {}
+            if !geometry.is_attached(key) {
+                continue;
+            }
+            if direct_closures(geometry, key, record.content(), &mut closures) {
+                waiting.push((geometry, version, key, geometry.subtree_reach(key)));
             }
         }
+    }
+    let mut region = close_over(region, closures.iter().copied(), surface);
+    loop {
+        let DamageRegion::Region(current) = &region else {
+            return region;
+        };
+        let before = waiting.len();
+        waiting.retain(|&(geometry, version, key, reach)| {
+            if !meets(current, reach, surface) {
+                return true;
+            }
+            for (at, ctm, input) in geometry.filter_inputs(key, &mut cost.filter_input_reads) {
+                let Some(Entry::Effect { layer, .. }) = version
+                    .record(key)
+                    .and_then(|record| record.content().entries().get(at.entry.get()))
+                else {
+                    continue;
+                };
+                match input {
+                    Reach::Rect(content) => closures.push(read_closure(layer, &ctm, content)),
+                    Reach::Nothing => {}
+                    Reach::Unbounded | Reach::NonFinite => closures.push(Closure::Unbounded),
+                }
+            }
+            false
+        });
+        if waiting.len() == before {
+            return region;
+        }
+        region = close_over(region, closures.iter().copied(), surface);
+    }
+}
+
+/// Pushes the closures of `key`'s entries that cost their chain alone: its
+/// backdrop and colour filters, the chunks that read the destination, and
+/// the foreground image filters that paint transparent black. Whether it
+/// holds other foreground image filters, read once the damage reaches it.
+fn direct_closures(
+    geometry: Geometry<'_>,
+    key: NodeKey,
+    content: &BoundaryContent,
+    out: &mut Vec<Closure>,
+) -> bool {
+    let mut foreground = false;
+    for (position, entry) in content.entries().iter().enumerate() {
+        let at = Address {
+            node: key,
+            entry: EntryIndex::at(position),
+        };
+        match entry {
+            Entry::Effect { layer, .. } => match layer {
+                Layer::BackdropFilter(_) | Layer::ColorFilter(_) => {
+                    if let Some(ctm) = geometry.effect_ctm(at) {
+                        out.push(read_closure(layer, &ctm, Rect::ZERO));
+                    }
+                }
+                Layer::ImageFilter(filter) if filter.filter().modifies_transparent_black() => {
+                    if geometry.effect_ctm(at).is_some() {
+                        out.push(Closure::Unbounded);
+                    }
+                }
+                Layer::ImageFilter(_) => foreground = true,
+                _ => {}
+            },
+            Entry::Chunk { chunk, .. } if chunk.reads_destination() => {
+                match geometry.entry_reach(key, at.entry) {
+                    Reach::Rect(bounds) => out.push(Closure::Bounded {
+                        reads: bounds,
+                        writes: bounds,
+                    }),
+                    Reach::Nothing => {}
+                    Reach::Unbounded | Reach::NonFinite => out.push(Closure::Unbounded),
+                }
+            }
+            Entry::Chunk { .. } | Entry::Slot { .. } => {}
+        }
+    }
+    foreground
+}
+
+/// Whether `reach`, grown by a pixel of rounding on each side, meets a rect
+/// of `region`; one with no finite bound meets every region.
+fn meets(region: &Region, reach: Reach, surface: (u32, u32)) -> bool {
+    match reach {
+        Reach::Nothing => false,
+        Reach::Rect(rect) => match DamageRect::try_covering(rect.expand(1.0), surface) {
+            Ok(Some(rect)) => region.rects().iter().any(|damage| damage.overlaps(rect)),
+            Ok(None) => false,
+            Err(_) => true,
+        },
+        Reach::Unbounded | Reach::NonFinite => true,
     }
 }

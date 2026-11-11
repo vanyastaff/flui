@@ -227,7 +227,9 @@ its own to the maximum of its children's, a sum along a chain), and a
 footprint adds it once mapped to the surface. The region then closes over the filtered nodes of
 both versions. A follower under `LeaderClip::Hide` is damaged when the patch changes a node on its
 leader's branch, and so is every follower whose chains pass through it, since hidden it hides
-them. Footprints fold an effect chain from its last entry back, without recursion. A surface
+them. Footprints fold an effect chain from its last entry back, without recursion; a clip over
+filters with a kernel bounds their scope by the clip. A node's foreground filter inputs are read
+only once the damage meets its subtree footprint, in one fold. A surface
 change between applies is
 `Full(SurfaceChanged)`, and `renew` makes the next one `Full(Resync(_))`.
 

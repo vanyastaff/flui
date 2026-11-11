@@ -293,6 +293,45 @@ pub(crate) fn is_projective(transform: &Matrix4) -> bool {
     m[3].abs() > f64::EPSILON || m[7].abs() > f64::EPSILON || (m[15] - 1.0).abs() > f64::EPSILON
 }
 
+/// The map a transform filter whose source-from-shown map has the
+/// `inverse` coefficients applies on the surface under `transform`.
+fn shown_map(inverse: [f64; 6], transform: &Matrix4) -> Option<Matrix4> {
+    let [xx, yx, xy, yy, x0, y0] = inverse;
+    let mut shown_to_source = Matrix4::IDENTITY;
+    shown_to_source.m[0] = xx;
+    shown_to_source.m[1] = yx;
+    shown_to_source.m[4] = xy;
+    shown_to_source.m[5] = yy;
+    shown_to_source.m[12] = x0;
+    shown_to_source.m[13] = y0;
+    Some(*transform * shown_to_source.try_inverse()? * transform.try_inverse()?)
+}
+
+/// Where `filter` moves what it takes from `input` under `transform`, its
+/// spread left out: a transform filter's map, nothing for a kernel. The
+/// spread is the filter's `device_spread`, which a footprint adds once on
+/// the surface. `None` when the map has no bound, under a projective
+/// ancestor.
+pub(crate) fn moved(
+    filter: &ImageFilter,
+    input: Rect<f64>,
+    transform: &Matrix4,
+) -> Option<Rect<f64>> {
+    match filter {
+        ImageFilter::Transform { transform: map, .. } => {
+            if is_projective(transform) {
+                return None;
+            }
+            let moved = shown_map(map.inverse_coefficients(), transform)?;
+            Some(moved.transform_rect(&input)).filter(Rect::is_finite)
+        }
+        ImageFilter::Compose(filters) => filters
+            .iter()
+            .try_fold(input, |input, filter| moved(filter, input, transform)),
+        _ => Some(input),
+    }
+}
+
 /// Where `filter` draws what it takes from `input` (surface pixels) under
 /// `transform`: spread by a kernel's reach, or moved where a transform
 /// sends it, the sampling's reach before the map and a pixel after it. `None` when that has no
@@ -310,15 +349,7 @@ pub(crate) fn footprint(
             if is_projective(transform) {
                 return None;
             }
-            let [xx, yx, xy, yy, x0, y0] = map.inverse_coefficients();
-            let mut shown_to_source = Matrix4::IDENTITY;
-            shown_to_source.m[0] = xx;
-            shown_to_source.m[1] = yx;
-            shown_to_source.m[4] = xy;
-            shown_to_source.m[5] = yy;
-            shown_to_source.m[12] = x0;
-            shown_to_source.m[13] = y0;
-            let moved = *transform * shown_to_source.try_inverse()? * transform.try_inverse()?;
+            let moved = shown_map(map.inverse_coefficients(), transform)?;
             // A read reaches past its sample point before the map spreads it,
             // as the renderer inflates its input support (a 10× linear
             // magnifier draws five device pixels past the mapped source).

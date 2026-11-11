@@ -498,6 +498,15 @@ impl SceneOwner {
         self.cost.footprint.pairing_reads
     }
 
+    /// Entries applies have folded to read what foreground image filters
+    /// take in: one fold of a filtered node's content once the damage meets
+    /// its footprint, none for a filter the damage does not reach.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn filter_input_reads(&self) -> u64 {
+        self.cost.footprint.filter_input_reads
+    }
+
     /// The last applied patch's damage against the version before it: the
     /// footprint of its operations, closed over what filters read
     /// (ADR-0304 §4). The pending log folds it into a publication.

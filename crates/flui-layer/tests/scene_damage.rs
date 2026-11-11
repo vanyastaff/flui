@@ -613,6 +613,119 @@ pub(crate) fn a_deep_effect_chain_applies_without_recursion() {
         .expect("no stack overflow");
 }
 
+/// A clip around a filter under a shrinking effect bounds what the filter's
+/// device kernel draws, not the shrunk content alone: moving the boundary
+/// damages the clipped dilation.
+pub(crate) fn a_clip_over_a_shrunk_filter_keeps_its_device_kernel() {
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let filtered = writer.mint_node();
+    let version = writer.next_content_version().expect("a version");
+    let mut content = BoundaryContent::builder();
+    content.push_effect(
+        Layer::from(ClipRectLayer::new(
+            Rect::from_ltrb(80.0, 80.0, 90.0, 90.0),
+            Clip::HardEdge,
+        )),
+        RenderId::new(1),
+        0,
+    );
+    content.push_effect(
+        Layer::from(TransformLayer::new(Matrix4::scaling(0.01, 0.01, 1.0))),
+        RenderId::new(1),
+        1,
+    );
+    content.push_effect(
+        Layer::from(ImageFilterLayer::new(ImageFilter::Dilate { radius: 20.0 })),
+        RenderId::new(1),
+        2,
+    );
+    content.chunk(chunk(
+        1,
+        version,
+        Rect::from_ltrb(10_000.0, 10_000.0, 10_100.0, 10_100.0),
+    ));
+    writer.push(publish(filtered, content.finish()));
+    let mut top = BoundaryContent::builder();
+    top.slot(filtered);
+    writer.push(publish(root, top.finish()));
+    owner
+        .apply(SURFACE)
+        .expect("a dilation clipped under a shrink");
+
+    let mut writer = owner.writer();
+    writer.push(place(filtered, 5.0, 0.0));
+    owner.apply(SURFACE).expect("the boundary moves");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(80.0, 80.0, 95.0, 90.0)),
+        "the clipped dilation at both placements: {damage:?}"
+    );
+}
+
+/// A filtered boundary's filter inputs are read only once the damage meets
+/// it, and then in one fold of its content: fifty nested blurs over two
+/// hundred chunks cost nothing when a node far away moves, and each
+/// version's entries once when a chunk under them changes.
+pub(crate) fn filter_inputs_are_read_once_the_damage_reaches_them() {
+    const FILTERS: u32 = 50;
+    const CHUNKS: u32 = 200;
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let (filtered, mover) = (writer.mint_node(), writer.mint_node());
+    let blurred = |writer: &mut flui_layer::SceneWriter<'_>, changed: f64| {
+        let version = writer.next_content_version().expect("a version");
+        let mut content = BoundaryContent::builder();
+        for ordinal in 0..FILTERS {
+            content.push_effect(
+                Layer::from(ImageFilterLayer::new(ImageFilter::blur(2.0))),
+                RenderId::new(1),
+                ordinal,
+            );
+        }
+        for index in 0..CHUNKS {
+            let height = if index == 0 { changed } else { 10.0 };
+            content.chunk(chunk(
+                1,
+                version,
+                Rect::from_xywh(500.0, f64::from(index), 10.0, height),
+            ));
+        }
+        content.finish()
+    };
+    let content = blurred(&mut writer, 10.0);
+    writer.push(publish(filtered, content));
+    let version = writer.next_content_version().expect("a version");
+    let mut far = BoundaryContent::builder();
+    far.chunk(chunk(2, version, Rect::from_xywh(0.0, 0.0, 10.0, 10.0)));
+    writer.push(publish(mover, far.finish()));
+    let mut top = BoundaryContent::builder();
+    top.slot(filtered);
+    top.slot(mover);
+    writer.push(publish(root, top.finish()));
+    owner
+        .apply(SURFACE)
+        .expect("nested blurs and a node far from them");
+
+    let reads = owner.filter_input_reads();
+    let mut writer = owner.writer();
+    writer.push(place(mover, 0.0, 20.0));
+    owner.apply(SURFACE).expect("the far node moves");
+    assert_eq!(owner.filter_input_reads(), reads, "damage that misses them");
+
+    let mut writer = owner.writer();
+    let content = blurred(&mut writer, 12.0);
+    writer.push(publish(filtered, content));
+    owner.apply(SURFACE).expect("a chunk under the blurs grows");
+    assert_eq!(
+        owner.filter_input_reads() - reads,
+        2 * u64::from(FILTERS + CHUNKS),
+        "one fold of each version"
+    );
+}
+
 /// Followers pair across a patch in one pass over a republished boundary's
 /// links and none over a kept one: two thousand sibling followers read
 /// nothing when another node moves, and each side's links once when their

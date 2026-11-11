@@ -19,7 +19,7 @@ use smallvec::SmallVec;
 use super::content::{BoundaryContent, Bounds, Entry, EntryIndex};
 use super::id::NodeKey;
 use super::version::{Address, NodeRecord, VersionInner};
-use crate::damage::closure::{device_spread, footprint};
+use crate::damage::closure::{device_spread, footprint, moved};
 use crate::layer::Layer;
 use crate::link::{MAX_FOLLOWER_NESTING, invert};
 use crate::{LayerLink, LeaderClip};
@@ -150,17 +150,32 @@ fn mapped(matrix: &Matrix4, rect: Rect<f64>) -> Reach {
         None => Reach::Unbounded,
     }
 }
-
 /// `reach`, in the innermost space of `links` (listed outermost first),
-/// mapped out through each of them into the outermost.
+/// mapped out through each of them into the outermost space of one
+/// boundary's content. A filter on the way moves what it takes and does not
+/// spread it: its spread is in device pixels, which the scope's kernel
+/// carries to the surface.
 pub(crate) fn map_out(links: &[Link<'_>], reach: Reach) -> Reach {
-    map_out_spread(links, reach, 0.0)
+    map_through(links, reach, 0.0, Spread::Kernel)
+}
+
+/// How a filter on a chain grows what it takes.
+#[derive(Clone, Copy)]
+enum Spread {
+    /// By its reach under the chain's map: the chain ends on the surface.
+    Reach,
+    /// Not at all: a kernel carries it.
+    Kernel,
 }
 
 /// `map_out`, with `reach` grown by `kernel` device pixels once mapped and
 /// before the links' clips and filters: the device-space spread of the
 /// filters inside it, which bounds in a local space cannot hold.
 pub(crate) fn map_out_spread(links: &[Link<'_>], reach: Reach, kernel: f64) -> Reach {
+    map_through(links, reach, kernel, Spread::Reach)
+}
+
+fn map_through(links: &[Link<'_>], reach: Reach, kernel: f64, spread: Spread) -> Reach {
     // The map from each step's space into the outermost.
     let mut ctms: SmallVec<[Matrix4; 16]> = SmallVec::with_capacity(links.len());
     let mut ctm = Matrix4::IDENTITY;
@@ -187,9 +202,11 @@ pub(crate) fn map_out_spread(links: &[Link<'_>], reach: Reach, kernel: f64) -> R
                 (out, _) => out,
             },
             Link::Filter(filter) => match out {
-                Reach::Rect(input) => {
-                    footprint(filter, input, ctm).map_or(Reach::Unbounded, Reach::rect)
+                Reach::Rect(input) => match spread {
+                    Spread::Reach => footprint(filter, input, ctm),
+                    Spread::Kernel => moved(filter, input, ctm),
                 }
+                .map_or(Reach::Unbounded, Reach::rect),
                 other => other,
             },
             Link::Extent(rect) => out.union(mapped(ctm, rect)),
@@ -431,7 +448,12 @@ impl<'v> Geometry<'v> {
     /// slotted subtrees included. One pass from the last entry back folds
     /// each into its parent's, so a chain of effects of any depth costs no
     /// stack.
-    fn scope(self, key: NodeKey, range: Range<usize>) -> Scope {
+    fn scope(
+        self,
+        key: NodeKey,
+        range: Range<usize>,
+        mut filters: Option<&mut Vec<(EntryIndex, Scope)>>,
+    ) -> Scope {
         let content = self.record(key).content();
         let entries = &content.entries()[range.clone()];
         let mut inside = vec![Scope::EMPTY; entries.len()];
@@ -460,13 +482,30 @@ impl<'v> Geometry<'v> {
                         entry: EntryIndex::at(range.start + offset),
                     };
                     self.effect_links(layer, at, &mut links, 0);
-                    Scope {
-                        local: map_out(&links, held.local),
-                        kernel: match layer {
-                            Layer::ImageFilter(filter) => {
-                                device_spread(filter.filter(), held.kernel)
+                    if let Layer::ImageFilter(_) = layer
+                        && let Some(filters) = filters.as_deref_mut()
+                    {
+                        filters.push((at.entry, held));
+                    }
+                    let kernel = match layer {
+                        Layer::ImageFilter(filter) => device_spread(filter.filter(), held.kernel),
+                        _ => held.kernel,
+                    };
+                    // A local bound cannot hold the device kernel of the
+                    // filters inside, but a clip here still bounds all they
+                    // draw: the scope is the clip, its kernel spent.
+                    match map_out(&links, Reach::Unbounded) {
+                        capped @ Reach::Rect(_)
+                            if held.kernel > 0.0 && held.local != Reach::Nothing =>
+                        {
+                            Scope {
+                                local: capped,
+                                kernel: 0.0,
                             }
-                            _ => held.kernel,
+                        }
+                        _ => Scope {
+                            local: map_out(&links, held.local),
+                            kernel,
                         },
                     }
                 }
@@ -485,7 +524,7 @@ impl<'v> Geometry<'v> {
     /// What `key`'s content and subtree change, in its own space, from its
     /// children's stored bounds, and its filters' device kernel.
     pub(crate) fn subtree_scope(self, key: NodeKey) -> Scope {
-        self.scope(key, 0..self.record(key).content().entries().len())
+        self.scope(key, 0..self.record(key).content().entries().len(), None)
     }
 
     /// Where `entry` of `key` and its scope land on the surface; nothing when
@@ -499,6 +538,7 @@ impl<'v> Geometry<'v> {
         let scope = self.scope(
             key,
             entry.get()..scope_end(self.record(key).content(), entry),
+            None,
         );
         map_out_spread(&links, scope.local, scope.kernel)
     }
@@ -528,18 +568,31 @@ impl<'v> Geometry<'v> {
         product(&links).ok()
     }
 
-    /// What the children of the effect at `at` draw, on the surface and
-    /// unclipped: the input a foreground filter there takes.
-    pub(crate) fn filter_input(self, at: Address) -> Reach {
-        let Some(ctm) = self.effect_ctm(at) else {
-            return Reach::Nothing;
-        };
-        let content = self.record(at.node).content();
-        let inside = self.scope(at.node, at.entry.get() + 1..scope_end(content, at.entry));
-        match inside.local {
-            Reach::Rect(rect) => mapped(&ctm, rect).spread(inside.kernel),
-            other => other,
-        }
+    /// What each foreground image filter of `key` takes in, on the surface
+    /// and unclipped, with the map under it, from one fold of the content;
+    /// `reads` counts the entries folded. A filter whose space nothing
+    /// draws in is left out.
+    pub(crate) fn filter_inputs(
+        self,
+        key: NodeKey,
+        reads: &mut u64,
+    ) -> SmallVec<[(Address, Matrix4, Reach); 4]> {
+        let entries = self.record(key).content().entries().len();
+        let mut filters = Vec::new();
+        self.scope(key, 0..entries, Some(&mut filters));
+        *reads = reads.saturating_add(u64::try_from(entries).unwrap_or(u64::MAX));
+        filters
+            .into_iter()
+            .filter_map(|(entry, inside)| {
+                let at = Address { node: key, entry };
+                let ctm = self.effect_ctm(at)?;
+                let input = match inside.local {
+                    Reach::Rect(rect) => mapped(&ctm, rect).spread(inside.kernel),
+                    other => other,
+                };
+                Some((at, ctm, input))
+            })
+            .collect()
     }
 
     /// The transform the follower at `at` applies to its children so their
