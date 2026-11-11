@@ -135,10 +135,11 @@ jobs:
       # The X server, the libraries the X11 host loads at run time, and Mesa's
       # llvmpipe and lavapipe for the window's surface, as in ci.yml.
       - name: Install Xvfb, libxcb, xkbcommon and Mesa
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends xvfb libxcb1 libxkbcommon-x11-0 \
-            libxkbcommon0 mesa-vulkan-drivers libegl-mesa0 libgl1-mesa-dri
+        uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            xvfb libxcb1 libxkbcommon-x11-0 libxkbcommon0 mesa-vulkan-drivers libegl-mesa0
+            libgl1-mesa-dri
 
       - name: cargo fetch (the scenario's app builds offline)
         run: cargo fetch --locked
