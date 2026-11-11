@@ -20,10 +20,10 @@ The behavior families, each at one arity:
 
 | Behavior | Arity | Notes |
 |---|---|---|
-| `StatelessBehavior` | `Single` | `view.build()` |
+| `StatelessBehavior` | `Single` | `view.build()`; publishes what `provide` writes |
 | `ProxyBehavior` | `Single` | `view.child()` pass-through |
-| `StatefulBehavior<V>` | `Single` | owns `V::State`, `init_state`/`dispose` |
-| `InheritedBehavior<V>` | `Single` | cached `V::Data` + dependent set |
+| `StatefulBehavior<V>` | `Single` | owns `V::State`, `init_state`/`dispose`; publishes what the state's `provide` writes |
+| `InheritedBehavior<V>` | `Single` | cached `V::Data`; publishes the view itself |
 | `AnimatedBehavior<V>` | `Single` | composes `StatefulBehavior<V>` |
 | `ParentDataBehavior` | `Single` | proxy-shaped parent-data tag |
 | `RenderBehavior<V>` | `Variable` | owns the render object |
@@ -463,6 +463,26 @@ silently opting out. There is no read path that does not record a dependency.
 **Typing.** Aspects are compile-time field masks and every public read depends. There is no blanket `Data: PartialEq` bound — the diff
 comes from the opt-in derive. Inherited field dependencies and signal reads have separate
 registries, feeding the same owner scheduler and depth-ordered build drain (ADR-0074 §5.5).
+
+### An element of any kind publishes values to its subtree
+
+**Rule.** An `InheritedView` is an element whose only job is to publish itself. A view or a state
+that already has an element publishes from it: `StatelessView::provide` and `ViewState::provide`
+run right before each build and write `ProvidedValue`s into a `Provided` sink
+([ADR-0322](../../docs/adr/ADR-0322-a-control-mounts-one-element-for-its-behaviours.md) §5).
+The element registers each value's type in its node's inherited scope, so `ctx.depend_on::<T, _>`
+resolves the nearest provider of `T` whichever kind of element it is, and an element's own reads
+resolve above it. Dependents are kept in the ledger an inherited element keeps (`Dependents`); a
+publishing element gives each type one field of the dependent's `FieldSet`, so a value that
+changes wakes the readers of that value only.
+
+**Failure paths.** The hook writes into a staging list and every `update_should_notify` runs
+before anything is replaced: a panic in either leaves the published values as they were and is
+recorded as `LifecycleHook::Provide`. A run that publishes another set of types re-derives the
+scope of the element's subtree and wakes every descendant that read an inherited value.
+
+**Evidence.** `crates/flui-view/tests/provided_values.rs` runs one table over an inherited view, a
+stateless view and a state.
 
 ### A render view reads inherited data while it is reconfigured
 

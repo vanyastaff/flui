@@ -34,8 +34,8 @@ use flui_view::prelude::*;
 use flui_view::{EventCx, EventOutcome};
 
 use super::actions::{
-    ActionChainProvider, Actions, ActivateIntent, ActivationPressIntent, BackIntent,
-    CopySelectionTextIntent, DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, Intent,
+    Actions, ActivateIntent, ActivationPressIntent, BackIntent, CopySelectionTextIntent,
+    DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, EnclosingActions, Intent,
     NextFocusAction, NextFocusIntent, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent,
     SelectAllTextIntent, ShowContextMenuIntent, chain_at, resolve,
 };
@@ -521,7 +521,7 @@ impl ViewState<Shortcuts> for ShortcutsState {
     /// a real dependency, as the fallback for a focused node that records
     /// none; the primary focus's chain is read at key time.
     fn build(&self, view: &Shortcuts, ctx: &dyn BuildContext) -> impl IntoView {
-        let own_chain = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+        let own_chain = EnclosingActions::depend_on(ctx);
         let focus_manager = Rc::clone(
             self.focus_manager
                 .as_ref()

@@ -54,7 +54,7 @@ use super::rich_text::ResolvedParagraph;
 use super::selection_style::{DefaultSelectionStyle, SelectionStyle};
 use crate::anchored_box::AnchoredBox;
 use crate::interaction::Focus;
-use crate::interaction::actions::ActionChainProvider;
+use crate::interaction::actions::{ActionScope, EnclosingActions};
 use crate::support::RefCallback;
 use crate::text::{MagnifierChoice, MenuSettings, SelectionMagnifier, show_menu_action};
 use crate::{DefaultSelectionControls, Overlay, Semantics};
@@ -435,7 +435,7 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         // Every commit rebuilds the area, so its actions follow the
         // selection (see `SelectionModel::action_chain`), and so does its
         // menu.
-        let enclosing = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+        let enclosing = EnclosingActions::depend_on(ctx);
         let chain = self.model.action_chain(enclosing);
         self.model
             .configure_menu(ctx, &view.menu, Rc::clone(&chain));
@@ -471,7 +471,7 @@ impl ViewState<SelectionArea> for SelectionAreaState {
                     model.focus_changed(focused);
                 }
             });
-        let actions = ActionChainProvider::new(chain, focused);
+        let actions = ActionScope::new(chain, focused);
         let model = Rc::clone(&self.model);
         let semantics = Semantics::new()
             .role(view.role)

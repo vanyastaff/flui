@@ -37,7 +37,8 @@ Reference: Flutter `widgets/focus_scope.dart` (`Focus`, `FocusScope`, `_FocusSta
   `Rc<FocusNode>` or accepting an external one (`Focus::with_external_node`). `FocusScope` is
   the same over `Rc<FocusScopeNode>`; `FocusScope::with_external_node` is what `ModalRoute`
   uses for its per-route scope.
-- A private `FocusParentProvider` inherited view publishes the nearest focus **node**. Widget
+- `Focus` and `FocusScope` publish the nearest focus **node** to their subtree from their own
+  elements, as the private value `FocusParent` (ADR-0322 §5). Widget
   nodes parent to that node rather than being flattened to the nearest scope: key bubbling
   (ADR-0023) makes the node tree's shape observable, so a non-scope `Focus` above a field must
   be the field's ancestor to see the keys it ignores. A widget with no focus widget above it

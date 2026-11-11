@@ -40,8 +40,8 @@ use flui_view::{BoxedView, CreationSite, RenderView, impl_render_view};
 
 use crate::AnimatedBuilder;
 use crate::interaction::actions::{
-    Action, ActionChain, ActionChainProvider, ActionOutcome, ActivateIntent, ActivationPressIntent,
-    CopySelectionTextIntent, DismissIntent, PasteTextIntent, SelectAllTextIntent,
+    Action, ActionChain, ActionOutcome, ActivateIntent, ActivationPressIntent,
+    CopySelectionTextIntent, DismissIntent, EnclosingActions, PasteTextIntent, SelectAllTextIntent,
     ShowContextMenuIntent, as_node_context, erased_action, layered_chain,
 };
 use crate::semantics::Semantics;
@@ -1446,7 +1446,7 @@ impl EditableTextState {
     /// enclosing chain, so a changed one is recorded again; the same record
     /// `Focus` keeps (ADR-0079).
     fn record_action_chain(&mut self, ctx: &dyn BuildContext) {
-        let enclosing = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+        let enclosing = EnclosingActions::depend_on(ctx);
         let unchanged = match (&enclosing, &self.enclosing_action_chain) {
             (Some(new), Some(held)) => Rc::ptr_eq(new, held),
             (None, None) => true,

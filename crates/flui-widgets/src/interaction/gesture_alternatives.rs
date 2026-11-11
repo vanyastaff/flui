@@ -38,8 +38,8 @@ use flui_view::{InheritedView, RebuildHandle, RebuildReason, WriterSource, impl_
 use smallvec::SmallVec;
 
 use super::actions::{
-    Action, ActionChain, ActionChainProvider, ActionOutcome, Actions, Intent,
-    ShowContextMenuIntent, resolve,
+    Action, ActionChain, ActionOutcome, Actions, EnclosingActions, Intent, ShowContextMenuIntent,
+    resolve,
 };
 use super::companion::{CompanionGap, CompanionLink, LinkedCompanions};
 use super::focus::Focus;
@@ -140,7 +140,7 @@ impl GestureCommand {
     pub fn handle(&self, ctx: &dyn BuildContext) -> CommandHandle {
         CommandHandle {
             command: self.clone(),
-            chain: ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone()),
+            chain: EnclosingActions::depend_on(ctx),
         }
     }
 
@@ -1228,7 +1228,7 @@ impl GestureAlternatives {
         state: &GestureAlternativesState,
     ) -> BoxedView {
         let opener_slot = &state.opener;
-        let chain = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+        let chain = EnclosingActions::depend_on(ctx);
         let platform = TargetPlatform::current();
         let content = self
             .child
