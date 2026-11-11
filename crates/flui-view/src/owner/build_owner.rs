@@ -1700,6 +1700,9 @@ impl BuildOwner {
         // one entry observed something land while THIS drain was actively
         // in progress, which is what the field name promises.
         let mut first_pop = true;
+        // One buffer of dependency records serves every element this drain
+        // builds: each build fills it, the drain below empties it.
+        let mut dependent_records: Vec<crate::context::DependentRecord> = Vec::new();
         loop {
             let absorbed_this_pop =
                 self.absorb_mid_drain_inbox(tree, &mut capped_leftover.leftover);
@@ -1802,7 +1805,7 @@ impl BuildOwner {
                 .get(id)
                 .and_then(|node| node.parent().map(|parent| (parent, node.slot())));
             let dep_sink: parking_lot::Mutex<Vec<crate::context::DependentRecord>> =
-                parking_lot::Mutex::new(Vec::new());
+                parking_lot::Mutex::new(std::mem::take(&mut dependent_records));
 
             // Run the build half under `catch_unwind` so the extracted element
             // is ALWAYS restored to its slot before this seam decides whether
@@ -1996,7 +1999,8 @@ impl BuildOwner {
             if !build_recovered.get() {
                 self.inherited_dependencies.reset_build_misses(id);
             }
-            for record in dep_sink.into_inner() {
+            let mut recorded: Vec<crate::context::DependentRecord> = dep_sink.into_inner();
+            for record in recorded.drain(..) {
                 let Some(provider) = record.provider else {
                     self.inherited_dependencies
                         .register_miss(record.dependent, record.lifecycle);
@@ -2026,6 +2030,7 @@ impl BuildOwner {
                 self.inherited_dependencies
                     .register(record.dependent, provider);
             }
+            dependent_records = recorded;
             for provider in previous_providers {
                 let pruned = tree
                     .get_mut(provider)

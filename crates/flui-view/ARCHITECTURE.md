@@ -454,9 +454,11 @@ stashed and used after its element is defunct. Capability acquisition is split o
 
 ### Inherited reads are O(1) and field-precise; reading is depending
 
-**Rule.** Each element node carries its resolved inherited scope — an `Arc<HashMap>` built at
-mount, shared by refcount down runs of non-providers, re-inserted by each provider so nested
-providers of the same type shadow nearest-first. `find_inherited_provider` is one map lookup.
+**Rule.** Each element node carries its resolved inherited scope, built at mount and shared by
+refcount down runs of non-providers. A provider's scope is the table of everything above it,
+shared, and the few types the nearest providers added since that table was built; a provider
+copies the table only when those outgrow four. A nearer provider of a type shadows a farther one.
+`find_inherited_provider` scans the few and asks the table once.
 `#[derive(InheritedData)]` generates `FieldMask` constants per field; `InheritedView::changed_fields`
 diffs old and new data per field; `depend_on_field(mask, …)` records a masked dependency, and a
 provider update rebuilds only dependents whose mask intersects the change. The whole-type read
