@@ -60,7 +60,10 @@ fn acked_owner(n: usize) -> (SceneOwner, Vec<SceneNodeId>) {
         node: root,
         content: Arc::new(root_content.finish()),
     });
-    let id = owner.apply(SURFACE).expect("a well-formed patch applies");
+    let id = owner
+        .apply(SURFACE)
+        .expect("a well-formed patch applies")
+        .id;
     drop(owner.completed(Some(id)));
     (owner, leaves)
 }
@@ -78,7 +81,7 @@ fn move_to(
         node: leaf,
         placement: Placement::try_new(Offset::new(x, y)).expect("a finite offset"),
     });
-    owner.apply(surface).expect("a move applies")
+    owner.apply(surface).expect("a move applies").id
 }
 
 /// Whether one rect of the publication's damage covers the 10 x 10 leaf at
@@ -236,13 +239,24 @@ pub(crate) fn a_lost_completion_over_reports_and_never_under_reports() {
 pub(crate) fn a_surface_change_in_the_log_publishes_full() {
     let (mut owner, leaves) = acked_owner(1);
     move_to(&mut owner, leaves[0], 100.0, 100.0, SURFACE);
-    let resized = move_to(&mut owner, leaves[0], 200.0, 200.0, RESIZED);
+    move_to(&mut owner, leaves[0], 200.0, 200.0, RESIZED);
+    // Folding the version applied for the new surface keeps its full damage.
+    for step in 0..20 {
+        move_to(
+            &mut owner,
+            leaves[0],
+            10.0 * f64::from(step),
+            400.0,
+            RESIZED,
+        );
+    }
+    assert_eq!(owner.pending_len(), 16);
     assert_eq!(
         owner.publication().damage,
         DamageRegion::Full(FullReason::SurfaceChanged)
     );
 
-    drop(owner.completed(Some(resized)));
+    drop(owner.completed(Some(owner.current().id())));
     move_to(&mut owner, leaves[0], 300.0, 300.0, RESIZED);
     assert!(covers(owner.publication().damage, 300.0, 300.0));
 }
@@ -270,46 +284,68 @@ impl Drop for ReentryProbe {
 }
 
 /// The content an acknowledgement releases drops after the owner's borrow
-/// ends: a destructor that calls the owner again finds it free.
-pub(crate) fn a_released_content_drops_after_the_owner_is_released() {
+/// An owner in a cell whose pending log holds a replaced content with a
+/// probe in it, every apply's release handed to an `Outbox`; returns the
+/// version that replaced it.
+fn probed_owner() -> (Rc<RefCell<SceneOwner>>, SceneVersionId) {
     let (owner, leaves) = acked_owner(1);
     let owner = Rc::new(RefCell::new(owner));
     OWNER.set(Some(Rc::clone(&owner)));
     DROPPED.set(None);
-
-    let _annotated = {
-        let mut owner = owner.borrow_mut();
-        let mut writer = owner.writer();
-        let mut content = BoundaryContent::builder();
-        content.push_effect(
-            Layer::AnnotatedRegion(AnnotatedRegionLayer::new(
-                Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-                Arc::new(ReentryProbe),
-            )),
-            RenderId::new(1),
-            0,
-        );
-        content.pop_effect();
-        writer.push(SceneOp::Publish {
-            node: leaves[0],
-            content: Arc::new(content.finish()),
+    let mut annotated = BoundaryContent::builder();
+    annotated.push_effect(
+        Layer::AnnotatedRegion(AnnotatedRegionLayer::new(
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            Arc::new(ReentryProbe),
+        )),
+        RenderId::new(1),
+        0,
+    );
+    annotated.pop_effect();
+    let mut replaced = None;
+    for content in [annotated.finish(), BoundaryContent::default()] {
+        commit(&owner, |owner, outbox| {
+            owner.writer().push(SceneOp::Publish {
+                node: leaves[0],
+                content: Arc::new(content),
+            });
+            let applied = owner.apply(SURFACE).expect("applies");
+            outbox.release(applied.released);
+            replaced = Some(applied.id);
         });
-        owner.apply(SURFACE).expect("applies")
-    };
-    let replaced = {
-        let mut owner = owner.borrow_mut();
-        owner.writer().push(SceneOp::Publish {
-            node: leaves[0],
-            content: Arc::new(BoundaryContent::default()),
-        });
-        owner.apply(SURFACE).expect("applies")
-    };
+    }
     // The log keeps the replaced content until the raster side moves past it.
     assert_eq!(DROPPED.get(), None);
+    (owner, replaced.expect("two applies ran"))
+}
 
+/// The content an acknowledgement releases drops after the owner's borrow
+/// ends: a destructor that calls the owner again finds it free.
+pub(crate) fn a_released_content_drops_after_the_owner_is_released() {
+    let (owner, replaced) = probed_owner();
     commit(&owner, |owner, outbox| {
         outbox.release(owner.completed(Some(replaced)));
     });
+    OWNER.set(None);
+    assert_eq!(DROPPED.get(), Some(true));
+}
+
+/// A raster side that never acknowledges: the log stays at sixteen entries,
+/// and the content a fold lets go of drops after the owner's borrow ends.
+pub(crate) fn a_fold_releases_its_contents_after_the_owner_is_released() {
+    let (owner, _) = probed_owner();
+    let root = owner.borrow().current().root();
+    for _ in 0..40 {
+        commit(&owner, |owner, outbox| {
+            owner.writer().push(SceneOp::Place {
+                node: root,
+                placement: Placement::ZERO,
+            });
+            outbox.release(owner.apply(SURFACE).expect("applies").released);
+        });
+        assert!(owner.borrow().pending_len() <= 16);
+    }
+    assert_eq!(owner.borrow().pending_log_folds(), 26);
     OWNER.set(None);
     assert_eq!(DROPPED.get(), Some(true));
 }

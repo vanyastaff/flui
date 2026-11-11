@@ -424,6 +424,10 @@ fn pending_log_contract() {
                 "a_released_content_drops_after_the_owner_is_released",
                 p::a_released_content_drops_after_the_owner_is_released,
             ),
+            (
+                "a_fold_releases_its_contents_after_the_owner_is_released",
+                p::a_fold_releases_its_contents_after_the_owner_is_released,
+            ),
         ],
     );
 }

@@ -180,7 +180,10 @@ pub(crate) fn a_node_named_by_two_slots_is_refused() {
     let c = writer.mint_node();
     writer.push(publish(c, empty()));
     writer.push(publish(b, slots(&[c, c])));
-    assert_eq!(owner.apply(SURFACE), Err(SceneError::TwoParents(c)));
+    assert_eq!(
+        owner.apply(SURFACE).map(|applied| applied.id),
+        Err(SceneError::TwoParents(c))
+    );
     assert_same_version(&before, owner.current());
 
     // Moving `a` under `b` while republishing the root without it is one
@@ -223,7 +226,7 @@ pub(crate) fn a_refused_patch_leaves_the_version_and_log_unchanged() {
     writer.push(publish(leaves[1], slots(&[fresh])));
     writer.push(SceneOp::Retire { node: leaves[2] });
     assert_eq!(
-        owner.apply(SURFACE),
+        owner.apply(SURFACE).map(|applied| applied.id),
         Err(SceneError::RetiredInUse(leaves[2]))
     );
 
@@ -269,7 +272,10 @@ pub(crate) fn an_id_never_published_is_unknown() {
         node: minted,
         placement: Placement::ZERO,
     });
-    assert_eq!(owner.apply(SURFACE), Err(SceneError::UnknownNode(minted)));
+    assert_eq!(
+        owner.apply(SURFACE).map(|applied| applied.id),
+        Err(SceneError::UnknownNode(minted))
+    );
 }
 
 /// An id of another live owner is refused before its slot and generation
@@ -354,7 +360,10 @@ pub(crate) fn an_exhausted_mint_renews_the_lineage_and_publishes_full() {
     let child = writer.mint_node();
     writer.push(publish(child, empty()));
     writer.push(publish(root, slots(&[child])));
-    assert_eq!(owner.apply(SURFACE), Err(SceneError::VersionsExhausted));
+    assert_eq!(
+        owner.apply(SURFACE).map(|applied| applied.id),
+        Err(SceneError::VersionsExhausted)
+    );
     assert_same_version(&before, owner.current());
 
     let lineage = owner.lineage();

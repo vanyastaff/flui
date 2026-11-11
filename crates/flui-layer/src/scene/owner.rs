@@ -139,6 +139,16 @@ pub struct ReleasedContents {
     version: Option<SceneVersion>,
 }
 
+/// An applied patch: the new version's id and what the owner let go of.
+#[derive(Debug)]
+pub struct Applied {
+    /// The version the patch made current.
+    pub id: SceneVersionId,
+    /// The version it replaced and the contents a fold of the pending log
+    /// released, to drop once the owner is free.
+    pub released: ReleasedContents,
+}
+
 /// Where a slot's generation stands in the owner's ledger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SlotState {
@@ -604,18 +614,17 @@ impl SceneOwner {
     }
 
     /// Applies the operations the writer buffered, all or nothing, and
-    /// returns the new version's id. The surface is the key the pending log
-    /// will group damage by; until it exists every publication is full.
-    ///
-    /// Runs no code the scene does not own while it changes the owner's
-    /// state: the version it replaces drops after the state is committed.
+    /// returns the new version's id with what the owner let go of: the
+    /// version it replaced and the contents a fold of the pending log
+    /// released. A caller holding the owner borrowed hands those to an
+    /// `Outbox`, so no destructor runs under the borrow.
     ///
     /// # Errors
     ///
     /// A [`SceneError`] naming the first operation the patch cannot apply;
     /// the version is unchanged, and the ids and content versions minted for
     /// the patch stay spent.
-    pub fn apply(&mut self, surface: SurfaceKey) -> Result<SceneVersionId, SceneError> {
+    pub fn apply(&mut self, surface: SurfaceKey) -> Result<Applied, SceneError> {
         #[cfg(feature = "testing")]
         let planted = self.planted.take();
         #[cfg(not(feature = "testing"))]
@@ -684,14 +693,18 @@ impl SceneOwner {
         self.surface = Some(surface);
         let folded = self.pending.push(id, self.patch_damage, replaced_contents);
         let replaced = std::mem::replace(&mut self.current, SceneVersion::from_inner(next));
-        // The version before and the contents a fold of the log let go drop
-        // last, with the owner's state committed. The contents this patch
-        // replaced live on in the log until a completion releases them.
+        // The contents this patch replaced live on in the log until a
+        // completion releases them; the version before and the contents a fold
+        // of the log let go are handed back, to drop once the owner is free.
         ops.clear();
         self.ops = ops;
-        drop(replaced);
-        drop(folded);
-        Ok(id)
+        Ok(Applied {
+            id,
+            released: ReleasedContents {
+                contents: folded,
+                version: Some(replaced),
+            },
+        })
     }
 }
 

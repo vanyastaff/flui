@@ -199,8 +199,9 @@ pub enum SceneError {
 }
 impl SceneOwner {
     pub fn writer(&mut self) -> SceneWriter<'_>;           // clears the reused operation buffer
-    pub fn apply(&mut self, surface: SurfaceKey) -> Result<SceneVersionId, SceneError>;
+    pub fn apply(&mut self, surface: SurfaceKey) -> Result<Applied, SceneError>;
 }
+pub struct Applied { pub id: SceneVersionId, pub released: ReleasedContents }
 impl SceneWriter<'_> {
     pub fn mint_node(&mut self) -> SceneNodeId;
     pub fn next_content_version(&mut self) -> Result<ContentVersion, SceneError>;
@@ -222,7 +223,9 @@ slot that names its own ancestor (found by walking up from the parent, at most a
 the version holds) and a depth past `u32`. `apply` runs no code the scene does not own and hashes
 nothing: its working sets are slot-indexed, kept by the owner and cleared per patch. A republished
 content costs the slots it gains or loses, since a child named before and after keeps its parent
-unwritten. On `Err` the version and the pending log are as they were, and the node ids and content
+unwritten. On `Ok` it hands back, beside the new id, the version it replaced and the contents a
+fold of the pending log let go of (§7), to drop once the owner is free. On `Err` the version and
+the pending log are as they were, and the node ids and content
 versions minted for the refused patch stay spent.
 
 A node stores its parent and depth, so the common ancestor of a leader and a follower is found by
@@ -368,7 +371,7 @@ publication's base is `acked` and its damage is the union of the log: `Full(Firs
 base, `Full(SurfaceChanged)` when the log spans two surface keys, since a version applied for another
 key than the one before carries that damage itself. A seventeenth entry folds the two
 oldest into one (the union of their damage, the newer id, the newer contents; the older contents
-are let go), counted as `pending_log_folds`: the
+go back with the apply's `Applied::released`), counted as `pending_log_folds`: the
 damage stays relative to the same base and only over-reports, so a long raster stall costs a larger
 region, never a lost one, and never more than sixteen entries of buffers. `renew` takes a new
 lineage and empties the version, the slots and the
@@ -396,7 +399,7 @@ clear. `RasterCompletion::rastered` reports the held version through the reliabl
 `completed` moves `acked` forward only, ignores an id of another lineage, drops the log entries at
 or below `acked`, and hands back the contents they replaced as `ReleasedContents`, which a caller
 holding the owner borrowed passes to an `Outbox` (ADR-0287), so their destructors (an annotation's
-value is user code) run once the owner is free; `renew` hands back the old version and log the same
+value is user code) run once the owner is free; `apply` and `renew` hand back the version they replace the same
 way. A buffer the owner holds alone goes
 back to the recorder's pool (`Arc::try_unwrap`), any other is dropped. Buffers come back with the
 completion while only the `Copy` id crosses up (ADR-0045 §1). A refused submit changes nothing: the

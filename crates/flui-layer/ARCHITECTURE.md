@@ -239,7 +239,8 @@ the acknowledged one as its base and the union of the log as its damage, full wi
 log holds sixteen entries; a seventeenth folds the two oldest under the newer id and lets go of the
 older contents, so a raster stall over-reports damage and never holds more than sixteen entries of
 buffers. An acknowledgement moves forward only and ignores another lineage or a version never
-applied. `completed` and `renew` return what they release as `ReleasedContents`, which a caller
+applied. `apply` (in `Applied::released`), `completed` and `renew` return what they release as
+`ReleasedContents`, the version an apply replaced and the contents a fold let go of included, which a caller
 holding the owner in a `RefCell` passes to an `Outbox`: a released annotation value's destructor is
 user code and finds the owner free.
 
