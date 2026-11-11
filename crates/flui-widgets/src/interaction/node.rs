@@ -8,14 +8,17 @@
 //! instead: one element with one [`RenderInteractive`] (ADR-0322 §1).
 //!
 //! The node restates none of the wrappers' logic. Its state owns the hosts
-//! they run on ([`FocusHost`], [`RecognizerHost`]) and drives the parts of
+//! they run on (`FocusHost`, `RecognizerHost`) and drives the parts of
 //! its render object with the views that drive them alone ([`Listener`],
 //! [`Semantics`]), so a control on the node behaves as the same control
 //! composed from wrappers does: the same recognizers in the arena, the same
 //! focus node, the same semantics.
 //!
-//! It is not an authoring surface. It has no styling and no layout, and
-//! nothing outside this crate names it.
+//! It is not an authoring surface. It has no styling and no layout. It is
+//! `pub` only because the official catalogs (`flui-material`,
+//! `flui-cupertino`) are separate crates: the module is `#[doc(hidden)]`, in
+//! no prelude, outside the API contract, and may change in any release
+//! (ADR-0322 §1). Applications compose the public wrappers.
 
 use std::any::TypeId;
 use std::rc::Rc;
@@ -23,6 +26,7 @@ use std::sync::Arc;
 
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::focus::FocusNode;
+use flui_interaction::{PointerDispatch, TapDetails, TapDownDetails, TapUpDetails};
 use flui_objects::{FocusRingStyle, RenderInteractive, RenderListener, SubtreeAnchor};
 use flui_platform::TargetPlatform;
 use flui_rendering::RenderUpdateImpact;
@@ -40,12 +44,12 @@ use super::actions::{
     shared_action,
 };
 use super::focus::{FocusChangeHandler, render_box_rect_provider};
-use super::focus_host::{FocusConfig, FocusHost};
+use super::focus_host::{FocusConfig, FocusHost, FocusNodeOwnership};
 use super::focus_ring::DefaultFocusRingStyle;
-use super::gesture_detector::TapSlot;
-use super::listener::release_targets;
+use super::gesture_detector::{PressCallbacks, PressSource, TapSlot};
+use super::listener::{ContactCallbacks, pointer_callback, release_targets};
 use super::raw_gesture_detector::RecognizerHost;
-use crate::support::EventCallback;
+use crate::support::{event_callback, value_callback};
 use crate::widget_state::{WidgetState, WidgetStates, WidgetStatesController};
 use crate::{Listener, MouseRegion, Semantics, SemanticsRole};
 
@@ -54,11 +58,13 @@ use crate::{Listener, MouseRegion, Semantics, SemanticsRole};
 /// Every part is optional and an absent one costs nothing: no recognizer, no
 /// focus node, no semantics configuration, no ring.
 #[derive(Clone)]
-pub(crate) struct InteractiveNode {
+pub struct InteractiveNode {
     behavior: HitTestBehavior,
     /// The one switch of ADR-0322 §2.
     enabled: bool,
-    on_tap: Option<EventCallback>,
+    /// The tap family and the raw contact ends: the control's value, shared,
+    /// so a control that only taps hands the one it already holds.
+    press: Option<Rc<dyn NodePress>>,
     focus: Option<FocusConfig>,
     focus_ring: bool,
     /// Shared, so a clone of the view copies no list.
@@ -93,7 +99,7 @@ impl std::fmt::Debug for InteractiveNode {
         f.debug_struct("InteractiveNode")
             .field("behavior", &self.behavior)
             .field("enabled", &self.enabled)
-            .field("on_tap", &self.on_tap.is_some())
+            .field("press", &self.press.is_some())
             .field("focus", &self.focus.is_some())
             .field("actions", &self.actions.len())
             .field("semantics", &self.semantics.is_some())
@@ -102,26 +108,159 @@ impl std::fmt::Debug for InteractiveNode {
     }
 }
 
+/// What a node's pointer part reads of its control: the tap family its press
+/// group mounts and, for a control that follows the contact itself, the
+/// raw ends of that contact.
+pub(super) trait NodePress: PressSource {
+    /// The raw ends of a contact the control observes, delivered before the
+    /// recognizers see the same event, as a [`Listener`] delivers them.
+    fn contact(&self) -> Option<&ContactCallbacks> {
+        None
+    }
+}
+
+/// The tap family of a control on an [`InteractiveNode`]: the slots of
+/// [`GestureDetector`](crate::GestureDetector) of that family, mounted as
+/// the same press group, so the control competes in the gesture arena
+/// exactly as a detector with these slots does. A control that follows the
+/// contact past the recognizer (a ripple that ends at the last button's
+/// release) adds the raw ends a [`Listener`] reports.
+#[derive(Clone, Default)]
+pub struct ControlTap {
+    press: PressCallbacks,
+    contact: ContactCallbacks,
+}
+
+impl std::fmt::Debug for ControlTap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlTap")
+            .field("tap", &self.press.tap.is_some())
+            .field("tap_down", &self.press.tap_down.is_some())
+            .field("tap_up", &self.press.tap_up.is_some())
+            .field("tap_cancel", &self.press.tap_cancel.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ControlTap {
+    /// No callback yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// As [`GestureDetector::on_tap`](crate::GestureDetector::on_tap).
+    #[must_use]
+    pub fn on_tap<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.press.tap = Some(event_callback(callback));
+        self
+    }
+
+    /// As [`GestureDetector::on_tap_down`](crate::GestureDetector::on_tap_down).
+    #[must_use]
+    pub fn on_tap_down<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, TapDownDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.press.tap_down = Some(value_callback(callback));
+        self
+    }
+
+    /// As [`GestureDetector::on_tap_up`](crate::GestureDetector::on_tap_up).
+    #[must_use]
+    pub fn on_tap_up<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, TapUpDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.press.tap_up = Some(value_callback(callback));
+        self
+    }
+
+    /// As [`GestureDetector::on_tap_cancel`](crate::GestureDetector::on_tap_cancel).
+    #[must_use]
+    pub fn on_tap_cancel<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, TapDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.press.tap_cancel = Some(value_callback(callback));
+        self
+    }
+
+    /// As [`Listener::on_pointer_up`].
+    #[must_use]
+    pub fn on_pointer_up<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.contact.up = Some(pointer_callback(callback));
+        self
+    }
+
+    /// As [`Listener::on_pointer_move`].
+    #[must_use]
+    pub fn on_pointer_move<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.contact.moved = Some(pointer_callback(callback));
+        self
+    }
+
+    /// As [`Listener::on_pointer_cancel`].
+    #[must_use]
+    pub fn on_pointer_cancel<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.contact.cancel = Some(pointer_callback(callback));
+        self
+    }
+}
+
+impl PressSource for ControlTap {
+    fn callbacks(&self) -> PressCallbacks {
+        self.press.clone()
+    }
+}
+
+impl NodePress for ControlTap {
+    fn contact(&self) -> Option<&ContactCallbacks> {
+        let contact = &self.contact;
+        (contact.up.is_some() || contact.moved.is_some() || contact.cancel.is_some())
+            .then_some(contact)
+    }
+}
+
 impl InteractiveNode {
     /// A node around `child` with no behaviour: hit where its child is, and
     /// transparent to everything else.
-    pub(crate) fn new(child: BoxedView) -> Self {
+    pub fn new(child: impl IntoView) -> Self {
         Self {
             behavior: HitTestBehavior::DeferToChild,
             enabled: true,
-            on_tap: None,
+            press: None,
             focus: None,
             focus_ring: false,
             actions: Rc::default(),
             semantics: None,
             states: None,
-            child,
+            child: child.into_view().boxed(),
         }
     }
 
     /// Where the node is hit, as [`Listener::behavior`] says.
     #[must_use]
-    pub(crate) fn behavior(mut self, behavior: HitTestBehavior) -> Self {
+    pub fn behavior(mut self, behavior: HitTestBehavior) -> Self {
         self.behavior = behavior;
         self
     }
@@ -133,7 +272,7 @@ impl InteractiveNode {
     /// semantics say disabled and offer no action. The node is still hit
     /// where it was, so a disabled control covers what is beneath it.
     #[must_use]
-    pub(crate) fn enabled(mut self, enabled: bool) -> Self {
+    pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
     }
@@ -142,8 +281,14 @@ impl InteractiveNode {
     /// recognizer and the click the semantics offer both follow it, so a
     /// disabled control has neither, and a contact in flight when the switch
     /// turns ends in nothing.
-    fn live_tap(&self) -> Option<EventCallback> {
-        self.on_tap.clone().filter(|_| self.enabled)
+    fn live_press(&self) -> Option<&Rc<dyn NodePress>> {
+        self.press.as_ref().filter(|_| self.enabled)
+    }
+
+    /// [`live_press`](Self::live_press) as the tap slot reads it.
+    fn live_tap(&self) -> Option<Rc<dyn PressSource>> {
+        self.live_press()
+            .map(|press| Rc::clone(press) as Rc<dyn PressSource>)
     }
 
     /// The focus part's configuration: the control's own, conjoined with
@@ -185,13 +330,43 @@ impl InteractiveNode {
         )
     }
 
-    /// Call `callback` on a primary tap, recognized as
-    /// [`GestureDetector::on_tap`](crate::GestureDetector::on_tap)
-    /// recognizes it.
+    /// Answer the tap family `tap` sets, recognized as a
+    /// [`GestureDetector`](crate::GestureDetector) with those slots
+    /// recognizes it, and observe the raw contact ends it asks for.
     #[must_use]
-    pub(crate) fn on_tap(mut self, callback: EventCallback) -> Self {
-        self.on_tap = Some(callback);
+    pub fn tap(self, tap: ControlTap) -> Self {
+        self.press(Rc::new(tap))
+    }
+
+    /// [`tap`](Self::tap) from a value the control already shares: a button
+    /// hands its press action, which answers the tap too, and allocates
+    /// nothing for it.
+    #[must_use]
+    pub(super) fn press(mut self, press: Rc<dyn NodePress>) -> Self {
+        self.press = Some(press);
         self
+    }
+
+    /// Host a focus node of its own, labelled `debug_label`, as a
+    /// [`Focus`](crate::Focus) does.
+    #[must_use]
+    pub fn focusable(self, debug_label: &'static str) -> Self {
+        self.focus(FocusConfig {
+            debug_label: Some(debug_label),
+            ..FocusConfig::new()
+        })
+    }
+
+    /// Host `node` instead of a focus node of its own, as
+    /// [`Focus::focus_node`](crate::Focus::focus_node) does: the node
+    /// attaches it, and still conjoins its `can_request_focus` with the
+    /// switch.
+    #[must_use]
+    pub fn focus_node(self, node: Rc<FocusNode>) -> Self {
+        self.focus(FocusConfig {
+            node_ownership: FocusNodeOwnership::ManagedExternal(node),
+            ..FocusConfig::new()
+        })
     }
 
     /// Host a focus node configured by `config`, as [`Focus`](crate::Focus)
@@ -211,7 +386,7 @@ impl InteractiveNode {
     /// visible focus, in the inherited [`DefaultFocusRingStyle`], as a
     /// [`FocusRing`](crate::FocusRing) under the `Focus` does.
     #[must_use]
-    pub(crate) fn focus_ring(mut self) -> Self {
+    pub fn focus_ring(mut self) -> Self {
         self.focus_ring = true;
         self
     }
@@ -223,7 +398,7 @@ impl InteractiveNode {
     /// takes it shared: each binding names the same action, and none holds
     /// a copy.
     #[must_use]
-    pub(crate) fn action<T: Intent, A: Action<T> + 'static>(mut self, action: &Rc<A>) -> Self {
+    pub fn action<T: Intent, A: Action<T> + 'static>(mut self, action: &Rc<A>) -> Self {
         Rc::make_mut(&mut self.actions).push(shared_action::<T, A>(action));
         self
     }
@@ -245,7 +420,7 @@ impl InteractiveNode {
     /// The node clears them from a controller it stops writing to, by a
     /// swap or by unmounting.
     #[must_use]
-    pub(crate) fn states(mut self, controller: WidgetStatesController) -> Self {
+    pub fn states(mut self, controller: WidgetStatesController) -> Self {
         self.states = Some(controller);
         self
     }
@@ -276,7 +451,7 @@ fn writing_focus(
 }
 
 /// The hosts of a mounted [`InteractiveNode`].
-pub(crate) struct InteractiveNodeState {
+pub struct InteractiveNodeState {
     tap: TapSlot,
     recognizers: RecognizerHost,
     focus: Option<FocusHost>,
@@ -298,6 +473,16 @@ pub(crate) struct InteractiveNodeState {
     /// writes `Disabled` from.
     states: Option<WidgetStatesController>,
     enabled: bool,
+}
+
+impl std::fmt::Debug for InteractiveNodeState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InteractiveNodeState")
+            .field("tap", &self.tap.is_set())
+            .field("focus", &self.focus.is_some())
+            .field("enabled", &self.enabled)
+            .finish_non_exhaustive()
+    }
 }
 
 impl InteractiveNodeState {
@@ -365,10 +550,16 @@ impl InteractiveNodeState {
     /// The listener that drives the pointer part: the recognizers, fed
     /// contacts only, as a `GestureDetector` feeds them.
     fn listener(&self, view: &InteractiveNode) -> Listener {
-        Listener::new()
+        let listener = Listener::new()
             .behavior(view.behavior)
             .contact_recognizers()
-            .recognizers(self.recognizers.recognizer_set(None))
+            .recognizers(self.recognizers.recognizer_set(None));
+        // The raw ends follow the switch with the tap: a disabled control
+        // observes no contact.
+        match view.live_press().and_then(|press| press.contact()) {
+            Some(contact) => listener.contact_callbacks(contact),
+            None => listener,
+        }
     }
 
     /// The semantics that drive the semantics part, assembled in one order
@@ -634,10 +825,9 @@ mod switch_tests {
     use std::any::TypeId;
     use std::rc::Rc;
 
-    use flui_view::{EventCx, ViewExt};
+    use flui_view::EventCx;
 
     use super::InteractiveNode;
-    use crate::support::event_callback;
     use crate::{Action, ActionOutcome, ActivateIntent, SizedBox};
 
     struct Willing;
@@ -649,8 +839,8 @@ mod switch_tests {
     }
 
     fn node(enabled: bool) -> InteractiveNode {
-        InteractiveNode::new(SizedBox::new(10.0, 10.0).boxed())
-            .on_tap(event_callback(|_cx| {}))
+        InteractiveNode::new(SizedBox::new(10.0, 10.0))
+            .tap(super::ControlTap::new().on_tap(|_cx| {}))
             .action::<ActivateIntent, Willing>(&Rc::new(Willing))
             .enabled(enabled)
     }

@@ -425,11 +425,11 @@ impl std::fmt::Debug for ForcePressSlot {
 /// The single-contact press callbacks: tap, secondary tap, long press and
 /// double tap. They share one composition, so they are one recognizer group.
 #[derive(Clone, Default)]
-struct PressCallbacks {
-    tap: Option<EventCallback>,
-    tap_down: Option<ValueCallback<TapDownDetails>>,
-    tap_up: Option<ValueCallback<TapUpDetails>>,
-    tap_cancel: Option<ValueCallback<TapDetails>>,
+pub(super) struct PressCallbacks {
+    pub(super) tap: Option<EventCallback>,
+    pub(super) tap_down: Option<ValueCallback<TapDownDetails>>,
+    pub(super) tap_up: Option<ValueCallback<TapUpDetails>>,
+    pub(super) tap_cancel: Option<ValueCallback<TapDetails>>,
     secondary_tap: Option<EventCallback>,
     long_press: Option<EventCallback>,
     double_tap: Option<EventCallback>,
@@ -440,6 +440,14 @@ struct PressCallbacks {
 }
 
 impl PressCallbacks {
+    /// The lone tap.
+    pub(super) fn tap(tap: Option<EventCallback>) -> Self {
+        Self {
+            tap,
+            ..Self::default()
+        }
+    }
+
     fn shape(&self) -> PressShape {
         PressShape {
             tap: self.tap.is_some()
@@ -1223,11 +1231,23 @@ impl GestureRecognizerFactory for PressFactory {
 }
 
 /// The tap of a control that mounts its own recognizers instead of building
-/// a [`GestureDetector`]: the press group a detector with only
-/// [`on_tap`](GestureDetector::on_tap) mounts, so the control competes in
-/// the gesture arena exactly as that detector does.
+/// a [`GestureDetector`]: the press group a detector with the same tap-family
+/// slots ([`on_tap`](GestureDetector::on_tap),
+/// [`on_tap_down`](GestureDetector::on_tap_down),
+/// [`on_tap_up`](GestureDetector::on_tap_up),
+/// [`on_tap_cancel`](GestureDetector::on_tap_cancel)) mounts, so the control
+/// competes in the gesture arena exactly as that detector does.
 pub(super) struct TapSlot {
     live: Rc<TapLive>,
+}
+
+/// Where a control's tap slot reads the callbacks of the tap family. A
+/// control that only taps hands the value it already shares (a button's
+/// press action), so the slot costs it nothing a bare callback would not.
+pub(super) trait PressSource {
+    /// The tap-family callbacks as they are now: cheap clones, read at
+    /// event time. Its implementations run no user code here.
+    fn callbacks(&self) -> PressCallbacks;
 }
 
 /// What a control's tap reads at event time. The one cell is the control's
@@ -1237,7 +1257,7 @@ struct TapLive(RefCell<TapCallbacks>);
 
 #[derive(Default)]
 struct TapCallbacks {
-    tap: Option<EventCallback>,
+    tap: Option<Rc<dyn PressSource>>,
     /// As [`PressCallbacks::pressed`].
     pressed: Option<WidgetStatesController>,
 }
@@ -1245,11 +1265,15 @@ struct TapCallbacks {
 impl PressLive for TapLive {
     fn press(&self) -> PressRead<'_> {
         let live = self.0.borrow();
-        PressRead::Owned(PressCallbacks {
-            tap: live.tap.clone(),
-            pressed: live.pressed.clone(),
-            ..PressCallbacks::default()
-        })
+        // Outside this module a source can only set the tap family, which
+        // is the group the slot mounts.
+        let mut press = live
+            .tap
+            .as_deref()
+            .map(PressSource::callbacks)
+            .unwrap_or_default();
+        press.pressed.clone_from(&live.pressed);
+        PressRead::Owned(press)
     }
 }
 
@@ -1273,10 +1297,10 @@ impl ErasedFactory for TapLive {
 }
 
 impl TapSlot {
-    /// A slot that calls `tap`, and writes the pressed state of its contact
-    /// to `pressed` while there is a tap to press.
+    /// A slot that calls the tap family `tap` gives, and writes the pressed
+    /// state of its contact to `pressed` while there is a tap to press.
     pub(super) fn new(
-        tap: Option<EventCallback>,
+        tap: Option<Rc<dyn PressSource>>,
         pressed: Option<&WidgetStatesController>,
     ) -> Self {
         Self {
@@ -1285,7 +1309,7 @@ impl TapSlot {
     }
 
     fn callbacks(
-        tap: Option<EventCallback>,
+        tap: Option<Rc<dyn PressSource>>,
         pressed: Option<&WidgetStatesController>,
     ) -> TapCallbacks {
         TapCallbacks {
@@ -1296,7 +1320,11 @@ impl TapSlot {
 
     /// Replace the callback. A live recognizer reads it at event time, so a
     /// contact in progress ends in the new one.
-    pub(super) fn set(&self, tap: Option<EventCallback>, pressed: Option<&WidgetStatesController>) {
+    pub(super) fn set(
+        &self,
+        tap: Option<Rc<dyn PressSource>>,
+        pressed: Option<&WidgetStatesController>,
+    ) {
         // The outgoing closure drops after the borrow is released: a
         // capture's `Drop` may reenter the control.
         let outgoing = self.live.0.replace(Self::callbacks(tap, pressed));
@@ -1314,7 +1342,12 @@ impl TapSlot {
     pub(super) fn click(&self) -> impl Fn(&mut EventCx<'_>) + 'static + use<> {
         let live = Rc::clone(&self.live);
         move |cx| {
-            let callback = live.0.borrow().tap.clone();
+            let callback = live
+                .0
+                .borrow()
+                .tap
+                .as_deref()
+                .and_then(|source| source.callbacks().tap);
             if let Some(callback) = callback {
                 callback(cx);
             }

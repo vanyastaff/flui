@@ -19,8 +19,8 @@ use flui_painting::display_list::DrawOp;
 use flui_painting::styling::Color;
 use flui_sdk::geometry::Offset;
 use flui_sdk::interaction::FocusNode;
-use flui_sdk::view::IntoView;
 use flui_sdk::view::SignalWriteExt;
+use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{FocusRingStyle, SizedBox, WidgetState, WidgetStatesController};
 use flui_testing::replay::MouseScript;
 
@@ -92,8 +92,7 @@ pub fn disabled_ink_well_does_not_fire_a_tap_callback() {
 
     assert!(
         !states.value().contains_state(WidgetState::Pressed),
-        "a disabled InkWell's GestureDetector has no on_tap closure at all, \
-         so no tap can ever be recognized",
+        "a disabled InkWell mounts no tap, so no tap can ever be recognized",
     );
 }
 
@@ -263,4 +262,351 @@ pub fn a_checkbox_shows_focus_with_its_halo_not_a_ring() {
         "Tab focused the checkbox"
     );
     assert!(!ring_painted(&laid), "the halo is its indicator");
+}
+
+/// How a test's well is made.
+#[derive(Clone, Copy, Debug)]
+enum Made {
+    /// [`InkWell`].
+    Well,
+    /// The public wrappers a well was composed from before it mounted one
+    /// node for its behaviours (ADR-0322): what it must stay
+    /// indistinguishable from to assistive technology and to the gesture
+    /// arena.
+    Wrappers,
+}
+
+type OnTap = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
+
+/// The pre-node `InkWell` without its ink: a `GestureDetector` with the tap
+/// family over a contact `Listener`, a `MouseRegion`, `Actions`, a `Focus`
+/// that takes focus while enabled, and a `FocusRing`.
+#[derive(Clone, StatelessView)]
+struct WrapperWell {
+    on_tap: Option<OnTap>,
+    child: BoxedView,
+}
+
+impl StatelessView for WrapperWell {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        use flui_sdk::widgets::{
+            Actions, ButtonActivateIntent, CallbackAction, Focus, FocusRing, GestureDetector,
+            Listener, MouseRegion,
+        };
+        let enabled = self.on_tap.is_some();
+        let mut actions =
+            Actions::new(Focus::new(FocusRing::new(self.child.clone())).can_request_focus(enabled));
+        let mut detector = GestureDetector::new();
+        if let Some(on_tap) = &self.on_tap {
+            let (activate, button_activate, tap) =
+                (Rc::clone(on_tap), Rc::clone(on_tap), Rc::clone(on_tap));
+            actions = actions
+                .action(CallbackAction::new(
+                    move |cx, _: &flui_sdk::widgets::ActivateIntent| activate(cx),
+                ))
+                .action(CallbackAction::new(move |cx, _: &ButtonActivateIntent| {
+                    button_activate(cx);
+                }));
+            detector = detector
+                .on_tap_down(|_cx, _details| {})
+                .on_tap_up(|_cx, _details| {})
+                .on_tap(move |cx| tap(cx))
+                .on_tap_cancel(|_cx, _details| {});
+        }
+        let surface = MouseRegion::new().child(actions);
+        if enabled {
+            detector
+                .child(
+                    Listener::new()
+                        .on_pointer_up(|_cx, _dispatch| {})
+                        .child(surface),
+                )
+                .boxed()
+        } else {
+            detector.child(surface).boxed()
+        }
+    }
+}
+
+fn well(made: Made, on_tap: Option<OnTap>, child: impl IntoView) -> BoxedView {
+    match made {
+        Made::Well => {
+            let mut well = InkWell::new(child);
+            if let Some(on_tap) = on_tap {
+                well = well.on_tap(move |cx| on_tap(cx));
+            }
+            well.boxed()
+        }
+        Made::Wrappers => WrapperWell {
+            on_tap,
+            child: child.into_view().boxed(),
+        }
+        .boxed(),
+    }
+}
+
+type TapLog = Rc<std::cell::RefCell<Vec<&'static str>>>;
+
+fn logging(log: &TapLog, entry: &'static str) -> OnTap {
+    let log = Rc::clone(log);
+    Rc::new(move |_cx| log.borrow_mut().push(entry))
+}
+
+/// A well's accessibility tree is the wrappers' tree, enabled and disabled,
+/// focused and not.
+///
+/// Red-check: drop the node's focus annotation (the focused well loses
+/// `focusable`/`focused`) or its click (the enabled well offers none).
+pub fn ink_well_a11y_tree_matches_wrappers() {
+    use flui_sdk::widgets::{Column, Text};
+    use flui_testing::Action;
+
+    for enabled in [true, false] {
+        for focused in [false, true] {
+            let tree = |made: Made| {
+                let log = TapLog::default();
+                let on_tap = enabled.then(|| logging(&log, "tap"));
+                let mut laid = lay_out(
+                    Column::new((Text::new("Above"), well(made, on_tap, Text::new("Press")))),
+                    common::loose(400.0),
+                );
+                if focused {
+                    let manager = laid.focus_manager();
+                    let _ = laid.enter_owner_scope(|| manager.dispatch_key_event(&tab()));
+                    laid.pump();
+                    assert_eq!(
+                        manager.primary_focus().is_some(),
+                        enabled,
+                        "{made:?}: Tab reaches an enabled well only"
+                    );
+                }
+                laid.enable_semantics();
+                laid.pump();
+                let tree = laid
+                    .a11y_tree()
+                    .expect("semantics enabled before the frame");
+                let clicks = tree
+                    .find_by_label("Press")
+                    .expect("the well's label is one node")
+                    .supports_action(Action::Click);
+                assert_eq!(
+                    clicks, enabled,
+                    "{made:?}: only an enabled well offers a click"
+                );
+                canonical_ids(&format!("{:#?}", tree.raw()))
+            };
+            assert_eq!(
+                tree(Made::Well),
+                tree(Made::Wrappers),
+                "enabled={enabled} focused={focused}: the well's tree is the wrappers' tree"
+            );
+        }
+    }
+}
+
+/// One contact with a scene.
+#[derive(Clone, Copy, Debug)]
+enum Contact {
+    Tap,
+    DragPastSlop,
+    LongPress,
+    Cancel,
+}
+
+/// Makes `contact` starting at `(x, y)` and settles.
+fn contact(laid: &mut LaidOut, contact: Contact, x: f64, y: f64) {
+    laid.dispatch_pointer_down(x, y);
+    match contact {
+        Contact::Tap => laid.dispatch_pointer_up(x, y),
+        Contact::DragPastSlop => {
+            for step in 1..=6 {
+                let moved = y - 10.0 * f64::from(step);
+                laid.dispatch_pointer_move_after(x, moved, Duration::from_millis(16));
+                laid.pump_for(Duration::from_millis(16));
+            }
+            laid.dispatch_pointer_up(x, y - 60.0);
+        }
+        Contact::LongPress => {
+            laid.pump_for(Duration::from_millis(800));
+            laid.dispatch_pointer_up(x, y);
+        }
+        Contact::Cancel => laid.dispatch_pointer_cancel(),
+    }
+    laid.pump_for(Duration::from_millis(400));
+}
+
+/// A well in a scrollable and a well inside a well enter the arena as the
+/// wrappers do: a tap taps, a drag past the slop scrolls and taps nothing,
+/// a long press and a cancel end as they do for the wrappers, and the inner
+/// well wins a contact over it while the outer one wins a contact beside it.
+///
+/// Red-check: mount the node's tap without its arena admission (the drag
+/// taps the well, or the scrollable never wins).
+pub fn ink_well_contests_like_gesture_detector() {
+    use flui_sdk::widgets::{Column, SingleChildScrollView, Text};
+
+    for made_contact in [
+        Contact::Tap,
+        Contact::DragPastSlop,
+        Contact::LongPress,
+        Contact::Cancel,
+    ] {
+        let scrolled = |made: Made| {
+            let log = TapLog::default();
+            let scene = SizedBox::new(300.0, 200.0).child(SingleChildScrollView::new().child(
+                Column::new((
+                    well(
+                        made,
+                        Some(logging(&log, "tap")),
+                        SizedBox::new(300.0, 60.0).child(Text::new("Press")),
+                    ),
+                    SizedBox::new(300.0, 2_000.0),
+                )),
+            ));
+            let mut laid = lay_out(scene, common::loose(400.0));
+            let label = laid.find_text("Press").expect("the well's label");
+            let before = laid.absolute_offset(label);
+            contact(&mut laid, made_contact, 150.0, 30.0);
+            let label = laid.find_text("Press").expect("the well's label");
+            let taps = log.borrow().clone();
+            (taps, before != laid.absolute_offset(label))
+        };
+        let (on_node, wrapped) = (scrolled(Made::Well), scrolled(Made::Wrappers));
+        assert_eq!(on_node, wrapped, "{made_contact:?} in a scrollable");
+        match made_contact {
+            Contact::Tap => assert_eq!(on_node, (vec!["tap"], false)),
+            Contact::DragPastSlop => assert_eq!(on_node, (vec![], true), "the drag scrolls"),
+            Contact::Cancel => assert_eq!(on_node, (vec![], false)),
+            Contact::LongPress => {}
+        }
+        for (place, y) in [("inner", 60.0), ("outer", 20.0)] {
+            let nested = |made: Made| {
+                let log = TapLog::default();
+                let inner = well(
+                    made,
+                    Some(logging(&log, "inner")),
+                    SizedBox::new(200.0, 40.0),
+                );
+                let outer = well(
+                    made,
+                    Some(logging(&log, "outer")),
+                    Column::new((SizedBox::new(200.0, 40.0), inner)),
+                );
+                let mut laid = lay_out(outer, common::loose(400.0));
+                contact(&mut laid, made_contact, 100.0, y);
+                log.borrow().clone()
+            };
+            let on_node = nested(Made::Well);
+            assert_eq!(
+                on_node,
+                nested(Made::Wrappers),
+                "{made_contact:?} over the {place} well"
+            );
+            if matches!(made_contact, Contact::Tap) {
+                assert_eq!(on_node, [place], "a tap taps the well under it");
+            }
+        }
+    }
+}
+
+/// A disabled well is disabled in every part (ADR-0322 §2): no tap, no
+/// focus, `Disabled` and no `Hovered`, still hit where it is, and an Enter
+/// that reaches it from a focused descendant stops at it instead of
+/// activating an enclosing binding.
+///
+/// Red-check: give the node's bindings to a disabled well as they are (the
+/// descendant's Enter taps a disabled well), or drop them (it reaches the
+/// enclosing binding).
+pub fn a_disabled_ink_well_is_disabled_in_every_part() {
+    use flui_sdk::widgets::{
+        Action as IntentAction, ActionOutcome, Actions, ActivateIntent, Focus, GestureDetector,
+        Stack,
+    };
+
+    struct Outer(TapLog);
+    impl IntentAction<ActivateIntent> for Outer {
+        fn invoke(
+            &self,
+            _cx: &mut flui_sdk::view::EventCx<'_>,
+            _intent: &ActivateIntent,
+        ) -> ActionOutcome {
+            self.0.borrow_mut().push("outer");
+            ActionOutcome::Performed
+        }
+    }
+
+    let log = TapLog::default();
+    let states = WidgetStatesController::default();
+    let inner = FocusNode::with_debug_label("inside-a-disabled-well");
+    let beneath = logging(&log, "beneath");
+    let mut laid = lay_out(
+        Actions::new(Stack::new((
+            GestureDetector::new()
+                .on_tap(move |cx| beneath(cx))
+                .child(SizedBox::new(80.0, 40.0)),
+            InkWell::new(Focus::new(SizedBox::new(80.0, 40.0)).focus_node(Rc::clone(&inner)))
+                .states_controller(states.clone()),
+        )))
+        .action::<ActivateIntent>(Outer(Rc::clone(&log))),
+        tight(80.0, 40.0),
+    );
+    assert!(states.value().contains_state(WidgetState::Disabled));
+
+    laid.dispatch_pointer_hover(40.0, 20.0);
+    laid.pump();
+    assert!(
+        !states.value().contains_state(WidgetState::Hovered),
+        "a disabled well tracks no hover"
+    );
+    laid.dispatch_pointer_down(40.0, 20.0);
+    laid.dispatch_pointer_up(40.0, 20.0);
+    laid.pump();
+    assert!(
+        log.borrow().is_empty(),
+        "a disabled well covers the well beneath it and taps nothing: {:?}",
+        log.borrow()
+    );
+    assert!(!states.value().contains_state(WidgetState::Pressed));
+
+    let manager = laid.focus_manager();
+    let _ = laid.enter_owner_scope(|| manager.dispatch_key_event(&tab()));
+    laid.pump();
+    assert!(
+        inner.has_primary_focus(),
+        "Tab skips the disabled well and reaches the focusable inside it"
+    );
+    let _ = laid.enter_owner_scope(|| manager.dispatch_key_event(&enter()));
+    laid.pump();
+    assert!(
+        log.borrow().is_empty(),
+        "the Enter stops at the disabled well: {:?}",
+        log.borrow()
+    );
+}
+
+/// `tree` with each node id replaced by the order it first appears in. An
+/// id is the slot the semantics arena gave the node, which follows the order
+/// the nodes were assembled in, not anything a platform reads of them: the
+/// node and the wrappers assemble one tree in a different order.
+fn canonical_ids(tree: &str) -> String {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut out = String::with_capacity(tree.len());
+    let mut rest = tree;
+    while let Some(at) = rest.find('#') {
+        out.push_str(&rest[..=at]);
+        rest = &rest[at + 1..];
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let (id, tail) = rest.split_at(digits);
+        let index = seen
+            .iter()
+            .position(|known| *known == id)
+            .unwrap_or_else(|| {
+                seen.push(id);
+                seen.len() - 1
+            });
+        out.push_str(&index.to_string());
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
 }

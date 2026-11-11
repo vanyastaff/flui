@@ -164,6 +164,12 @@ which reads the focus node.
 - `FocusVisible`: the node holds focus and focus is shown (ADR-0079);
 - `Disabled`: §2.
 
+An activation a control runs (a tap, a key, an assistive request) may hold `Pressed` past its
+contact for the activation's duration, as Flutter's `InkWell` holds it for `_activationDuration`
+(100 ms): the control sets `Pressed` before the activation's callback and clears it when the hold
+ends. That hold is the one state a control writes beside its node, and the node clears it with the
+rest when it unmounts or stops writing to the controller.
+
 `Focused` is "holds focus, by any cause" and `FocusVisible` is the focus a user can see; the
 readers that mean "show it" (state-layer overlays, rings, halos) resolve on `FocusVisible`.
 `WidgetStates` is a `u16`.
@@ -393,6 +399,13 @@ render object or already owns the element the value comes from.
   `nested_raw_button_contests_like_gesture_detector`: a table of contacts (tap, drag past slop,
   long press, cancel) gives the same winner, the same callbacks and the same order as the
   wrappers.
+- `packages/flui-material/tests/perf.rs`, `perf_ink_well_over_text`: what an `InkWell` adds to its
+  `Text`, held by `packages/flui-material/perf/baseline/ink_well_over_text.toml`.
+- `ink_well_a11y_tree_matches_wrappers` and `ink_well_contests_like_gesture_detector`: an
+  `InkWell` on the node publishes the tree of the same well composed from the wrappers (node ids
+  compared by the order they first appear in, since an id is the arena slot the assembly order
+  gave it) and contests a scrollable and a nested well as they do;
+  `a_disabled_ink_well_is_disabled_in_every_part`: its rows of §2.
 - `disabled_raw_button_is_disabled_in_every_part`: one switch, the six rows of §2, including a
   disable during a contact. The pointer and
   action rows of a control that keeps its callback while disabled are the node's `switch_tests`
