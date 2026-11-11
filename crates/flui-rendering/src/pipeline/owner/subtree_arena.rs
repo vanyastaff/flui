@@ -73,7 +73,17 @@ use crate::{
     storage::{ErasedConstraints, RenderEntry, RenderNode, RenderTree},
 };
 
+use super::buffer_pool::BufferPool;
 use super::poison::{LayoutFailureKind, LayoutPoison};
+
+/// The child lists a layout walk checks out for each node it lays out, kept
+/// by the owner across frames so a pass over a settled tree allocates none.
+#[derive(Default)]
+pub(super) struct LayoutBuffers {
+    child_ids: BufferPool<RenderId>,
+    box_children: BufferPool<crate::protocol::ErasedChildState>,
+    sliver_children: BufferPool<crate::protocol::ErasedSliverChildState>,
+}
 
 // ============================================================================
 // NodePtr — raw-pointer alias of a single &mut RenderNode borrow
@@ -197,6 +207,8 @@ pub(super) struct SubtreeArena<'tree> {
     /// again.  Also gates the success sink below so a skip's stand-in
     /// `Ok` is never mistaken for a recovery.
     layout_poison: &'tree LayoutPoison,
+    /// The owner's child-list buffers, checked out per node and given back.
+    buffers: &'tree LayoutBuffers,
     /// The UI runtime's text context, lent to each node the walk lays out or
     /// measures: box leaves, box parents, and box intrinsic queries, whether
     /// a box or a sliver parent asked for them. Each loan records the node
@@ -252,6 +264,7 @@ impl<'tree> SubtreeArena<'tree> {
     pub(super) fn new(
         lease: TreeLease<'tree>,
         layout_poison: &'tree LayoutPoison,
+        buffers: &'tree LayoutBuffers,
         text: TextLender<'tree>,
         #[cfg(any(test, feature = "testing"))] parent_data_seeds: &'tree FxHashMap<
             RenderId,
@@ -269,6 +282,7 @@ impl<'tree> SubtreeArena<'tree> {
             laid_out_count: std::cell::Cell::new(0),
             acquired_count: std::cell::Cell::new(0),
             layout_poison,
+            buffers,
             text,
             poison_retries: RefCell::new(FxHashSet::default()),
             layout_failures: RefCell::new(Vec::new()),
@@ -507,6 +521,7 @@ impl<'tree> SubtreeArena<'tree> {
         render_tree: &'tree mut RenderTree,
         id: RenderId,
         layout_poison: &'tree LayoutPoison,
+        buffers: &'tree LayoutBuffers,
         text: TextLender<'tree>,
         #[cfg(any(test, feature = "testing"))] all_seeds: &'tree FxHashMap<
             RenderId,
@@ -520,6 +535,7 @@ impl<'tree> SubtreeArena<'tree> {
         Ok(Self::new(
             lease,
             layout_poison,
+            buffers,
             text,
             #[cfg(any(test, feature = "testing"))]
             all_seeds,
@@ -991,7 +1007,9 @@ unsafe fn layout_subtree_borrowed_impl(
                 });
             }
         };
-        let child_ids: Vec<RenderId> = entry.links().children().to_vec();
+        let children = entry.links().children();
+        let mut child_ids = arena.buffers.child_ids.checkout(children.len());
+        child_ids.extend_from_slice(children);
         let needs_layout_flag = entry.needs_layout();
         // Snapshot the cached geometry for the short-circuit check below;
         // no allocation — `Size` is `Copy`.
@@ -1091,10 +1109,12 @@ unsafe fn layout_subtree_borrowed_impl(
     // the child AFTER opening the parent's &mut.  Seeding here, while only
     // the `LayoutCycleGuard` (not any &mut) is live, removes the race.
     // -----------------------------------------------------------------------
-    let mut child_states: Vec<crate::protocol::ErasedChildState> = child_ids
-        .iter()
-        .map(|&cid| crate::protocol::ErasedChildState::new(cid))
-        .collect();
+    let mut child_states = arena.buffers.box_children.checkout(child_ids.len());
+    child_states.extend(
+        child_ids
+            .iter()
+            .map(|&cid| crate::protocol::ErasedChildState::new(cid)),
+    );
 
     if !is_leaf {
         // Seed each ChildState from the child's persisted RenderState.
@@ -1121,7 +1141,7 @@ unsafe fn layout_subtree_borrowed_impl(
         // (Phase 1's `parent_shared` has dropped), and each `child_ptr`
         // addresses a DISTINCT slot from `id`'s slot.  No live &mut overlaps
         // the shared reads below.
-        for cs in &mut child_states {
+        for cs in child_states.iter_mut() {
             // Skip children whose &mut is live on an ancestor frame.
             if arena.is_in_flight(cs.id) {
                 continue;
@@ -1196,17 +1216,10 @@ unsafe fn layout_subtree_borrowed_impl(
 
             // Descendant-error tracking flag.  Closure flips to `true` on any
             // descendant `RenderError`; stage 6 below skips `clear_needs_layout`
-            // when set so the parent stays dirty for next-frame retry.  Shared
-            // via `Arc<AtomicBool>` even though the closure never leaves this
-            // thread: `Arc` gives a cheap `Clone` for the recursive callback to
-            // carry alongside `arena_for_cb` without fighting the closure's own
-            // borrow of `arena`; a `Rc<Cell<bool>>` would work just as well
-            // soundness-wise but `Arc<AtomicBool>` was already the established
-            // idiom elsewhere in this walk (see the `layout_failures`/
-            // `layout_successes` sinks) before this callback existed.
-            let descendant_error_flag: std::sync::Arc<std::sync::atomic::AtomicBool> =
-                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let descendant_error_for_cb = std::sync::Arc::clone(&descendant_error_flag);
+            // when set so the parent stays dirty for next-frame retry. The
+            // callbacks borrow it: they run on this thread, inside this frame.
+            let descendant_error_flag = std::cell::Cell::new(false);
+            let descendant_error_for_cb = &descendant_error_flag;
 
             // Capture `&SubtreeArena` for the recursive callback. Neither the
             // capture nor the closure it is captured into needs `Send`/`Sync`:
@@ -1218,7 +1231,7 @@ unsafe fn layout_subtree_borrowed_impl(
             // the same thread that called `layout_dirty_root`, synchronously,
             // before this stack frame returns.
             let arena_for_cb: &SubtreeArena<'_> = arena;
-            let descendant_error_for_sliver_cb = std::sync::Arc::clone(&descendant_error_flag);
+            let descendant_error_for_sliver_cb = &descendant_error_flag;
             let cb_owned = move |child_id: RenderId,
                              child_constraints: BoxConstraints|
               -> crate::error::RenderResult<flui_foundation::geometry::Size> {
@@ -1243,7 +1256,7 @@ unsafe fn layout_subtree_borrowed_impl(
                         &err,
                         Some(child_constraints.into()),
                     );
-                    descendant_error_for_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                    descendant_error_for_cb.set(true);
                     tracing::error!(
                         parent = id.as_u64(),
                         ?child_id,
@@ -1340,8 +1353,7 @@ unsafe fn layout_subtree_borrowed_impl(
                                 &err,
                                 Some(sliver_constraints.into()),
                             );
-                            descendant_error_for_sliver_cb
-                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                            descendant_error_for_sliver_cb.set(true);
                             tracing::error!(
                                 parent = id.as_u64(),
                                 ?child_id,
@@ -1365,7 +1377,7 @@ unsafe fn layout_subtree_borrowed_impl(
             // layout callback.  Mirrors the sliver→box intrinsic callback wired in
             // `layout_sliver_subtree_borrowed_impl` — no extra pre-acquisition needed
             // because all child slots are already in the pre-acquired `SubtreeArena`.
-            let descendant_error_for_intrinsics_cb = std::sync::Arc::clone(&descendant_error_flag);
+            let descendant_error_for_intrinsics_cb = &descendant_error_flag;
             let box_intrinsic_cb_owned = move |child_id: RenderId,
                                                dimension: crate::storage::IntrinsicDimension,
                                                extent: f64|
@@ -1388,8 +1400,7 @@ unsafe fn layout_subtree_borrowed_impl(
                                 return Err(err);
                             }
                             arena_for_cb.note_layout_failure(id, child_id, &err, None);
-                            descendant_error_for_intrinsics_cb
-                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                            descendant_error_for_intrinsics_cb.set(true);
                             tracing::error!(
                                 parent = id.as_u64(),
                                 ?child_id,
@@ -1506,8 +1517,7 @@ unsafe fn layout_subtree_borrowed_impl(
 
             // Only clear NEEDS_LAYOUT if the recursive callback observed no
             // descendant failure.  Preserves retry-next-frame semantics.
-            let had_descendant_error =
-                descendant_error_flag.load(std::sync::atomic::Ordering::Relaxed);
+            let had_descendant_error = descendant_error_flag.get();
             if had_descendant_error {
                 tracing::debug!(
                     parent = id.as_u64(),
@@ -1568,7 +1578,7 @@ unsafe fn layout_subtree_borrowed_impl(
         let node: &RenderNode = unsafe { &*ptr.0 };
         node.advance_layout_generation()
     });
-    for cs in &child_states {
+    for cs in child_states.iter() {
         // Skip slots whose &mut is live on an ancestor frame (see above).
         if arena.is_in_flight(cs.id) {
             continue;
@@ -1684,7 +1694,9 @@ unsafe fn box_intrinsic_query_borrowed_impl(
         return Ok(hit);
     }
 
-    let child_ids: Vec<RenderId> = entry.links().children().to_vec();
+    let children = entry.links().children();
+    let mut child_ids = arena.buffers.child_ids.checkout(children.len());
+    child_ids.extend_from_slice(children);
 
     // Build the per-child parent-data slice before creating the child-query
     // closure. The owned boxes coexist with the `&mut` the closure captures
@@ -1874,7 +1886,9 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                 });
             }
         };
-        let child_ids: Vec<RenderId> = entry.links().children().to_vec();
+        let children = entry.links().children();
+        let mut child_ids = arena.buffers.child_ids.checkout(children.len());
+        child_ids.extend_from_slice(children);
         // Snapshotted in the block that already holds the shared borrow, as
         // in the Box walk.
         let is_repaint_boundary = entry.state().is_repaint_boundary();
@@ -1908,10 +1922,12 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // `ErasedSliverLayoutCtx` path is always taken for slivers so that the
     // context's `pending_child_requests` / `pending_retain_bands` sinks are
     // wired in — even when the current child list is empty.
-    let mut child_states: Vec<crate::protocol::ErasedSliverChildState> = child_ids
-        .iter()
-        .map(|&cid| crate::protocol::ErasedSliverChildState::new(cid))
-        .collect();
+    let mut child_states = arena.buffers.sliver_children.checkout(child_ids.len());
+    child_states.extend(
+        child_ids
+            .iter()
+            .map(|&cid| crate::protocol::ErasedSliverChildState::new(cid)),
+    );
 
     // -----------------------------------------------------------------------
     // Phase 1b — seed child states while NO &mut to the parent slot is live.
@@ -1939,7 +1955,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // dropped, each `child_ptr` addresses a DISTINCT slab slot from `id`'s
     // slot, and no live `&mut` covers those slots.
     // -----------------------------------------------------------------------
-    for cs in &mut child_states {
+    for cs in child_states.iter_mut() {
         // Skip children whose &mut is live on an ancestor frame.
         if arena.is_in_flight(cs.id) {
             continue;
@@ -1987,11 +2003,10 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             }
         };
 
-        let descendant_error_flag: std::sync::Arc<std::sync::atomic::AtomicBool> =
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let descendant_error_for_cb = std::sync::Arc::clone(&descendant_error_flag);
-        let descendant_error_for_box_cb = std::sync::Arc::clone(&descendant_error_flag);
-        let descendant_error_for_intrinsic_cb = std::sync::Arc::clone(&descendant_error_flag);
+        let descendant_error_flag = std::cell::Cell::new(false);
+        let descendant_error_for_cb = &descendant_error_flag;
+        let descendant_error_for_box_cb = &descendant_error_flag;
+        let descendant_error_for_intrinsic_cb = &descendant_error_flag;
         let arena_for_cb: &SubtreeArena<'_> = arena;
 
         let cb_owned = move |child_id: RenderId,
@@ -2018,7 +2033,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                             &err,
                             Some(child_constraints.into()),
                         );
-                        descendant_error_for_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                        descendant_error_for_cb.set(true);
                         tracing::error!(
                             parent = id.as_u64(),
                             ?child_id,
@@ -2068,8 +2083,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                                 &err,
                                 Some(child_constraints.into()),
                             );
-                            descendant_error_for_box_cb
-                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                            descendant_error_for_box_cb.set(true);
                             tracing::error!(
                                 parent = id.as_u64(),
                                 ?child_id,
@@ -2108,8 +2122,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                             return Err(err);
                         }
                         arena_for_cb.note_layout_failure(id, child_id, &err, None);
-                        descendant_error_for_intrinsic_cb
-                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                        descendant_error_for_intrinsic_cb.set(true);
                         tracing::error!(
                             parent = id.as_u64(),
                             ?child_id,
@@ -2201,7 +2214,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             has_parent,
         );
 
-        if descendant_error_flag.load(std::sync::atomic::Ordering::Relaxed) {
+        if descendant_error_flag.get() {
             tracing::debug!(
                 parent = id.as_u64(),
                 "layout_dirty_root: a sliver descendant errored during this walk; \
@@ -2244,7 +2257,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         let node: &crate::storage::RenderNode = unsafe { &*ptr.0 };
         node.advance_layout_generation()
     });
-    for cs in &child_states {
+    for cs in child_states.iter() {
         // Skip slots whose &mut is live on an ancestor frame.
         if arena.is_in_flight(cs.id) {
             continue;

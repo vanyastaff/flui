@@ -541,21 +541,28 @@ thread, counted by the target's `#[global_allocator]`: `allocations` (a
 `realloc` included), `reallocations` (buffers that outgrew their capacity) and
 `allocated_bytes`.
 `cargo xtask perf` runs that target with `FLUI_PERF_OUT` set and compares every
-count with `crates/flui-widgets/perf/baseline.toml`:
+count with its scenario's file under `crates/flui-widgets/perf/baseline/`:
 
 ```bash
 cargo nextest run -p flui-widgets --test perf   # the budget assertions alone
 cargo xtask perf                                # advisory: prints differences, exits 0
-cargo xtask perf --check                        # any difference fails
-cargo xtask perf --bless                        # rewrite the baseline from this run
+cargo xtask perf --check                        # a failing finding fails (see below)
+cargo xtask perf --bless                        # rewrite every scenario file from this run
 cargo xtask perf --instructions --check         # each perf_scaling_ scenario under callgrind (needs valgrind)
 cargo xtask perf --self-test                    # the comparison on planted fixtures (part of `cargo test -p xtask`)
 ```
 
-The comparison is exact: a count that rose is a regression, and one that fell
-is a finding too, until `--bless` locks the improvement in — otherwise a later
-regression back up to the old value would pass. Commit a re-blessed baseline
-with the change that moved it and say why in the PR. The run writes the merged
+The comparison is exact, and how a difference counts depends on the counter.
+A work counter (elements rebuilt, nodes laid out or painted, layers, frames) has
+to match its baseline: a rise is a regression, and a fall is work that went
+missing until `--bless` records it as meant, in the PR that changed it. A cost
+counter (a name with `alloc` or `bytes` in it) only has to stay at or under its
+baseline: a fall prints as an improvement and passes, so a PR that makes a
+scenario cheaper does not touch the baseline. After it merges, `cargo xtask
+perf --bless` on a fresh `main`, committed alone, ratchets the files down, and
+any thread may do it; from then on a rise back to the old value fails. Each
+scenario has its own file, so changes to different scenarios never conflict.
+The run writes the merged
 counts to `<target>/perf/current.toml`. A count is a function of the tree and
 the change, so it must not depend on a random seed: a per-frame table keyed by
 ids is slot-indexed (`flui_foundation::SlotIndex`, `SlotSet`) or hashed with a
