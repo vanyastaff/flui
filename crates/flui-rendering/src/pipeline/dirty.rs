@@ -15,8 +15,8 @@
 //! - **Paint** sorts deep-first so leaves emit their layers before
 //!   ancestor compositing decisions are taken.
 
-use flui_foundation::RenderId;
-use rustc_hash::{FxHashMap, FxHashSet};
+use flui_foundation::{RenderId, SlotIndex};
+use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
 // ============================================================================
@@ -45,18 +45,20 @@ impl DirtyNode {
 }
 
 // ============================================================================
-// DirtySet — Vec + HashSet for O(1) dedup
+// DirtySet — Vec + slot index for O(1) dedup
 // ============================================================================
 
-/// A single dirty set with O(1) dedup via a companion `FxHashSet`.
+/// A single dirty set with O(1) dedup through a slot-addressed index.
 ///
-/// The `Vec` preserves insertion order for sort-at-flush; the `HashSet`
-/// provides O(1) `contains` for the mark-dirty dedup check. Both are
-/// kept in sync on every push/evict/clear.
+/// The `Vec` preserves insertion order for sort-at-flush; the [`SlotIndex`]
+/// answers the mark-dirty dedup check by the node's slot and confirms the
+/// full id. Clearing costs the entries held, not the largest set ever held:
+/// a hash set's `clear` walks every bucket it grew during a mount that
+/// dirtied the whole tree, on every later frame.
 #[derive(Debug, Default)]
 pub struct DirtySet {
     vec: Vec<DirtyNode>,
-    set: FxHashSet<RenderId>,
+    index: SlotIndex<RenderId>,
 }
 
 impl DirtySet {
@@ -67,20 +69,29 @@ impl DirtySet {
     }
 
     /// Pushes a node if not already present. Returns `true` if inserted.
+    ///
+    /// An entry of the same slot and another generation is replaced: the
+    /// tree reused the slot, so that node is gone.
     #[inline]
     pub fn push(&mut self, node: DirtyNode) -> bool {
-        if self.set.insert(node.id) {
-            self.vec.push(node);
-            true
-        } else {
-            false
+        match self.index.occupant(&self.vec, node.id, |n| n.id) {
+            Some(position) if self.vec[position].id == node.id => false,
+            Some(position) => {
+                self.vec[position] = node;
+                true
+            }
+            None => {
+                self.index.insert(node.id, self.vec.len());
+                self.vec.push(node);
+                true
+            }
         }
     }
 
     /// Returns `true` if the set contains the given id.
     #[inline]
     pub fn contains(&self, id: &RenderId) -> bool {
-        self.set.contains(id)
+        self.index.find(&self.vec, *id, |n| n.id).is_some()
     }
 
     /// Returns the number of entries.
@@ -99,6 +110,7 @@ impl DirtySet {
     #[inline]
     pub fn sort_shallow_first(&mut self) {
         self.vec.sort_unstable_by_key(|n| n.depth);
+        self.index.reindex(self.vec.iter().map(|n| n.id));
     }
 
     /// Sorts the vector by depth (deep-first).
@@ -106,37 +118,34 @@ impl DirtySet {
     pub fn sort_deep_first(&mut self) {
         self.vec
             .sort_unstable_by_key(|n| std::cmp::Reverse(n.depth));
+        self.index.reindex(self.vec.iter().map(|n| n.id));
     }
 
-    /// Drains the vector, clearing both vec and set.
+    /// Drains the vector, clearing the index with it.
     pub fn drain(&mut self) -> std::vec::Drain<'_, DirtyNode> {
-        self.set.clear();
+        self.index.remove_all(self.vec.iter().map(|n| n.id));
         self.vec.drain(..)
     }
 
     /// Evicts entries whose id is in `removed`.
     #[inline]
     pub fn evict(&mut self, removed: &FxHashSet<RenderId>) {
-        self.set.retain(|id| !removed.contains(id));
-        self.vec.retain(|d| !removed.contains(&d.id));
+        self.retain(|d| !removed.contains(&d.id));
     }
 
-    /// Clears both vec and set. Vec retains capacity.
+    /// Clears the set. The vector and the index retain capacity.
     #[inline]
     pub fn clear(&mut self) {
+        self.index.remove_all(self.vec.iter().map(|n| n.id));
         self.vec.clear();
-        self.set.clear();
     }
 
     /// Appends all entries from `other` into `self`, clearing `other`.
     /// Duplicates in `other` that already exist in `self` are skipped.
     pub fn append(&mut self, other: &mut Self) {
-        for node in other.vec.drain(..) {
-            if self.set.insert(node.id) {
-                self.vec.push(node);
-            }
+        for node in other.drain() {
+            self.push(node);
         }
-        other.set.clear();
     }
 
     /// Returns a slice of the entries (for iteration).
@@ -152,15 +161,11 @@ impl DirtySet {
     }
 
     /// Retains only entries matching the predicate.
-    pub fn retain(&mut self, mut f: impl FnMut(&DirtyNode) -> bool) {
-        self.vec.retain(|d| {
-            if f(d) {
-                true
-            } else {
-                self.set.remove(&d.id);
-                false
-            }
-        });
+    ///
+    /// A panic in `f` leaves every entry queued and findable, in another
+    /// order (see [`SlotIndex::retain`]).
+    pub fn retain(&mut self, f: impl FnMut(&DirtyNode) -> bool) {
+        self.index.retain(&mut self.vec, |n| n.id, f);
     }
 }
 
@@ -215,15 +220,17 @@ pub struct PaintEntry {
     pub kind: PaintKind,
 }
 
-/// The paint phase's dirty queue: ordered entries plus an id → position index.
+/// The paint phase's dirty queue: ordered entries plus a slot → position index.
 ///
 /// The index is what lets `enqueue` UPGRADE an existing entry in place rather
 /// than push a second one for the same boundary, which is the whole reason this
-/// is not a `DirtySet`.
+/// is not a `DirtySet`. A lookup confirms the entry at the stored position
+/// carries the asked id, so an index left stale by a reorder answers "not
+/// queued" rather than handing back a neighbour's kind.
 #[derive(Debug, Default)]
 pub struct PaintQueue {
     entries: Vec<PaintEntry>,
-    index: FxHashMap<RenderId, usize>,
+    index: SlotIndex<RenderId>,
 }
 
 impl PaintQueue {
@@ -246,7 +253,13 @@ impl PaintQueue {
     /// `LayerUpdate` arriving for it is dropped rather than weakening it. An
     /// update arriving for an existing `LayerUpdate` appends its requester.
     pub fn enqueue(&mut self, id: RenderId, depth: usize, kind: PaintKind) -> bool {
-        if let Some(&position) = self.index.get(&id) {
+        let occupant = self.index.occupant(&self.entries, id, |e| e.id);
+        if let Some(position) = occupant.filter(|&p| self.entries[p].id != id) {
+            // The tree reused the slot: the queued node is gone.
+            self.entries[position] = PaintEntry { id, depth, kind };
+            return true;
+        }
+        if let Some(position) = occupant {
             let existing = &mut self.entries[position].kind;
             match (&mut *existing, kind) {
                 // A repaint subsumes any update, in either arrival order, and
@@ -272,33 +285,15 @@ impl PaintQueue {
     }
 
     /// Why `id` is queued, or `None` when it is not.
-    ///
-    /// The `debug_assert` is the one check this shape still needs and can
-    /// falsify. Collapsing the classification into the entry made "a boundary
-    /// is queued for exactly one reason" true by construction — there is no
-    /// second record left to disagree with — but it moved the risk to the
-    /// position index, which every reorder and removal invalidates. A stale
-    /// index does not fail loudly: it hands back a NEIGHBOUR's kind, so a
-    /// repaint reads as an update and grafts stale output. Checking the id
-    /// round-trips is what makes that observable.
     #[inline]
     pub fn kind_of(&self, id: RenderId) -> Option<&PaintKind> {
-        self.index.get(&id).map(|&i| {
-            let entry = &self.entries[i];
-            debug_assert_eq!(
-                entry.id, id,
-                "BUG: paint-queue index is stale — it points at another \
-                 entry, so this boundary's reason for being queued is being \
-                 read off the wrong one",
-            );
-            &entry.kind
-        })
+        self.position(id).map(|i| &self.entries[i].kind)
     }
 
     /// Whether `id` is queued at all.
     #[inline]
     pub fn contains(&self, id: &RenderId) -> bool {
-        self.index.contains_key(id)
+        self.position(*id).is_some()
     }
 
     /// Number of queued entries.
@@ -321,40 +316,29 @@ impl PaintQueue {
 
     /// Sorts deepest-first and rebuilds the index.
     ///
-    /// Every reordering or removal invalidates the positions the index holds,
-    /// so each one rebuilds it. Both are already at least O(n), so it costs
-    /// nothing asymptotically.
-    ///
-    /// Defensive, and measured to be so: removing either `reindex` call leaves
-    /// the whole suite green, because today nothing reads the index between a
-    /// reorder or removal and the next `clear` — `run_paint` sorts, walks under
-    /// `&self`, then clears. They stay because the type's contract is that the
-    /// index tracks positions, and the first caller to enqueue after a retain
-    /// would otherwise corrupt an unrelated entry in silence. The
-    /// `debug_assert` in [`Self::enqueue`] is what would catch that.
+    /// Every reordering or removal moves the positions the index holds, so
+    /// each one rewrites them; both are already O(n) in the queue's length.
     pub fn sort_deep_first(&mut self) {
         self.entries
             .sort_unstable_by_key(|e| std::cmp::Reverse(e.depth));
-        self.reindex();
+        self.index.reindex(self.entries.iter().map(|e| e.id));
     }
 
     /// Drops entries whose id is in `removed`.
     pub fn evict(&mut self, removed: &FxHashSet<RenderId>) {
-        self.entries.retain(|e| !removed.contains(&e.id));
-        self.reindex();
+        self.retain(|e| !removed.contains(&e.id));
     }
 
     /// Drops entries matching `remove_ids`.
     pub fn retain_not_in(&mut self, remove_ids: &FxHashSet<RenderId>) {
-        self.entries.retain(|e| !remove_ids.contains(&e.id));
-        self.reindex();
+        self.retain(|e| !remove_ids.contains(&e.id));
     }
 
-    /// Clears the queue, retaining capacity.
+    /// Clears the queue, retaining capacity. Costs the entries it held.
     #[inline]
     pub fn clear(&mut self) {
+        self.index.remove_all(self.entries.iter().map(|e| e.id));
         self.entries.clear();
-        self.index.clear();
     }
 
     /// Moves every entry of `other` into `self`, clearing `other`.
@@ -364,10 +348,10 @@ impl PaintQueue {
     /// same boundary with different kinds, and dropping the incoming one would
     /// lose a repaint that arrived mid-paint.
     pub fn append(&mut self, other: &mut Self) {
+        other.index.remove_all(other.entries.iter().map(|e| e.id));
         for entry in other.entries.drain(..) {
             self.enqueue(entry.id, entry.depth, entry.kind);
         }
-        other.index.clear();
     }
 
     /// The kind queued for `id`, cloned — a test-only read.
@@ -377,14 +361,16 @@ impl PaintQueue {
     /// second way to answer a question that already has one.
     #[cfg(test)]
     pub fn kind_for_test(&self, id: RenderId) -> Option<PaintKind> {
-        self.index.get(&id).map(|&i| self.entries[i].kind.clone())
+        self.kind_of(id).cloned()
     }
 
-    fn reindex(&mut self) {
-        self.index.clear();
-        for (position, entry) in self.entries.iter().enumerate() {
-            self.index.insert(entry.id, position);
-        }
+    #[inline]
+    fn position(&self, id: RenderId) -> Option<usize> {
+        self.index.find(&self.entries, id, |e| e.id)
+    }
+
+    fn retain(&mut self, keep: impl FnMut(&PaintEntry) -> bool) {
+        self.index.retain(&mut self.entries, |e| e.id, keep);
     }
 }
 
@@ -394,7 +380,7 @@ impl PaintQueue {
 
 /// Co-located dirty sets for the four pipeline phases that produce them.
 ///
-/// Each phase's set uses a `Vec` + `FxHashSet` pair for O(1) dedup
+/// Each phase's set uses a `Vec` + [`SlotIndex`] pair for O(1) dedup
 /// on `push` and ordered iteration at flush time. The vectors are
 /// non-shrinking on purpose -- once they grow to the peak working set,
 /// they keep that capacity for the next frame.

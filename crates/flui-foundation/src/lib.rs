@@ -200,6 +200,8 @@ pub mod ticket;
 pub mod panic;
 // A child's position during reconciliation (index plus previous sibling).
 pub mod slot;
+// Slot-addressed side tables: membership and position without hashing.
+pub mod slot_index;
 pub mod wasm;
 
 // Shared field-name vocabulary for structured tracing events. Foundation owns
@@ -295,6 +297,7 @@ pub use notifier::{
 };
 pub use rebuild_reason::{RebuildReason, RebuildReasons};
 pub use slot::IndexedSlot;
+pub use slot_index::{SlotIndex, SlotKey, SlotSet};
 // Generic typed channel
 pub use notifier_generic::{ArgCallback, Notifier};
 // WASM compatibility
