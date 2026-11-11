@@ -18,6 +18,7 @@ pub(crate) use anchored_drag::anchor_keys;
 #[cfg(test)]
 pub(crate) use interactive_viewer::zoom_keys;
 #[cfg(test)]
+#[cfg(test)]
 pub(crate) use refresh_indicator::refresh_keys;
 mod animated_list;
 mod collapsing_header;
@@ -33,6 +34,7 @@ pub mod nested;
 mod page_indicator;
 mod page_view;
 mod refresh_indicator;
+mod scroll_behavior;
 mod scroll_controller;
 mod scroll_owner;
 mod scroll_physics;
@@ -92,10 +94,14 @@ pub use refresh_indicator::{
     RefreshController, RefreshIndicator, RefreshIndicatorPhase, RefreshIndicatorState,
     RefreshIndicatorStyle, RefreshIntent,
 };
+pub use scroll_behavior::{
+    DefaultScrollBehavior, ScrollBehavior, ScrollBehaviorDetails, ScrollConfiguration,
+};
 pub use scroll_controller::{InvalidExtents, ScrollController};
 pub use scroll_owner::SharedSnapPolicy;
 pub use scroll_physics::{
-    BouncingScrollPhysics, ClampingScrollPhysics, ScrollMetrics, ScrollPhysics, SharedScrollPhysics,
+    BouncingScrollPhysics, ClampingScrollPhysics, ScrollMetrics, ScrollPhysics, ScrollPhysicsError,
+    ScrollPhysicsParameter, SharedScrollPhysics,
 };
 pub use scroll_position_scope::ScrollPositionScope;
 use scrollable::wheel_axis_delta;

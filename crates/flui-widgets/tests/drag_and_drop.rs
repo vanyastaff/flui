@@ -341,7 +341,7 @@ fn lift_alice_to(laid: &LaidOut, (x, y): (f64, f64)) {
 fn chord(letter: &str) -> SingleActivator {
     let activator = SingleActivator::character(letter);
     if matches!(
-        TargetPlatform::current(),
+        TargetPlatform::Unknown,
         TargetPlatform::MacOS | TargetPlatform::iOS
     ) {
         activator.meta()
@@ -826,7 +826,7 @@ pub(crate) fn the_cursor_shows_what_a_drop_would_do() {
     let mut laid = mount(&shared);
     laid.dispatch_pointer_hover(100.0, 30.0);
     assert_eq!(laid.cursor(), CursorIcon::Grab);
-    laid.dispatch_pointer_down(100.0, 30.0);
+    laid.dispatch_pointer_down_with_kind(100.0, 30.0, PointerKind::Mouse);
     laid.dispatch_pointer_move(100.0, 45.0);
     laid.dispatch_pointer_move(300.0, 120.0);
     assert_eq!(laid.cursor(), CursorIcon::Grabbing, "over nothing");

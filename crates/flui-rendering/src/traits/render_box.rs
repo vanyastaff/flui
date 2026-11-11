@@ -489,6 +489,11 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
         None
     }
 
+    /// Whether this type adds input regions in [`Self::describe_input_regions`]; a type
+    /// that calls `InputRegionSink::add` sets it, and a region from a type that does not
+    /// is never collected. See [`RenderObject::reports_input_regions`]. Default: `false`.
+    const REPORTS_INPUT_REGIONS: bool = false;
+
     /// The input regions this box claims, in local coordinates.
     ///
     /// Default: none. See [`RenderObject::describe_input_regions`].
@@ -912,6 +917,10 @@ where
         kind: flui_interaction::events::PointerKind,
     ) -> Option<flui_foundation::geometry::Rect> {
         <T as RenderBox>::hit_slop_area(self, size, kind)
+    }
+
+    fn reports_input_regions(&self) -> bool {
+        <T as RenderBox>::REPORTS_INPUT_REGIONS
     }
 
     fn describe_input_regions(

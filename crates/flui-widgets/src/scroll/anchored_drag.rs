@@ -32,7 +32,7 @@ use flui_animation::{
 use flui_foundation::geometry::{Axis, Offset, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerObserver, Subscription};
-use flui_interaction::{HapticsHandle, InputSequenceId};
+use flui_interaction::{HapticsHandle, InputSequenceId, PointerKindSet};
 use flui_painting::typography::TextDirection;
 use flui_platform::HapticFeedback;
 use flui_platform::haptics::{HapticRequest, HapticTiming};
@@ -51,7 +51,7 @@ use super::nested::{
     Participant, PlaneSource, ScrollCause, ScrollDevice, ScrollEndReason, ScrollStep,
 };
 use super::scroll_owner::{MotionHook, MoveOutcome, ScrollOwner, SharedSnapPolicy};
-use super::{ScrollController, Scrollable};
+use super::{ClampingScrollPhysics, ScrollController, Scrollable, SharedScrollPhysics};
 use crate::anchored_box::AnchoredBox;
 use crate::interaction::raw_gesture_detector::ContactAdmission;
 use crate::transitions::transform_view::AnimatedTransformView;
@@ -885,6 +885,11 @@ pub struct AnchoredDragState<K> {
     haptics: Rc<RefCell<Option<HapticsHandle>>>,
     pipeline: Rc<RefCell<Option<WeakPipelineCell>>>,
     motion: MotionHook,
+    /// The bounds of the drag: clamped at the outermost anchors whatever
+    /// `ScrollBehavior` the subtree names (ADR-0209 §9). Its devices are
+    /// every pointer kind for the same reason: a sheet or a swipe row takes a
+    /// mouse drag where a scroll view leaves it to selection.
+    physics: SharedScrollPhysics,
     ancestor: Rc<Ancestor>,
     /// The chain node the scrollables inside see, kept while the ancestor
     /// and the chain above stay the same.
@@ -977,6 +982,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
     ) -> Self {
         Self {
             motion: motion_hook(Rc::downgrade(&controller.inner), Rc::clone(&haptics)),
+            physics: Rc::new(ClampingScrollPhysics::new()),
             ancestor: Rc::new(Ancestor {
                 slot: Rc::clone(&controller.inner.slot),
                 pipeline: Rc::clone(&pipeline),
@@ -1256,6 +1262,8 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
             .scroll_direction(axis)
             .axis_direction(axis_direction)
             .snap_policy(Rc::clone(&anchors.policy))
+            .physics(Rc::clone(&self.physics))
+            .allowed_devices(PointerKindSet::all())
             .anchored(AnchoredLeaf {
                 motion: Rc::clone(&self.motion),
                 slot: Rc::clone(&controller.inner.slot),

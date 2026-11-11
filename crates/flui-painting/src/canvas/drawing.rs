@@ -25,8 +25,7 @@ use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
 
 use super::Canvas;
 use crate::display_list::{
-    BlendMode, ColorFilter, DisplayList, DrawCommand, DrawOp, FilterQuality, ImageRepeat, Paint,
-    PointMode, TextureId,
+    BlendMode, ColorFilter, DrawOp, FilterQuality, ImageRepeat, Paint, PointMode, TextureId,
 };
 use crate::display_list::{BlurSigma, ShapedParagraph};
 
@@ -55,12 +54,12 @@ impl Canvas {
     ///
     /// # Panics
     ///
-    /// In debug builds, panics if `radius` is negative or NaN.
+    /// In debug builds, panics if `radius` is negative. A NaN radius is
+    /// refused at record, like every non-finite value (ADR-0306 §4).
     pub fn draw_circle(&mut self, center: Point<f64>, radius: f64, paint: &Paint) {
         debug_assert!(
-            radius >= 0.0 && !radius.is_nan(),
-            "Circle radius must be non-negative and not NaN, got: {}",
-            radius
+            radius.is_nan() || radius >= 0.0,
+            "Circle radius must be non-negative, got: {radius}"
         );
 
         let paint = self.intern_paint(paint);
@@ -110,7 +109,8 @@ impl Canvas {
     /// coverage in `color`, blurred by `sigma` (ADR-0309 §3).
     ///
     /// `TextPainter::paint` records one per shadow of a span, before the
-    /// paragraph itself. A non-finite `offset` records nothing.
+    /// paragraph itself. A non-finite `offset` records nothing and is counted
+    /// in [`DisplayList::non_finite`](crate::DisplayList::non_finite).
     pub fn draw_paragraph_shadow(
         &mut self,
         paragraph: &Arc<ShapedParagraph>,
@@ -118,9 +118,6 @@ impl Canvas {
         color: Color,
         sigma: BlurSigma,
     ) {
-        if !(offset.dx.is_finite() && offset.dy.is_finite()) {
-            return;
-        }
         self.record(DrawOp::ParagraphShadow {
             paragraph: Arc::clone(paragraph),
             offset,
@@ -247,12 +244,12 @@ impl Canvas {
     ///
     /// # Panics
     ///
-    /// In debug builds, panics if `elevation` is negative or NaN.
+    /// In debug builds, panics if `elevation` is negative. A NaN elevation is
+    /// refused at record, like every non-finite value (ADR-0306 §4).
     pub fn draw_shadow(&mut self, path: &Path, color: Color, elevation: f64) {
         debug_assert!(
-            elevation >= 0.0 && !elevation.is_nan(),
-            "Shadow elevation must be non-negative and not NaN, got: {}",
-            elevation
+            elevation.is_nan() || elevation >= 0.0,
+            "Shadow elevation must be non-negative, got: {elevation}"
         );
 
         self.record(DrawOp::Shadow {
@@ -377,29 +374,5 @@ impl Canvas {
             blend_mode,
             paint,
         });
-    }
-
-    /// Replays a recorded display list under the current transform.
-    ///
-    /// Every command is re-stamped as `ctm * command.transform` — a picture
-    /// recorded at the origin lands wherever the canvas is currently
-    /// translated, scaled, or rotated to. Paints are shared by `Arc`, so a
-    /// replay allocates nothing per command beyond the command itself.
-    /// The picture inherits this canvas's clip, and its own clips are isolated
-    /// from subsequent draws. The picture must have balanced save/restore
-    /// scopes. An empty picture records nothing.
-    pub fn draw_picture(&mut self, picture: &DisplayList) {
-        if picture.is_empty() {
-            return;
-        }
-        self.save();
-        let ctm = self.transform;
-        for command in picture {
-            self.display_list.push(DrawCommand {
-                transform: ctm * command.transform,
-                op: command.op.clone(),
-            });
-        }
-        self.restore();
     }
 }

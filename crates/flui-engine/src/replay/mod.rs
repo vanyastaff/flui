@@ -12,14 +12,15 @@
 //! geometry runs share a render pass; textures and destination reads remain barriers.
 //! Uploading arenas once does not regroup or reorder their recorded ranges.
 //!
-//! ## Viewport bind-group layout identity
+//! ## Viewport bind-group layout
 //!
 //! `viewport_bind_group` is created in `GpuReplay::new` against
-//! `pipelines.viewport_bind_group_layout()`, the same layout object every
-//! pipeline in `PipelineSet` was built against.  wgpu
-//! requires bind group and pipeline to share the **exact same** layout object —
-//! substituting any structurally-equal-but-distinct layout causes a validation
-//! error.  See the `pipelines.rs` module doc for the full hazard description.
+//! `pipelines.viewport_bind_group_layout()`, the layout every pipeline of
+//! that `PipelineSet` was built against. A bind group binds under any
+//! pipeline whose layout at its index is group-equivalent (the same entries),
+//! so it also binds under the sets the painter builds for other target
+//! formats; a layout with other entries is a validation error. See the
+//! `pipeline_set.rs` module doc.
 //!
 //! ## C4 rule — no `Matrix4` in this module
 //!
@@ -87,9 +88,8 @@ pub(super) struct GpuReplay {
     /// Viewport bind group (group 0 for all instanced / gradient / shadow
     /// pipelines).
     ///
-    /// Created against `PipelineSet::viewport_bind_group_layout` to satisfy
-    /// the wgpu identity requirement: bind group and pipeline must share the
-    /// exact same layout object.
+    /// Created against `PipelineSet::viewport_bind_group_layout`, so it binds
+    /// under every pipeline whose group 0 layout has the same entries.
     pub(super) uniform_size: (u32, u32),
     /// Signed root-space pixel corresponding to attachment pixel (0, 0).
     pub(super) attachment_origin: (i64, i64),
@@ -155,8 +155,8 @@ impl GpuReplay {
     ///
     /// `pipelines` must already be constructed (it owns the
     /// `viewport_bind_group_layout`); the bind group created here is built
-    /// against that exact layout object, satisfying the wgpu identity
-    /// requirement.
+    /// against that layout and binds under every set whose layout has its
+    /// entries.
     ///
     /// Mirrors the viewport-buffer / bind-group / unit-quad / sampler
     /// construction that previously lived inside `WgpuPainter::with_shared_device`.

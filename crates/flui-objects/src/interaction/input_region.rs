@@ -74,6 +74,8 @@ impl flui_foundation::inspect::Inspect for RenderInputRegion {
 }
 
 impl RenderBox for RenderInputRegion {
+    const REPORTS_INPUT_REGIONS: bool = true;
+
     type Arity = Single;
     type ParentData = BoxParentData;
 

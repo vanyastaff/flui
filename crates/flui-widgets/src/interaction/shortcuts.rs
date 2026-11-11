@@ -22,6 +22,7 @@
 //! bound (`EditableText`'s own key handler moves the caret).
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_interaction::focus::{FocusNode, KeyEventResult};
@@ -34,10 +35,10 @@ use flui_view::prelude::*;
 use flui_view::{EventCx, EventOutcome};
 
 use super::actions::{
-    ActionChainProvider, Actions, ActivateIntent, ActivationPressIntent, BackIntent,
-    CopySelectionTextIntent, DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, Intent,
+    Actions, ActivateIntent, ActivationPressIntent, BackIntent, CopySelectionTextIntent,
+    DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, EnclosingActions, Intent,
     NextFocusAction, NextFocusIntent, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent,
-    SelectAllTextIntent, ShowContextMenuIntent, chain_at, resolve,
+    SelectAllTextIntent, ShowContextMenuIntent, chain_at, platform_at, resolve,
 };
 use super::focus::Focus;
 use crate::support::{command_modifiers, event_callback};
@@ -435,10 +436,13 @@ impl StatelessView for CallbackShortcuts {
 /// match, or no enabled action: the key keeps bubbling.
 #[derive(Clone, StatefulView)]
 pub struct Shortcuts {
-    bindings: Vec<(SingleActivator, Rc<dyn Intent>)>, // ADR-0023 — activator-to-intent pairs; read back only through its own TypeId.
+    bindings: Vec<Binding>, // ADR-0023 — activator-to-intent pairs; read back only through its own TypeId.
     child: BoxedView,
     /// The node its key handler lives on, when the owner needs to name it.
     focus_node: Option<Rc<FocusNode>>,
+    /// Bindings resolved by the focused widget's convention, and the
+    /// platform they follow where the focused node records none.
+    by_convention: Option<(Rc<ConventionBindings>, TargetPlatform)>,
 }
 
 impl Shortcuts {
@@ -448,12 +452,21 @@ impl Shortcuts {
             bindings: Vec::new(),
             child: BoxedView::new(child.into_view()),
             focus_node: None,
+            by_convention: None,
         }
     }
 
     /// Host the key handler on `node`, which the caller owns.
     fn focus_node(mut self, node: Rc<FocusNode>) -> Self {
         self.focus_node = Some(node);
+        self
+    }
+
+    /// Also match `bindings` for the platform convention the focused widget
+    /// recorded, or `fallback` where it recorded none. Checked after the
+    /// fixed bindings.
+    fn by_convention(mut self, bindings: Rc<ConventionBindings>, fallback: TargetPlatform) -> Self {
+        self.by_convention = Some((bindings, fallback));
         self
     }
 
@@ -521,13 +534,14 @@ impl ViewState<Shortcuts> for ShortcutsState {
     /// a real dependency, as the fallback for a focused node that records
     /// none; the primary focus's chain is read at key time.
     fn build(&self, view: &Shortcuts, ctx: &dyn BuildContext) -> impl IntoView {
-        let own_chain = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+        let own_chain = EnclosingActions::depend_on(ctx);
         let focus_manager = Rc::clone(
             self.focus_manager
                 .as_ref()
                 .expect("BUG: Shortcuts built before init_state"),
         );
         let shortcuts = view.bindings.clone();
+        let by_convention = view.by_convention.clone();
         let mut focus = Focus::new(view.child.clone());
         if let Some(node) = &view.focus_node {
             focus = focus.focus_node(Rc::clone(node));
@@ -539,20 +553,32 @@ impl ViewState<Shortcuts> for ShortcutsState {
                 // The FIRST matching activator decides; an unresolvable
                 // intent falls through as ignored, it does not try later
                 // activators.
-                let Some((_, intent)) = shortcuts
-                    .iter()
-                    .find(|(activator, _)| activator.matches(event))
-                else {
+                let focused = focus_manager.primary_focus();
+                let matching = |bindings: &[Binding]| {
+                    bindings
+                        .iter()
+                        .find(|(activator, _)| activator.matches(event))
+                        .map(|(_, intent)| Rc::clone(intent))
+                };
+                let found = matching(&shortcuts).or_else(|| {
+                    let (bindings, fallback) = by_convention.as_ref()?;
+                    let platform = focused
+                        .as_deref()
+                        .and_then(platform_at)
+                        .unwrap_or(*fallback);
+                    matching(&bindings.for_platform(platform))
+                });
+                let Some(intent) = found else {
                     return KeyEventResult::Ignored;
                 };
-                let chain = focus_manager
-                    .primary_focus()
-                    .and_then(|focused| chain_at(&focused))
+                let chain = focused
+                    .as_deref()
+                    .and_then(chain_at)
                     .or_else(|| own_chain.clone());
                 let Some(chain) = chain else {
                     return KeyEventResult::Ignored;
                 };
-                let intent: &dyn Any = &**intent;
+                let intent: &dyn Any = &*intent;
                 match resolve(&chain, intent) {
                     // One call: invoke and read `to_key_event_result` off what
                     // it actually did, so the key result cannot disagree with
@@ -584,6 +610,12 @@ impl ViewState<Shortcuts> for ShortcutsState {
 /// the focused text field ([`CopySelectionTextIntent`], [`PasteTextIntent`]),
 /// and Ctrl+A (Cmd+A on Apple platforms) selects all its text
 /// ([`SelectAllTextIntent`]).
+///
+/// The chords that differ by platform (select all, the clipboard, back and
+/// the context menu) follow the
+/// [`PlatformConvention`](flui_view::environment::PlatformConvention) the
+/// focused widget is built under, so a subtree that names another platform
+/// answers its own chords; with nothing focused they follow this widget's.
 ///
 /// Holding Enter activates once: a control is activated once per physical
 /// press. Space activates on its release, as WinUI and the web do, so a
@@ -629,10 +661,9 @@ pub struct DefaultFocusTraversalState {
     /// The node the bindings' key handler lives on, which the focus owner
     /// starts a key's walk at while nothing is focused.
     keys: Rc<FocusNode>,
-    /// The platform whose clipboard chords are bound, resolved once in
-    /// `create_state` — the same single injection point `EditableText`'s
-    /// word-jump modifier uses.
-    platform: TargetPlatform,
+    /// The platform-dependent bindings, built once per platform a focused
+    /// widget follows.
+    convention: Rc<ConventionBindings>,
 }
 
 /// Which clipboard intent a default binding carries.
@@ -791,8 +822,83 @@ fn same_modifiers(a: &SingleActivator, b: &SingleActivator) -> bool {
         && a.shift.unwrap_or(false) == b.shift.unwrap_or(false)
 }
 
+/// One activator and the intent it raises.
+type Binding = (SingleActivator, Rc<dyn Intent>);
+
+/// Bindings whose chords follow the platform convention of the focused
+/// widget rather than of the `Shortcuts` that holds them, so a
+/// [`PlatformConvention`] subtree raises its intents on its own chords.
+/// Each platform's table is built once, when a key first needs it.
+///
+/// [`PlatformConvention`]: flui_view::environment::PlatformConvention
+struct ConventionBindings {
+    bind: fn(TargetPlatform) -> Vec<Binding>,
+    built: RefCell<Vec<(TargetPlatform, Rc<[Binding]>)>>,
+}
+
+impl ConventionBindings {
+    fn new(bind: fn(TargetPlatform) -> Vec<Binding>) -> Self {
+        Self {
+            bind,
+            built: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// The table for `platform`. `bind` is this crate's own table, so no
+    /// user code runs while the cache is borrowed.
+    fn for_platform(&self, platform: TargetPlatform) -> Rc<[Binding]> {
+        let built = self
+            .built
+            .borrow()
+            .iter()
+            .find(|(of, _)| *of == platform)
+            .map(|(_, bindings)| Rc::clone(bindings));
+        built.unwrap_or_else(|| {
+            let bindings: Rc<[Binding]> = Rc::from((self.bind)(platform));
+            self.built
+                .borrow_mut()
+                .push((platform, Rc::clone(&bindings)));
+            bindings
+        })
+    }
+}
+
+/// [`DefaultFocusTraversal`]'s bindings whose chords differ by platform:
+/// select all and the clipboard on the command modifier, back, and the
+/// context menu.
+fn convention_bindings(platform: TargetPlatform) -> Vec<Binding> {
+    let once = |activator: SingleActivator| activator.allow_repeats(false);
+    let mut bindings: Vec<Binding> = vec![(
+        command_activator(platform, "a"),
+        Rc::new(SelectAllTextIntent),
+    )];
+    for activator in back_activators(platform) {
+        bindings.push((once(activator), Rc::new(BackIntent)));
+    }
+    for activator in ShowContextMenuIntent::default_keys(platform) {
+        bindings.push((activator, Rc::new(ShowContextMenuIntent)));
+    }
+    for (activator, binding) in clipboard_activators(platform) {
+        let intent: Rc<dyn Intent> = match binding {
+            ClipboardBinding::Copy => Rc::new(CopySelectionTextIntent::Copy),
+            ClipboardBinding::Cut => Rc::new(CopySelectionTextIntent::Cut),
+            ClipboardBinding::Paste => Rc::new(PasteTextIntent),
+        };
+        bindings.push((activator, intent));
+    }
+    bindings
+}
+
 fn command_activator(platform: TargetPlatform, key: &str) -> SingleActivator {
-    let activator = SingleActivator::character(key);
+    with_command_modifier(platform, SingleActivator::character(key))
+}
+
+/// `activator` with `platform`'s command modifier: Cmd on macOS and iOS,
+/// Control elsewhere.
+pub(crate) fn with_command_modifier(
+    platform: TargetPlatform,
+    activator: SingleActivator,
+) -> SingleActivator {
     match platform {
         TargetPlatform::MacOS | TargetPlatform::iOS => activator.meta(),
         _ => activator.control(),
@@ -804,8 +910,7 @@ impl std::fmt::Debug for DefaultFocusTraversalState {
         f.debug_struct("DefaultFocusTraversalState")
             .field("initialized", &self.focus_owner.is_some())
             .field("keys", &self.keys.id())
-            .field("platform", &self.platform)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -816,7 +921,7 @@ impl StatefulView for DefaultFocusTraversal {
         DefaultFocusTraversalState {
             focus_owner: None,
             keys: FocusNode::with_debug_label("Shortcuts"),
-            platform: TargetPlatform::current(),
+            convention: Rc::new(ConventionBindings::new(convention_bindings)),
         }
     }
 }
@@ -859,7 +964,8 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
         self.release_unfocused_keys();
     }
 
-    fn build(&self, view: &DefaultFocusTraversal, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &DefaultFocusTraversal, ctx: &dyn BuildContext) -> impl IntoView {
+        let platform = flui_view::environment::PlatformConvention::of(ctx);
         let focus_owner = self
             .focus_owner
             .as_ref()
@@ -887,13 +993,7 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
                 once(SingleActivator::named(NamedKey::Escape)),
                 DismissIntent,
             )
-            .shortcut(command_activator(self.platform, "a"), SelectAllTextIntent);
-        for activator in back_activators(self.platform) {
-            shortcuts = shortcuts.shortcut(once(activator), BackIntent);
-        }
-        for activator in ShowContextMenuIntent::default_keys(self.platform) {
-            shortcuts = shortcuts.shortcut(activator, ShowContextMenuIntent);
-        }
+            .by_convention(Rc::clone(&self.convention), platform);
         for (key, direction) in [
             (NamedKey::ArrowUp, flui_interaction::FocusDirection::Up),
             (NamedKey::ArrowDown, flui_interaction::FocusDirection::Down),
@@ -907,17 +1007,6 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
                 SingleActivator::named(key),
                 DirectionalFocusIntent(direction),
             );
-        }
-        for (activator, binding) in clipboard_activators(self.platform) {
-            shortcuts = match binding {
-                ClipboardBinding::Copy => {
-                    shortcuts.shortcut(activator, CopySelectionTextIntent::Copy)
-                }
-                ClipboardBinding::Cut => {
-                    shortcuts.shortcut(activator, CopySelectionTextIntent::Cut)
-                }
-                ClipboardBinding::Paste => shortcuts.shortcut(activator, PasteTextIntent),
-            };
         }
         Actions::new(shortcuts)
             .action(NextFocusAction::new(Rc::clone(&focus_owner)))

@@ -122,13 +122,6 @@ impl CaretHandle {
     }
 }
 
-impl Default for CaretHandle {
-    /// The handle of the platform the app is built for.
-    fn default() -> Self {
-        Self::for_platform(TargetPlatform::current())
-    }
-}
-
 /// What a touch long press in an editable text selects, and what the same
 /// touch moves as it drags. Either way the magnifier shows over the moving
 /// end while the touch is down, and the handles show once it lifts.
@@ -151,13 +144,6 @@ impl LongPressSelection {
             TargetPlatform::iOS => Self::Caret,
             _ => Self::Word,
         }
-    }
-}
-
-impl Default for LongPressSelection {
-    /// The long press of the platform the app is built for.
-    fn default() -> Self {
-        Self::for_platform(TargetPlatform::current())
     }
 }
 
@@ -214,7 +200,7 @@ impl EditableText {
 
     /// Whether a tap shows a handle under the caret, in place of the
     /// nearest [`DefaultSelectionControls`]' choice or the platform's
-    /// ([`CaretHandle::default`]).
+    /// ([`CaretHandle::for_platform`] of the [`PlatformConvention`](flui_view::environment::PlatformConvention)).
     #[must_use]
     pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
         self.caret_handle = Some(caret_handle);
@@ -223,7 +209,7 @@ impl EditableText {
 
     /// What a touch long press selects, and the same touch then moves, in
     /// place of the nearest [`DefaultSelectionControls`]' choice or the
-    /// platform's ([`LongPressSelection::default`]).
+    /// platform's ([`LongPressSelection::for_platform`] of the [`PlatformConvention`](flui_view::environment::PlatformConvention)).
     #[must_use]
     pub fn long_press(mut self, selection: LongPressSelection) -> Self {
         self.long_press = Some(selection);
@@ -306,7 +292,7 @@ impl FieldHandles {
             overlay: RefCell::new(None),
             entry: RefCell::new(None),
             look: RefCell::new(None),
-            caret_handle: Cell::new(CaretHandle::default()),
+            caret_handle: Cell::new(CaretHandle::for_platform(TargetPlatform::Unknown)),
             grip: Cell::new(None),
             expected: RefCell::new(None),
             own_revision: Cell::new(None),

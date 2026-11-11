@@ -119,7 +119,7 @@ impl<'a> RenderObjectContext<'a> {
     pub fn depend_on<I: InheritedView, R>(&self, f: impl FnOnce(&I) -> R) -> Option<R> {
         let tree = self.tree?;
         let element_id = self.element_id?;
-        let provider_id = tree.get(element_id)?.inherited_provider(TypeId::of::<I>());
+        let provider_id = tree.enclosing_provider(element_id, TypeId::of::<I>());
         // Buffer the dependent before invoking the callback, mirroring
         // `BuildContext::depend_on_inherited`: the tree is read-only here, so the
         // write is deferred to the `build_scope` drain. A missed provider records
@@ -138,7 +138,10 @@ impl<'a> RenderObjectContext<'a> {
             .get(provider_id)
             .and_then(ElementNode::element_opt)
             .and_then(ElementBase::as_inherited)?;
-        let data = accessor.view_as_any().downcast_ref::<I>()?;
+        let data = accessor
+            .provided(TypeId::of::<I>())?
+            .value
+            .downcast_ref::<I>()?;
         Some(f(data))
     }
 

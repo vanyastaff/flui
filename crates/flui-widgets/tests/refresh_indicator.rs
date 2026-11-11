@@ -574,7 +574,7 @@ pub(crate) fn refresh_completion_arrives_on_the_next_frame() {
     assert!(!inbox.refresh.is_refreshing(), "the next frame delivers it");
     assert_eq!(inbox.refreshes.dropped.get(), 0);
 
-    laid.replay(&pull(Device::Mouse, 180.0));
+    laid.replay(&pull(Device::Pen, 180.0));
     laid.pump_for(FRAME);
     assert_eq!(inbox.started(), 2, "the next pull refreshes");
 }

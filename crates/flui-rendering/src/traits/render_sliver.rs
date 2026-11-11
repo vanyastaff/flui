@@ -341,6 +341,11 @@ pub trait RenderSliver: flui_foundation::inspect::Inspect + 'static {
         None
     }
 
+    /// Whether this type adds input regions in [`Self::describe_input_regions`]; a type
+    /// that calls `InputRegionSink::add` sets it, and a region from a type that does not
+    /// is never collected. See [`RenderObject::reports_input_regions`]. Default: `false`.
+    const REPORTS_INPUT_REGIONS: bool = false;
+
     /// The input regions this sliver claims, in its local paint coordinates at its
     /// absolute paint `size`.
     ///
@@ -609,6 +614,10 @@ where
         size: flui_foundation::geometry::Size,
     ) -> Option<flui_foundation::geometry::Matrix4> {
         <T as RenderSliver>::hit_test_transform(self, size)
+    }
+
+    fn reports_input_regions(&self) -> bool {
+        <T as RenderSliver>::REPORTS_INPUT_REGIONS
     }
 
     fn describe_input_regions(

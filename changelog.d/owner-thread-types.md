@@ -22,5 +22,5 @@
 ### Fixed
 
 - **Headless frame requests ran on the requesting thread** (`flui-native`):
-  `MockWindow::request_redraw` called from another thread now queues the frame callback for the
+  `HeadlessHostWindow::request_redraw` called from another thread now queues the frame callback for the
   owner's next turn, coalesced, instead of running owner code on the caller's thread.

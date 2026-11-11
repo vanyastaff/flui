@@ -26,6 +26,7 @@ mod proxy;
 mod render;
 mod root;
 mod stateful;
+mod stateful_render;
 mod stateless;
 mod view;
 
@@ -45,6 +46,7 @@ pub use proxy::ProxyView;
 pub use render::{RenderObjectContext, RenderObjectContextError, RenderView};
 pub use root::{RootRenderElement, RootRenderView};
 pub use stateful::{StatefulView, ViewState};
+pub use stateful_render::{RenderViewState, StatefulRenderView};
 pub use stateless::StatelessView;
 pub use view::{ElementBase, ElementDepth, View};
 

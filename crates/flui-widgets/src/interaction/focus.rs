@@ -48,9 +48,9 @@ use flui_rendering::semantics::SemanticsConfiguration;
 use flui_view::element::ElementKind;
 use flui_view::environment::FocusTreeRoot;
 use flui_view::prelude::*;
-use flui_view::{RebuildHandle, impl_inherited_view};
+use flui_view::{Provided, ProvidedValue, RebuildHandle};
 
-use super::actions::{ActionChain, ActionChainProvider, as_node_context};
+use super::actions::{EnclosingActions, FocusRecord};
 use super::focus_reveal::{FocusRevealScope, SharedRevealTarget};
 
 /// Reports whether this widget's node gained or lost the primary focus, with
@@ -84,48 +84,35 @@ fn key_handler(handler: &FocusKeyHandler, writer: &WriterSlot) -> KeyEventHandle
 // The ambient scope
 // ============================================================================
 
-/// Provides the nearest enclosing focus **node** â€” scope or plain `Focus` â€”
-/// to descendants, which every `Focus`
-/// widget provides. Private: [`Focus`] and
-/// [`FocusScope`] are the public surface.
+/// The nearest enclosing focus **node**, scope or plain `Focus`, as every
+/// focus widget publishes it to its subtree from its own element
+/// (ADR-0322 §5). Private: [`Focus`] and [`FocusScope`] are the public
+/// surface.
 ///
 /// The parent being a *node*, not always a scope, is what makes the
-/// leafâ†’root key-dispatch walk (ADR-0023) match the widget tree: a
+/// leaf-to-root key-dispatch walk (ADR-0023) match the widget tree: a
 /// `Shortcuts`-style non-scope `Focus` above a field is a node **ancestor**
 /// of the field, so keys the field ignores bubble through it.
 #[derive(Clone)]
-struct FocusParentProvider {
+struct FocusParent {
     parent: Rc<FocusNode>,
     revision: u64,
-    child: BoxedView,
 }
 
-impl std::fmt::Debug for FocusParentProvider {
+impl std::fmt::Debug for FocusParent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FocusParentProvider")
+        f.debug_struct("FocusParent")
             .field("parent_id", &self.parent.id())
             .field("revision", &self.revision)
-            .finish_non_exhaustive()
+            .finish()
     }
 }
 
-impl InheritedView for FocusParentProvider {
-    type Data = Rc<FocusNode>;
-
-    fn data(&self) -> &Self::Data {
-        &self.parent
-    }
-
-    fn child(&self) -> &dyn View {
-        &self.child
-    }
-
+impl ProvidedValue for FocusParent {
     fn update_should_notify(&self, old: &Self) -> bool {
         !Rc::ptr_eq(&self.parent, &old.parent) || self.revision != old.revision
     }
 }
-
-impl_inherited_view!(FocusParentProvider);
 
 /// The node a mounting/reparenting focus node hangs under.
 ///
@@ -141,7 +128,7 @@ pub fn enclosing_focus_parent(ctx: &dyn BuildContext) -> Rc<FocusNode> {
 }
 
 /// Raw lookup behind [`Focus::of`]/[`Focus::maybe_of`]/[`FocusScope::of`]:
-/// the nearest enclosing [`FocusParentProvider`]'s node, else the
+/// the nearest enclosing [`FocusParent`]'s node, else the
 /// presentation's root scope from [`FocusTreeRoot::maybe_of`], registering a
 /// dependency, with **no** scope-node filtering. This is the call
 /// [`FocusScope::of`] makes internally; [`Focus::maybe_of`] layers the
@@ -153,10 +140,10 @@ pub fn enclosing_focus_parent(ctx: &dyn BuildContext) -> Rc<FocusNode> {
 /// through [`BuildContextExt::depend_on`], so a build that reads it rebuilds
 /// when the enclosing node changes.
 ///
-/// This resolves the SAME [`FocusParentProvider`] marker `Focus`/`FocusScope`'s
-/// own `build` already mounts around their child for
-/// [`enclosing_focus_parent`]'s mount-time attach/reparent lookups. No second,
-/// redundant marker is mounted just for this public entry point. The root
+/// This resolves the SAME [`FocusParent`] value `Focus`/`FocusScope` publish
+/// from their own elements for [`enclosing_focus_parent`]'s mount-time
+/// attach/reparent lookups. No second, redundant marker is mounted just for
+/// this public entry point. The root
 /// fallback is reached only by a widget with no focus widget above it; every
 /// focus widget sits below the presentation's one `FocusTreeRoot`, so the
 /// nearest provider is always the nearer node.
@@ -165,7 +152,7 @@ pub fn enclosing_focus_parent(ctx: &dyn BuildContext) -> Rc<FocusNode> {
 /// invalidates dependents on node-state changes as well as identity changes;
 /// a build that reads `Focus::of(ctx).has_focus()` stays live.
 fn nearest_focus_node(ctx: &dyn BuildContext) -> Option<Rc<FocusNode>> {
-    ctx.depend_on::<FocusParentProvider, _>(|provider| Rc::clone(&provider.parent))
+    ctx.depend_on::<FocusParent, _>(|provider| Rc::clone(&provider.parent))
         .or_else(|| FocusTreeRoot::maybe_of(ctx))
 }
 
@@ -648,7 +635,7 @@ pub struct FocusState {
     rect_provider_registration: Option<FocusNodeRegistration>,
     /// The `Actions` chain visible at this widget, recorded on the node so a
     /// `Shortcuts` above resolves intents from here (ADR-0079).
-    action_chain: Option<ActionChain>,
+    action_chain: Option<FocusRecord>,
     /// Generation-checked ownership of that record on the current node.
     context_registration: Option<FocusNodeRegistration>,
     /// Lifecycle-acquired rebuild capability used by the node subscription.
@@ -810,19 +797,20 @@ pub(crate) fn request_autofocus(
     }
 }
 
-/// Record the `Actions` chain visible at a widget on its focus `node`, and
-/// depend on it, so a changed chain is recorded again (ADR-0079). Shared by
-/// `Focus` and `FocusScope`: either widget's node can hold the primary focus,
-/// and a `Shortcuts` above resolves its intent from that node's record.
+/// Record the `Actions` chain visible at a widget and the platform convention
+/// it is built under on its focus `node`, and depend on both, so a changed
+/// one is recorded again (ADR-0079). Shared by `Focus` and `FocusScope`:
+/// either widget's node can hold the primary focus, and a `Shortcuts` above
+/// resolves its intent from that node's record.
 fn record_action_chain(
     ctx: &dyn BuildContext,
     node: &Rc<FocusNode>,
-    held: &mut Option<ActionChain>,
+    held: &mut Option<FocusRecord>,
     registration: &mut Option<FocusNodeRegistration>,
 ) {
-    let chain = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+    let chain = EnclosingActions::depend_on(ctx).map(|chain| FocusRecord::at(ctx, chain));
     let unchanged = match (&chain, &*held) {
-        (Some(new), Some(held)) => Rc::ptr_eq(new, held),
+        (Some(new), Some(held)) => new.same_as(held),
         (None, None) => true,
         _ => false,
     };
@@ -835,9 +823,7 @@ fn record_action_chain(
     }
     // Register the new record before the old token drops: the old one is no
     // longer current then, so dropping it leaves the new one in place.
-    *registration = chain
-        .as_ref()
-        .map(|chain| node.register_context(as_node_context(chain)));
+    *registration = chain.as_ref().map(|record| record.register_on(node));
     *held = chain;
 }
 
@@ -931,7 +917,7 @@ impl ViewState<Focus> for FocusState {
             let replacement_context_registration = self
                 .action_chain
                 .as_ref()
-                .map(|chain| replacement.register_context(as_node_context(chain)));
+                .map(|record| record.register_on(&replacement));
             let replacement_focus_subscription = self.add_focus_listener(&replacement);
 
             // Observe the replacement before the core transaction delivers
@@ -1047,9 +1033,8 @@ impl ViewState<Focus> for FocusState {
         self.focus_manager = None;
     }
 
-    /// Every `Focus` provides itself as the parent for descendants,
-    /// and anchors the child so the node's
-    /// rect provider has a render node to measure.
+    /// Anchors the child so the node's rect provider has a render node to
+    /// measure.
     ///
     /// The subtree publishes whether its node can take focus (`focusable`)
     /// and, while it holds the primary focus, `focused`. The node listener rebuilds this widget on
@@ -1077,11 +1062,7 @@ impl ViewState<Focus> for FocusState {
                 .child(view.child.clone())
                 .into_view()
                 .boxed();
-            return FocusParentProvider {
-                parent: Rc::clone(&self.node),
-                revision: self.node_revision.get(),
-                child: BoxedView::new(AnchoredSliver::new(self.anchor.clone(), child).into_view()),
-            };
+            return BoxedView::new(AnchoredSliver::new(self.anchor.clone(), child).into_view());
         }
         let semantics = if view.include_semantics && self.node.can_request_focus() {
             let semantics = Semantics::new()
@@ -1108,11 +1089,15 @@ impl ViewState<Focus> for FocusState {
             Semantics::new()
         };
         let child = semantics.child(view.child.clone()).into_view().boxed();
-        FocusParentProvider {
+        BoxedView::new(AnchoredBox::new(self.anchor.clone(), child).into_view())
+    }
+
+    /// Every `Focus` is the parent of the focus nodes under it.
+    fn provide(&self, _view: &Focus, _ctx: &dyn BuildContext, values: &mut Provided<'_>) {
+        values.value(FocusParent {
             parent: Rc::clone(&self.node),
             revision: self.node_revision.get(),
-            child: BoxedView::new(AnchoredBox::new(self.anchor.clone(), child).into_view()),
-        }
+        });
     }
 }
 
@@ -1308,7 +1293,7 @@ pub struct FocusScopeState {
     focus_subscription: Option<Subscription>,
     /// The `Actions` chain visible at this scope, recorded on its backing
     /// node: the node itself can hold the primary focus (ADR-0079).
-    action_chain: Option<ActionChain>,
+    action_chain: Option<FocusRecord>,
     /// Generation-checked ownership of that record.
     context_registration: Option<FocusNodeRegistration>,
 }
@@ -1414,11 +1399,10 @@ impl ViewState<FocusScope> for FocusScopeState {
             replacement.set_traversal_edge_behavior(edge);
         }
         let replacement_subscription = self.add_focus_listener(replacement.as_focus_node());
-        let replacement_context_registration = self.action_chain.as_ref().map(|chain| {
-            replacement
-                .as_focus_node()
-                .register_context(as_node_context(chain))
-        });
+        let replacement_context_registration = self
+            .action_chain
+            .as_ref()
+            .map(|record| record.register_on(replacement.as_focus_node()));
         let attachment = self
             .attachment
             .take()
@@ -1470,11 +1454,14 @@ impl ViewState<FocusScope> for FocusScopeState {
     }
 
     fn build(&self, view: &FocusScope, _ctx: &dyn BuildContext) -> impl IntoView {
-        FocusParentProvider {
+        view.child.clone()
+    }
+
+    fn provide(&self, _view: &FocusScope, _ctx: &dyn BuildContext, values: &mut Provided<'_>) {
+        values.value(FocusParent {
             parent: Rc::clone(self.scope.as_focus_node()),
             revision: self.node_revision.get(),
-            child: view.child.clone(),
-        }
+        });
     }
 }
 

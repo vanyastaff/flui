@@ -6,6 +6,7 @@ import android.content.ClipData;
 import android.content.ClipDescription;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.res.AssetFileDescriptor;
 import android.database.ContentObserver;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -15,6 +16,7 @@ import android.graphics.Point;
 import android.graphics.RectF;
 import android.net.Uri;
 import android.os.Build;
+import android.os.CancellationSignal;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -36,7 +38,7 @@ import android.view.inputmethod.InputMethodManager;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The one view FLUI adds over a NativeActivity's content: the input method's
@@ -60,9 +62,11 @@ public final class FluiView extends View {
     static native boolean nativeDrag(long handle, int action, float x, float y,
             String[] mimeTypes, boolean local, boolean result);
 
-    /** The offer a taken drop holds until FLUI concludes it, or zero when it is refused. */
-    static native long nativeDrop(long handle, float x, float y, boolean local, String text,
-            String html, String[] uris);
+    /** The key of the offer over the view, which a drop is taken as, or zero when none is. */
+    static native long nativeDropOffer(long handle);
+
+    /** Whether FLUI takes the drop of {@code offer}, whose clip is already held under it. */
+    static native boolean nativeDrop(long handle, long offer, float x, float y, boolean local);
 
     static native void nativeImeState(long handle, String text, int selectionStart,
             int selectionEnd, int compositionStart, int compositionEnd, int generation);
@@ -130,8 +134,14 @@ public final class FluiView extends View {
     private boolean handwriting;
     /** Whether this view started the drag the system runs now. */
     private boolean dragging;
-    /** The permissions of each taken drop's content URIs, by its offer, until FLUI concludes it. */
-    private final HashMap<Long, Object> dropPermissions = new HashMap<Long, Object>();
+    /**
+     * Each taken drop's clip and URI permissions, by its offer, until FLUI
+     * concludes it. Written on this thread; read by FLUI's threads.
+     */
+    private final ConcurrentHashMap<Long, HeldDrop> drops = new ConcurrentHashMap<Long, HeldDrop>();
+    /** The reads of dropped URIs' bytes running or stopped, by FLUI's ticket. */
+    private final ConcurrentHashMap<Long, DropRead> dropReads =
+            new ConcurrentHashMap<Long, DropRead>();
     /** The mirror's state last reported, so an unchanged state is not sent twice. */
     private String reportedText;
     private int reportedSelectionStart = -1;
@@ -249,10 +259,11 @@ public final class FluiView extends View {
         setAccessibilityDelegate(null);
         stopObserving();
         editing = false;
-        for (Object permissions : dropPermissions.values()) {
-            release(permissions);
+        // keys(), not keySet(): the Java 8 signature of keySet() is missing
+        // before API 24.
+        for (java.util.Enumeration<Long> offers = drops.keys(); offers.hasMoreElements();) {
+            releaseDrop(offers.nextElement());
         }
-        dropPermissions.clear();
         inputMethods.restartInput(this);
         ViewGroup parent = (ViewGroup) getParent();
         if (parent != null) {
@@ -542,55 +553,89 @@ public final class FluiView extends View {
     }
 
     private boolean drop(DragEvent event, boolean local) {
-        ClipData clip = event.getClipData();
-        String text = null;
-        String html = null;
-        String[] uris = new String[0];
-        Object permissions = null;
-        if (clip != null) {
-            StringBuilder plain = new StringBuilder();
-            java.util.ArrayList<String> found = new java.util.ArrayList<String>();
-            for (int index = 0; index < clip.getItemCount(); index++) {
-                ClipData.Item item = clip.getItemAt(index);
-                CharSequence itemText = item.getText();
-                if (itemText != null) {
-                    plain.append(itemText);
-                }
-                if (html == null && item.getHtmlText() != null) {
-                    html = item.getHtmlText();
-                }
-                if (item.getUri() != null) {
-                    found.add(item.getUri().toString());
-                }
-            }
-            if (plain.length() > 0) {
-                text = plain.toString();
-            }
-            uris = found.toArray(new String[0]);
-            // Asked for before the native side answers: once it takes the drop,
-            // FLUI may read a URI before this method returns.
-            if (uris.length > 0 && Build.VERSION.SDK_INT >= 24) {
-                permissions = Api24.permissions(activity, event);
-            }
-        }
-        long offer = nativeDrop(handle, event.getX(), event.getY(), local, text, html, uris);
+        long offer = nativeDropOffer(handle);
         if (offer == 0) {
-            release(permissions);
-        } else if (permissions != null) {
-            dropPermissions.put(offer, permissions);
+            return false;
         }
-        return offer != 0;
+        ClipData clip = event.getClipData();
+        Object permissions = null;
+        // Asked for before the native side answers: once it takes the drop,
+        // FLUI may read a URI before this method returns.
+        if (firstUri(clip) != null && Build.VERSION.SDK_INT >= 24) {
+            permissions = Api24.permissions(activity, event);
+        }
+        HeldDrop held = new HeldDrop(clip, permissions);
+        // Held before the native side wakes FLUI, which may read it at once.
+        if (drops.putIfAbsent(offer, held) != null) {
+            held.release();
+            return false;
+        }
+        boolean taken = false;
+        try {
+            taken = nativeDrop(handle, offer, event.getX(), event.getY(), local);
+        } finally {
+            if (!taken) {
+                releaseDrop(offer);
+            }
+        }
+        return taken;
     }
 
-    /** FLUI concluded the drop of {@code offer}: give back the URI permissions it held. */
+    /**
+     * FLUI concluded or refused the drop of {@code offer}: let go of its clip
+     * and give back the URI permissions it held, once.
+     */
     public void releaseDrop(long offer) {
-        release(dropPermissions.remove(offer));
+        HeldDrop held = drops.remove(offer);
+        if (held != null) {
+            held.release();
+        }
     }
 
     private static void release(Object permissions) {
         if (permissions != null && Build.VERSION.SDK_INT >= 24) {
             Api24.release(permissions);
         }
+    }
+
+    /**
+     * A taken drop's clip and the permissions to read its URIs. A read that
+     * found it before its release reads on; the release revokes only the
+     * permissions, so such a read of a URI fails, and FLUI has answered its
+     * request already.
+     */
+    private static final class HeldDrop {
+        final ClipData clip;
+        private final Object permissions;
+
+        HeldDrop(ClipData clip, Object permissions) {
+            this.clip = clip;
+            this.permissions = permissions;
+        }
+
+        /** Called once: by whoever removed this drop from {@link #drops}. */
+        void release() {
+            FluiView.release(permissions);
+        }
+    }
+
+    /** The clip held under {@code offer}, or null when it was released or carried none. */
+    private ClipData heldClip(long offer) {
+        HeldDrop held = drops.get(offer);
+        return held == null ? null : held.clip;
+    }
+
+    private static Uri firstUri(ClipData clip) {
+        if (clip == null) {
+            return null;
+        }
+        for (int index = 0; index < clip.getItemCount(); index++) {
+            Uri uri = clip.getItemAt(index).getUri();
+            if (uri != null) {
+                return uri;
+            }
+        }
+        return null;
     }
 
     private static String[] mimeTypes(ClipDescription description) {
@@ -664,16 +709,103 @@ public final class FluiView extends View {
     }
 
     /**
-     * The bytes behind a content URI of a drop, at most {@code limit} of them;
-     * null when it cannot be read or is larger. {@code read[0]} is how many
-     * bytes it read, past {@code limit} when it stopped there. Called on a
+     * The text of the drop held under {@code offer}, every item's joined, or
+     * with {@code html} the first item's HTML, as UTF-8 of at most
+     * {@code limit} bytes; null when the clip carries none or is released, or
+     * when it is larger, and then {@code read[0]} is its length. Its length
+     * is counted before anything is copied. Called on a thread of FLUI's.
+     */
+    public byte[] readDropText(long offer, boolean html, long limit, long[] read) {
+        ClipData clip = heldClip(offer);
+        if (clip == null) {
+            return null;
+        }
+        java.util.ArrayList<CharSequence> parts = new java.util.ArrayList<CharSequence>();
+        long length = 0;
+        for (int index = 0; index < clip.getItemCount(); index++) {
+            ClipData.Item item = clip.getItemAt(index);
+            CharSequence part = html ? item.getHtmlText() : item.getText();
+            if (part == null) {
+                continue;
+            }
+            parts.add(part);
+            length = saturatingAdd(length, utf8Length(part));
+            if (html) {
+                break;
+            }
+        }
+        if (parts.isEmpty() || (!html && length == 0)) {
+            return null;
+        }
+        if (length > limit || length > Integer.MAX_VALUE) {
+            read[0] = length;
+            return null;
+        }
+        byte[] out = new byte[(int) length];
+        int at = 0;
+        for (CharSequence part : parts) {
+            at = encodeUtf8(part, out, at);
+        }
+        return out;
+    }
+
+    /**
+     * Every URI of the drop held under {@code offer}, when its
+     * {@code text/uri-list}, a CRLF after each, is at most {@code limit}
+     * bytes; null when the clip carries none or is released, or when the
+     * list is larger, and then {@code read[0]} is its length. Called on a
      * thread of FLUI's.
      */
-    public byte[] readUri(String uri, long limit, long[] read) {
+    public String[] readDropUris(long offer, long limit, long[] read) {
+        ClipData clip = heldClip(offer);
+        if (clip == null) {
+            return null;
+        }
+        java.util.ArrayList<String> uris = new java.util.ArrayList<String>();
+        long length = 0;
+        for (int index = 0; index < clip.getItemCount(); index++) {
+            Uri uri = clip.getItemAt(index).getUri();
+            if (uri == null) {
+                continue;
+            }
+            String text = uri.toString();
+            length = saturatingAdd(length, saturatingAdd(utf8Length(text), 2));
+            if (length > limit) {
+                read[0] = length;
+                return null;
+            }
+            uris.add(text);
+        }
+        return uris.isEmpty() ? null : uris.toArray(new String[0]);
+    }
+
+    /**
+     * The bytes behind the first content URI of the drop held under
+     * {@code offer}, at most {@code limit} of them, as FLUI's read
+     * {@code ticket}; null when it cannot be read, is larger, or
+     * {@link #cancelDropRead} stopped it. {@code read[0]} is how many bytes
+     * it read, past {@code limit} when it stopped there. Called on a thread
+     * of FLUI's.
+     */
+    public byte[] readDropBytes(long offer, long ticket, long limit, long[] read) {
+        DropRead fresh = new DropRead();
+        DropRead prior = dropReads.putIfAbsent(ticket, fresh);
+        DropRead running = prior != null ? prior : fresh;
+        running.begun = true;
+        AssetFileDescriptor file = null;
         InputStream stream = null;
         try {
-            stream = activity.getContentResolver().openInputStream(Uri.parse(uri));
-            if (stream == null) {
+            Uri uri = firstUri(heldClip(offer));
+            if (uri == null || running.isCancelled()) {
+                return null;
+            }
+            file = activity.getContentResolver()
+                    .openAssetFileDescriptor(uri, "r", running.signal);
+            if (file == null) {
+                return null;
+            }
+            stream = file.createInputStream();
+            if (!running.attach(stream)) {
                 return null;
             }
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -686,18 +818,153 @@ public final class FluiView extends View {
                 }
                 out.write(chunk, 0, count);
             }
-            return out.toByteArray();
+            return running.isCancelled() ? null : out.toByteArray();
         } catch (Exception error) {
             return null;
         } finally {
+            dropReads.remove(ticket);
             if (stream != null) {
+                closeQuietly(stream);
+            } else if (file != null) {
                 try {
-                    stream.close();
+                    file.close();
                 } catch (Exception ignored) {
-                    // Nothing to recover: the bytes were read or the read failed.
+                    // Nothing to recover: no stream was opened on it.
                 }
             }
         }
+    }
+
+    /**
+     * Stop FLUI's read {@code ticket}: cancel its open and close its stream,
+     * which makes a read blocked on it throw. A read that has not begun yet
+     * finds itself stopped when it does. A stop that arrives after its read
+     * ended is left behind, and is dropped once it is older than any read
+     * may wait to begin. Called on a thread of FLUI's.
+     */
+    public void cancelDropRead(long ticket) {
+        DropRead fresh = new DropRead();
+        DropRead prior = dropReads.putIfAbsent(ticket, fresh);
+        (prior != null ? prior : fresh).cancel();
+        if (prior == null) {
+            long now = android.os.SystemClock.uptimeMillis();
+            for (java.util.Map.Entry<Long, DropRead> entry : dropReads.entrySet()) {
+                DropRead left = entry.getValue();
+                if (!left.begun && now - left.created > STALE_STOP_MILLIS) {
+                    dropReads.remove(entry.getKey(), left);
+                }
+            }
+        }
+    }
+
+    /** How long a stop waits for its read to begin, far past FLUI's deadline. */
+    private static final long STALE_STOP_MILLIS = 60_000;
+
+    private static void closeQuietly(InputStream stream) {
+        if (stream != null) {
+            try {
+                stream.close();
+            } catch (Exception ignored) {
+                // Nothing to recover: the bytes were read or the read failed.
+            }
+        }
+    }
+
+    /** One read of a dropped URI's bytes, which another thread may stop. */
+    private static final class DropRead {
+        final CancellationSignal signal = new CancellationSignal();
+        final long created = android.os.SystemClock.uptimeMillis();
+        /** Whether {@link #readDropBytes} took it up; set once, before any read. */
+        volatile boolean begun;
+        private InputStream stream;
+        private boolean cancelled;
+
+        /** Hold {@code opened} to close on cancellation; false when already stopped. */
+        synchronized boolean attach(InputStream opened) {
+            if (cancelled) {
+                return false;
+            }
+            stream = opened;
+            return true;
+        }
+
+        synchronized boolean isCancelled() {
+            return cancelled;
+        }
+
+        void cancel() {
+            InputStream opened;
+            synchronized (this) {
+                if (cancelled) {
+                    return;
+                }
+                cancelled = true;
+                opened = stream;
+            }
+            // Outside the lock: the provider's cancellation and the close
+            // may block, and the reading thread takes the lock to attach.
+            signal.cancel();
+            closeQuietly(opened);
+        }
+    }
+
+    private static long saturatingAdd(long a, long b) {
+        return a > Long.MAX_VALUE - b ? Long.MAX_VALUE : a + b;
+    }
+
+    /** The UTF-8 length of {@code text}, a lone surrogate counted as U+FFFD. */
+    private static long utf8Length(CharSequence text) {
+        long length = 0;
+        int count = text.length();
+        for (int index = 0; index < count; index++) {
+            char unit = text.charAt(index);
+            if (unit < 0x80) {
+                length += 1;
+            } else if (unit < 0x800) {
+                length += 2;
+            } else if (Character.isHighSurrogate(unit) && index + 1 < count
+                    && Character.isLowSurrogate(text.charAt(index + 1))) {
+                length += 4;
+                index++;
+            } else {
+                length += 3;
+            }
+        }
+        return length;
+    }
+
+    /**
+     * Write {@code text} as UTF-8 into {@code out} from {@code at}, a lone
+     * surrogate as U+FFFD, exactly {@link #utf8Length} bytes; returns the end.
+     */
+    private static int encodeUtf8(CharSequence text, byte[] out, int at) {
+        int count = text.length();
+        for (int index = 0; index < count; index++) {
+            char unit = text.charAt(index);
+            int scalar = unit;
+            if (Character.isHighSurrogate(unit) && index + 1 < count
+                    && Character.isLowSurrogate(text.charAt(index + 1))) {
+                scalar = Character.toCodePoint(unit, text.charAt(++index));
+            } else if (Character.isSurrogate(unit)) {
+                scalar = 0xfffd;
+            }
+            if (scalar < 0x80) {
+                out[at++] = (byte) scalar;
+            } else if (scalar < 0x800) {
+                out[at++] = (byte) (0xc0 | (scalar >>> 6));
+                out[at++] = (byte) (0x80 | (scalar & 0x3f));
+            } else if (scalar < 0x10000) {
+                out[at++] = (byte) (0xe0 | (scalar >>> 12));
+                out[at++] = (byte) (0x80 | ((scalar >>> 6) & 0x3f));
+                out[at++] = (byte) (0x80 | (scalar & 0x3f));
+            } else {
+                out[at++] = (byte) (0xf0 | (scalar >>> 18));
+                out[at++] = (byte) (0x80 | ((scalar >>> 12) & 0x3f));
+                out[at++] = (byte) (0x80 | ((scalar >>> 6) & 0x3f));
+                out[at++] = (byte) (0x80 | (scalar & 0x3f));
+            }
+        }
+        return at;
     }
 
     // ------------------------------------------------------- accessibility

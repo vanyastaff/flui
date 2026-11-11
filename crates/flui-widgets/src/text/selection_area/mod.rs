@@ -54,7 +54,7 @@ use super::rich_text::ResolvedParagraph;
 use super::selection_style::{DefaultSelectionStyle, SelectionStyle};
 use crate::anchored_box::AnchoredBox;
 use crate::interaction::Focus;
-use crate::interaction::actions::ActionChainProvider;
+use crate::interaction::actions::{ActionScope, EnclosingActions};
 use crate::support::RefCallback;
 use crate::text::{MagnifierChoice, MenuSettings, SelectionMagnifier, show_menu_action};
 use crate::{DefaultSelectionControls, Overlay, Semantics};
@@ -305,6 +305,7 @@ impl StatefulView for SelectionArea {
                 pipeline: RefCell::new(None),
                 primary: RefCell::default(),
                 direction: Cell::new(TextDirection::Ltr),
+                platform: Cell::new(flui_platform::TargetPlatform::Unknown),
                 writer: RefCell::new(None),
                 clipboard: RefCell::new(None),
                 focus: FocusNode::with_debug_label("SelectionArea"),
@@ -424,6 +425,9 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             ctx,
             view.magnifier.as_ref(),
         ));
+        self.model
+            .platform
+            .set(flui_view::environment::PlatformConvention::of(ctx));
         // The document reads its lines in the ambient direction.
         let direction = crate::Directionality::maybe_of(ctx).unwrap_or_default();
         // Shown handles are built for the direction they read in.
@@ -435,7 +439,7 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         // Every commit rebuilds the area, so its actions follow the
         // selection (see `SelectionModel::action_chain`), and so does its
         // menu.
-        let enclosing = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+        let enclosing = EnclosingActions::depend_on(ctx);
         let chain = self.model.action_chain(enclosing);
         self.model
             .configure_menu(ctx, &view.menu, Rc::clone(&chain));
@@ -471,7 +475,7 @@ impl ViewState<SelectionArea> for SelectionAreaState {
                     model.focus_changed(focused);
                 }
             });
-        let actions = ActionChainProvider::new(chain, focused);
+        let actions = ActionScope::new(chain, focused);
         let model = Rc::clone(&self.model);
         let semantics = Semantics::new()
             .role(view.role)
@@ -521,6 +525,10 @@ struct SelectionModel {
     /// The direction the area read as of its last build, which orders the
     /// texts along a line.
     direction: Cell<TextDirection>,
+    /// The platform whose conventions the area followed as of its last
+    /// build: which chord extends by word, whether a secondary press
+    /// selects the word under it.
+    pub(super) platform: Cell<flui_platform::TargetPlatform>,
     /// Where the listener hears of a change the pointer made, acquired in
     /// `init_state`.
     writer: RefCell<Option<WriterSource>>,

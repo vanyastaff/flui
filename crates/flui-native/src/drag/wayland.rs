@@ -735,7 +735,8 @@ fn outcome(
         Err(PipeError::TooLarge { read }) => {
             Err(too_large(read, limit).unwrap_or(TransferError::SourceGone))
         }
-        Err(PipeError::Timeout | PipeError::Failed) => Err(TransferError::SourceGone),
+        Err(PipeError::Timeout) => Err(TransferError::TimedOut),
+        Err(PipeError::Failed) => Err(TransferError::SourceGone),
     }
 }
 

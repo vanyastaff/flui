@@ -15,9 +15,10 @@ use std::{
     sync::Arc,
 };
 
-use flui_foundation::{ElementId, RebuildReasons, RenderId, ViewKey};
+use flui_foundation::{ElementId, RebuildReasons, RenderId, SlotSet, ViewKey};
 use flui_interaction::FocusManager;
 use flui_rendering::pipeline::DetachedRenderSubtrees;
+use rustc_hash::FxHashMap;
 
 use super::dirty_queue::{DirtyElement, DirtyQueue};
 use crate::{
@@ -351,7 +352,7 @@ pub struct BuildOwner {
     ///
     /// `pub(crate)` for the [`ElementOwner`](super::ElementOwner)
     /// split-borrow.
-    pub(crate) dirty_reasons: HashMap<ElementId, RebuildReasons>,
+    pub(crate) dirty_reasons: FxHashMap<ElementId, RebuildReasons>,
 
     /// GlobalKey registry: key hash -> element ID.
     ///
@@ -503,7 +504,7 @@ pub struct BuildOwner {
     /// (a self-reschedule), from a child it just built notifying it back,
     /// or from the other half of an A↔B ping-pong — and spends one unit of
     /// [`Self::mid_drain_absorbs_left`].
-    pub(crate) built_this_frame: HashSet<ElementId>,
+    pub(crate) built_this_frame: SlotSet<ElementId>,
     /// How many elements this frame's drain rebuilt for each cause — the
     /// per-frame telemetry ADR-0074 §8 measures against (`FrameStats` has no
     /// rebuild figure). Reset with `built_this_frame` at every `build_scope`.
@@ -715,7 +716,7 @@ impl BuildOwner {
         let focus_manager = std::mem::ManuallyDrop::into_inner(focus_manager);
         let owner = Self {
             dirty_elements: DirtyQueue::default(),
-            dirty_reasons: HashMap::new(),
+            dirty_reasons: FxHashMap::default(),
             global_keys: GlobalKeyRegistry::new(),
             global_key_reservations: Box::new(GlobalKeyReservations::new()),
             global_key_diagnostics: Vec::new(),
@@ -736,7 +737,7 @@ impl BuildOwner {
             external_inbox: Arc::new(ExternalBuildInbox::default()),
             mid_drain_absorbs_left: MAX_MID_DRAIN_ABSORBS,
             mid_drain_cap_streak: false,
-            built_this_frame: HashSet::new(),
+            built_this_frame: SlotSet::new(),
             frame_builds: Box::default(),
             child_manager_registry: RefCell::new(HashMap::new()),
             layout_builder_registry: LayoutBuilderRegistry::default(),
@@ -2037,6 +2038,8 @@ impl BuildOwner {
                 }
             }
 
+            self.refresh_provided_scope(tree, id);
+
             // ── Phase 2: reconcile the returned views against the node's
             // slab-resident children with a fresh `&mut tree`. Newly inserted
             // children are scheduled inside the reconciler so this same drain
@@ -2239,7 +2242,7 @@ impl BuildOwner {
                 absorbed += 1;
                 continue;
             }
-            if self.built_this_frame.contains(&id) {
+            if self.built_this_frame.contains(id) {
                 let Some(remaining) = self.mid_drain_absorbs_left.checked_sub(1) else {
                     newly_capped_ids.push(id);
                     capped_leftover.merge(id, reasons);

@@ -22,9 +22,9 @@ use crate::display_list::{BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMo
 /// and the operation itself.
 ///
 /// The transform is absolute (the full CTM), so every command is
-/// self-describing — its bounds, a damage query, a snapshot line, and a
-/// re-stamp under another transform (`Canvas::draw_picture`) all read one
-/// command without replaying state. Clips are the one thing that scope:
+/// self-describing — its bounds, a damage query and a snapshot line all
+/// read one command without replaying state. Clips are the one thing that
+/// scope:
 /// [`DrawOp::Save`]/[`DrawOp::Restore`] bracket them.
 #[derive(Debug, Clone)]
 pub struct DrawCommand {

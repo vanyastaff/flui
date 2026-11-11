@@ -1,0 +1,93 @@
+name: Android dex
+
+# Compiles the dex of the Android backend's Java classes
+# (`crates/flui-native/android/classes.dex`, ADR-0247) on a GitHub runner, so
+# changing the Java sources needs no local JDK or Android SDK. A pull request
+# that changes the sources (or this file) runs it in `write` mode, so its
+# checks carry the `android-dex` artifact to commit. Or run it by hand
+# on the branch that changed them:
+#
+#   gh workflow run android-dex.yml --ref <branch>             # mode: write
+#   gh workflow run android-dex.yml --ref <branch> -f mode=rebuild
+#
+# `write` runs `cargo xtask android-dex --write` and uploads `classes.dex` and
+# `classes.dex.toml` as the `android-dex` artifact; commit both to the branch.
+# `rebuild` runs `--rebuild`, which requires the checked-in dex to reproduce
+# byte for byte with the recorded build tools and platform. PR CI checks only
+# the digests (`cargo xtask checks`), which needs no JDK.
+
+on:
+  pull_request:
+    paths:
+      - "crates/flui-native/android/java/**"
+      - ".github/workflows/android-dex.yml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "write: compile and upload the dex; rebuild: require the checked-in bytes"
+        type: choice
+        options: [write, rebuild]
+        default: write
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTUP_HOME: ${{ github.workspace }}/../flui-android-dex-rustup
+  MODE: ${{ inputs.mode || 'write' }}
+
+jobs:
+  dex:
+    name: android-dex (${{ inputs.mode || 'write' }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+
+      - name: JDK 21 and the Android SDK
+        run: |
+          set -euo pipefail
+          java_home="${JAVA_HOME_21_X64:?the runner image has no JDK 21}"
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:?the runner image has no Android SDK}}"
+          echo "JAVA_HOME=$java_home" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+          # The build tools and platform the record names, which `--write` and
+          # `--rebuild` use when installed: install them if the image lacks them.
+          record=crates/flui-native/android/classes.dex.toml
+          tools="$(sed -n 's/^build-tools = "\(.*\)"$/\1/p' "$record")"
+          platform="$(sed -n 's/^platform = "\(.*\)"$/\1/p' "$record")"
+          : "${tools:?the record names no build-tools}" "${platform:?the record names no platform}"
+          if [ ! -f "$sdk/build-tools/$tools/lib/d8.jar" ] || [ ! -f "$sdk/platforms/$platform/android.jar" ]; then
+            (yes || true) | JAVA_HOME="$java_home" "$sdk/cmdline-tools/latest/bin/sdkmanager" \
+              "build-tools;$tools" "platforms;$platform"
+          fi
+          "$java_home/bin/javac" -version
+
+      - name: cargo xtask android-dex --${{ env.MODE }}
+        run: |
+          cargo xtask android-dex "--$MODE"
+          # Whether the written dex differs from the checked-in one.
+          git diff --stat -- crates/flui-native/android/
+
+      - name: Upload the dex
+        if: env.MODE == 'write'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-dex
+          path: |
+            crates/flui-native/android/classes.dex
+            crates/flui-native/android/classes.dex.toml
+          if-no-files-found: error
+          retention-days: 7

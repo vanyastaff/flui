@@ -1,0 +1,139 @@
+//! [`ScrollBehavior`] and [`ScrollConfiguration`]: how the scroll views of a
+//! subtree scroll where their own [`ScrollViewConfig`] says nothing.
+//!
+//! A scroll view resolves each setting it leaves open by asking the
+//! behavior of the nearest [`ScrollConfiguration`] above it, with the
+//! [`PlatformConvention`] it is built under and its axis. Without a
+//! configuration it asks [`DefaultScrollBehavior`].
+//!
+//! [`ScrollViewConfig`]: crate::ScrollViewConfig
+//! [`PlatformConvention`]: flui_view::environment::PlatformConvention
+
+use std::rc::Rc;
+
+use flui_foundation::geometry::Axis;
+use flui_interaction::PointerKindSet;
+use flui_platform::TargetPlatform;
+use flui_view::impl_inherited_view;
+use flui_view::prelude::*;
+use flui_view::{BoxedView, InheritedView, View};
+
+use crate::scroll::{BouncingScrollPhysics, ClampingScrollPhysics, SharedScrollPhysics};
+
+/// What a scroll view asks its [`ScrollBehavior`] about: the platform
+/// convention it is built under and the axis it scrolls along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ScrollBehaviorDetails {
+    platform: TargetPlatform,
+    axis: Axis,
+}
+
+impl ScrollBehaviorDetails {
+    /// The details of a scroll view along `axis` built under `platform`.
+    #[must_use]
+    pub const fn new(platform: TargetPlatform, axis: Axis) -> Self {
+        Self { platform, axis }
+    }
+
+    /// The platform whose conventions the scroll view follows.
+    pub const fn platform(&self) -> TargetPlatform {
+        self.platform
+    }
+
+    /// The axis the scroll view scrolls along.
+    #[must_use]
+    pub const fn axis(&self) -> Axis {
+        self.axis
+    }
+}
+
+/// How the scroll views under a [`ScrollConfiguration`] scroll where their
+/// own configuration says nothing.
+///
+/// Every method is provided; an implementation overrides the ones it
+/// changes. A scroll view asks again whenever it rebuilds under another
+/// behavior, platform or axis, and keeps the answer otherwise.
+pub trait ScrollBehavior: std::fmt::Debug {
+    /// The boundary and fling behaviour of a scroll view that names no
+    /// physics: [`BouncingScrollPhysics`] on macOS and iOS,
+    /// [`ClampingScrollPhysics`] elsewhere.
+    fn physics(&self, details: &ScrollBehaviorDetails) -> SharedScrollPhysics {
+        match details.platform() {
+            TargetPlatform::MacOS | TargetPlatform::iOS => Rc::new(BouncingScrollPhysics::new()),
+            _ => Rc::new(ClampingScrollPhysics::new()),
+        }
+    }
+
+    /// The pointer kinds whose drags and presses a scroll view that names no
+    /// devices admits: every kind but the mouse, which scrolls by its wheel
+    /// and the scrollbar and leaves a drag to selection.
+    fn drag_devices(&self, _details: &ScrollBehaviorDetails) -> PointerKindSet {
+        PointerKindSet::TOUCH
+            | PointerKindSet::PEN
+            | PointerKindSet::TRACKPAD
+            | PointerKindSet::VIRTUAL
+    }
+}
+
+/// The behavior of a tree with no [`ScrollConfiguration`]: every provided
+/// [`ScrollBehavior`] method as written.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DefaultScrollBehavior;
+
+impl ScrollBehavior for DefaultScrollBehavior {}
+
+/// Sets the [`ScrollBehavior`] of the scroll views below it.
+///
+/// Dependents are told of a change only when the behavior is another `Rc`:
+/// create it once (in a state, or a field the parent keeps) and pass clones
+/// of it. A behavior allocated in `build` is a new one each time, and every
+/// scroll view below asks it again.
+#[derive(Clone)]
+pub struct ScrollConfiguration {
+    behavior: Rc<dyn ScrollBehavior>,
+    child: BoxedView,
+}
+
+impl ScrollConfiguration {
+    /// `behavior` for the scroll views in `child`.
+    pub fn new(behavior: Rc<dyn ScrollBehavior>, child: impl IntoView) -> Self {
+        Self {
+            behavior,
+            child: BoxedView::new(child.into_view()),
+        }
+    }
+
+    /// The behavior of the nearest configuration above `ctx`, registering a
+    /// dependency on it; `None` where there is none, which
+    /// [`DefaultScrollBehavior`] answers for.
+    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<Rc<dyn ScrollBehavior>> {
+        ctx.depend_on::<Self, _>(|scope| Rc::clone(&scope.behavior))
+    }
+}
+
+impl std::fmt::Debug for ScrollConfiguration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScrollConfiguration")
+            .field("behavior", &self.behavior)
+            .finish_non_exhaustive()
+    }
+}
+
+impl InheritedView for ScrollConfiguration {
+    type Data = Rc<dyn ScrollBehavior>;
+
+    fn data(&self) -> &Self::Data {
+        &self.behavior
+    }
+
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+
+    fn update_should_notify(&self, old: &Self) -> bool {
+        !Rc::ptr_eq(&self.behavior, &old.behavior)
+    }
+}
+
+impl_inherited_view!(ScrollConfiguration);

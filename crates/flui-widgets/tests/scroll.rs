@@ -3840,7 +3840,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
             let _ = host.pump(Duration::ZERO);
             let pointer = PointerInfo::new(
                 PointerId::try_from(id).expect("nonzero contact"),
-                PointerKind::Mouse,
+                PointerKind::Touch,
             );
             let sample = |y: f64| {
                 PointerSample::new(
@@ -3849,7 +3849,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
                             .expect("fixture clock fits event time"),
                     ),
                     PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, y))
-                        .expect("finite authored mouse position"),
+                        .expect("finite authored touch position"),
                 )
             };
             host.dispatch(PlatformInput::Pointer(PointerEvent::Down(
@@ -5164,4 +5164,269 @@ pub(crate) fn controller_mutation_during_build_is_refused() {
     };
     assert_eq!(*outcome.borrow(), vec![Err(refused), Err(refused)]);
     assert_eq!(scroll.pixels(), 10.0, "a refused mutation moves nothing");
+}
+
+/// A behavior that answers every question the same way and counts how often
+/// it is asked for physics.
+#[derive(Debug)]
+struct CountingBehavior {
+    physics: SharedScrollPhysics,
+    devices: flui_interaction::PointerKindSet,
+    asked: Cell<usize>,
+}
+
+impl CountingBehavior {
+    fn new(physics: SharedScrollPhysics, devices: flui_interaction::PointerKindSet) -> Rc<Self> {
+        Rc::new(Self {
+            physics,
+            devices,
+            asked: Cell::new(0),
+        })
+    }
+}
+
+impl flui_widgets::ScrollBehavior for CountingBehavior {
+    fn physics(&self, _details: &flui_widgets::ScrollBehaviorDetails) -> SharedScrollPhysics {
+        self.asked.set(self.asked.get() + 1);
+        Rc::clone(&self.physics)
+    }
+
+    fn drag_devices(
+        &self,
+        _details: &flui_widgets::ScrollBehaviorDetails,
+    ) -> flui_interaction::PointerKindSet {
+        self.devices
+    }
+}
+
+/// Physics that accepts no motion: every proposed offset stays where it is.
+#[derive(Debug)]
+struct PinnedPhysics;
+
+impl flui_widgets::ScrollPhysics for PinnedPhysics {
+    fn apply_boundary_conditions(
+        &self,
+        metrics: &flui_widgets::ScrollMetrics,
+        _proposed: f64,
+    ) -> f64 {
+        metrics.pixels
+    }
+
+    fn create_ballistic_simulation(
+        &self,
+        _metrics: &flui_widgets::ScrollMetrics,
+        _velocity_px_per_sec: f64,
+    ) -> Option<Box<dyn flui_animation::simulation::Simulation>> {
+        None
+    }
+}
+
+/// Drag a 300 px viewport over 800 px of `view`'s content up by 50 px and
+/// return the offset it lands on.
+fn dragged_offset(view: impl Fn(&ScrollController) -> flui_view::BoxedView) -> f64 {
+    dragged_offset_with(flui_interaction::PointerKind::Touch, view)
+}
+
+fn dragged_offset_with(
+    kind: flui_interaction::PointerKind,
+    view: impl Fn(&ScrollController) -> flui_view::BoxedView,
+) -> f64 {
+    let controller = ScrollController::new();
+    let scoped = lay_out(view(&controller), tight(300.0, 300.0));
+    scoped.dispatch_pointer_down_with_kind(150.0, 200.0, kind);
+    scoped.dispatch_pointer_move(150.0, 150.0);
+    scoped.dispatch_pointer_up(150.0, 150.0);
+    controller.pixels()
+}
+
+/// With no configuration, a scroll view drags with a finger, a pen, a
+/// trackpad and a virtual pointer, and leaves a mouse drag to selection: the
+/// mouse scrolls it by its wheel and the scrollbar.
+pub(crate) fn the_default_scroll_behavior_leaves_a_mouse_drag_to_selection() {
+    let list = |controller: &ScrollController| {
+        SingleChildScrollView::new()
+            .controller(controller.clone())
+            .child(SizedBox::new(300.0, 800.0))
+            .boxed()
+    };
+    let pen = flui_interaction::PointerKind::Pen {
+        tool: flui_interaction::PenTool::Tip,
+    };
+    for kind in [
+        flui_interaction::PointerKind::Touch,
+        pen,
+        flui_interaction::PointerKind::Virtual,
+    ] {
+        assert_eq!(dragged_offset_with(kind, list), 50.0, "{kind:?} drags");
+    }
+    assert_eq!(
+        dragged_offset_with(flui_interaction::PointerKind::Mouse, list),
+        0.0,
+        "the mouse leaves the drag"
+    );
+    let every = |controller: &ScrollController| {
+        SingleChildScrollView::new()
+            .controller(controller.clone())
+            .allowed_devices(flui_interaction::PointerKindSet::all())
+            .child(SizedBox::new(300.0, 800.0))
+            .boxed()
+    };
+    assert_eq!(
+        dragged_offset_with(flui_interaction::PointerKind::Mouse, every),
+        50.0,
+        "a view that names every device takes the mouse"
+    );
+}
+
+/// A scroll view asks the nearest `ScrollConfiguration` for what it leaves
+/// open, and what it names itself wins.
+pub(crate) fn a_scroll_configuration_answers_what_a_scroll_view_leaves_open() {
+    use flui_interaction::PointerKindSet;
+    use flui_widgets::{ScrollBehavior, ScrollConfiguration};
+
+    let clamping = || -> SharedScrollPhysics { Rc::new(ClampingScrollPhysics::new()) };
+    type Row = (&'static str, Rc<dyn ScrollBehavior>, bool, bool, f64);
+    let rows: [Row; 4] = [
+        (
+            "the behavior's physics",
+            CountingBehavior::new(Rc::new(PinnedPhysics), PointerKindSet::all()),
+            false,
+            false,
+            0.0,
+        ),
+        (
+            "the view's physics wins",
+            CountingBehavior::new(Rc::new(PinnedPhysics), PointerKindSet::all()),
+            true,
+            false,
+            50.0,
+        ),
+        (
+            "the behavior's devices",
+            CountingBehavior::new(clamping(), PointerKindSet::MOUSE),
+            false,
+            false,
+            0.0,
+        ),
+        (
+            "the view's devices win",
+            CountingBehavior::new(clamping(), PointerKindSet::MOUSE),
+            false,
+            true,
+            50.0,
+        ),
+    ];
+    for (row, behavior, view_physics, view_devices, expected) in rows {
+        let offset = dragged_offset(|controller| {
+            let mut view = SingleChildScrollView::new()
+                .controller(controller.clone())
+                .child(SizedBox::new(300.0, 800.0));
+            if view_physics {
+                view = view.physics(clamping());
+            }
+            if view_devices {
+                view = view.allowed_devices(PointerKindSet::all());
+            }
+            ScrollConfiguration::new(Rc::clone(&behavior), view).boxed()
+        });
+        assert_eq!(offset, expected, "{row}");
+    }
+}
+
+/// Without a configuration, a scroll view follows its platform: an Apple
+/// convention overscrolls a pull past the top, any other clamps it.
+pub(crate) fn the_default_scroll_behavior_follows_the_platform_convention() {
+    use flui_platform::TargetPlatform;
+    use flui_view::environment::PlatformConvention;
+
+    for (platform, overscrolls) in [
+        (TargetPlatform::MacOS, true),
+        (TargetPlatform::iOS, true),
+        (TargetPlatform::Linux, false),
+        (TargetPlatform::Unknown, false),
+    ] {
+        let controller = ScrollController::new();
+        let view = PlatformConvention::new(
+            platform,
+            SingleChildScrollView::new()
+                .controller(controller.clone())
+                .child(SizedBox::new(300.0, 800.0)),
+        );
+        let scoped = lay_out(view, tight(300.0, 300.0));
+        // A pull down at the top proposes a negative offset.
+        scoped.dispatch_pointer_down(150.0, 100.0);
+        scoped.dispatch_pointer_move(150.0, 150.0);
+        assert_eq!(
+            controller.pixels() < 0.0,
+            overscrolls,
+            "{platform:?}: offset {}",
+            controller.pixels()
+        );
+        scoped.dispatch_pointer_up(150.0, 150.0);
+    }
+}
+
+/// A rebuild under the same behavior keeps the physics it answered; another
+/// behavior is asked again.
+pub(crate) fn a_scroll_view_asks_its_behavior_again_only_when_it_changes() {
+    use flui_interaction::PointerKindSet;
+    use flui_widgets::ScrollConfiguration;
+
+    let controller = ScrollController::new();
+    let content = |behavior: &Rc<CountingBehavior>| {
+        ScrollConfiguration::new(
+            Rc::clone(behavior) as Rc<dyn flui_widgets::ScrollBehavior>,
+            SingleChildScrollView::new()
+                .controller(controller.clone())
+                .child(SizedBox::new(300.0, 800.0)),
+        )
+    };
+    let first = CountingBehavior::new(Rc::new(ClampingScrollPhysics::new()), PointerKindSet::all());
+    let mut laid = lay_out(content(&first), tight(300.0, 300.0));
+    assert_eq!(first.asked.get(), 1, "mounting asks once");
+    laid.pump_widget(content(&first));
+    assert_eq!(first.asked.get(), 1, "the same behavior is not asked again");
+    let second =
+        CountingBehavior::new(Rc::new(ClampingScrollPhysics::new()), PointerKindSet::all());
+    laid.pump_widget(content(&second));
+    assert_eq!(second.asked.get(), 1, "another behavior is asked");
+    assert_eq!(first.asked.get(), 1);
+}
+
+/// Physics constructors refuse coefficients outside the open unit range.
+pub(crate) fn scroll_physics_refuse_coefficients_outside_the_unit_range() {
+    use flui_widgets::{ScrollPhysicsError, ScrollPhysicsParameter};
+
+    let spring = BouncingScrollPhysics::new().spring();
+    for value in [f64::NAN, -0.1, 0.0, 1.0, 2.0, f64::INFINITY] {
+        let refused = |result: Result<(), ScrollPhysicsError>| match result {
+            Err(ScrollPhysicsError::OutOfRange {
+                parameter,
+                value: given,
+            }) if given.to_bits() == value.to_bits() => Some(parameter),
+            _ => None,
+        };
+        let drag = Some(ScrollPhysicsParameter::FlingDragCoefficient);
+        let resistance = Some(ScrollPhysicsParameter::OverscrollSpringCoefficient);
+        assert_eq!(
+            refused(ClampingScrollPhysics::try_new(value).map(drop)),
+            drag,
+            "clamping drag {value}"
+        );
+        assert_eq!(
+            refused(BouncingScrollPhysics::try_new(value, spring, 0.135).map(drop)),
+            resistance,
+            "bouncing resistance {value}"
+        );
+        assert_eq!(
+            refused(BouncingScrollPhysics::try_new(0.52, spring, value).map(drop)),
+            drag,
+            "bouncing drag {value}"
+        );
+    }
+    let accepted = ClampingScrollPhysics::try_new(0.2).expect("0.2 is in range");
+    assert_eq!(accepted.fling_drag_coefficient(), 0.2);
+    let bouncing = BouncingScrollPhysics::try_new(0.3, spring, 0.2).expect("in range");
+    assert_eq!(bouncing.overscroll_spring_coefficient(), 0.3);
+    assert_eq!(bouncing.fling_drag_coefficient(), 0.2);
 }

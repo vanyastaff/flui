@@ -26,4 +26,7 @@ disallowed-methods = [
     # `#[expect(clippy::disallowed_methods, reason = "ADR-0287: <why>")]` on its statement or
     # function, never on a file or module; test code is exempt at the crate root (ADR-0303 §5).
     { path = "std::panic::catch_unwind", reason = "ADR-0287: run user code through flui_foundation::panic (commit, FirstPanic), an OS entry through owner::panic_boundary::os_entry (ADR-0151 §16)" },
+    # A widget reads the platform whose conventions it follows from `PlatformConvention::of`;
+    # only the app runner, which installs that value at the root, takes the compile target.
+    { path = "flui_platform::TargetPlatform::current", reason = "ADR-0028: read the platform from flui_view::environment::PlatformConvention::of; the runner is the one root default" },
 ]

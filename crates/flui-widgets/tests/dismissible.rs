@@ -99,7 +99,11 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
         let root = || VsyncScope::new(vsync.clone(), probe.view());
         let mut app = lay_out_animated(root(), tight(200.0, 200.0), vsync.clone());
         drop(capture);
-        app.dispatch_pointer_down(20.0, 20.0);
+        app.dispatch_pointer_down_with_kind(
+            20.0,
+            20.0,
+            flui_interaction::events::PointerKind::Mouse,
+        );
         for x in [40.0, 60.0, 80.0, 100.0] {
             app.dispatch_pointer_move_after(x, 20.0, Duration::from_millis(10));
         }
@@ -266,7 +270,11 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
             show.set(true);
             app.pump_widget(root());
             app.dispatch_pointer_cancel();
-            app.dispatch_pointer_down(20.0, 20.0);
+            app.dispatch_pointer_down_with_kind(
+                20.0,
+                20.0,
+                flui_interaction::events::PointerKind::Mouse,
+            );
             for x in [40.0, 60.0, 80.0, 100.0] {
                 app.dispatch_pointer_move_after(x, 20.0, Duration::from_millis(10));
             }
@@ -715,15 +723,17 @@ pub(crate) fn a_returning_dismissible_migrates_between_registries() {
                 (primary, 50.0)
             }
         };
-        let (x, y) = point(10.0);
+        let (x, y) = point(30.0);
         laid.dispatch_pointer_down(x, y);
+        let (x, y) = point(50.0);
+        laid.dispatch_pointer_move(x, y);
         let (x, y) = point(80.0);
         laid.dispatch_pointer_move(x, y);
         laid.dispatch_pointer_cancel();
         laid.pump_for(Duration::from_millis(16));
         laid.pump_for(Duration::from_millis(16));
         let before = painted_card_axis(&laid, vertical);
-        assert!(before > 0.0 && before < 70.0);
+        assert!(before > 0.0 && before < 70.0, "{before}");
         assert!(old.has_running());
 
         laid.pump_widget(VsyncScope::new(next.clone(), card));
@@ -785,10 +795,10 @@ fn release_speed(width: f64, reverse: bool, maximum: Option<f64>, vertical: bool
             (primary, 50.0)
         }
     };
-    let (start_x, start_y) = point(10.0);
+    let (start_x, start_y) = point(30.0);
     laid.dispatch_pointer_down(start_x, start_y);
     // 15 px every 10 ms: 1500 px/s to the right.
-    let mut x = 10.0;
+    let mut x = 30.0;
     // A reverse release goes 240 px out and comes back 120 px at 1000 px/s.
     // The drag stops at the card's extent, so the narrowest card comes back
     // from its 150 px edge and stays on that side.
@@ -886,10 +896,10 @@ fn exercise_collapse_registry(migrate: bool, fail_wake: bool) {
         )),
         vsync.clone(),
     );
-    laid.dispatch_pointer_down(10.0, 50.0);
+    laid.dispatch_pointer_down(30.0, 50.0);
     for step in 1..=12 {
         laid.dispatch_pointer_move_after(
-            10.0 + f64::from(step) * 20.0,
+            30.0 + f64::from(step) * 20.0,
             50.0,
             Duration::from_millis(10),
         );
@@ -1056,10 +1066,10 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
         // A new root view is how the scope hands its probe to build again.
         let root = || VsyncScope::new(vsync.clone(), probe.view());
         let mut laid = lay_out_animated(root(), tight(150.0, 100.0), vsync.clone());
-        laid.dispatch_pointer_down(10.0, 50.0);
+        laid.dispatch_pointer_down(30.0, 50.0);
         for step in 1..=12 {
             laid.dispatch_pointer_move_after(
-                10.0 + f64::from(step) * 20.0,
+                30.0 + f64::from(step) * 20.0,
                 50.0,
                 Duration::from_millis(10),
             );

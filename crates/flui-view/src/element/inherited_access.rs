@@ -33,11 +33,18 @@ pub trait InheritedElementAccess {
     // `ElementTree` chain, but only the framework records, resets or prunes a
     // dependency (ADR-0074 §5.5 — a dependency recorded with an empty set
     // would read a provider and never rebuild).
-    /// Borrow the inherited view as `&dyn Any` so the caller can
-    /// downcast to the concrete `V` (the `InheritedView` type).
+    /// Visit the type of every value this element publishes to its subtree.
     ///
-    /// This is the typed payload handed to the dependent's `BuildContext`.
-    fn view_as_any(&self) -> &dyn std::any::Any;
+    /// An inherited element publishes one, its view type. The node's
+    /// inherited scope registers the element under each.
+    fn provided_types(&self, visit: &mut dyn FnMut(std::any::TypeId));
+
+    /// The value this element publishes under `type_id`, or `None` when it
+    /// publishes none of that type.
+    ///
+    /// This is the typed payload handed to the dependent's `BuildContext`: the
+    /// caller downcasts [`ProvidedRef::value`] to the type it asked for.
+    fn provided(&self, type_id: std::any::TypeId) -> Option<ProvidedRef<'_>>;
 
     /// How many elements currently depend on this inherited element.
     ///
@@ -115,4 +122,21 @@ pub trait InheritedElementAccess {
     /// notification to prune stale entries. Invoked when the dependent
     /// deactivates. No-op when the id is not registered.
     fn remove_dependent(&mut self, token: crate::context::CrateToken, dependent: ElementId);
+}
+
+/// One value a provider element publishes, as a dependent reads it.
+#[derive(Clone, Copy)]
+pub struct ProvidedRef<'a> {
+    /// The value, to downcast to the type it was asked for.
+    pub value: &'a dyn std::any::Any,
+    /// The field a dependent of this value records, when the provider keeps
+    /// one field per published type. `None` for an inherited view, whose
+    /// dependents record the fields they name themselves.
+    pub(crate) field: Option<crate::view::FieldSet>,
+}
+
+impl std::fmt::Debug for ProvidedRef<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProvidedRef").finish_non_exhaustive()
+    }
 }
