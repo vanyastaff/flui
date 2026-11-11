@@ -679,7 +679,7 @@ impl RenderNode {
     }
 
     /// Whether the stored render object adds input regions — see
-    /// [`RenderObject::reports_input_regions`](crate::traits::RenderObject::reports_input_regions).
+    /// [`RenderObject::reports_input_regions`].
     #[inline]
     pub fn reports_input_regions(&self) -> bool {
         with_entry!(self, entry => entry.render_object().reports_input_regions())
