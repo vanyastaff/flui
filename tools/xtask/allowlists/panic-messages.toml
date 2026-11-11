@@ -33,10 +33,6 @@ path = "crates/flui-engine/src/effects_pipeline.rs"
 count = 1
 
 [[allow]]
-path = "crates/flui-engine/src/offscreen/blit.rs"
-count = 1
-
-[[allow]]
 path = "crates/flui-engine/src/pipeline_set.rs"
 count = 1
 
