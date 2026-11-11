@@ -88,6 +88,10 @@ pub struct RasterExecutor<B: SlotBackend = crate::GpuContext> {
     backend: B,
     shared: Arc<Shared>,
     lifecycle: Receiver<Lifecycle>,
+    /// The host's wake: called once a turn wrote a settlement, with no lock
+    /// held and contained. Owner-local, as the inline executor is; the
+    /// threaded placement asks `Send` of it at its spawn (ADR-0305 §11).
+    wake: Box<dyn Fn()>,
     slots: Vec<Option<ExecSlot>>,
 }
 
@@ -105,15 +109,16 @@ impl<B: SlotBackend> RasterExecutor<B> {
     ///
     /// `wake` is the host's: the executor calls it once a turn wrote a
     /// settlement, with no lock held and contained.
-    pub fn new(backend: B, wake: impl Fn() + Send + Sync + 'static) -> (Self, RasterSender) {
+    pub fn new(backend: B, wake: impl Fn() + 'static) -> (Self, RasterSender) {
         let (lifecycle_tx, lifecycle) = bounded(LIFECYCLE_CAPACITY);
-        let shared = Arc::new(Shared::new(lifecycle_tx, Box::new(wake)));
+        let shared = Arc::new(Shared::new(lifecycle_tx));
         let sender = RasterSender::new(Arc::clone(&shared));
         (
             Self {
                 backend,
                 shared,
                 lifecycle,
+                wake: Box::new(wake),
                 slots: Vec::new(),
             },
             sender,
@@ -169,7 +174,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             outcome.settled += self.service(index, &mut first);
         }
         if outcome.settled > 0 {
-            first.contain(|| (self.shared.wake)());
+            first.contain(|| (self.wake)());
         }
         first.resume();
         outcome
@@ -203,7 +208,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             }
         }
         if settled > 0 {
-            first.contain(|| (self.shared.wake)());
+            first.contain(|| (self.wake)());
         }
         first.resume();
     }
@@ -242,7 +247,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             });
             return 0;
         };
-        tracing::warn!(?slot, ?failure, "raster executor: slot refused");
+        let described = format!("{failure:?}");
         // A frame sent before the refusal was visible settles here; later
         // ones are refused at send.
         let (frame, extra) = {
@@ -257,6 +262,13 @@ impl<B: SlotBackend> RasterExecutor<B> {
         };
         let settled = usize::from(frame.is_some());
         retire(frame, extra, first);
+        report(
+            Report::Refused {
+                slot,
+                failure: described,
+            },
+            first,
+        );
         settled
     }
 
@@ -304,6 +316,10 @@ impl<B: SlotBackend> RasterExecutor<B> {
             )
         };
         let mut failure = None;
+        // A resize that failed stays pending, so the next turn retries it:
+        // the owner already stamps frames with the generation it minted.
+        let mut retry = None;
+        let mut resize_report = None;
         if let Some(visibility) = visibility {
             slot.full_redraw |= !slot.visibility.is_shown() && visibility.is_shown();
             slot.visibility = visibility;
@@ -316,23 +332,43 @@ impl<B: SlotBackend> RasterExecutor<B> {
                     slot.full_redraw = true;
                 }
                 Some(Err(error)) => {
-                    tracing::warn!(slot = ?slot.id, %error, "raster executor: resize refused");
+                    retry = Some(size);
+                    resize_report = Some(Report::ResizeRefused {
+                        slot: slot.id,
+                        error: error.to_string(),
+                    });
+                    failure = Some(SlotFailure::Refused(error));
                 }
-                None => failure = caught.into_payload().map(SlotFailure::Panicked),
+                None => {
+                    retry = Some(size);
+                    failure = caught.into_payload().map(SlotFailure::Panicked);
+                }
             }
         }
         let Some(frame) = frame else {
-            settle_failure(&slot.inbox, failure, first);
+            let extra = {
+                let mut state = slot.inbox.lock();
+                if let Some(size) = retry {
+                    state.size.get_or_insert(size);
+                }
+                failure.and_then(|failure| state.hold_failure(failure))
+            };
+            retire(None, extra, first);
+            report_each([resize_report, None], first);
             return 0;
         };
-        let (verdict, render_failure, surface_lost) = render(backend, slot, &frame);
-        if failure.is_none() {
+        let (verdict, render_failure, surface_lost, render_report) = render(backend, slot, &frame);
+        let discarded = if failure.is_none() {
             failure = render_failure;
-        } else if let Some(SlotFailure::Panicked(later)) = render_failure {
-            discard_payload(later);
-        }
+            None
+        } else {
+            render_failure
+        };
         let extra = {
             let mut state = slot.inbox.lock();
+            if let Some(size) = retry {
+                state.size.get_or_insert(size);
+            }
             if surface_lost {
                 state.generation = state.generation.next();
                 slot.applied = state.generation;
@@ -341,6 +377,8 @@ impl<B: SlotBackend> RasterExecutor<B> {
             failure.and_then(|failure| state.hold_failure(failure))
         };
         retire(Some(frame), extra, first);
+        retire(None, discarded, first);
+        report_each([resize_report, render_report], first);
         1
     }
 }
@@ -351,27 +389,26 @@ impl<B: SlotBackend> Drop for RasterExecutor<B> {
     }
 }
 
-/// Render `frame` into `slot`: its verdict, the slot failure it raised, and
-/// whether the surface was lost.
+/// Render `frame` into `slot`: its verdict, the slot failure it raised,
+/// whether the surface was lost, and what to report once the frame settled.
 fn render<B: SlotBackend>(
     backend: &mut B,
     slot: &mut ExecSlot,
     frame: &SceneSnapshot,
-) -> (RasterVerdict, Option<SlotFailure>, bool) {
+) -> (RasterVerdict, Option<SlotFailure>, bool, Option<Report>) {
     let stamped = frame.stamp.surface_generation;
     if !slot.visibility.is_shown() {
         slot.full_redraw = true;
-        return (RasterVerdict::NotShown, None, false);
+        return (RasterVerdict::NotShown, None, false, None);
     }
     if stamped == SurfaceGeneration::ZERO || stamped != slot.applied {
-        tracing::debug!(
-            slot = ?slot.id,
-            ?stamped,
-            applied = ?slot.applied,
-            "raster executor: frame stamped against another surface generation"
-        );
         slot.full_redraw = true;
-        return (RasterVerdict::SurfaceStale, None, false);
+        let report = Report::Stale {
+            slot: slot.id,
+            stamped,
+            applied: slot.applied,
+        };
+        return (RasterVerdict::SurfaceStale, None, false, Some(report));
     }
     let damage = if slot.full_redraw {
         DamageRegion::Full
@@ -389,24 +426,84 @@ fn render<B: SlotBackend>(
             RasterVerdict::Retry,
             Some(SlotFailure::Panicked(payload)),
             false,
+            None,
         );
     };
     match rendered {
         Ok(PresentDisposition::Presented) => {
             slot.full_redraw = false;
-            (RasterVerdict::Presented, None, false)
+            (RasterVerdict::Presented, None, false, None)
         }
-        Ok(PresentDisposition::NoDamage) => (RasterVerdict::NoPresent, None, false),
+        Ok(PresentDisposition::NoDamage) => (RasterVerdict::NoPresent, None, false, None),
         Ok(PresentDisposition::NotShown) => {
             slot.full_redraw = true;
-            (RasterVerdict::NotShown, None, false)
+            (RasterVerdict::NotShown, None, false, None)
         }
         Err(error) => {
             slot.full_redraw = true;
             let (verdict, surface_lost) = classify(&error);
-            tracing::warn!(slot = ?slot.id, %error, ?verdict, "raster executor: frame failed");
-            (verdict, None, surface_lost)
+            let report = Report::FrameFailed {
+                slot: slot.id,
+                error,
+                verdict,
+            };
+            (verdict, None, surface_lost, Some(report))
         }
+    }
+}
+
+/// A tracing event about a command, emitted once the command committed:
+/// a subscriber is user code, and one that panics must not strand a frame.
+enum Report {
+    Refused {
+        slot: SlotId,
+        failure: String,
+    },
+    ResizeRefused {
+        slot: SlotId,
+        error: String,
+    },
+    Stale {
+        slot: SlotId,
+        stamped: SurfaceGeneration,
+        applied: SurfaceGeneration,
+    },
+    FrameFailed {
+        slot: SlotId,
+        error: EngineError,
+        verdict: RasterVerdict,
+    },
+}
+
+fn report(report: Report, first: &mut FirstPanic) {
+    first.contain(move || match report {
+        Report::Refused { slot, failure } => {
+            tracing::warn!(?slot, %failure, "raster executor: slot refused");
+        }
+        Report::ResizeRefused { slot, error } => {
+            tracing::warn!(?slot, %error, "raster executor: resize refused; retried next turn");
+        }
+        Report::Stale {
+            slot,
+            stamped,
+            applied,
+        } => tracing::debug!(
+            ?slot,
+            ?stamped,
+            ?applied,
+            "raster executor: frame stamped against another surface generation"
+        ),
+        Report::FrameFailed {
+            slot,
+            error,
+            verdict,
+        } => tracing::warn!(?slot, %error, ?verdict, "raster executor: frame failed"),
+    });
+}
+
+fn report_each<const N: usize>(reports: [Option<Report>; N], first: &mut FirstPanic) {
+    for each in reports.into_iter().flatten() {
+        report(each, first);
     }
 }
 
@@ -443,16 +540,6 @@ fn close(inbox: &SlotInbox, first: &mut FirstPanic) -> usize {
     let settled = usize::from(frame.is_some());
     retire(frame, None, first);
     settled
-}
-
-/// Hold `failure` in `inbox`'s record, with the lock released before a
-/// failure it already holds is discarded.
-fn settle_failure(inbox: &SlotInbox, failure: Option<SlotFailure>, first: &mut FirstPanic) {
-    let Some(failure) = failure else {
-        return;
-    };
-    let extra = inbox.lock().hold_failure(failure);
-    retire(None, extra, first);
 }
 
 /// Drop what a command took out of an inbox, after its lock is released: a

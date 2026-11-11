@@ -865,3 +865,197 @@ fn a_panicking_host_wake_is_resumed_after_the_turn_committed() {
     );
     assert_eq!(rig.wakes.load(Ordering::SeqCst), 2);
 }
+
+/// A resize the backend refuses or panics in is held in the slot's record,
+/// and stays pending: frames stamped with the minted generation settle
+/// `SurfaceStale` until a later turn applies it, and then render.
+#[test]
+fn a_failed_resize_is_held_in_the_record_and_retried_next_turn() {
+    for answer in [
+        ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
+            width: 16,
+            height: 16,
+        }),
+        ScriptedAnswer::Panic,
+    ] {
+        let mut rig = rig();
+        let panicked = matches!(answer, ScriptedAnswer::Panic);
+        let at = attached(&mut rig, 1);
+        rig.backend.script_resize(answer);
+        let SendReceipt::Configured(resized) = rig
+            .sender
+            .send(RasterCommand::Configure {
+                slot: at.slot,
+                change: SlotChange::Size(DeviceSize::new(16, 16)),
+            })
+            .expect("accepted")
+        else {
+            panic!("a positive size mints a generation");
+        };
+        let current = Attached {
+            generation: resized,
+            ..at
+        };
+        let _ = rig.sender.send(frame(current, 1)).expect("accepted");
+        let _ = rig.executor.turn();
+        assert_eq!(
+            verdicts(&rig.sender, at.slot),
+            [(1, RasterVerdict::SurfaceStale)]
+        );
+        let failure = rig.sender.take_failure(at.slot);
+        match failure {
+            Some(SlotFailure::Panicked(_)) => assert!(panicked),
+            Some(SlotFailure::Refused(_)) => assert!(!panicked),
+            None => panic!("the failed resize is held in the record"),
+        }
+
+        let _ = rig.sender.send(frame(current, 2)).expect("accepted");
+        let _ = rig.executor.turn();
+        assert_eq!(
+            verdicts(&rig.sender, at.slot),
+            [(2, RasterVerdict::Presented)],
+            "the next turn retries the resize"
+        );
+        let resizes = rig
+            .backend
+            .calls()
+            .into_iter()
+            .filter(|call| matches!(call, SlotCall::Resize(..)))
+            .count();
+        assert_eq!(resizes, 2);
+    }
+}
+
+/// A subscriber that panics at every event.
+struct PanicsAtEvents;
+
+impl tracing::Subscriber for PanicsAtEvents {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, _: &tracing::Event<'_>) {
+        panic!("the subscriber panics");
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A `tracing` subscriber is user code: one that panics while the executor
+/// reports a refused attach is resumed after the turn, with the slot already
+/// `Refused` and its pending frame settled.
+#[test]
+fn a_panicking_subscriber_cannot_strand_a_refused_slot() {
+    let mut rig = rig();
+    rig.backend
+        .script_attach(ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
+            width: 8,
+            height: 8,
+        }));
+    let slot = rig.sender.mint_slot().expect("a slot id is left");
+    let SendReceipt::Configured(generation) = rig
+        .sender
+        .send(attach_command(slot, address(1)))
+        .expect("accepted")
+    else {
+        panic!("a positive size configures the slot");
+    };
+    let at = Attached {
+        slot,
+        address: address(1),
+        generation,
+    };
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    let mut caught = FirstPanic::new();
+    let turn = tracing::subscriber::with_default(PanicsAtEvents, || {
+        caught.contain(|| rig.executor.turn())
+    });
+    assert!(
+        turn.is_none() && caught.into_payload().is_some(),
+        "the subscriber's panic is resumed"
+    );
+    assert_eq!(phase(&rig.sender, slot), SlotPhase::Refused);
+    assert_eq!(verdicts(&rig.sender, slot), [(1, RasterVerdict::Failed)]);
+}
+
+thread_local! {
+    /// The sender a payload's destructor mints through, and what it got.
+    static MINTER: RefCell<Option<RasterSender>> = const { RefCell::new(None) };
+    static REMINTED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A panic payload whose destructor mints a slot through [`MINTER`].
+struct MintsOnDrop;
+
+impl Drop for MintsOnDrop {
+    fn drop(&mut self) {
+        let sender = MINTER.with_borrow(Clone::clone);
+        if let Some(sender) = sender {
+            REMINTED.set(sender.mint_slot().is_ok());
+        }
+    }
+}
+
+/// A backend whose attach panics with a [`MintsOnDrop`] payload.
+struct PanicsAtAttach;
+
+impl flui_engine::SlotBackend for PanicsAtAttach {
+    fn attach(&mut self, _: SlotId, _: SlotTarget) -> flui_engine::EngineResult<()> {
+        std::panic::panic_any(MintsOnDrop)
+    }
+
+    fn resize(&mut self, _: SlotId, _: DeviceSize) -> flui_engine::EngineResult<()> {
+        Ok(())
+    }
+
+    fn render(
+        &mut self,
+        _: SlotId,
+        _: &Scene,
+        _: DamageRegion,
+    ) -> flui_engine::EngineResult<PresentDisposition> {
+        Ok(PresentDisposition::Presented)
+    }
+
+    fn detach(&mut self, _: SlotId) {}
+
+    fn reclaim(&mut self, _: MemoryPressureLevel) {}
+}
+
+/// A panic payload the owner never took is dropped when its detached slot's
+/// index is collected, with the owner's slot table released: its destructor
+/// can mint through the same sender.
+#[test]
+fn an_untaken_panic_payload_is_dropped_outside_the_slot_table() {
+    let (mut executor, sender) = RasterExecutor::new(PanicsAtAttach, || {});
+    let slot = sender.mint_slot().expect("a slot id is left");
+    let _ = sender
+        .send(attach_command(slot, address(1)))
+        .expect("accepted");
+    let _ = executor.turn();
+    assert_eq!(phase(&sender, slot), SlotPhase::Refused);
+    let _ = sender
+        .send(RasterCommand::Detach { slot })
+        .expect("a refused slot detaches");
+    let _ = executor.turn();
+    MINTER.set(Some(sender.clone()));
+    REMINTED.set(false);
+    let minted = sender.mint_slot().expect("a slot id is left");
+    MINTER.set(None);
+    assert!(REMINTED.get(), "the payload's destructor minted a slot");
+    assert_eq!(
+        minted.index(),
+        slot.index(),
+        "the collected index is reused"
+    );
+}

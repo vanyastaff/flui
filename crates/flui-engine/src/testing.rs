@@ -42,6 +42,7 @@ pub enum SlotCall {
 struct Script {
     calls: Vec<SlotCall>,
     attaches: VecDeque<ScriptedAnswer>,
+    resizes: VecDeque<ScriptedAnswer>,
     renders: VecDeque<ScriptedAnswer>,
 }
 
@@ -80,6 +81,11 @@ impl ScriptedSlots {
         self.script.borrow_mut().attaches.push_back(answer);
     }
 
+    /// Answer the next unanswered resize with `answer`.
+    pub fn script_resize(&self, answer: ScriptedAnswer) {
+        self.script.borrow_mut().resizes.push_back(answer);
+    }
+
     /// Every call so far, oldest first.
     #[must_use]
     pub fn calls(&self) -> Vec<SlotCall> {
@@ -106,7 +112,8 @@ impl ScriptedSlots {
         match call {
             SlotCall::Attach(..) => script.attaches.pop_front(),
             SlotCall::Render(..) => script.renders.pop_front(),
-            SlotCall::Resize(..) | SlotCall::Detach(_) | SlotCall::Reclaim(_) => None,
+            SlotCall::Resize(..) => script.resizes.pop_front(),
+            SlotCall::Detach(_) | SlotCall::Reclaim(_) => None,
         }
     }
 }
@@ -121,8 +128,11 @@ impl SlotBackend for ScriptedSlots {
     }
 
     fn resize(&mut self, slot: SlotId, size: DeviceSize) -> EngineResult<()> {
-        let _none = self.answer(SlotCall::Resize(slot, size));
-        Ok(())
+        match self.answer(SlotCall::Resize(slot, size)) {
+            None | Some(ScriptedAnswer::Answer(_)) => Ok(()),
+            Some(ScriptedAnswer::Fail(error)) => Err(error),
+            Some(ScriptedAnswer::Panic) => panic!("scripted resize panic"),
+        }
     }
 
     fn render(

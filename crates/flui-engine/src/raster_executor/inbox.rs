@@ -8,7 +8,11 @@
 
 use std::{any::Any, collections::VecDeque, fmt};
 
-use flui_foundation::{PresentationAddress, SurfaceGeneration, geometry::DeviceSize};
+use flui_foundation::{
+    PresentationAddress, SurfaceGeneration,
+    geometry::DeviceSize,
+    panic::{FirstPanic, discard_payload},
+};
 use flui_layer::SceneSnapshot;
 use parking_lot::{Mutex, MutexGuard};
 
@@ -38,7 +42,8 @@ pub enum SlotPhase {
 
 /// Why a slot failed: the first failure since the owner last took one.
 pub enum SlotFailure {
-    /// The backend refused to attach the slot.
+    /// The backend refused a command on the slot: its attach, or a resize
+    /// (which the executor retries on its next turn).
     Refused(EngineError),
     /// A command on the slot panicked. The owner reports the payload where
     /// the slot's presentation is (ADR-0258 §1) and resumes or discards it.
@@ -128,6 +133,26 @@ impl SlotInbox {
             in_flight: state.in_flight,
             undrained: state.settlements.len(),
             required_generation: state.generation,
+        }
+    }
+}
+
+/// The last owner of an inbox drops what it still holds as a command would:
+/// a frame's scene and a panic payload nobody took run their destructors
+/// contained, and the payload goes to `discard_payload` (ADR-0281).
+impl Drop for InboxState {
+    fn drop(&mut self) {
+        let frame = self.frame.take();
+        let failure = self.failure.take();
+        if let Some(frame) = frame {
+            let mut caught = FirstPanic::new();
+            caught.contain(move || drop(frame));
+            if let Some(payload) = caught.into_payload() {
+                discard_payload(payload);
+            }
+        }
+        if let Some(SlotFailure::Panicked(payload)) = failure {
+            discard_payload(payload);
         }
     }
 }

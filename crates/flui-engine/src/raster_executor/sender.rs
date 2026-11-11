@@ -62,27 +62,24 @@ impl Lifecycle {
 }
 
 /// What the owner and the executor share: the lifecycle queue, the coalesced
-/// trim, the executor's health and the host's wake. No lock: the queue is a
+/// trim and the executor's health. No lock: the queue is a
 /// bounded channel and the rest are atomics.
 pub(crate) struct Shared {
     pub(crate) lifecycle: Sender<Lifecycle>,
     health: AtomicU8,
     /// The strongest trim asked for since the last turn: 0 for none.
     trim: AtomicU8,
-    /// Called once a turn wrote a settlement, with no lock held.
-    pub(crate) wake: Box<dyn Fn() + Send + Sync>,
 }
 
 const RUNNING: u8 = 0;
 const SHUT_DOWN: u8 = 1;
 
 impl Shared {
-    pub(crate) fn new(lifecycle: Sender<Lifecycle>, wake: Box<dyn Fn() + Send + Sync>) -> Self {
+    pub(crate) fn new(lifecycle: Sender<Lifecycle>) -> Self {
         Self {
             lifecycle,
             health: AtomicU8::new(RUNNING),
             trim: AtomicU8::new(0),
-            wake,
         }
     }
 
@@ -145,16 +142,21 @@ impl OwnerSlots {
             .filter(|slot| slot.id == id)
     }
 
-    /// Free the index of every slot whose detach the executor completed.
-    fn collect_detached(&mut self) {
+    /// Free the index of every slot whose detach the executor completed, and
+    /// hand the slots back: their inboxes may hold the last reference to a
+    /// panic payload, which the caller drops once this table is released.
+    fn collect_detached(&mut self) -> Vec<OwnerSlot> {
+        let mut retired = Vec::new();
         for entry in &mut self.entries {
             let done = entry.as_ref().is_some_and(|slot| {
                 slot.detaching && slot.inbox.record().phase == SlotPhase::Detached
             });
             if done && let Some(slot) = entry.take() {
                 self.mint.release(slot.id);
+                retired.push(slot);
             }
         }
+        retired
     }
 }
 
@@ -193,9 +195,15 @@ impl RasterSender {
     /// [`SlotIdentityExhausted`](crate::EngineError::SlotIdentityExhausted)
     /// when no index is left.
     pub fn mint_slot(&self) -> EngineResult<SlotId> {
-        let mut slots = self.slots.borrow_mut();
-        slots.collect_detached();
-        slots.mint.mint()
+        let (retired, minted) = {
+            let mut slots = self.slots.borrow_mut();
+            let retired = slots.collect_detached();
+            (retired, slots.mint.mint())
+        };
+        // A retired inbox's unclaimed failure is discarded here, with the
+        // slot table released (`InboxState`'s drop).
+        drop(retired);
+        minted
     }
 
     /// Whether the executor still takes commands.
