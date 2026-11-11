@@ -205,8 +205,22 @@ impl PluginPipeline {
                 if !painted {
                     return None;
                 }
+                // The key only tells a resize apart: whole pixels, clamped to
+                // the range `u32` holds, a non-finite size as zero.
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "clamped to 0..=u32::MAX before the cast"
+                )]
+                let pixels = |extent: f64| {
+                    if extent.is_finite() {
+                        extent.ceil().clamp(0.0, f64::from(u32::MAX)) as u32
+                    } else {
+                        0
+                    }
+                };
                 let surface = flui_rendering::layer::SurfaceKey {
-                    size: (width.ceil() as u32, height.ceil() as u32),
+                    size: (pixels(width), pixels(height)),
                     generation: flui_foundation::SurfaceGeneration::ZERO,
                 };
                 if let Err(error) = scene.apply(surface) {

@@ -839,7 +839,7 @@ mod tests {
         }
 
         fn apply_empty_patch(&mut self) {
-            drop(self.owner.writer());
+            let _ = self.owner.writer();
             self.owner.apply(LANE_SURFACE).expect("an empty patch");
         }
     }

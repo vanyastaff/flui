@@ -299,6 +299,10 @@ fn scene_table_cost() {
                 s::a_repaint_with_the_same_links_leaves_the_indexes,
             ),
             (
+                "entries_sharing_a_bucket_copy_it_once",
+                s::entries_sharing_a_bucket_copy_it_once,
+            ),
+            (
                 "wrapping_a_subtree_rewrites_its_depths",
                 s::wrapping_a_subtree_rewrites_its_depths,
             ),

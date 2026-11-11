@@ -107,14 +107,17 @@ pub(crate) fn reassemble_failure_rearms_the_accepted_tail() {
     reload_failure(0, true);
 }
 
-/// A hot reload renews the presentation's scene: the next frame repaints
-/// from the root into a new lineage and is published in full, with no base
-/// the raster side could apply a region to.
-pub(crate) fn a_hot_reload_publishes_the_next_frame_in_full() {
-    let ui_runtime = new_runtime(Arc::new(|| {})).expect("runtime");
+/// A hot reload renews the scene of every presentation: each one starts a new
+/// lineage with no base the raster side could apply a region to, and the next
+/// frame repaints from the root and is published in full.
+pub(crate) fn a_hot_reload_renews_every_scene_lineage() {
+    let mut ui_runtime = new_runtime(Arc::new(|| {})).expect("runtime");
     ui_runtime
         .attach_root_widget_to_for_test(ui_runtime.presentation_id(), &SizedBox::square(20.0))
         .expect("root");
+    let window: Rc<dyn PlatformWindow> = Rc::new(crate::testing::TestWindow::new());
+    let assembled = ui_runtime.assemble_presentation(Rc::clone(&window));
+    let secondary = ui_runtime.install_presentation(assembled);
     let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let mut sink = {
         let seen = Arc::clone(&seen);
@@ -125,23 +128,57 @@ pub(crate) fn a_hot_reload_publishes_the_next_frame_in_full() {
         })
     };
     ui_runtime.render_frame(&mut sink);
+    let shown = seen.lock().pop().expect("the first frame is published");
+    assert!(
+        matches!(shown.2, flui_layer::DamageRegion::Full(_)),
+        "the first frame is drawn in full"
+    );
+    let lineage_of = |ui_runtime: &UiRuntime, id| {
+        ui_runtime
+            .presentations
+            .get(id)
+            .expect("presentation")
+            .scene
+            .borrow()
+            .publication()
+            .scene
+            .id()
+            .lineage()
+    };
+    let primary = ui_runtime.presentation_id();
+    let before = [
+        lineage_of(&ui_runtime, primary),
+        lineage_of(&ui_runtime, secondary),
+    ];
+    assert_eq!(before[0], shown.0.lineage());
+
     ui_runtime
         .command_sender()
         .request_hot_reload(crate::reload::ReloadTier::Reassemble)
         .expect("reload accepted");
     let _ = ui_runtime.drain_commands();
-    ui_runtime.render_frame(&mut sink);
+    for (id, old) in [primary, secondary].into_iter().zip(before) {
+        let publication = ui_runtime
+            .presentations
+            .get(id)
+            .expect("presentation")
+            .scene
+            .borrow()
+            .publication();
+        assert_ne!(
+            publication.scene.id().lineage(),
+            old,
+            "the reload starts a new lineage for every presentation"
+        );
+        assert_eq!(publication.base, None, "nothing on screen is a base of it");
+    }
 
-    let seen = seen.lock();
-    assert_eq!(seen.len(), 2, "the reloaded tree is painted");
-    assert_ne!(
-        seen[1].0.lineage(),
-        seen[0].0.lineage(),
-        "the reload starts a new lineage"
-    );
-    assert_eq!(seen[1].1, None, "nothing on screen is a base of it");
+    ui_runtime.render_frame(&mut sink);
+    let (id, base, damage) = seen.lock().pop().expect("the reloaded tree is published");
+    assert_ne!(id.lineage(), shown.0.lineage());
+    assert_eq!(base, None);
     assert_eq!(
-        seen[1].2,
+        damage,
         flui_layer::DamageRegion::Full(flui_layer::FullReason::Resync(
             flui_layer::ResyncReason::Rebuilt
         ))

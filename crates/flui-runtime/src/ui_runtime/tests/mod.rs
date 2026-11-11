@@ -421,7 +421,7 @@ fn wake_debt_and_signal_write_matrix() {
             #[cfg(feature = "hot-reload")]
             ("hot_reload_recovery::reassemble_failure_rearms_the_accepted_tail", hot_reload_recovery::reassemble_failure_rearms_the_accepted_tail as fn()),
             #[cfg(feature = "hot-reload")]
-            ("hot_reload_recovery::a_hot_reload_publishes_the_next_frame_in_full", hot_reload_recovery::a_hot_reload_publishes_the_next_frame_in_full as fn()),
+            ("hot_reload_recovery::a_hot_reload_renews_every_scene_lineage", hot_reload_recovery::a_hot_reload_renews_every_scene_lineage as fn()),
             ("full_inbox_retries_outstanding_wake_debt_before_rejecting", full_inbox_retries_outstanding_wake_debt_before_rejecting as fn()),
         ],
     );

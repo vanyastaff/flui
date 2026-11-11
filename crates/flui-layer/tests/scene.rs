@@ -672,6 +672,55 @@ pub(crate) fn a_repaint_with_the_same_links_leaves_the_indexes() {
     assert_eq!(owner.current().texture_users(texture).count(), 1);
 }
 
+/// Content whose `n` chunks draw one texture under `n` followers of one link.
+fn shared_users(
+    owner: &mut SceneOwner,
+    n: u32,
+    link: LayerLink,
+    texture: TextureId,
+) -> Arc<BoundaryContent> {
+    let version = owner.writer().next_content_version().expect("fresh");
+    let mut content = BoundaryContent::builder();
+    for ordinal in 0..n {
+        content.push_effect(Layer::from(FollowerLayer::new(link)), owner_id(), ordinal);
+        let mut canvas = Canvas::new();
+        canvas.draw_texture(
+            texture,
+            Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+            None,
+            FilterQuality::Low,
+            1.0,
+        );
+        content.chunk(Arc::new(Chunk::new(
+            owner_id(),
+            ordinal,
+            version,
+            canvas.finish(),
+        )));
+        content.pop_effect();
+    }
+    Arc::new(content.finish())
+}
+
+/// A content with many entries on one texture and one link unshares each
+/// bucket once and extends it in place: its apply copies the table nodes an
+/// apply with one entry copies.
+pub(crate) fn entries_sharing_a_bucket_copy_it_once() {
+    let mut copies = Vec::new();
+    for n in [1u32, 64] {
+        let link = LayerLink::new();
+        let texture = TextureId::new(11);
+        let (mut owner, leaves) = owner_with_leaves(2);
+        let content = shared_users(&mut owner, n, link, texture);
+        copies.push(copies_of(&mut owner, vec![publish(leaves[0], content)]));
+        assert_eq!(owner.current().texture_users(texture).count(), n as usize);
+        assert_eq!(owner.current().followers(link).count(), n as usize);
+    }
+    assert_eq!(
+        copies[0], copies[1],
+        "copies at 1 and 64 entries: {copies:?}"
+    );
+}
 /// A new boundary inserted above a subtree of `n` nodes rewrites `n` depths
 /// and its own.
 pub(crate) fn wrapping_a_subtree_rewrites_its_depths() {
