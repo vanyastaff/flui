@@ -2,7 +2,7 @@
 # One scenario of crates/flui-widgets/tests/perf.rs.
 
 [full_reassemble]
-allocated_bytes = 738607
+allocated_bytes = 738463
 allocations = 2037
 builds_run = 273
 elements_rebuilt = 147
