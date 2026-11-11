@@ -426,38 +426,27 @@ fn content_damage(
     footprints: &mut Footprints,
 ) {
     let (old_entries, new_entries) = (before.entries(), after.entries());
-    let mut old_keys: Vec<((u8, u64, u32), usize)> = old_entries
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| (pairing_key(entry), index))
-        .collect();
-    let mut new_keys: Vec<((u8, u64, u32), usize)> = new_entries
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| (pairing_key(entry), index))
-        .collect();
-    old_keys.sort_unstable();
-    new_keys.sort_unstable();
-    // `pair[j]` is the old entry new entry `j` continues; a key that repeats
-    // pairs its first occurrences only.
-    let mut pair: Vec<Option<usize>> = vec![None; new_entries.len()];
-    let (mut i, mut j) = (0, 0);
-    while i < old_keys.len() && j < new_keys.len() {
-        match old_keys[i].0.cmp(&new_keys[j].0) {
-            std::cmp::Ordering::Less => i += 1,
-            std::cmp::Ordering::Greater => j += 1,
-            std::cmp::Ordering::Equal => {
-                pair[new_keys[j].1] = Some(old_keys[i].1);
-                let repeated = old_keys[i].0;
-                while i < old_keys.len() && old_keys[i].0 == repeated {
-                    i += 1;
-                }
-                while j < new_keys.len() && new_keys[j].0 == repeated {
-                    j += 1;
-                }
-            }
-        }
-    }
+    // A content republished entry for entry in its old order (a layer
+    // update, a repaint that drew the same objects) pairs each entry with the
+    // one at its own position: no sort and no reordering to find.
+    let aligned = old_entries.len() == new_entries.len()
+        && old_entries
+            .iter()
+            .zip(new_entries)
+            .all(|(old, new)| pairing_key(old) == pairing_key(new));
+    let (pair, order_moved) = if aligned {
+        let pair: Vec<Option<usize>> = (0..new_entries.len()).map(Some).collect();
+        (pair, Vec::new())
+    } else {
+        let pair = pair_by_key(old_entries, new_entries);
+        let order: Vec<(usize, usize)> = pair
+            .iter()
+            .enumerate()
+            .filter_map(|(index, old_index)| old_index.map(|old_index| (index, old_index)))
+            .collect();
+        let moved = out_of_order(&order);
+        (pair, moved)
+    };
     // A new entry is stable when it continues an old one that draws the same
     // under the continuation of the same parent.
     let mut stable = vec![false; new_entries.len()];
@@ -481,12 +470,7 @@ fn content_damage(
     }
     // Paired entries out of their old order: every one outside a longest run
     // still in order moved past another, by the rule the differ uses.
-    let order: Vec<(usize, usize)> = pair
-        .iter()
-        .enumerate()
-        .filter_map(|(index, old_index)| old_index.map(|old_index| (index, old_index)))
-        .collect();
-    for (index, old_index) in out_of_order(&order) {
+    for (index, old_index) in order_moved {
         stable[index] = false;
         kept[old_index] = false;
     }
@@ -506,6 +490,42 @@ fn content_damage(
             footprints.add(old.entry_reach(key, EntryIndex::at(index)));
         }
     }
+}
+
+/// `pair[j]`: the old entry new entry `j` continues, by pairing key; a key
+/// that repeats pairs its first occurrences only.
+fn pair_by_key(old_entries: &[Entry], new_entries: &[Entry]) -> Vec<Option<usize>> {
+    let mut old_keys: Vec<((u8, u64, u32), usize)> = old_entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (pairing_key(entry), index))
+        .collect();
+    let mut new_keys: Vec<((u8, u64, u32), usize)> = new_entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (pairing_key(entry), index))
+        .collect();
+    old_keys.sort_unstable();
+    new_keys.sort_unstable();
+    let mut pair: Vec<Option<usize>> = vec![None; new_entries.len()];
+    let (mut i, mut j) = (0, 0);
+    while i < old_keys.len() && j < new_keys.len() {
+        match old_keys[i].0.cmp(&new_keys[j].0) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                pair[new_keys[j].1] = Some(old_keys[i].1);
+                let repeated = old_keys[i].0;
+                while i < old_keys.len() && old_keys[i].0 == repeated {
+                    i += 1;
+                }
+                while j < new_keys.len() && new_keys[j].0 == repeated {
+                    j += 1;
+                }
+            }
+        }
+    }
+    pair
 }
 
 /// The `(new, old)` pairs, listed in new order, that lie outside a longest

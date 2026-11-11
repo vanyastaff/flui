@@ -135,6 +135,22 @@ impl SceneHost {
         pipeline: &mut PipelineOwner<P>,
         paint: impl FnOnce(&mut PipelineOwner<P>, &mut SceneWriter<'_>) -> R,
     ) -> (R, Option<LayerTree>) {
+        let (answer, applied) = self.apply(pipeline, paint);
+        let tree = applied.then(|| self.frame_tree(pipeline)).flatten();
+        (answer, tree)
+    }
+
+    /// [`Self::drive`] without flattening: whether a version was applied,
+    /// for a bench that times what a production frame does.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::drive`].
+    pub fn apply<P: PipelinePhase, R>(
+        &mut self,
+        pipeline: &mut PipelineOwner<P>,
+        paint: impl FnOnce(&mut PipelineOwner<P>, &mut SceneWriter<'_>) -> R,
+    ) -> (R, bool) {
         let answer = {
             let mut writer = self.owner.writer();
             let answer = paint(pipeline, &mut writer);
@@ -144,14 +160,13 @@ impl SceneHost {
             answer
         };
         if !pipeline.scene_staged() {
-            return (answer, None);
+            return (answer, false);
         }
         if let Err(error) = self.owner.apply(self.surface) {
             panic!("BUG: the pipeline's patch was refused: {error}");
         }
         pipeline.scene_applied(self.owner.current());
-        let tree = self.frame_tree(pipeline);
-        (answer, tree)
+        (answer, true)
     }
 
     /// [`Self::drive`] for a pipeline its `cell` holds, which `paint` reaches
@@ -167,6 +182,25 @@ impl SceneHost {
         cell: &PipelineCell,
         paint: impl FnOnce(&mut SceneWriter<'_>) -> R,
     ) -> (R, Option<LayerTree>) {
+        let (answer, applied) = self.apply_cell(cell, paint);
+        let tree = applied
+            .then(|| cell.scene_frame_node())
+            .flatten()
+            .and_then(|node| self.owner.current().flatten_node(node));
+        (answer, tree)
+    }
+
+    /// [`Self::drive_cell`] without flattening: whether a version was
+    /// applied, for a host that flattens [`Self::version`] only when asked.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::drive_cell`].
+    pub fn apply_cell<R>(
+        &mut self,
+        cell: &PipelineCell,
+        paint: impl FnOnce(&mut SceneWriter<'_>) -> R,
+    ) -> (R, bool) {
         let staged = || cell.with(PipelineOwner::scene_staged);
         let answer = {
             let mut writer = self.owner.writer();
@@ -177,16 +211,13 @@ impl SceneHost {
             answer
         };
         if !staged() {
-            return (answer, None);
+            return (answer, false);
         }
         if let Err(error) = self.owner.apply(self.surface) {
             panic!("BUG: the pipeline's patch was refused: {error}");
         }
         cell.scene_applied(self.owner.current());
-        let tree = cell
-            .scene_frame_node()
-            .and_then(|node| self.owner.current().flatten_node(node));
-        (answer, tree)
+        (answer, true)
     }
 
     /// [`Self::drive`] for a frame that takes the pipeline by value.

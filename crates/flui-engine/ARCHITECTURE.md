@@ -1022,8 +1022,9 @@ Locked by `a_hard_rect_clip_keeps_the_pixels_whose_centres_are_inside`
 
 ### 18. Partial frames render into a retained target and blit — [ADR-0087 §4](../../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md)
 
-Damage arrives as `flui_layer::DamageRegion` on each `SceneSnapshot`, from the
-host's `LayerDiffer`. The enum is exhaustive (ADR-0304 §5): `Unchanged`,
+Damage arrives as `flui_layer::DamageRegion` on each `SceneSnapshot`: the
+footprint of the scene patches since the version on screen, which the host holds
+to that base with `RasterBase` (ADR-0304 §7). The enum is exhaustive (ADR-0304 §5): `Unchanged`,
 `Region` of up to eight disjoint rects, or `Full` with its `FullReason`, and the
 engine matches all three with no wildcard, so a new variant fails to compile
 here. The tracker plans by the region's bounds. `RasterOwner::pump` hands it to the backend before the
@@ -1118,8 +1119,9 @@ Why this and not "replace only under the content":
 - Clips still clip: a layer never changes a pixel its clip excludes, the one
   limit the author cannot reach from inside the layer.
 - It is the extent the damage producer already reports (`DrawOp`'s damage
-  extent for a bounded save layer is its mapped bounds; `LayerDiffer` takes an
-  opacity layer in such a mode as the viewport), so a partial frame repaints
+  extent for a bounded save layer is its mapped bounds; the scene footprint
+  takes an opacity layer in such a mode as reaching everywhere), so a partial
+  frame repaints
   everything the composite changes.
 
 Edge cases:

@@ -258,7 +258,9 @@ fn counter(report: &FrameReport, name: &str) -> u64 {
 
 /// A full reassemble — every element rebuilt and every render object
 /// re-laid-out and repainted, with semantics on — touches every phase, so
-/// every counter but the retained-layer one moves. Removing any increment
+/// every counter moves but three: the retained-layer one, the full-damage
+/// one, which only a frame with no base on screen moves, and the depth one,
+/// which only a reparented boundary moves. Removing any other increment
 /// site fails here.
 #[test]
 fn perf_counters_are_live_on_a_full_reassemble() {
@@ -269,7 +271,10 @@ fn perf_counters_are_live_on_a_full_reassemble() {
     record("full_reassemble", &report, allocations);
 
     for (name, value) in report.counters() {
-        if name == "layers_reused" {
+        if matches!(
+            name,
+            "layers_reused" | "damage_full" | "scene_depth_updates"
+        ) {
             continue;
         }
         assert!(
@@ -370,6 +375,11 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
         "a tick must not repaint the panel's rows: {report:#?}"
     );
     assert_eq!(report.pipeline.nodes_laid_out, 0, "{report:#?}");
+    assert_eq!(
+        report.scene.scene_depth_updates, 0,
+        "a slide moves the panel's node without reparenting it: {report:#?}"
+    );
+    assert_eq!(report.scene.damage_full, 0, "{report:#?}");
 }
 
 /// The two tree sizes a `perf_scaling_` scenario compares, by the name

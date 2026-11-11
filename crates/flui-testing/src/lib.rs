@@ -306,7 +306,7 @@ pub struct HeadlessBinding {
     /// [`layer_tree`](Self::layer_tree).
     ///
     /// `None` before the first painted frame and for a gesture-only binding.
-    last_layer_tree: Option<LayerTree>,
+    last_layer_tree: CommittedFrame,
     /// Whether the immediately preceding frame produced a fresh layer tree.
     last_frame_painted: bool,
     /// Number of frames that produced a fresh layer tree.
@@ -386,7 +386,7 @@ impl HeadlessBinding {
             owner_frame,
             interaction_lane,
             presentation_alive: std::rc::Rc::new(()),
-            last_layer_tree: None,
+            last_layer_tree: CommittedFrame::default(),
             last_frame_painted: false,
             painted_frame_count: 0,
             last_frame_report: FrameReport::default(),
@@ -645,7 +645,7 @@ impl HeadlessBinding {
             scene,
         });
         self.last_frame_painted = committed_layer_tree.is_some();
-        self.last_layer_tree = committed_layer_tree;
+        self.last_layer_tree = CommittedFrame::of_tree(committed_layer_tree);
         // The previous tree's last pump says nothing about this one.
         self.last_frame_report = FrameReport::default();
         if self.last_frame_painted {
@@ -825,7 +825,7 @@ impl HeadlessBinding {
     /// [`Self::did_paint_last_frame`] when the distinction matters.
     #[must_use]
     pub fn layer_tree(&self) -> Option<&LayerTree> {
-        self.last_layer_tree.as_ref()
+        self.last_layer_tree.tree()
     }
 
     /// Whether the immediately preceding frame produced a fresh layer tree.
@@ -1223,11 +1223,11 @@ impl HeadlessBinding {
                         // before build/layout/paint. Keep raw-owner animation
                         // work under that same profiling and execution extent.
                         vsync.tick_all(&tick);
-                        let (painted_layer_tree, report) = Self::run_pipeline(tree);
+                        let (painted, report) = Self::run_pipeline(tree);
                         *last_frame_report = report;
-                        *last_frame_painted = painted_layer_tree.is_some();
-                        if let Some(layer_tree) = painted_layer_tree {
-                            *last_layer_tree = Some(layer_tree);
+                        *last_frame_painted = painted.is_some();
+                        if let Some(frame) = painted {
+                            *last_layer_tree = frame;
                             *painted_frame_count = painted_frame_count.saturating_add(1);
                         }
 
@@ -1276,12 +1276,12 @@ impl HeadlessBinding {
     /// → paint, plus the lazy-sliver service pass. Runs inside
     /// `OwnerFrame::drive_frame`'s persistent slot.
     ///
-    /// Returns the composited [`LayerTree`] this frame produced — `None` for a
+    /// Returns the frame this pass committed, flattened when a test asks — `None` for a
     /// gesture-only binding, and `None` when nothing was dirty enough to
     /// repaint. `pump_frame` stores it in
     /// [`last_layer_tree`](Self::last_layer_tree). Alongside it, the frame's
     /// [`FrameReport`] (all zeros for a gesture-only binding).
-    fn run_pipeline(tree: &mut Option<TreeBinding>) -> (Option<LayerTree>, FrameReport) {
+    fn run_pipeline(tree: &mut Option<TreeBinding>) -> (Option<CommittedFrame>, FrameReport) {
         let Some(tree_binding) = tree.as_mut() else {
             return (None, FrameReport::default());
         };
@@ -1315,7 +1315,7 @@ impl HeadlessBinding {
             scene,
         } = tree_binding;
         let scene_before = SceneReport::read(scene.owner_mut());
-        let (result, layer_tree) = scene.drive_cell(pipeline_owner, |writer| {
+        let (result, applied) = scene.apply_cell(pipeline_owner, |writer| {
             build_owner.run_frame_with_layout_builders(element_tree, pipeline_owner, writer)
         });
         // A headless frame over an already-mounted, rooted tree must succeed;
@@ -1343,13 +1343,13 @@ impl HeadlessBinding {
         let report = FrameReport {
             build: tree_binding.build_owner.last_frame_build_report(),
             pipeline: after.since(before),
-            scene: SceneReport::since(
-                tree_binding.scene.owner_mut(),
-                scene_before,
-                layer_tree.is_some(),
-            ),
+            scene: SceneReport::since(tree_binding.scene.owner_mut(), scene_before, applied),
         };
-        (layer_tree, report)
+        let frame = applied
+            .then(|| tree_binding.pipeline_owner.scene_frame_node())
+            .flatten()
+            .map(|node| CommittedFrame::of_version(tree_binding.scene.version().clone(), node));
+        (frame, report)
     }
 }
 
@@ -1419,6 +1419,49 @@ impl std::ops::AddAssign<&FrameReport> for FrameReport {
         }
         self.pipeline += rhs.pipeline;
         self.scene += rhs.scene;
+    }
+}
+
+/// The last frame a headless binding committed: the scene version and the
+/// pipeline's frame node, flattened into a [`LayerTree`] the first time a
+/// test asks, so a frame nobody inspects costs no copy of the scene.
+#[derive(Debug, Default)]
+struct CommittedFrame {
+    source: Option<(
+        flui_rendering::layer::SceneVersion,
+        flui_rendering::layer::SceneNodeId,
+    )>,
+    tree: std::cell::OnceCell<Option<LayerTree>>,
+}
+
+impl CommittedFrame {
+    /// A tree the caller already holds.
+    fn of_tree(tree: Option<LayerTree>) -> Self {
+        Self {
+            source: None,
+            tree: std::cell::OnceCell::from(tree),
+        }
+    }
+
+    /// The frame node `node` paints in `version`.
+    fn of_version(
+        version: flui_rendering::layer::SceneVersion,
+        node: flui_rendering::layer::SceneNodeId,
+    ) -> Self {
+        Self {
+            source: Some((version, node)),
+            tree: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn tree(&self) -> Option<&LayerTree> {
+        self.tree
+            .get_or_init(|| {
+                self.source
+                    .as_ref()
+                    .and_then(|(version, node)| version.flatten_node(*node))
+            })
+            .as_ref()
     }
 }
 
