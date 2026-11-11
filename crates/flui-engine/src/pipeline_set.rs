@@ -38,7 +38,7 @@
 //! A `BindGroup` binds under a `RenderPipeline` only when its layout is
 //! group-equivalent to the pipeline's layout at that index: the same entries
 //! (WebGPU's rule, which wgpu applies). Within a set the layout is one
-//! object; across the sets of a [`PipelineLibrary`] it is equal by entries,
+//! object; across the sets of a [`PipelineLibrary`](crate::pipeline_set::PipelineLibrary) it is equal by entries,
 //! which is what lets the painter keep its viewport and glyph atlas bind groups
 //! when it changes target format. The layout is owned by
 //! [`crate::pipeline_cache::PipelineCache`] and exposed via
