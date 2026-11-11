@@ -335,6 +335,9 @@ impl PipelineOwner<PaintPhase> {
         root_is_boundary: bool,
         inputs: &PaintInputs<'_>,
     ) -> crate::error::RenderResult<()> {
+        // Served once every repaint above has staged the placements it may
+        // move them by.
+        let mut settled_later: SmallVec<[RenderId; 4]> = SmallVec::new();
         for queued in self.scheduler.nodes_needing_paint() {
             let id = queued.id;
             if !self.boundary_records.contains_key(&id) {
@@ -343,11 +346,32 @@ impl PipelineOwner<PaintPhase> {
             if self.slotted_by_a_repaint(id, inputs) {
                 continue;
             }
+            if self.under_a_repaint(id, inputs) {
+                settled_later.push(id);
+                continue;
+            }
             self.serve_alone(composer, id, inputs)?;
         }
-        if !inputs.frame_dirty {
-            return Ok(());
+        if inputs.frame_dirty {
+            self.paint_frame(composer, root_id, root_is_boundary, inputs)?;
         }
+        // Shallowest first, so a deferred boundary's placement is staged
+        // before one nested in it reads it.
+        for &id in settled_later.iter().rev() {
+            self.serve_alone(composer, id, inputs)?;
+        }
+        Ok(())
+    }
+
+    /// Paints the frame node's content: the device-pixel-ratio layer over the
+    /// root, inline or slotted.
+    fn paint_frame(
+        &self,
+        composer: &mut FragmentComposer<'_, '_, '_>,
+        root_id: RenderId,
+        root_is_boundary: bool,
+        inputs: &PaintInputs<'_>,
+    ) -> crate::error::RenderResult<()> {
         composer.begin_boundary(None);
         let root_layer = if (self.device_pixel_ratio - 1.0).abs() < f64::EPSILON {
             Layer::Offset(OffsetLayer::zero())
@@ -412,29 +436,63 @@ impl PipelineOwner<PaintPhase> {
         false
     }
 
+    /// Whether a boundary above `id`'s parent repaints this frame, or the
+    /// frame node does above a chain of clean boundaries: that repaint may
+    /// move the clean boundaries between, so `id` is served alone only once
+    /// their placements are staged.
+    fn under_a_repaint(&self, id: RenderId, inputs: &PaintInputs<'_>) -> bool {
+        let mut at = self
+            .boundary_records
+            .get(&id)
+            .and_then(|record| record.placed.parent);
+        while let Some(ancestor) = at {
+            let Some(record) = self.boundary_records.get(&ancestor) else {
+                return false;
+            };
+            match record.placed.parent {
+                Some(parent) if inputs.repaints(parent) => return true,
+                Some(parent) => at = Some(parent),
+                None => return inputs.frame_dirty,
+            }
+        }
+        false
+    }
+
+    /// Where `id`'s slot puts it: the placement staged this frame when its
+    /// parent's repaint placed it, else the one its record holds.
+    fn placed_of(&self, composer: &FragmentComposer<'_, '_, '_>, id: RenderId) -> Option<Placed> {
+        composer
+            .staged_placed(id)
+            .or_else(|| self.boundary_records.get(&id).map(|record| record.placed))
+    }
+
     /// The paint anchor a walk from the root would hand the boundary `id` at
-    /// its slot, derived from its records' `parent` chain (ADR-0304 §8):
+    /// its slot, derived from its placements' `parent` chain (ADR-0304 §8):
     /// O(depth), and never stale, since an ancestor that moved changed only
-    /// its own record.
-    fn inherited_anchor(&self, id: RenderId) -> Option<AnchorFrame> {
-        let mut chain: SmallVec<[&BoundaryRecord; 8]> = SmallVec::new();
+    /// its own placement, staged this frame or recorded before.
+    fn inherited_anchor(
+        &self,
+        composer: &FragmentComposer<'_, '_, '_>,
+        id: RenderId,
+    ) -> Option<AnchorFrame> {
+        let mut chain: SmallVec<[Placed; 8]> = SmallVec::new();
         let mut at = Some(id);
         while let Some(current) = at {
-            let record = self.boundary_records.get(&current)?;
-            chain.push(record);
-            if record.placed.slot_anchor.is_some() {
+            let placed = self.placed_of(composer, current)?;
+            chain.push(placed);
+            if placed.slot_anchor.is_some() {
                 break;
             }
-            at = record.placed.parent;
+            at = placed.parent;
         }
         // Outermost first: the frame that reaches the slot of the innermost.
         let mut frame: Option<AnchorFrame> = None;
-        for (depth, record) in chain.iter().enumerate().rev() {
-            let at_slot = record.placed.slot_anchor.or(frame);
+        for (depth, placed) in chain.iter().enumerate().rev() {
+            let at_slot = placed.slot_anchor.or(frame);
             if depth == 0 {
                 return at_slot;
             }
-            frame = at_slot.map(|anchor| anchor.rebased(record.placed.placement));
+            frame = at_slot.map(|anchor| anchor.rebased(placed.placement));
         }
         None
     }
@@ -459,9 +517,12 @@ impl PipelineOwner<PaintPhase> {
         if !node.is_repaint_boundary() {
             return Ok(());
         }
+        let placement = self
+            .placed_of(composer, id)
+            .map_or(record.placed.placement, |placed| placed.placement);
         let region_anchor = self
-            .inherited_anchor(id)
-            .map(|anchor| anchor.rebased(record.placed.placement));
+            .inherited_anchor(composer, id)
+            .map(|anchor| anchor.rebased(placement));
         let fresh = self.refresh_boundary(composer, id, Some(record), region_anchor, inputs)?;
         if let Some(fresh) = fresh {
             composer.stage_record(id, fresh);
@@ -1711,6 +1772,14 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
     fn stage_record(&mut self, id: RenderId, record: BoundaryRecord) {
         self.staged.placed.remove(&id);
         self.staged.records.insert(id, Some(record));
+    }
+
+    /// The placement a repaint staged for `id` this pass, if any.
+    fn staged_placed(&self, id: RenderId) -> Option<Placed> {
+        match self.staged.records.get(&id) {
+            Some(Some(record)) => Some(record.placed),
+            _ => self.staged.placed.get(&id).copied(),
+        }
     }
 
     fn stage_placed(&mut self, id: RenderId, placed: Placed) {

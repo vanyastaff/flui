@@ -452,6 +452,49 @@ fn an_anchor_outside_the_region_is_rebased_at_each_slot() {
     assert_eq!(tally.anchor(), Some(first_anchor));
 }
 
+/// A boundary repainted alone under a clean boundary that moves in the same frame reads the
+/// anchor the moved placement gives it: the move is settled before the nested repaint.
+///
+/// Red-check: serve the nested boundary before its moved ancestor's placement is staged (it
+/// reads the placement of the frame before).
+#[test]
+fn a_boundary_under_a_moved_clean_boundary_reads_the_moved_anchor() {
+    let tally = PaintTally::new();
+    let (owner, registry) = mount(
+        box_node(RenderPaintAnchor::new()).child(
+            box_node(RenderFlex::row())
+                .child(box_node(RenderSizedBox::fixed(10.0, 10.0)).label("lead"))
+                .child(
+                    box_node(RenderRepaintBoundary::new()).label("moved").child(
+                        box_node(RenderFlex::row()).child(leaf()).child(
+                            box_node(RenderRepaintBoundary::new())
+                                .label("inner")
+                                .child(box_node(tally.clone())),
+                        ),
+                    ),
+                ),
+        ),
+    );
+    let lead = registry.get("lead").expect("labelled");
+    let inner = registry.get("inner").expect("labelled");
+    let mut scene = SceneHost::new();
+    let (mut owner, _) = frame(&mut scene, owner);
+    let first = tally.anchor().expect("the tally sits under an anchor");
+
+    update_render_object::<RenderSizedBox, _>(&mut owner, lead, |lead| {
+        lead.set_size(Some(40.0), Some(10.0))
+    });
+    owner.mark_needs_paint(inner);
+    let _ = frame(&mut scene, owner);
+
+    let moved = tally.anchor().expect("the tally sits under an anchor");
+    assert_eq!(
+        moved.offset.dx,
+        first.offset.dx + 30.0,
+        "the nested repaint reads the anchor of the moved placement"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Differential: retained frames against a fresh full repaint
 // ---------------------------------------------------------------------------
