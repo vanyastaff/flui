@@ -145,6 +145,17 @@ pub(crate) const fn appkit_window_capabilities(
 /// visible, unoccluded window presented was handed to its presented handler
 /// with a `presentedTime` of 0, Metal's "never shown", so no frame is ever
 /// reported.
+///
+/// The guest flag is a proxy: the cause is the virtual display, and a guest
+/// whose display does stamp its drawables is told it reports nothing. It is
+/// used because the answer is owed before any frame
+/// (`Platform::window_capabilities` before a window exists, the snapshot at
+/// open), and nothing readable then names the cause: Metal says whether a
+/// drawable was shown only after it was presented, and the virtual display is
+/// told apart from a real one only by a localized screen name or an EDID
+/// vendor of 0, which a real display without EDID shares. Downgrading after
+/// the first unstamped drawables would leave the claim untrue for those
+/// frames and change a capability under a running window.
 #[cfg(any(target_os = "macos", test))]
 pub(crate) const fn appkit_presentation(hypervisor_guest: bool) -> Option<CapabilityAbsence> {
     if hypervisor_guest {
