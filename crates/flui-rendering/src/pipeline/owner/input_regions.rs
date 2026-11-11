@@ -8,8 +8,9 @@
 //! composing matrices: a node's transform and clip are composed along its path from the root
 //! only when it reported a region, `depth` steps per reporter.
 
+use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
-use flui_foundation::{RenderId, SlotSet};
+use rustc_hash::FxHashSet;
 
 use crate::input_regions::{
     InputRegion, InputRegionKind, InputRegionSink, Presses, UnmappableRegion, map_rect,
@@ -49,12 +50,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // Only a node that adds regions, or a node in the subtree of one, can contribute:
         // anything else only claims or passes presses, which matters inside a move area
         // alone. The walk follows the paths from the root to those nodes and their
-        // subtrees, so a tree with none costs nothing here.
+        // subtrees, so a tree with none costs nothing here. The path set is sized by the
+        // paths, not by the slot of the deepest source: it is built fresh every frame.
         let sources = self.render_tree.input_region_sources();
         if sources.is_empty() {
             return regions;
         }
-        let mut toward_sources = SlotSet::new();
+        let mut toward_sources = FxHashSet::default();
         for &source in sources {
             let mut current = Some(source);
             while let Some(id) = current {
@@ -183,7 +185,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 continue;
             };
             // Outside every source's subtree, only a child on a path to one can contribute.
-            if !walk.in_source && !walk.toward_sources.contains(child_id) {
+            if !walk.in_source && !walk.toward_sources.contains(&child_id) {
                 continue;
             }
             if !child.was_placed_by(id, generation) || !visits_child(node, slot, size) {
@@ -305,7 +307,7 @@ struct RegionWalk<'a> {
     scope: MoveScope,
     /// The nodes that add regions and every ancestor of one: outside a source's subtree,
     /// the walk enters only these.
-    toward_sources: SlotSet<RenderId>,
+    toward_sources: FxHashSet<RenderId>,
     /// Whether the node being visited lies in the subtree of a node that adds regions.
     in_source: bool,
 }
