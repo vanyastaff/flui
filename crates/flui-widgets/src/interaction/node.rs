@@ -35,8 +35,8 @@ use flui_view::{
 };
 
 use super::actions::{
-    Action, ActionChain, EnclosingActions, ErasedAction, FocusRecord, Intent, erased_action,
-    layered_chain,
+    Action, ActionChain, EnclosingActions, ErasedAction, FocusRecord, Intent, layered_chain,
+    shared_action,
 };
 use super::focus::render_box_rect_provider;
 use super::focus_host::{FocusConfig, FocusHost};
@@ -130,9 +130,13 @@ impl InteractiveNode {
 
     /// Bind intent type `T` to `action` for the hosted focus node and the
     /// subtree, as an [`Actions`](crate::Actions) around a `Focus` does.
+    ///
+    /// A control binds one action to several intent types, so the node
+    /// takes it shared: each binding names the same action, and none holds
+    /// a copy.
     #[must_use]
-    pub(crate) fn action<T: Intent>(mut self, action: impl Action<T> + 'static) -> Self {
-        Rc::make_mut(&mut self.actions).push(erased_action(action));
+    pub(crate) fn action<T: Intent, A: Action<T> + 'static>(mut self, action: &Rc<A>) -> Self {
+        Rc::make_mut(&mut self.actions).push(shared_action::<T, A>(action));
         self
     }
 

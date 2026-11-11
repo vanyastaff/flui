@@ -148,7 +148,7 @@ impl StatelessView for RawButton {
     /// activation bindings, the semantics and the focus ring.
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         let enabled = self.on_press.is_some();
-        let press = Press(self.on_press.clone());
+        let press = Rc::new(Press(self.on_press.clone()));
         // One node for assistive technology: the button.
         let semantics = Semantics::new()
             .container(true)
@@ -165,9 +165,9 @@ impl StatelessView for RawButton {
                 ..FocusConfig::new()
             })
             .focus_ring()
-            .action::<ActivateIntent>(press.clone())
-            .action::<ButtonActivateIntent>(press.clone())
-            .action::<ActivationPressIntent>(press);
+            .action::<ActivateIntent, Press>(&press)
+            .action::<ButtonActivateIntent, Press>(&press)
+            .action::<ActivationPressIntent, Press>(&press);
         // The node replaces its callbacks on every build, so a new closure
         // takes effect on the next press.
         if let Some(handler) = self.on_press.clone() {
