@@ -212,9 +212,9 @@ fn click(laid: &mut LaidOut, x: f64, y: f64) {
     laid.pump();
 }
 
-/// `Focused` is the focus a user can see: focus taken after a click is not
-/// shown, neither as the state nor as a ring, and the next key shows both,
-/// in the theme's ring style.
+/// `Focused` is the focus the well holds and `FocusVisible` the focus a user
+/// can see: focus taken after a click is held and not shown, neither as the
+/// state nor as a ring, and the next key shows both, in the theme's ring style.
 pub fn a_well_shows_focus_only_when_the_keyboard_is_in_use() {
     let node = FocusNode::with_debug_label("visible-focus");
     let states = WidgetStatesController::default();
@@ -232,14 +232,18 @@ pub fn a_well_shows_focus_only_when_the_keyboard_is_in_use() {
     laid.pump_for(Duration::from_millis(200));
     assert!(node.has_primary_focus(), "the well took the focus");
     assert!(
-        !states.value().contains_state(WidgetState::Focused),
+        states.value().contains_state(WidgetState::Focused),
+        "the well holds the focus, whatever gave it"
+    );
+    assert!(
+        !states.value().contains_state(WidgetState::FocusVisible),
         "focus after a click is not shown"
     );
     assert!(!ring_painted(&laid), "and draws no ring");
     let _ = laid.enter_owner_scope(|| laid.focus_manager().dispatch_key_event(&tab()));
     laid.pump_for(Duration::from_millis(200));
     assert!(
-        states.value().contains_state(WidgetState::Focused),
+        states.value().contains_state(WidgetState::FocusVisible),
         "a key shows the focus"
     );
     assert!(ring_painted(&laid), "as the theme's ring");

@@ -13,7 +13,10 @@ use flui_widgets::interaction::{
     Action as IntentAction, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent,
     ButtonActivateIntent, Focus, FocusRing, GestureDetector,
 };
-use flui_widgets::{Column, RawButton, Semantics, SemanticsRole, Text, column};
+use flui_widgets::{
+    Column, RawButton, Semantics, SemanticsRole, Text, WidgetState, WidgetStates,
+    WidgetStatesController, column,
+};
 
 use crate::common::{LaidOut, lay_out, loose};
 
@@ -658,5 +661,348 @@ pub(crate) fn disabled_raw_button_is_disabled_in_every_part() {
         *log.borrow(),
         ["press", "press", "press", "press"],
         "the activation key reaches neither the disabled button nor the action above it"
+    );
+}
+
+/// A button given a states controller, with the switches the test turns.
+#[derive(Clone, StatefulView)]
+struct Stated {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+    shown: flui_testing::widgets::SharedSignal<bool>,
+    first: flui_testing::widgets::SharedSignal<bool>,
+    controllers: [WidgetStatesController; 2],
+}
+
+struct StatedState {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+    shown: flui_testing::widgets::SharedSignal<bool>,
+    first: flui_testing::widgets::SharedSignal<bool>,
+}
+
+impl StatefulView for Stated {
+    type State = StatedState;
+    fn create_state(&self) -> Self::State {
+        StatedState {
+            enabled: self.enabled.clone(),
+            shown: self.shown.clone(),
+            first: self.first.clone(),
+        }
+    }
+}
+
+impl ViewState<Stated> for StatedState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.enabled.bind(ctx);
+        self.shown.bind(ctx);
+        self.first.bind(ctx);
+    }
+
+    fn build(&self, view: &Stated, ctx: &dyn BuildContext) -> impl IntoView {
+        if !self.shown.get(ctx) {
+            return flui_widgets::SizedBox::new(120.0, 60.0).boxed();
+        }
+        let controller = &view.controllers[usize::from(!self.first.get(ctx))];
+        let mut button =
+            RawButton::new(flui_widgets::SizedBox::new(120.0, 60.0).child(Text::new("Press")))
+                .states_controller(controller.clone());
+        if self.enabled.get(ctx) {
+            button = button.on_press(|_cx: &mut EventCx<'_>| {});
+        }
+        button.boxed()
+    }
+}
+
+/// The button writes its interaction states to the controller it is given
+/// (ADR-0322 §3): `Hovered` for a pointer inside it, `Pressed` for a contact
+/// that is down, `Focused` and
+/// `FocusVisible` for the focus a key gave it, `Disabled` for the switch;
+/// disabling under a contact leaves `Disabled` alone, and a controller the
+/// button stops writing to, by a swap or by unmounting, keeps nothing, and a
+/// press under way follows its contact across the swap.
+///
+/// Red-check: drop the `states` the button hands its node (every row but
+/// the first fails), or the clearing in the node's `dispose` (the last row).
+pub(crate) fn raw_button_writes_its_states_to_the_controller() {
+    use std::time::Duration;
+
+    use crate::keyboard_focus::tab;
+
+    let enabled = flui_testing::widgets::SharedSignal::new(true);
+    let shown = flui_testing::widgets::SharedSignal::new(true);
+    let first = flui_testing::widgets::SharedSignal::new(true);
+    // The second arrives holding states of some other control.
+    let controllers = [
+        WidgetStatesController::default(),
+        WidgetStatesController::new(WidgetStates::PRESSED | WidgetStates::HOVERED),
+    ];
+    let [one, other] = controllers.clone();
+    let mut app = lay_out(
+        Stated {
+            enabled: enabled.clone(),
+            shown: shown.clone(),
+            first: first.clone(),
+            controllers,
+        },
+        loose(400.0),
+    );
+    let manager = app.focus_manager();
+    let focus_states = WidgetStates::FOCUSED | WidgetStates::FOCUS_VISIBLE;
+    assert_eq!(one.value(), WidgetStates::NONE, "an idle button");
+
+    app.dispatch_pointer_hover(20.0, 20.0);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::HOVERED,
+        "a pointer inside the button hovers it"
+    );
+    app.dispatch_pointer_hover(300.0, 300.0);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::NONE,
+        "and leaving ends the hover"
+    );
+    app.dispatch_pointer_hover(20.0, 20.0);
+    // A pen is a second pointer: it hovers beside the mouse.
+    let pen_hover = |app: &LaidOut, x: f64, y: f64| {
+        use flui_interaction::events::{PointerEvent, make_move_event_for_id};
+        use flui_platform::pointer::{PenTool, PointerButtons, PointerId, PointerKind};
+        let mut event = make_move_event_for_id(
+            PointerId::try_from(2_u64).expect("non-zero"),
+            flui_foundation::geometry::Offset::new(x, y),
+            PointerKind::Pen { tool: PenTool::Tip },
+        )
+        .expect("finite");
+        let PointerEvent::Move(update) = &mut event else {
+            unreachable!("a move event");
+        };
+        update.buttons = PointerButtons::NONE;
+        app.dispatch_pointer_event(&event);
+    };
+    pen_hover(&app, 30.0, 30.0);
+    app.pump();
+    app.dispatch_pointer_hover(300.0, 300.0);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::HOVERED,
+        "a pen still over the button keeps it hovered when the mouse leaves"
+    );
+    pen_hover(&app, 300.0, 300.0);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::NONE,
+        "the last pointer out ends it"
+    );
+    app.dispatch_pointer_hover(20.0, 20.0);
+    app.pump();
+    enabled.set(false);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::DISABLED,
+        "a disabled button tracks no pointer"
+    );
+    app.dispatch_pointer_hover(300.0, 300.0);
+    enabled.set(true);
+    app.pump();
+    assert_eq!(one.value(), WidgetStates::NONE);
+
+    app.dispatch_pointer_down(20.0, 20.0);
+    app.pump_for(Duration::from_millis(200));
+    assert!(
+        one.value().contains_state(WidgetState::Pressed),
+        "a contact that is down presses the button"
+    );
+    app.dispatch_pointer_up(20.0, 20.0);
+    app.pump_for(Duration::from_millis(400));
+    assert!(
+        !one.value().contains_state(WidgetState::Pressed),
+        "and its release ends the press"
+    );
+
+    assert!(app.enter_owner_scope(|| tab(&manager)));
+    app.pump();
+    assert_eq!(
+        one.value().intersection(focus_states),
+        focus_states,
+        "focus a key gave is held and shown"
+    );
+
+    app.dispatch_pointer_down(20.0, 20.0);
+    app.pump_for(Duration::from_millis(200));
+    assert!(one.value().contains_state(WidgetState::Pressed));
+    enabled.set(false);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::DISABLED,
+        "a button disabled under a contact, with the focus, is disabled and nothing else"
+    );
+    app.dispatch_pointer_up(20.0, 20.0);
+    app.pump_for(Duration::from_millis(400));
+    assert_eq!(one.value(), WidgetStates::DISABLED);
+
+    enabled.set(true);
+    app.pump();
+    assert!(app.enter_owner_scope(|| tab(&manager)));
+    app.pump();
+    assert_eq!(one.value(), focus_states);
+    first.set(false);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::NONE,
+        "a controller the button stops writing to keeps none of its states"
+    );
+    assert_eq!(
+        other.value(),
+        focus_states,
+        "and the one it is given starts at what the button is, whatever it held"
+    );
+
+    app.dispatch_pointer_down(20.0, 20.0);
+    app.pump_for(Duration::from_millis(200));
+    assert!(other.value().contains_state(WidgetState::Pressed));
+    first.set(true);
+    app.pump();
+    assert_eq!(other.value(), WidgetStates::NONE);
+    assert_eq!(
+        one.value(),
+        WidgetStates::FOCUSED | WidgetStates::PRESSED,
+        "a press follows its contact to the controller given under it, and a pointer press ends the shown focus"
+    );
+    app.dispatch_pointer_up(20.0, 20.0);
+    app.pump_for(Duration::from_millis(400));
+    assert_eq!(one.value(), WidgetStates::FOCUSED, "and ends there");
+
+    shown.set(false);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::NONE,
+        "a controller keeps no state of a button that is gone"
+    );
+}
+
+/// Paints from the states a control writes, and repaints when they change.
+#[derive(Debug)]
+struct StateReader {
+    states: WidgetStatesController,
+    painted: Rc<RefCell<Vec<WidgetStates>>>,
+}
+
+impl flui_rendering::delegates::CustomPainter for StateReader {
+    fn paint(&self, _canvas: &mut flui_painting::Canvas, _size: flui_foundation::geometry::Size) {
+        self.painted.borrow_mut().push(self.states.value());
+    }
+
+    fn should_repaint(&self, _old: &dyn flui_rendering::delegates::CustomPainter) -> bool {
+        false
+    }
+
+    fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
+        Some(Rc::new(self.states.clone()))
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// A reader that takes a control's states at paint follows a hover with no
+/// build (ADR-0322 §3): the hover rebuilds no element, lays out no node and
+/// paints the reader's repaint boundary alone, where the reader sees `Hovered`.
+///
+/// Red-check: drop `StateReader::repaint` (nothing paints), or have the
+/// button's node rebuild on a hover (an element builds).
+pub(crate) fn hover_repaints_without_rebuilding() {
+    use std::time::Duration;
+
+    use flui_rendering::pipeline::PipelineOwner;
+
+    let states = WidgetStatesController::default();
+    let painted = Rc::new(RefCell::new(Vec::<WidgetStates>::new()));
+    let reader = StateReader {
+        states: states.clone(),
+        painted: Rc::clone(&painted),
+    };
+    let mut app = lay_out(
+        Column::new((
+            RawButton::new(
+                flui_widgets::RepaintBoundary::new().child(
+                    flui_widgets::CustomPaint::new()
+                        .size(flui_foundation::geometry::Size::new(120.0, 60.0))
+                        .painter(reader),
+                ),
+            )
+            .states_controller(states.clone())
+            .on_press(|_cx: &mut EventCx<'_>| {}),
+            Text::new("A neighbour"),
+        )),
+        loose(400.0),
+    );
+    app.pump_for(Duration::ZERO);
+    painted.borrow_mut().clear();
+    let before = app.pipeline_owner().with(PipelineOwner::counters);
+
+    app.dispatch_pointer_hover(20.0, 20.0);
+    app.pump_for(Duration::ZERO);
+
+    let work = app
+        .pipeline_owner()
+        .with(PipelineOwner::counters)
+        .since(before);
+    let built = app.with_build_owner_mut(|owner| owner.last_frame_build_report());
+    assert_eq!(states.value(), WidgetStates::HOVERED);
+    assert_eq!(
+        *painted.borrow(),
+        [WidgetStates::HOVERED],
+        "the reader paints once, from the state the hover wrote"
+    );
+    assert_eq!(
+        built.elements_built, 0,
+        "a hover builds nothing: {built:#?}"
+    );
+    assert_eq!(work.nodes_laid_out, 0, "{work:#?}");
+    assert_eq!(
+        work.nodes_painted, 2,
+        "the reader and its repaint boundary paint, the button and its neighbour do not: {work:#?}"
+    );
+}
+
+/// A focus edge handler that panics does not cost the other edge
+/// (ADR-0281): `on_visible_focus_change` still reports the shown focus, and
+/// the first failure is the one that surfaces.
+///
+/// Red-check: call the handlers in `FocusHost::add_focus_listener` bare.
+pub(crate) fn a_panicking_focus_edge_still_reports_the_shown_focus() {
+    use crate::keyboard_focus::tab;
+
+    let shown = Rc::new(RefCell::new(Vec::<bool>::new()));
+    let seen = Rc::clone(&shown);
+    let mut app = lay_out(
+        Focus::new(flui_widgets::SizedBox::new(120.0, 60.0))
+            .on_focus_change(move |_cx, held| {
+                // Only the edge in: the tree's teardown runs the edge out.
+                assert!(!held, "focus edge handler");
+            })
+            .on_visible_focus_change(move |_cx, now| seen.borrow_mut().push(now)),
+        loose(400.0),
+    );
+    let manager = app.focus_manager();
+
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _moved: bool = app.enter_owner_scope(|| tab(&manager));
+        app.pump();
+    }));
+
+    assert_eq!(*shown.borrow(), [true], "the shown focus is reported");
+    let payload = failure.expect_err("the handler's panic surfaces");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("focus edge handler")
     );
 }
