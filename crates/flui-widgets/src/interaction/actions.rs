@@ -31,7 +31,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use flui_foundation::ChangeNotifier;
-use flui_interaction::focus::{FocusManager, FocusNode, KeyEventResult, NodeContext};
+use flui_interaction::focus::{
+    FocusManager, FocusNode, FocusNodeRegistration, KeyEventResult, NodeContext,
+};
+use flui_platform::TargetPlatform;
 use flui_view::element::ElementKind;
 
 use flui_view::prelude::*;
@@ -369,20 +372,60 @@ pub(crate) fn erased_action<T: Intent>(action: impl Action<T> + 'static) -> (Typ
     (TypeId::of::<T>(), ErasedAction::new(action))
 }
 
-/// The chain a focused [`Focus`](super::focus::Focus) recorded on its node:
-/// the bindings visible at the focused widget's position, which is where
-/// a shortcut's intent is resolved. `None` for a node no
-/// `Focus` widget hosts, or one with no `Actions` above it.
-pub(crate) fn chain_at(node: &FocusNode) -> Option<ActionChain> {
-    node.context()?
-        .downcast::<HashMap<TypeId, ErasedAction>>()
-        .ok()
+/// What a focused widget records on its node for the `Shortcuts` above it:
+/// the action chain at its position, where an intent is resolved, and the
+/// platform convention it was built under, which picks the chords of the
+/// platform-dependent bindings.
+#[derive(Clone)]
+pub(crate) struct FocusRecord {
+    chain: ActionChain,
+    platform: TargetPlatform,
 }
 
-/// The chain as the opaque context a focus node carries ([`chain_at`] reads
-/// it back).
-pub(crate) fn as_node_context(chain: &ActionChain) -> NodeContext {
-    Rc::clone(chain) as NodeContext
+impl FocusRecord {
+    /// The record of a widget built under `platform` with `chain` above it.
+    pub(crate) fn new(chain: ActionChain, platform: TargetPlatform) -> Self {
+        Self { chain, platform }
+    }
+
+    /// The record of a widget at `ctx` with `chain` above it.
+    pub(crate) fn at(ctx: &dyn BuildContext, chain: ActionChain) -> Self {
+        Self::new(chain, flui_view::environment::PlatformConvention::of(ctx))
+    }
+
+    /// The platform convention the recording widget was built under.
+    pub(crate) fn platform(&self) -> TargetPlatform {
+        self.platform
+    }
+
+    /// Whether `self` and `other` record the same chain and convention, so
+    /// recording one over the other changes nothing.
+    pub(crate) fn same_as(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.chain, &other.chain) && self.platform == other.platform
+    }
+
+    /// Record `self` on `node`, until the returned registration drops.
+    pub(crate) fn register_on(&self, node: &Rc<FocusNode>) -> FocusNodeRegistration {
+        node.register_context(Rc::new(self.clone()) as NodeContext)
+    }
+}
+
+/// The record a focused widget left on `node`. `None` for a node no `Focus`
+/// or text field hosts, or one with no `Actions` above it.
+fn record_at(node: &FocusNode) -> Option<Rc<FocusRecord>> {
+    node.context()?.downcast::<FocusRecord>().ok()
+}
+
+/// The chain recorded on `node`: the bindings visible at the focused widget's
+/// position, which is where a shortcut's intent is resolved.
+pub(crate) fn chain_at(node: &FocusNode) -> Option<ActionChain> {
+    record_at(node).map(|record| Rc::clone(&record.chain))
+}
+
+/// The platform convention the widget that recorded on `node` was built
+/// under.
+pub(crate) fn platform_at(node: &FocusNode) -> Option<TargetPlatform> {
+    record_at(node).map(|record| record.platform)
 }
 
 /// The nearest provider's chain, if any. Resolved at call time, so late reads

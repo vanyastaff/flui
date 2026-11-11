@@ -18,7 +18,7 @@ use std::{
 };
 
 use flui_native::{
-    HeadlessPlatform, HostWindow, MockWindow, Platform as _, executor::BackgroundExecutor,
+    HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform as _, executor::BackgroundExecutor,
 };
 use flui_platform::{CloseDecision, WindowCommand, WindowOptions};
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
@@ -82,7 +82,7 @@ fn a_nested_close_request_keeps_the_window() {
             let window = mock(&weak);
             let window = window
                 .as_any()
-                .downcast_ref::<MockWindow>()
+                .downcast_ref::<HeadlessHostWindow>()
                 .expect("a headless window");
             heard.set(Some(window.simulate_close()));
         }
@@ -90,7 +90,7 @@ fn a_nested_close_request_keeps_the_window() {
     });
     let window = window
         .as_any()
-        .downcast_ref::<MockWindow>()
+        .downcast_ref::<HeadlessHostWindow>()
         .expect("a headless window");
     assert!(
         window.simulate_close(),

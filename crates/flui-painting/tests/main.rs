@@ -545,6 +545,14 @@ fn recording_contract() {
                 "a_finished_display_list_is_sendable_to_another_thread",
                 recording::a_finished_display_list_is_sendable_to_another_thread,
             ),
+            (
+                "a_non_finite_op_is_refused_by_kind",
+                recording::a_non_finite_op_is_refused_by_kind,
+            ),
+            (
+                "a_destructor_that_panics_during_reset_leaves_the_canvas_empty",
+                recording::a_destructor_that_panics_during_reset_leaves_the_canvas_empty,
+            ),
         ],
     );
 }

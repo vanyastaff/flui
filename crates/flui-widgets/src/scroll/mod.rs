@@ -18,6 +18,7 @@ pub(crate) use anchored_drag::anchor_keys;
 #[cfg(test)]
 pub(crate) use interactive_viewer::zoom_keys;
 #[cfg(test)]
+#[cfg(test)]
 pub(crate) use refresh_indicator::refresh_keys;
 mod animated_list;
 mod collapsing_header;

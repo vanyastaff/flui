@@ -2526,26 +2526,13 @@ is what fails if the second segmenter comes back.
   Delete) come from ICU4X's grapheme segmenter, a different UAX #29 mode
   with no dictionary dependency, and are correct for
   every script including all the ones named above.
-- **The word-jump modifier's platform source is compile-time only, and
-  that is already known wrong for at least one real target.**
-  `is_word_jump_modifier` resolves `TargetPlatform::current()` — a
-  `cfg(target_os)` compile-time constant — once per `EditableText` key
-  handler, in `build_key_handler`. `wasm32` matches none of
-  `current()`'s `target_os` arms and falls through to `Unknown` →
-  Control, but a `flui` app compiled to `wasm32` and running in a Safari
-  tab on macOS needs Alt instead: native Ctrl+Arrow is the OS's own
-  Spaces-switch shortcut there, so a page that binds Control for
-  word-jump would never even see the chord. Web and embedded targets
-  need `TargetPlatform` resolved at RUNTIME, not baked in at compile
-  time — the gap `GestureSettings::preset` closes for gestures by taking
-  the platform as a value rather than reading the compile target. `word_jump_modifier`
-  is already split into a pure `(platform) -> Modifiers` function
-  specifically so a future runtime-resolved source has one place to
-  plug in — `build_key_handler`'s `let platform = TargetPlatform::current();`
-  — without touching the mapping table itself. Not fixed here: this
-  change did not add a runtime-platform-resolution mechanism to
-  `flui-widgets`, and inventing one for this one call site would be
-  premature relative to `GestureSettings`' own still-open gap.
+- **The word-jump modifier follows the tree's `PlatformConvention`.**
+  `is_word_jump_modifier` takes the platform the field or area read from
+  `PlatformConvention::of` at its last build, which the runtime installs
+  from the platform its runner names. `word_jump_modifier` stays a pure
+  `(platform) -> Modifiers` table. A `wasm32` build is named `Unknown`
+  (Control) until the web runner reports the browser's OS: a Safari tab on
+  macOS needs Alt, since Ctrl+Arrow switches Spaces there (`docs/gaps.md`).
 
 **Replacement tests:**
 `two_space_run_word_boundary`, a row of flui-painting's `caret_contract`
@@ -2865,8 +2852,8 @@ technology reads when it appears. **Unasserted:** no test pins this.
 
 **Choice:** `DefaultFocusTraversal`, which `app_root` installs above every
 application root, binds the three chords (Cmd on macOS and iOS, Control
-elsewhere — a pure table resolved once per state from
-`TargetPlatform::current()`). The chord resolves at the
+elsewhere — a pure table resolved in each build from
+`PlatformConvention::of`). The chord resolves at the
 primary focus like the traversal keys: an `EditableText` answers it on its own
 node, and with no text field focused nothing does, so the chord keeps
 bubbling. **Tests:** `tests/editable_text_clipboard.rs`

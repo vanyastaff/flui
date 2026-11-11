@@ -1,7 +1,7 @@
 # render-scaling: задачи
 
-- **Статус:** утверждена 2026-11-11; исполнение. Сделано: ничего. Следующие: RS1, RS3, RS4, RS5,
-  RS14 (не зависят друг от друга).
+- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1. Следующие: RS3, RS4, RS5, RS14 (не
+  зависят друг от друга).
 - **Design:** [design.md](design.md); требования и ворота G1–G7: [requirements.md](requirements.md)
 - **База:** `main` @ `da69efa`. Пути и строки в ADR даны на `e5ba8fe8f`; перед правкой сверить.
 
@@ -272,4 +272,5 @@
 
 | Задача | PR | Состояние | Доказательство |
 |---|---|---|---|
-| RS1–RS19 | | не начата | |
+| RS1 | #2384 | готова | `painting_it recording_contract::a_non_finite_op_is_refused_by_kind`, `…a_destructor_that_panics_during_reset_leaves_the_canvas_empty` (падает без порядка `reset`); `a_non_finite_op_is_omitted_and_the_frame_draws`, `inline_picture_replay_owns_its_root_clips` на lavapipe; `.snap` не тронуты; `rg draw_picture crates packages` пуст |
+| RS2–RS19 | | не начата | |

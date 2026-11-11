@@ -3,7 +3,7 @@
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::TextStyle;
 use flui_sdk::painting::{BorderRadius, BorderSide, BoxDecoration, Color};
-use flui_sdk::platform::{Brightness, TargetPlatform};
+use flui_sdk::platform::Brightness;
 use flui_sdk::widgets::{FocusRingStyle, SelectionStyle, WidgetStateProperty};
 
 use crate::button_style::ButtonStyle;
@@ -745,7 +745,7 @@ pub enum MaterialStyle {
 /// [`text_theme`](Self::text_theme), and the button-family/`AppBar`/`Card`/
 /// `Dialog`/`FloatingActionButton` component-theme slots below (each
 /// narrowed to its owning widget's actually-consumed fields — see that
-/// slot's own doc comment). Deferred: `iconTheme`, `extensions`, `platform`,
+/// slot's own doc comment). Deferred: `iconTheme`, `extensions`,
 /// `useMaterial3` (this crate is M3-only — there is no M2 mode to switch
 /// away from), and every other widget's component theme (`inputDecorationTheme`
 /// and friends) until that widget lands.
@@ -853,11 +853,6 @@ pub struct ThemeData {
     /// field.
     pub data_table_theme: Option<DataTableThemeData>,
 
-    /// The platform this theme adapts to: today, which page transition
-    /// [`page_transitions_theme`](Self::page_transitions_theme) picks. The
-    /// baselines use the platform the app was built for.
-    pub platform: TargetPlatform,
-
     /// Which Material design the components follow: the M3 baseline, or Material 3
     /// Expressive. Today it picks the indicator [`MaterialApp`](crate::MaterialApp) gives
     /// every `RefreshIndicator`: a circular progress indicator for the baseline, a
@@ -865,8 +860,8 @@ pub struct ThemeData {
     pub style: MaterialStyle,
 
     /// Which transition page routes run, per platform (ADR-0221 D3).
-    /// [`MaterialApp`](crate::MaterialApp) installs the one for
-    /// [`platform`](Self::platform).
+    /// [`MaterialApp`](crate::MaterialApp) installs the one for the
+    /// [`PlatformConvention`](flui_sdk::view::environment::PlatformConvention) it is built under.
     pub page_transitions_theme: PageTransitionsTheme,
 }
 
@@ -903,7 +898,6 @@ impl ThemeData {
             tab_bar_theme: None,
             data_table_theme: None,
             style: MaterialStyle::default(),
-            platform: TargetPlatform::current(),
             page_transitions_theme: PageTransitionsTheme::default(),
         }
     }
@@ -940,7 +934,6 @@ impl ThemeData {
             tab_bar_theme: None,
             data_table_theme: None,
             style: MaterialStyle::default(),
-            platform: TargetPlatform::current(),
             page_transitions_theme: PageTransitionsTheme::default(),
         }
     }
@@ -1043,7 +1036,6 @@ impl ThemeData {
                 .data_table_theme
                 .or_else(|| self.data_table_theme.clone()),
             style: overrides.style.unwrap_or(self.style),
-            platform: overrides.platform.unwrap_or(self.platform),
             page_transitions_theme: overrides
                 .page_transitions_theme
                 .unwrap_or_else(|| self.page_transitions_theme.clone()),
@@ -1118,8 +1110,6 @@ pub struct ThemeDataOverrides {
     pub data_table_theme: Option<DataTableThemeData>,
     /// Overrides [`ThemeData::style`].
     pub style: Option<MaterialStyle>,
-    /// Overrides [`ThemeData::platform`].
-    pub platform: Option<TargetPlatform>,
     /// Overrides [`ThemeData::page_transitions_theme`].
     pub page_transitions_theme: Option<PageTransitionsTheme>,
 }
