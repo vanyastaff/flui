@@ -50,8 +50,9 @@ flui-protocol = { workspace = true }
 
 # Core dependencies
 parking_lot.workspace = true
+# Deterministic hashing of per-frame owner tables.
+rustc-hash.workspace = true
 slab.workspace = true
-rustc-hash.workspace = true # deterministic hashing of per-frame owner tables
 smallvec.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
