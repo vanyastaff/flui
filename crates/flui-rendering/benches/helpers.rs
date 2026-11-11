@@ -234,9 +234,9 @@ pub fn build_nested_boundary_tree_painted_once(n: usize) -> (PipelineOwner<Paint
 /// `layered` decides what those leaves are, and it is the difference between
 /// two very different cost curves:
 ///
-/// - `false` — plain inline leaves. They merge into ONE `PictureLayer` sharing
-///   an `Arc<DisplayList>`, so the retained capture is a handful of nodes
-///   whatever `subtree` is, and grafting is O(1).
+/// - `false` — plain inline leaves, each its own `PictureLayer` sharing an
+///   `Arc<DisplayList>` (a picture holds one render object's output, ADR-0304
+///   §2), so grafting clones one picture per leaf and re-records nothing.
 /// - `true` — each leaf under its own `RenderRepaintBoundary`, so the capture's
 ///   layer count grows with `subtree` and grafting is O(retained layers): a
 ///   graft still clones every captured node. This is the shape that shows the

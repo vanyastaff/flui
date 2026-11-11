@@ -5,9 +5,10 @@
 //! `DisplayList`s with record-time bounds. These tests pin the
 //! composition contract:
 //!
-//! 1. an inline subtree merges into ONE `PictureLayer` with
-//!    origin-baked coordinates;
-//! 2. sibling inline draws merge into the same picture in z-order;
+//! 1. a picture holds one render object's output with origin-baked
+//!    coordinates: the open run is sealed whenever the painting render
+//!    object changes (ADR-0304 §2);
+//! 2. inline draws keep their z-order across those pictures;
 //! 3. a repaint-boundary child splits into its own `OffsetLayer`
 //!    with coordinates rebased to zero;
 //! 4. a clip render object produces a real clip layer bracketing the
@@ -20,9 +21,10 @@ use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_layer::{Layer, LayerTree};
 use flui_objects::{RenderClipRect, RenderColoredBox, RenderPadding, RenderRepaintBoundary};
+use flui_painting::{Paint, styling::Color};
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
     pipeline::PipelineOwner,
     testing::inspect,
@@ -70,25 +72,24 @@ fn first_picture(tree: &LayerTree) -> &flui_painting::DisplayList {
 }
 
 // ============================================================================
-// 1+2. Inline subtree merges into one picture, z-ordered, origin-baked
+// 1+2. A picture holds one render object's output, z-ordered, origin-baked
 // ============================================================================
 
 /// Variable-arity container: lays out children loose and positions
-/// child `i` at `(i*50, 0)`. No paint override — the default
-/// pass-through splices children, so their draws must merge into the
-/// parent's picture space.
+/// child `i` at `(i*50, 0)`. Paints a backdrop under its children and a
+/// frame over them, so its own output comes before and after theirs.
 #[derive(Debug)]
-struct SimpleRow;
+struct FramedRow;
 
-impl flui_foundation::inspect::Inspect for SimpleRow {
+impl flui_foundation::inspect::Inspect for FramedRow {
     fn kind(&self) -> &'static str {
-        "SimpleRow"
+        "FramedRow"
     }
 
     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
 }
 
-impl RenderBox for SimpleRow {
+impl RenderBox for FramedRow {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
@@ -107,14 +108,49 @@ impl RenderBox for SimpleRow {
         })
     }
 
+    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
+        let rect = Rect::from_origin_size(Point::ZERO, ctx.size());
+        ctx.canvas()
+            .draw_rect(rect, &Paint::fill(Color::rgb(0, 255, 0)));
+        ctx.paint_children();
+        ctx.canvas()
+            .draw_rect(rect, &Paint::stroke(Color::BLACK, 1.0));
+    }
+
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
         false
     }
 }
 
-pub(crate) fn inline_siblings_merge_into_one_origin_baked_picture() {
+/// Every picture under `tree`'s root, in paint order.
+fn pictures(tree: &LayerTree) -> Vec<&flui_painting::DisplayList> {
+    fn walk<'t>(
+        tree: &'t LayerTree,
+        id: flui_foundation::LayerId,
+        out: &mut Vec<&'t flui_painting::DisplayList>,
+    ) {
+        let node = tree
+            .get(id)
+            .expect("every id in this walk came from the tree");
+        if let Layer::Picture(picture) = node.layer() {
+            out.push(picture.picture());
+        }
+        for &child in node.children() {
+            walk(tree, child, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(tree, tree.root(), &mut out);
+    out
+}
+
+/// The open run is sealed whenever the painting render object changes
+/// (ADR-0304 §2): a parent that paints before and after two inline
+/// children yields four pictures, each holding one render object's
+/// draws, in paint order and at the origins the layout committed.
+pub(crate) fn a_picture_run_holds_one_render_objects_output() {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-    let row_id = owner.insert(Box::new(SimpleRow) as BoxedRenderObject);
+    let row_id = owner.insert(Box::new(FramedRow) as BoxedRenderObject);
     owner
         .insert_child_render_object(row_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
         .expect("child 0");
@@ -129,25 +165,55 @@ pub(crate) fn inline_siblings_merge_into_one_origin_baked_picture() {
 
     assert_eq!(
         structure(&tree),
-        vec![(0, "Offset"), (1, "Picture")],
-        "two inline sibling draws must merge into ONE PictureLayer under \
-         the root — no per-node layer explosion",
+        vec![
+            (0, "Offset"),
+            (1, "Picture"),
+            (1, "Picture"),
+            (1, "Picture"),
+            (1, "Picture"),
+        ],
+        "the row's backdrop, each child and the row's frame are four pictures \
+         under the root, not one merged run",
     );
 
-    let picture = first_picture(&tree);
-    assert_eq!(
+    let rects = |picture: &flui_painting::DisplayList| -> Vec<Rect> {
         picture
             .iter()
-            .filter(|command| matches!(command.op, flui_painting::DrawOp::Rect { .. }))
-            .count(),
-        2,
-        "one DrawRect per ColoredBox, merged in z-order",
+            .filter_map(|command| match command.op {
+                flui_painting::DrawOp::Rect { rect, .. } => Some(rect),
+                _ => None,
+            })
+            .collect()
+    };
+    let pictures = pictures(&tree);
+    let row = Rect::from_ltrb(0.0, 0.0, 150.0, 50.0);
+    assert_eq!(
+        pictures
+            .iter()
+            .map(|picture| rects(picture))
+            .collect::<Vec<_>>(),
+        vec![
+            vec![row],
+            vec![Rect::from_ltrb(0.0, 0.0, 40.0, 40.0)],
+            vec![Rect::from_ltrb(0.0, 0.0, 40.0, 40.0)],
+            vec![row],
+        ],
+        "one render object's rect per picture, in paint order",
     );
     assert_eq!(
-        picture.bounds(),
-        Some(Rect::from_ltrb(0.0, 0.0, 90.0, 40.0)),
-        "record-time bounds must reflect the committed child offsets: \
-         child 0 at (0,0)-(40,40), child 1 at (50,0)-(90,40)",
+        pictures
+            .iter()
+            .map(|picture| picture.bounds())
+            .collect::<Vec<_>>(),
+        vec![
+            Some(row),
+            Some(Rect::from_ltrb(0.0, 0.0, 40.0, 40.0)),
+            Some(Rect::from_ltrb(50.0, 0.0, 90.0, 40.0)),
+            // The frame's stroke reaches half its width past the rect.
+            Some(Rect::from_ltrb(-0.5, -0.5, 150.5, 50.5)),
+        ],
+        "record-time bounds bake each child's committed offset: child 0 at \
+         (0,0)-(40,40), child 1 at (50,0)-(90,40)",
     );
 }
 

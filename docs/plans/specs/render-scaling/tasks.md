@@ -172,9 +172,22 @@
   аллокаций кадра показывает, что `apply` с N записями на одну текстуру или одну ссылку аллоцирует
   столько же, сколько с одной (корзина индекса расширяется на месте); readback-наборы
   без правки ожиданий.
-- **Зависит:** RS4 (в той же серии), RS7. **Размер:** XL. **Ревью сильной модели.** Если PR выходит за 3 000 строк
-  диффа, первым отдельным PR уходит `FrameSink::submit(ScenePublication)` с публикацией
-  `Full` на каждый кадр, вторым производитель патчей.
+- **Зависит:** RS4 (в той же серии), RS7. **Размер:** XL. **Ревью сильной модели.**
+- **Серия:** три PR, каждый зелёный сам по себе. Первый: RS4 (сливается только после зелёного
+  второго). Второй: производитель патчей с публикацией и удалением старых форм выше; общие ворота
+  RS4 меряются на его голове. Третий: RS8c. Конвертера `LayerTree` → `SceneVersion` нет: он стоил
+  бы O(сцена) дважды на кадр и уходил бы следующим PR. Если второй выходит за 3 000 строк диффа,
+  от него отделяется проводка `BoundaryRecord` и `SceneWriter` за прежней сборкой дерева, без
+  второго производственного пути: публикует по-прежнему старый.
+
+### RS8c. Буферы paint и сборки сцены живут между кадрами
+
+- **Что:** `Vec<FragmentOp>` нарисованного узла, команды display list, буферы патча и детей слоёв
+  сохраняют ёмкость между кадрами (профиль: `paint_cx.rs` `FragmentOp::Child`/`Push`/`Run`,
+  `display_list/mod.rs` `commands.push`, `paint.rs` списки границ).
+- **Ворота:** строка baseline `xtask perf --check`, падающая на коде до пулов: 0 аллокаций paint
+  и сборки сцены на `slide_transition_tick` и на кадре без изменений.
+- **Зависит:** RS8. **Размер:** M.
 
 ### RS9. Движок обходит версию
 
@@ -319,4 +332,5 @@
 | RS7 | #2401 | готова | `layer_it pending_log_contract`: пять строк ADR (`a_full_log_folds_its_two_oldest_entries`, `damage_from_an_older_base_covers_the_newer_one`, `a_base_from_another_lineage_renders_full`, `a_lost_completion_over_reports_and_never_under_reports`, `a_surface_change_in_the_log_publishes_full`) и пробы повторного входа `a_released_content_drops_after_the_owner_is_released`, `a_fold_releases_its_contents_after_the_owner_is_released` (40 кадров без подтверждения: журнал не больше 16 записей, свёрнутая запись сохраняет `Full(SurfaceChanged)`); каждая строка падает без своей проверки (линия, «только вперёд», сворачивание, отпускание после заимствования, сброс записей по подтверждению); счётчик `pending_log_folds`; `apply` (в `Applied::released`), `completed` и `renew` возвращают `ReleasedContents` для `Outbox` (ADR-0287), включая заменённую версию и содержимое, отпущенное сворачиванием; память журнала ограничена 16 записями |
 | RS15a | #2396 | готова (ревью принято) | `engine_it` 17 тестов; без фикса падают `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released` (взаимоблокировка), `a_full_settlement_ring_holds_the_next_frame`, `a_stopped_executor_settles_every_pending_frame_failed`, `a_failed_resize_is_held_in_the_record_and_retried_next_turn`, `a_panicking_subscriber_cannot_strand_a_refused_slot`, `an_untaken_panic_payload_is_dropped_outside_the_slot_table`, `a_refusal_whose_error_panics_when_formatted_still_commits`, `a_surface_loss_keeps_the_barrier_of_a_pending_resize` |
 | RS15c1 | #2407 | в ревью | `a_surface_targets_display_equals_the_platforms_connection`: X11 под `Xvfb` (`x11_window`), Wayland под `weston` (`platform_it`), `the_headless_display_connection_answers_no_display`; проверка типов Windows, macOS, iOS, Android, wasm32 |
-| RS2, RS4, RS8–RS13, RS15b, RS15c2, RS16–RS19 | | не начата | |
+| RS4 | в серии с RS8 | готова, сливается после зелёного производителя RS8 | `rendering_it paint_matrix::a_picture_run_holds_one_render_objects_output` (падает без запечатывания по владельцу); readback `composited_layer_update_readback` и lib flui-engine на lavapipe без правки; снимки paint не перегенерированы; perf: `layers_produced` без изменений во всех сценариях, `slide_transition_tick.layers_reused` 1 → 30 (30 строк панели теперь 30 картинок, а не одна); общие ворота с RS8 меряются на голове производителя |
+| RS2, RS8, RS8c, RS9–RS13, RS15b, RS15c2, RS16–RS19 | | не начата | |

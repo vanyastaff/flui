@@ -48,7 +48,8 @@ impl PipelineOwner<PaintPhase> {
     /// (sans-IO paint model): each node's `paint_raw` records a
     /// node-local fragment — draw runs, child markers, clip scopes —
     /// which is immediately replayed into the frame's [`LayerTree`].
-    /// Adjacent inline draw runs merge into shared `PictureLayer`s;
+    /// Adjacent inline draw runs of one render object merge into a
+    /// `PictureLayer`, a run of another seals it (ADR-0304 §2);
     /// repaint-boundary children are rebased to `Offset::ZERO` under
     /// their own `OffsetLayer`; clip scopes become real clip layers.
     ///
@@ -832,7 +833,7 @@ impl PipelineOwner<PaintPhase> {
         let mut scope_opacity: SmallVec<[f64; 4]> = SmallVec::new();
         for op in fragment.ops {
             match op {
-                FragmentOp::Run(list) => composer.append_run(list),
+                FragmentOp::Run(list) => composer.append_run(node_id, list),
                 FragmentOp::Push(scope) => {
                     // Follower hit-testing: capture the RenderId -> LayerId
                     // correlation as a near-free byproduct of pushing a
@@ -914,8 +915,8 @@ impl PipelineOwner<PaintPhase> {
                             inputs,
                         )?;
                     } else {
-                        // Inline children bake into the shared picture
-                        // space — runs merge, no extra layer.
+                        // Inline children paint in the parent's layer space,
+                        // origin baked in, into pictures of their own.
                         self.paint_subtree(
                             composer,
                             child_id,
@@ -1420,17 +1421,24 @@ struct PaintInputs<'a> {
 }
 
 /// Builds the frame's [`LayerTree`] from replayed paint fragments,
-/// merging adjacent inline draw runs into shared `PictureLayer`s.
+/// merging adjacent inline draw runs of one render object into a
+/// `PictureLayer`.
 ///
 /// Sealing discipline mirrors the recorder's: the open run is flushed
 /// into a `PictureLayer` whenever a layer boundary needs ordering
-/// (push/pop) and at [`Self::finish`]. The stack always holds at least
-/// the root `OffsetLayer`.
+/// (push/pop), whenever the render object painting the next run changes,
+/// and at [`Self::finish`]. A picture therefore holds one render object's
+/// output (ADR-0304 §2), and a render object that repaints changes only its
+/// own pictures. The stack always holds at least the root `OffsetLayer`.
 #[derive(Debug)]
 struct FragmentComposer {
     tree: LayerTree,
     stack: Vec<LayerId>,
     open: DisplayList,
+    /// The render object whose runs `open` holds, `None` while it is empty: a
+    /// picture holds one render object's output (ADR-0304 §2), so a run of
+    /// another seals it first.
+    open_owner: Option<RenderId>,
     /// `(RenderId, LayerId, origin)` correlation for each `Layer::Follower` pushed
     /// this paint pass (flui-rendering ARCHITECTURE.md, follower hit-testing) — the general `RenderId -> LayerId`
     /// primitive independently wanted by the snapshot/harness subtree-scoping
@@ -1522,6 +1530,7 @@ impl FragmentComposer {
             stack: vec![tree.root()],
             tree,
             open: DisplayList::new(),
+            open_owner: None,
             follower_correlations: Vec::new(),
             child_paint_orders: Vec::new(),
             retained_captures: Vec::new(),
@@ -1544,8 +1553,16 @@ impl FragmentComposer {
         self.counts.nodes_painted += 1;
     }
 
-    /// Merges a sealed run while keeping its canvas clips local to that run.
-    fn append_run(&mut self, run: DisplayList) {
+    /// Merges a sealed run of `owner`'s paint while keeping its canvas clips
+    /// local to that run; a run of another render object seals the open
+    /// picture first.
+    fn append_run(&mut self, owner: RenderId, run: DisplayList) {
+        // An empty run draws nothing, so it seals nothing; it is still
+        // appended for the refusal counts it carries.
+        if !run.is_empty() && self.open_owner != Some(owner) {
+            self.seal_picture();
+            self.open_owner = Some(owner);
+        }
         self.open.append_isolated(run);
     }
 
@@ -1563,6 +1580,7 @@ impl FragmentComposer {
     }
 
     fn seal_picture(&mut self) {
+        self.open_owner = None;
         if self.open.is_empty() {
             return;
         }
@@ -1838,7 +1856,7 @@ fn backdrop_filter_at(
 /// position.
 ///
 /// Always a real layer today; lowering non-composited clips back into
-/// canvas clips inside the merged picture is a composer-side optimization
+/// canvas clips inside a picture is a composer-side optimization
 /// gated on the `needs_compositing` bits — correctness is identical
 /// either way, so the recording API does not expose the choice.
 fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
