@@ -239,6 +239,14 @@ impl OwnerPlatform {
         self.platform.window_frame_inset(scale_factor)
     }
 
+    /// The host's connection to its window system, which the application's
+    /// one GPU instance is made on (ADR-0305 §2). See
+    /// [`Platform::display_connection`].
+    #[must_use]
+    pub fn display_connection(&self) -> Arc<dyn flui_platform::DisplayConnection> {
+        self.platform.display_connection()
+    }
+
     /// Open a window whose deliveries go to `handler` (ADR-0254 §4). `Ready`
     /// is guaranteed inside `on_ready`; afterwards the backend may defer
     /// through its owner lane (where one exists), returning `Pending`.

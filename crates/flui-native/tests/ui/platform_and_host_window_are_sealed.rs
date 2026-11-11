@@ -105,6 +105,10 @@ impl Platform for OutsidePlatform {
         Size::default()
     }
 
+    fn display_connection(&self) -> Arc<dyn flui_platform::DisplayConnection> {
+        unimplemented!()
+    }
+
     fn name(&self) -> &'static str {
         "outside"
     }

@@ -185,6 +185,14 @@ this one path (ADR-0151 §9).
   target of a window with no native surface. `raw-window-handle` appears only
   through the two handle traits and their
   `WindowHandle`/`DisplayHandle`/`HandleError` (ADR-0089).
+- **The GPU instance is made on the host's display, not a window's
+  (ADR-0305 §2).** `DisplayConnection` (`HasDisplayHandle + Send + Sync +
+  'static`) is what a host hands out once for its life: X11 and Wayland their
+  connection, so it answers the display handle every target of the host
+  answers and keeps answering it after any window closed; Win32, AppKit,
+  UIKit, Android and the web their pointerless handle; headless none
+  (`HandleError::NotSupported`). No window target implements it, since a
+  target answers `Unavailable` once its window is gone.
 - **A frame request carries when earlier frames reached the screen, on the
   event timeline.** `FrameRequest::presented` is a `FramePresented { at,
   refresh }`: the instant the display started showing the newest earlier

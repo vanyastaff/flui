@@ -2467,23 +2467,41 @@ mod toplevel {
     }
 
     impl HasDisplayHandle for WaylandSurface {
-        #[expect(
-            unsafe_code,
-            reason = "a raw display handle is borrowed from the connection this target keeps alive"
-        )]
         fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
             if self.retirement.is_retired() {
                 return Err(HandleError::Unavailable);
             }
-            let backend: wayland_backend::client::Backend = self.connection.backend();
-            let display = NonNull::new(backend.display_ptr().cast::<c_void>())
-                .ok_or(HandleError::Unavailable)?;
-            let raw = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(display));
-            // SAFETY: `display` is the `wl_display` of the connection this
-            // target holds a clone of; libwayland disconnects it only when
-            // the last clone of the connection drops, after this borrow.
-            Ok(unsafe { DisplayHandle::borrow_raw(raw) })
+            wayland_display(&self.connection)
         }
+    }
+
+    /// The Wayland host's display connection (ADR-0305 §2): the connection
+    /// its windows are made on, so its handle is every window target's.
+    pub(crate) struct WaylandDisplay(pub(crate) Connection);
+
+    impl HasDisplayHandle for WaylandDisplay {
+        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+            wayland_display(&self.0)
+        }
+    }
+
+    impl flui_platform::DisplayConnection for WaylandDisplay {}
+
+    /// The `wl_display` of `connection`, borrowed for as long as the
+    /// connection is.
+    #[expect(
+        unsafe_code,
+        reason = "a raw display handle is borrowed from the connection it is made from"
+    )]
+    fn wayland_display(connection: &Connection) -> Result<DisplayHandle<'_>, HandleError> {
+        let backend: wayland_backend::client::Backend = connection.backend();
+        let display =
+            NonNull::new(backend.display_ptr().cast::<c_void>()).ok_or(HandleError::Unavailable)?;
+        let raw = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(display));
+        // SAFETY: `display` is the `wl_display` of `connection`; libwayland
+        // disconnects it only when the last clone of the connection drops,
+        // and the borrow cannot outlive the `&Connection` it is made from.
+        Ok(unsafe { DisplayHandle::borrow_raw(raw) })
     }
 
     impl flui_platform::SurfaceTarget for WaylandSurface {
@@ -2934,6 +2952,14 @@ mod toplevel {
             } else {
                 Size::new(0.0, 0.0)
             }
+        }
+
+        /// The connection every window of the host is made on.
+        fn display_connection(
+            owner: &WaylandLoop,
+            _: &WaylandWindows,
+        ) -> Arc<dyn flui_platform::DisplayConnection> {
+            Arc::new(WaylandDisplay(owner.connection().clone()))
         }
     }
 

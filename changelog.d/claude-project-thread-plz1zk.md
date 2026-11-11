@@ -7,6 +7,11 @@
   A full lifecycle queue, a stale slot and a stopped executor hand the command back
   (`RasterSendError`). `GpuContext` is the executor's backend for offscreen slots, and the
   `testing` feature adds `flui_engine::testing::ScriptedSlots`, a backend without a GPU.
+- **`flui-platform`**, **`flui-native`**: `DisplayConnection` and `OwnerPlatform::display_connection`,
+  the host's connection to its window system for its whole life (the X11 or Wayland connection, a
+  pointerless handle on Win32, AppKit, UIKit, Android and the web, none on headless), which the
+  application's one GPU instance is made on
+  ([ADR-0305](/docs/adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §2).
 
 ### Changed
 
