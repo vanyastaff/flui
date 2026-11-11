@@ -1,4 +1,5 @@
-//! Describing a node allocates only if its sink does (ADR-0242 §1).
+//! What the crate promises about allocation: describing a node allocates only if its sink
+//! does (ADR-0242 §1), and a notifier is one allocation with one more per listener.
 //!
 //! A counting sink walks a derived description with every field kind, a sequence and an
 //! untyped field, under a counting `#[global_allocator]`. That allocator is process-wide,
@@ -187,4 +188,36 @@ fn the_snapshot_sink_is_where_allocation_happens() {
     assert_eq!(node.get::<f64>("opacity"), Ok(0.5));
     assert_eq!(node.debug_fields, 1);
     let _ = Value::None;
+}
+
+/// A channel is one shared allocation, and a listener that takes no argument is registered
+/// as it was given: the only allocation a subscription adds is the envelope the channel
+/// holds it in. The first registration also allocates the channel's table.
+#[test]
+fn a_notifier_is_one_allocation_and_a_plain_listener_one_more() {
+    use flui_foundation::ListenerCallback;
+    use flui_foundation::notifier_generic::Notifier;
+    use std::rc::Rc;
+
+    let before = allocations();
+    let notifier = black_box(Notifier::<()>::new());
+    assert_eq!(allocations() - before, 1, "a notifier is one allocation");
+
+    let first: ListenerCallback = Rc::new(|| {});
+    let second: ListenerCallback = Rc::new(|| {});
+    let before = allocations();
+    let first = black_box(notifier.listen(first));
+    assert_eq!(
+        allocations() - before,
+        2,
+        "the first listener allocates its envelope and the channel's table"
+    );
+    let before = allocations();
+    let second = black_box(notifier.listen(second));
+    assert_eq!(
+        allocations() - before,
+        1,
+        "a later listener allocates its envelope alone"
+    );
+    drop((first, second));
 }

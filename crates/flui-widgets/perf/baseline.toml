@@ -34,8 +34,8 @@ nodes_painted = 134
 semantics_nodes_updated = 81
 
 [raw_button_over_text]
-allocations = 70
-bytes = 8581
+allocations = 61
+bytes = 8404
 elements = 2
 render_nodes = 1
 text_allocations = 68

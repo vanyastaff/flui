@@ -6,6 +6,7 @@
 //! focus manager and no registry keyed by node IDs.
 
 use std::{
+    borrow::Cow,
     cell::{Cell, RefCell},
     collections::VecDeque,
     num::NonZeroU64,
@@ -531,7 +532,7 @@ impl std::fmt::Debug for FocusNodeRegistration {
 /// A node in the owner-local focus tree.
 pub struct FocusNode {
     id: FocusNodeId,
-    debug_label: Option<String>,
+    debug_label: Option<Cow<'static, str>>,
     parent: RefCell<Option<Weak<FocusNode>>>,
     children: RefCell<Vec<Rc<FocusNode>>>,
     can_request_focus: Cell<bool>,
@@ -678,16 +679,19 @@ impl FocusNode {
 
     /// Create an unattached focus node with a diagnostics label.
     #[must_use]
-    pub fn with_debug_label(label: impl Into<String>) -> Rc<Self> {
+    pub fn with_debug_label(label: impl Into<Cow<'static, str>>) -> Rc<Self> {
         Self::create(Some(label.into()), None)
     }
 
-    fn create(label: Option<String>, scope_owner: Option<Weak<FocusScopeNode>>) -> Rc<Self> {
+    fn create(
+        label: Option<Cow<'static, str>>,
+        scope_owner: Option<Weak<FocusScopeNode>>,
+    ) -> Rc<Self> {
         Self::create_with_counter(label, scope_owner, &NEXT_FOCUS_NODE_ID)
     }
 
     fn create_with_counter(
-        label: Option<String>,
+        label: Option<Cow<'static, str>>,
         scope_owner: Option<Weak<FocusScopeNode>>,
         counter: &AtomicU64,
     ) -> Rc<Self> {
@@ -720,7 +724,7 @@ impl FocusNode {
     }
 
     fn new_scope_backing_node(
-        label: Option<String>,
+        label: Option<Cow<'static, str>>,
         scope_owner: Weak<FocusScopeNode>,
     ) -> Rc<Self> {
         Self::create(label, Some(scope_owner))
@@ -2009,11 +2013,11 @@ impl FocusScopeNode {
 
     /// Create an unattached focus scope with a diagnostics label.
     #[must_use]
-    pub fn with_debug_label(label: impl Into<String>) -> Rc<Self> {
+    pub fn with_debug_label(label: impl Into<Cow<'static, str>>) -> Rc<Self> {
         Self::create(Some(label.into()))
     }
 
-    fn create(label: Option<String>) -> Rc<Self> {
+    fn create(label: Option<Cow<'static, str>>) -> Rc<Self> {
         Rc::new_cyclic(|owner| Self {
             inner: FocusNode::new_scope_backing_node(label, owner.clone()),
             focus_history: RefCell::new(VecDeque::new()),

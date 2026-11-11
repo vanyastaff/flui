@@ -190,31 +190,28 @@ impl<T: Intent> Action<T> for CallbackAction<T> {
 // Erasure
 // ============================================================================
 
-/// An `Action<T>` asked through `dyn Any` intents.
-trait AnyIntentAction {
-    fn is_enabled(&self, intent: &dyn Any) -> bool;
-    fn invoke(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> ActionOutcome;
-    fn to_key_event_result(&self, intent: &dyn Any, outcome: ActionOutcome) -> KeyEventResult;
+/// How one action type answers one intent type, with both erased: the
+/// functions an [`ErasedAction`] reaches its action through. One table
+/// exists per pair of types, so binding an action allocates nothing beyond
+/// the action itself, and one action bound to several intent types is held
+/// once.
+struct BindingTable {
+    is_enabled: fn(&dyn Any, &dyn Any) -> bool,
+    invoke: fn(&dyn Any, &mut EventCx<'_>, &dyn Any) -> ActionOutcome,
+    to_key_event_result: fn(&dyn Any, &dyn Any, ActionOutcome) -> KeyEventResult,
 }
 
-/// `action` with the intent type it is bound to.
-struct Bound<T, A> {
-    action: A,
-    intent: std::marker::PhantomData<fn(&T)>,
-}
+/// Names the [`BindingTable`] of action type `A` for intent type `T`.
+struct Binding<T, A>(std::marker::PhantomData<fn(&T, &A)>);
 
-impl<T: Intent, A: Action<T>> AnyIntentAction for Bound<T, A> {
-    fn is_enabled(&self, intent: &dyn Any) -> bool {
-        self.action.is_enabled(typed::<T>(intent))
-    }
-
-    fn invoke(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> ActionOutcome {
-        self.action.invoke(cx, typed::<T>(intent))
-    }
-
-    fn to_key_event_result(&self, intent: &dyn Any, outcome: ActionOutcome) -> KeyEventResult {
-        self.action.to_key_event_result(typed::<T>(intent), outcome)
-    }
+impl<T: Intent, A: Action<T> + 'static> Binding<T, A> {
+    const TABLE: BindingTable = BindingTable {
+        is_enabled: |action, intent| bound::<A>(action).is_enabled(typed::<T>(intent)),
+        invoke: |action, cx, intent| bound::<A>(action).invoke(cx, typed::<T>(intent)),
+        to_key_event_result: |action, intent, outcome| {
+            bound::<A>(action).to_key_event_result(typed::<T>(intent), outcome)
+        },
+    };
 }
 
 /// One `Action<T>` behind `dyn Any` intents, so a heterogeneous map can hold
@@ -222,7 +219,8 @@ impl<T: Intent, A: Action<T>> AnyIntentAction for Bound<T, A> {
 /// cannot fail.
 #[derive(Clone)]
 pub(crate) struct ErasedAction {
-    action: Rc<dyn AnyIntentAction>,
+    action: Rc<dyn Any>,
+    table: &'static BindingTable,
     enablement_changes: Option<ChangeNotifier>,
 }
 
@@ -236,20 +234,32 @@ fn typed<T: Intent>(intent: &dyn Any) -> &T {
     )
 }
 
+/// The typed view of an erased action. A table is paired only with the
+/// action type it was made for, so the downcast cannot fail.
+fn bound<A: 'static>(action: &dyn Any) -> &A {
+    action
+        .downcast_ref::<A>()
+        .expect("BUG: a binding table was paired with an action of another type")
+}
+
 impl ErasedAction {
     fn new<T: Intent, A: Action<T> + 'static>(action: A) -> Self {
+        Self::shared::<T, A>(Rc::new(action))
+    }
+
+    /// `action` bound to `T` without a copy of its own: the bindings of one
+    /// action to several intent types share it.
+    fn shared<T: Intent, A: Action<T> + 'static>(action: Rc<A>) -> Self {
         let enablement_changes = action.enablement_changes();
         Self {
-            action: Rc::new(Bound {
-                action,
-                intent: std::marker::PhantomData,
-            }),
+            action,
+            table: &Binding::<T, A>::TABLE,
             enablement_changes,
         }
     }
 
     pub(crate) fn is_enabled(&self, intent: &dyn Any) -> bool {
-        self.action.is_enabled(intent)
+        (self.table.is_enabled)(&*self.action, intent)
     }
 
     /// The signal [`Action::enablement_changes`] gave when this was bound.
@@ -260,15 +270,15 @@ impl ErasedAction {
     /// Invoke outside a key dispatch: a gesture, a control's press, an
     /// assistive-technology action.
     pub(crate) fn invoke(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> ActionOutcome {
-        self.action.invoke(cx, intent)
+        (self.table.invoke)(&*self.action, cx, intent)
     }
 
     /// Invoke inside the key event's dispatch, then report what the key
     /// dispatch should do — **one** call, so the key result cannot disagree
     /// with what actually ran.
     pub(crate) fn invoke_for_key(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> KeyEventResult {
-        let outcome = self.action.invoke(cx, intent);
-        self.action.to_key_event_result(intent, outcome)
+        let outcome = (self.table.invoke)(&*self.action, cx, intent);
+        (self.table.to_key_event_result)(&*self.action, intent, outcome)
     }
 }
 
@@ -428,6 +438,17 @@ pub(crate) fn layered_chain(
 /// `action` as one entry of a chain, keyed by `T`.
 pub(crate) fn erased_action<T: Intent>(action: impl Action<T> + 'static) -> (TypeId, ErasedAction) {
     (TypeId::of::<T>(), ErasedAction::new(action))
+}
+
+/// `action` as one entry of a chain, keyed by `T`, sharing the action with
+/// the entries that bind it to other intent types.
+pub(crate) fn shared_action<T: Intent, A: Action<T> + 'static>(
+    action: &Rc<A>,
+) -> (TypeId, ErasedAction) {
+    (
+        TypeId::of::<T>(),
+        ErasedAction::shared::<T, A>(Rc::clone(action)),
+    )
 }
 
 /// What a focused widget records on its node for the `Shortcuts` above it:
