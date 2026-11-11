@@ -5,8 +5,8 @@
 //! by `Arc`. The two shapes bound what a frame's paint walk pays:
 //! - `record_mixed_scene`: a representative run — rects, rounded rects, a
 //!   clip scope, a stroked path, a translated group — per iteration.
-//! - `draw_picture_replay`: re-stamping a recorded list under a transform,
-//!   the cost of `Canvas::draw_picture` per command.
+//! - `append_isolated_splice`: splicing a recorded run into an accumulator in
+//!   its own save/restore scope, what the paint composer pays per inline run.
 //!
 //! Run with `cargo bench -p flui-painting --bench display_list_record`.
 
@@ -79,16 +79,16 @@ fn bench_record(c: &mut Criterion) {
         canvas.finish()
     };
     assert_eq!(picture.len() as u64, OPS_PER_SCENE);
-    group.bench_function("draw_picture_replay", |b| {
+    group.bench_function("append_isolated_splice", |b| {
         b.iter_batched(
             || {
-                let mut canvas = Canvas::new();
-                canvas.translate(10.0, 20.0);
-                canvas
+                let mut accumulator = DisplayList::new();
+                accumulator.append_isolated(picture.clone());
+                (accumulator, picture.clone())
             },
-            |mut canvas| {
-                canvas.draw_picture(black_box(&picture));
-                canvas.finish()
+            |(mut accumulator, run)| {
+                accumulator.append_isolated(black_box(run));
+                accumulator
             },
             BatchSize::SmallInput,
         );
