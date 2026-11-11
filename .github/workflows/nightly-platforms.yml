@@ -241,7 +241,9 @@ jobs:
           target: google_apis
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           disable-animations: true
-          script: cargo nextest run -p flui-cli --locked --no-capture --test cli_it -E "test(=$SCENARIO)"
+          # `flui run` follows the app's own log only; a native crash is in
+          # the crash buffer, printed when the scenario fails.
+          script: cargo nextest run -p flui-cli --locked --no-capture --test cli_it -E "test(=$SCENARIO)" || { adb logcat -d -b crash; exit 1; }
 
   report:
     name: report

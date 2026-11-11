@@ -138,10 +138,17 @@ impl Mcp {
     }
 
     /// The window's semantics tree, retried until `found` picks something
-    /// out of it or [`SETTLE`] passes.
-    fn read_until<T>(&mut self, what: &str, found: impl Fn(&Value) -> Option<T>) -> T {
+    /// out of it or [`SETTLE`] passes, failing at once when `flui run`
+    /// reports the app ended.
+    fn read_until<T>(
+        &mut self,
+        run: &mpsc::Receiver<Value>,
+        what: &str,
+        found: impl Fn(&Value) -> Option<T>,
+    ) -> T {
         let deadline = Instant::now() + SETTLE;
         loop {
+            assert_running(run, what);
             let last = match self.call("flui_read", json!({})) {
                 Ok(text) => {
                     let tree: Value = serde_json::from_str(&text).expect("the tree is JSON");
@@ -224,6 +231,16 @@ impl Drop for Session {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// Fails the scenario if `flui run` reported, since the last look, that the
+/// app ended or the run failed: waiting longer for `what` cannot help.
+fn assert_running(run: &mpsc::Receiver<Value>, what: &str) {
+    while let Ok(event) = run.try_recv() {
+        if matches!(event["event"].as_str(), Some("run.app.exit" | "error")) {
+            panic!("the app ended before the {what}: {event}");
+        }
     }
 }
 
@@ -330,18 +347,14 @@ fn an_agent_presses_the_counter_on_a_live_device() {
     // The app builds and starts; it answers once it serves its agent.
     let deadline = Instant::now() + LAUNCH;
     while let Err(error) = mcp.call("flui_windows", json!({})) {
-        while let Ok(event) = received.try_recv() {
-            if matches!(event["event"].as_str(), Some("run.app.exit" | "error")) {
-                panic!("the app ended before its agent answered: {event}");
-            }
-        }
+        assert_running(&received, "answer from the app's agent");
         assert!(
             Instant::now() < deadline,
             "the app's agent did not answer within {LAUNCH:?}: {error}"
         );
         std::thread::sleep(Duration::from_secs(2));
     }
-    let button = mcp.read_until("Increment button with a count of 0", |tree| {
+    let button = mcp.read_until(&received, "Increment button with a count of 0", |tree| {
         let button = nodes(tree).into_iter().find(|node| {
             node["role"] == "button"
                 && node["actions"]
@@ -353,5 +366,7 @@ fn an_agent_presses_the_counter_on_a_live_device() {
     });
     mcp.call("flui_act", json!({ "element": button, "action": "invoke" }))
         .unwrap_or_else(|error| panic!("pressing Increment failed: {error}"));
-    mcp.read_until("count of 1", |tree| (count(tree) == Some(1)).then_some(()));
+    mcp.read_until(&received, "count of 1", |tree| {
+        (count(tree) == Some(1)).then_some(())
+    });
 }
