@@ -199,8 +199,9 @@ pub enum SceneError {
 }
 impl SceneOwner {
     pub fn writer(&mut self) -> SceneWriter<'_>;           // clears the reused operation buffer
-    pub fn apply(&mut self, surface: SurfaceKey) -> Result<SceneVersionId, SceneError>;
+    pub fn apply(&mut self, surface: SurfaceKey) -> Result<Applied, SceneError>;
 }
+pub struct Applied { pub id: SceneVersionId, pub released: ReleasedContents }
 impl SceneWriter<'_> {
     pub fn mint_node(&mut self) -> SceneNodeId;
     pub fn next_content_version(&mut self) -> Result<ContentVersion, SceneError>;
@@ -222,7 +223,9 @@ slot that names its own ancestor (found by walking up from the parent, at most a
 the version holds) and a depth past `u32`. `apply` runs no code the scene does not own and hashes
 nothing: its working sets are slot-indexed, kept by the owner and cleared per patch. A republished
 content costs the slots it gains or loses, since a child named before and after keeps its parent
-unwritten. On `Err` the version and the pending log are as they were, and the node ids and content
+unwritten. On `Ok` it hands back, beside the new id, the version it replaced and the contents a
+fold of the pending log let go of (§7), to drop once the owner is free. On `Err` the version and
+the pending log are as they were, and the node ids and content
 versions minted for the refused patch stay spent.
 
 A node stores its parent and depth, so the common ancestor of a leader and a follower is found by
@@ -354,8 +357,8 @@ pub struct ScenePublication {
 pub struct SurfaceKey { pub size: (u32, u32), pub generation: SurfaceGeneration }
 impl SceneOwner {
     pub fn publication(&self) -> ScenePublication;
-    pub fn completed(&mut self, rastered: Option<SceneVersionId>);
-    pub fn renew(&mut self, reason: ResyncReason);
+    pub fn completed(&mut self, rastered: Option<SceneVersionId>) -> ReleasedContents;
+    pub fn renew(&mut self, reason: ResyncReason) -> ReleasedContents;
 }
 // flui-runtime; `surface_size` is unchanged
 pub trait FrameSink { fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict; }
@@ -364,12 +367,15 @@ pub struct RasterCompletion { /* … */ pub rastered: Option<SceneVersionId> }
 ```
 
 The UI runtime holds one `SceneOwner` per presentation. The pending log keeps, per applied version
-not yet acknowledged, its id, its damage, its `SurfaceKey` and the contents it replaced. A
+not yet acknowledged, its id, its damage and the contents it replaced. A
 publication's base is `acked` and its damage is the union of the log: `Full(FirstFrame)` without a
-base, `Full(SurfaceChanged)` when the log spans two surface keys. A seventeenth entry folds the two
-oldest into one (the union of their damage, the newer id), counted as `pending_log_folds`: the
+base, `Full(SurfaceChanged)` when the log spans two surface keys, since a version applied for another
+key than the one before carries that damage itself. A seventeenth entry folds the two
+oldest into one (the union of their damage, the newer id, the newer contents; the older contents
+go back with the apply's `Applied::released`), counted as `pending_log_folds`: the
 damage stays relative to the same base and only over-reports, so a long raster stall costs a larger
-region, never a lost one. `renew` takes a new lineage and empties the version, the slots and the
+region, never a lost one, and never more than sixteen entries of buffers. `renew` takes a new
+lineage and empties the version, the slots and the
 log; every node id of the old lineage is refused as `ForeignNode`, and `renew` makes
 the next publication `Full(Resync(reason))`. Raster-side state and inspector links keyed by a
 node are keyed by its `SceneNodeId` (with the `ContentVersion` where a recording matters), which
@@ -392,7 +398,10 @@ clear. `RasterCompletion::rastered` reports the held version through the reliabl
 (`raster_owner.rs:88-109`, `:147`).
 
 `completed` moves `acked` forward only, ignores an id of another lineage, drops the log entries at
-or below `acked`, and then releases the contents they replaced: a buffer the owner holds alone goes
+or below `acked`, and hands back the contents they replaced as `ReleasedContents`, which a caller
+holding the owner borrowed passes to an `Outbox` (ADR-0287), so their destructors (an annotation's
+value is user code) run once the owner is free; `apply` and `renew` hand back the version they replace the same
+way. A buffer the owner holds alone goes
 back to the recorder's pool (`Arc::try_unwrap`), any other is dropped. Buffers come back with the
 completion while only the `Copy` id crosses up (ADR-0045 §1). A refused submit changes nothing: the
 next publication's damage still starts at `acked`.

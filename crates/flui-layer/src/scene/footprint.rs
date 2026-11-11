@@ -534,7 +534,7 @@ fn out_of_order(order: &[(usize, usize)]) -> Vec<(usize, usize)> {
         .iter()
         .zip(in_place)
         .filter_map(|(&pair, stays)| (!stays).then_some(pair))
-        .collect()
+        .collect::<Vec<(usize, usize)>>()
 }
 
 /// `region` closed over what the entries of the attached filtered nodes of
