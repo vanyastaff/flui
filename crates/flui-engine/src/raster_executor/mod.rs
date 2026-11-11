@@ -91,7 +91,8 @@ struct ExecSlot {
 pub struct RasterExecutor<B: SlotBackend = crate::GpuContext> {
     backend: B,
     shared: Arc<Shared>,
-    lifecycle: Receiver<Lifecycle>,
+    /// The lifecycle queue; dropped once the executor stopped and drained it.
+    lifecycle: Option<Receiver<Lifecycle>>,
     /// The host's wake: called once a turn wrote a settlement, with no lock
     /// held and contained. Owner-local, as the inline executor is; the
     /// threaded placement asks `Send` of it at its spawn (ADR-0305 §11).
@@ -121,7 +122,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             Self {
                 backend,
                 shared,
-                lifecycle,
+                lifecycle: Some(lifecycle),
                 wake: Box::new(wake),
                 slots: Vec::new(),
             },
@@ -142,6 +143,12 @@ impl<B: SlotBackend> RasterExecutor<B> {
         &self.backend
     }
 
+    /// The backend, to arm a fault a test injects.
+    #[cfg(test)]
+    pub(crate) fn backend_mut(&mut self) -> &mut B {
+        &mut self.backend
+    }
+
     /// Apply everything sent since the last turn: the trim, then the
     /// lifecycle queue in order, then each slot's inbox.
     ///
@@ -158,7 +165,11 @@ impl<B: SlotBackend> RasterExecutor<B> {
         if let Some(level) = self.shared.take_trim() {
             first.contain(|| self.backend.reclaim(level));
         }
-        while let Ok(message) = self.lifecycle.try_recv() {
+        while let Some(message) = self
+            .lifecycle
+            .as_ref()
+            .and_then(|queue| queue.try_recv().ok())
+        {
             outcome.commands += 1;
             outcome.settled += match message {
                 Lifecycle::Attach {
@@ -207,7 +218,11 @@ impl<B: SlotBackend> RasterExecutor<B> {
         self.shared.shut_down();
         let mut first = FirstPanic::new();
         let mut settled = 0;
-        while let Ok(message) = self.lifecycle.try_recv() {
+        // Every send that saw the executor running has queued its command by
+        // now, and every later one answers `Gone`: draining the queue answers
+        // every command a send accepted.
+        let queue = self.lifecycle.take();
+        for message in queue.iter().flat_map(Receiver::try_iter) {
             let inbox = match message {
                 Lifecycle::Attach { inbox, target, .. } => {
                     // A window target's destructor can be user code.
@@ -226,6 +241,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             };
             settled += close(&inbox, &mut first);
         }
+        drop(queue);
         for entry in &mut self.slots {
             if let Some(slot) = entry.take() {
                 first.contain(|| self.backend.detach(slot.id));
