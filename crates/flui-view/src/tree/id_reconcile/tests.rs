@@ -292,7 +292,10 @@ mod emission {
         views: &crate::view::ChildViews,
     ) {
         let mut ids = Vec::with_capacity(views.len());
-        for (slot, view) in views.iter().enumerate() {
+        for (slot, view) in (0..views.len())
+            .filter_map(|slot| views.get(slot))
+            .enumerate()
+        {
             ids.push(tree.insert(view, parent, slot, &mut owner.element_owner_mut()));
         }
         tree.get_mut(parent)

@@ -28,8 +28,8 @@ macro_rules! unbuilt_view {
 unbuilt_view!(First, Second, Third);
 
 fn types(views: &ChildViews) -> Vec<TypeId> {
-    views
-        .iter()
+    (0..views.len())
+        .filter_map(|index| views.get(index))
         .map(|view| view.as_any().type_id())
         .collect::<Vec<TypeId>>()
 }

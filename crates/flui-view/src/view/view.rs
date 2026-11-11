@@ -353,11 +353,6 @@ impl ChildViews {
             ChildViewsRepr::Many(views) => views.get(index).map(ChildView::view),
         }
     }
-
-    /// The child views, in order.
-    pub fn iter(&self) -> impl Iterator<Item = &dyn View> {
-        (0..self.len()).filter_map(|index| self.get(index))
-    }
 }
 
 impl From<Vec<Box<dyn View>>> for ChildViews {
