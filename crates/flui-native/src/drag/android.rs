@@ -330,6 +330,7 @@ mod drops {
     use std::collections::{HashMap, VecDeque};
     use std::num::NonZeroU64;
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     use flui_foundation::{DataTransferId, IdMint, geometry::Point};
     use flui_platform::DragDropEvent;
@@ -356,6 +357,16 @@ mod drops {
     /// its own; more wait their turn, as the X11 and Wayland targets' fetches
     /// do.
     pub(super) const MAX_READS: usize = 4;
+
+    /// At most this many reads of URIs wait for a place; a request past them
+    /// is refused [`TransferError::Busy`]. One whose request was dropped gives
+    /// its entry back when the next is asked for.
+    pub(super) const MAX_WAITING: usize = 64;
+
+    /// How long a read of a URI's bytes may take, as the X11 and Wayland
+    /// targets give a fetch: past it the request is answered
+    /// [`TransferError::TimedOut`] and the Java read is unblocked.
+    pub(super) const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
     /// The key `FluiView` holds a taken drop's clip and URI permissions under:
     /// the offer's whole identity, generation included, so a concluded offer
@@ -398,7 +409,8 @@ mod drops {
     }
 
     /// What a change of the drops leaves to do once they are unlocked: no
-    /// completer is completed, and no thread started, with them locked.
+    /// completer is completed, no thread started and no Java call made with
+    /// them locked.
     #[derive(Debug, Default)]
     pub(super) struct After {
         /// Reads that found a place, to start.
@@ -406,13 +418,27 @@ mod drops {
         /// Requests to answer [`TransferError::SourceGone`]: their offer
         /// retired, or their read could not start.
         pub(super) gone: Vec<TransferCompleter>,
+        /// Requests to answer [`TransferError::TimedOut`]: their read passed
+        /// [`READ_TIMEOUT`].
+        pub(super) timed_out: Vec<TransferCompleter>,
+        /// Reads whose blocked Java read to unblock (`FluiView.cancelDropRead`):
+        /// they timed out or their offer retired. Each keeps its place until
+        /// its thread ends.
+        pub(super) cancel: Vec<NonZeroU64>,
+        /// Whether a watch must start, which ends the reads that pass their
+        /// deadline ([`Drops::expire`]).
+        pub(super) watch: bool,
     }
 
     impl After {
         /// Whether nothing is left to do.
         #[must_use]
         pub(super) fn is_empty(&self) -> bool {
-            self.start.is_empty() && self.gone.is_empty()
+            self.start.is_empty()
+                && self.gone.is_empty()
+                && self.timed_out.is_empty()
+                && self.cancel.is_empty()
+                && !self.watch
         }
     }
 
@@ -426,11 +452,30 @@ mod drops {
     }
 
     /// A read of a URI's bytes holding a place until its thread ends; its
-    /// completer is taken when the offer retires first.
+    /// completer is taken when the offer retires or the deadline passes
+    /// first.
     #[derive(Debug)]
     struct Reading {
         id: DataTransferId,
         completer: Option<TransferCompleter>,
+        /// When the read times out.
+        deadline: Instant,
+        /// Whether its thread entered the Java read ([`Drops::begin_read`]),
+        /// so a cancellation must reach it.
+        entered: bool,
+        /// Whether its Java read was asked to stop.
+        cancelled: bool,
+    }
+
+    impl Reading {
+        /// Stop the read: a thread inside the Java read is unblocked, and one
+        /// that has not entered it finds nothing wanted.
+        fn stop(&mut self, ticket: NonZeroU64, after: &mut After) {
+            if self.entered && !self.cancelled {
+                after.cancel.push(ticket);
+            }
+            self.cancelled = true;
+        }
     }
 
     #[derive(Default)]
@@ -455,8 +500,11 @@ mod drops {
         tickets: IdMint<NonZeroU64>,
         /// The reads holding a place, at most [`MAX_READS`].
         reading: HashMap<NonZeroU64, Reading>,
-        /// The reads waiting for a place, in the order they were asked for.
+        /// The reads waiting for a place, in the order they were asked for, at
+        /// most [`MAX_WAITING`].
         waiting: VecDeque<Wanted>,
+        /// Whether a watch runs ([`Self::expire`]).
+        watching: bool,
     }
 
     impl Drops {
@@ -581,7 +629,7 @@ mod drops {
         }
 
         /// A request for representation `index` of the dropped offer `id`
-        /// under `limits`: read from the clip at once, answered from the
+        /// under `limits`, at `now`: read from the clip at once, answered from the
         /// descriptor alone (the session identity), or queued as a read of a
         /// URI's bytes, which `after` starts when it finds a place.
         ///
@@ -594,6 +642,7 @@ mod drops {
             id: DataTransferId,
             index: RepresentationIndex,
             limits: TransferLimits,
+            now: Instant,
             after: &mut After,
         ) -> Requested {
             let (source, descriptor) = match self.source(id, index) {
@@ -608,6 +657,22 @@ mod drops {
                     limits,
                 ))),
                 ClipSource::UriBytes => {
+                    // A request dropped while it waits gives its entry back
+                    // now, even when every place is held by a read that
+                    // blocks.
+                    let (gone, kept): (VecDeque<Wanted>, VecDeque<Wanted>) =
+                        std::mem::take(&mut self.waiting)
+                            .into_iter()
+                            .partition(|wanted| wanted.completer.is_cancelled());
+                    self.waiting = kept;
+                    after
+                        .gone
+                        .extend(gone.into_iter().map(|wanted| wanted.completer));
+                    if self.waiting.len() >= MAX_WAITING {
+                        return Requested::Request(TransferRequest::ready(Err(
+                            TransferError::Busy,
+                        )));
+                    }
                     let (request, completer) = TransferRequest::pending();
                     self.waiting.push_back(Wanted {
                         id,
@@ -615,7 +680,7 @@ mod drops {
                         limits,
                         completer,
                     });
-                    self.start_waiting(after);
+                    self.start_waiting(now, after);
                     Requested::Request(request)
                 }
                 ClipSource::Text | ClipSource::Html | ClipSource::UriList => Requested::Clip {
@@ -651,8 +716,9 @@ mod drops {
         }
 
         /// Give the waiting reads the places the running ones leave, in
-        /// order; one whose request was dropped meanwhile is let go of.
-        fn start_waiting(&mut self, after: &mut After) {
+        /// order, each due by [`READ_TIMEOUT`] from `now`; one whose request
+        /// was dropped meanwhile is let go of.
+        fn start_waiting(&mut self, now: Instant, after: &mut After) {
             while self.reading.len() < MAX_READS {
                 let Some(wanted) = self.waiting.pop_front() else {
                     return;
@@ -670,6 +736,9 @@ mod drops {
                     Reading {
                         id: wanted.id,
                         completer: Some(wanted.completer),
+                        deadline: now + READ_TIMEOUT,
+                        entered: false,
+                        cancelled: false,
                     },
                 );
                 after.start.push(UriRead {
@@ -678,30 +747,75 @@ mod drops {
                     descriptor: wanted.descriptor,
                     limits: wanted.limits,
                 });
+                if !self.watching {
+                    self.watching = true;
+                    after.watch = true;
+                }
             }
         }
 
-        /// Whether the read under `ticket` still has a request to answer: its
-        /// offer is live and its request was not dropped.
+        /// The thread of the read under `ticket` is about to enter the Java
+        /// read: `true` when its request still waits for it (its offer is
+        /// live, its deadline not passed, its request not dropped), from when
+        /// a cancellation is sent to the view; `false` when it should not read.
         #[must_use]
-        pub(super) fn wanted(&self, ticket: NonZeroU64) -> bool {
-            self.reading
-                .get(&ticket)
-                .and_then(|reading| reading.completer.as_ref())
-                .is_some_and(|completer| !completer.is_cancelled())
+        pub(super) fn begin_read(&mut self, ticket: NonZeroU64) -> bool {
+            let Some(reading) = self.reading.get_mut(&ticket) else {
+                return false;
+            };
+            let wanted = !reading.cancelled
+                && reading
+                    .completer
+                    .as_ref()
+                    .is_some_and(|completer| !completer.is_cancelled());
+            reading.entered = wanted;
+            wanted
         }
 
-        /// The read under `ticket` ended: its place goes to the next waiting
-        /// read, and its completer is returned to answer, `None` when its
-        /// offer retired first and answered it already.
+        /// The read under `ticket` ended, its thread out of the Java read: its
+        /// place goes to the next waiting read, and its completer is returned
+        /// to answer, `None` when its offer retired or its deadline passed
+        /// first and it was answered already.
         pub(super) fn finish_read(
             &mut self,
             ticket: NonZeroU64,
+            now: Instant,
             after: &mut After,
         ) -> Option<TransferCompleter> {
             let reading = self.reading.remove(&ticket);
-            self.start_waiting(after);
+            self.start_waiting(now, after);
             reading.and_then(|reading| reading.completer)
+        }
+
+        /// The watch's turn at `now`: each read past its deadline is answered
+        /// [`TransferError::TimedOut`] and its Java read unblocked, keeping
+        /// its place until its thread ends. Returns when to look again, the
+        /// earliest deadline still to come; `None` ends the watch, and the
+        /// next read to start starts another.
+        pub(super) fn expire(&mut self, now: Instant, after: &mut After) -> Option<Instant> {
+            let mut next: Option<Instant> = None;
+            for (ticket, reading) in &mut self.reading {
+                if reading.cancelled {
+                    continue;
+                }
+                if reading.deadline <= now {
+                    after.timed_out.extend(reading.completer.take());
+                    reading.stop(*ticket, after);
+                } else {
+                    next = Some(next.map_or(reading.deadline, |next| next.min(reading.deadline)));
+                }
+            }
+            self.watching = next.is_some();
+            next
+        }
+
+        /// The watch could not start: the next read to start tries again.
+        #[cfg_attr(
+            not(target_os = "android"),
+            expect(dead_code, reason = "the JNI side starts the watch")
+        )]
+        pub(super) fn unwatch(&mut self) {
+            self.watching = false;
         }
 
         /// The target's answer for the live offer `id`, cached for the drop.
@@ -712,15 +826,19 @@ mod drops {
         }
 
         /// The target is done with the drop of `id`: its offer retires, its
-        /// reads answer `SourceGone` through `after` (a running one keeps its
-        /// place until its thread ends), and `true` when it was a taken drop,
-        /// whose clip and URI permissions the view lets go of. A stale,
-        /// hovering or repeated conclusion has nothing to let go of.
+        /// reads answer `SourceGone` through `after` (a running one is
+        /// unblocked and keeps its place until its thread ends), and `true`
+        /// when it was a taken drop, whose clip and URI permissions the view
+        /// lets go of. A stale, hovering or repeated conclusion has nothing to
+        /// let go of.
         pub(super) fn conclude(&mut self, id: DataTransferId, after: &mut After) -> bool {
             let taken = self.dropped.contains_key(&id);
             self.close(id);
-            for reading in self.reading.values_mut().filter(|reading| reading.id == id) {
-                after.gone.extend(reading.completer.take());
+            for (ticket, reading) in &mut self.reading {
+                if reading.id == id {
+                    after.gone.extend(reading.completer.take());
+                    reading.stop(*ticket, after);
+                }
             }
             let (gone, kept): (VecDeque<Wanted>, VecDeque<Wanted>) =
                 std::mem::take(&mut self.waiting)
@@ -752,7 +870,11 @@ mod drops {
 // The JNI side, on Android alone.
 
 #[cfg(target_os = "android")]
-use std::sync::{Arc, Weak};
+use std::{
+    num::NonZeroU64,
+    sync::{Arc, Weak},
+    time::Instant,
+};
 
 #[cfg(target_os = "android")]
 use flui_foundation::{DataTransferId, panic::FirstPanic};
@@ -884,10 +1006,10 @@ impl DragTransport for AndroidTransfer {
         limits: TransferLimits,
     ) -> TransferRequest {
         let mut after = After::default();
-        let requested = self
-            .drops
-            .lock()
-            .request(id, representation, limits, &mut after);
+        let requested =
+            self.drops
+                .lock()
+                .request(id, representation, limits, Instant::now(), &mut after);
         run(&self.drops, &self.view, after);
         match requested {
             Requested::Request(request) => request,
@@ -931,15 +1053,37 @@ impl DragTransport for AndroidTransfer {
 }
 
 /// Do what a change of `drops` left, with them unlocked: answer the requests
-/// whose offer retired, and start each read that found a place on a thread of
-/// its own, giving back the place of one no thread could be started for. A
-/// waker's panic is raised once everything is done.
+/// whose offer retired or whose read timed out, unblock their Java reads,
+/// start each read that found a place on a thread of its own (giving back the
+/// place of one no thread could be started for), and start the watch when one
+/// is wanted. A waker's panic is raised once everything is done.
 #[cfg(target_os = "android")]
 fn run(drops: &Arc<Mutex<Drops>>, view: &Weak<JavaView>, mut after: After) {
     let mut failure = FirstPanic::new();
     while !after.is_empty() {
         for completer in std::mem::take(&mut after.gone) {
             failure.contain(|| completer.complete(Err(TransferError::SourceGone)));
+        }
+        for completer in std::mem::take(&mut after.timed_out) {
+            failure.contain(|| completer.complete(Err(TransferError::TimedOut)));
+        }
+        let cancel = std::mem::take(&mut after.cancel);
+        if !cancel.is_empty()
+            && let Some(view) = view.upgrade()
+        {
+            failure.contain(|| cancel_reads(&view, &cancel));
+        }
+        if std::mem::take(&mut after.watch) {
+            let (watch_drops, watch_view) = (Arc::clone(drops), Weak::clone(view));
+            let spawned = std::thread::Builder::new()
+                .name("flui-drop-watch".into())
+                .spawn(move || watch(&watch_drops, &watch_view));
+            if let Err(error) = spawned {
+                failure.contain(|| {
+                    tracing::warn!(target: "flui_native::android", %error, "no thread to time dropped URI reads");
+                });
+                drops.lock().unwatch();
+            }
         }
         for read in std::mem::take(&mut after.start) {
             let ticket = read.ticket;
@@ -951,7 +1095,7 @@ fn run(drops: &Arc<Mutex<Drops>>, view: &Weak<JavaView>, mut after: After) {
                 failure.contain(|| {
                     tracing::warn!(target: "flui_native::android", %error, "no thread to read a dropped URI");
                 });
-                let completer = drops.lock().finish_read(ticket, &mut after);
+                let completer = drops.lock().finish_read(ticket, Instant::now(), &mut after);
                 after.gone.extend(completer);
             }
         }
@@ -959,19 +1103,60 @@ fn run(drops: &Arc<Mutex<Drops>>, view: &Weak<JavaView>, mut after: After) {
     failure.resume();
 }
 
+/// The watch over the running reads: at each deadline the reads past it are
+/// answered `TimedOut` and their Java reads unblocked; it ends when no read
+/// is left to time.
+#[cfg(target_os = "android")]
+fn watch(drops: &Arc<Mutex<Drops>>, view: &Weak<JavaView>) {
+    loop {
+        let mut after = After::default();
+        let next = drops.lock().expire(Instant::now(), &mut after);
+        run(drops, view, after);
+        let Some(next) = next else {
+            return;
+        };
+        std::thread::sleep(next.saturating_duration_since(Instant::now()));
+    }
+}
+
+/// Unblock the Java reads under `tickets` (`FluiView.cancelDropRead`): an
+/// open in progress is cancelled and an open stream closed, which makes a
+/// blocked read throw.
+#[cfg(target_os = "android")]
+fn cancel_reads(view: &JavaView, tickets: &[NonZeroU64]) {
+    let Some(target) = view.view() else {
+        return;
+    };
+    let cancelled = view.attached(|env| {
+        for ticket in tickets {
+            env.call_method(
+                target.as_ref(),
+                jni_str!("cancelDropRead"),
+                jni_sig!("(J)V"),
+                &[JValue::Long(ticket.get().cast_signed())],
+            )?;
+        }
+        Ok(())
+    });
+    if let Err(error) = cancelled {
+        tracing::warn!(target: "flui_native::android", %error, "a dropped URI read was not cancelled");
+    }
+}
+
 /// Read the bytes of `read`'s URI, unless its request is gone, and answer it
-/// unless its offer retired first; then hand its place on.
+/// unless its offer retired or its deadline passed first; then hand its place
+/// on.
 #[cfg(target_os = "android")]
 fn read_on_thread(drops: &Arc<Mutex<Drops>>, view: &Weak<JavaView>, read: UriRead) {
     let mut failure = FirstPanic::new();
-    let wanted = drops.lock().wanted(read.ticket);
+    let wanted = drops.lock().begin_read(read.ticket);
     let result = if wanted {
         failure
             .contain(|| {
                 let bytes = view
                     .upgrade()
                     .map_or(ViewRead::Stopped { read: 0 }, |view| {
-                        read_bytes(&view, read.key, read.limits)
+                        read_bytes(&view, read.key, read.ticket, read.limits)
                     });
                 delivered(ClipSource::UriBytes, &read.descriptor, bytes, read.limits)
             })
@@ -980,7 +1165,9 @@ fn read_on_thread(drops: &Arc<Mutex<Drops>>, view: &Weak<JavaView>, read: UriRea
         Err(TransferError::SourceGone)
     };
     let mut after = After::default();
-    let completer = drops.lock().finish_read(read.ticket, &mut after);
+    let completer = drops
+        .lock()
+        .finish_read(read.ticket, Instant::now(), &mut after);
     if let Some(completer) = completer {
         failure.contain(|| completer.complete(result));
     }
@@ -1047,17 +1234,19 @@ fn read_clip(view: &JavaView, key: i64, source: ClipSource, limits: TransferLimi
 }
 
 /// The bytes behind the first URI of the drop the view holds under `key`,
-/// read through its content resolver on the calling thread.
+/// read through its content resolver on the calling thread as the read under
+/// `ticket`, which `cancelDropRead` unblocks.
 #[cfg(target_os = "android")]
-fn read_bytes(view: &JavaView, key: i64, limits: TransferLimits) -> ViewRead {
+fn read_bytes(view: &JavaView, key: i64, ticket: NonZeroU64, limits: TransferLimits) -> ViewRead {
     view_read(view, limits, |env, target, limit, count| {
         let bytes = env
             .call_method(
                 target,
                 jni_str!("readDropBytes"),
-                jni_sig!("(JJ[J)[B"),
+                jni_sig!("(JJJ[J)[B"),
                 &[
                     JValue::Long(key),
+                    JValue::Long(ticket.get().cast_signed()),
                     JValue::Long(limit),
                     JValue::Object(count),
                 ],

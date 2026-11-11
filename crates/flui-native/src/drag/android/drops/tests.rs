@@ -7,6 +7,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
+use std::time::{Duration, Instant};
 
 use flui_foundation::DataTransferId;
 use flui_platform::DragDropEvent;
@@ -18,7 +19,7 @@ use flui_platform::data_transfer::{
 use super::super::clip::ClipSource;
 use super::{
     ACTION_DRAG_ENDED, ACTION_DRAG_ENTERED, ACTION_DRAG_LOCATION, ACTION_DRAG_STARTED, After,
-    Drops, MAX_READS, Requested, UriRead, java_key,
+    Drops, MAX_READS, MAX_WAITING, READ_TIMEOUT, Requested, UriRead, java_key,
 };
 
 const IMAGE: RepresentationIndex = RepresentationIndex(0);
@@ -64,12 +65,19 @@ fn dropped(drops: &mut Drops, id: DataTransferId) {
 /// The byte ceiling every URI read of these tests asks for.
 const MAX_BYTES: u64 = 4096;
 
-/// A request for the bytes of the image of `id`, which waits for a read.
-fn wanted(drops: &mut Drops, id: DataTransferId, after: &mut After) -> TransferRequest {
+/// A request at `now` for the bytes of the image of `id`, which waits for a
+/// read.
+fn wanted(
+    drops: &mut Drops,
+    id: DataTransferId,
+    now: Instant,
+    after: &mut After,
+) -> TransferRequest {
     match drops.request(
         id,
         IMAGE,
         TransferLimits::default().with_max_bytes(MAX_BYTES),
+        now,
         after,
     ) {
         Requested::Request(request) => request,
@@ -103,7 +111,13 @@ fn a_drop_is_read_when_requested() {
     let mut after = After::default();
     assert!(
         matches!(
-            answered_now(drops.request(id, RepresentationIndex(0), limits, &mut after)),
+            answered_now(drops.request(
+                id,
+                RepresentationIndex(0),
+                limits,
+                Instant::now(),
+                &mut after
+            )),
             Err(TransferError::SourceGone)
         ),
         "before the drop the clip's data is out of reach"
@@ -111,7 +125,13 @@ fn a_drop_is_read_when_requested() {
     dropped(&mut drops, id);
     let sources = [ClipSource::Text, ClipSource::Html, ClipSource::UriList];
     for (index, expected) in (0_u16..).zip(sources) {
-        match drops.request(id, RepresentationIndex(index), limits, &mut after) {
+        match drops.request(
+            id,
+            RepresentationIndex(index),
+            limits,
+            Instant::now(),
+            &mut after,
+        ) {
             Requested::Clip {
                 key,
                 source,
@@ -128,7 +148,13 @@ fn a_drop_is_read_when_requested() {
         }
     }
     assert!(matches!(
-        answered_now(drops.request(id, RepresentationIndex(3), limits, &mut after)),
+        answered_now(drops.request(
+            id,
+            RepresentationIndex(3),
+            limits,
+            Instant::now(),
+            &mut after
+        )),
         Err(TransferError::UnknownRepresentation { .. })
     ));
     assert!(after.is_empty(), "nothing is read on a thread");
@@ -169,7 +195,7 @@ fn a_drop_is_taken_as_the_offer_it_names() {
     assert!(!taken);
     let mut after = After::default();
     assert!(matches!(
-        answered_now(drops.request(id, IMAGE, TransferLimits::default(), &mut after)),
+        answered_now(drops.request(id, IMAGE, TransferLimits::default(), Instant::now(), &mut after)),
         Err(TransferError::StaleOffer(stale)) if stale == id
     ));
     assert!(
@@ -187,7 +213,7 @@ fn uri_reads_wait_for_a_place() {
     dropped(&mut drops, id);
     let mut after = After::default();
     let mut requests: Vec<TransferRequest> = (0..=MAX_READS)
-        .map(|_| wanted(&mut drops, id, &mut after))
+        .map(|_| wanted(&mut drops, id, Instant::now(), &mut after))
         .collect();
     let started: Vec<UriRead> = std::mem::take(&mut after.start);
     assert_eq!(started.len(), MAX_READS, "the fifth waits");
@@ -195,10 +221,10 @@ fn uri_reads_wait_for_a_place() {
     assert!(started.iter().all(|read| read.key == java_key(id)
         && read.limits.max_bytes == MAX_BYTES
         && matches!(&read.descriptor.format, TransferFormat::Image { mime } if mime.as_str() == "image/png")));
-    assert!(started.iter().all(|read| drops.wanted(read.ticket)));
+    assert!(started.iter().all(|read| drops.begin_read(read.ticket)));
 
     let completer = drops
-        .finish_read(started[0].ticket, &mut after)
+        .finish_read(started[0].ticket, Instant::now(), &mut after)
         .expect("a live read answers its request");
     completer.complete(Ok(TransferPayload::Text("first".to_owned())));
     let [next]: [UriRead; 1] = std::mem::take(&mut after.start)
@@ -216,7 +242,9 @@ fn uri_reads_wait_for_a_place() {
         assert!(poll(request).is_pending(), "the others are still reading");
     }
     assert!(
-        drops.finish_read(started[0].ticket, &mut after).is_none(),
+        drops
+            .finish_read(started[0].ticket, Instant::now(), &mut after)
+            .is_none(),
         "a read answers once"
     );
 }
@@ -240,9 +268,9 @@ fn a_concluded_drop_answers_its_reads() {
 
     let mut after = After::default();
     let mut ours: Vec<TransferRequest> = (0..=MAX_READS)
-        .map(|_| wanted(&mut drops, first, &mut after))
+        .map(|_| wanted(&mut drops, first, Instant::now(), &mut after))
         .collect();
-    let mut theirs = wanted(&mut drops, second, &mut after);
+    let mut theirs = wanted(&mut drops, second, Instant::now(), &mut after);
     let running = std::mem::take(&mut after.start);
     assert_eq!(running.len(), MAX_READS);
 
@@ -269,13 +297,15 @@ fn a_concluded_drop_answers_its_reads() {
         ));
     }
     assert!(
-        running.iter().all(|read| !drops.wanted(read.ticket)),
+        running.iter().all(|read| !drops.begin_read(read.ticket)),
         "nothing waits for them"
     );
     assert!(poll(&mut theirs).is_pending());
 
     assert!(
-        drops.finish_read(running[0].ticket, &mut after).is_none(),
+        drops
+            .finish_read(running[0].ticket, Instant::now(), &mut after)
+            .is_none(),
         "a late read answers nothing"
     );
     let [next]: [UriRead; 1] = std::mem::take(&mut after.start)
@@ -283,7 +313,7 @@ fn a_concluded_drop_answers_its_reads() {
         .expect("the other drop's read starts");
     assert_eq!(next.key, java_key(second));
     drops
-        .finish_read(next.ticket, &mut after)
+        .finish_read(next.ticket, Instant::now(), &mut after)
         .expect("its request waits")
         .complete(Ok(TransferPayload::Text("second".to_owned())));
     assert!(matches!(poll(&mut theirs), Poll::Ready(Ok(_))));
@@ -293,7 +323,7 @@ fn a_concluded_drop_answers_its_reads() {
         "a concluded drop lets go of nothing again"
     );
     assert!(matches!(
-        answered_now(drops.request(first, IMAGE, TransferLimits::default(), &mut after)),
+        answered_now(drops.request(first, IMAGE, TransferLimits::default(), Instant::now(), &mut after)),
         Err(TransferError::StaleOffer(stale)) if stale == first
     ));
     assert!(drops.conclude(second, &mut after));
@@ -307,24 +337,161 @@ fn a_dropped_request_gives_up_its_read() {
     dropped(&mut drops, id);
     let mut after = After::default();
     let mut requests: Vec<TransferRequest> = (0..MAX_READS)
-        .map(|_| wanted(&mut drops, id, &mut after))
+        .map(|_| wanted(&mut drops, id, Instant::now(), &mut after))
         .collect();
     let running = std::mem::take(&mut after.start);
-    drop(wanted(&mut drops, id, &mut after));
-    let kept = wanted(&mut drops, id, &mut after);
+    drop(wanted(&mut drops, id, Instant::now(), &mut after));
+    let kept = wanted(&mut drops, id, Instant::now(), &mut after);
     drop(requests.pop());
     assert!(
-        !drops.wanted(running[MAX_READS - 1].ticket),
+        !drops.begin_read(running[MAX_READS - 1].ticket),
         "its request is gone"
     );
 
-    assert!(drops.finish_read(running[0].ticket, &mut after).is_some());
+    assert!(
+        drops
+            .finish_read(running[0].ticket, Instant::now(), &mut after)
+            .is_some()
+    );
     assert_eq!(after.gone.len(), 1, "the dropped request is let go of");
     let [next]: [UriRead; 1] = std::mem::take(&mut after.start)
         .try_into()
         .expect("the kept one starts");
-    assert!(drops.wanted(next.ticket));
+    assert!(drops.begin_read(next.ticket));
     drop(kept);
+}
+
+/// While every place is held by a read that blocks, at most `MAX_WAITING`
+/// reads wait and the next request is refused `Busy`; a request dropped while
+/// it waits gives its entry back at the next request, so asking and dropping
+/// without end never fills the queue.
+fn waiting_reads_are_bounded() {
+    let mut drops = Drops::default();
+    let id = hovering(&mut drops, &["image/png"]);
+    dropped(&mut drops, id);
+    let mut after = After::default();
+    let _running: Vec<TransferRequest> = (0..MAX_READS)
+        .map(|_| wanted(&mut drops, id, Instant::now(), &mut after))
+        .collect();
+    assert_eq!(after.start.len(), MAX_READS, "every place is held");
+
+    for _ in 0..4 * MAX_WAITING {
+        drop(wanted(&mut drops, id, Instant::now(), &mut after));
+    }
+    let mut waiting: Vec<TransferRequest> = (0..MAX_WAITING)
+        .map(|_| wanted(&mut drops, id, Instant::now(), &mut after))
+        .collect();
+    assert_eq!(
+        after.gone.len(),
+        4 * MAX_WAITING,
+        "each dropped request gave its entry back at the next request"
+    );
+    assert!(waiting.iter_mut().all(|request| poll(request).is_pending()));
+    let mut refused = wanted(&mut drops, id, Instant::now(), &mut after);
+    assert!(
+        matches!(poll(&mut refused), Poll::Ready(Err(TransferError::Busy))),
+        "past the bound the request is refused"
+    );
+    assert_eq!(after.start.len(), MAX_READS, "nothing else started");
+}
+
+/// A read past `READ_TIMEOUT` is answered `TimedOut` and, once inside its
+/// Java read, is asked to stop exactly once; it keeps its place until its
+/// thread ends, and only then does a waiting read start. One that never
+/// entered its Java read is sent no cancellation and finds nothing to read.
+/// The watch looks again at the next deadline, ends when no read is left to
+/// time, and the next read to start starts another.
+fn a_read_past_its_deadline_times_out() {
+    let mut drops = Drops::default();
+    let id = hovering(&mut drops, &["image/png"]);
+    dropped(&mut drops, id);
+    let start = Instant::now();
+    let later = start + Duration::from_secs(2);
+    let mut after = After::default();
+    let mut first = wanted(&mut drops, id, start, &mut after);
+    assert!(
+        std::mem::take(&mut after.watch),
+        "the first read starts the watch"
+    );
+    let mut rest: Vec<TransferRequest> = (1..MAX_READS)
+        .map(|_| wanted(&mut drops, id, later, &mut after))
+        .collect();
+    let mut queued = wanted(&mut drops, id, later, &mut after);
+    assert!(!after.watch, "one watch at a time");
+    let running = std::mem::take(&mut after.start);
+    assert_eq!(running.len(), MAX_READS);
+    assert!(
+        drops.begin_read(running[0].ticket),
+        "the first enters its Java read"
+    );
+
+    assert_eq!(
+        drops.expire(start + Duration::from_secs(4), &mut after),
+        Some(start + READ_TIMEOUT),
+        "nothing is due yet"
+    );
+    assert!(after.is_empty());
+
+    let due = start + READ_TIMEOUT;
+    assert_eq!(drops.expire(due, &mut after), Some(later + READ_TIMEOUT));
+    assert_eq!(
+        after.cancel,
+        [running[0].ticket],
+        "its Java read is unblocked"
+    );
+    for completer in std::mem::take(&mut after.timed_out) {
+        completer.complete(Err(TransferError::TimedOut));
+    }
+    after.cancel.clear();
+    assert!(matches!(
+        poll(&mut first),
+        Poll::Ready(Err(TransferError::TimedOut))
+    ));
+    assert!(
+        after.is_empty(),
+        "the queued read waits: the place is still held"
+    );
+    assert_eq!(drops.expire(due, &mut after), Some(later + READ_TIMEOUT));
+    assert!(after.is_empty(), "a read times out once");
+
+    assert_eq!(
+        drops.expire(later + READ_TIMEOUT, &mut after),
+        None,
+        "the watch ends"
+    );
+    assert_eq!(after.timed_out.len(), MAX_READS - 1);
+    assert!(
+        after.cancel.is_empty(),
+        "no thread entered those Java reads"
+    );
+    for completer in std::mem::take(&mut after.timed_out) {
+        completer.complete(Err(TransferError::TimedOut));
+    }
+    for request in &mut rest {
+        assert!(matches!(
+            poll(request),
+            Poll::Ready(Err(TransferError::TimedOut))
+        ));
+    }
+    assert!(
+        !drops.begin_read(running[1].ticket),
+        "a timed-out read reads nothing"
+    );
+
+    let late = later + READ_TIMEOUT + Duration::from_secs(1);
+    assert!(
+        drops
+            .finish_read(running[0].ticket, late, &mut after)
+            .is_none(),
+        "what it read late answers nothing"
+    );
+    let [next]: [UriRead; 1] = std::mem::take(&mut after.start)
+        .try_into()
+        .expect("its place goes to the queued read once its thread ends");
+    assert!(after.watch, "the next read starts another watch");
+    assert_eq!(drops.expire(late, &mut after), Some(late + READ_TIMEOUT));
+    assert!(drops.begin_read(next.ticket));
+    assert!(poll(&mut queued).is_pending());
 }
 
 /// FLUI's own drag dropped on its own target reports the action the target
@@ -367,6 +534,11 @@ fn android_drop_state() {
                 a_drop_is_taken_as_the_offer_it_names,
             ),
             ("uri_reads_wait_for_a_place", uri_reads_wait_for_a_place),
+            ("waiting_reads_are_bounded", waiting_reads_are_bounded),
+            (
+                "a_read_past_its_deadline_times_out",
+                a_read_past_its_deadline_times_out,
+            ),
             (
                 "a_concluded_drop_answers_its_reads",
                 a_concluded_drop_answers_its_reads,

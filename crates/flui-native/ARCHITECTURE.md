@@ -4677,7 +4677,9 @@ feedback. `FluiView` holds a taken drop's `ClipData` and URI permissions under t
 (`drag::android::drops::java_key`) until the target concludes it, and a request reads one
 representation from it under its limits (`clip::delivered`): text, HTML and the URI list on the
 requesting thread, a URI's bytes on a thread of their own, at most `drops::MAX_READS` at once,
-answered `SourceGone` when the offer retires first. The view lets go of a refused drop at once,
+answered `SourceGone` when the offer retires first and `TimedOut` past `drops::READ_TIMEOUT`, when
+the view cancels the open and closes the stream (`cancelDropRead`) and the read keeps its place
+until its thread ends; at most `drops::MAX_WAITING` wait, and past them a request is `Busy`. The view lets go of a refused drop at once,
 and of every held one when it leaves the window. Requests are completed, and reading threads
 started, with the drops unlocked (`drops::After`).
 `drag::android::AndroidDragSource` serves the whole clip at the start (`clip_parts`) and maps

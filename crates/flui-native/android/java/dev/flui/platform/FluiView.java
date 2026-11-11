@@ -6,6 +6,7 @@ import android.content.ClipData;
 import android.content.ClipDescription;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.res.AssetFileDescriptor;
 import android.database.ContentObserver;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -15,6 +16,7 @@ import android.graphics.Point;
 import android.graphics.RectF;
 import android.net.Uri;
 import android.os.Build;
+import android.os.CancellationSignal;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -137,6 +139,9 @@ public final class FluiView extends View {
      * concludes it. Written on this thread; read by FLUI's threads.
      */
     private final ConcurrentHashMap<Long, HeldDrop> drops = new ConcurrentHashMap<Long, HeldDrop>();
+    /** The reads of dropped URIs' bytes running or stopped, by FLUI's ticket. */
+    private final ConcurrentHashMap<Long, DropRead> dropReads =
+            new ConcurrentHashMap<Long, DropRead>();
     /** The mirror's state last reported, so an unchanged state is not sent twice. */
     private String reportedText;
     private int reportedSelectionStart = -1;
@@ -776,19 +781,31 @@ public final class FluiView extends View {
 
     /**
      * The bytes behind the first content URI of the drop held under
-     * {@code offer}, at most {@code limit} of them; null when it cannot be
-     * read or is larger. {@code read[0]} is how many bytes it read, past
-     * {@code limit} when it stopped there. Called on a thread of FLUI's.
+     * {@code offer}, at most {@code limit} of them, as FLUI's read
+     * {@code ticket}; null when it cannot be read, is larger, or
+     * {@link #cancelDropRead} stopped it. {@code read[0]} is how many bytes
+     * it read, past {@code limit} when it stopped there. Called on a thread
+     * of FLUI's.
      */
-    public byte[] readDropBytes(long offer, long limit, long[] read) {
-        Uri uri = firstUri(heldClip(offer));
-        if (uri == null) {
-            return null;
-        }
+    public byte[] readDropBytes(long offer, long ticket, long limit, long[] read) {
+        DropRead fresh = new DropRead();
+        DropRead prior = dropReads.putIfAbsent(ticket, fresh);
+        DropRead running = prior != null ? prior : fresh;
+        running.begun = true;
+        AssetFileDescriptor file = null;
         InputStream stream = null;
         try {
-            stream = activity.getContentResolver().openInputStream(uri);
-            if (stream == null) {
+            Uri uri = firstUri(heldClip(offer));
+            if (uri == null || running.isCancelled()) {
+                return null;
+            }
+            file = activity.getContentResolver()
+                    .openAssetFileDescriptor(uri, "r", running.signal);
+            if (file == null) {
+                return null;
+            }
+            stream = file.createInputStream();
+            if (!running.attach(stream)) {
                 return null;
             }
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -801,17 +818,93 @@ public final class FluiView extends View {
                 }
                 out.write(chunk, 0, count);
             }
-            return out.toByteArray();
+            return running.isCancelled() ? null : out.toByteArray();
         } catch (Exception error) {
             return null;
         } finally {
+            dropReads.remove(ticket);
             if (stream != null) {
+                closeQuietly(stream);
+            } else if (file != null) {
                 try {
-                    stream.close();
+                    file.close();
                 } catch (Exception ignored) {
-                    // Nothing to recover: the bytes were read or the read failed.
+                    // Nothing to recover: no stream was opened on it.
                 }
             }
+        }
+    }
+
+    /**
+     * Stop FLUI's read {@code ticket}: cancel its open and close its stream,
+     * which makes a read blocked on it throw. A read that has not begun yet
+     * finds itself stopped when it does. A stop that arrives after its read
+     * ended is left behind, and is dropped once it is older than any read
+     * may wait to begin. Called on a thread of FLUI's.
+     */
+    public void cancelDropRead(long ticket) {
+        DropRead fresh = new DropRead();
+        DropRead prior = dropReads.putIfAbsent(ticket, fresh);
+        (prior != null ? prior : fresh).cancel();
+        if (prior == null) {
+            long now = android.os.SystemClock.uptimeMillis();
+            for (java.util.Map.Entry<Long, DropRead> entry : dropReads.entrySet()) {
+                DropRead left = entry.getValue();
+                if (!left.begun && now - left.created > STALE_STOP_MILLIS) {
+                    dropReads.remove(entry.getKey(), left);
+                }
+            }
+        }
+    }
+
+    /** How long a stop waits for its read to begin, far past FLUI's deadline. */
+    private static final long STALE_STOP_MILLIS = 60_000;
+
+    private static void closeQuietly(InputStream stream) {
+        if (stream != null) {
+            try {
+                stream.close();
+            } catch (Exception ignored) {
+                // Nothing to recover: the bytes were read or the read failed.
+            }
+        }
+    }
+
+    /** One read of a dropped URI's bytes, which another thread may stop. */
+    private static final class DropRead {
+        final CancellationSignal signal = new CancellationSignal();
+        final long created = android.os.SystemClock.uptimeMillis();
+        /** Whether {@link #readDropBytes} took it up; set once, before any read. */
+        volatile boolean begun;
+        private InputStream stream;
+        private boolean cancelled;
+
+        /** Hold {@code opened} to close on cancellation; false when already stopped. */
+        synchronized boolean attach(InputStream opened) {
+            if (cancelled) {
+                return false;
+            }
+            stream = opened;
+            return true;
+        }
+
+        synchronized boolean isCancelled() {
+            return cancelled;
+        }
+
+        void cancel() {
+            InputStream opened;
+            synchronized (this) {
+                if (cancelled) {
+                    return;
+                }
+                cancelled = true;
+                opened = stream;
+            }
+            // Outside the lock: the provider's cancellation and the close
+            // may block, and the reading thread takes the lock to attach.
+            signal.cancel();
+            closeQuietly(opened);
         }
     }
 
