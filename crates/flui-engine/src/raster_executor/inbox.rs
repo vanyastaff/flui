@@ -16,8 +16,10 @@ use flui_foundation::{
 use flui_layer::SceneSnapshot;
 use parking_lot::{Mutex, MutexGuard};
 
+use flui_platform::DisplayColor;
+
 use super::command::{RasterVerdict, SlotSettlement, SlotVisibility};
-use crate::error::EngineError;
+use crate::{FrameLatency, error::EngineError};
 
 /// How many settlements an inline slot holds undrained: the executor starts
 /// no frame of a slot whose ring is full (ADR-0305 §4, §5).
@@ -40,10 +42,22 @@ pub enum SlotPhase {
     Detached,
 }
 
+impl SlotPhase {
+    /// Whether a slot in this phase takes commands: one attaching or
+    /// attached, not one refused or detached.
+    pub(crate) fn takes_commands(self) -> bool {
+        match self {
+            Self::Attaching | Self::Attached => true,
+            Self::Refused | Self::Detached => false,
+        }
+    }
+}
+
 /// Why a slot failed: the first failure since the owner last took one.
 pub enum SlotFailure {
-    /// The backend refused a command on the slot: its attach, or a resize
-    /// (which the executor retries on its next turn).
+    /// The backend refused a command on the slot: its attach, a restore, a
+    /// colour change, or a resize (which the executor retries on its next turn
+    /// only when the refusal is transient).
     Refused(EngineError),
     /// A command on the slot panicked. The owner reports the payload where
     /// the slot's presentation is (ADR-0258 §1) and resumes or discards it.
@@ -85,6 +99,10 @@ pub(crate) struct InboxState {
     pub(crate) size: Option<DeviceSize>,
     /// The latest visibility asked for and not applied yet.
     pub(crate) visibility: Option<SlotVisibility>,
+    /// The latest display colour reported and not applied yet.
+    pub(crate) color: Option<DisplayColor>,
+    /// The latest frame latency asked for and not applied yet.
+    pub(crate) latency: Option<FrameLatency>,
     /// The slot's one surface-generation counter (ADR-0305 §6): a resize
     /// mints here, and so does the executor when the surface is lost.
     pub(crate) generation: SurfaceGeneration,
@@ -111,6 +129,8 @@ impl SlotInbox {
                 frame: None,
                 size: None,
                 visibility: None,
+                color: None,
+                latency: None,
                 generation,
                 in_flight: 0,
                 settlements: VecDeque::with_capacity(INLINE_DEPTH),

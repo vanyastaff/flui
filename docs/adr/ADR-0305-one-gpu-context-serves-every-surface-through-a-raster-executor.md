@@ -208,7 +208,7 @@ pub struct GpuBootstrap {
   awaits it before its first `Attach`.
 - **The first surface picks the adapter for the context's life.** A later surface the adapter
   cannot present to (`wgpu::Adapter::is_surface_supported`) is refused at `Attach` with
-  `AttachError::IncompatibleSurface`, reported where the window was opened; a WebGL2 context
+  `EngineError::IncompatibleSurface`, reported where the window was opened; a WebGL2 context
   presents to one canvas, so a second canvas on the GL backend is refused the same way, and the
   change that implements it records the one-canvas limit of WebGL2 in `docs/gaps.md`. WebGPU has
   no such limit.
@@ -320,7 +320,11 @@ holds per slot: the counter lives in the slot's inbox state and changes only und
 the raster side mints there on a lost surface, and a frame renders only when its stamp equals the
 applied configuration's generation. `SurfaceGeneration::ZERO` still means no surface, and a size
 with a zero or negative side mints no generation and leaves the slot unconfigured, as `resize`
-answers `None` for it today (`raster_owner.rs:928`).
+answers `None` for it today (`raster_owner.rs:928`). A minted size the backend refuses for now
+(an error whose `Recoverability` is `Recoverable`) or whose resize panics stays pending, and the
+next turn retries it; a size it always refuses is not retried: the slot keeps its previous
+configuration, so frames stamped with that generation settle `SurfaceStale`, the failure waits in
+the slot's record, and the executor warns once for that size until the owner sends another one.
 `GpuResourceGeneration`, `FrameStamp::gpu_resource_generation`,
 `RasterHandle::bind_gpu_resource_generation` (`raster_owner.rs:954`) and
 `PumpOutcome::ResourceOutdated` are deleted: a frame carries CPU data only, every GPU object it
@@ -367,7 +371,7 @@ executor runs each command under its own catch, in both placements.
   pipelines and caches, and reconfigures each slot's surface from the new adapter's capabilities
   (ADR-0063 decision 6's rule for a rebuilt surface). On a hybrid-GPU machine the new adapter can
   differ from the old one; a slot it cannot present to settles `SurfaceStale` and reports
-  `AttachError::IncompatibleSurface` at that slot's address, an error of that slot and not of
+  `EngineError::IncompatibleSurface` at that slot's address, an error of that slot and not of
   the context. A slot whose reconfigure fails settles `SurfaceStale`, and its
   record asks the owner for a new surface, which the owner makes with the factory and sends in a
   `Restore`. Each slot redraws in full and re-uploads its external textures from its registry
@@ -511,7 +515,12 @@ the facade. Every production use of `with_backend` becomes:
   `a_stale_slot_id_is_refused_after_detach`,
   `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released` (its destructor sends to the
   same slot), `a_full_settlement_ring_holds_the_next_frame`,
-  `a_stopped_executor_settles_every_pending_frame_failed`; and in `flui-runtime`'s
+  `a_stopped_executor_settles_every_pending_frame_failed`,
+  `a_size_the_backend_always_refuses_is_not_retried_and_warns_once`,
+  `a_window_slot_attaches_unconfigured_and_its_first_size_configures_it`,
+  `a_frame_stamped_before_a_restore_is_refused_on_its_generation` (window surfaces from wgpu's
+  no-op backend); compile-fail `surface_factory_is_owner_local` and
+  `surface_factory_rejects_borrowed_window`; and in `flui-runtime`'s
   `tests/main.rs`: `a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored`.
 - Conformance, to be added in `flui-native`: `a_surface_targets_display_equals_the_platforms_connection`,
   one row per host, in `flui-native`'s Linux suites: the Wayland row under a headless `weston`,

@@ -1,0 +1,394 @@
+//! A slot that presents to a window (ADR-0305 §2–§6): the window's surface,
+//! its configuration and its frame protocol, rendered with the context's
+//! shared painter and presentation blit.
+//!
+//! What is keyed by the presentation lives here: the surface and the target it
+//! needs, the size the owner configured, the colour request and latency, the
+//! damage and retained target of the frame protocol, and what the acquire path
+//! owes the surface between frames. Everything keyed by content (pipelines,
+//! glyphs, images, the blit pipelines) is the context's.
+
+use std::sync::Arc;
+
+use flui_layer::{DamageRegion, Scene};
+use flui_platform::{DisplayColor, SurfaceTarget};
+
+use crate::{
+    error::{EngineError, EngineResult},
+    frame_latency::FrameLatency,
+    frame_protocol::{FontSource, FrameProtocol},
+    offscreen::OffscreenRenderer,
+    painter::WgpuPainter,
+    raster::PresentDisposition,
+    surface_color::{ColorRequest, OutputEncoding, ResolvedSurfaceColor, SurfaceColor},
+    surface_factory::UnconfiguredSurface,
+    surface_lease::SurfaceLease,
+    surface_present::{
+        SurfaceAcquireBackend, SurfaceAcquireOutcome, SurfaceRecovery, SwapchainFrame,
+        acquire_surface_texture_with, classify_frame, reconfigure_after_suboptimal_present,
+    },
+};
+
+/// The context's parts a window slot works with.
+pub(crate) struct Gpu<'a> {
+    pub(crate) instance: &'a wgpu::Instance,
+    pub(crate) adapter: &'a wgpu::Adapter,
+    pub(crate) device: &'a wgpu::Device,
+    pub(crate) queue: &'a wgpu::Queue,
+}
+
+/// The configuration a surface was given.
+struct Configured {
+    config: wgpu::SurfaceConfiguration,
+    color: ResolvedSurfaceColor,
+    supports_copy_src: bool,
+}
+
+/// One window's slot.
+pub(crate) struct WindowSlot {
+    lease: SurfaceLease<wgpu::Surface<'static>>,
+    /// Told immediately before each present (ADR-0305 §5).
+    target: Arc<dyn SurfaceTarget>,
+    /// The size the owner configured, in device pixels; `None` until the
+    /// first one arrives.
+    size: Option<(u32, u32)>,
+    /// The held surface's configuration; `None` while the slot has no size
+    /// or no surface.
+    configured: Option<Configured>,
+    color: ColorRequest,
+    latency: FrameLatency,
+    frame: FrameProtocol,
+    recovery: SurfaceRecovery,
+}
+
+impl WindowSlot {
+    /// A slot over `surface`, which the adapter must present to.
+    ///
+    /// # Errors
+    /// [`EngineError::IncompatibleSurface`] when the adapter cannot present
+    /// to `surface`.
+    pub(crate) fn attach(
+        gpu: &Gpu<'_>,
+        surface: UnconfiguredSurface,
+        color: SurfaceColor,
+        display: Option<DisplayColor>,
+        latency: FrameLatency,
+    ) -> EngineResult<Self> {
+        let UnconfiguredSurface { lease, target } = surface;
+        presentable(gpu, &lease)?;
+        Ok(Self {
+            lease,
+            target,
+            size: None,
+            configured: None,
+            color: ColorRequest {
+                requested: color,
+                display,
+            },
+            latency,
+            frame: FrameProtocol::new(),
+            recovery: SurfaceRecovery::default(),
+        })
+    }
+
+    /// Give the surface `size` device pixels, both sides positive and within
+    /// the device's limit.
+    ///
+    /// # Errors
+    /// [`EngineError::InvalidTargetSize`] for a size outside the device's
+    /// limit, which leaves the slot as it was; a configuration error of the
+    /// surface.
+    pub(crate) fn resize(&mut self, gpu: &Gpu<'_>, size: (u32, u32)) -> EngineResult<()> {
+        let max = gpu.device.limits().max_texture_dimension_2d;
+        let (width, height) = size;
+        if width == 0 || height == 0 || width > max || height > max {
+            return Err(EngineError::InvalidTargetSize { width, height });
+        }
+        if self.size == Some(size) && self.configured.is_some() {
+            return Ok(());
+        }
+        self.size = Some(size);
+        match self.configured.as_mut() {
+            Some(configured) => {
+                configured.config.width = width;
+                configured.config.height = height;
+                if let Some(surface) = self.lease.surface() {
+                    surface.configure(gpu.device, &configured.config);
+                    self.recovery.configured();
+                }
+                self.frame.surface_changed();
+                Ok(())
+            }
+            None => self.configure(gpu),
+        }
+    }
+
+    /// Drop the surface; the target stays, and frames settle not shown until
+    /// a [`Self::restore`].
+    pub(crate) fn release(&mut self) {
+        self.recovery.reset();
+        if self.lease.has_surface() {
+            let _released = self.lease.release();
+        }
+        self.configured = None;
+        self.frame.release_target();
+        self.frame.surface_changed();
+    }
+
+    /// Present to `surface` from now on, configured at the slot's size.
+    ///
+    /// # Errors
+    /// [`EngineError::IncompatibleSurface`] when the adapter cannot present
+    /// to `surface`, which leaves the slot released; a configuration error.
+    pub(crate) fn restore(
+        &mut self,
+        gpu: &Gpu<'_>,
+        surface: UnconfiguredSurface,
+    ) -> EngineResult<()> {
+        self.release();
+        let UnconfiguredSurface { lease, target } = surface;
+        presentable(gpu, &lease)?;
+        self.lease = lease;
+        self.target = target;
+        self.configure(gpu)
+    }
+
+    /// The window's display now reports `display` as its colour: the held
+    /// surface is configured again when its colour was resolved for another.
+    ///
+    /// # Errors
+    /// The surface offers no configuration for the request; it keeps its old
+    /// one.
+    pub(crate) fn set_display_color(
+        &mut self,
+        gpu: &Gpu<'_>,
+        display: DisplayColor,
+    ) -> EngineResult<()> {
+        self.color.display = Some(display);
+        if self
+            .configured
+            .as_ref()
+            .is_some_and(|configured| configured.color.request() == self.color)
+        {
+            return Ok(());
+        }
+        self.configure(gpu)
+    }
+
+    /// Hold `latency` frames ahead of the display from the next configuration,
+    /// which happens now for a configured surface.
+    pub(crate) fn set_latency(&mut self, gpu: &Gpu<'_>, latency: FrameLatency) {
+        self.latency = latency;
+        let Some(configured) = self.configured.as_mut() else {
+            return;
+        };
+        configured.config.desired_maximum_frame_latency = latency.frames();
+        if let Some(surface) = self.lease.surface() {
+            surface.configure(gpu.device, &configured.config);
+            self.recovery.configured();
+        }
+    }
+
+    /// The working format and size the painter renders the next frame in;
+    /// `None` while the slot has nothing to present into.
+    pub(crate) fn target_format(&self) -> Option<(wgpu::TextureFormat, (u32, u32))> {
+        let configured = self.configured.as_ref()?;
+        self.lease.surface()?;
+        Some((
+            configured.color.working_format(),
+            (configured.config.width, configured.config.height),
+        ))
+    }
+
+    /// Render `scene` with `painter` (retargeted to [`Self::target_format`])
+    /// and present it, repainting at least `damage`.
+    ///
+    /// # Errors
+    /// The frame's acquire, render or submission error.
+    pub(crate) fn render(
+        &mut self,
+        gpu: &Gpu<'_>,
+        painter: &mut WgpuPainter,
+        offscreen: &mut OffscreenRenderer,
+        scene: &Scene,
+        damage: DamageRegion,
+    ) -> EngineResult<PresentDisposition> {
+        match damage {
+            DamageRegion::Region(region) => self.frame.mark_dirty(region.bounds().to_rect()),
+            DamageRegion::Unchanged => {}
+            DamageRegion::Full(_) => self.frame.mark_full_repaint(),
+        }
+        self.frame
+            .select_font_source(painter, FontSource::Ordinary, false);
+        self.present(gpu, painter, offscreen, scene)
+    }
+
+    fn present(
+        &mut self,
+        gpu: &Gpu<'_>,
+        painter: &mut WgpuPainter,
+        offscreen: &mut OffscreenRenderer,
+        scene: &Scene,
+    ) -> EngineResult<PresentDisposition> {
+        let Some((working_format, size)) = self.target_format() else {
+            return Ok(PresentDisposition::NotShown);
+        };
+        self.frame.include_backdrop_dependencies(scene, size);
+        if self.frame.plan(self.uses_intermediate()) == crate::damage::FramePlan::Skip {
+            return Ok(classify_frame(false, false));
+        }
+        let Some(output) = acquire_surface_texture_with(&mut Acquire { slot: self, gpu })? else {
+            return Ok(classify_frame(true, false));
+        };
+        // Acquiring may have configured the surface again, which owes a full
+        // repaint: plan again.
+        let plan = self.frame.plan(self.uses_intermediate());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let output_encoding = self
+            .configured
+            .as_ref()
+            .map_or(OutputEncoding::Identity, |configured| {
+                configured.color.output()
+            });
+        let domain = Arc::clone(painter.domain());
+        #[cfg(feature = "gpu-profiler")]
+        let mut no_profiler = None;
+        let mut steps = SwapchainFrame {
+            painter,
+            offscreen,
+            output: output_encoding,
+            scene,
+            #[cfg(feature = "gpu-profiler")]
+            gpu_profiler: &mut no_profiler,
+        };
+        self.frame.run(
+            plan,
+            &domain,
+            size,
+            working_format,
+            (&view, &output.texture),
+            &mut steps,
+        )?;
+        let SwapchainFrame {
+            painter, offscreen, ..
+        } = steps;
+        // The platform's frame-pacing signal, strictly before the present and
+        // only for a frame that presents.
+        self.target
+            .pre_present_notify(crate::surface_present::swap_chain_statistics(
+                self.lease.surface(),
+            ));
+        tracing::trace!(
+            target: "flui.gpu",
+            event = "pre_present_notified",
+            "platform notified before present"
+        );
+        gpu.queue.present(output);
+        tracing::trace!(
+            target: "flui.gpu",
+            event = "present_submitted",
+            "surface frame submitted and presented"
+        );
+        self.frame.presented();
+        match reconfigure_after_suboptimal_present(&mut Acquire { slot: self, gpu }) {
+            // The configure owes a repaint nothing else asks for: present the
+            // same scene again, at most once (the episode is answered).
+            Ok(true) => return self.present(gpu, painter, offscreen, scene),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(target: "flui.gpu", %error, "reconfigure after a suboptimal frame failed");
+            }
+        }
+        Ok(classify_frame(true, true))
+    }
+
+    /// Whether a frame renders into the retained target and reaches the
+    /// surface through the presentation blit.
+    fn uses_intermediate(&self) -> bool {
+        self.configured.as_ref().is_some_and(|configured| {
+            !configured.supports_copy_src || configured.color.output() != OutputEncoding::Identity
+        })
+    }
+
+    /// Configure the held surface at the slot's size from its own
+    /// capabilities; nothing while it has no size or no surface.
+    fn configure(&mut self, gpu: &Gpu<'_>) -> EngineResult<()> {
+        let (Some(surface), Some((width, height))) = (self.lease.surface(), self.size) else {
+            return Ok(());
+        };
+        let (config, supports_copy_src, color) = crate::Renderer::derive_surface_config(
+            surface,
+            gpu.adapter,
+            width,
+            height,
+            self.latency,
+            self.color,
+        )?;
+        surface.configure(gpu.device, &config);
+        self.configured = Some(Configured {
+            config,
+            color,
+            supports_copy_src,
+        });
+        self.recovery.reset();
+        self.frame.surface_changed();
+        Ok(())
+    }
+}
+
+/// Whether the context's adapter presents to the surface `lease` holds.
+fn presentable(gpu: &Gpu<'_>, lease: &SurfaceLease<wgpu::Surface<'static>>) -> EngineResult<()> {
+    match lease.surface() {
+        Some(surface) if gpu.adapter.is_surface_supported(surface) => Ok(()),
+        Some(_) | None => Err(EngineError::IncompatibleSurface),
+    }
+}
+
+/// The acquire path's view of a slot.
+struct Acquire<'a, 'g> {
+    slot: &'a mut WindowSlot,
+    gpu: &'a Gpu<'g>,
+}
+
+impl SurfaceAcquireBackend for Acquire<'_, '_> {
+    type Frame = wgpu::SurfaceTexture;
+
+    fn acquire(&mut self) -> Result<SurfaceAcquireOutcome<Self::Frame>, EngineError> {
+        let Some(surface) = self.slot.lease.surface() else {
+            return Ok(SurfaceAcquireOutcome::Released);
+        };
+        Ok(SurfaceAcquireOutcome::from(surface.get_current_texture()))
+    }
+
+    fn reconfigure(&mut self) -> Result<(), EngineError> {
+        if let (Some(surface), Some(configured)) =
+            (self.slot.lease.surface(), self.slot.configured.as_ref())
+        {
+            surface.configure(self.gpu.device, &configured.config);
+            self.slot.frame.surface_changed();
+        }
+        Ok(())
+    }
+
+    fn recreate(&mut self) -> Result<(), EngineError> {
+        let slot = &mut *self.slot;
+        slot.lease.probe()?;
+        // Drop first: a platform refuses a second surface for a live window
+        // (`Renderer::recreate_surface` has the Android case).
+        let released = slot.lease.release();
+        slot.configured = None;
+        let surface = self
+            .gpu
+            .instance
+            .create_surface(Arc::clone(released.target()))
+            .map_err(EngineError::surface_creation)?;
+        slot.lease.replace_surface(released, surface);
+        slot.configure(self.gpu)
+    }
+
+    fn recovery(&mut self) -> &mut SurfaceRecovery {
+        &mut self.slot.recovery
+    }
+}

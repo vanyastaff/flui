@@ -1,0 +1,76 @@
+error[E0478]: lifetime bound not satisfied
+  --> tests/compile_fail/surface_factory_rejects_borrowed_window.rs:28:6
+   |
+28 | impl SurfaceTarget for &'_ LocalWindow {
+   |      ^^^^^^^^^^^^^
+   |
+note: lifetime parameter instantiated with the anonymous lifetime as defined here
+  --> tests/compile_fail/surface_factory_rejects_borrowed_window.rs:28:25
+   |
+28 | impl SurfaceTarget for &'_ LocalWindow {
+   |                         ^^
+   = note: but lifetime parameter must outlive the static lifetime
+
+error[E0803]: cannot infer an appropriate lifetime for lifetime parameter `'_` due to conflicting requirements
+  --> tests/compile_fail/surface_factory_rejects_borrowed_window.rs:28:24
+   |
+28 | impl SurfaceTarget for &'_ LocalWindow {
+   |                        ^^^^^^^^^^^^^^^
+   |
+note: first, the lifetime cannot outlive the anonymous lifetime as defined here...
+  --> tests/compile_fail/surface_factory_rejects_borrowed_window.rs:28:25
+   |
+28 | impl SurfaceTarget for &'_ LocalWindow {
+   |                         ^^
+note: ...so that the types are compatible
+  --> tests/compile_fail/surface_factory_rejects_borrowed_window.rs:28:24
+   |
+28 | impl SurfaceTarget for &'_ LocalWindow {
+   |                        ^^^^^^^^^^^^^^^
+   = note: expected `<&LocalWindow as flui_platform::SurfaceTarget>`
+              found `<&LocalWindow as flui_platform::SurfaceTarget>`
+   = note: but, the lifetime must be valid for the static lifetime...
+note: ...so that the declared lifetime parameter bounds are satisfied
+  --> tests/compile_fail/surface_factory_rejects_borrowed_window.rs:28:24
+   |
+28 | impl SurfaceTarget for &'_ LocalWindow {
+   |                        ^^^^^^^^^^^^^^^
+
+error[E0597]: `window` does not live long enough
+  --> tests/compile_fail/surface_factory_rejects_borrowed_window.rs:34:43
+   |
+33 |     let window = LocalWindow;
+   |         ------ binding `window` declared here
+34 |     let surface = factory.create(Arc::new(&window));
+   |                                  ---------^^^^^^^-
+   |                                  |        |
+   |                                  |        borrowed value does not live long enough
+   |                                  coercion requires that `window` is borrowed for `'static`
+...
+37 | }
+   | - `window` dropped here while still borrowed
+   |
+   = note: due to object lifetime defaults, `Arc<dyn flui_platform::SurfaceTarget>` actually means `Arc<(dyn flui_platform::SurfaceTarget + 'static)>`
+
+error[E0505]: cannot move out of `window` because it is borrowed
+  --> tests/compile_fail/surface_factory_rejects_borrowed_window.rs:35:10
+   |
+33 |     let window = LocalWindow;
+   |         ------ binding `window` declared here
+34 |     let surface = factory.create(Arc::new(&window));
+   |                                  -----------------
+   |                                  |        |
+   |                                  |        borrow of `window` occurs here
+   |                                  coercion requires that `window` is borrowed for `'static`
+35 |     drop(window);
+   |          ^^^^^^ move out of `window` occurs here
+   |
+   = note: due to object lifetime defaults, `Arc<dyn flui_platform::SurfaceTarget>` actually means `Arc<(dyn flui_platform::SurfaceTarget + 'static)>`
+note: if `LocalWindow` implemented `Clone`, you could clone the value
+  --> tests/compile_fail/surface_factory_rejects_borrowed_window.rs:14:1
+   |
+14 | struct LocalWindow;
+   | ^^^^^^^^^^^^^^^^^^ consider implementing `Clone` for this type
+...
+34 |     let surface = factory.create(Arc::new(&window));
+   |                                            ------ you could clone this value
