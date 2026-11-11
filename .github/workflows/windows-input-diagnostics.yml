@@ -46,28 +46,18 @@ jobs:
           tool: cargo-nextest@0.9
       - name: Build
         run: cargo nextest run -p flui-native --locked --test platform_it --no-run
-      - name: When the touch keyboard host appears after a touch
+      - name: The contract in two processes, then with every feature
         run: |
           set +e
-          one() {
-            FLUI_NATIVE_WINDOW_CONTRACT_CHILD=$1 cargo nextest run -p flui-native --locked --test platform_it --no-capture -E 'test(=contract::test_window_lifecycle_contract)' 2>&1 | grep -E "PASS \[|FAIL \["
+          host() { tasklist //fi 'imagename eq TabTip.exe' //fo csv //nh | grep -c TabTip; }
+          pass() {
+            echo "== pass $1 (TabTip running before: $(host))"
+            cargo nextest run -p flui-native --locked --test platform_it --no-capture $2 -E 'test(=contract::test_window_lifecycle_contract)' > pass.log 2>&1
+            echo "exit $?"
+            grep -E "native window cases failed|PASS \[|FAIL \[" pass.log | head -20
+            echo "TabTip running after: $(host)"
           }
-          watch() {
-            start=$(date +%s%N)
-            for i in $(seq 1 80); do
-              if tasklist //fi 'imagename eq TabTip.exe' //fo csv //nh | grep -q TabTip; then
-                echo "TabTip after $(( ($(date +%s%N) - start) / 1000000 )) ms"; return
-              fi
-              sleep 0.25
-            done
-            echo "no TabTip within 20 s"
-          }
-          for row in focus_loss_ends_a_touch_and_silences_its_tail synthetic_touch_and_pen_reach_native_pointer_dispatch two_injected_touches_arrive_as_one_pointer_frame a_captured_native_pointer_session_replays_to_what_it_delivered; do
-            echo "== $row"
-            one $row & pid=$!
-            watch
-            wait $pid
-            taskkill //F //IM TabTip.exe
-            sleep 2
-          done
+          pass 1 ""
+          pass 2 ""
+          pass 3 "--all-features"
           exit 0

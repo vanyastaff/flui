@@ -447,25 +447,6 @@ mod native_windows {
             focus_loss_and_minimising_end_the_held_press,
         ),
         (
-            "diag_real_alt_f4_closes_the_foreground_window",
-            diag_real_alt_f4_closes_the_foreground_window,
-        ),
-        // The mouse's hover rows run before the first injected touch. On a
-        // hosted `windows-latest` runner that touch starts the touch keyboard's
-        // host (`TabTip.exe`), and from then on the same rows fail where they
-        // passed before it: a capture lost outside the window no longer reads
-        // as a leave, and a leave's callback no longer brings the hover back.
-        // The system-key rows above stop closing the window then too, with the
-        // window still foreground and active.
-        (
-            "a_pointer_routed_mouse_hovers_the_window",
-            a_pointer_routed_mouse_hovers_the_window,
-        ),
-        (
-            "a_leave_callback_that_hovers_again_keeps_the_hover",
-            a_leave_callback_that_hovers_again_keeps_the_hover,
-        ),
-        (
             "focus_loss_ends_a_touch_and_silences_its_tail",
             focus_loss_ends_a_touch_and_silences_its_tail,
         ),
@@ -512,6 +493,14 @@ mod native_windows {
         (
             "native_mouse_wheels_keep_hover_identity_and_signed_units",
             native_mouse_wheels_keep_hover_identity_and_signed_units,
+        ),
+        (
+            "a_pointer_routed_mouse_hovers_the_window",
+            a_pointer_routed_mouse_hovers_the_window,
+        ),
+        (
+            "a_leave_callback_that_hovers_again_keeps_the_hover",
+            a_leave_callback_that_hovers_again_keeps_the_hover,
         ),
         (
             "fractional_native_wheel_packets_preserve_observed_precision_and_source",
@@ -1514,68 +1503,6 @@ mod native_windows {
                 let _ = unsafe { SetKeyboardState(&self.original) };
             }
         }
-    }
-
-    /// FLUI_DIAG (temporary): a real Alt+F4 through `SendInput` to the
-    /// foreground FLUI window closes it.
-    #[expect(unsafe_code, reason = "temporary diagnostic of real keyboard input")]
-    fn diag_real_alt_f4_closes_the_foreground_window() {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{
-            INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
-            SendInput, VIRTUAL_KEY, VK_F4, VK_MENU,
-        };
-        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
-        let platform = WindowsPlatform::try_new().expect("native Windows platform");
-        let window = open_shown(&platform);
-        let hwnd = hwnd_of(&window);
-        let closes = Arc::new(AtomicUsize::new(0));
-        let observed = Arc::clone(&closes);
-        window.handler.react_to_close(move || {
-            observed.fetch_add(1, Ordering::SeqCst);
-        });
-        // SAFETY: the fixture's own live window.
-        let _ = unsafe { SetForegroundWindow(hwnd) };
-        for _ in 0..25 {
-            pump_pointer_thread();
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        // SAFETY: reads the foreground handle only.
-        let foreground = unsafe { GetForegroundWindow() } == hwnd;
-        let key = |vk: VIRTUAL_KEY, up: bool| INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: vk,
-                    dwFlags: if up {
-                        KEYEVENTF_KEYUP
-                    } else {
-                        KEYBD_EVENT_FLAGS(0)
-                    },
-                    ..Default::default()
-                },
-            },
-        };
-        let inputs = [
-            key(VK_MENU, false),
-            key(VK_F4, false),
-            key(VK_F4, true),
-            key(VK_MENU, true),
-        ];
-        // SAFETY: initialized keyboard inputs.
-        let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
-        for _ in 0..100 {
-            pump_pointer_thread();
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        eprintln!(
-            "FLUI_DIAG real Alt+F4: foreground={foreground} sent={sent} closes={}",
-            closes.load(Ordering::SeqCst)
-        );
-        assert_eq!(
-            closes.load(Ordering::SeqCst),
-            1,
-            "a real Alt+F4 closes the window"
-        );
     }
 
     #[expect(
@@ -3340,11 +3267,7 @@ mod native_windows {
     fn focus_loss_ends_a_touch_and_silences_its_tail() {
         use flui_platform::pointer::{PointerEvent, PointerKind};
         use windows::Win32::UI::{
-            Controls::{
-                CreateSyntheticPointerDevice, DestroySyntheticPointerDevice,
-                HSYNTHETICPOINTERDEVICE, POINTER_FEEDBACK_NONE, POINTER_TYPE_INFO,
-                POINTER_TYPE_INFO_0,
-            },
+            Controls::{POINTER_TYPE_INFO, POINTER_TYPE_INFO_0},
             Input::Pointer::{
                 InjectSyntheticPointerInput, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT,
                 POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_FLAGS,
@@ -3352,13 +3275,6 @@ mod native_windows {
             },
             WindowsAndMessaging::{PT_TOUCH, WindowFromPoint},
         };
-        struct Device(HSYNTHETICPOINTERDEVICE);
-        impl Drop for Device {
-            fn drop(&mut self) {
-                // SAFETY: this fixture uniquely owns the device returned by Create.
-                unsafe { DestroySyntheticPointerDevice(self.0) };
-            }
-        }
         let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let Some((window, _close)) = open_pointer_target(&platform) else {
             return;
@@ -3372,11 +3288,8 @@ mod native_windows {
             eprintln!("CANNOT_VERIFY focus-loss touch: the shown target is occluded");
             return;
         }
-        // SAFETY: one ephemeral synthetic device, no borrowed native resources.
-        let device = match unsafe {
-            CreateSyntheticPointerDevice(PT_TOUCH, 1, POINTER_FEEDBACK_NONE)
-        } {
-            Ok(device) => Device(device),
+        let device = match SyntheticPointerDevice::try_new(PT_TOUCH, 1) {
+            Ok(device) => device,
             Err(error) => {
                 eprintln!(
                     "CANNOT_VERIFY focus-loss touch: CreateSyntheticPointerDevice refused: {error}"
@@ -3432,7 +3345,7 @@ mod native_windows {
             };
             // SAFETY: an initialized union arm matching the device's type; the
             // packet outlives the synchronous copy.
-            unsafe { InjectSyntheticPointerInput(device.0, &[packet]) }
+            unsafe { InjectSyntheticPointerInput(device.handle(), &[packet]) }
         };
         let settle = || {
             let limit = Instant::now() + Duration::from_millis(100);
@@ -3693,11 +3606,7 @@ mod native_windows {
     fn synthetic_touch_and_pen_reach_native_pointer_dispatch() {
         use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
         use windows::Win32::UI::{
-            Controls::{
-                CreateSyntheticPointerDevice, DestroySyntheticPointerDevice,
-                HSYNTHETICPOINTERDEVICE, POINTER_FEEDBACK_NONE, POINTER_TYPE_INFO,
-                POINTER_TYPE_INFO_0,
-            },
+            Controls::{POINTER_TYPE_INFO, POINTER_TYPE_INFO_0},
             Input::Pointer::{
                 InjectSyntheticPointerInput, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT,
                 POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO,
@@ -3708,13 +3617,6 @@ mod native_windows {
                 PT_TOUCH, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WindowFromPoint,
             },
         };
-        struct Device(HSYNTHETICPOINTERDEVICE);
-        impl Drop for Device {
-            fn drop(&mut self) {
-                // SAFETY: this fixture uniquely owns the device returned by Create.
-                unsafe { DestroySyntheticPointerDevice(self.0) };
-            }
-        }
         fn unsupported_host(error: &windows::core::Error) -> bool {
             // Explicit host capability/permission refusals. Invalid arguments
             // and sequencing failures are fixture defects, not coverage skips.
@@ -3766,11 +3668,8 @@ mod native_windows {
             (PT_TOUCH, PointerKind::Touch),
             (PT_PEN, PointerKind::Pen { tool: PenTool::Tip }),
         ] {
-            // SAFETY: one ephemeral synthetic device, no borrowed native resources.
-            let device = match unsafe {
-                CreateSyntheticPointerDevice(native_kind, 1, POINTER_FEEDBACK_NONE)
-            } {
-                Ok(device) => Device(device),
+            let device = match SyntheticPointerDevice::try_new(native_kind, 1) {
+                Ok(device) => device,
                 Err(error) => {
                     assert!(
                         unsupported_host(&error),
@@ -3870,7 +3769,9 @@ mod native_windows {
                 };
                 // SAFETY: initialized union arm matches type and device; the
                 // packet slice remains alive for the synchronous native copy.
-                if let Err(error) = unsafe { InjectSyntheticPointerInput(device.0, &[packet]) } {
+                if let Err(error) =
+                    unsafe { InjectSyntheticPointerInput(device.handle(), &[packet]) }
+                {
                     assert!(
                         unsupported_host(&error),
                         "InjectSyntheticPointerInput failed unexpectedly: {error}"
@@ -4033,11 +3934,7 @@ mod native_windows {
         use flui_platform::PlatformInput;
         use flui_platform::pointer::{PointerEvent, PointerKind};
         use windows::Win32::UI::{
-            Controls::{
-                CreateSyntheticPointerDevice, DestroySyntheticPointerDevice,
-                HSYNTHETICPOINTERDEVICE, POINTER_FEEDBACK_NONE, POINTER_TYPE_INFO,
-                POINTER_TYPE_INFO_0,
-            },
+            Controls::{POINTER_TYPE_INFO, POINTER_TYPE_INFO_0},
             Input::Pointer::{
                 InjectSyntheticPointerInput, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT,
                 POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_FLAGS,
@@ -4045,13 +3942,6 @@ mod native_windows {
             },
             WindowsAndMessaging::{PT_TOUCH, WindowFromPoint},
         };
-        struct Device(HSYNTHETICPOINTERDEVICE);
-        impl Drop for Device {
-            fn drop(&mut self) {
-                // SAFETY: this fixture uniquely owns the device returned by Create.
-                unsafe { DestroySyntheticPointerDevice(self.0) };
-            }
-        }
         let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let Some((window, _close)) = open_pointer_target(&platform) else {
             return;
@@ -4072,17 +3962,15 @@ mod native_windows {
             eprintln!("CANNOT_VERIFY pointer frame: the shown target is occluded");
             return;
         }
-        // SAFETY: one ephemeral synthetic device, no borrowed native resources.
-        let device =
-            match unsafe { CreateSyntheticPointerDevice(PT_TOUCH, 2, POINTER_FEEDBACK_NONE) } {
-                Ok(device) => Device(device),
-                Err(error) => {
-                    eprintln!(
-                        "CANNOT_VERIFY pointer frame: CreateSyntheticPointerDevice refused: {error}"
-                    );
-                    return;
-                }
-            };
+        let device = match SyntheticPointerDevice::try_new(PT_TOUCH, 2) {
+            Ok(device) => device,
+            Err(error) => {
+                eprintln!(
+                    "CANNOT_VERIFY pointer frame: CreateSyntheticPointerDevice refused: {error}"
+                );
+                return;
+            }
+        };
         // Each delivery's touch events: a frame's, or a lone event's.
         let deliveries = Arc::new(Mutex::new(Vec::<Vec<PointerEvent>>::new()));
         let recorded = Arc::clone(&deliveries);
@@ -4120,7 +4008,7 @@ mod native_windows {
             });
             // SAFETY: initialized union arms matching the device's type; the
             // packets outlive the synchronous copy.
-            let injected = unsafe { InjectSyntheticPointerInput(device.0, &packets) };
+            let injected = unsafe { InjectSyntheticPointerInput(device.handle(), &packets) };
             let limit = Instant::now() + Duration::from_millis(200);
             while Instant::now() < limit {
                 pump_pointer_thread();
@@ -4191,10 +4079,7 @@ mod native_windows {
         use crate::native_recording::capture::record;
         use crate::native_recording::codec::Backend;
         use windows::Win32::UI::{
-            Controls::{
-                CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, POINTER_FEEDBACK_NONE,
-                POINTER_TYPE_INFO, POINTER_TYPE_INFO_0,
-            },
+            Controls::{POINTER_TYPE_INFO, POINTER_TYPE_INFO_0},
             Input::Pointer::{
                 InjectSyntheticPointerInput, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT,
                 POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO,
@@ -4206,6 +4091,7 @@ mod native_windows {
             },
         };
         let platform = WindowsPlatform::try_new().expect("native Windows platform");
+        let mut devices = Vec::<SyntheticPointerDevice>::new();
         let (delivered, recordings) = record(Backend::Win32, || {
             let (window, _close) = open_pointer_target(&platform)?;
             let hwnd = hwnd_of(&window);
@@ -4220,11 +4106,12 @@ mod native_windows {
             }
             let events = record_pointer(&window);
             for native_kind in [PT_TOUCH, PT_PEN] {
-                // SAFETY: one ephemeral synthetic device, destroyed below.
-                let device = match unsafe {
-                    CreateSyntheticPointerDevice(native_kind, 1, POINTER_FEEDBACK_NONE)
-                } {
-                    Ok(device) => device,
+                let device = match SyntheticPointerDevice::try_new(native_kind, 1) {
+                    Ok(device) => {
+                        let handle = device.handle();
+                        devices.push(device);
+                        handle
+                    }
                     Err(error) => {
                         eprintln!(
                             "CANNOT_VERIFY native capture: CreateSyntheticPointerDevice refused: {error}"
@@ -4296,8 +4183,6 @@ mod native_windows {
                     // the packet outlives the synchronous native copy.
                     let injected = unsafe { InjectSyntheticPointerInput(device, &[packet]) };
                     if let Err(error) = injected {
-                        // SAFETY: this fixture owns the device it created.
-                        unsafe { DestroySyntheticPointerDevice(device) };
                         eprintln!(
                             "CANNOT_VERIFY native capture: InjectSyntheticPointerInput refused: {error}"
                         );
@@ -4309,13 +4194,14 @@ mod native_windows {
                         std::thread::sleep(Duration::from_millis(2));
                     }
                 }
-                // SAFETY: this fixture owns the device it created.
-                unsafe { DestroySyntheticPointerDevice(device) };
             }
             let delivered = events.lock().expect("pointer log").clone();
             window.close_now();
             Some(delivered)
         });
+        // Only now, with the recording finished, do the devices end what
+        // their touches started.
+        drop(devices);
         let Some(delivered) = delivered else {
             return;
         };
@@ -4540,6 +4426,141 @@ mod native_windows {
             "the journal replays to what the window delivered"
         );
         hold_against_golden("win32_sent_mouse_and_wheel", recording);
+    }
+
+    /// A synthetic pointer device a row injects through, which ends what its
+    /// touches start.
+    ///
+    /// On a hosted `windows-latest` runner an injected touch starts the touch
+    /// keyboard's host, `TabTip.exe`, a few seconds later, and from then on
+    /// rows of this contract fail that pass without it: a system key stops
+    /// closing the window and the mouse's hover rows stop reading a leave,
+    /// with the window still foreground and active. A real Alt+F4 still
+    /// closes the window then, so it is the injected session that changes,
+    /// not the window. Dropping the device, on every exit of the row a panic
+    /// included, ends the `TabTip.exe` its touches started where none was
+    /// running before, so the rows after it, in this process or the next,
+    /// start from the desktop they had.
+    struct SyntheticPointerDevice {
+        handle: windows::Win32::UI::Controls::HSYNTHETICPOINTERDEVICE,
+        /// A touch keyboard host was running before the device existed: it is
+        /// not this row's to end, and the touches start no second one.
+        host_was_running: bool,
+        created: Instant,
+    }
+
+    impl SyntheticPointerDevice {
+        /// How long after the device's creation its touches can still start
+        /// the touch keyboard's host. On the hosted runner it appears within
+        /// five seconds of the row's process starting.
+        const HOST_START: Duration = Duration::from_secs(8);
+
+        #[expect(unsafe_code, reason = "creates an ephemeral synthetic pointer device")]
+        fn try_new(
+            kind: windows::Win32::UI::WindowsAndMessaging::POINTER_INPUT_TYPE,
+            contacts: u32,
+        ) -> windows::core::Result<Self> {
+            use windows::Win32::UI::Controls::{
+                CreateSyntheticPointerDevice, POINTER_FEEDBACK_NONE,
+            };
+            let host_was_running = !touch_keyboard_hosts().is_empty();
+            // SAFETY: plain values in; the returned handle is owned by `Self`,
+            // which destroys it once.
+            let handle =
+                unsafe { CreateSyntheticPointerDevice(kind, contacts, POINTER_FEEDBACK_NONE) }?;
+            Ok(Self {
+                handle,
+                host_was_running,
+                created: Instant::now(),
+            })
+        }
+
+        fn handle(&self) -> windows::Win32::UI::Controls::HSYNTHETICPOINTERDEVICE {
+            self.handle
+        }
+    }
+
+    impl Drop for SyntheticPointerDevice {
+        #[expect(
+            unsafe_code,
+            reason = "destroys the synthetic device and ends the touch keyboard host its touches started"
+        )]
+        fn drop(&mut self) {
+            use windows::Win32::{
+                Foundation::CloseHandle,
+                System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess},
+                UI::Controls::DestroySyntheticPointerDevice,
+            };
+            // SAFETY: `try_new` created this handle and nothing else destroys it.
+            unsafe { DestroySyntheticPointerDevice(self.handle) };
+            if self.host_was_running {
+                return;
+            }
+            let deadline = self.created + Self::HOST_START;
+            let started = loop {
+                let started: Vec<u32> = touch_keyboard_hosts();
+                if !started.is_empty() || Instant::now() >= deadline {
+                    break started;
+                }
+                // The thread's windows keep answering while the host starts.
+                pump_pointer_thread();
+                std::thread::sleep(Duration::from_millis(50));
+            };
+            for pid in started {
+                // SAFETY: a process id from the snapshot; a process that has
+                // exited since makes the open fail, which leaves nothing to end.
+                let Ok(process) = (unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) }) else {
+                    continue;
+                };
+                // SAFETY: `process` is the handle opened above with the
+                // terminate right, closed once below.
+                unsafe {
+                    let _ = TerminateProcess(process, 1);
+                    let _ = CloseHandle(process);
+                }
+            }
+        }
+    }
+
+    /// The process ids of every running `TabTip.exe`, the touch keyboard's host.
+    #[expect(unsafe_code, reason = "walks a process snapshot")]
+    fn touch_keyboard_hosts() -> Vec<u32> {
+        use windows::Win32::{
+            Foundation::CloseHandle,
+            System::Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+                TH32CS_SNAPPROCESS,
+            },
+        };
+        // SAFETY: a snapshot of the system's processes, closed below.
+        let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
+            return Vec::new();
+        };
+        let mut hosts = Vec::new();
+        let mut entry = PROCESSENTRY32W {
+            dwSize: u32::try_from(std::mem::size_of::<PROCESSENTRY32W>())
+                .expect("BUG: PROCESSENTRY32W fits its own size field"),
+            ..PROCESSENTRY32W::default()
+        };
+        // SAFETY: the open snapshot and an entry whose `dwSize` is set.
+        let mut more = unsafe { Process32FirstW(snapshot, &raw mut entry) }.is_ok();
+        while more {
+            let length = entry
+                .szExeFile
+                .iter()
+                .position(|&unit| unit == 0)
+                .unwrap_or(entry.szExeFile.len());
+            if String::from_utf16_lossy(&entry.szExeFile[..length])
+                .eq_ignore_ascii_case("TabTip.exe")
+            {
+                hosts.push(entry.th32ProcessID);
+            }
+            // SAFETY: as for `Process32FirstW`.
+            more = unsafe { Process32NextW(snapshot, &raw mut entry) }.is_ok();
+        }
+        // SAFETY: the snapshot opened above, closed once.
+        let _ = unsafe { CloseHandle(snapshot) };
+        hosts
     }
 
     #[expect(
