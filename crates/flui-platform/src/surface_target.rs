@@ -72,6 +72,29 @@ pub trait SurfaceTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'sta
     fn pre_present_notify(&self, statistics: SwapChainStatistics);
 }
 
+/// The platform's connection to its window system, which the one GPU instance
+/// of an application is made on (ADR-0305 §2).
+///
+/// wgpu reads an instance's display when the instance is made and again at
+/// every surface it makes, and refuses a surface whose display differs. A
+/// window's [`SurfaceTarget`] cannot be that display: once its window closes
+/// it answers [`HandleError::Unavailable`](raw_window_handle::HandleError::Unavailable),
+/// and the next window's surface would then find no display. The host hands
+/// out its own connection instead, which lives as long as anything holds it:
+///
+/// - **X11** and **Wayland**: the connection the host's windows are made on,
+///   so it answers the same display handle as every target of the host;
+/// - **Win32**, **AppKit**, **UIKit**, **Android** and **the web**: their
+///   display handle, which carries no pointer;
+/// - **headless**: no display; it answers
+///   [`HandleError::NotSupported`](raw_window_handle::HandleError::NotSupported),
+///   and an instance made over it makes no window surface.
+///
+/// A connection that answered a handle once answers the same one for as long
+/// as it is held, on any thread. Not implemented for a window's target, so
+/// passing one where the connection belongs does not compile.
+pub trait DisplayConnection: HasDisplayHandle + Send + Sync + 'static {}
+
 /// What a presenter read from its swap chain before a present: the platform's
 /// own record of when its earlier frames reached the screen, in the platform's
 /// units, which the window's host rebases onto the event timeline.

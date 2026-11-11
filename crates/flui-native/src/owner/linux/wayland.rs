@@ -1862,6 +1862,11 @@ mod event_loop {
         pub(crate) fn shown_cursor(&self) -> Option<ShownCursor> {
             self.input.shown_cursor()
         }
+        /// The connection to the compositor, which every window of the
+        /// platform is made on.
+        pub(crate) fn connection(&self) -> &Connection {
+            &self.connection
+        }
         /// Whether the compositor offers to draw a window's frame
         /// (`xdg-decoration`).
         pub(crate) fn offers_decorations(&self) -> bool {
