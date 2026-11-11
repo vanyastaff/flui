@@ -318,7 +318,9 @@ agent or a test holds the tree (`flui-runtime`'s `SemanticsHost` counts the hold
 `reconcile_semantics_enablement` carries the answer to the pipeline at the start of a frame). The
 view layer follows the same answer. `BuildOwner` holds it, every `RenderObjectContext` carries it,
 a `Semantics` registers the route of its actions only while it holds, and a control's node builds
-its semantics part, the description and the handlers it offers, only while it holds:
+its semantics part, the description and the handlers it offers, only while it holds. The node's
+view carries what the description is made from (a role and an identifier), not a built
+`Semantics`, so the copies of the view the tree keeps stay small:
 
 ```rust
 impl BuildOwner {

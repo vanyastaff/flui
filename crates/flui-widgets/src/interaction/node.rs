@@ -19,6 +19,7 @@
 
 use std::any::TypeId;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::focus::FocusNode;
@@ -46,7 +47,7 @@ use super::listener::release_targets;
 use super::raw_gesture_detector::RecognizerHost;
 use crate::support::EventCallback;
 use crate::widget_state::{WidgetState, WidgetStates, WidgetStatesController};
-use crate::{Listener, MouseRegion, Semantics};
+use crate::{Listener, MouseRegion, Semantics, SemanticsRole};
 
 /// The behaviours of a control around its child, in one element.
 ///
@@ -62,10 +63,29 @@ pub(crate) struct InteractiveNode {
     focus_ring: bool,
     /// Shared, so a clone of the view copies no list.
     actions: Rc<Vec<(TypeId, ErasedAction)>>,
-    semantics: Option<Semantics>,
+    semantics: Option<Description>,
     /// Where the node writes the interaction states it owns (ADR-0322 §3).
     states: Option<WidgetStatesController>,
     child: BoxedView,
+}
+
+/// What a control says of itself to assistive technology: one node of a
+/// role. A view holds this in place of the [`Semantics`] it stands for,
+/// which the node builds only while its window collects semantics
+/// (ADR-0322 §8), so the view stays small in every copy the tree keeps.
+#[derive(Clone, Debug)]
+pub(crate) struct Description {
+    pub(crate) role: SemanticsRole,
+    pub(crate) identifier: Option<Arc<str>>,
+}
+
+impl Description {
+    fn build(&self) -> Semantics {
+        Semantics::new()
+            .container(true)
+            .role(self.role)
+            .identifier_if(self.identifier.as_ref())
+    }
 }
 
 impl std::fmt::Debug for InteractiveNode {
@@ -208,11 +228,10 @@ impl InteractiveNode {
         self
     }
 
-    /// Describe the node to assistive technology as `semantics` says, as a
-    /// [`Semantics`] around the control does. Its child is not read: the
-    /// node's child is the one annotated.
+    /// Describe the node to assistive technology as `description` says, as
+    /// a [`Semantics`] around the control does.
     #[must_use]
-    pub(crate) fn semantics(mut self, semantics: Semantics) -> Self {
+    pub(crate) fn semantics(mut self, semantics: Description) -> Self {
         self.semantics = Some(semantics);
         self
     }
@@ -361,8 +380,8 @@ impl InteractiveNodeState {
         // The description never carries the switch itself (ADR-0322 §2).
         let mut semantics = view
             .semantics
-            .clone()
-            .map(|described| described.enabled(view.enabled));
+            .as_ref()
+            .map(|described| described.build().enabled(view.enabled));
         if self.tap.is_set() {
             semantics = Some(semantics.unwrap_or_default().on_click(self.tap.click()));
         }
