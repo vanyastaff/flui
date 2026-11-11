@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     owner::LifecycleHook,
-    view::{IntoView, RenderViewState, StatefulRenderView, View},
+    view::{BoxedView, IntoView, RenderViewState, StatefulRenderView},
 };
 
 /// Behavior of a [`StatefulRenderView`] element.
@@ -148,7 +148,7 @@ where
         });
         let child_view = build_or_recover_begun(core, owner, "StatefulRenderElement", move || {
             let opaque = state.child(&view, ctx);
-            Box::new(IntoView::into_view(opaque)) as Box<dyn View>
+            BoxedView::new(IntoView::into_view(opaque))
         });
         single_child_views(core, child_view, "StatefulRenderBehavior")
     }

@@ -32,7 +32,7 @@ fn active_retake_fixture() -> (
     let destination = tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
     tree.get_mut(root)
         .expect("root remains live")
-        .set_child_ids(vec![donor, destination]);
+        .set_child_ids(&[donor, destination]);
 
     let armed = std::rc::Rc::new(std::cell::Cell::new(false));
     let keyed = ActiveRetakePanicsOnActivate {
@@ -42,7 +42,7 @@ fn active_retake_fixture() -> (
     let candidate = tree.insert(&keyed, donor, 0, &mut owner.element_owner_mut());
     tree.get_mut(donor)
         .expect("donor remains live")
-        .set_child_ids(vec![candidate]);
+        .set_child_ids(&[candidate]);
     let depth = tree.get(candidate).expect("candidate remains live").depth();
     owner.schedule_build_for(candidate, depth, crate::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
