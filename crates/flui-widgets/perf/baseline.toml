@@ -2,9 +2,9 @@
 # One table per scenario of crates/flui-widgets/tests/perf.rs.
 
 [full_reassemble]
-allocations = 3490
-builds_run = 275
-elements_rebuilt = 149
+allocations = 3474
+builds_run = 273
+elements_rebuilt = 147
 frames_produced = 1
 layers_produced = 86
 layers_reused = 0
