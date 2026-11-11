@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value, json};
 
+use super::launch::AttachError;
 use super::socket::Socket;
 use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote};
 
@@ -22,9 +23,10 @@ pub(super) struct Cdp {
 impl Cdp {
     /// Attaches to the first tab the browser on `socket` opens. A browser still starting
     /// answers late, so every step may take until `ready_by`.
-    pub(super) fn attach(mut socket: Socket, ready_by: Instant) -> Result<Self, LinkError> {
+    pub(super) fn attach(mut socket: Socket, ready_by: Instant) -> Result<Self, AttachError> {
         let target = loop {
-            let targets = command(&mut socket, None, "Target.getTargets", json!({}), ready_by)?;
+            let targets = command(&mut socket, None, "Target.getTargets", json!({}), ready_by)
+                .map_err(AttachError::at("Target.getTargets"))?;
             let page = targets
                 .get("targetInfos")
                 .and_then(Value::as_array)
@@ -40,7 +42,9 @@ impl Cdp {
                 break page;
             }
             if Instant::now() >= ready_by {
-                return Err(LinkError::Refused("the browser opened no tab".into()));
+                return Err(AttachError::at("Target.getTargets")(LinkError::Refused(
+                    "the browser opened no tab".into(),
+                )));
             }
             std::thread::sleep(Duration::from_millis(100));
         };
@@ -50,18 +54,24 @@ impl Cdp {
             "Target.attachToTarget",
             json!({ "targetId": target, "flatten": true }),
             ready_by,
-        )?;
+        )
+        .map_err(AttachError::at("Target.attachToTarget"))?;
         let session = attached
             .get("sessionId")
             .and_then(Value::as_str)
             .map(str::to_owned)
-            .ok_or_else(|| LinkError::Refused("Target.attachToTarget named no session".into()))?;
+            .ok_or_else(|| {
+                AttachError::at("Target.attachToTarget")(LinkError::Refused(
+                    "Target.attachToTarget named no session".into(),
+                ))
+            })?;
         for (method, params) in [
             ("Page.enable", json!({})),
             ("Runtime.enable", json!({})),
             ("Runtime.addBinding", json!({ "name": BINDING })),
         ] {
-            command(&mut socket, Some(&session), method, params, ready_by)?;
+            command(&mut socket, Some(&session), method, params, ready_by)
+                .map_err(AttachError::at(method))?;
         }
         Ok(Self { socket, session })
     }
