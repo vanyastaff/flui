@@ -179,7 +179,8 @@ not on the frame path: a walk of every layer each frame is the cost the retained
 
 ### 9. The retained scene is a persistent value — [ADR-0304 §1–§3](../../docs/adr/ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
 
-A `SceneVersion` is an `Arc` over its nodes, kept in a path-copying table of fanout 32
+A `SceneVersion` is an `Arc` over its nodes, kept in a path-copying table of branches of 32 over
+leaves of 8
 (`src/scene/table.rs`) written here rather than taken from a persistent-collection crate: the
 scene needs lookup, insert, remove and an ordered walk. A write copies its path from the root to
 its leaf and shares every other subtree with the version before it; writes into one leaf share
@@ -260,8 +261,8 @@ user code and finds the owner free.
 Pinned by `layer_it`: `pending_log_contract`, `scene_patch_damage`, `patch_damage_covers_diff_damage` (random patches,
 whose damage must cover what `LayerDiffer` finds between the flattened versions),
 `scene_apply_contract`, `content_version_contract` and `scene_table_cost`
-(an apply's copies are at most its operations times the table height, equal at 1 100 and 30 000
-nodes, and a republished parent copies as much at 40 children as at 1 000); the table's model
+(an apply's copies are at most its operations times the table height, equal at 1 100 and 8 000
+nodes, and a republished parent copies as much at 40 children as at 200); the table's model
 test against `BTreeMap` is `scene::table::tests`.
 
 ### Deleted, with the reason

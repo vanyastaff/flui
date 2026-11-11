@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::cmp::Reverse;
 use std::sync::Arc;
 
-use flui_foundation::geometry::{Matrix4, Rect};
+use flui_foundation::geometry::Rect;
 use smallvec::SmallVec;
 
 use super::content::{BoundaryContent, Bounds, Entry, EntryIndex, LinkRole};
@@ -464,9 +464,7 @@ fn growth(next: &VersionInner, child: NodeKey) -> Option<(NodeKey, Bounds, f64)>
     let mut links = Links::new();
     Geometry::new(next).content_links(parent, slot, &mut links, 0);
     let offset = record.placement().offset();
-    links.push(Link::Matrix(Matrix4::translation(
-        offset.dx, offset.dy, 0.0,
-    )));
+    links.push(Link::Translate(offset));
     // The effects over the slot carry the child's scope as they do in the
     // parent's own content.
     let scope = Scope {

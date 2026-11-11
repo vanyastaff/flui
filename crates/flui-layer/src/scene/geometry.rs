@@ -26,10 +26,21 @@ use crate::{LayerLink, LeaderClip};
 
 /// One step from a space into the one it holds, as a footprint crosses it
 /// outward.
+///
+/// A step names its map rather than holding one: a placement or a layer's
+/// offset is a translation, a transform layer's matrix is borrowed from the
+/// layer, and a follower's resolved map is held once by its chain
+/// ([`Links`]), so a step stays the size of a rect and a chain copies no
+/// matrices.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Link<'v> {
-    /// The inner space's map into the outer one.
-    Matrix(Matrix4),
+    /// The inner space is the outer one moved by this offset.
+    Translate(Offset),
+    /// The inner space's map into the outer one, a transform layer's own.
+    Matrix(&'v Matrix4),
+    /// The inner space's map into the outer one, a follower's: the resolved
+    /// map at this index of its chain.
+    Resolved(usize),
     /// Nothing inside lands outside this rect of the inner space.
     Clip(Rect<f64>),
     /// What is inside spreads or moves as the filter sends it.
@@ -42,7 +53,86 @@ pub(crate) enum Link<'v> {
     Hidden,
 }
 
-pub(crate) type Links<'v> = SmallVec<[Link<'v>; 16]>;
+/// A chain of steps, outermost first, and the follower maps its
+/// [`Link::Resolved`] steps name.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Links<'v> {
+    steps: SmallVec<[Link<'v>; 16]>,
+    resolved: SmallVec<[Matrix4; 1]>,
+}
+
+/// The map one step applies.
+#[derive(Clone, Copy)]
+enum Map<'m> {
+    Translate(Offset),
+    Matrix(&'m Matrix4),
+}
+
+impl<'v> Links<'v> {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn push(&mut self, link: Link<'v>) {
+        self.steps.push(link);
+    }
+
+    /// Appends a follower's resolved map.
+    fn push_resolved(&mut self, map: Matrix4) {
+        self.steps.push(Link::Resolved(self.resolved.len()));
+        self.resolved.push(map);
+    }
+
+    /// The map `link`, a step of this chain, applies; `None` for a step that
+    /// maps nothing.
+    fn map(&self, link: &Link<'v>) -> Option<Map<'_>> {
+        match *link {
+            Link::Translate(offset) => Some(Map::Translate(offset)),
+            Link::Matrix(matrix) => Some(Map::Matrix(matrix)),
+            Link::Resolved(index) => Some(Map::Matrix(&self.resolved[index])),
+            Link::Clip(_) | Link::Filter(_) | Link::Extent(_) | Link::Everywhere | Link::Hidden => {
+                None
+            }
+        }
+    }
+}
+
+impl Map<'_> {
+    /// `rect` mapped by this map, covered by a rect.
+    fn rect(self, rect: Rect<f64>) -> Reach {
+        match self {
+            Self::Translate(offset) => translated(rect, offset),
+            Self::Matrix(matrix) => mapped(matrix, rect),
+        }
+    }
+
+    /// `ctm` followed, inward, by this map: `ctm · map`.
+    fn after(self, ctm: &mut Matrix4) {
+        match self {
+            Self::Translate(offset) => {
+                // `ctm · translation(dx, dy)` changes only the translation
+                // column: it becomes `ctm` applied to `(dx, dy, 0, 1)`.
+                for row in 0..4 {
+                    ctm.m[12 + row] += ctm.m[row] * offset.dx + ctm.m[4 + row] * offset.dy;
+                }
+            }
+            Self::Matrix(matrix) => *ctm *= *matrix,
+        }
+    }
+}
+
+/// `rect` moved by `offset`.
+fn translated(rect: Rect<f64>, offset: Offset) -> Reach {
+    if !offset.is_finite() {
+        return Reach::NonFinite;
+    }
+    Reach::rect(Rect::from_ltrb(
+        rect.min.x + offset.dx,
+        rect.min.y + offset.dy,
+        rect.max.x + offset.dx,
+        rect.max.y + offset.dy,
+    ))
+}
 
 /// What a scope draws, in the space that holds it, and how far its filters
 /// spread that in device pixels once mapped to the surface.
@@ -73,37 +163,41 @@ impl Scope {
     /// over a scope with a kernel bounds it by the clip, its kernel spent,
     /// since a local bound cannot hold device pixels but the clip still
     /// bounds all they draw.
-    pub(crate) fn through(self, links: &[Link<'_>]) -> Self {
-        links.iter().rev().fold(self, |scope, link| match *link {
-            Link::Matrix(matrix) => Self {
-                local: match scope.local {
-                    Reach::Rect(rect) => mapped(&matrix, rect),
-                    other => other,
+    pub(crate) fn through(self, links: &Links<'_>) -> Self {
+        links
+            .steps
+            .iter()
+            .rev()
+            .fold(self, |scope, link| match *link {
+                Link::Translate(_) | Link::Matrix(_) | Link::Resolved(_) => Self {
+                    local: match (scope.local, links.map(link)) {
+                        (Reach::Rect(rect), Some(map)) => map.rect(rect),
+                        (other, _) => other,
+                    },
+                    ..scope
                 },
-                ..scope
-            },
-            Link::Hidden => Self::EMPTY,
-            Link::Clip(clip) if scope.kernel > 0.0 && scope.local != Reach::Nothing => Self {
-                local: Reach::rect(clip),
-                kernel: 0.0,
-            },
-            Link::Clip(clip) => Self {
-                local: map_out(&[Link::Clip(clip)], scope.local),
-                ..scope
-            },
-            Link::Filter(filter) => Self {
-                local: map_out(&[Link::Filter(filter)], scope.local),
-                kernel: device_spread(filter, scope.kernel),
-            },
-            Link::Extent(rect) => Self {
-                local: scope.local.union(Reach::rect(rect)),
-                ..scope
-            },
-            Link::Everywhere => Self {
-                local: Reach::Unbounded,
-                ..scope
-            },
-        })
+                Link::Hidden => Self::EMPTY,
+                Link::Clip(clip) if scope.kernel > 0.0 && scope.local != Reach::Nothing => Self {
+                    local: Reach::rect(clip),
+                    kernel: 0.0,
+                },
+                Link::Clip(clip) => Self {
+                    local: clipped(scope.local, Reach::rect(clip)),
+                    ..scope
+                },
+                Link::Filter(filter) => Self {
+                    local: filtered(filter, scope.local, &Matrix4::IDENTITY, Spread::Kernel),
+                    kernel: device_spread(filter, scope.kernel),
+                },
+                Link::Extent(rect) => Self {
+                    local: scope.local.union(Reach::rect(rect)),
+                    ..scope
+                },
+                Link::Everywhere => Self {
+                    local: Reach::Unbounded,
+                    ..scope
+                },
+            })
     }
 }
 
@@ -200,14 +294,6 @@ fn mapped(matrix: &Matrix4, rect: Rect<f64>) -> Reach {
         None => Reach::Unbounded,
     }
 }
-/// `reach`, in the innermost space of `links` (listed outermost first),
-/// mapped out through each of them into the outermost space of one
-/// boundary's content. A filter on the way moves what it takes and does not
-/// spread it: its spread is in device pixels, which the scope's kernel
-/// carries to the surface.
-pub(crate) fn map_out(links: &[Link<'_>], reach: Reach) -> Reach {
-    map_through(links, reach, 0.0, Spread::Kernel)
-}
 
 /// How a filter on a chain grows what it takes.
 #[derive(Clone, Copy)]
@@ -218,32 +304,34 @@ enum Spread {
     Kernel,
 }
 
-/// `map_out`, with `reach` grown by `kernel` device pixels once mapped and
-/// before the links' clips and filters: the device-space spread of the
-/// filters inside it, which bounds in a local space cannot hold.
-pub(crate) fn map_out_spread(links: &[Link<'_>], reach: Reach, kernel: f64) -> Reach {
-    map_through(links, reach, kernel, Spread::Reach)
-}
-
-fn map_through(links: &[Link<'_>], reach: Reach, kernel: f64, spread: Spread) -> Reach {
+/// `reach`, in the innermost space of `links` (listed outermost first),
+/// mapped out through each of them to the surface, grown by `kernel` device
+/// pixels once mapped and before the links' clips and filters: the
+/// device-space spread of the filters inside it, which bounds in a local
+/// space cannot hold.
+pub(crate) fn map_out_spread(links: &Links<'_>, reach: Reach, kernel: f64) -> Reach {
     // The map from the space of each step that reads it (a clip, a filter,
     // an extent) into the outermost, in chain order.
     let mut ctms: SmallVec<[Matrix4; 4]> = SmallVec::new();
     let mut ctm = Matrix4::IDENTITY;
-    for link in links {
+    for link in &links.steps {
         match link {
-            Link::Matrix(matrix) => ctm *= *matrix,
             Link::Clip(_) | Link::Filter(_) | Link::Extent(_) => ctms.push(ctm),
             Link::Hidden | Link::Everywhere => {}
+            Link::Translate(_) | Link::Matrix(_) | Link::Resolved(_) => {
+                if let Some(map) = links.map(link) {
+                    map.after(&mut ctm);
+                }
+            }
         }
     }
     let mut out = match reach {
         Reach::Rect(rect) => mapped(&ctm, rect).spread(kernel),
         other => other,
     };
-    for link in links.iter().rev() {
+    for link in links.steps.iter().rev() {
         out = match *link {
-            Link::Matrix(_) => out,
+            Link::Translate(_) | Link::Matrix(_) | Link::Resolved(_) => out,
             Link::Hidden => Reach::Nothing,
             Link::Everywhere => Reach::Unbounded,
             Link::Clip(_) | Link::Filter(_) | Link::Extent(_) => {
@@ -251,29 +339,40 @@ fn map_through(links: &[Link<'_>], reach: Reach, kernel: f64, spread: Spread) ->
                     .pop()
                     .expect("BUG: every clip, filter and extent of the chain has its map");
                 match *link {
-                    Link::Clip(clip) => match (out, mapped(&ctm, clip)) {
-                        (Reach::Rect(inside), Reach::Rect(clip)) => {
-                            inside.intersect(&clip).map_or(Reach::Nothing, Reach::rect)
-                        }
-                        (Reach::Unbounded, clip @ (Reach::Rect(_) | Reach::Nothing)) => clip,
-                        (Reach::Rect(_), Reach::Nothing) => Reach::Nothing,
-                        (out, _) => out,
-                    },
-                    Link::Filter(filter) => match out {
-                        Reach::Rect(input) => match spread {
-                            Spread::Reach => footprint(filter, input, &ctm),
-                            Spread::Kernel => moved(filter, input, &ctm),
-                        }
-                        .map_or(Reach::Unbounded, Reach::rect),
-                        other => other,
-                    },
+                    Link::Clip(clip) => clipped(out, mapped(&ctm, clip)),
+                    Link::Filter(filter) => filtered(filter, out, &ctm, Spread::Reach),
                     Link::Extent(rect) => out.union(mapped(&ctm, rect)),
-                    Link::Matrix(_) | Link::Hidden | Link::Everywhere => out,
+                    _ => out,
                 }
             }
         };
     }
     out
+}
+
+/// `out` cut by `clip`, both in one space.
+fn clipped(out: Reach, clip: Reach) -> Reach {
+    match (out, clip) {
+        (Reach::Rect(inside), Reach::Rect(clip)) => {
+            inside.intersect(&clip).map_or(Reach::Nothing, Reach::rect)
+        }
+        (Reach::Unbounded, clip @ (Reach::Rect(_) | Reach::Nothing)) => clip,
+        (Reach::Rect(_), Reach::Nothing) => Reach::Nothing,
+        (out, _) => out,
+    }
+}
+
+/// What `filter`, under `ctm`, makes of `out`: moved, and spread by its
+/// reach when `spread` says so.
+fn filtered(filter: &ImageFilter, out: Reach, ctm: &Matrix4, spread: Spread) -> Reach {
+    match out {
+        Reach::Rect(input) => match spread {
+            Spread::Reach => footprint(filter, input, ctm),
+            Spread::Kernel => moved(filter, input, ctm),
+        }
+        .map_or(Reach::Unbounded, Reach::rect),
+        other => other,
+    }
 }
 
 /// Why a follower draws nothing.
@@ -411,7 +510,7 @@ impl<'v> Geometry<'v> {
             return Err(Unattached);
         }
         // The root's placement offsets the whole scene, as `flatten` draws it.
-        out.push(Link::Matrix(placement(self.record(at))));
+        out.push(Link::Translate(self.record(at).placement().offset()));
         for pair in path.windows(2).rev() {
             let (child, parent) = (pair[0], pair[1]);
             let slot = self
@@ -420,7 +519,7 @@ impl<'v> Geometry<'v> {
                 .slot_entry(child)
                 .expect("BUG: a node's parent names it in a slot");
             self.content_links(parent, slot, out, nesting);
-            out.push(Link::Matrix(placement(self.record(child))));
+            out.push(Link::Translate(self.record(child).placement().offset()));
         }
         Ok(())
     }
@@ -466,17 +565,15 @@ impl<'v> Geometry<'v> {
         nesting: usize,
     ) {
         match layer {
-            Layer::Transform(transform) => out.push(Link::Matrix(*transform.transform())),
-            Layer::Follower(_) => out.push(match self.resolve(at, nesting) {
-                Ok(transform) => Link::Matrix(transform),
-                Err(Unresolved::Hidden | Unresolved::TooDeep) => Link::Hidden,
-            }),
+            Layer::Transform(transform) => out.push(Link::Matrix(transform.transform())),
+            Layer::Follower(_) => match self.resolve(at, nesting) {
+                Ok(transform) => out.push_resolved(transform),
+                Err(Unresolved::Hidden | Unresolved::TooDeep) => out.push(Link::Hidden),
+            },
             _ => {
                 let offset = layer.local_translation();
                 if offset != Offset::ZERO {
-                    out.push(Link::Matrix(Matrix4::translation(
-                        offset.dx, offset.dy, 0.0,
-                    )));
+                    out.push(Link::Translate(offset));
                 }
             }
         }
@@ -672,10 +769,10 @@ impl<'v> Geometry<'v> {
     fn slot_scope(self, child: NodeKey) -> Scope {
         let child = self.record(child);
         Scope {
-            local: map_out(
-                &[Link::Matrix(placement(child))],
-                Reach::of(child.subtree()),
-            ),
+            local: match Reach::of(child.subtree()) {
+                Reach::Rect(rect) => translated(rect, child.placement().offset()),
+                other => other,
+            },
             kernel: child.kernel(),
         }
     }
@@ -727,7 +824,7 @@ impl<'v> Geometry<'v> {
     /// the chain into the space that holds it ([`Self::entry_chain`]).
     pub(crate) fn effect_reach(
         self,
-        chain: &[Link<'_>],
+        chain: &Links<'_>,
         key: NodeKey,
         entry: EntryIndex,
         inside: Scope,
@@ -954,7 +1051,9 @@ impl<'v> Geometry<'v> {
         for (index, step) in steps.iter().enumerate() {
             let mut links = Links::new();
             match *step {
-                Up::Place(node) => links.push(Link::Matrix(placement(self.record(node)))),
+                Up::Place(node) => {
+                    links.push(Link::Translate(self.record(node).placement().offset()))
+                }
                 Up::Effect(at) => {
                     let Some(layer) = self.record(at.node).content().effect_layer(at.entry) else {
                         continue;
@@ -979,7 +1078,9 @@ impl<'v> Geometry<'v> {
     fn up_links(self, steps: &[Up], out: &mut Links<'v>, nesting: usize) {
         for step in steps.iter().rev() {
             match *step {
-                Up::Place(node) => out.push(Link::Matrix(placement(self.record(node)))),
+                Up::Place(node) => {
+                    out.push(Link::Translate(self.record(node).placement().offset()))
+                }
                 Up::Effect(at) => {
                     if let Some(layer) = self.record(at.node).content().effect_layer(at.entry) {
                         self.effect_links(layer, at, out, nesting);
@@ -1012,13 +1113,17 @@ impl<'v> Geometry<'v> {
 }
 
 /// The product of every map in `links`, outermost first.
-fn product(links: &[Link<'_>]) -> Result<Matrix4, Unresolved> {
+fn product(links: &Links<'_>) -> Result<Matrix4, Unresolved> {
     let mut ctm = Matrix4::IDENTITY;
-    for link in links {
+    for link in &links.steps {
         match link {
-            Link::Matrix(matrix) => ctm *= *matrix,
             Link::Hidden => return Err(Unresolved::Hidden),
             Link::Clip(_) | Link::Filter(_) | Link::Extent(_) | Link::Everywhere => {}
+            Link::Translate(_) | Link::Matrix(_) | Link::Resolved(_) => {
+                if let Some(map) = links.map(link) {
+                    map.after(&mut ctm);
+                }
+            }
         }
     }
     finite(ctm)
@@ -1030,11 +1135,6 @@ fn finite(transform: Matrix4) -> Result<Matrix4, Unresolved> {
     } else {
         Err(Unresolved::Hidden)
     }
-}
-
-fn placement(record: &NodeRecord) -> Matrix4 {
-    let offset = record.placement().offset();
-    Matrix4::translation(offset.dx, offset.dy, 0.0)
 }
 
 /// Whether `entry` sits under `effect` in `content`.

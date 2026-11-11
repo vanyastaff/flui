@@ -111,7 +111,9 @@ struct NodeRecord {
 pub struct SceneNode<'a> { lineage: Lineage, record: &'a NodeRecord }   // read through a version
 ```
 
-`VersionInner` keeps the nodes in a path-copying table of fanout 32, written in `flui-layer`
+`VersionInner` keeps the nodes in a path-copying table, branches of 32 over leaves of 8 (a leaf
+holds its values inline and a write copies the whole leaf, so a narrow leaf keeps one record
+change to a few cache lines), written in `flui-layer`
 itself: no persistent-collection crate is in the workspace, and the scene needs only lookup,
 insert, remove and an ordered walk, which do not justify a dependency and its review. Beside it are
 three persistent indexes: links (`LayerLink` to the leader and followers that name it), texture users

@@ -533,10 +533,11 @@ pub(crate) fn a_version_is_send_and_sync() {
 
 // scene_table_cost
 
-/// The fewest fanout-32 levels that index `slots` slots.
+/// The fewest levels that index `slots` slots: leaves of eight under
+/// branches of 32.
 fn height(slots: usize) -> u64 {
     let mut height = 1;
-    let mut capacity = 32usize;
+    let mut capacity = 8usize;
     while capacity < slots {
         capacity *= 32;
         height += 1;
@@ -570,7 +571,7 @@ fn places(leaves: &[SceneNodeId], k: usize, stride: usize) -> Vec<SceneOp> {
 pub(crate) fn an_apply_copies_the_patch_not_the_scene() {
     const K: usize = 8;
     let mut same_slots = Vec::new();
-    for n in [100usize, 1_100, 30_000, 100_000] {
+    for n in [100usize, 1_100, 8_000, 100_000] {
         let (mut owner, leaves) = owner_with_leaves(n);
         // The root takes slot 0 and the leaves the slots after it.
         let height = height(n + 1);
@@ -579,7 +580,8 @@ pub(crate) fn an_apply_copies_the_patch_not_the_scene() {
             spread <= K as u64 * height,
             "{n} nodes: {spread} copies over height {height}"
         );
-        let dense = copies_of(&mut owner, places(&leaves[32..], K, 1));
+        // The leaves from the 31st take slots 32..40: one leaf of eight.
+        let dense = copies_of(&mut owner, places(&leaves[31..], K, 1));
         assert_eq!(
             dense, height,
             "{n} nodes: {K} places in one leaf copy one path"
@@ -593,17 +595,17 @@ pub(crate) fn an_apply_copies_the_patch_not_the_scene() {
             .expect("measured")
     };
     let (_, height_small, copies_small) = at(1_100);
-    let (_, height_large, copies_large) = at(30_000);
+    let (_, height_large, copies_large) = at(8_000);
     assert_eq!(height_small, height_large);
     assert_eq!(copies_small, copies_large, "{same_slots:?}");
 }
 
 /// A parent republished with the slots it had, plus one, copies the same
-/// table nodes whether it names 40 children or 1 000: both tables are two
+/// table nodes whether it names 40 children or 200: both tables are two
 /// levels high, and a child named before and after is not written.
 pub(crate) fn a_republished_parent_costs_its_change_not_its_slots() {
     let mut copies = Vec::new();
-    for n in [40usize, 1_000] {
+    for n in [40usize, 200] {
         let (mut owner, leaves) = owner_with_leaves(n);
         assert_eq!(height(n + 1), 2);
         let root = owner.current().root();
