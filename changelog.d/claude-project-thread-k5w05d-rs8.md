@@ -9,6 +9,8 @@
 - `PipelineOwner::run_frame`, `run_frame_in_place`, `run_paint`, `PipelineCell::run_frame`, `RenderingBinding::draw_frame` and `BuildOwner::run_frame_with_layout_builders` take the `SceneWriter` the patch goes into and answer whether there is a frame to apply.
 - `FrameSink::submit` takes a `ScenePublication`: the presentation's scene version and the damage since the version the raster side last showed. A frame the sink does not show leaves its damage owed to the next one.
 - A hot reload or a refused patch renews the presentation's scene, and the next frame is drawn in full.
+- `PipelineOwner::scene_applied` returns the version it replaces, to be dropped once no borrow of the owner is held: its annotations are user values.
+- `SceneOwner::renew` runs the version sequence on unless it is spent, so an inspection handle kept from before a renewal names no layer after it.
 
 ### Removed
 - `LayerDiffer`, `ContentToken` and `BoundaryStamp` from the production API: they remain behind `flui-layer`'s `testing` feature as the oracle the damage tests compare against.

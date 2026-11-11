@@ -1,7 +1,8 @@
 # render-scaling: задачи
 
 - **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS3, RS5, RS6, RS7, RS14, RS15a. В ревью: RS4 с RS8
-  (update по времени хуже main, вопрос у автора спеки), RS15c1. Следующие: RS8c, RS15b.
+  (update по времени 1,7–1,9× от main с differ, выше порога 1,6×: разбивка callgrind у автора
+  спеки), RS15c1. Следующие: RS8c, RS15b.
 - **Design:** [design.md](design.md); требования и ворота G1–G7: [requirements.md](requirements.md)
 - **База:** `main` @ `da69efa`. Пути и строки в ADR даны на `e5ba8fe8f`; перед правкой сверить.
 
