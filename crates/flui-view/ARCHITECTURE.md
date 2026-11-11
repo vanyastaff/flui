@@ -478,8 +478,11 @@ changes wakes the readers of that value only.
 
 **Failure paths.** The hook writes into a staging list and every `update_should_notify` runs
 before anything is replaced: a panic in either leaves the published values as they were and is
-recorded as `LifecycleHook::Provide`. A run that publishes another set of types re-derives the
-scope of the element's subtree and wakes every descendant that read an inherited value.
+recorded as `LifecycleHook::Provide`. The replaced values drop after the new ones are published,
+the scope marked and the dependents scheduled (ADR-0287). The hook runs inside the reactive build
+phase of its element, so its signal reads belong to the build that follows. A run that publishes
+another set of types re-derives the scope of the element's subtree and wakes every descendant
+that read an inherited value.
 
 **Evidence.** `crates/flui-view/tests/provided_values.rs` runs one table over an inherited view, a
 stateless view and a state.

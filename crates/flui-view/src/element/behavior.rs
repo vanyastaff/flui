@@ -90,6 +90,12 @@ fn mark_lifecycle_records(owner: &crate::ElementOwner<'_>, start: Option<usize>)
 /// The hook is user code. A panic in it, or in a value's
 /// `update_should_notify`, leaves the published values as they were, is
 /// recorded against the element and resumes, like a state's `apply_view`.
+///
+/// The hook is the first part of the element's build: it runs with the
+/// reactive build phase armed, so a signal it reads rebuilds the element and
+/// a signal it writes is refused, as in `build` (ADR-0074). The phase stays
+/// armed for the `build_or_recover_begun` that follows, and is disarmed here
+/// when the hook fails.
 fn publish_provided<V, A>(
     publication: &mut Publication,
     core: &ElementCore<V, A>,
@@ -99,6 +105,7 @@ fn publish_provided<V, A>(
     V: Clone + 'static,
     A: ElementArity,
 {
+    super::behavior_commons::begin_reactive_build(core, owner);
     #[expect(
         clippy::disallowed_methods,
         reason = "ADR-0287: a provide hook's panic is recorded and the element recovers"
@@ -107,6 +114,9 @@ fn publish_provided<V, A>(
         publication.publish(owner, provide);
     }));
     if let Err(payload) = published {
+        if let Some(id) = core.self_id() {
+            owner.reactive.end_element_build(id, false);
+        }
         owner.record_armed_lifecycle_panic(
             core.self_id(),
             core.creation_site(),
@@ -591,8 +601,11 @@ where
         // `view` borrow is moved into the closure so nothing of `core`
         // is mutated under the catch.
         let view = core.view().clone();
-        let child_view =
-            super::behavior_commons::build_or_recover(core, owner, "StatelessElement", move || {
+        let child_view = super::behavior_commons::build_or_recover_begun(
+            core,
+            owner,
+            "StatelessElement",
+            move || {
                 // `view.build(ctx)` returns `impl IntoView` that may
                 // capture closure-local borrows of `view`/`ctx` (Rust 2024
                 // RPITIT default). We consume the opaque value through
@@ -602,7 +615,8 @@ where
                 // escaping borrows for `catch_unwind` to return.
                 let opaque = view.build(ctx);
                 Box::new(IntoView::into_view(opaque)) as Box<dyn View>
-            });
+            },
+        );
         super::behavior_commons::single_child_views(core, child_view, "StatelessBehavior")
     }
 }
@@ -895,15 +909,19 @@ where
         // captured by reference, independent of `core`.
         let view = core.view().clone();
         let state = &self.state;
-        let child_view =
-            super::behavior_commons::build_or_recover(core, owner, "StatefulElement", move || {
+        let child_view = super::behavior_commons::build_or_recover_begun(
+            core,
+            owner,
+            "StatefulElement",
+            move || {
                 // See `StatelessBehavior::build_into_views` for the
                 // RPITIT-capture rationale — consume the opaque
                 // `impl IntoView` inside the closure body to box an owned
                 // `Box<dyn View>` for the `catch_unwind` return.
                 let opaque = state.build(&view, ctx);
                 Box::new(IntoView::into_view(opaque)) as Box<dyn View>
-            });
+            },
+        );
         super::behavior_commons::single_child_views(core, child_view, "StatefulBehavior")
     }
 

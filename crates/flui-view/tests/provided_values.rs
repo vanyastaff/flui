@@ -12,7 +12,7 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
     BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementTree, GlobalKey, InheritedView,
     IntoView, LifecycleContext, LifecycleHook, Provided, ProvidedValue, RebuildReason, RenderView,
-    StatefulView, StatelessView, View, ViewExt, ViewState,
+    Signal, SignalWriteExt, StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -54,6 +54,27 @@ impl Tone for Density {
     }
 }
 
+/// A published value whose `Drop` is authored to fail once.
+struct Fragile(u32, Rc<Cell<bool>>);
+
+impl ProvidedValue for Fragile {
+    fn update_should_notify(&self, old: &Self) -> bool {
+        self.0 != old.0
+    }
+}
+
+impl Tone for Fragile {
+    fn tone(&self) -> u32 {
+        self.0
+    }
+}
+
+impl Drop for Fragile {
+    fn drop(&mut self) {
+        assert!(!self.1.replace(false), "authored drop failure");
+    }
+}
+
 // ============================================================================
 // Providers
 // ============================================================================
@@ -65,6 +86,10 @@ struct Published {
     density: Option<u32>,
     /// Panic in `provide` while set.
     fail: Option<Rc<Cell<bool>>>,
+    /// A value whose `Drop` panics once while the flag is set.
+    fragile: Option<(u32, Rc<Cell<bool>>)>,
+    /// A palette whose tone is read from a signal inside `provide`.
+    signal: Option<Signal<u32>>,
 }
 
 impl Published {
@@ -75,12 +100,18 @@ impl Published {
         }
     }
 
-    fn write(&self, values: &mut Provided<'_>) {
+    fn write(&self, ctx: &dyn BuildContext, values: &mut Provided<'_>) {
         if let Some(fail) = &self.fail {
             assert!(!fail.get(), "authored provide failure");
         }
         if let Some(tone) = self.palette {
             values.value(Palette(tone));
+        }
+        if let Some((tone, armed)) = &self.fragile {
+            values.value(Fragile(*tone, Rc::clone(armed)));
+        }
+        if let Some(signal) = self.signal {
+            values.value(Palette(signal.get(ctx)));
         }
         if let Some(density) = self.density {
             values.value(Density(density));
@@ -133,8 +164,8 @@ impl StatelessView for Plain {
         self.child.clone()
     }
 
-    fn provide(&self, _ctx: &dyn BuildContext, values: &mut Provided<'_>) {
-        self.published.write(values);
+    fn provide(&self, ctx: &dyn BuildContext, values: &mut Provided<'_>) {
+        self.published.write(ctx, values);
     }
 }
 
@@ -165,8 +196,8 @@ impl ViewState<Kept> for KeptState {
         view.child.clone()
     }
 
-    fn provide(&self, view: &Kept, _ctx: &dyn BuildContext, values: &mut Provided<'_>) {
-        view.published.write(values);
+    fn provide(&self, view: &Kept, ctx: &dyn BuildContext, values: &mut Provided<'_>) {
+        view.published.write(ctx, values);
     }
 }
 
@@ -383,17 +414,42 @@ struct Frames {
     root: ElementId,
 }
 
-impl Frames {
-    fn mount(view: &dyn View) -> Self {
-        let tree = Rc::new(RefCell::new(ElementTree::new()));
-        let owner = Rc::new(RefCell::new(BuildOwner::new()));
-        flui_view::test_only_set_global_key_registry(&tree, &owner);
+struct Unmounted {
+    tree: Rc<RefCell<ElementTree>>,
+    owner: Rc<RefCell<BuildOwner>>,
+}
+
+impl Unmounted {
+    fn mounted(self, view: &dyn View) -> Frames {
+        let Self { tree, owner } = self;
         let root = tree
             .borrow_mut()
             .mount_root(view, &mut owner.borrow_mut().element_owner_mut());
-        let frames = Self { tree, owner, root };
+        let frames = Frames { tree, owner, root };
         frames.build(RebuildReason::InitialMount);
         frames
+    }
+}
+
+impl Frames {
+    fn mount(view: &dyn View) -> Self {
+        Self::empty().mounted(view)
+    }
+
+    /// A tree and its owner before the root mounts, for a case that needs
+    /// the owner's signal graph to build its view.
+    fn empty() -> Unmounted {
+        let tree = Rc::new(RefCell::new(ElementTree::new()));
+        let owner = Rc::new(RefCell::new(BuildOwner::new()));
+        flui_view::test_only_set_global_key_registry(&tree, &owner);
+        Unmounted { tree, owner }
+    }
+
+    /// Build what is scheduled, without scheduling the root.
+    fn drain(&self) {
+        self.owner
+            .borrow_mut()
+            .build_scope(&mut self.tree.borrow_mut());
     }
 
     fn update(&self, view: &dyn View) {
@@ -565,7 +621,7 @@ pub(crate) fn provided_set_change_rescopes_the_subtree() {
                 Published {
                     palette: Some(1),
                     density: Some(7),
-                    fail: None,
+                    ..Published::default()
                 },
                 publisher(inner, readers.boxed()),
             )
@@ -580,7 +636,7 @@ pub(crate) fn provided_set_change_rescopes_the_subtree() {
         frames.update(&view(Published {
             palette: None,
             density: Some(9),
-            fail: None,
+            ..Published::default()
         }));
         assert_eq!(palette.seen.get(), Some(1), "{name}: falls to the outer");
         assert_eq!(density.seen.get(), Some(9), "{name}: finds the inner");
@@ -589,9 +645,8 @@ pub(crate) fn provided_set_change_rescopes_the_subtree() {
 
         // A change of one published type wakes the readers of that type only.
         frames.update(&view(Published {
-            palette: None,
             density: Some(10),
-            fail: None,
+            ..Published::default()
         }));
         assert_eq!(density.seen.get(), Some(10), "{name}: the new density");
         assert_eq!(density.changes.get(), 2, "{name}: its reader woke");
@@ -613,6 +668,7 @@ pub(crate) fn a_provide_panic_is_recorded_and_keeps_the_frame() {
                     palette: Some(tone),
                     density: None,
                     fail: Some(Rc::clone(&fail)),
+                    ..Published::default()
                 },
                 reader::<Palette>(&probe),
             )])
@@ -634,5 +690,60 @@ pub(crate) fn a_provide_panic_is_recorded_and_keeps_the_frame() {
             reader::<Palette>(&late),
         )]));
         assert_eq!(late.seen.get(), Some(4), "{name}: the frame after");
+    }
+}
+
+/// A replaced value's `Drop` runs after the change is on record: the retry
+/// publishes equal values and still reaches the reader.
+pub(crate) fn a_replaced_value_that_panics_in_drop_keeps_its_notification() {
+    for (name, publisher) in PUBLISHERS {
+        let probe = Seen::default();
+        let armed = Rc::new(Cell::new(false));
+        let view = |tone| {
+            publisher(
+                Published {
+                    fragile: Some((tone, Rc::clone(&armed))),
+                    ..Published::default()
+                },
+                reader::<Fragile>(&probe),
+            )
+        };
+        let frames = Frames::mount(&view(1));
+        assert_eq!(probe.seen.get(), Some(1), "{name}: published");
+
+        armed.set(true);
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            frames.update(&view(2));
+        }));
+        assert!(unwound.is_err(), "{name}: the root's failure unwinds");
+        let _ = frames.owner.borrow_mut().take_recovered_panics();
+        frames.update(&view(2));
+        assert_eq!(probe.seen.get(), Some(2), "{name}: the replacement is read");
+        assert_eq!(probe.changes.get(), 1, "{name}: its reader was notified");
+    }
+}
+
+/// `provide` is part of the element's build: a signal it reads rebuilds the
+/// element, and the value derived from it reaches the readers.
+pub(crate) fn a_signal_read_in_provide_republishes_on_write() {
+    for (name, publisher) in PUBLISHERS {
+        let probe = Seen::default();
+        let frames = Frames::empty();
+        let tone = frames.owner.borrow().signal_graph().signal(1u32);
+        let writer = frames.owner.borrow().writer_source();
+        let frames = frames.mounted(&publisher(
+            Published {
+                signal: Some(tone),
+                ..Published::default()
+            },
+            reader::<Palette>(&probe),
+        ));
+        assert_eq!(probe.seen.get(), Some(1), "{name}: published");
+
+        for next in [2, 3] {
+            writer.write(|cx| tone.set(cx, next)).expect("live");
+            frames.drain();
+            assert_eq!(probe.seen.get(), Some(next), "{name}: after the write");
+        }
     }
 }

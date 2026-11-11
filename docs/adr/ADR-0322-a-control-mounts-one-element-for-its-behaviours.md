@@ -213,11 +213,13 @@ impl Provided<'_> {
 ```
 
 `provide` exists, with an empty default, on `StatelessView`, `ViewState` and `RenderViewState`.
-It runs right before each build of its element and receives the build context, so what it
-publishes may be derived from what it reads (an `Actions` layers its bindings over the enclosing
-chain). The hook writes into a staging list: a panic in it, or in an `update_should_notify`,
+It runs as the first part of each build of its element and receives the build context, so what
+it publishes may be derived from what it reads (an `Actions` layers its bindings over the
+enclosing chain) and a signal it reads rebuilds the element, as a read in `build` does
+(ADR-0074). The hook writes into a staging list: a panic in it, or in an `update_should_notify`,
 leaves the published values as they were and is recorded against the element as a `provide`
-failure.
+failure. The values a run replaces are dropped after the new ones are published and their
+dependents scheduled, so a `Drop` that panics loses no notification.
 
 A value is keyed by its type in the node's inherited scope (`ElementNode::inherited`), the map
 `InheritedElement` registers in, so a descendant's `ctx.depend_on::<T, _>(..)` finds the nearest
@@ -322,7 +324,9 @@ render object or already owns the element the value comes from.
   `provided_value_follows_a_moved_subtree` and `provided_value_unmount_releases_dependents` run one
   table over an inherited view, a stateless view that publishes and a state that publishes;
   `provided_set_change_rescopes_the_subtree` (an update that drops one type and adds another while
-  readers of both are mounted) and `a_provide_panic_is_recorded_and_keeps_the_frame` run over the
+  readers of both are mounted), `a_provide_panic_is_recorded_and_keeps_the_frame`,
+  `a_replaced_value_that_panics_in_drop_keeps_its_notification` and
+  `a_signal_read_in_provide_republishes_on_write` run over the
   two that publish.
 - The node's module is absent from the facade and from every prelude: the facade's public-API
   snapshot.

@@ -288,8 +288,9 @@ impl ProvidedValues {
     /// Compare `staged` with the published values, then publish it.
     ///
     /// Every `update_should_notify` runs before anything is replaced: a panic
-    /// in one leaves the published values as they were.
-    fn commit(&mut self, staged: SmallVec<[Slot; 2]>) -> ProvideOutcome {
+    /// in one leaves the published values as they were. Returns the values
+    /// it replaced, for the caller to drop.
+    fn commit(&mut self, staged: SmallVec<[Slot; 2]>) -> (ProvideOutcome, SmallVec<[Slot; 2]>) {
         for slot in &staged {
             // Mint the bit of a type seen for the first time.
             let _: FieldSet = self.field_of(slot.type_id);
@@ -314,13 +315,16 @@ impl ProvidedValues {
                 }
             }
         }
-        // The replaced values drop after the commit.
+        // The replaced values go back to the caller: their `Drop` is user
+        // code and runs after what this commit owes is on record.
         let replaced = std::mem::replace(&mut self.slots, staged);
-        drop(replaced);
-        ProvideOutcome {
-            changed,
-            set_changed,
-        }
+        (
+            ProvideOutcome {
+                changed,
+                set_changed,
+            },
+            replaced,
+        )
     }
 }
 
@@ -412,9 +416,12 @@ impl Publication {
             None if staged.is_empty() => return,
             None => self.values.insert(Box::default()),
         };
-        let outcome = values.commit(staged);
+        let (outcome, replaced) = values.commit(staged);
         self.scope_stale |= outcome.set_changed;
         values.dependents.notify(outcome.changed, owner);
+        // A value's `Drop` that panics unwinds from here with the new values
+        // published, the scope marked and the dependents scheduled.
+        drop(replaced);
     }
 
     /// Whether the published types changed since the last call.

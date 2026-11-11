@@ -314,6 +314,8 @@ fn element_lifecycle_and_dependency_matrix() {
             ("provided_values::provided_value_unmount_releases_dependents", provided_values::provided_value_unmount_releases_dependents),
             ("provided_values::provided_set_change_rescopes_the_subtree", provided_values::provided_set_change_rescopes_the_subtree),
             ("provided_values::a_provide_panic_is_recorded_and_keeps_the_frame", provided_values::a_provide_panic_is_recorded_and_keeps_the_frame),
+            ("provided_values::a_replaced_value_that_panics_in_drop_keeps_its_notification", provided_values::a_replaced_value_that_panics_in_drop_keeps_its_notification),
+            ("provided_values::a_signal_read_in_provide_republishes_on_write", provided_values::a_signal_read_in_provide_republishes_on_write),
             ("build_owner_tests::build_owners_have_isolated_focus_managers", build_owner_tests::build_owners_have_isolated_focus_managers as fn()),
             ("build_owner_tests::test_build_scope_processes_in_depth_order", build_owner_tests::test_build_scope_processes_in_depth_order as fn()),
             ("build_owner_tests::clean_binding_frames_report_no_builds", build_owner_tests::clean_binding_frames_report_no_builds as fn()),
