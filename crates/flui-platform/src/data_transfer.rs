@@ -383,6 +383,14 @@ pub enum TransferError {
     /// The transfer was cancelled by the consumer.
     #[error("transfer cancelled")]
     Cancelled,
+    /// The transport refused the request: as many requests as it holds
+    /// already wait for a read to end. Asking again once one ends may
+    /// succeed.
+    #[error("too many transfer requests are waiting")]
+    Busy,
+    /// The source took longer than the transport gives a delivery.
+    #[error("transfer timed out")]
+    TimedOut,
 }
 
 // ============================================================================
