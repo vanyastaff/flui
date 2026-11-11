@@ -1579,6 +1579,12 @@ mod native_windows {
         // Direct system-key dispatch also supplies the owner thread's logical
         // Alt state. This is a synthetic default-processing fixture, not a
         // hardware-input or GetAsyncKeyState modifier-fidelity claim.
+        // FLUI_DIAG (temporary): who is active when the system key arrives.
+        eprintln!(
+            "FLUI_DIAG system key: foreground={} active={}",
+            unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() } == hwnd,
+            unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow() } == hwnd,
+        );
         let mut keyboard_state = ThreadKeyboardState::with_alt_pressed();
         // SAFETY: this wrapper owns HWND on its creating thread. The message
         // carries only integer F4, scan-code and documented Alt-context data.
