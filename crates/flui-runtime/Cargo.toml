@@ -90,6 +90,8 @@ wasm-bindgen-futures = { workspace = true }
 [dev-dependencies]
 # `flui_platform::testing::FakeHaptics`, the actuator the preference tests record.
 flui-platform = { workspace = true, features = ["testing"] }
+# `CountingWaker`, the transport signal an agent-service test counts.
+flui-foundation = { workspace = true, features = ["testing"] }
 # The widget catalog, for the tests that drive a presentation through real
 # widgets; the runtime itself names no widget.
 flui-widgets = { workspace = true }

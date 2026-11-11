@@ -616,10 +616,12 @@ mod tests {
     use std::pin::Pin;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::task::{Context, Poll, Waker};
+    use std::task::{Context, Poll};
     use std::thread;
 
-    use super::{ClaimOutcome, Inner, claim_slot};
+    use crate::testing::CountingWaker;
+
+    use super::{ClaimOutcome, claim_slot};
 
     fn counting_wake() -> (Arc<dyn Fn() + Send + Sync>, Arc<AtomicUsize>) {
         let count = Arc::new(AtomicUsize::new(0));
@@ -696,36 +698,26 @@ mod tests {
     /// re-enters this same slot from its own `wake()` would observe the
     /// lock still held. This waker's `wake_by_ref` probes exactly that.
     fn wake_task_releases_the_waker_lock_before_calling_wake() {
-        struct ProbingWake {
-            inner: Arc<Inner<u32>>,
-            observed_locked: AtomicBool,
-        }
-        impl std::task::Wake for ProbingWake {
-            fn wake(self: Arc<Self>) {
-                self.wake_by_ref();
-            }
-            fn wake_by_ref(self: &Arc<Self>) {
-                if !self.inner.is_unlocked() {
-                    self.observed_locked.store(true, Ordering::Release);
-                }
-            }
-        }
-
         let (wake, _wake_count) = counting_wake();
         let (slot, mut handle) = claim_slot::<u32>(wake);
 
-        let probe = Arc::new(ProbingWake {
-            inner: Arc::clone(&handle.inner),
-            observed_locked: AtomicBool::new(false),
-        });
-        let waker = Waker::from(Arc::clone(&probe));
+        let inner = Arc::clone(&handle.inner);
+        let observed_locked = Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&observed_locked);
+        let waker = CountingWaker::calling(move || {
+            if !inner.is_unlocked() {
+                observed.store(true, Ordering::Release);
+            }
+        })
+        .shared()
+        .waker();
         let mut cx = Context::from_waker(&waker);
         assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Pending);
 
         slot.deliver(9).expect("slot is still Pending");
 
         assert!(
-            !probe.observed_locked.load(Ordering::Acquire),
+            !observed_locked.load(Ordering::Acquire),
             "wake_task must release the waker lock before calling Waker::wake"
         );
     }

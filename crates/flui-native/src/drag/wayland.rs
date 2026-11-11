@@ -949,24 +949,6 @@ mod tests {
         }
     }
 
-    /// A waker that panics with a [`Counted`] payload as it is woken.
-    struct FailsAsWoken {
-        first: bool,
-        drops: Arc<std::sync::atomic::AtomicUsize>,
-    }
-
-    impl std::task::Wake for FailsAsWoken {
-        fn wake(self: Arc<Self>) {
-            self.wake_by_ref();
-        }
-        fn wake_by_ref(self: &Arc<Self>) {
-            std::panic::panic_any(Counted {
-                first: self.first,
-                drops: Arc::clone(&self.drops),
-            });
-        }
-    }
-
     /// Requests whose wakers panic leave the rest answered. The first panic is
     /// kept and a later one is destroyed under containment, not leaked.
     #[test]
@@ -977,10 +959,16 @@ mod tests {
 
         let drops = Arc::new(AtomicUsize::new(0));
         let failing = |first| {
-            Waker::from(Arc::new(FailsAsWoken {
-                first,
-                drops: Arc::clone(&drops),
-            }))
+            let drops = Arc::clone(&drops);
+            // The payload is a [`Counted`], so the test sees which panic was kept.
+            flui_foundation::testing::CountingWaker::calling(move || {
+                std::panic::panic_any(Counted {
+                    first,
+                    drops: Arc::clone(&drops),
+                })
+            })
+            .shared()
+            .waker()
         };
         let wakers = [failing(true), Waker::noop().clone(), failing(false)];
         let mut requests = Vec::new();

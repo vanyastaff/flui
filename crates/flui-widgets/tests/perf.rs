@@ -631,3 +631,43 @@ fn perf_raw_button_over_text() {
         "a button adds {render_nodes} render nodes to its child"
     );
 }
+
+/// What a `Semantics` with one action adds to the `Text` it holds in a
+/// window that collects no semantics: its element and render object, and no
+/// action route (ADR-0322 §8).
+#[test]
+fn perf_semantics_action_over_text() {
+    let annotated_row = |row: usize| {
+        Semantics::new()
+            .on_click(|_cx| {})
+            .child(Text::new(format!("Row {row}")))
+            .boxed()
+    };
+    let _warm_up = mount_cost(annotated_row);
+    let text = mount_cost(|row| Text::new(format!("Row {row}")).boxed());
+    let annotated = mount_cost(annotated_row);
+    let rows = MOUNT_ROWS as u64;
+    let per_row = |with: u64, without: u64| with.saturating_sub(without).div_ceil(rows);
+    record_counts(
+        "semantics_action_over_text",
+        &[
+            (
+                "elements",
+                per_row(annotated.elements as u64, text.elements as u64),
+            ),
+            (
+                "render_nodes",
+                per_row(annotated.render_nodes as u64, text.render_nodes as u64),
+            ),
+            (
+                "allocations",
+                per_row(annotated.heap.allocations, text.heap.allocations),
+            ),
+            (
+                "reallocations",
+                per_row(annotated.heap.reallocations, text.heap.reallocations),
+            ),
+            ("bytes", per_row(annotated.live_bytes, text.live_bytes)),
+        ],
+    );
+}

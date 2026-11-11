@@ -54,7 +54,11 @@ pub(crate) fn mount<V, A, R, P>(
         tracing::warn!("a render element mounted without a PipelineOwner");
         return;
     };
-    let ctx = RenderObjectContext::new(owner.interaction_dispatch.as_ref(), Some(owner.reactive));
+    let ctx = RenderObjectContext::new(
+        owner.interaction_dispatch.as_ref(),
+        Some(owner.reactive),
+        owner.collects_semantics,
+    );
     let render_object = create(&ctx);
 
     let sliver_slot = core.sliver_slot();
@@ -162,8 +166,13 @@ pub(crate) fn push<V, A, R>(
             element_id,
             core.depth(),
             handle.dep_sink,
+            owner.collects_semantics,
         ),
-        _ => RenderObjectContext::new(owner.interaction_dispatch.as_ref(), Some(owner.reactive)),
+        _ => RenderObjectContext::new(
+            owner.interaction_dispatch.as_ref(),
+            Some(owner.reactive),
+            owner.collects_semantics,
+        ),
     };
     let outcome = pipeline_owner.with_mut(|pipeline_owner| {
         let node = pipeline_owner
@@ -221,8 +230,11 @@ pub(crate) fn unmount<V, A, R>(
     if let Some(render_id) = *slot
         && let Some(pipeline_owner) = core.pipeline_owner()
     {
-        let ctx =
-            RenderObjectContext::new(owner.interaction_dispatch.as_ref(), Some(owner.reactive));
+        let ctx = RenderObjectContext::new(
+            owner.interaction_dispatch.as_ref(),
+            Some(owner.reactive),
+            owner.collects_semantics,
+        );
         pipeline_owner.with_mut(|pipeline_owner| {
             #[expect(
                 clippy::disallowed_methods,

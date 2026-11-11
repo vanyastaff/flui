@@ -250,16 +250,9 @@ std::thread_local! {
         const { RefCell::new(None) };
 }
 
-/// A waker whose last drop cancels the task in [`CANCELLED_BY_WAKER`].
+/// A waker capture whose drop, with the waker's last clone, cancels the task in
+/// [`CANCELLED_BY_WAKER`].
 struct CancelsOnDrop;
-
-#[expect(
-    clippy::manual_noop_waker,
-    reason = "the waker exists for its `Drop`, which `Waker::noop` has none of"
-)]
-impl std::task::Wake for CancelsOnDrop {
-    fn wake(self: Arc<Self>) {}
-}
 
 impl Drop for CancelsOnDrop {
     fn drop(&mut self) {
@@ -286,7 +279,9 @@ pub(crate) fn a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock() {
         .pop()
         .expect("the future was spawned");
 
-    let first = Waker::from(Arc::new(CancelsOnDrop));
+    let first = flui_foundation::testing::CountingWaker::new()
+        .shared()
+        .retiring_waker(|| {}, CancelsOnDrop);
     assert_eq!(
         future.as_mut().poll(&mut Context::from_waker(&first)),
         Poll::Pending

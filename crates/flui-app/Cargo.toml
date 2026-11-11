@@ -170,6 +170,8 @@ flui-engine = { workspace = true, features = ["vulkan"] }
 # normally, which cargo permits for dev-dependencies precisely so a lower crate
 # can use the test support built on it.
 flui-testing = { workspace = true }
+# `CountingWaker`, the waker whose wakes a served-page test counts.
+flui-foundation = { workspace = true, features = ["testing"] }
 # The `testing` kit, for this crate's integration tests.
 flui-app = { path = ".", features = ["testing"] }
 static_assertions.workspace = true
