@@ -74,7 +74,7 @@ impl TextureState {
 impl StatefulView for Texture {
     type State = TextureState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         TextureState {
             id: self.id,
             registry: None,

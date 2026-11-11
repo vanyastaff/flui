@@ -119,7 +119,7 @@ struct DeskState {
 impl StatefulView for Desk {
     type State = DeskState;
 
-    fn create_state(&self) -> DeskState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> DeskState {
         let navigator = NavigatorHandle::new();
         let board = self.0.clone();
         navigator.seed_initial(PageRoute::<()>::new(move |_, _, _| {
@@ -166,7 +166,7 @@ struct BoardGridState {
 impl StatefulView for BoardGrid {
     type State = BoardGridState;
 
-    fn create_state(&self) -> BoardGridState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> BoardGridState {
         BoardGridState {
             items: self.0.items.clone(),
             width: self.0.width.clone(),

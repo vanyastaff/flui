@@ -268,7 +268,7 @@ fn propose(
 impl StatefulView for Disclosure {
     type State = DisclosureState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DisclosureState {
             node: Terminal::new(FocusNode::with_debug_label("Disclosure")),
             focused: Terminal::new(Rc::new(Cell::new(false))),

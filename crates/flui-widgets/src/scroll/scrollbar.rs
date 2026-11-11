@@ -847,7 +847,7 @@ impl fmt::Debug for ScrollbarState {
 impl StatefulView for Scrollbar {
     type State = ScrollbarState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let fade = AnimationController::builder(self.knobs.fade_duration)
             .debug_label("Scrollbar.fade")
             .build_on(None);

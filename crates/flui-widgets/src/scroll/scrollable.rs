@@ -483,7 +483,7 @@ impl std::fmt::Debug for ScrollableState {
 impl StatefulView for Scrollable {
     type State = ScrollableState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // Unbounded: pixel values from the ballistic simulation are never
         // clamped — the simulation's own `is_done` terminates the run.
         // Unboundedness is a constructor fact (#1183), not a bound value —

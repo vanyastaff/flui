@@ -247,7 +247,7 @@ mod tests {
     use crate::app::runner::window_routes::OwnerOpenRouted as _;
     use flui_native::Platform;
     use flui_testing::window_commands::AdmitAndApply as _;
-    use flui_view::{StatefulView, View, ViewState};
+    use flui_view::{LifecycleContext, StatefulView, View, ViewState};
     use std::{
         cell::{Cell, RefCell},
         rc::Rc,
@@ -269,7 +269,7 @@ mod tests {
     }
     impl StatefulView for Probe {
         type State = State;
-        fn create_state(&self) -> State {
+        fn create_state(&self, _ctx: &dyn LifecycleContext) -> State {
             let local = Rc::new(Cell::new(7));
             self.states.borrow_mut().push(local.clone());
             State {

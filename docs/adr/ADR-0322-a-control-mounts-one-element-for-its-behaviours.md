@@ -215,14 +215,14 @@ pub trait RenderViewState<V: StatefulRenderView>: 'static {
 It is an element kind, `Element<V, Variable, StatefulRenderBehavior<V>>`, with the lifecycle
 of a stateful element and the render-object custody of a render element; the two behaviours
 share that custody (`flui_view::element::render_custody`) and the containment of a state's
-hooks. Presentation capabilities are acquired in `init_state` and `did_change_dependencies`
-only (ADR-0078).
+hooks. Presentation capabilities are acquired in `create_state`, `init_state` and
+`did_change_dependencies` only (ADR-0078).
 
 The view creates the render object, not the state: the object is created and adopted at mount,
-and `init_state` runs at the element's first build, so at mount the state holds nothing it
-acquires there. Putting the constructor on the view makes that order a signature instead of a
-rule to remember. The first build runs `init_state` and then `update_render_object` in the
-same frame, before layout, so the object never lays out without its state's configuration.
+and the state does not exist until `create_state` and `init_state` run at the element's first
+build. Putting the constructor on the view makes that order a signature instead of a rule to
+remember. The first build runs `create_state`, `init_state` and then `update_render_object` in
+the same frame, before layout, so the object never lays out without its state's configuration.
 
 The view also releases it. What the object holds in the owner's runtime is data: the targets
 registered for it (ADR-0027). `did_unmount_render_object` unregisters them from the object
@@ -318,7 +318,9 @@ agent or a test holds the tree (`flui-runtime`'s `SemanticsHost` counts the hold
 `reconcile_semantics_enablement` carries the answer to the pipeline at the start of a frame). The
 view layer follows the same answer. `BuildOwner` holds it, every `RenderObjectContext` carries it,
 a `Semantics` registers the route of its actions only while it holds, and a control's node builds
-its semantics part, the description and the handlers it offers, only while it holds:
+its semantics part, the description and the handlers it offers, only while it holds. The node's
+view carries what the description is made from (a role and an identifier), not a built
+`Semantics`, so the copies of the view the tree keeps stay small:
 
 ```rust
 impl BuildOwner {

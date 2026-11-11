@@ -70,7 +70,7 @@ pub struct AnimatedScaleState {
 impl StatefulView for AnimatedScale {
     type State = AnimatedScaleState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let animation = ImplicitMotion::new("AnimatedScale", self.scale, 1.0, &self.motion);
         let proxy = ProxyAnimation::new(Rc::new(animation.stream()));
         AnimatedScaleState {

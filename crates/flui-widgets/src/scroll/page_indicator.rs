@@ -298,7 +298,7 @@ impl std::fmt::Debug for PageIndicatorState {
 impl StatefulView for PageIndicator {
     type State = PageIndicatorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let initial = match &self.source {
             Source::Controlled(controller) => controller.initial_page() as f64,
             Source::Observed(_) => 0.0,

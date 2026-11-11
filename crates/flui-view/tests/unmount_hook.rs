@@ -72,7 +72,7 @@ struct HookedState {
 impl StatefulView for Hooked {
     type State = HookedState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         HookedState {
             log: Rc::clone(&self.log),
             hooks: self.hooks,

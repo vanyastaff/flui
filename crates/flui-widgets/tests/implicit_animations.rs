@@ -9,6 +9,7 @@
 //! retargets its controller in `did_update_view`); `pump_for(dt)` then advances
 //! the controller frame-by-frame.
 
+use flui_view::LifecycleContext;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1266,7 +1267,7 @@ impl flui_view::View for KeyedOpacity {
 
 impl StatefulView for KeyedOpacity {
     type State = KeyedOpacityState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         KeyedOpacityState {
             registry: self.registry.clone(),
             inits: self.inits.clone(),
@@ -1373,7 +1374,7 @@ struct OpacityProbeState {
 impl StatefulView for OpacityProbe {
     type State = OpacityProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         OpacityProbeState {
             vsync: self.vsync.clone(),
             target: Arc::clone(&self.target),
@@ -1460,7 +1461,7 @@ struct ContainerProbeState {
 impl StatefulView for ContainerProbe {
     type State = ContainerProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ContainerProbeState {
             vsync: self.vsync.clone(),
             side: Arc::clone(&self.side),
@@ -1566,7 +1567,7 @@ struct OvershootProbeState {
 impl StatefulView for OvershootProbe {
     type State = OvershootProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         OvershootProbeState {
             probe: self.clone(),
         }
@@ -1713,7 +1714,7 @@ struct TransformProbeState {
 impl StatefulView for TransformProbe {
     type State = TransformProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         TransformProbeState {
             probe: self.clone(),
         }
@@ -1854,7 +1855,7 @@ struct RotationProbeState {
 impl StatefulView for RotationProbe {
     type State = RotationProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         RotationProbeState {
             probe: self.clone(),
         }

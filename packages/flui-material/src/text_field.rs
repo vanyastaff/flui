@@ -352,7 +352,7 @@ impl std::fmt::Debug for MaterialTextFieldState {
 impl StatefulView for TextField {
     type State = MaterialTextFieldState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         MaterialTextFieldState {
             controller: self.controller.clone(),
             focus_node: self.external_focus_node.as_ref().map_or_else(

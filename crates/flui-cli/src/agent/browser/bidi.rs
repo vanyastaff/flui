@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use serde_json::{Map, Value, json};
 
+use super::launch::AttachError;
 use super::socket::Socket;
 use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote};
 
@@ -30,17 +31,20 @@ impl Bidi {
     /// Starts a session on `socket` and takes the browser's first tab. A browser still starting
     /// answers late (Firefox answers `session.new` once its first window is up), so every step
     /// may take until `ready_by`.
-    pub(super) fn attach(socket: Socket, ready_by: Instant) -> Result<Self, LinkError> {
+    pub(super) fn attach(socket: Socket, ready_by: Instant) -> Result<Self, AttachError> {
         let mut link = Self {
             socket,
             context: String::new(),
         };
-        link.command_by("session.new", json!({ "capabilities": {} }), ready_by)?;
-        let tree = link.command_by(
-            "browsingContext.getTree",
-            json!({ "maxDepth": 0 }),
-            ready_by,
-        )?;
+        link.command_by("session.new", json!({ "capabilities": {} }), ready_by)
+            .map_err(AttachError::at("session.new"))?;
+        let tree = link
+            .command_by(
+                "browsingContext.getTree",
+                json!({ "maxDepth": 0 }),
+                ready_by,
+            )
+            .map_err(AttachError::at("browsingContext.getTree"))?;
         let first = tree
             .get("contexts")
             .and_then(Value::as_array)
@@ -51,13 +55,18 @@ impl Bidi {
         link.context = match first {
             Some(context) => context,
             None => link
-                .command_by("browsingContext.create", json!({ "type": "tab" }), ready_by)?
-                .get("context")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .ok_or_else(|| LinkError::Refused("the browser opened no tab".into()))?,
+                .command_by("browsingContext.create", json!({ "type": "tab" }), ready_by)
+                .and_then(|created| {
+                    created
+                        .get("context")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .ok_or_else(|| LinkError::Refused("the browser opened no tab".into()))
+                })
+                .map_err(AttachError::at("browsingContext.create"))?,
         };
-        link.command_by("session.subscribe", json!({ "events": EVENTS }), ready_by)?;
+        link.command_by("session.subscribe", json!({ "events": EVENTS }), ready_by)
+            .map_err(AttachError::at("session.subscribe"))?;
         Ok(link)
     }
 

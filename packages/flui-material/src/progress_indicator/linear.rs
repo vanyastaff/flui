@@ -156,7 +156,7 @@ impl std::fmt::Debug for LinearProgressIndicatorState {
 impl StatefulView for LinearProgressIndicator {
     type State = LinearProgressIndicatorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         LinearProgressIndicatorState {
             controller: AnimationController::builder(CYCLE)
                 .debug_label("ProgressIndicator")

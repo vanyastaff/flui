@@ -4,6 +4,7 @@
 //! their ends through layer links, so every touch below lands where the
 //! handle is painted.
 
+use flui_view::LifecycleContext;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
@@ -1060,7 +1061,7 @@ impl flui_view::View for Gap {
 
 impl flui_view::StatefulView for Gap {
     type State = GapState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         GapState(Rc::clone(&self.rebuild))
     }
 }

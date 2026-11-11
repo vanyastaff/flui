@@ -84,7 +84,7 @@ struct RemoveButtonState {
 impl StatefulView for RemoveButton {
     type State = RemoveButtonState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let anchor = SemanticsAnchor::new();
         let named = anchor.clone();
         RemoveButtonState {
@@ -148,7 +148,7 @@ struct AnimatedRemovalState {
 impl StatefulView for AnimatedRemoval {
     type State = AnimatedRemovalState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let driven = AnimationController::builder(Duration::from_millis(300))
             .behavior(AnimationBehavior::Preserve)
             .build_on(None);

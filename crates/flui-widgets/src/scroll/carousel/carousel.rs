@@ -408,7 +408,7 @@ impl fmt::Debug for CarouselState {
 impl StatefulView for Carousel {
     type State = CarouselState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let own = CarouselController::new();
         let controller = self.controller.clone().unwrap_or_else(|| own.clone());
         let period = self

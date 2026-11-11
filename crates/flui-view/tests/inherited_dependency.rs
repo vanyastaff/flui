@@ -27,6 +27,7 @@
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+use flui_view::LifecycleContext;
 use std::sync::Arc;
 
 use flui_objects::RenderSizedBox;
@@ -233,7 +234,7 @@ pub(crate) fn missing_inherited_reads_refresh_lifecycle_and_survive_build_recove
     }
     impl flui_view::StatefulView for Probe {
         type State = ProbeState;
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
             ProbeState(std::rc::Rc::clone(&self.changes))
         }
     }
@@ -441,7 +442,7 @@ mod did_change_dependencies_on_inherited_update {
     impl StatefulView for PanicDcd {
         type State = PanicDcdState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
             PanicDcdState
         }
     }
@@ -724,7 +725,7 @@ pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtre
     }
     impl flui_view::StatefulView for Dependent {
         type State = DependentState;
-        fn create_state(&self) -> DependentState {
+        fn create_state(&self, _ctx: &dyn LifecycleContext) -> DependentState {
             DependentState(Rc::clone(&self.mounts))
         }
     }

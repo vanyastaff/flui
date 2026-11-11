@@ -266,7 +266,7 @@ fn switch_position(value: bool) -> f64 {
 impl StatefulView for Switch {
     type State = SwitchState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let initial = if self.value {
             WidgetStates::from(WidgetState::Selected)
         } else {

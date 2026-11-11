@@ -689,7 +689,7 @@ impl<T: 'static> View for OpenContainer<T> {
 impl<T: 'static> StatefulView for OpenContainer<T> {
     type State = OpenContainerState<T>;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         OpenContainerState {
             shared: Rc::new(Shared {
                 seat: Rc::new(FlightSeat::new()),
@@ -877,7 +877,7 @@ impl MorphState {
 impl StatefulView for ContainerMorph {
     type State = MorphState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         MorphState {
             flight: Rc::clone(&self.flight),
             primary: Rc::clone(&self.primary),

@@ -1,6 +1,7 @@
 //! [`DecoratedBoxTransition`] — paints a [`BoxDecoration`] read off an
 //! [`Animation`] around its child.
 
+use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_animation::{Animation, ProxyAnimation};
@@ -99,7 +100,7 @@ impl ViewState<DecoratedBoxTransition> for DecoratedBoxTransitionState {
 impl StatefulView for DecoratedBoxTransition {
     type State = DecoratedBoxTransitionState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DecoratedBoxTransitionState {
             decoration: ProxySlot::new(&self.decoration),
         }

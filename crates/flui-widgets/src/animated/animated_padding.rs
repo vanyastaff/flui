@@ -57,7 +57,7 @@ pub struct AnimatedPaddingState {
 impl StatefulView for AnimatedPadding {
     type State = AnimatedPaddingState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let animation = ImplicitMotion::new(
             "AnimatedPadding",
             self.padding,

@@ -666,7 +666,7 @@ struct SelectionBounceState {
 impl StatefulView for SelectionBounce {
     type State = SelectionBounceState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SelectionBounceState { selections: 0 }
     }
 }
@@ -722,7 +722,7 @@ struct SelectionIndicatorState {
 impl StatefulView for SelectionIndicator {
     type State = SelectionIndicatorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let fraction = AnimatedValue::with_debug_label(
             "NavigationBar indicator",
             selection_fraction(self.selected),

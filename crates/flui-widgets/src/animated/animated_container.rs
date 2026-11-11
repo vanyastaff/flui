@@ -145,7 +145,7 @@ pub struct AnimatedContainerState {
 impl StatefulView for AnimatedContainer {
     type State = AnimatedContainerState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let notifications = Rc::new(ChangeNotifier::new());
         let transform = self.transform.filter(|m| m.m.iter().all(|v| v.is_finite()));
         let transform_progress = PropertyMotion::try_new(

@@ -301,7 +301,7 @@ impl InkWellState {
 impl StatefulView for InkWell {
     type State = InkWellState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let states = self.states_controller.clone().unwrap_or_default();
         let indication = Indication::new(
             states.clone(),

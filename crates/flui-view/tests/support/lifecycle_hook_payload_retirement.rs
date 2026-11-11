@@ -5,6 +5,7 @@ use flui_rendering::{
     pipeline::{PipelineCell, PipelineOwner},
     protocol::BoxProtocol,
 };
+use flui_view::LifecycleContext;
 use flui_view::{
     BuildContext, BuildOwner, ElementTree, GlobalKey, IntoView, LifecycleHook, RebuildReason,
     RenderView, StatefulView, View, ViewExt, ViewState,
@@ -60,7 +61,7 @@ struct StateSubject {
 struct HookState(Observed);
 impl StatefulView for StateSubject {
     type State = HookState;
-    fn create_state(&self) -> HookState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> HookState {
         HookState(self.observed.clone())
     }
 }

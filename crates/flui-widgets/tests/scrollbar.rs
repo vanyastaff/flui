@@ -813,7 +813,7 @@ struct DirectedState {
 impl StatefulView for Directed {
     type State = DirectedState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _cx: &dyn flui_view::LifecycleContext) -> Self::State {
         DirectedState {
             rtl: self.rtl.clone(),
         }

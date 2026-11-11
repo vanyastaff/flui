@@ -13,7 +13,7 @@ use flui_protocol::launch::{ENDPOINT_EXTRA, PAGE_LAUNCH_GLOBAL, TOKEN_EXTRA};
 use interprocess::local_socket::Stream;
 use interprocess::local_socket::traits::Stream as _;
 
-use super::launch::LaunchedBrowser;
+use super::launch::{LaunchError, LaunchedBrowser};
 use super::relay::Relay;
 use super::*;
 use crate::agent::{Endpoint, Session};
@@ -364,13 +364,33 @@ fn installed_browser(variable: &str, commands: &[&str]) -> Option<PathBuf> {
 
 /// The whole path in a real browser: the launch object installed before the page's scripts,
 /// a client carried to the page's export, and a reload ending the connection.
+/// How many times a test starts a browser that did not get ready. A cold start on a busy CI
+/// machine sometimes does not; each failed attempt is printed with the browser's stderr, and
+/// the test fails with the last one.
+const START_ATTEMPTS: usize = 2;
+
+fn start_browser(executable: &Path, dialect: Dialect) -> (LaunchedBrowser, Box<dyn BrowserLink>) {
+    let mut attempt = 1;
+    loop {
+        match LaunchedBrowser::start(executable, dialect, true) {
+            Ok(started) => return started,
+            Err(failure @ LaunchError::NotReady { .. }) if attempt < START_ATTEMPTS => {
+                eprintln!("start attempt {attempt} of {START_ATTEMPTS} failed: {failure}");
+                attempt += 1;
+            }
+            Err(failure) => {
+                panic!("the browser starts and links (attempt {attempt}): {failure}")
+            }
+        }
+    }
+}
+
 fn drives_a_page(executable: &Path, dialect: Dialect) {
     let site = tempfile::tempdir().expect("a site directory");
     std::fs::write(site.path().join("index.html"), APP_PAGE).expect("the page is written");
     let server = crate::serve::DevServer::start(site.path().to_path_buf(), 0)
         .expect("the dev server starts");
-    let (browser, mut link) =
-        LaunchedBrowser::start(executable, dialect, true).expect("the browser starts and links");
+    let (browser, mut link) = start_browser(executable, dialect);
 
     let project = tempfile::tempdir().expect("a project directory");
     let session = Session::create_relayed(project.path(), None, Some(project.path()), PAGE_EXPORT)

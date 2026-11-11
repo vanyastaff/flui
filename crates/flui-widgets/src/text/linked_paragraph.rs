@@ -143,7 +143,7 @@ impl View for LinkedParagraph {
 impl StatefulView for LinkedParagraph {
     type State = LinkedParagraphState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let live = Rc::new(LiveLinks {
             on_link: RefCell::new(Rc::clone(&self.on_link)),
             mounted: Cell::new(true),

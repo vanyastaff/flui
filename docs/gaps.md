@@ -470,7 +470,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** all · **Who it hurts:** Every screen with many controls; every catalog built on the wrappers · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
 - `RawButton` mounts one element and one render object for its behaviours (the private node of [ADR-0322](adr/ADR-0322-a-control-mounts-one-element-for-its-behaviours.md) §1; `crates/flui-widgets/src/interaction/raw_button.rs`). The Material and Cupertino controls are still built from the wrappers (`Semantics`, `GestureDetector`, `Actions`, `Focus`, `FocusRing`), each with its own elements, render object and state: on the wrappers a button holding a `Text` was 18 elements, 8 render nodes, 421 allocations and 46 KB at mount.
-- What a `RawButton` adds to the `Text` it holds is counted by `perf_raw_button_over_text` (`crates/flui-widgets/tests/perf.rs`) and recorded in `crates/flui-widgets/perf/baseline/raw_button_over_text.toml`: the elements and render nodes are at the entry's numbers, the allocations and bytes are not. What is left of them is the semantics description, two thirds of a kilobyte that the node's view holds twice, in its parent and in its element (the render object holds none while the window collects no semantics); the focus node with its notifier, its listener and its measured rectangle; and what any element and render node cost to build, lay out and paint the first time.
+- What a `RawButton` adds to the `Text` it holds is counted by `perf_raw_button_over_text` (`crates/flui-widgets/tests/perf.rs`) and recorded in `crates/flui-widgets/perf/baseline/raw_button_over_text.toml`: the elements and render nodes are at the entry's numbers, the allocations and bytes are not. What is left of them is the node's view, held twice, in its parent and in its element (it carries a role and an identifier in place of the description, which the node builds while the window collects semantics); the focus node with its notifier, its listener and its measured rectangle; and what any element and render node cost to build, lay out and paint the first time.
 - The entry closes when a `RawButton` adds to its child at most 2 elements, 1 render node, 40 allocations and 3 KB, asserted by that scenario. The `Text` itself is recorded by the same scenario (`text_allocations`, `text_bytes`) and is not this entry's condition. Until then no new widget family starts on the wrappers (`AGENTS.md`, "Working here").
 - The Material and Cupertino controls move to the node earlier, at the migration threshold of ADR-0322: 2 elements, 1 render node, at most 40 allocations and at most 5 KB, held by the scenario's baseline. The entry stays open after that until the bytes reach 3 KB.
 
@@ -535,6 +535,13 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - Flutter's `ScrollNotification`, `ScrollMetricsNotification` and `NotificationListener` have no FLUI counterpart. An ancestor reaches the scroll view nearest below it only through the crate-private scroll observer scope (`crates/flui-widgets/src/scroll/scroll_observer.rs`), whose one user is `Scrollbar`; other code shares a `ScrollController` by hand.
 - The likely shape is a public listener that installs the observer scope and reads the attached position, so a scroll frame costs one listener call and nothing bubbles through the tree.
 - The entry closes when a public listener reports a scroll start, update, end and a change of extents for the scroll view at depth zero below it, with headless tests over a nested list.
+
+### Widget states still fill their handles in `init_state`
+
+> **Environments:** all · **Who it hurts:** Contributors copying a catalog widget's state · **Parity:** none (API shape)
+
+- `StatefulView::create_state` receives the `LifecycleContext`, so a state can be built with its signals and capability handles bound; `Signal::default()` is gone. Production states still hold an `Option` (a `WriterSource`, a focus or text-input handle, a rebuild handle) that `init_state` fills with `self.field = Some(ctx.…)` and that `build` unwraps: `rg 'self\.[a-z_]+ = Some\((ctx|cx)\.' crates packages` lists them.
+- The check is that search finding no production state, each field a plain handle made in `create_state`.
 
 ### No widget hot reload on Android and the Web
 

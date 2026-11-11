@@ -264,7 +264,7 @@ impl View for RawTextField {
 impl StatefulView for RawTextField {
     type State = RawTextFieldState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         RawTextFieldState {
             focus_node: self
                 .external_focus_node

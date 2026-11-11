@@ -191,7 +191,7 @@ impl std::fmt::Debug for FloatingHeaderHostState {
 impl StatefulView for FloatingHeaderHost {
     type State = FloatingHeaderHostState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FloatingHeaderHostState {
             snap_controller: None,
             position: None,

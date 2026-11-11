@@ -166,7 +166,7 @@ impl std::fmt::Debug for ShimmerState {
 impl StatefulView for Shimmer {
     type State = ShimmerState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let controller = AnimationController::builder(self.period)
             .debug_label("Shimmer")
             .build_on(None);
@@ -441,7 +441,7 @@ impl std::fmt::Debug for SkeletonState {
 impl StatefulView for Skeleton {
     type State = SkeletonState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SkeletonState {
             phase: ProxyAnimation::new(still()),
             source: None,

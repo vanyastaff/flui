@@ -1,6 +1,7 @@
 //! [`RotationTransition`] — animates its child's rotation from an
 //! [`Animation<f64>`] of turns.
 
+use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_animation::{Animation, ProxyAnimation};
@@ -72,7 +73,7 @@ impl ViewState<RotationTransition> for RotationTransitionState {
 impl StatefulView for RotationTransition {
     type State = RotationTransitionState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         RotationTransitionState {
             proxy: ProxyAnimation::new(Rc::clone(&self.turns)),
             turns: Rc::clone(&self.turns),

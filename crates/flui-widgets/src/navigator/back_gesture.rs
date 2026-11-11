@@ -529,7 +529,7 @@ impl AnimatedView for BackGestureDetector {
 impl StatefulView for BackGestureDetector {
     type State = BackGestureDetectorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         BackGestureDetectorState {
             runtime: super::lifecycle::Terminal::new(Rc::new(BackGestureRuntime::new(
                 self.navigator.clone(),
