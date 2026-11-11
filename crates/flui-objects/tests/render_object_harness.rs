@@ -79,7 +79,7 @@
 //! | `RenderIgnoreBaseline` | `harness_ignore_baseline_*` | yes | yes | — | yes | baseline hidden |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
 //! | `RenderMouseRegion` | `harness_mouse_region_*` | yes | yes | — | yes | cursor/annotation |
-//! | `RenderInteractive` | `harness_interactive_*` | yes | yes | yes | yes | targets, semantics, baseline |
+//! | `RenderInteractive` | `harness_interactive_*` | yes | yes | yes | yes | targets, semantics, baseline, identity |
 //! | `RenderSliverCarousel` | `harness_sliver_carousel_*` | yes | — | — | yes | frames |
 //! | `RenderSliverFixedExtentList` | `harness_sliver_fixed_extent_list_*` | yes | — | — | yes | — |
 //! | `RenderSliverGrid` | `harness_render_sliver_grid_*` | yes | yes | — | yes | — |
@@ -1782,6 +1782,29 @@ fn harness_interactive_preserves_child_baselines() {
         run.offset(run.id("peer")).dy,
         30.0,
         "the peer aligns to the baseline the control forwards",
+    );
+}
+
+/// The control publishes the id the pipeline knows it by into its anchor,
+/// which is how its owner measures it; without an anchor it publishes nowhere.
+fn harness_interactive_publishes_its_identity_into_its_anchor() {
+    let anchor = SubtreeAnchor::new();
+    let mut interactive =
+        RenderInteractive::new(RenderListener::new(None, HitTestBehavior::Opaque));
+    interactive.set_anchor(Some(anchor.clone()));
+    assert_eq!(anchor.get(), None, "nothing is named before mount");
+
+    let run = RenderTester::mount(
+        box_node(interactive)
+            .label("interactive")
+            .child(box_node(RenderColoredBox::red(40.0, 24.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+    assert_eq!(
+        anchor.get(),
+        Some(run.id("interactive")),
+        "the published id is the control's own RenderId"
     );
 }
 
@@ -15089,6 +15112,10 @@ fn family_pointer() {
             (
                 "interactive_preserves_child_baselines",
                 harness_interactive_preserves_child_baselines,
+            ),
+            (
+                "interactive_publishes_its_identity_into_its_anchor",
+                harness_interactive_publishes_its_identity_into_its_anchor,
             ),
             (
                 "listener_passes_layout_through_and_attaches_handler",

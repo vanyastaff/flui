@@ -54,11 +54,18 @@ use flui_widgets::{
 // thread a host starts add nothing to a scenario's count.
 thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
+    static LIVE_BYTES: Cell<u64> = const { Cell::new(0) };
 }
 
 /// This thread's allocations so far; `0` once its TLS is gone.
 fn allocations() -> u64 {
     ALLOCATIONS.try_with(Cell::get).unwrap_or(0)
+}
+
+/// This thread's live heap bytes: allocated minus freed, wrapping, so only a
+/// difference of two readings means anything.
+fn live_bytes() -> u64 {
+    LIVE_BYTES.try_with(Cell::get).unwrap_or(0)
 }
 
 struct CountingAllocator;
@@ -71,11 +78,13 @@ struct CountingAllocator;
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let _ = ALLOCATIONS.try_with(|count| count.set(count.get().saturating_add(1)));
+        let _ = LIVE_BYTES.try_with(|live| live.set(live.get().wrapping_add(layout.size() as u64)));
         // SAFETY: `layout` is the caller's own, forwarded unchanged.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        let _ = LIVE_BYTES.try_with(|live| live.set(live.get().wrapping_sub(layout.size() as u64)));
         // SAFETY: `ptr`/`layout` are the caller's own, forwarded unchanged.
         unsafe { System.dealloc(ptr, layout) }
     }
@@ -457,4 +466,100 @@ fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
              and {large} times over {large_rows}"
         );
     }
+}
+
+/// The rows a mount-cost scenario mounts: enough that the app around them
+/// is noise in a per-row figure.
+const MOUNT_ROWS: usize = 1_000;
+
+/// What `MOUNT_ROWS` rows of one kind cost to mount.
+struct MountCost {
+    elements: usize,
+    render_nodes: usize,
+    allocations: u64,
+    live_bytes: u64,
+}
+
+/// `MOUNT_ROWS` rows in one eager column, each made by `row`.
+#[derive(Clone, StatelessView)]
+struct Rows {
+    row: fn(usize) -> BoxedView,
+}
+
+impl StatelessView for Rows {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        SingleChildScrollView::new().child(Column::new(
+            (0..MOUNT_ROWS).map(self.row).collect::<Vec<BoxedView>>(),
+        ))
+    }
+}
+
+/// Mounts [`Rows`] with semantics off, pumps its first frame and counts what
+/// the tree holds and what building it allocated.
+fn mount_cost(row: fn(usize) -> BoxedView) -> MountCost {
+    let (live_before, allocations_before) = (live_bytes(), allocations());
+    let mut binding = HeadlessBinding::new();
+    let root = GestureArenaScope::new(
+        binding.arena().clone(),
+        FocusTreeRoot::new(app_root(Rows { row })),
+    );
+    let _ = binding.mount_root(
+        &root,
+        MountOwners::fresh(),
+        MountOptions::tight(WIDTH, HEIGHT),
+    );
+    let _ = binding.pump_frame_report(FRAME);
+    let cost = MountCost {
+        elements: binding.tree_mut().len(),
+        render_nodes: binding
+            .pipeline_owner()
+            .expect("tree-bound")
+            .with(|owner: &PipelineOwner| owner.render_tree().len()),
+        allocations: allocations() - allocations_before,
+        live_bytes: live_bytes().wrapping_sub(live_before),
+    };
+    drop(binding);
+    cost
+}
+
+/// What a `RawButton` adds to the `Text` it holds, per button: the four
+/// numbers `docs/gaps.md` closes "An interactive widget costs eighteen
+/// elements" on (ADR-0322). The `Text` alone is recorded beside them.
+#[test]
+fn perf_raw_button_over_text() {
+    let text = mount_cost(|row| Text::new(format!("Row {row}")).boxed());
+    let button = mount_cost(|row| {
+        RawButton::new(Text::new(format!("Row {row}")))
+            .on_press(|_cx| {})
+            .boxed()
+    });
+    let rows = MOUNT_ROWS as u64;
+    let per_row = |with: u64, without: u64| with.saturating_sub(without).div_ceil(rows);
+    let elements = per_row(button.elements as u64, text.elements as u64);
+    let render_nodes = per_row(button.render_nodes as u64, text.render_nodes as u64);
+    let allocations = per_row(button.allocations, text.allocations);
+    let bytes = per_row(button.live_bytes, text.live_bytes);
+    record_counts(
+        "raw_button_over_text",
+        &[
+            ("elements", elements),
+            ("render_nodes", render_nodes),
+            ("allocations", allocations),
+            ("bytes", bytes),
+            ("text_allocations", text.allocations / rows),
+            ("text_bytes", text.live_bytes / rows),
+        ],
+    );
+
+    // One element for the button and one for its behaviours; one render
+    // object. The allocations and bytes are held by the baseline, which
+    // only falls: the entry's numbers for them are 40 and 3 KB.
+    assert!(
+        elements <= 2,
+        "a button adds {elements} elements to its child"
+    );
+    assert!(
+        render_nodes <= 1,
+        "a button adds {render_nodes} render nodes to its child"
+    );
 }

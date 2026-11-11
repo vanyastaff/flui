@@ -1137,6 +1137,24 @@ impl TapSlot {
         drop(outgoing);
     }
 
+    /// Whether the slot calls anything.
+    pub(super) fn is_set(&self) -> bool {
+        self.live.press.borrow().tap.is_some()
+    }
+
+    /// The activation assistive technology invokes: the callback the slot
+    /// holds when the request arrives, run inside that request's dispatch.
+    /// The slot borrow ends before the callback runs.
+    pub(super) fn click(&self) -> impl Fn(&mut EventCx<'_>) + 'static + use<> {
+        let live = Rc::clone(&self.live);
+        move |cx| {
+            let callback = live.press.borrow().tap.clone();
+            if let Some(callback) = callback {
+                callback(cx);
+            }
+        }
+    }
+
     /// The recognizers to mount: the press group while there is a callback,
     /// none otherwise.
     pub(super) fn factories(&self) -> Vec<FactoryEntry> {

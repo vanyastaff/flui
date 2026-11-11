@@ -202,27 +202,31 @@ impl InteractiveNodeState {
             .recognizers(self.recognizers.recognizer_set(None))
     }
 
-    /// The semantics that drive the semantics part: the view's own, with the
-    /// focus state a `Focus` annotates its subtree with. A node that cannot
-    /// take focus says nothing about focus.
+    /// The semantics that drive the semantics part, assembled in one order
+    /// (ADR-0322 §6): the view's properties, then the activation its tap
+    /// recognizer gives, then the focus state a `Focus` annotates its
+    /// subtree with. A node that cannot take focus says nothing about focus,
+    /// and a node with none of the three has no semantics part.
     fn semantics(&self, view: &InteractiveNode) -> Option<Semantics> {
-        let Some(focus) = self
+        let mut semantics = view.semantics.clone();
+        if self.tap.is_set() {
+            semantics = Some(semantics.unwrap_or_default().on_click(self.tap.click()));
+        }
+        let focus = self
             .focus
             .as_ref()
-            .filter(|focus| focus.node().can_request_focus())
-        else {
-            return view.semantics.clone();
-        };
-        let semantics = view
-            .semantics
-            .clone()
-            .unwrap_or_default()
-            .focusable(true)
-            .focused(focus.node().has_primary_focus());
-        Some(match focus.assistive_focus_request() {
-            Some(request) => semantics.on_focus(move |_cx| request()),
-            None => semantics,
-        })
+            .filter(|focus| focus.node().can_request_focus());
+        if let Some(focus) = focus {
+            let annotated = semantics
+                .unwrap_or_default()
+                .focusable(true)
+                .focused(focus.node().has_primary_focus());
+            semantics = Some(match focus.assistive_focus_request() {
+                Some(request) => annotated.on_focus(move |_cx| request()),
+                None => annotated,
+            });
+        }
+        semantics
     }
 }
 
@@ -297,7 +301,8 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
             self.tap.set(new.on_tap.clone());
             self.recognizers.update(&self.tap.factories());
         });
-        self.own_actions.clone_from(&new.actions);
+        // The replaced bindings drop here; an action is user code.
+        failure.contain(|| self.own_actions.clone_from(&new.actions));
         self.layer_actions();
         let record = self.focus_record();
         if let (Some(focus), Some(config)) = (&mut self.focus, &new.focus) {
@@ -362,6 +367,9 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
     fn dispose(&mut self) {
         let mut failure = FirstPanic::new();
         failure.contain(|| self.recognizers.dispose());
+        // A request from assistive technology that arrives late finds no
+        // callback; the outgoing closure is user code.
+        failure.contain(|| self.tap.set(None));
         if let Some(focus) = &mut self.focus {
             failure.contain(|| focus.dispose());
         }

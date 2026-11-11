@@ -150,7 +150,7 @@ impl StatelessView for RawButton {
         let enabled = self.on_press.is_some();
         let press = Press(self.on_press.clone());
         // One node for assistive technology: the button.
-        let mut semantics = Semantics::new()
+        let semantics = Semantics::new()
             .container(true)
             .role(crate::SemanticsRole::Button)
             .enabled(enabled)
@@ -171,8 +171,6 @@ impl StatelessView for RawButton {
         // The node replaces its callbacks on every build, so a new closure
         // takes effect on the next press.
         if let Some(handler) = self.on_press.clone() {
-            let activate = Rc::clone(&handler);
-            semantics = semantics.on_click(move |cx| activate(cx));
             node = node.on_tap(handler);
         }
         node.semantics(semantics)

@@ -33,6 +33,14 @@ nodes_laid_out = 132
 nodes_painted = 134
 semantics_nodes_updated = 81
 
+[raw_button_over_text]
+allocations = 115
+bytes = 14539
+elements = 2
+render_nodes = 1
+text_allocations = 103
+text_bytes = 8652
+
 [slide_transition_tick]
 allocations = 90
 builds_run = 0

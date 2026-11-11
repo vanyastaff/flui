@@ -399,6 +399,8 @@ fn pointer_and_gesture_recognition() {
     run_cases(
         "pointer_and_gesture_recognition",
         &[
+            ("raw_button::raw_button_in_scrollable_contests_like_gesture_detector", crate::raw_button::raw_button_in_scrollable_contests_like_gesture_detector as fn()),
+            ("raw_button::nested_raw_button_contests_like_gesture_detector", crate::raw_button::nested_raw_button_contests_like_gesture_detector),
             ("pointer_vocabulary::viewer_touch_focal_inertia_uses_the_admitted_profile", crate::pointer_vocabulary::viewer_touch_focal_inertia_uses_the_admitted_profile as fn()),
             ("pointer_vocabulary::viewer_native_focal_inertia_uses_the_admitted_profile", crate::pointer_vocabulary::viewer_native_focal_inertia_uses_the_admitted_profile),
             ("pointer_vocabulary::viewer_focal_fling_rebuild_preserves_or_retires_geometry", crate::pointer_vocabulary::viewer_focal_fling_rebuild_preserves_or_retires_geometry as fn()),
@@ -982,6 +984,7 @@ fn semantics_translation_and_routing() {
             ("semantics::unmounting_a_node_releases_its_action_table", crate::semantics::unmounting_a_node_releases_its_action_table),
             ("semantics::a_detached_mount_advertises_no_actions", crate::semantics::a_detached_mount_advertises_no_actions),
             ("raw_button::raw_button_press_is_reachable_through_a_platform_click", crate::raw_button::raw_button_press_is_reachable_through_a_platform_click),
+            ("raw_button::raw_button_a11y_tree_matches_wrappers", crate::raw_button::raw_button_a11y_tree_matches_wrappers),
         ],
     );
 }
