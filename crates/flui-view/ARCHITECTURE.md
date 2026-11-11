@@ -104,9 +104,9 @@ E0624 for depth minting and E0308 for raw-integer stamping, alongside an
 opaque-depth forwarding caller.
 
 Element-local state is a `Signal<T>` created with `ctx.signal(value)` in
-`init_state`; "Writes open through a WriterSource" and "Signal mutation is
-commit-on-unwind, not transactional" state its write admission and panic
-containment.
+`StatefulView::create_state`, so the state field is the handle itself;
+"Writes open through a WriterSource" and "Signal mutation is commit-on-unwind,
+not transactional" state its write admission and panic containment.
 
 ### Clean widget frames report no builds
 

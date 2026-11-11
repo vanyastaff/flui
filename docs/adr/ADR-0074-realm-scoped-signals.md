@@ -280,14 +280,18 @@ nobody; a field reader still rebuilds on its own field after an unrelated change
 **Counter** — the handle is `Copy`; the write happens in the tap callback, outside `build`:
 
 ```rust
-struct CounterState { count: Option<Signal<u32>> }
+struct CounterState { count: Signal<u32> }
+
+impl StatefulView for Counter {
+    type State = CounterState;
+    fn create_state(&self, cx: &dyn LifecycleContext) -> CounterState {
+        CounterState { count: cx.signal(0u32) }              // owned by this element
+    }
+}
 
 impl ViewState<Counter> for CounterState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        self.count = Some(cx.signal(0u32));                  // owned by this element
-    }
     fn build(&self, _v: &Counter, cx: &dyn BuildContext) -> impl IntoView {
-        let count = self.count.expect("BUG: init_state ran before build");
+        let count = self.count;
         let r = cx.reactive();
         Column::new((
             Text::new(format!("{}", count.get(cx))),         // this element is a reader

@@ -486,7 +486,7 @@ impl Reactive {
     /// Create a signal that lives as long as the graph — application-level
     /// state released with the UI runtime. Widget-level state belongs to its
     /// element: use [`Reactive::signal_owned_by`] (or `cx.signal(..)` from
-    /// `init_state`, which does that for you) so the slot is released when
+    /// `create_state`, which does that for you) so the slot is released when
     /// the element unmounts.
     ///
     /// # Errors
