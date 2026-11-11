@@ -35,7 +35,7 @@ impl<'a> TextMeasurement<'a> {
     ) -> Result<(), TextMeasurementError> {
         self.context.note_lent();
         if let Err(error) = shaping_widths(min_width, max_width) {
-            painter.layout_cache = None;
+            painter.mark_needs_layout();
             return Err(error.into());
         }
         let sizing = self.effective_sizing(painter);
@@ -49,7 +49,7 @@ impl<'a> TextMeasurement<'a> {
             sizing.retain_resolved(&cache.answers);
             return Ok(());
         }
-        painter.layout_cache = None;
+        painter.mark_needs_layout();
         let text = painter.text.as_ref().ok_or(TextLayoutError::TextNotSet)?;
         painter
             .text_direction

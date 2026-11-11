@@ -6,14 +6,13 @@
 //! paragraph paints from the layout that measured it.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::fmt;
 use std::sync::OnceLock;
 
 use super::caret::PlacedLine;
-use crate::display_list::paragraph::RunData;
+use crate::display_list::paragraph::{RunData, SpanDescription};
 use crate::display_list::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph};
-use crate::glyphs::{Synthesis, fake_bold_width};
+use crate::glyphs::{FaceKey, Synthesis, fake_bold_width};
 use crate::styling::Color;
 use crate::typography::{FontStyle, TextAlign, TextDirection, TextStyle};
 use flui_foundation::geometry::{Rect, Size};
@@ -110,7 +109,7 @@ const _: () = {
 #[derive(Clone, Debug)]
 struct SpanInfo {
     len: usize,
-    family: String,
+    family: std::sync::Arc<str>,
     weight: f32,
     italic: bool,
     size: Option<f32>,
@@ -120,6 +119,22 @@ struct SpanInfo {
     /// The paint run it paints in; `None` for an empty span, which paints
     /// nothing.
     paint_run: Option<usize>,
+}
+
+impl SpanInfo {
+    /// What [`ShapedParagraph::describe_spans`] prints for this span, with
+    /// `color` where its run paints in another colour than the paragraph
+    /// command's.
+    fn description(&self, color: Option<Color>) -> SpanDescription {
+        SpanDescription {
+            len: self.len,
+            family: std::sync::Arc::clone(&self.family),
+            weight: self.weight,
+            italic: self.italic,
+            size: self.size,
+            color,
+        }
+    }
 }
 
 impl ParagraphLayout {
@@ -454,13 +469,25 @@ impl ParagraphLayout {
         };
         let sources = casts.map(|_| SpanSourceMap::of(&self.spans));
         let metrics = self.metrics();
-        let mut faces: Vec<FontFace> = Vec::new();
-        let mut face_index: HashMap<(u64, u32), u32> = HashMap::new();
-        let mut em_bounds: Vec<Option<[f32; 4]>> = Vec::new();
-        let mut runs = Vec::new();
-        let mut glyphs = Vec::new();
-        let mut coords = Vec::new();
-        let mut baselines = Vec::new();
+        // Sized from the kept lines up front, so a paragraph that casts every
+        // glyph fills each list once and boxes it without reallocating. A
+        // paragraph names a face or two: they are found by a scan.
+        let (run_count, glyph_count) = self
+            .layout
+            .lines()
+            .take(self.kept())
+            .flat_map(|line| line.items())
+            .fold((0_usize, 0_usize), |(runs, glyphs), item| match item {
+                PositionedLayoutItem::GlyphRun(glyph_run) => {
+                    (runs + 1, glyphs + glyph_run.glyphs().count())
+                }
+                PositionedLayoutItem::InlineBox(_) => (runs, glyphs),
+            });
+        let mut faces: Vec<FontFace> = Vec::with_capacity(1);
+        let mut runs: Vec<RunData> = Vec::with_capacity(run_count);
+        let mut glyphs: Vec<ShapedGlyph> = Vec::with_capacity(glyph_count);
+        let mut coords: Vec<i16> = Vec::new();
+        let mut baselines: Vec<f32> = Vec::with_capacity(self.kept());
         let mut ink = InkBounds::default();
         // For `casts`: the line item the glyph runs come from, the byte its
         // clusters start at for each of its glyphs in glyph order, and how
@@ -494,13 +521,19 @@ impl ParagraphLayout {
                     0
                 };
                 let font = run.font();
-                let face = *face_index
-                    .entry((font.data.id(), font.index))
-                    .or_insert_with(|| {
-                        em_bounds.push(head_bounds(font));
+                let key = FaceKey {
+                    blob_id: font.data.id(),
+                    index: font.index,
+                };
+                let position = faces
+                    .iter()
+                    .position(|face| face.key() == key)
+                    .unwrap_or_else(|| {
                         faces.push(face_of(font));
-                        u32::try_from(faces.len() - 1).unwrap_or(u32::MAX)
+                        faces.len() - 1
                     });
+                let face = u32::try_from(position).unwrap_or(u32::MAX);
+                let em_bounds = head_bounds(font);
                 let synthesis = synthesis_of(&run.synthesis());
                 let font_size = run.font_size();
                 let coords_start = coords.len();
@@ -523,13 +556,7 @@ impl ParagraphLayout {
                     };
                     let x = glyph.x;
                     let dy = glyph.y - baseline;
-                    ink.add(
-                        em_bounds.get(face as usize).copied().flatten(),
-                        x,
-                        glyph.y,
-                        font_size,
-                        synthesis,
-                    );
+                    ink.add(em_bounds, x, glyph.y, font_size, synthesis);
                     glyphs.push(ShapedGlyph { id, x, dy });
                 }
                 if casts.is_some() && glyphs.len() == glyph_start {
@@ -551,8 +578,8 @@ impl ParagraphLayout {
         let spans = self
             .spans
             .iter()
-            .map(|span| describe(span, span.paint_run.and_then(run_color)))
-            .collect();
+            .map(|span| span.description(span.paint_run.and_then(run_color)))
+            .collect::<Box<[SpanDescription]>>();
         ShapedParagraph {
             text: self.text.as_str().into(),
             size: Size::new(metrics.width, metrics.height),
@@ -869,26 +896,6 @@ impl InkBounds {
     }
 }
 
-/// One span's line in [`ShapedParagraph::describe_spans`]: the text a
-/// snapshot prints, with the colour its run paints with when that is not the
-/// paragraph command's.
-fn describe(span: &SpanInfo, color: Option<Color>) -> String {
-    let mut parts = vec![
-        format!("len={}", span.len),
-        format!("family={}", span.family),
-        format!("weight={}", span.weight),
-        format!("style={}", if span.italic { "Italic" } else { "Normal" }),
-    ];
-    if let Some(size) = span.size {
-        parts.push(format!("size={size:.2}"));
-    }
-    if let Some(color) = color {
-        let [r, g, b, a] = color.to_rgba8();
-        parts.push(format!("color=#{:02x}{:02x}{:02x}{:02x}", r, g, b, a));
-    }
-    parts.join(" ")
-}
-
 /// The paint run a glyph run belongs to: an index into its layout's run
 /// colours, not the colour itself, so recolouring a span changes no style
 /// Parley shaped with. Parley splits shaping items only on font properties,
@@ -1056,6 +1063,14 @@ fn validate_layout(paragraph: &ParagraphLayout) -> Result<(), TextLayoutError> {
 }
 
 impl TextContext {
+    /// Keeps `dropped`'s buffers for the next shaping to build into. A
+    /// context keeps one; a second is dropped.
+    pub(crate) fn recycle(&mut self, dropped: ParagraphLayout) {
+        if self.spare_layout.is_none() {
+            self.spare_layout = Some(dropped.layout);
+        }
+    }
+
     /// Shapes and line-breaks `paragraph` on this context's fonts.
     pub fn shape(
         &mut self,
@@ -1291,6 +1306,9 @@ impl TextContext {
             })
             .collect();
 
+        // A dropped layout's buffers, when one was handed back: building into
+        // them clears what they held and allocates only past their capacity.
+        let mut layout = self.spare_layout.take().unwrap_or_default();
         // Unquantized: the layout is in logical pixels, and Parley's
         // quantization would round ascent, descent and the leading halves to
         // whole logical pixels, which at a device scale other than 1 is not
@@ -1329,7 +1347,7 @@ impl TextContext {
                 builder.push(property, range.clone());
             }
         }
-        let mut layout = builder.build(&breaks);
+        builder.build_into(&mut layout, &breaks);
         // Reject overflow before the line breaker consumes derived advances.
         let widths = layout.calculate_content_widths();
         if !widths.min.is_finite() || !widths.max.is_finite() {
@@ -1387,7 +1405,7 @@ fn sliced_spans(
 /// its source and paint run are the caller's to set.
 fn span_info(
     len: usize,
-    family: String,
+    family: std::sync::Arc<str>,
     style: Option<&TextStyle>,
     default: Option<&TextStyle>,
     adjustment: i32,
@@ -1425,9 +1443,9 @@ fn span_info(
 fn family(
     collection: &mut Collection,
     style: Option<&TextStyle>,
-) -> (StyleProperty<'static, SpanBrush>, String) {
+) -> (StyleProperty<'static, SpanBrush>, std::sync::Arc<str>) {
     let family = resolve_family_name(style, |name| holds_exactly(collection, name));
-    let described = format!("{family:?}");
+    let described: std::sync::Arc<str> = format!("{family:?}").into();
     let name = match family {
         Family::Name(name) => FontFamilyName::Named(Cow::Owned(name.to_owned())),
         Family::Serif => FontFamilyName::Generic(GenericFamily::Serif),
