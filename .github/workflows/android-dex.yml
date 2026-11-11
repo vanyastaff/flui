@@ -39,11 +39,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUSTUP_HOME: ${{ github.workspace }}/../flui-android-dex-rustup
-  # The tools `classes.dex.toml` records; the SDK step installs them when the
-  # runner image lacks them, and `xtask android-dex` falls back to the newest
-  # installed version (and says so) only if that fails.
-  BUILD_TOOLS: "35.0.0"
-  PLATFORM: "android-36"
   MODE: ${{ inputs.mode || 'write' }}
 
 jobs:
@@ -67,9 +62,15 @@ jobs:
           sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:?the runner image has no Android SDK}}"
           echo "JAVA_HOME=$java_home" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
-          if [ ! -f "$sdk/build-tools/$BUILD_TOOLS/lib/d8.jar" ] || [ ! -f "$sdk/platforms/$PLATFORM/android.jar" ]; then
+          # The build tools and platform the record names, which `--write` and
+          # `--rebuild` use when installed: install them if the image lacks them.
+          record=crates/flui-native/android/classes.dex.toml
+          tools="$(sed -n 's/^build-tools = "\(.*\)"$/\1/p' "$record")"
+          platform="$(sed -n 's/^platform = "\(.*\)"$/\1/p' "$record")"
+          : "${tools:?the record names no build-tools}" "${platform:?the record names no platform}"
+          if [ ! -f "$sdk/build-tools/$tools/lib/d8.jar" ] || [ ! -f "$sdk/platforms/$platform/android.jar" ]; then
             (yes || true) | JAVA_HOME="$java_home" "$sdk/cmdline-tools/latest/bin/sdkmanager" \
-              "build-tools;$BUILD_TOOLS" "platforms;$PLATFORM"
+              "build-tools;$tools" "platforms;$platform"
           fi
           "$java_home/bin/javac" -version
 

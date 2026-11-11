@@ -16,7 +16,9 @@
 //!   the checked-in bytes. It needs a JDK and the Android SDK's build tools
 //!   (`ANDROID_HOME`); `javac` output can differ between JDK releases, so a
 //!   mismatch names the recorded tools.
-//! - `--write` compiles and writes the dex and its record.
+//! - `--write` compiles and writes the dex and its record, with the build
+//!   tools and platform the record names when they are installed (the newest
+//!   installed otherwise, which it says).
 //!
 //! Without a local JDK or SDK, `.github/workflows/android-dex.yml` runs
 //! `--write` (or `--rebuild`) on a GitHub runner by hand and uploads the dex
@@ -158,7 +160,13 @@ pub(crate) fn android_dex(args: &AndroidDexArgs) -> anyhow::Result<ExitCode> {
     }
     let digest = sources_digest(&sources);
     if args.write {
-        let built = compile(&root, None)?;
+        // The recorded build tools and platform when installed, so a rewrite
+        // changes them only on purpose (by editing the record) and never picks
+        // up a preview platform the SDK happens to have.
+        let recorded = std::fs::read_to_string(root.join(RECORD))
+            .ok()
+            .and_then(|text| Record::parse(&text).ok());
+        let built = compile(&root, recorded.as_ref())?;
         let record = Record {
             sources: digest,
             dex: hex(&Sha256::digest(&built.dex)),
