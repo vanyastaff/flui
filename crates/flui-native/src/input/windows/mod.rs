@@ -964,21 +964,19 @@ impl InputWindow {
         .flatten();
         // FLUI_DIAG (temporary): what each pointer message reads.
         eprintln!(
-            "FLUI_DIAG msg={message:#x} raw={raw} mouse={mouse} hover={hover:?} cell={} members={members:?} raw_info={:?}",
+            "FLUI_DIAG msg={message:#x} raw={raw} mouse={mouse} hover={hover:?} cell={} members={:?} raw_info={:?}",
             self.hovered.get(),
+            members.as_ref().map(|members| members
+                .iter()
+                .map(|m| (m.id, m.message))
+                .collect::<Vec<_>>()),
             raw::diag_info(raw),
         );
-        if let Some(members) = &members {
-            for (id, _) in members {
-                eprintln!("FLUI_DIAG   member {id}: {:?}", raw::diag_info(*id));
-            }
-        }
         let inputs = if let Some(members) = members {
-            let contacts = members.into_iter().map(|(id, message)| {
-                raw::native_pointer_input(
+            let contacts = members.iter().map(|member| {
+                raw::frame_member_input(
                     hwnd,
-                    message,
-                    (id, false),
+                    member,
                     self.scale_factor(),
                     &self.message_clock,
                     &self.registry,
@@ -1678,33 +1676,116 @@ mod raw {
         assembled.unwrap_or_else(DecodeError::into_inputs)
     }
 
-    /// The pointers of the frame `raw` belongs to, each with the message its
-    /// own state change reads as, when the frame holds more than one. The
-    /// system sends one message per pointer of a frame; the others are
-    /// skipped once the frame is read ([`skip_frame_messages`]).
-    pub(super) fn pointer_frame_members(raw: u32) -> Option<Vec<(u32, u32)>> {
+    /// One pointer of a frame: its id, the message its own state change reads
+    /// as, and its readings, newest first, copied out of the frame.
+    pub(super) struct FrameMember {
+        pub(super) id: u32,
+        pub(super) message: u32,
+        packets: Vec<PointerPacket>,
+    }
+
+    /// The pointers of the frame `raw`'s message belongs to, when the frame
+    /// holds more than one, in the frame's order. The system sends one message
+    /// per pointer of a frame; the others are skipped once the frame is read
+    /// ([`skip_frame_messages`]).
+    ///
+    /// Every reading comes from the frame's own history
+    /// (`GetPointerFrame*InfoHistory`, one row per entry and one column per
+    /// pointer). The per-pointer queries (`GetPointerInfo` and its histories)
+    /// answer for the message last retrieved for that pointer, which for a
+    /// pointer other than `raw` is its previous frame: its press read again
+    /// in place of its move.
+    pub(super) fn pointer_frame_members(raw: u32) -> Option<Vec<FrameMember>> {
         use windows::Win32::UI::{
             Input::Pointer::{
-                GetPointerFrameInfo, POINTER_FLAG_DOWN, POINTER_FLAG_UP, POINTER_FLAG_UPDATE,
+                GetPointerFrameInfoHistory, GetPointerFramePenInfoHistory,
+                GetPointerFrameTouchInfoHistory, GetPointerInfo, POINTER_FLAG_DOWN,
+                POINTER_FLAG_UP, POINTER_FLAG_UPDATE,
             },
-            WindowsAndMessaging::{WM_POINTERDOWN, WM_POINTERUP, WM_POINTERUPDATE},
+            WindowsAndMessaging::{
+                PT_PEN, PT_TOUCH, WM_POINTERDOWN, WM_POINTERUP, WM_POINTERUPDATE,
+            },
         };
-        let mut count = 0u32;
-        // SAFETY: a null buffer asks only for the count, into a live local.
-        unsafe { GetPointerFrameInfo(raw, &raw mut count, None) }.ok()?;
-        if count < 2 {
+        let mut info = POINTER_INFO::default();
+        // SAFETY: `info` is a live, writable local; Windows refuses a stale or
+        // invented id.
+        unsafe { GetPointerInfo(raw, &raw mut info) }.ok()?;
+        let (mut entries, mut pointers) = (0u32, 0u32);
+        // SAFETY: a null buffer asks only for the counts, into live locals.
+        unsafe { GetPointerFrameInfoHistory(raw, &raw mut entries, &raw mut pointers, None) }
+            .ok()?;
+        if pointers < 2 {
             return None;
         }
-        let mut frame = read_history(count, |count, buffer: &mut [POINTER_INFO]| {
-            // SAFETY: `*count` is `buffer.len()` (`read_history`).
-            unsafe { GetPointerFrameInfo(raw, count, Some(buffer.as_mut_ptr())) }
-        })?;
-        // The system lists the frame newest first; deliver in sample order.
-        frame.reverse();
-        frame
-            .iter()
-            .map(|info| {
-                let flags = info.pointerFlags;
+        let entries = entries.max(1);
+        let rows: Vec<Vec<PointerPacket>> = match info.pointerType {
+            PT_TOUCH => read_frame_history(
+                entries,
+                pointers,
+                |entries, pointers, buffer: &mut [POINTER_TOUCH_INFO]| {
+                    // SAFETY: `*entries * *pointers` is `buffer.len()`
+                    // (`read_frame_history`).
+                    unsafe {
+                        GetPointerFrameTouchInfoHistory(
+                            raw,
+                            entries,
+                            pointers,
+                            Some(buffer.as_mut_ptr()),
+                        )
+                    }
+                },
+            )?
+            .into_iter()
+            .map(|row| row.into_iter().map(PointerPacket::Touch).collect())
+            .collect(),
+            PT_PEN => read_frame_history(
+                entries,
+                pointers,
+                |entries, pointers, buffer: &mut [POINTER_PEN_INFO]| {
+                    // SAFETY: as for the touch history.
+                    unsafe {
+                        GetPointerFramePenInfoHistory(
+                            raw,
+                            entries,
+                            pointers,
+                            Some(buffer.as_mut_ptr()),
+                        )
+                    }
+                },
+            )?
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|pen| {
+                        PointerPacket::Pen(pen, HimetricMap::of(pen.pointerInfo.sourceDevice))
+                    })
+                    .collect()
+            })
+            .collect(),
+            _ => read_frame_history(
+                entries,
+                pointers,
+                |entries, pointers, buffer: &mut [POINTER_INFO]| {
+                    // SAFETY: as for the touch history.
+                    unsafe {
+                        GetPointerFrameInfoHistory(
+                            raw,
+                            entries,
+                            pointers,
+                            Some(buffer.as_mut_ptr()),
+                        )
+                    }
+                },
+            )?
+            .into_iter()
+            .map(|row| row.into_iter().map(PointerPacket::Pointer).collect())
+            .collect(),
+        };
+        let newest = rows.first()?;
+        (0..newest.len())
+            .map(|column| {
+                let current = newest[column].info();
+                let flags = current.pointerFlags;
                 let message = if flags.contains(POINTER_FLAG_DOWN) {
                     WM_POINTERDOWN
                 } else if flags.contains(POINTER_FLAG_UP) {
@@ -1714,9 +1795,43 @@ mod raw {
                 } else {
                     return None;
                 };
-                Some((info.pointerId, message))
+                // The same pointer down every row of its column.
+                let packets: Vec<PointerPacket> = rows
+                    .iter()
+                    .filter_map(|row| row.get(column).copied())
+                    .filter(|packet| packet.info().pointerId == current.pointerId)
+                    .collect();
+                Some(FrameMember {
+                    id: current.pointerId,
+                    message,
+                    packets,
+                })
             })
             .collect()
+    }
+
+    /// Read a frame's history of up to `entries` rows of `pointers` columns:
+    /// `query` is handed a buffer of `entries * pointers` readings and both
+    /// counts, which it rewrites to what it filled. Rows come back newest
+    /// first; a count larger than the buffer is refused.
+    fn read_frame_history<T: Default + Clone>(
+        entries: u32,
+        pointers: u32,
+        query: impl FnOnce(&mut u32, &mut u32, &mut [T]) -> windows::core::Result<()>,
+    ) -> Option<Vec<Vec<T>>> {
+        let len = usize::try_from(entries.checked_mul(pointers)?).ok()?;
+        let mut values = Vec::new();
+        values.try_reserve_exact(len).ok()?;
+        values.resize(len, T::default());
+        let (mut filled_entries, mut filled_pointers) = (entries, pointers);
+        query(&mut filled_entries, &mut filled_pointers, &mut values).ok()?;
+        if filled_entries > entries || filled_pointers != pointers {
+            return None;
+        }
+        let width = usize::try_from(pointers).ok()?;
+        let rows = usize::try_from(filled_entries).ok()?;
+        values.truncate(rows.checked_mul(width)?);
+        Some(values.chunks(width).map(<[T]>::to_vec).collect())
     }
 
     /// FLUI_DIAG (temporary): the pointer's info, its frame's ids and flags,
@@ -1758,16 +1873,16 @@ mod raw {
             .collect();
         format!(
             "info={:?} id={} frame={} flags={:#x} at=({},{}) hist={} | frame_count={:?} n={count} read={:?} members={members:?} | frame_hist={:?} {entries}x{pointers}",
-            got.as_ref().map(|_| ()),
+            got.is_ok(),
             info.pointerId,
             info.frameId,
             info.pointerFlags.0,
             info.ptPixelLocation.x,
             info.ptPixelLocation.y,
             info.historyCount,
-            frame_count.map(|_| ()),
-            frame_read.map(|_| ()),
-            history.map(|_| ()),
+            frame_count.is_ok(),
+            frame_read.is_ok(),
+            history.is_ok(),
         )
     }
 
@@ -1807,35 +1922,84 @@ mod raw {
     ) -> Assembled {
         use windows::Win32::UI::WindowsAndMessaging::WM_POINTERCAPTURECHANGED;
         let contact = pointer_contact(mouse, raw);
-        let cancel = |reason| {
-            let time = EventTime::from_nanos(clock.message_time());
-            registry
-                .borrow_mut()
-                .cancel_contact(SURFACE, contact, time, reason)
-                .into_iter()
-                .collect()
-        };
         if message == WM_POINTERCAPTURECHANGED {
-            return cancel(NativeCancel::CaptureLost);
+            return cancel_contact(contact, NativeCancel::CaptureLost, clock, registry);
         }
         let Some(packets) = native_history(raw) else {
             tracing::warn!(raw, "pointer history unavailable; its contact is cancelled");
-            return cancel(NativeCancel::InvalidInput);
+            return cancel_contact(contact, NativeCancel::InvalidInput, clock, registry);
         };
+        assemble_packets(
+            hwnd,
+            message,
+            (raw, contact),
+            &packets,
+            scale,
+            clock,
+            registry,
+        )
+    }
+
+    /// The input of one pointer of a frame read whole
+    /// ([`pointer_frame_members`]).
+    pub(super) fn frame_member_input(
+        hwnd: HWND,
+        member: &FrameMember,
+        scale: f64,
+        clock: &MessageClock,
+        registry: &RefCell<ContactRegistry>,
+    ) -> Assembled {
+        let contact = pointer_contact(false, member.id);
+        assemble_packets(
+            hwnd,
+            member.message,
+            (member.id, contact),
+            &member.packets,
+            scale,
+            clock,
+            registry,
+        )
+    }
+
+    /// End `contact` for `reason`.
+    fn cancel_contact(
+        contact: NativeContact,
+        reason: NativeCancel,
+        clock: &MessageClock,
+        registry: &RefCell<ContactRegistry>,
+    ) -> Assembled {
+        let time = EventTime::from_nanos(clock.message_time());
+        registry
+            .borrow_mut()
+            .cancel_contact(SURFACE, contact, time, reason)
+            .into_iter()
+            .collect()
+    }
+
+    /// The input `message`'s newest-first `packets` of pointer `raw` make.
+    fn assemble_packets(
+        hwnd: HWND,
+        message: u32,
+        (raw, contact): (u32, NativeContact),
+        packets: &[PointerPacket],
+        scale: f64,
+        clock: &MessageClock,
+        registry: &RefCell<ContactRegistry>,
+    ) -> Assembled {
         let mut offset = POINT::default();
         // SAFETY: the live owner HWND and initialized client translation buffer
         // remain valid under the window procedure's ContextGuard.
         let now = unsafe {
             if !ScreenToClient(hwnd, &raw mut offset).as_bool() {
                 tracing::warn!(raw, "client origin unavailable; the pointer is cancelled");
-                return cancel(NativeCancel::InvalidInput);
+                return cancel_contact(contact, NativeCancel::InvalidInput, clock, registry);
             }
             GetTickCount64()
         };
         let modifiers = message_modifiers();
         let assembled = assemble_history(
             &mut registry.borrow_mut(),
-            &packets,
+            packets,
             message,
             offset,
             scale,

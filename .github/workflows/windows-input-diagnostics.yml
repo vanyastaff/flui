@@ -54,3 +54,6 @@ jobs:
             echo "::endgroup::"
           done
           exit $status
+      - name: Whole window contract, as the nightly runs it
+        if: ${{ !cancelled() }}
+        run: cargo test -p flui-native --locked --test platform_it -- --exact contract::test_window_lifecycle_contract --nocapture
