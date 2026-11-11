@@ -1,4 +1,9 @@
 //! Public capture witnesses for target-aware layer traversal.
+
+#![expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+)]
 use crate::headless::HeadlessRenderer;
 use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
 use flui_layer::{

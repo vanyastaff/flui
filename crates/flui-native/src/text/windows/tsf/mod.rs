@@ -110,7 +110,8 @@ enum HostOp {
 /// while unwinding, and the owner's containment orders it behind the one
 /// raised (ADR-0142 item 8): the earlier failure stays authoritative.
 /// Outside an unwind (a COM entry, which only logs the failure) it commits
-/// as any completion does. A commit that panics is retained.
+/// as any completion does. A commit that panics is discarded under containment
+/// (ADR-0281).
 struct Recovery(Vec<Rc<dyn TextStore>>);
 
 impl Drop for Recovery {
@@ -203,7 +204,8 @@ unsafe fn associate(
 /// Log a failure of application code a host operation reached, where it
 /// cannot be raised (a COM entry, the window procedure). The log runs a
 /// user-installed subscriber, so it is contained too: nothing unwinds, and
-/// the payload is retained whatever the subscriber does.
+/// the payload is destroyed under containment whatever the subscriber does
+/// (ADR-0281).
 fn log_failure(payload: Box<dyn Any + Send>) {
     let mut calls = OwnerCalls::new();
     calls.run(|| {
@@ -214,7 +216,7 @@ fn log_failure(payload: Box<dyn Any + Send>) {
         );
     });
     flui_foundation::panic::discard_payload(payload);
-    // A failure the diagnostic raised is retained with the scope.
+    // A failure the diagnostic raised is discarded with the scope.
     drop(calls);
 }
 
@@ -354,7 +356,7 @@ impl TextServices {
     /// A failure those operations caught cannot be handed back through TSF:
     /// it is logged, not raised. The log runs a user-installed subscriber,
     /// so it is contained too: nothing unwinds into TSF, and the failure's
-    /// payload is retained whatever the subscriber does.
+    /// payload is destroyed under containment whatever the subscriber does.
     fn leave(&self, entered: Entered<'_>) {
         drop(entered);
         self.drain_pending();
@@ -431,7 +433,7 @@ impl TextServices {
     }
 
     /// Keep `payload` for the outermost host operation; a later failure is
-    /// retained behind the first.
+    /// discarded under containment behind the first.
     fn keep_failure(&self, payload: Box<dyn Any + Send>) {
         let mut failure = self.failure.borrow_mut();
         if failure.is_none() {

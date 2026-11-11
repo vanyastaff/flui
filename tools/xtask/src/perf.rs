@@ -24,6 +24,8 @@ use anyhow::{Context, bail};
 
 use crate::util::{self, repo_root};
 
+mod instructions;
+
 /// The package whose `perf` test target holds the scenarios.
 const PACKAGE: &str = "flui-widgets";
 
@@ -41,16 +43,21 @@ type Counts = BTreeMap<String, BTreeMap<String, u64>>;
 /// Arguments for `cargo xtask perf`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct PerfArgs {
-    /// Fail when any counter differs from the baseline.
+    /// Fail when any counter differs from the baseline (with `--instructions`: when a
+    /// scaling scenario grows with the tree).
     #[arg(long, conflicts_with_all = ["bless", "self_test"])]
     check: bool,
     /// Rewrite the baseline from this run.
-    #[arg(long, conflicts_with = "self_test")]
+    #[arg(long, conflicts_with_all = ["self_test", "instructions"])]
     bless: bool,
     /// Compare planted fixtures in memory and fail if the comparison misses
     /// one; builds nothing.
     #[arg(long)]
     pub(crate) self_test: bool,
+    /// Count each `perf_scaling_` scenario's instructions on its small and its large tree
+    /// under callgrind, and compare them instead of the baseline's counters. Needs valgrind.
+    #[arg(long, conflicts_with = "self_test")]
+    instructions: bool,
 }
 
 /// How a run treats its findings.
@@ -151,6 +158,10 @@ pub(crate) fn perf(args: &PerfArgs) -> anyhow::Result<ExitCode> {
         std::fs::remove_dir_all(&out).with_context(|| format!("clearing {}", out.display()))?;
     }
     std::fs::create_dir_all(&out).with_context(|| format!("creating {}", out.display()))?;
+
+    if args.instructions {
+        return instructions::run(&root, &out, args.check);
+    }
 
     let scenarios_passed = run_scenarios(&root, &out)?;
     report(&root, &out, mode, scenarios_passed)
@@ -437,7 +448,8 @@ fn self_test() -> ExitCode {
     let round_trip = render(&current)
         .and_then(|text| parse(&text))
         .is_ok_and(|parsed| parsed == current);
-    if found == expected && round_trip {
+    let tolerance = instructions_tolerance_holds();
+    if found == expected && round_trip && tolerance {
         println!("perf self-test: the comparison reports exactly the 4 planted findings");
         return ExitCode::SUCCESS;
     }
@@ -450,7 +462,29 @@ fn self_test() -> ExitCode {
     if !round_trip {
         println!("perf self-test: a blessed baseline does not parse back to itself");
     }
+    if !tolerance {
+        println!("perf self-test: the instruction tolerance misjudges a planted pair");
+    }
     ExitCode::FAILURE
+}
+
+/// The planted instruction pairs: at the tolerance is flat, one past it grows,
+/// and counts near `u64::MAX` compare without overflow.
+fn instructions_tolerance_holds() -> bool {
+    use instructions::{Scaling, TOLERANCE_PERCENT};
+    let at = Scaling {
+        small: 100,
+        large: 100 + TOLERANCE_PERCENT,
+    };
+    let past = Scaling {
+        small: 100,
+        large: 101 + TOLERANCE_PERCENT,
+    };
+    let huge = Scaling {
+        small: u64::MAX,
+        large: u64::MAX,
+    };
+    at.is_flat() && !past.is_flat() && huge.is_flat()
 }
 
 #[cfg(test)]
@@ -522,6 +556,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out);
     }
 
+    fn instruction_runs_read_what_cargo_libtest_and_callgrind_print() {
+        let messages = concat!(
+            r#"{"reason":"compiler-artifact","target":{"name":"flui_widgets"},"executable":null}"#,
+            "\n",
+            r#"{"reason":"compiler-artifact","target":{"name":"perf"},"executable":"/t/perf-1"}"#,
+            "\n",
+            r#"{"reason":"build-finished","success":true}"#,
+        );
+        assert_eq!(
+            instructions::executable_from_messages(messages),
+            Some(PathBuf::from("/t/perf-1"))
+        );
+        let listing = "perf_counters_are_live: test\nperf_scaling_a_change: test\n\
+                       perf_scaling_not_a_test: bench\n2 tests, 0 benchmarks\n";
+        assert_eq!(
+            instructions::scaling_from_listing(listing),
+            vec!["perf_scaling_a_change".to_owned()]
+        );
+        let log = "==12== Events    : Ir\n==12== Collected : 23062682\n==12==\n";
+        assert_eq!(instructions::collected_from_log(log), Some(23_062_682));
+        assert_eq!(instructions::collected_from_log("==12== nothing\n"), None);
+        assert!(instructions_tolerance_holds());
+    }
+
     #[test]
     fn perf_contract() {
         crate::table_test::run_table(
@@ -542,6 +600,10 @@ mod tests {
                 (
                     "a_failed_run_still_writes_its_records_and_never_blesses",
                     a_failed_run_still_writes_its_records_and_never_blesses as fn(),
+                ),
+                (
+                    "instruction_runs_read_what_cargo_libtest_and_callgrind_print",
+                    instruction_runs_read_what_cargo_libtest_and_callgrind_print as fn(),
                 ),
             ],
         );

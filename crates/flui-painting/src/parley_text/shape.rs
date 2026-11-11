@@ -208,6 +208,18 @@ impl ParagraphLayout {
         self.content_widths
     }
 
+    /// [`Self::content_widths`] of the text as its spans give it, or `None`
+    /// when the paragraph was ellipsized: its shaped text is then the kept
+    /// prefix and the ellipsis, not the spans.
+    ///
+    /// Shaping does not depend on the width the lines break at nor on
+    /// `max_lines`, so a paragraph that was not ellipsized answers what a
+    /// separate unconstrained shaping of the same spans would.
+    #[must_use]
+    pub(crate) fn authored_content_widths(&self) -> Option<(f64, f64)> {
+        (!self.ellipsized).then(|| self.content_widths())
+    }
+
     /// The paragraph as the display list carries it: its kept lines' glyph
     /// runs, each naming its face by blob, with the metrics' size.
     ///

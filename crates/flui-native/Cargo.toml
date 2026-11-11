@@ -676,13 +676,15 @@ wasm-bindgen-test.workspace = true
 
 # A DXGI swap chain on a test window, presented the way a renderer presents,
 # whose frame statistics the window turns into its presentation report
-# (`the_win32_window_conforms`).
+# (`the_win32_window_conforms`); the process snapshot a row that injects touch
+# finds the touch keyboard host its touches started in (`contract`).
 [target.'cfg(target_os = "windows")'.dev-dependencies]
 windows = { workspace = true, features = [
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_System_Diagnostics_ToolHelp",
 ] }
 
 # The harnesses that run their cases on the main thread
