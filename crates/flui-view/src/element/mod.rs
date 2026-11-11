@@ -14,6 +14,7 @@ mod inherited_access;
 pub(crate) mod layout_builder;
 mod lifecycle;
 mod notification;
+mod provided;
 mod render_object_element;
 mod root;
 pub(crate) mod sliver_adaptor;
@@ -52,7 +53,7 @@ pub use behavior::{
 };
 pub use future_builder::{BoxedResultFuture, FutureBuilder, FutureBuilderState, FutureFactory};
 pub use generic::ElementCore;
-pub use inherited_access::InheritedElementAccess;
+pub use inherited_access::{InheritedElementAccess, ProvidedRef};
 pub use kind::{
     ElementKind, InheritedElementBase, NotificationElementBase, ProxyElementBase,
     RenderElementBase, StatefulElementBase, StatelessElementBase,
@@ -64,6 +65,7 @@ pub use notification::{
     LayoutChangedNotification, NotifiableElement, Notification, ScrollNotification,
     SizeChangedNotification,
 };
+pub use provided::{Provided, ProvidedValue};
 pub use render_object_element::RenderTreeRootElement;
 pub use root::{RootElement, RootElementImpl};
 // The lazy multi-box adaptor and its extension point: a render object that

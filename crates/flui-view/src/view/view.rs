@@ -678,6 +678,13 @@ pub trait ElementBase: Downcast + 'static {
         None
     }
 
+    /// Whether the set of types this element publishes to its subtree changed
+    /// since the last call (ADR-0322 §5). The tree then re-derives the
+    /// inherited scope of the element's node and of its subtree.
+    fn take_provided_scope_stale(&mut self) -> bool {
+        false
+    }
+
     // ========================================================================
     // Ancestor-finder protocol
     // ========================================================================
