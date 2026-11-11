@@ -355,7 +355,7 @@ where
 // RenderBehavior helpers
 // ============================================================================
 
-/// Body of `RenderBehavior::on_unmount`: remove the associated
+/// The removal half of `render_custody::unmount`: remove the associated
 /// `RenderObject` from the `RenderTree`. No-op if the behavior never
 /// got a `RenderId` (e.g. unmount before mount with no `PipelineOwner`).
 pub(crate) fn remove_render_object_from_tree<V, A>(

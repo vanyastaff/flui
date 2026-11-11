@@ -83,6 +83,8 @@ mod recovered_panics;
 mod runtime_seam;
 #[path = "signal_reads.rs"]
 mod signal_reads;
+#[path = "stateful_render_view.rs"]
+mod stateful_render_view;
 #[path = "stateless_stateful_tests.rs"]
 mod stateless_stateful_tests;
 #[path = "support/static_children_retirement.rs"]
