@@ -32,7 +32,7 @@ use crate::{
         layout_builder::LayoutBuilderRegistry,
     },
     tree::ElementTree,
-    view::View,
+    view::ChildViews,
 };
 
 pub(crate) use super::external_build_inbox::ExternalBuildInbox;
@@ -1898,7 +1898,7 @@ impl BuildOwner {
             // ordering.
             tree.put_element(id, element);
 
-            let new_views: Vec<Box<dyn View>> = match build_outcome {
+            let new_views: ChildViews = match build_outcome {
                 Ok(views) => {
                     debug_assert!(
                         self.lifecycle_panic_handoff.take().is_disarmed(),

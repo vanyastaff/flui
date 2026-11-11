@@ -28,14 +28,10 @@ pub(crate) mod stream_builder;
 pub mod arity;
 pub mod behavior;
 pub(crate) mod behavior_commons;
-// `dispatch` is the only View-update routing path. The
-// pre-FR-021 `feature = "legacy-downcast"` gate is gone:
-// `ElementCore::update_view` unconditionally
-// routes through `dispatch_view_update`, which performs a
-// `TypeId`-keyed dispatch + `Downcast::into_any` + `Box::downcast`
-// (no `downcast_ref::<V>()` pattern). The workspace-internal
-// feature isolation guard (`cfg(__flui_legacy_downcast_internal)`)
-// is retired here.
+// `dispatch` is the only View-update routing path:
+// `ElementCore::update_view` unconditionally routes through
+// `dispatch_view_update`, which downcasts only after a concrete
+// `TypeId` guard has matched.
 pub(crate) mod dispatch;
 pub mod generic;
 pub mod kind;
