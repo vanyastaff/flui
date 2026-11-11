@@ -45,7 +45,7 @@
 //!
 //! # Invariant: host `child_ids` stays empty
 //!
-//! `build_into_views` returns an empty `Vec` so the dense reconciler in
+//! `build_into_views` returns `ChildViews::none()` so the dense reconciler in
 //! `build_scope` never touches the lazy children. The lazy children live only
 //! in `SparseChildren::by_logical_index`; they are managed by
 //! `service_child_requests`, and a resident whose lifecycle hook panics as it
@@ -376,7 +376,7 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
 /// # Invariant: no dense children
 ///
 /// [`has_children`](RenderView::has_children) returns `false` so
-/// `build_into_views` returns an empty `Vec`. The dense reconciler must
+/// `build_into_views` returns `ChildViews::none()`. The dense reconciler must
 /// never touch the lazy children — they are managed by `SparseChildren`
 /// via `BuildOwner::service_child_requests`.
 pub struct SliverMultiBoxAdaptor<R: LazyMultiBoxRender> {
@@ -1011,8 +1011,8 @@ where
 
     /// Returns empty — the dense reconciler must not touch lazy children.
     ///
-    /// The inner `RenderBehavior::build_into_views` also returns empty
-    /// because `SliverMultiBoxAdaptor::has_children() = false`; we forward
+    /// The inner `RenderBehavior::build_into_views` also returns
+    /// `ChildViews::none()` because `SliverMultiBoxAdaptor::has_children() = false`; we forward
     /// for the `should_build` guard and `clear_dirty` side effect.
     fn build_into_views(
         &mut self,

@@ -176,7 +176,7 @@ pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() 
 
     let migrated_id = std::cell::Cell::new(None);
     let events = capture(|| {
-        let views = ChildViews::one(Box::new(counter.clone()));
+        let views = ChildViews::one(counter.clone());
         reconcile_children(
             &mut tree.borrow_mut(),
             parent_b,
@@ -188,7 +188,7 @@ pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() 
                 .first()
                 .copied(),
         );
-        let donor_views = ChildViews::one(Box::new(Spacer));
+        let donor_views = ChildViews::one(Spacer);
         reconcile_children(
             &mut tree.borrow_mut(),
             parent_a,

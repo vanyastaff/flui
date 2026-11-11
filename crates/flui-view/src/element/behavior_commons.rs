@@ -310,7 +310,7 @@ where
     A: ElementArity,
     R: IntoView,
 {
-    let child = crate::view::ChildViews::of(child_view.into_view());
+    let child = crate::view::ChildViews::one(child_view.into_view());
     core.clear_dirty();
     tracing::debug!("{}::build_into_views completed", behavior_name);
     child

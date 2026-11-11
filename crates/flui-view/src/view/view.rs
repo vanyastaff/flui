@@ -230,10 +230,9 @@ clone_trait_object!(View);
 /// The child views one build of an element produced, in order.
 ///
 /// Most elements build exactly one child, and [`ChildViews::one`] holds it
-/// without a list of its own; [`ChildViews::none`] holds nothing, and a
-/// `Vec` converts for an element with several. A child the element holds
-/// as a [`BoxedView`](crate::BoxedView) is handed on shared
-/// ([`ChildViews::shared`], [`ChildViews::push_shared`]): the reconciler
+/// without a list of its own; [`ChildViews::none`] holds nothing,
+/// [`ChildViews::push`] appends, and a `Vec` of boxes converts. A child
+/// given as a [`BoxedView`](crate::BoxedView) is held shared: the reconciler
 /// reads it where it is, so it costs no box of its own and keeps its
 /// identity.
 pub struct ChildViews(ChildViewsRepr);
@@ -293,22 +292,10 @@ impl ChildViews {
         Self(ChildViewsRepr::Many(Vec::new()))
     }
 
-    /// Exactly one child view.
+    /// Exactly one child view, taken by value: a [`BoxedView`](crate::BoxedView)
+    /// is held shared, with no box of its own; any other view is boxed.
     #[must_use]
-    pub fn one(view: Box<dyn View>) -> Self {
-        Self(ChildViewsRepr::One(ChildView::Owned(view)))
-    }
-
-    /// Exactly one child view, shared with the parent that holds it.
-    #[must_use]
-    pub fn shared(view: crate::BoxedView) -> Self {
-        Self(ChildViewsRepr::One(ChildView::Shared(view)))
-    }
-
-    /// Exactly one child view, taken by value: a `BoxedView` is held
-    /// shared, any other view in a box of its own.
-    #[must_use]
-    pub(crate) fn of<V: View>(view: V) -> Self {
+    pub fn one<V: View>(view: V) -> Self {
         Self(ChildViewsRepr::One(ChildView::of(view)))
     }
 
@@ -324,15 +311,10 @@ impl ChildViews {
         self.push_child(ChildView::copy_of(view));
     }
 
-    /// Appends `view` after the child views already held.
-    pub fn push(&mut self, view: Box<dyn View>) {
-        self.push_child(ChildView::Owned(view));
-    }
-
-    /// Appends `view`, shared with the parent that holds it, after the
-    /// child views already held.
-    pub fn push_shared(&mut self, view: crate::BoxedView) {
-        self.push_child(ChildView::Shared(view));
+    /// Appends `view` after the child views already held: a `BoxedView` is
+    /// held shared, any other view is boxed.
+    pub fn push<V: View>(&mut self, view: V) {
+        self.push_child(ChildView::of(view));
     }
 
     fn push_child(&mut self, view: ChildView) {
@@ -343,7 +325,14 @@ impl ChildViews {
                 views.push(view);
                 ChildViewsRepr::Many(views)
             }
-            ChildViewsRepr::One(first) => ChildViewsRepr::Many(vec![first, view]),
+            ChildViewsRepr::One(first) => {
+                // The capacity a `Vec` of boxes starts with, so a third and
+                // fourth child grow nothing.
+                let mut views = Vec::with_capacity(4);
+                views.push(first);
+                views.push(view);
+                ChildViewsRepr::Many(views)
+            }
         };
     }
 
@@ -374,16 +363,6 @@ impl ChildViews {
     /// The child views, in order.
     pub fn iter(&self) -> impl Iterator<Item = &dyn View> {
         (0..self.len()).filter_map(|index| self.get(index))
-    }
-}
-
-impl std::ops::Index<usize> for ChildViews {
-    type Output = dyn View;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        let len = self.len();
-        self.get(index)
-            .unwrap_or_else(|| panic!("child view {index} of {len}"))
     }
 }
 

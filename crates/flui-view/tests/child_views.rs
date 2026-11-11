@@ -38,16 +38,12 @@ fn types(views: &ChildViews) -> Vec<TypeId> {
 fn child_views_keep_the_order_they_were_given() {
     let cases: [(&str, ChildViews, Vec<TypeId>); 5] = [
         ("none", ChildViews::none(), Vec::new()),
-        (
-            "one",
-            ChildViews::one(Box::new(First)),
-            vec![TypeId::of::<First>()],
-        ),
+        ("one", ChildViews::one(First), vec![TypeId::of::<First>()]),
         (
             "pushed onto none",
             {
                 let mut views = ChildViews::none();
-                views.push(Box::new(First));
+                views.push(First);
                 views
             },
             vec![TypeId::of::<First>()],
@@ -55,9 +51,9 @@ fn child_views_keep_the_order_they_were_given() {
         (
             "pushed onto one",
             {
-                let mut views = ChildViews::one(Box::new(First));
-                views.push(Box::new(Second));
-                views.push(Box::new(Third));
+                let mut views = ChildViews::one(First);
+                views.push(Second);
+                views.push(Third);
                 views
             },
             vec![
@@ -87,11 +83,8 @@ fn child_views_keep_the_order_they_were_given() {
 fn a_shared_child_view_is_the_parent_s_own() {
     let held = First.boxed();
     let mut pushed = ChildViews::none();
-    pushed.push_shared(held.clone());
-    for (case, views) in [
-        ("shared", ChildViews::shared(held.clone())),
-        ("pushed shared", pushed),
-    ] {
+    pushed.push(held.clone());
+    for (case, views) in [("one", ChildViews::one(held.clone())), ("pushed", pushed)] {
         let handed = views.get(0).expect("one child view");
         let shared = handed
             .as_any()
