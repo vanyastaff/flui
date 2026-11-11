@@ -1,16 +1,13 @@
 //! Typed-dispatch entry point for element-view updates.
 //!
-//! The current body
-//! eliminates the runtime `downcast_ref::<V>()` call in the
-//! View-type update dispatch path by gating on the concrete
-//! runtime `TypeId` (via `Downcast::as_any().type_id()`) and
-//! routing through `Downcast::into_any` + `Box::downcast::<V>`
-//! — no reference downcast smuggles a view type through this path.
-//! The `tracing::warn!` fall-through of the Phase 1 identity-shim
-//! is removed: after unwrapping any `BoxedView` (below), a genuine
-//! concrete-type mismatch is [`ViewUpdate::Mismatch`], the caller (`Phase 2
-//! reconciler`) replaces the element, and no silent stale state
-//! remains in the tree.
+//! The dispatch gates on the concrete runtime `TypeId` (via
+//! `Downcast::as_any().type_id()`); only once that guard has matched
+//! `V` does it take a `downcast_ref::<V>()`, compare through it, and
+//! clone `V` from it into the element. No downcast runs on a value
+//! the guard has not matched, and the clone needs no box of its own.
+//! After unwrapping any `BoxedView` (below), a genuine concrete-type
+//! mismatch is [`ViewUpdate::Mismatch`]: the reconciler replaces the
+//! element, and no silent stale state remains in the tree.
 //!
 //! ## `BoxedView` unwrap, then `as_any().type_id()`
 //!
@@ -32,7 +29,7 @@
 //! `Downcast::as_any().type_id()` (non-overridable — the blanket
 //! `impl<T: 'static + ?Sized> Any for T` reads the discriminant
 //! from the vtable) against `TypeId::of::<V>()`. On match the inner
-//! is cloned and `Box::downcast::<V>` succeeds (so the element
+//! is downcast by reference and cloned as `V` (so the element
 //! updates in place — consistent with `can_update_by_id`); on a real mismatch it returns
 //! [`ViewUpdate::Mismatch`] and the reconciler replaces the element. Without the
 //! unwrap a boxed rebuild was neither updated (TypeId saw
@@ -49,15 +46,14 @@ use std::rc::Rc;
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::view::{BoxedView, View};
 
-/// Typed view-update dispatch (FR-021).
+/// Typed view-update dispatch.
 ///
 /// Compares the *concrete runtime* `TypeId` of `new_view` (via
 /// `Downcast::as_any().type_id()`, **not** the overridable
 /// `View::view_type_id()`) against `TypeId::of::<V>()` to
-/// discriminate the dispatch. On match, the underlying typed
-/// value is extracted through the `Downcast::into_any` →
-/// `Box::downcast::<V>` chain — distinct from the
-/// `downcast_ref::<V>()` view-type smuggling this path avoids.
+/// discriminate the dispatch. On match, the guarded
+/// `downcast_ref::<V>()` yields the typed view, and the element
+/// takes a `V::clone` of it.
 /// On mismatch — and on the defense-in-depth case
 /// where the downcast still fails despite the TypeId check —
 /// the function returns [`ViewUpdate::Mismatch`]; the reconciler replaces the
@@ -98,9 +94,8 @@ where
     // reconciler's `can_update_by_id` matched on the BoxedView-forwarded
     // `view_type_id()` (the inner type) — so without this unwrap such a rebuild
     // is neither updated (TypeId mismatch here) nor replaced (can_update said
-    // reuse), leaving the element silently stale. Unwrapping is strictly safer
-    // than the old bail-to-`false`: the `Box::downcast::<V>` below now runs on
-    // the inner concrete value and cannot panic.
+    // reuse), leaving the element silently stale. After the unwrap the
+    // downcast below runs on the inner concrete value.
     let mut effective: &dyn View = new_view;
     let mut shared: Option<&Rc<dyn View>> = None;
     loop {
