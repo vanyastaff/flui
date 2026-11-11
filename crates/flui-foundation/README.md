@@ -180,19 +180,9 @@ assert_eq!(rect.size(), Size::new(100.0, 50.0));
 
 ### Platform Detection
 
-`TargetPlatform` lives in `flui-platform`:
-
-```rust
-use flui_platform::TargetPlatform;
-
-let platform = TargetPlatform::current();
-
-if platform.is_desktop() {
-    // desktop branch
-} else if platform.is_mobile() {
-    // mobile branch
-}
-```
+`TargetPlatform` lives in `flui-platform`. A widget reads the platform whose conventions
+it follows from `flui_view::environment::PlatformConvention::of(ctx)`, which the runtime
+installs at the root; only the app runner takes `TargetPlatform::current()`.
 
 ### Inspection
 

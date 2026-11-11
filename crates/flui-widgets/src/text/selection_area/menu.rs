@@ -13,7 +13,6 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::panic::FirstPanic;
-use flui_platform::TargetPlatform;
 use flui_rendering::semantics::DocumentSelection;
 use flui_view::BoxedView;
 use flui_view::prelude::*;
@@ -58,7 +57,7 @@ impl SelectionArea {
 
     /// When a touch shows the toolbar, in place of the nearest
     /// [`DefaultSelectionControls`]' policy or the platform's
-    /// ([`SelectionMenuPolicy::default`]). An area has no caret, so only
+    /// ([`SelectionMenuPolicy::for_platform`] of the [`PlatformConvention`](flui_view::environment::PlatformConvention)). An area has no caret, so only
     /// the long press and the end of a handle drag count.
     #[must_use]
     pub fn menu_policy(mut self, policy: SelectionMenuPolicy) -> Self {
@@ -235,7 +234,7 @@ impl SelectionModel {
             _ => false,
         };
         if !on_selection {
-            let replacement = if TargetPlatform::current().is_apple() {
+            let replacement = if self.platform.get().is_apple() {
                 hit.map(|hit| {
                     let (start, end) = self.word_at(&ordered, &hit.at);
                     DocumentSelection::new(start, end)

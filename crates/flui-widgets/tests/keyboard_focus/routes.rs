@@ -121,7 +121,7 @@ fn enter() -> Key {
 /// The platform's Back chord: Cmd+[ on Apple, Alt+Left elsewhere.
 fn back_chord() -> (Key, Modifiers) {
     if matches!(
-        TargetPlatform::current(),
+        TargetPlatform::Unknown,
         TargetPlatform::MacOS | TargetPlatform::iOS
     ) {
         (Key::character("["), Modifiers::META)
