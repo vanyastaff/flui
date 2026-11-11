@@ -242,7 +242,7 @@ code, after the list is complete.
   image region or a filtered image one each; a retained chunk pays it once per recording.
 - Bad, because 120 bytes is not option 4's 72: about 9.6 MB more at 200,000 operations.
 - Bad, because the reader is a view: code that took `commands()` as a slice, indexed a list, or used
-  `commands().as_ptr()` as identity (`crates/flui-rendering/tests/boundary_content_tokens.rs:139`)
+  `commands().as_ptr()` as identity
   moves to `iter`, `get` and the address of a yielded `op`, and every match on the three boxed
   variants changes, the engine's dispatch included.
 - Bad, because `append` adds a base to each appended id: a pass over the appended commands instead

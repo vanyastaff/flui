@@ -552,9 +552,9 @@ consecutive versions. The patch damage must cover the diff damage.
   `a_boundary_holding_a_leader_is_retained`,
   `a_boundary_painted_alone_reads_the_anchor_its_parent_gave_it`. The existing
   `retained_frames_match_a_full_repaint_over_random_trees_and_marks`
-  (`crates/flui-rendering/tests/nested_boundary_capture.rs:478`) compares flattened versions, and
+  (`crates/flui-rendering/tests/nested_boundary_capture.rs:549`) compares flattened versions, and
   `pipeline_frames_diff_to_the_changed_boundary_rect`
-  (`crates/flui-rendering/tests/boundary_content_tokens.rs:243`) asserts the patch damage.
+  (`crates/flui-rendering/tests/boundary_contents.rs:251`) asserts the patch damage.
 - `flui-engine` (to be added): `a_cached_chunk_replays_the_command_stream_it_recorded` (ADR-0006
   §6), `a_chunk_moved_by_whole_pixels_hits_the_recording_cache`,
   `an_atlas_reset_misses_every_cached_recording`, `the_renderer_kernel_stays_inside_read_closure`,
