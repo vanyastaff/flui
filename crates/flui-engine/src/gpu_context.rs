@@ -1176,4 +1176,50 @@ mod tests {
             "the slot holds no surface until its owner restores one"
         );
     }
+
+    /// A resize whose surface configure unwinds leaves the window at the size
+    /// its surface last took, so the executor's retry of that size configures
+    /// again instead of finding it already applied.
+    ///
+    /// Red-check: write the new size into the slot before the configure, and
+    /// the slot reports the size the surface never took.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_resize_whose_configure_panics_leaves_the_old_size() {
+        use std::sync::Arc;
+
+        use flui_foundation::panic::FirstPanic;
+
+        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+
+        let (context, factory) = noop_context();
+        let surface = factory
+            .create(Arc::new(crate::testing::FakeWindow::new(7)))
+            .expect("the no-op backend makes a surface for any window");
+        let mut window = WindowSlot::configured_without_capabilities(
+            surface,
+            (32, 16),
+            ScriptedAcquire::Timeout,
+        );
+        window.panic_in_next_configure = true;
+        let gpu = context.gpu();
+        let mut caught = FirstPanic::new();
+        assert!(
+            caught.contain(|| window.resize(&gpu, (64, 32))).is_none(),
+            "the injected configure panicked"
+        );
+        if let Some(payload) = caught.into_payload() {
+            flui_foundation::panic::discard_payload(payload);
+        }
+        let size = |window: &WindowSlot| window.target_format().map(|(_, size)| size);
+        assert_eq!(
+            size(&window),
+            Some((32, 16)),
+            "the surface never took 64×32"
+        );
+        window
+            .resize(&gpu, (64, 32))
+            .expect("the retry configures the surface");
+        assert_eq!(size(&window), Some((64, 32)));
+    }
 }

@@ -64,6 +64,9 @@ pub(crate) struct WindowSlot {
     /// surface no GPU presents to.
     #[cfg(all(test, feature = "testing"))]
     acquire_answers: Option<ScriptedAcquire>,
+    /// Make the next resize's configure panic, in a test.
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) panic_in_next_configure: bool,
 }
 
 impl WindowSlot {
@@ -95,6 +98,8 @@ impl WindowSlot {
             recovery: SurfaceRecovery::default(),
             #[cfg(all(test, feature = "testing"))]
             acquire_answers: None,
+            #[cfg(all(test, feature = "testing"))]
+            panic_in_next_configure: false,
         })
     }
 
@@ -152,6 +157,8 @@ impl WindowSlot {
             recovery: SurfaceRecovery::default(),
             #[cfg(all(test, feature = "testing"))]
             acquire_answers: Some(answers),
+            #[cfg(all(test, feature = "testing"))]
+            panic_in_next_configure: false,
         }
     }
 
@@ -171,20 +178,30 @@ impl WindowSlot {
         if self.size == Some(size) && self.configured.is_some() {
             return Ok(());
         }
-        self.size = Some(size);
-        match self.configured.as_mut() {
-            Some(configured) => {
-                configured.config.width = width;
-                configured.config.height = height;
-                if let Some(surface) = self.lease.surface() {
-                    surface.configure(gpu.device, &configured.config);
-                    self.recovery.configured();
-                }
-                self.frame.surface_changed();
-                Ok(())
-            }
-            None => self.configure(gpu),
+        let Some(configured) = self.configured.as_ref() else {
+            self.size = Some(size);
+            return self.configure(gpu);
+        };
+        let mut config = configured.config.clone();
+        config.width = width;
+        config.height = height;
+        if let Some(surface) = self.lease.surface() {
+            #[cfg(all(test, feature = "testing"))]
+            assert!(
+                !std::mem::take(&mut self.panic_in_next_configure),
+                "injected panic in a surface configure"
+            );
+            surface.configure(gpu.device, &config);
+            self.recovery.configured();
         }
+        // Committed once the surface took it: a configure that unwinds
+        // leaves the slot at its old size, so the retry configures again.
+        self.size = Some(size);
+        if let Some(configured) = self.configured.as_mut() {
+            configured.config = config;
+        }
+        self.frame.surface_changed();
+        Ok(())
     }
 
     /// Drop the surface; the target stays, and frames settle not shown until
@@ -243,13 +260,18 @@ impl WindowSlot {
     /// which happens now for a configured surface.
     pub(crate) fn set_latency(&mut self, gpu: &Gpu<'_>, latency: FrameLatency) {
         self.latency = latency;
-        let Some(configured) = self.configured.as_mut() else {
+        let Some(configured) = self.configured.as_ref() else {
             return;
         };
-        configured.config.desired_maximum_frame_latency = latency.frames();
+        let mut config = configured.config.clone();
+        config.desired_maximum_frame_latency = latency.frames();
         if let Some(surface) = self.lease.surface() {
-            surface.configure(gpu.device, &configured.config);
+            surface.configure(gpu.device, &config);
             self.recovery.configured();
+        }
+        // Committed once the surface took it, as a resize is.
+        if let Some(configured) = self.configured.as_mut() {
+            configured.config = config;
         }
     }
 
