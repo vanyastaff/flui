@@ -11,7 +11,7 @@ use std::fmt;
 use std::sync::OnceLock;
 
 use super::caret::PlacedLine;
-use crate::display_list::paragraph::RunData;
+use crate::display_list::paragraph::{RunData, SpanDescription};
 use crate::display_list::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph};
 use crate::glyphs::{Synthesis, fake_bold_width};
 use crate::styling::Color;
@@ -110,7 +110,7 @@ const _: () = {
 #[derive(Clone, Debug)]
 struct SpanInfo {
     len: usize,
-    family: String,
+    family: std::sync::Arc<str>,
     weight: f32,
     italic: bool,
     size: Option<f32>,
@@ -120,6 +120,22 @@ struct SpanInfo {
     /// The paint run it paints in; `None` for an empty span, which paints
     /// nothing.
     paint_run: Option<usize>,
+}
+
+impl SpanInfo {
+    /// What [`ShapedParagraph::describe_spans`] prints for this span, with
+    /// `color` where its run paints in another colour than the paragraph
+    /// command's.
+    fn description(&self, color: Option<Color>) -> SpanDescription {
+        SpanDescription {
+            len: self.len,
+            family: std::sync::Arc::clone(&self.family),
+            weight: self.weight,
+            italic: self.italic,
+            size: self.size,
+            color,
+        }
+    }
 }
 
 impl ParagraphLayout {
@@ -551,8 +567,8 @@ impl ParagraphLayout {
         let spans = self
             .spans
             .iter()
-            .map(|span| describe(span, span.paint_run.and_then(run_color)))
-            .collect();
+            .map(|span| span.description(span.paint_run.and_then(run_color)))
+            .collect::<Box<[SpanDescription]>>();
         ShapedParagraph {
             text: self.text.as_str().into(),
             size: Size::new(metrics.width, metrics.height),
@@ -867,26 +883,6 @@ impl InkBounds {
         }
         Some(self.rect.unwrap_or(Rect::from_ltrb(0.0, 0.0, 0.0, 0.0)))
     }
-}
-
-/// One span's line in [`ShapedParagraph::describe_spans`]: the text a
-/// snapshot prints, with the colour its run paints with when that is not the
-/// paragraph command's.
-fn describe(span: &SpanInfo, color: Option<Color>) -> String {
-    let mut parts = vec![
-        format!("len={}", span.len),
-        format!("family={}", span.family),
-        format!("weight={}", span.weight),
-        format!("style={}", if span.italic { "Italic" } else { "Normal" }),
-    ];
-    if let Some(size) = span.size {
-        parts.push(format!("size={size:.2}"));
-    }
-    if let Some(color) = color {
-        let [r, g, b, a] = color.to_rgba8();
-        parts.push(format!("color=#{:02x}{:02x}{:02x}{:02x}", r, g, b, a));
-    }
-    parts.join(" ")
 }
 
 /// The paint run a glyph run belongs to: an index into its layout's run
@@ -1387,7 +1383,7 @@ fn sliced_spans(
 /// its source and paint run are the caller's to set.
 fn span_info(
     len: usize,
-    family: String,
+    family: std::sync::Arc<str>,
     style: Option<&TextStyle>,
     default: Option<&TextStyle>,
     adjustment: i32,
@@ -1425,9 +1421,9 @@ fn span_info(
 fn family(
     collection: &mut Collection,
     style: Option<&TextStyle>,
-) -> (StyleProperty<'static, SpanBrush>, String) {
+) -> (StyleProperty<'static, SpanBrush>, std::sync::Arc<str>) {
     let family = resolve_family_name(style, |name| holds_exactly(collection, name));
-    let described = format!("{family:?}");
+    let described: std::sync::Arc<str> = format!("{family:?}").into();
     let name = match family {
         Family::Name(name) => FontFamilyName::Named(Cow::Owned(name.to_owned())),
         Family::Serif => FontFamilyName::Generic(GenericFamily::Serif),

@@ -423,10 +423,8 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
             if current != 0 {
                 let expected_weight = format!("weight={expected}");
                 let paragraph = painted_style_paragraph(&painter);
-                let description = paragraph
-                    .describe_spans()
-                    .first()
-                    .expect("the shaped span is described");
+                let descriptions = paragraph.describe_spans();
+                let description = descriptions.first().expect("the shaped span is described");
                 assert!(
                     description
                         .split_whitespace()

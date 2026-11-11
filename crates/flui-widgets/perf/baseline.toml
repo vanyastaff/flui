@@ -15,10 +15,10 @@ nodes_painted = 134
 semantics_nodes_updated = 42
 
 [label_change_large]
-allocations = 590
+allocations = 562
 
 [label_change_small]
-allocations = 590
+allocations = 562
 
 [list_10k_scroll_one_screen]
 allocations = 4302
