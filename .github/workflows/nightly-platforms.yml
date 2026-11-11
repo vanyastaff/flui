@@ -1,0 +1,109 @@
+name: Nightly platforms
+
+# The platform code that pull-request CI only type-checks, run every night on
+# GitHub's hosted runners against main (the repository is public, so they are
+# free). CI on pull requests runs Linux and wasm32 only, and stays that fast:
+# this workflow runs on a schedule, by hand, and on a pull request that edits
+# this file, never on any other.
+#
+#   windows — flui-native's suite on Win32 (`cargo xtask platform-test`) and
+#             the GPU readback suites on Direct3D 12, which a runner without a
+#             GPU answers with WARP (`cargo xtask gpu-test --backend dx12`).
+#   macos   — flui-native's suite on AppKit and the readback suites on Metal.
+#
+# Each leg runs the local command, so a run here and one on a developer's
+# machine cannot drift. A row of crates/flui-native/platform-parity.toml that
+# one of these runs holds names it in its `nightly` table, and the document
+# renders it as "ran on a runner".
+#
+# No build cache: the hosted runners of other systems would each add an entry
+# beside ci.yml's, and the repository's 10 GB would evict the pull-request
+# entries first. A cold build is the price of a nightly run, not of a merge.
+# A red run on main keeps the "Nightly platforms are red on main" issue open,
+# and a green one closes it.
+
+on:
+  schedule:
+    - cron: "43 1 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/nightly-platforms.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  RUST_BACKTRACE: 1
+  RUSTUP_HOME: ${{ github.workspace }}/../flui-nightly-rustup
+
+jobs:
+  desktop:
+    name: ${{ matrix.os }} (flui-native, GPU readback on ${{ matrix.gpu }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            gpu: dx12
+          - os: macos-latest
+            gpu: metal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9
+
+      - name: cargo xtask platform-test
+        run: cargo xtask platform-test
+
+      # `FLUI_REQUIRE_GPU` (set by the task) turns a missing adapter into a
+      # failure. A Windows runner has no GPU, so Direct3D 12 answers with
+      # WARP, the fallback ADR-0244 §1 names.
+      - name: cargo xtask gpu-test --backend ${{ matrix.gpu }}
+        if: ${{ !cancelled() }}
+        run: cargo xtask gpu-test --backend ${{ matrix.gpu }}
+
+  report:
+    name: report
+    needs: [desktop]
+    if: ${{ always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-26.04
+    permissions:
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Keep the tracking issue
+        uses: ./.github/actions/tracking-issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        with:
+          title: Nightly platforms are red on main
+          outcome: ${{ contains(needs.*.result, 'failure') && 'failure' || (contains(needs.*.result, 'cancelled') && 'cancelled' || 'success') }}
+          body: >-
+            A nightly platform run failed on main. The run names the leg and
+            the failing test; fix it or file it as a gap:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
