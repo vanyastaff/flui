@@ -26,9 +26,52 @@ mod pointerless {
     use raw_window_handle::{DisplayHandle, HandleError, HasDisplayHandle, RawDisplayHandle};
 
     /// The display of a window system whose display handle carries no
-    /// pointer (Win32, AppKit, UIKit, Android, the web): the function makes
-    /// it, and it answers it on any thread for as long as it is held.
-    pub(crate) struct PointerlessDisplay(pub(crate) fn() -> RawDisplayHandle);
+    /// pointer: each variant names one, and it answers it on any thread for
+    /// as long as it is held. Only these handles can be made, so the borrow
+    /// below has nothing to keep valid by construction.
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) enum PointerlessDisplay {
+        /// Win32.
+        #[cfg(windows)]
+        Windows,
+        /// AppKit.
+        #[cfg(target_os = "macos")]
+        AppKit,
+        /// UIKit.
+        #[cfg(target_os = "ios")]
+        UiKit,
+        /// Android.
+        #[cfg(target_os = "android")]
+        Android,
+        /// The web.
+        #[cfg(target_arch = "wasm32")]
+        Web,
+    }
+
+    impl PointerlessDisplay {
+        fn raw(self) -> RawDisplayHandle {
+            match self {
+                #[cfg(windows)]
+                Self::Windows => {
+                    RawDisplayHandle::Windows(raw_window_handle::WindowsDisplayHandle::new())
+                }
+                #[cfg(target_os = "macos")]
+                Self::AppKit => {
+                    RawDisplayHandle::AppKit(raw_window_handle::AppKitDisplayHandle::new())
+                }
+                #[cfg(target_os = "ios")]
+                Self::UiKit => {
+                    RawDisplayHandle::UiKit(raw_window_handle::UiKitDisplayHandle::new())
+                }
+                #[cfg(target_os = "android")]
+                Self::Android => {
+                    RawDisplayHandle::Android(raw_window_handle::AndroidDisplayHandle::new())
+                }
+                #[cfg(target_arch = "wasm32")]
+                Self::Web => RawDisplayHandle::Web(raw_window_handle::WebDisplayHandle::new()),
+            }
+        }
+    }
 
     impl HasDisplayHandle for PointerlessDisplay {
         #[expect(
@@ -36,10 +79,10 @@ mod pointerless {
             reason = "a display handle with no pointer is borrowed for no lifetime of its own"
         )]
         fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-            // SAFETY: every handle a host passes here carries no fields (each
-            // host's surface target answers the same one), so there is
-            // nothing for `borrow_raw` to keep valid.
-            Ok(unsafe { DisplayHandle::borrow_raw((self.0)()) })
+            // SAFETY: `raw` makes only the Win32, AppKit, UIKit, Android and
+            // web display handles, none of which carries a field, so there
+            // is nothing for `borrow_raw` to keep valid.
+            Ok(unsafe { DisplayHandle::borrow_raw(self.raw()) })
         }
     }
 

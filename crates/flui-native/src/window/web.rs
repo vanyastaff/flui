@@ -1269,9 +1269,7 @@ impl host::Window<WebLoop> for WebWindow {
         _: &WebLoop,
         _: &WindowPositions<CanvasRef>,
     ) -> std::sync::Arc<dyn flui_platform::DisplayConnection> {
-        std::sync::Arc::new(crate::display_connection::PointerlessDisplay(|| {
-            raw_window_handle::RawDisplayHandle::Web(raw_window_handle::WebDisplayHandle::new())
-        }))
+        std::sync::Arc::new(crate::display_connection::PointerlessDisplay::Web)
     }
 }
 

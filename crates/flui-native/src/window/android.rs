@@ -715,11 +715,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
         _: &AndroidLoop,
         _: &WindowPositions<ActivityRef>,
     ) -> std::sync::Arc<dyn flui_platform::DisplayConnection> {
-        std::sync::Arc::new(crate::display_connection::PointerlessDisplay(|| {
-            raw_window_handle::RawDisplayHandle::Android(
-                raw_window_handle::AndroidDisplayHandle::new(),
-            )
-        }))
+        std::sync::Arc::new(crate::display_connection::PointerlessDisplay::Android)
     }
 }
 

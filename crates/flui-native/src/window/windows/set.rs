@@ -295,11 +295,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         _: &WindowsLoop,
         _: &WindowSet,
     ) -> std::sync::Arc<dyn flui_platform::DisplayConnection> {
-        std::sync::Arc::new(crate::display_connection::PointerlessDisplay(|| {
-            raw_window_handle::RawDisplayHandle::Windows(
-                raw_window_handle::WindowsDisplayHandle::new(),
-            )
-        }))
+        std::sync::Arc::new(crate::display_connection::PointerlessDisplay::Windows)
     }
 }
 

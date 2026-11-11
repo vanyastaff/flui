@@ -1262,11 +1262,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         _: &MacOSLoop,
         _: &MacOSWindows,
     ) -> std::sync::Arc<dyn flui_platform::DisplayConnection> {
-        std::sync::Arc::new(crate::display_connection::PointerlessDisplay(|| {
-            raw_window_handle::RawDisplayHandle::AppKit(
-                raw_window_handle::AppKitDisplayHandle::new(),
-            )
-        }))
+        std::sync::Arc::new(crate::display_connection::PointerlessDisplay::AppKit)
     }
 }
 

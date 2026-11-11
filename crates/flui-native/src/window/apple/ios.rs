@@ -1659,9 +1659,7 @@ impl host::Window<IOSLoop> for IOSWindow {
         _: &IOSLoop,
         _: &IOSWindows,
     ) -> std::sync::Arc<dyn flui_platform::DisplayConnection> {
-        std::sync::Arc::new(crate::display_connection::PointerlessDisplay(|| {
-            raw_window_handle::RawDisplayHandle::UiKit(raw_window_handle::UiKitDisplayHandle::new())
-        }))
+        std::sync::Arc::new(crate::display_connection::PointerlessDisplay::UiKit)
     }
 }
 
