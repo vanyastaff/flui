@@ -15,11 +15,12 @@ use flui_platform::data_transfer::{
     DropFeedback, RepresentationIndex, TransferActions, TransferError, TransferFormat,
     TransferLimits, TransferPayload, TransferRequest,
 };
+use parking_lot::Mutex;
 
 use super::super::clip::ClipSource;
 use super::{
     ACTION_DRAG_ENDED, ACTION_DRAG_ENTERED, ACTION_DRAG_LOCATION, ACTION_DRAG_STARTED, After,
-    Drops, MAX_READS, MAX_WAITING, READ_TIMEOUT, Requested, UriRead, java_key,
+    CANCEL_RETRY, Drops, MAX_READS, MAX_WAITING, READ_TIMEOUT, Requested, Spawn, UriRead, java_key,
 };
 
 const IMAGE: RepresentationIndex = RepresentationIndex(0);
@@ -650,6 +651,189 @@ fn a_panic_in_one_cancel_unblocks_the_rest() {
     assert!(again.cancel_worker, "the worker's flag was cleared");
 }
 
+/// A thread that cannot start, for [`super::settle`].
+fn no_thread() -> std::io::Result<()> {
+    Err(std::io::Error::other("no thread"))
+}
+
+/// `MAX_READS + 1` requests for the image of a fresh drop: the requests, and
+/// what placing them left.
+fn more_than_a_place_each(drops: &Mutex<Drops>, now: Instant) -> (Vec<TransferRequest>, After) {
+    let mut after = After::default();
+    let id = hovering(&mut drops.lock(), &["image/png"]);
+    dropped(&mut drops.lock(), id);
+    let requests = (0..=MAX_READS)
+        .map(|_| wanted(&mut drops.lock(), id, now, &mut after))
+        .collect();
+    (requests, after)
+}
+
+/// With no watch no read runs without a deadline: when the watch cannot
+/// start, the reads placed are refused `SourceGone` before a thread starts
+/// for any of them, the places they give back go to the waiting read, which
+/// is refused the same, and the next read tries for a watch again.
+fn a_watch_that_cannot_start_refuses_its_reads() {
+    let drops = Mutex::new(Drops::default());
+    let now = Instant::now();
+    let (mut requests, after) = more_than_a_place_each(&drops, now);
+    let mut watches = 0_usize;
+    let mut reads = 0_usize;
+    super::settle(
+        &drops,
+        after,
+        || now,
+        |job| match job {
+            Spawn::Watch => {
+                watches += 1;
+                no_thread()
+            }
+            Spawn::Read(_) => {
+                reads += 1;
+                Ok(())
+            }
+            Spawn::CancelWorker => Ok(()),
+        },
+    );
+    assert_eq!(watches, 2, "each read placed asks for a watch");
+    assert_eq!(reads, 0, "no read starts without a deadline");
+    for request in &mut requests {
+        assert!(
+            matches!(poll(request), Poll::Ready(Err(TransferError::SourceGone))),
+            "every request is answered"
+        );
+    }
+    assert!(drops.lock().reading.is_empty(), "every place is given back");
+
+    let mut again = After::default();
+    let id = hovering(&mut drops.lock(), &["image/png"]);
+    dropped(&mut drops.lock(), id);
+    let _request = wanted(&mut drops.lock(), id, now, &mut again);
+    assert!(again.watch, "the next read tries for a watch");
+}
+
+/// A read whose thread cannot start is refused `SourceGone` and gives its
+/// place to the next, which is refused the same, under one watch.
+fn a_read_that_cannot_start_is_refused() {
+    let drops = Mutex::new(Drops::default());
+    let now = Instant::now();
+    let (mut requests, after) = more_than_a_place_each(&drops, now);
+    let mut watches = 0_usize;
+    let mut reads = Vec::new();
+    super::settle(
+        &drops,
+        after,
+        || now,
+        |job| match job {
+            Spawn::Watch => {
+                watches += 1;
+                Ok(())
+            }
+            Spawn::Read(read) => {
+                reads.push(read.ticket);
+                no_thread()
+            }
+            Spawn::CancelWorker => Ok(()),
+        },
+    );
+    assert_eq!(watches, 1);
+    reads.dedup();
+    assert_eq!(reads.len(), MAX_READS + 1, "the waiting read was tried too");
+    for request in &mut requests {
+        assert!(matches!(
+            poll(request),
+            Poll::Ready(Err(TransferError::SourceGone))
+        ));
+    }
+    assert!(drops.lock().reading.is_empty(), "every place is given back");
+}
+
+/// A cancel worker that cannot start leaves its reads blocked only until the
+/// watch tries again: a watch starts though no deadline is left to time, and
+/// its turn asks for the worker again and looks again `CANCEL_RETRY` later.
+fn a_cancel_worker_that_cannot_start_is_tried_again() {
+    let drops = Mutex::new(Drops::default());
+    let start = Instant::now();
+    let mut after = After::default();
+    let (mut requests, running) = entered_reads(&mut drops.lock(), start, &mut after);
+    let late = start + READ_TIMEOUT * 2;
+    assert_eq!(
+        drops.lock().expire(late, &mut after),
+        None,
+        "every read is late"
+    );
+    let mut watches = 0_usize;
+    super::settle(
+        &drops,
+        after,
+        || late,
+        |job| match job {
+            Spawn::CancelWorker => no_thread(),
+            Spawn::Watch => {
+                watches += 1;
+                Ok(())
+            }
+            Spawn::Read(_) => panic!("no read is placed"),
+        },
+    );
+    for request in &mut requests {
+        assert!(matches!(
+            poll(request),
+            Poll::Ready(Err(TransferError::TimedOut))
+        ));
+    }
+    assert_eq!(watches, 1, "a watch starts to try the worker again");
+
+    let mut retry = After::default();
+    assert_eq!(
+        drops.lock().expire(late, &mut retry),
+        Some(late + CANCEL_RETRY),
+        "and stays while the reads are blocked"
+    );
+    assert!(retry.cancel_worker, "its turn asks for the worker again");
+    let mut cancelled: Vec<_> = std::iter::from_fn(|| drops.lock().next_cancel()).collect();
+    cancelled.sort_unstable();
+    let mut expected: Vec<_> = running.iter().map(|read| read.ticket).collect();
+    expected.sort_unstable();
+    assert_eq!(cancelled, expected, "every blocked read is unblocked");
+}
+
+/// With no thread to be had at all, every request is still answered and
+/// settling ends: the late reads time out and, once their threads end, the
+/// next requests are refused.
+fn with_no_thread_every_request_is_answered() {
+    let drops = Mutex::new(Drops::default());
+    let start = Instant::now();
+    let mut after = After::default();
+    let (mut requests, running) = entered_reads(&mut drops.lock(), start, &mut after);
+    let late = start + READ_TIMEOUT * 2;
+    drops.lock().expire(late, &mut after);
+    super::settle(&drops, after, || late, |_| no_thread());
+    for request in &mut requests {
+        assert!(matches!(
+            poll(request),
+            Poll::Ready(Err(TransferError::TimedOut))
+        ));
+    }
+    let mut ended = After::default();
+    for read in &running {
+        assert!(
+            drops
+                .lock()
+                .finish_read(read.ticket, late, &mut ended)
+                .is_none()
+        );
+    }
+    assert!(ended.is_empty());
+    let (mut more, after) = more_than_a_place_each(&drops, late);
+    super::settle(&drops, after, || late, |_| no_thread());
+    for request in &mut more {
+        assert!(matches!(
+            poll(request),
+            Poll::Ready(Err(TransferError::SourceGone))
+        ));
+    }
+}
+
 /// FLUI's own drag dropped on its own target reports the action the target
 /// took, once.
 fn our_own_drop_reports_its_action() {
@@ -702,6 +886,22 @@ fn android_drop_state() {
             (
                 "a_panic_in_one_cancel_unblocks_the_rest",
                 a_panic_in_one_cancel_unblocks_the_rest,
+            ),
+            (
+                "a_watch_that_cannot_start_refuses_its_reads",
+                a_watch_that_cannot_start_refuses_its_reads,
+            ),
+            (
+                "a_read_that_cannot_start_is_refused",
+                a_read_that_cannot_start_is_refused,
+            ),
+            (
+                "a_cancel_worker_that_cannot_start_is_tried_again",
+                a_cancel_worker_that_cannot_start_is_tried_again,
+            ),
+            (
+                "with_no_thread_every_request_is_answered",
+                with_no_thread_every_request_is_answered,
             ),
             (
                 "a_read_past_its_deadline_times_out",

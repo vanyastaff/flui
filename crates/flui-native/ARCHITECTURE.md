@@ -4680,7 +4680,11 @@ requesting thread, a URI's bytes on a thread of their own, at most `drops::MAX_R
 answered `SourceGone` when the offer retires first and `TimedOut` past `drops::READ_TIMEOUT`, when
 the view cancels the open and closes the stream (`cancelDropRead`, on a cancel worker of the
 transport's, so neither the owner thread nor the watch waits on it) and the read keeps its place
-until its thread ends; at most `drops::MAX_WAITING` wait, and past them a request is `Busy`. The view lets go of a refused drop at once,
+until its thread ends; at most `drops::MAX_WAITING` wait, and past them a request is `Busy`. A
+thread that cannot start answers what it was for (`drops::settle`): without the watch the running
+reads answer `SourceGone` and none starts with no deadline, a read with no thread answers
+`SourceGone`, and a cancel worker that cannot start is tried again by the watch every
+`drops::CANCEL_RETRY`. The view lets go of a refused drop at once,
 and of every held one when it leaves the window. Requests are completed, and reading threads
 started, with the drops unlocked (`drops::After`).
 `drag::android::AndroidDragSource` serves the whole clip at the start (`clip_parts`) and maps

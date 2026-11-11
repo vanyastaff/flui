@@ -369,6 +369,10 @@ mod drops {
     /// [`TransferError::TimedOut`] and the Java read is unblocked.
     pub(super) const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
+    /// How often the watch tries again to start a cancel worker that could
+    /// not start ([`Drops::uncancel`]).
+    pub(super) const CANCEL_RETRY: Duration = Duration::from_secs(1);
+
     /// The key `FluiView` holds a taken drop's clip and URI permissions under:
     /// the offer's whole identity, generation included, so a concluded offer
     /// never lets go of a later one's. Never zero, which the view reads as no
@@ -687,6 +691,8 @@ mod drops {
                         completer,
                     });
                     self.start_waiting(now, after);
+                    // Cancellations a worker could not start for try again.
+                    self.queue_cancels(Vec::new(), after);
                     Requested::Request(request)
                 }
                 ClipSource::Text | ClipSource::Html | ClipSource::UriList => Requested::Clip {
@@ -798,10 +804,15 @@ mod drops {
         /// The watch's turn at `now`: each read past its deadline is answered
         /// [`TransferError::TimedOut`] and its Java read unblocked, keeping
         /// its place until its thread ends. Returns when to look again, the
-        /// earliest deadline still to come; `None` ends the watch, and the
-        /// next read to start starts another.
+        /// earliest deadline still to come, or [`CANCEL_RETRY`] from `now`
+        /// while cancellations wait for a worker that could not start, which
+        /// this turn starts again; `None` ends the watch, and the next read to
+        /// start starts another.
         pub(super) fn expire(&mut self, now: Instant, after: &mut After) -> Option<Instant> {
-            let mut next: Option<Instant> = None;
+            // Cancellations queued with no worker are left by one that could
+            // not start ([`Self::uncancel`]): the watch stays to try again.
+            let mut next =
+                (!self.cancelling && !self.cancels.is_empty()).then(|| now + CANCEL_RETRY);
             let mut unblock = Vec::new();
             for (ticket, reading) in &mut self.reading {
                 if reading.cancelled {
@@ -839,23 +850,38 @@ mod drops {
             next
         }
 
-        /// The cancel worker could not start: the next read stopped tries
-        /// again.
-        #[cfg_attr(
-            not(target_os = "android"),
-            expect(dead_code, reason = "the JNI side starts the cancel worker")
-        )]
-        pub(super) fn uncancel(&mut self) {
+        /// The cancel worker could not start: the watch tries again each
+        /// [`CANCEL_RETRY`], a watch starting through `after` when none runs,
+        /// and so does the next read stopped or asked for.
+        pub(super) fn uncancel(&mut self, after: &mut After) {
             self.cancelling = false;
+            if !self.watching {
+                self.watching = true;
+                after.watch = true;
+            }
         }
 
-        /// The watch could not start: the next read to start tries again.
-        #[cfg_attr(
-            not(target_os = "android"),
-            expect(dead_code, reason = "the JNI side starts the watch")
-        )]
-        pub(super) fn unwatch(&mut self) {
+        /// The watch could not start, so nothing would time the running
+        /// reads: each is refused [`TransferError::SourceGone`] through
+        /// `after` and stopped, a thread inside its Java read unblocked, and
+        /// the next read to start tries for a watch again.
+        pub(super) fn unwatched(&mut self, after: &mut After) {
             self.watching = false;
+            let mut unblock = Vec::new();
+            for (ticket, reading) in &mut self.reading {
+                if reading.cancelled {
+                    continue;
+                }
+                after.gone.extend(reading.completer.take());
+                if reading.stop() {
+                    unblock.push(*ticket);
+                }
+            }
+            // Only reads it stopped ask for the worker: a worker and a watch
+            // that both cannot start do not ask for each other in turn.
+            if !unblock.is_empty() {
+                self.queue_cancels(unblock, after);
+            }
         }
 
         /// The target's answer for the live offer `id`, cached for the drop.
@@ -951,6 +977,77 @@ mod drops {
         failure.resume();
     }
 
+    /// A thread [`settle`] asks to start.
+    #[derive(Debug)]
+    pub(super) enum Spawn {
+        /// The cancel worker ([`cancel_all`]).
+        CancelWorker,
+        /// The watch ([`watch`]).
+        Watch,
+        /// A read of a URI's bytes, which answers through
+        /// [`Drops::finish_read`].
+        Read(UriRead),
+    }
+
+    /// Do what a change of `drops` left, with them unlocked: answer the
+    /// requests whose offer retired or whose read timed out, then start the
+    /// cancel worker, the watch and the reads that found a place through
+    /// `spawn`, at `now`. A thread that cannot start leaves no accepted
+    /// request unanswered: without the watch no read runs with no deadline,
+    /// so every running read is refused [`TransferError::SourceGone`]
+    /// ([`Drops::unwatched`]) and none of those just placed is started; a
+    /// read that cannot start is refused the same and gives its place on;
+    /// the cancel worker that cannot start is tried again by the watch
+    /// ([`Drops::uncancel`]). A waker's panic is raised once everything is
+    /// done.
+    pub(super) fn settle(
+        drops: &Mutex<Drops>,
+        mut after: After,
+        now: impl Fn() -> Instant,
+        mut spawn: impl FnMut(Spawn) -> std::io::Result<()>,
+    ) {
+        let mut failure = FirstPanic::new();
+        while !after.is_empty() {
+            for completer in std::mem::take(&mut after.gone) {
+                failure.contain(|| completer.complete(Err(TransferError::SourceGone)));
+            }
+            for completer in std::mem::take(&mut after.timed_out) {
+                failure.contain(|| completer.complete(Err(TransferError::TimedOut)));
+            }
+            if std::mem::take(&mut after.cancel_worker)
+                && let Err(error) = spawn(Spawn::CancelWorker)
+            {
+                failure.contain(|| {
+                    tracing::warn!(target: "flui_native::android", %error, "no thread to cancel dropped URI reads");
+                });
+                drops.lock().uncancel(&mut after);
+            }
+            let mut unwatched = false;
+            if std::mem::take(&mut after.watch)
+                && let Err(error) = spawn(Spawn::Watch)
+            {
+                failure.contain(|| {
+                    tracing::warn!(target: "flui_native::android", %error, "no thread to time dropped URI reads");
+                });
+                drops.lock().unwatched(&mut after);
+                unwatched = true;
+            }
+            for read in std::mem::take(&mut after.start) {
+                let ticket = read.ticket;
+                if !unwatched {
+                    let Err(error) = spawn(Spawn::Read(read)) else {
+                        continue;
+                    };
+                    failure.contain(|| {
+                        tracing::warn!(target: "flui_native::android", %error, "no thread to read a dropped URI");
+                    });
+                }
+                let completer = drops.lock().finish_read(ticket, now(), &mut after);
+                after.gone.extend(completer);
+            }
+        }
+        failure.resume();
+    }
     #[cfg(test)]
     mod tests;
 }
@@ -994,7 +1091,7 @@ use crate::{
 #[cfg(target_os = "android")]
 use clip::{ClipSource, ViewRead, clip_parts, delivered, source_end};
 #[cfg(target_os = "android")]
-use drops::{ACTION_DRAG_ENDED, After, Drops, Requested, UriRead, java_key};
+use drops::{ACTION_DRAG_ENDED, After, Drops, Requested, Spawn, UriRead, java_key};
 
 /// The size of the drag shadow, in logical pixels.
 #[cfg(target_os = "android")]
@@ -1140,64 +1237,30 @@ impl DragTransport for AndroidTransfer {
     }
 }
 
-/// Do what a change of `drops` left, with them unlocked: answer the requests
-/// whose offer retired or whose read timed out, start the cancel worker that
-/// unblocks their Java reads,
-/// start each read that found a place on a thread of its own (giving back the
-/// place of one no thread could be started for), and start the watch when one
-/// is wanted. A waker's panic is raised once everything is done.
+/// Do what a change of `drops` left, with them unlocked ([`drops::settle`]),
+/// on the real clock and real threads.
 #[cfg(target_os = "android")]
-fn run(drops: &Arc<Mutex<Drops>>, view: &Weak<JavaView>, mut after: After) {
-    let mut failure = FirstPanic::new();
-    while !after.is_empty() {
-        for completer in std::mem::take(&mut after.gone) {
-            failure.contain(|| completer.complete(Err(TransferError::SourceGone)));
-        }
-        for completer in std::mem::take(&mut after.timed_out) {
-            failure.contain(|| completer.complete(Err(TransferError::TimedOut)));
-        }
-        if std::mem::take(&mut after.cancel_worker) {
-            let (cancel_drops, cancel_view) = (Arc::clone(drops), Weak::clone(view));
-            let spawned = std::thread::Builder::new()
-                .name("flui-drop-cancel".into())
-                .spawn(move || {
-                    drops::cancel_all(&cancel_drops, |ticket| cancel_read(&cancel_view, ticket));
-                });
-            if let Err(error) = spawned {
-                failure.contain(|| {
-                    tracing::warn!(target: "flui_native::android", %error, "no thread to cancel dropped URI reads");
-                });
-                drops.lock().uncancel();
-            }
-        }
-        if std::mem::take(&mut after.watch) {
-            let (watch_drops, watch_view) = (Arc::clone(drops), Weak::clone(view));
-            let spawned = std::thread::Builder::new()
-                .name("flui-drop-watch".into())
-                .spawn(move || watch(&watch_drops, &watch_view));
-            if let Err(error) = spawned {
-                failure.contain(|| {
-                    tracing::warn!(target: "flui_native::android", %error, "no thread to time dropped URI reads");
-                });
-                drops.lock().unwatch();
-            }
-        }
-        for read in std::mem::take(&mut after.start) {
-            let ticket = read.ticket;
-            let (thread_drops, thread_view) = (Arc::clone(drops), Weak::clone(view));
-            let spawned = std::thread::Builder::new()
-                .name("flui-drop-read".into())
-                .spawn(move || read_on_thread(&thread_drops, &thread_view, read));
-            if let Err(error) = spawned {
-                failure.contain(|| {
-                    tracing::warn!(target: "flui_native::android", %error, "no thread to read a dropped URI");
-                });
-                let completer = drops.lock().finish_read(ticket, Instant::now(), &mut after);
-                after.gone.extend(completer);
-            }
-        }
+fn run(drops: &Arc<Mutex<Drops>>, view: &Weak<JavaView>, after: After) {
+    drops::settle(drops, after, Instant::now, |job| spawn(drops, view, job));
+}
+
+/// Start the thread `job` names.
+#[cfg(target_os = "android")]
+fn spawn(drops: &Arc<Mutex<Drops>>, view: &Weak<JavaView>, job: Spawn) -> std::io::Result<()> {
+    let (drops, view) = (Arc::clone(drops), Weak::clone(view));
+    let thread = std::thread::Builder::new();
+    match job {
+        Spawn::CancelWorker => thread
+            .name("flui-drop-cancel".to_owned())
+            .spawn(move || drops::cancel_all(&drops, |ticket| cancel_read(&view, ticket))),
+        Spawn::Watch => thread
+            .name("flui-drop-watch".to_owned())
+            .spawn(move || watch(&drops, &view)),
+        Spawn::Read(read) => thread
+            .name("flui-drop-read".to_owned())
+            .spawn(move || read_on_thread(&drops, &view, read)),
     }
-    failure.resume();
+    .map(drop)
 }
 
 /// The watch over the running reads ([`drops::watch`]), on the real clock.

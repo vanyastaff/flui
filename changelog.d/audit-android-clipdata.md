@@ -11,7 +11,9 @@
   answers `TransferError::TimedOut`, and the view cancels the provider's open and closes the
   stream from a thread of its own, so the owner thread never waits on a provider. At most 64
   requests wait for one of the four reads; a request past them is refused
-  `TransferError::Busy`, and a dropped request gives its place in the queue back at once.
+  `TransferError::Busy`, and a dropped request gives its place in the queue back at once. When the
+  thread that times the reads cannot start, the reads answer `SourceGone` instead of running with
+  no deadline.
 
 ### Added
 
