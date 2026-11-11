@@ -1033,7 +1033,10 @@ builder sets them. `Scrollable` resolves each open setting by asking the `Scroll
 nearest `ScrollConfiguration`, or `DefaultScrollBehavior` where there is none, with a
 `ScrollBehaviorDetails` of the `PlatformConvention` it is built under and its axis. The default
 behavior answers `BouncingScrollPhysics` on macOS and iOS, `ClampingScrollPhysics` elsewhere, and
-every pointer kind for drags. A `ScrollConfiguration` notifies its dependents only when its
+every pointer kind but the mouse for drags: the mouse scrolls by its wheel and the scrollbar and
+leaves a drag to selection (`the_default_scroll_behavior_leaves_a_mouse_drag_to_selection`). A
+widget with a drag of its own, an `AnchoredDrag` (a sheet, a swipe row), names every device on
+its scrollable. A `ScrollConfiguration` notifies its dependents only when its
 behavior is another `Rc`, and a scrollable keeps the physics it was answered until the behavior,
 the platform or the axis changes, so a rebuild keeps one physics and its owner
 (`a_scroll_view_asks_its_behavior_again_only_when_it_changes`). What the view names wins over the

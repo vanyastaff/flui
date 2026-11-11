@@ -21,7 +21,7 @@ use flui_widgets::{
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};
-use crate::nested_scroll::{DEVICES, Device, Keys, Probe, at, fling, settle, slow};
+use crate::nested_scroll::{ALL_DEVICES, DEVICES, Device, Keys, Probe, at, fling, settle, slow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stop {
@@ -169,7 +169,7 @@ fn near(value: f64, target: f64) -> bool {
 /// direction; the child follows the offset and the drag clamps to the
 /// extreme anchors (ADR-0209 §9, W3).
 pub(crate) fn anchored_drag_settles_on_anchors_by_release_and_fling() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         let vsync = Vsync::new();
         let anchors = controller(three());
         let mut laid = mount(drag_view(&anchors, Axis::Horizontal), &vsync);
@@ -217,7 +217,7 @@ pub(crate) fn anchored_drag_settles_on_anchors_by_release_and_fling() {
 /// Offsets run toward the reading end: under right-to-left text a drag to
 /// the left opens the row and the child moves left (A5).
 pub(crate) fn anchored_drag_reads_offsets_toward_the_reading_end() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         for direction in [TextDirection::Ltr, TextDirection::Rtl] {
             let vsync = Vsync::new();
             let anchors = controller(three());
@@ -368,7 +368,7 @@ pub(crate) fn anchored_drag_refuses_degenerate_anchor_sets() {
 /// the settle, is honoured at once: the drag goes on within the new
 /// extents and settles on the new anchors.
 pub(crate) fn anchored_drag_follows_anchors_replaced_mid_drag() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         let vsync = Vsync::new();
         let anchors = controller(stops(&[(Stop::Closed, 0.0), (Stop::Open, 120.0)]));
         let replaced = Rc::new(Cell::new(0));
@@ -594,7 +594,7 @@ pub(crate) fn anchored_drag_assistive_and_key_steps_move_between_anchors() {
 /// selection haptic with the frame that shows it; settling back where a
 /// drag already arrived and programmatic moves play none (ADR-0210).
 pub(crate) fn anchored_drag_plays_a_haptic_on_each_new_anchor() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         let vsync = Vsync::new();
         let anchors = controller(three());
         let mut laid = mount(drag_view(&anchors, Axis::Horizontal), &vsync);

@@ -264,7 +264,7 @@ fn keyed_factories_keep_their_recognizers_when_reordered() {
             .recognizer_with_key(ValueKey::new("mouse"), spec("mouse again", 10.0, &log))
             .child(surface()),
     );
-    laid.dispatch_pointer_down(50.0, 10.0);
+    laid.dispatch_pointer_down_with_kind(50.0, 10.0, PointerKind::Mouse);
     laid.dispatch_pointer_move(50.0, 30.0);
     laid.dispatch_pointer_up(50.0, 30.0);
 
