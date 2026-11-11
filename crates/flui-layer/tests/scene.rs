@@ -332,7 +332,7 @@ pub(crate) fn a_replaced_owner_never_reports_unchanged() {
     assert_ne!(old, new);
     assert_ne!(first.lineage(), second.lineage());
 
-    second.renew(ResyncReason::Rebuilt);
+    drop(second.renew(ResyncReason::Rebuilt));
     let renewed = second.writer().next_content_version().expect("fresh");
     assert_eq!(renewed.seq(), new.seq());
     assert_ne!(renewed, new);
@@ -358,7 +358,7 @@ pub(crate) fn an_exhausted_mint_renews_the_lineage_and_publishes_full() {
     assert_same_version(&before, owner.current());
 
     let lineage = owner.lineage();
-    owner.renew(ResyncReason::Rebuilt);
+    drop(owner.renew(ResyncReason::Rebuilt));
     assert_ne!(owner.lineage(), lineage);
     let publication = owner.publication();
     assert_eq!(publication.base, None);

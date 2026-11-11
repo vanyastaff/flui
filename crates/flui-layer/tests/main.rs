@@ -10,6 +10,8 @@ mod annotations;
 mod follower;
 #[path = "inspect.rs"]
 mod inspect;
+#[path = "pending_log.rs"]
+mod pending_log;
 #[path = "region.rs"]
 mod region;
 #[path = "scene.rs"]
@@ -384,6 +386,43 @@ fn scene_patch_damage() {
             (
                 "a_filter_under_a_shrinking_ancestor_damages_its_device_kernel",
                 d::a_filter_under_a_shrinking_ancestor_damages_its_device_kernel,
+            ),
+        ],
+    );
+}
+
+/// The owner publishes against the acknowledged version, and its damage is
+/// every change since: folded at sixteen entries, never lost, full across a
+/// surface change or a lineage (ADR-0304 §7).
+#[test]
+fn pending_log_contract() {
+    use pending_log as p;
+    run_rows(
+        "pending_log_contract",
+        &[
+            (
+                "a_full_log_folds_its_two_oldest_entries",
+                p::a_full_log_folds_its_two_oldest_entries,
+            ),
+            (
+                "damage_from_an_older_base_covers_the_newer_one",
+                p::damage_from_an_older_base_covers_the_newer_one,
+            ),
+            (
+                "a_base_from_another_lineage_renders_full",
+                p::a_base_from_another_lineage_renders_full,
+            ),
+            (
+                "a_lost_completion_over_reports_and_never_under_reports",
+                p::a_lost_completion_over_reports_and_never_under_reports,
+            ),
+            (
+                "a_surface_change_in_the_log_publishes_full",
+                p::a_surface_change_in_the_log_publishes_full,
+            ),
+            (
+                "a_released_content_drops_after_the_owner_is_released",
+                p::a_released_content_drops_after_the_owner_is_released,
             ),
         ],
     );

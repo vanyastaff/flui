@@ -233,7 +233,17 @@ only once the damage meets its subtree footprint, in one fold. A surface
 change between applies is
 `Full(SurfaceChanged)`, and `renew` makes the next one `Full(Resync(_))`.
 
-Pinned by `layer_it`: `scene_patch_damage`, `patch_damage_covers_diff_damage` (random patches,
+Each applied version enters a pending log (`src/scene/pending.rs`) until the raster side reports
+holding it or a later one through `completed`. `publication` hands over the current version with
+the acknowledged one as its base and the union of the log as its damage, full without a base. The
+log holds sixteen entries; a seventeenth folds the two oldest under the newer id and lets go of the
+older contents, so a raster stall over-reports damage and never holds more than sixteen entries of
+buffers. An acknowledgement moves forward only and ignores another lineage or a version never
+applied. `completed` and `renew` return what they release as `ReleasedContents`, which a caller
+holding the owner in a `RefCell` passes to an `Outbox`: a released annotation value's destructor is
+user code and finds the owner free.
+
+Pinned by `layer_it`: `pending_log_contract`, `scene_patch_damage`, `patch_damage_covers_diff_damage` (random patches,
 whose damage must cover what `LayerDiffer` finds between the flattened versions),
 `scene_apply_contract`, `content_version_contract` and `scene_table_cost`
 (an apply's copies are at most its operations times the table height, equal at 1 100 and 30 000

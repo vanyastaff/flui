@@ -88,8 +88,9 @@ pub use layer::{
 pub use link::{LayerLink, leader_origin, resolve_follower_transform};
 pub use scene::{
     BoundaryContent, Bounds, Chunk, ContentBuilder, ContentVersion, Entry, EntryAddress,
-    EntryIndex, Lineage, Placement, Scene, SceneError, SceneNode, SceneNodeId, SceneNodeMarker,
-    SceneOp, SceneOwner, ScenePublication, SceneVersion, SceneVersionId, SceneWriter, SurfaceKey,
+    EntryIndex, Lineage, Placement, ReleasedContents, Scene, SceneError, SceneNode, SceneNodeId,
+    SceneNodeMarker, SceneOp, SceneOwner, ScenePublication, SceneVersion, SceneVersionId,
+    SceneWriter, SurfaceKey,
 };
 pub use scene_snapshot::{
     DamageRect, DamageRegion, FullReason, NonFinite, Region, ResyncReason, SceneSnapshot,
