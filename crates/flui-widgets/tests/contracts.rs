@@ -1754,6 +1754,7 @@ fn nested_scroll_channel() {
             ("swipe_actions::swipe_actions_refuse_rows_without_distinct_actions", crate::swipe_actions::swipe_actions_refuse_rows_without_distinct_actions),
             ("collapsing_header::collapsing_header_collapses_before_or_after_the_content", crate::collapsing_header::collapsing_header_collapses_before_or_after_the_content),
             ("collapsing_header::collapsing_header_expands_first_or_last", crate::collapsing_header::collapsing_header_expands_first_or_last),
+            ("collapsing_header::collapsing_header_takes_a_wheel_over_the_list_scrollbar", crate::collapsing_header::collapsing_header_takes_a_wheel_over_the_list_scrollbar),
             ("collapsing_header::collapsing_header_inherits_the_fling_across_its_collapse", crate::collapsing_header::collapsing_header_inherits_the_fling_across_its_collapse),
             ("collapsing_header::collapsing_header_snaps_to_an_extent", crate::collapsing_header::collapsing_header_snaps_to_an_extent),
             ("collapsing_header::collapsing_header_rests_within_half_a_device_pixel", crate::collapsing_header::collapsing_header_rests_within_half_a_device_pixel),
@@ -2022,6 +2023,10 @@ fn scrollbar() {
             (
                 "scrollbar::a_bar_attached_mid_scroll_shows_for_the_run_under_way",
                 crate::scrollbar::a_bar_attached_mid_scroll_shows_for_the_run_under_way,
+            ),
+            (
+                "scrollbar::a_second_finger_leaves_the_thumb_drag_to_the_first",
+                crate::scrollbar::a_second_finger_leaves_the_thumb_drag_to_the_first,
             ),
             #[cfg(debug_assertions)]
             (

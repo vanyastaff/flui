@@ -118,6 +118,7 @@ use flui_view::environment::VsyncScope;
 
 use super::anchored_drag::AnchoredLeaf;
 use super::scroll_controller::ScrollableHooks;
+use super::scroll_controller::{WheelHandler, WheelPort};
 use super::scroll_observer::{ObservedBy, ObservedScroll};
 use super::scroll_position_scope::ScrollPositionScope;
 use crate::anchored_box::AnchoredBox;
@@ -423,6 +424,9 @@ pub struct ScrollableState {
     /// This scroll view's attachment to the scroll observer above it, if
     /// it is the one at depth zero there.
     observed_by: ObservedBy,
+    /// This scroll view's wheel handling, for a bar over it; its handler
+    /// is set on each build.
+    wheel_port: Rc<WheelPort>,
 }
 
 /// A physics a [`ScrollBehavior`] answered, with the question: the behavior
@@ -523,6 +527,7 @@ impl StatefulView for Scrollable {
             pipeline: None,
             applied: None,
             observed_by: ObservedBy::default(),
+            wheel_port: Rc::new(WheelPort::default()),
         }
     }
 }
@@ -669,6 +674,7 @@ impl ScrollableState {
                 owner.is_some_and(|owner| owner.jump(target))
             }),
             build_phase: self.build_phase.clone(),
+            wheel: Rc::clone(&self.wheel_port),
             in_pass: Box::new(move || {
                 pass_owner
                     .borrow()
@@ -891,7 +897,6 @@ impl ViewState<Scrollable> for ScrollableState {
                 ObservedScroll {
                     controller: self.scroll_controller.clone(),
                     axis_direction,
-                    wheel_distances: view.config.wheel_distances,
                 },
             );
         }
@@ -945,8 +950,7 @@ impl ViewState<Scrollable> for ScrollableState {
                     applied.platform,
                     applied.axis_direction,
                     self.scroll_controller.clone(),
-                )
-                .with_wheel_distances(view.config.wheel_distances),
+                ),
             )
         };
         // A touchpad pan contests the contact with the recognizers that feed
@@ -961,12 +965,13 @@ impl ViewState<Scrollable> for ScrollableState {
                 pan_position.max_scroll_extent() > pan_position.min_scroll_extent()
             })
         };
+        // One handler for the content and for a bar over it, so a tick moves
+        // the same distance through the same nested chain over either.
+        let wheel: WheelHandler =
+            Rc::new(self.wheel_claim(view, &applied, GestureArenaScope::wheel_preferences_of(ctx)));
+        self.wheel_port.set(Some(Rc::clone(&wheel)));
         let listener = listener
-            .on_scroll_claim(self.wheel_claim(
-                view,
-                &applied,
-                GestureArenaScope::wheel_preferences_of(ctx),
-            ))
+            .on_scroll_claim(move |event| wheel(event))
             .on_pointer_signal(self.inertia_cancel(&applied))
             .child(if anchored {
                 // An anchored drag is no drop autoscroll target.
@@ -1046,6 +1051,7 @@ impl ViewState<Scrollable> for ScrollableState {
     fn dispose(&mut self) {
         // The bar above stops following a scroll view that is gone.
         self.observed_by.clear();
+        self.wheel_port.set(None);
         self.retire_owner();
         self.reveal.motion.borrow_mut().take();
         self.reveal.parent.borrow_mut().take();

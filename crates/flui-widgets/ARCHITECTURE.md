@@ -1307,7 +1307,9 @@ foreground whose repaint source is the position and the fade, so a scroll frame 
 builds no element. Its painter takes the hit over the thumb and track, which keeps the scroll
 view's own drag out of the arena there; the bar takes every device, moves the position by
 `jump_to` (cancelling a running animation first), pages the track by 0.8 of the viewport and
-moves the position by a wheel tick that reaches it. A `ScrollBehavior` adds a bar through
+hands a wheel tick that reaches it to the scrollable's own wheel handling (through the
+controller's hooks), so a tick over the bar moves as far, through the same nested chain, as
+one over the content. A `ScrollBehavior` adds a bar through
 `build_scrollbar`, except over a scroll view an explicit bar above already follows. The
 `scrollbar` contract rows (`tests/scrollbar.rs`) pin geometry on both axes, RTL, reverse and
 overscroll, zero rebuilds per scroll frame, thumb drag by mouse and touch, paging, the fade

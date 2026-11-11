@@ -22,7 +22,6 @@ use flui_rendering::constraints::AxisDirection;
 
 use crate::scroll::{
     BouncingScrollPhysics, ClampingScrollPhysics, ScrollController, SharedScrollPhysics,
-    WheelScrollDistances,
 };
 
 /// What a scroll view asks its [`ScrollBehavior`] about: the platform
@@ -63,7 +62,6 @@ pub struct ScrollableDetails {
     platform: TargetPlatform,
     axis_direction: AxisDirection,
     controller: ScrollController,
-    wheel_distances: WheelScrollDistances,
 }
 
 impl ScrollableDetails {
@@ -79,7 +77,6 @@ impl ScrollableDetails {
             platform,
             axis_direction,
             controller,
-            wheel_distances: WheelScrollDistances::default(),
         }
     }
 
@@ -98,20 +95,6 @@ impl ScrollableDetails {
     #[must_use]
     pub const fn controller(&self) -> &ScrollController {
         &self.controller
-    }
-
-    /// How far a line or detent of the wheel moves the scroll view.
-    #[must_use]
-    pub const fn wheel_distances(&self) -> WheelScrollDistances {
-        self.wheel_distances
-    }
-
-    /// The same scroll view, moved by a line or detent of the wheel as
-    /// `distances` say.
-    #[must_use]
-    pub(crate) const fn with_wheel_distances(mut self, distances: WheelScrollDistances) -> Self {
-        self.wheel_distances = distances;
-        self
     }
 }
 

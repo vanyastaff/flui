@@ -5,7 +5,8 @@
   axis_direction)` names a scroll view beside the bar instead.
 - `Scrollbar` works on both axes, under RTL and on reversed lists, and shrinks its thumb with the
   overscroll. It takes a thumb drag and a track tap from any device (a tap pages by 0.8 of the
-  viewport) and a wheel tick over it, and fades out after the scroll stops (`fade_duration`,
+  viewport) and a wheel tick over it as the list itself would (same distances, same nested
+  scrolling), and fades out after the scroll stops (`fade_duration`,
   `time_to_fade`; at once under reduced motion).
 - `Scrollbar` knobs `thumb_visibility`, `track_visibility`, `interactive`, `thickness`, `radius`,
   `main_axis_margin`, `cross_axis_margin`, `min_thumb_length`, `thumb_color`, `track_color` and

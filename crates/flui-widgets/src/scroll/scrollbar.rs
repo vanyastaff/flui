@@ -181,12 +181,7 @@ impl Scrollbar {
     /// returns.
     #[must_use]
     pub fn for_scrollable(details: &ScrollableDetails, child: impl IntoView) -> Self {
-        let mut bar =
-            Self::new(child).controller(details.controller().clone(), details.axis_direction());
-        if let Some(followed) = &mut bar.followed {
-            followed.wheel_distances = details.wheel_distances();
-        }
-        bar
+        Self::new(child).controller(details.controller().clone(), details.axis_direction())
     }
 
     /// Follow the scroll view `controller` moves, whose offset grows toward
@@ -201,7 +196,6 @@ impl Scrollbar {
         self.followed = Some(ObservedScroll {
             controller,
             axis_direction,
-            wheel_distances: WheelScrollDistances::default(),
         });
         self
     }
@@ -534,10 +528,6 @@ impl Bar {
             _ => false,
         };
         if unchanged {
-            // The same position: only what the bar reads of it may differ,
-            // the wheel distances.
-            let replaced = self.shown.replace(next);
-            drop(replaced);
             return;
         }
         let (position, activity) = match &next {
@@ -686,13 +676,19 @@ impl Bar {
         let Some(shown) = self.shown() else {
             return EventPropagation::Continue;
         };
+        // Through the scrollable's own wheel handling: the same distances
+        // and the same nested chain as a tick over its content.
+        if let Some(port) = shown.controller.wheel_port() {
+            return port.claim(event);
+        }
+        // A controller no scrollable drives: move the position itself.
         let position = shown.controller.position();
         let mut delta = wheel_axis_delta(
             shown.axis_direction.axis(),
             event,
             position.viewport_dimension(),
             preferences,
-            shown.wheel_distances,
+            WheelScrollDistances::default(),
         );
         if shown.axis_direction.is_reversed() {
             delta = -delta;
@@ -940,12 +936,18 @@ impl ViewState<Scrollbar> for ScrollbarState {
             Rc::clone(&self.bar),
         );
         let wheeled = Rc::clone(&self.bar);
+        let pressed = Rc::clone(&self.bar);
         let wheel_preferences = GestureArenaScope::wheel_preferences_of(ctx);
         // A pan, so a bar whose scroll view attaches after this build drags
         // along whichever axis it follows.
         let slot = DragSlot::pan()
             // The bar takes the mouse whatever its scroll view admits.
             .allowed_devices(PointerKindSet::all())
+            // The contact the drag follows: a second finger that lands
+            // elsewhere does not change where this one went down.
+            .on_down(move |_cx, details| {
+                pressed.pressed.set(pressed.takes(details.local_position));
+            })
             .on_start(move |_cx, _details| {
                 if started.pressed.get() == Some(Landing::Thumb) {
                     started.dragging.set(true);
@@ -973,15 +975,13 @@ impl ViewState<Scrollbar> for ScrollbarState {
         let detector =
             GestureDetector::new()
                 .admission(ContactAdmission::new(move |dispatch| {
-                    let landing = match dispatch.local {
+                    match dispatch.local {
                         PointerEvent::Down(_) => dispatch
                             .local
                             .position()
-                            .and_then(|local| admitted.takes(local)),
-                        _ => return true,
-                    };
-                    admitted.pressed.set(landing);
-                    landing.is_some()
+                            .is_some_and(|local| admitted.takes(local).is_some()),
+                        _ => true,
+                    }
                 }))
                 .behavior(HitTestBehavior::DeferToChild)
                 .drag(slot)

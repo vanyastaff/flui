@@ -711,3 +711,32 @@ pub(crate) fn a_bar_attached_mid_scroll_shows_for_the_run_under_way() {
     assert!(scroll.position().is_scrolling(), "still under way");
     assert_eq!(painted(&laid, THUMB).len(), 1, "the bar shows for it");
 }
+
+/// A second finger that lands on the content or the track while the first
+/// holds the thumb leaves the first finger's drag of the thumb as it was.
+pub(crate) fn a_second_finger_leaves_the_thumb_drag_to_the_first() {
+    use flui_foundation::geometry::Offset;
+    use flui_testing::TouchScript;
+    for (name, second) in [
+        ("content", Offset::new(150.0, 150.0)),
+        ("track", Offset::new(297.0, 250.0)),
+    ] {
+        let scroll = ScrollController::new();
+        let mut laid = lay_out(shown(column(&scroll, 3000.0)), tight(SIDE, SIDE));
+        let script = TouchScript::new(name)
+            .down(1, Offset::new(297.0, 10.0))
+            .down(2, second)
+            .move_to(1, Offset::new(297.0, 60.0))
+            .move_to(1, Offset::new(297.0, 87.0))
+            .up(1)
+            .up(2)
+            .build()
+            .expect("every finger lifts");
+        laid.replay(&script);
+        assert!(
+            scroll.pixels() > 200.0,
+            "{name}: the first finger dragged the thumb, to {}",
+            scroll.pixels()
+        );
+    }
+}

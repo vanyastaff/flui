@@ -27,7 +27,7 @@ use flui_rendering::view::ScrollPosition;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 
-use super::{ScrollController, ScrollPositionScope, WheelScrollDistances};
+use super::{ScrollController, ScrollPositionScope};
 
 /// What a scroll view attached to an observer: the controller that moves it
 /// and the direction its offset grows in.
@@ -35,14 +35,11 @@ use super::{ScrollController, ScrollPositionScope, WheelScrollDistances};
 pub(crate) struct ObservedScroll {
     pub(crate) controller: ScrollController,
     pub(crate) axis_direction: AxisDirection,
-    /// How far a line or detent of the wheel moves it.
-    pub(crate) wheel_distances: WheelScrollDistances,
 }
 
 impl ObservedScroll {
     fn same_as(&self, other: &Self) -> bool {
         self.axis_direction == other.axis_direction
-            && self.wheel_distances == other.wheel_distances
             && self
                 .controller
                 .position()
