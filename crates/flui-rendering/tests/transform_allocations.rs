@@ -9,7 +9,7 @@ use std::{
 
 use flui_foundation::geometry::Size;
 use flui_objects::{RenderColoredBox, RenderPadding};
-use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
+use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, testing::SceneHost};
 
 thread_local! {
     #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
@@ -180,7 +180,8 @@ fn warm_hit_tests_reuse_their_result_storage() {
         );
     }
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(400.0, 400.0))));
-    let (owner, frame) = owner.run_frame();
+    let mut scene = SceneHost::new();
+    let (owner, frame) = scene.run_frame(owner);
     frame.expect("the tree paints");
 
     // The last row box, scaled 2x from the padding's corner at (51, 1).

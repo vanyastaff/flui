@@ -22,7 +22,7 @@ impl FrameSink for Device {
         (400, 400)
     }
 
-    fn submit(&mut self, _: flui_layer::Scene) -> SubmitVerdict {
+    fn submit(&mut self, _: flui_layer::ScenePublication) -> SubmitVerdict {
         self.submits += 1;
         if self.lost {
             SubmitVerdict::DeviceLost

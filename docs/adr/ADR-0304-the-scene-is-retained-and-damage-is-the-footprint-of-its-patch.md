@@ -111,7 +111,9 @@ struct NodeRecord {
 pub struct SceneNode<'a> { lineage: Lineage, record: &'a NodeRecord }   // read through a version
 ```
 
-`VersionInner` keeps the nodes in a path-copying table of fanout 32, written in `flui-layer`
+`VersionInner` keeps the nodes in a path-copying table, branches of 32 over leaves of 8 (a leaf
+holds its values inline and a write copies the whole leaf, so a narrow leaf keeps one record
+change to a few cache lines), written in `flui-layer`
 itself: no persistent-collection crate is in the workspace, and the scene needs only lookup,
 insert, remove and an ordered walk, which do not justify a dependency and its review. Beside it are
 three persistent indexes: links (`LayerLink` to the leader and followers that name it), texture users
@@ -178,7 +180,8 @@ boundary's content with the new effect and the same chunks. `seq` comes from the
 refuses with `IdExhausted` once spent, and is a `counter` grant in the `globals` of `flui-layer`.
 A new scene owner takes a new lineage, so a restarted `seq` never equals an old one, which is what
 `ContentToken` was an allocation for (`stamp.rs:23-30`); `ContentToken` and `BoundaryStamp` are
-deleted.
+deleted. `renew` keeps the owner's mint running, so within one owner a `seq`, which an inspection
+handle names its scene by, is issued once; only a spent mint starts over, under the new lineage.
 
 §3. **Paint writes a patch of typed operations, applied all or nothing.**
 
@@ -388,7 +391,10 @@ nodes are shared. The raster mailbox stays latest-wins (`raster_owner.rs:3-8`); 
 frame's damage folds into the survivor as it does now (`raster_owner.rs:791-797`), and the survivor
 takes the older base.
 
-The raster side holds, per presentation, the version whose image it last committed. It accepts a
+The raster side holds, per presentation, the version whose image it last committed and the
+`SurfaceKey` that image is on (`RasterBase`). A publication for another key, a surface recreated at
+the same size included, is `Full(SurfaceChanged)`, and a lost device or lost GPU resources forget
+both, since the image went with them. It accepts a
 publication's damage when that version and the base share a lineage and `base.seq <= held.seq`,
 because damage from an older base covers every change since a newer one; otherwise the frame is
 `Full(Resync(BaseMismatch))`, or `Full(Resync(RasterReset))` when it holds nothing. After a
@@ -484,8 +490,8 @@ list and the performance overlay are versioned content, and no longer damaged ev
 | Point | What holds after it |
 |-------|---------------------|
 | A panic in one boundary's paint | The pass commits nothing (ADR-0062): no patch is applied, the version and log are unchanged, the paint queue keeps the boundary, and the next publication's damage still starts at `acked`. Ids and content versions minted for the failed pass stay spent and are never reissued. |
-| A refused patch (`SceneError`) | A defect in the producer: a debug build panics with `BUG:`. A release build calls `renew(Rebuilt)`, the pipeline owner drops its boundary records and marks the root for a full paint, the frame is not presented, and a frame is requested; that frame publishes `Full(Resync(Rebuilt))`. |
-| `seq` exhausted | `IdMint` refuses with `IdExhausted` (it never wraps), `apply` returns `VersionsExhausted`, and the refused-patch path renews the lineage, so `seq` starts over where no old version can equal a new one. |
+| A refused patch (`SceneError`) | A defect in the producer: a debug build panics with `BUG:`. A release build calls `renew(Rebuilt)`, the pipeline owner drops its boundary records and marks the root for a full paint, the frame is not presented, and a frame is requested; that frame publishes `Full(Resync(Rebuilt))`. A second refusal in a row is a defect the rebuild did not cure: that frame fails without asking for a retry, and the next frame waits for a change (`a_second_refusal_in_a_row_asks_for_no_retry`). |
+| `seq` exhausted | `IdMint` refuses with `IdExhausted` (it never wraps), `apply` returns `VersionsExhausted`, and the refused-patch path renews the lineage, so `seq` starts over where no old version can equal a new one; a renewal with sequence left runs it on. |
 | Owner retirement | Published versions stay valid on the raster side until the presentation's slot detaches; a new owner has a new lineage, so its first publication is `Full(FirstFrame)` and no recording of the old lineage is replayed for it. |
 | A hot reload (`DevReloadHook`) | Code changed under the recordings and content versions, so the reload calls `renew(Rebuilt)` on every presentation's scene owner: the next frame is `Full(Resync(Rebuilt))` and no recording made by the old code is replayed. |
 | A raster-side panic or device loss | The raster side holds no version for that presentation and drops its recordings; the next frame is `Full(Resync(RasterReset))`. The owner's `acked` does not move, so nothing it owes is dropped. ADR-0305 says where the panic is contained. |
@@ -552,9 +558,9 @@ consecutive versions. The patch damage must cover the diff damage.
   `a_boundary_holding_a_leader_is_retained`,
   `a_boundary_painted_alone_reads_the_anchor_its_parent_gave_it`. The existing
   `retained_frames_match_a_full_repaint_over_random_trees_and_marks`
-  (`crates/flui-rendering/tests/nested_boundary_capture.rs:478`) compares flattened versions, and
+  (`crates/flui-rendering/tests/nested_boundary_capture.rs:549`) compares flattened versions, and
   `pipeline_frames_diff_to_the_changed_boundary_rect`
-  (`crates/flui-rendering/tests/boundary_content_tokens.rs:243`) asserts the patch damage.
+  (`crates/flui-rendering/tests/boundary_contents.rs:251`) asserts the patch damage.
 - `flui-engine` (to be added): `a_cached_chunk_replays_the_command_stream_it_recorded` (ADR-0006
   §6), `a_chunk_moved_by_whole_pixels_hits_the_recording_cache`,
   `an_atlas_reset_misses_every_cached_recording`, `the_renderer_kernel_stays_inside_read_closure`,

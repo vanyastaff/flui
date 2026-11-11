@@ -6,6 +6,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use flui_foundation::geometry::Size;
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::testing::SceneHost;
 
 /// Panics when a span named `name` opens (`on_close = false`) or exits (`on_close = true`).
 struct PanicsOnSpan {
@@ -58,7 +59,8 @@ fn layout_survives(subscriber: PanicsOnSpan) {
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
         // One whole frame first, so the tree is laid out and painted and owes nothing; the
         // constraints change then dirties layout alone.
-        let (mut owner, shown) = owner.run_frame();
+        let mut scene = SceneHost::new();
+        let (mut owner, shown) = scene.run_frame(owner);
         shown.expect("the first frame runs");
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(150.0, 150.0))));
         (owner.into_layout(), root)

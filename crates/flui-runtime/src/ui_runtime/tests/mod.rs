@@ -420,6 +420,8 @@ fn wake_debt_and_signal_write_matrix() {
             ("hot_reload_recovery::reassemble_failure_keeps_priority_over_a_failed_rearm", hot_reload_recovery::reassemble_failure_keeps_priority_over_a_failed_rearm as fn()),
             #[cfg(feature = "hot-reload")]
             ("hot_reload_recovery::reassemble_failure_rearms_the_accepted_tail", hot_reload_recovery::reassemble_failure_rearms_the_accepted_tail as fn()),
+            #[cfg(feature = "hot-reload")]
+            ("hot_reload_recovery::a_hot_reload_renews_every_scene_lineage", hot_reload_recovery::a_hot_reload_renews_every_scene_lineage as fn()),
             ("full_inbox_retries_outstanding_wake_debt_before_rejecting", full_inbox_retries_outstanding_wake_debt_before_rejecting as fn()),
         ],
     );
@@ -500,6 +502,7 @@ fn frame_pacing_and_pump_matrix() {
             ("overlay_style::each_style_change_is_delivered_once", overlay_style::each_style_change_is_delivered_once as fn()),
             ("external_textures::a_fed_frame_repaints_and_reaches_the_raster_side", external_textures::a_fed_frame_repaints_and_reaches_the_raster_side as fn()),
             ("external_textures::a_fed_frame_damages_only_the_texture", external_textures::a_fed_frame_damages_only_the_texture as fn()),
+            ("external_textures::a_refused_submit_keeps_its_damage_owed", external_textures::a_refused_submit_keeps_its_damage_owed as fn()),
             ("external_textures::a_hidden_texture_stops_painting_after_one_frame", external_textures::a_hidden_texture_stops_painting_after_one_frame as fn()),
             ("external_textures::unmounting_the_owner_retires_its_texture", external_textures::unmounting_the_owner_retires_its_texture as fn()),
             ("overlay_style::a_refused_frame_announces_nothing", overlay_style::a_refused_frame_announces_nothing as fn()),

@@ -27,7 +27,7 @@ use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
     pipeline::PipelineOwner,
-    testing::inspect,
+    testing::{SceneHost, inspect},
     traits::RenderBox,
 };
 
@@ -46,10 +46,10 @@ fn paint_frame(
     let mut owner = owner.into_compositing();
     owner.run_compositing().expect("compositing succeeds");
     let mut owner = owner.into_paint();
-    owner.run_paint().expect("paint succeeds");
-    let tree = owner
-        .take_layer_tree()
-        .expect("run_paint must produce a layer tree");
+    let mut scene = SceneHost::new();
+    let (painted, tree) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
+    painted.expect("paint succeeds");
+    let tree = tree.expect("run_paint must produce a layer tree");
     (tree, owner)
 }
 

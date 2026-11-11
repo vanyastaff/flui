@@ -6,7 +6,8 @@ use std::cell::Cell;
 use std::cmp::Reverse;
 use std::sync::Arc;
 
-use flui_foundation::geometry::{Matrix4, Rect};
+use flui_foundation::geometry::Rect;
+use smallvec::SmallVec;
 
 use super::content::{BoundaryContent, Bounds, Entry, EntryIndex, LinkRole};
 use super::geometry::{Geometry, Link, Links, Reach, Scope, Watch};
@@ -31,6 +32,10 @@ pub(crate) struct PatchFacts<'p> {
     /// A node whose operations leave no footprint: the planted defect the
     /// property test must catch.
     pub(crate) skip: Option<NodeKey>,
+    /// Whether an effect update reads the inside and the chain both
+    /// versions share once; `false` reads each version's own, the path a
+    /// test holds the shared one equal to.
+    pub(crate) share: bool,
 }
 
 /// What the pass costs, for the owner's counters.
@@ -56,14 +61,50 @@ impl FootprintCost {
     }
 }
 
-/// The footprints a patch damages, in surface pixels.
-#[derive(Default)]
-struct Footprints {
+/// The working vectors of the damage pass, kept by the scene owner so a
+/// patch allocates only when it outgrows them. Each step clears what it uses
+/// before it reads it, so vectors a refused or unwound patch left filled
+/// serve the next one as well as empty ones.
+#[derive(Debug, Default)]
+pub(crate) struct DamageScratch {
+    /// The footprints found so far, in surface pixels.
     rects: Vec<Rect<f64>>,
+    /// The followers whose transform the patch changed.
+    moved: Vec<(Address, Address)>,
+    /// The nodes whose bounds are recomputed, deepest first.
+    exact: Vec<(Reverse<u32>, NodeKey)>,
+    pairs: FollowerPairs,
+    content: ContentScratch,
+    closures: Vec<Closure>,
+}
+
+/// The vectors the general pairing of one republished content uses.
+#[derive(Debug, Default)]
+struct ContentScratch {
+    pair: Vec<Option<usize>>,
+    order: Vec<(usize, usize)>,
+    order_moved: Vec<(usize, usize)>,
+    stable: Vec<bool>,
+    kept: Vec<bool>,
+    old_keys: Vec<(PairingKey, usize)>,
+    new_keys: Vec<(PairingKey, usize)>,
+    tails: Vec<usize>,
+    links: Vec<Option<usize>>,
+    in_place: Vec<bool>,
+}
+
+/// The footprints a patch damages, in surface pixels.
+struct Footprints<'s> {
+    rects: &'s mut Vec<Rect<f64>>,
     full: Option<FullReason>,
 }
 
-impl Footprints {
+impl<'s> Footprints<'s> {
+    fn new(rects: &'s mut Vec<Rect<f64>>) -> Self {
+        rects.clear();
+        Self { rects, full: None }
+    }
+
     fn add(&mut self, reach: Reach) {
         match reach {
             Reach::Nothing => {}
@@ -77,12 +118,12 @@ impl Footprints {
         }
     }
 
-    fn region(self, surface: (u32, u32)) -> DamageRegion {
+    fn region(&self, surface: (u32, u32)) -> DamageRegion {
         if let Some(reason) = self.full {
             return DamageRegion::Full(reason);
         }
         let mut region: Option<Region> = None;
-        for rect in self.rects {
+        for &rect in self.rects.iter() {
             match DamageRect::try_covering(rect, surface) {
                 Ok(Some(rect)) => match &mut region {
                     Some(region) => region.insert(rect),
@@ -104,13 +145,22 @@ pub(crate) fn patch_damage(
     facts: &PatchFacts<'_>,
     surface: (u32, u32),
     table: &mut TableCost,
+    scratch: &mut DamageScratch,
 ) -> (DamageRegion, FootprintCost) {
     let mut cost = FootprintCost::default();
-    let moved = moved_followers(base, next, facts, &mut cost);
-    update_bounds(base, next, facts, &moved, table);
+    let DamageScratch {
+        rects,
+        moved,
+        exact,
+        pairs,
+        content,
+        closures,
+    } = scratch;
+    moved_followers(base, next, facts, &mut cost, pairs, moved);
+    update_bounds(base, next, facts, moved, table, exact);
 
     let (old, new) = (Geometry::new(base), Geometry::new(next));
-    let mut footprints = Footprints::default();
+    let mut footprints = Footprints::new(rects);
     for &key in facts.touched {
         if Some(key) == facts.skip {
             continue;
@@ -125,11 +175,12 @@ pub(crate) fn patch_damage(
         }
         content_damage(
             key,
-            before.content(),
-            after.content(),
+            (before.content(), after.content()),
             old,
             new,
             &mut footprints,
+            content,
+            facts,
         );
     }
     for &key in facts.placed {
@@ -144,18 +195,24 @@ pub(crate) fn patch_damage(
             footprints.add(new.subtree_reach(key));
         }
     }
-    for &(before, after) in &moved {
+    for &(before, after) in moved.iter() {
         footprints.add(old.entry_reach(before.node, before.entry));
         footprints.add(new.entry_reach(after.node, after.entry));
     }
     let region = footprints.region(surface);
-    let damage = close_filtered(region, [(old, base), (new, next)], surface, &mut cost);
+    let damage = close_filtered(
+        region,
+        [(old, base), (new, next)],
+        surface,
+        &mut cost,
+        closures,
+    );
     (damage, cost)
 }
 
 /// The followers of `next` whose transform differs from their pair's in
-/// `base`, as `(before, after)` addresses. A follower is paired with the one
-/// of the same rank on the same link in the same node.
+/// `base`, as `(before, after)` addresses, into `moved`. A follower is paired
+/// with the one of the same rank on the same link in the same node.
 ///
 /// A follower that hides when its leader's branch clips its anchor counts as
 /// moved too when the patch touched or placed a node on that branch, in
@@ -167,7 +224,15 @@ fn moved_followers(
     next: &VersionInner,
     facts: &PatchFacts<'_>,
     cost: &mut FootprintCost,
-) -> Vec<(Address, Address)> {
+    pairs: &mut FollowerPairs,
+    moved: &mut Vec<(Address, Address)>,
+) {
+    moved.clear();
+    // No content of either version holds a link: no follower to pair, and
+    // no link to count.
+    if base.links.len() == 0 && next.links.len() == 0 {
+        return;
+    }
     let changed = |key: NodeKey| {
         facts.touched_marks.contains(key.slot()) || facts.placed_marks.contains(key.slot())
     };
@@ -180,8 +245,7 @@ fn moved_followers(
         Geometry::watching(base, &watch),
         Geometry::watching(next, &watch),
     );
-    let pairs = FollowerPairs::of(base, next, facts.touched, &mut cost.pairing_reads);
-    let mut moved = Vec::new();
+    pairs.fill(base, next, facts.touched, &mut cost.pairing_reads);
     for (_, users) in next.links.iter() {
         for &after in &users.followers {
             let Some(before) = pairs.before(base, next, after) else {
@@ -198,35 +262,54 @@ fn moved_followers(
     cost.followers_resolved = cost
         .followers_resolved
         .saturating_add(watch.resolutions.get());
-    moved
 }
 
 /// How the followers of each republished boundary pair across the patch:
 /// per node, sorted by table key, its followers' entries after the patch
 /// with the entry each continues, sorted by the entry after.
-struct FollowerPairs(Vec<(u64, Vec<(EntryIndex, EntryIndex)>)>);
+#[derive(Debug, Default)]
+struct FollowerPairs {
+    /// Each republished node's table key and its range of `pairs`.
+    nodes: Vec<(u64, std::ops::Range<usize>)>,
+    pairs: Vec<(EntryIndex, EntryIndex)>,
+    keys: Vec<NodeKey>,
+    old: Vec<(u64, EntryIndex)>,
+    new: Vec<(u64, EntryIndex)>,
+}
 
 impl FollowerPairs {
     /// The pairing of every node the patch republished, built in one pass
     /// over each content's links.
-    fn of(base: &VersionInner, next: &VersionInner, touched: &[NodeKey], reads: &mut u64) -> Self {
-        let mut keys: Vec<NodeKey> = touched.to_vec();
-        keys.sort_unstable_by_key(|key| key.table_key());
-        keys.dedup();
-        let mut nodes: Vec<(u64, Vec<(EntryIndex, EntryIndex)>)> = Vec::new();
-        for key in keys {
+    fn fill(
+        &mut self,
+        base: &VersionInner,
+        next: &VersionInner,
+        touched: &[NodeKey],
+        reads: &mut u64,
+    ) {
+        self.nodes.clear();
+        self.pairs.clear();
+        self.keys.clear();
+        self.keys.extend_from_slice(touched);
+        self.keys.sort_unstable_by_key(|key| key.table_key());
+        self.keys.dedup();
+        for &key in &self.keys {
             let (Some(before), Some(after)) = (base.record(key), next.record(key)) else {
                 continue;
             };
             if Arc::ptr_eq(before.content(), after.content()) {
                 continue;
             }
-            nodes.push((
-                key.table_key(),
-                pair_followers(before.content(), after.content(), reads),
-            ));
+            let start = self.pairs.len();
+            pair_followers(
+                before.content(),
+                after.content(),
+                reads,
+                [&mut self.old, &mut self.new],
+                &mut self.pairs,
+            );
+            self.nodes.push((key.table_key(), start..self.pairs.len()));
         }
-        Self(nodes)
     }
 
     /// The follower in `base` that `after` (in `next`) continues: the same
@@ -238,10 +321,10 @@ impl FollowerPairs {
             return Some(after);
         }
         let at = self
-            .0
+            .nodes
             .binary_search_by_key(&after.node.table_key(), |(key, _)| *key)
             .ok()?;
-        let pairs = &self.0[at].1;
+        let pairs = &self.pairs[self.nodes[at].1.clone()];
         let pair = pairs
             .binary_search_by_key(&after.entry, |(entry, _)| *entry)
             .ok()?;
@@ -252,31 +335,38 @@ impl FollowerPairs {
     }
 }
 
-/// Each follower of `after` with the follower of `before` of the same link
-/// and rank among that link's followers, sorted by the entry in `after`,
-/// counting each link it reads into `reads`.
+/// Appends to `pairs` each follower of `after` with the follower of `before`
+/// of the same link and rank among that link's followers, sorted by the
+/// entry in `after`, counting each link it reads into `reads`; `lists` holds
+/// the two contents' followers while they pair.
 fn pair_followers(
     before: &BoundaryContent,
     after: &BoundaryContent,
     reads: &mut u64,
-) -> Vec<(EntryIndex, EntryIndex)> {
-    let mut followers = |content: &BoundaryContent| {
-        let links = content.links();
-        *reads = reads.saturating_add(u64::try_from(links.len()).unwrap_or(u64::MAX));
-        let mut out: Vec<(u64, EntryIndex)> = links
-            .iter()
-            .filter(|(_, role, _)| *role == LinkRole::Follower)
-            .map(|(link, _, entry)| (link.id(), *entry))
-            .collect();
-        // Within a link, by entry: its followers in paint order.
-        out.sort_unstable();
-        out
-    };
-    let (old, new) = (followers(before), followers(after));
-    let mut pairs: Vec<(EntryIndex, EntryIndex)> = Vec::with_capacity(new.len().min(old.len()));
+    lists: [&mut Vec<(u64, EntryIndex)>; 2],
+    pairs: &mut Vec<(EntryIndex, EntryIndex)>,
+) {
+    let followers =
+        |content: &BoundaryContent, out: &mut Vec<(u64, EntryIndex)>, reads: &mut u64| {
+            let links = content.links();
+            *reads = reads.saturating_add(u64::try_from(links.len()).unwrap_or(u64::MAX));
+            out.clear();
+            out.extend(
+                links
+                    .iter()
+                    .filter(|(_, role, _)| *role == LinkRole::Follower)
+                    .map(|(link, _, entry)| (link.id(), *entry)),
+            );
+            // Within a link, by entry: its followers in paint order.
+            out.sort_unstable();
+        };
+    let [old, new] = lists;
+    followers(before, old, reads);
+    followers(after, new, reads);
+    let start = pairs.len();
     let mut cursor = 0;
     let mut previous: Option<(u64, usize)> = None;
-    for &(link, entry) in &new {
+    for &(link, entry) in new.iter() {
         let rank = match previous {
             Some((last, rank)) if last == link => rank + 1,
             _ => 0,
@@ -291,8 +381,7 @@ fn pair_followers(
             pairs.push((entry, before_entry));
         }
     }
-    pairs.sort_unstable_by_key(|(entry, _)| *entry);
-    pairs
+    pairs[start..].sort_unstable_by_key(|(entry, _)| *entry);
 }
 
 /// Recomputes, deepest first, the subtree bounds of every node the patch
@@ -304,8 +393,9 @@ fn update_bounds(
     facts: &PatchFacts<'_>,
     moved: &[(Address, Address)],
     table: &mut TableCost,
+    exact: &mut Vec<(Reverse<u32>, NodeKey)>,
 ) {
-    let mut exact: Vec<(Reverse<u32>, NodeKey)> = Vec::new();
+    exact.clear();
     for &key in facts.touched {
         if let Some(after) = next.record(key)
             && base
@@ -322,15 +412,18 @@ fn update_bounds(
     }
     exact.sort_unstable_by_key(|(depth, key)| (*depth, key.slot()));
     exact.dedup();
-    for &(_, key) in &exact {
+    for &(_, key) in exact.iter() {
         let geometry = Geometry::new(next);
         let scope = geometry.subtree_scope(key);
         let (bounds, kernel) = (scope.local.bounds(), scope.kernel);
-        let record = next
-            .nodes
-            .get_mut(key.table_key(), table)
-            .expect("BUG: a node whose bounds are recomputed is in the table");
-        if record.subtree() != bounds || record.kernel() != kernel {
+        let unchanged = next
+            .record(key)
+            .is_some_and(|record| record.subtree() == bounds && record.kernel() == kernel);
+        if !unchanged {
+            let record = next
+                .nodes
+                .get_mut(key.table_key(), table)
+                .expect("BUG: a node whose bounds are recomputed is in the table");
             record.set_subtree(bounds);
             record.set_kernel(kernel);
         }
@@ -374,9 +467,7 @@ fn growth(next: &VersionInner, child: NodeKey) -> Option<(NodeKey, Bounds, f64)>
     let mut links = Links::new();
     Geometry::new(next).content_links(parent, slot, &mut links, 0);
     let offset = record.placement().offset();
-    links.push(Link::Matrix(Matrix4::translation(
-        offset.dx, offset.dy, 0.0,
-    )));
+    links.push(Link::Translate(offset));
     // The effects over the slot carry the child's scope as they do in the
     // parent's own content.
     let scope = Scope {
@@ -391,9 +482,12 @@ fn growth(next: &VersionInner, child: NodeKey) -> Option<(NodeKey, Bounds, f64)>
         .then(|| (parent, current.union(reach).bounds(), kernel))
 }
 
+/// An entry's pairing key: its kind, then its owner or node, then its ordinal.
+type PairingKey = (u8, u64, u32);
+
 /// The key a `Publish` pairs an entry by: a chunk and an effect by owner and
 /// ordinal, a slot by its node.
-fn pairing_key(entry: &Entry) -> (u8, u64, u32) {
+fn pairing_key(entry: &Entry) -> PairingKey {
     match entry {
         Entry::Chunk { chunk, .. } => (0, chunk.owner().as_u64(), chunk.ordinal()),
         Entry::Effect { owner, ordinal, .. } => (1, owner.as_u64(), *ordinal),
@@ -401,13 +495,27 @@ fn pairing_key(entry: &Entry) -> (u8, u64, u32) {
     }
 }
 
-/// Whether a paired entry draws as before, its own part of the stream.
-fn same_entry(before: &Entry, after: &Entry) -> bool {
-    match (before, after) {
+/// Whether the paired entries at `old_index` of `before` and `index` of
+/// `after` draw as before, their own part of the stream.
+fn same_entry(
+    before: &BoundaryContent,
+    old_index: usize,
+    after: &BoundaryContent,
+    index: usize,
+) -> bool {
+    match (&before.entries()[old_index], &after.entries()[index]) {
         (Entry::Chunk { chunk: a, .. }, Entry::Chunk { chunk: b, .. }) => {
             std::sync::Arc::ptr_eq(a, b) || a.version() == b.version()
         }
-        (Entry::Effect { layer: a, .. }, Entry::Effect { layer: b, .. }) => a.same_effect(b),
+        (Entry::Effect { .. }, Entry::Effect { .. }) => {
+            match (
+                before.effect_layer(EntryIndex::at(old_index)),
+                after.effect_layer(EntryIndex::at(index)),
+            ) {
+                (Some(a), Some(b)) => a.same_effect(b),
+                _ => false,
+            }
+        }
         (Entry::Slot { node: a, .. }, Entry::Slot { node: b, .. }) => a == b,
         _ => false,
     }
@@ -419,28 +527,255 @@ fn same_entry(before: &Entry, after: &Entry) -> bool {
 /// scope.
 fn content_damage(
     key: NodeKey,
+    (before, after): (&BoundaryContent, &BoundaryContent),
+    old: Geometry<'_>,
+    new: Geometry<'_>,
+    footprints: &mut Footprints<'_>,
+    scratch: &mut ContentScratch,
+    facts: &PatchFacts<'_>,
+) {
+    if before.shares_stream(after) {
+        effects_damage(key, before, after, old, new, footprints, facts);
+        return;
+    }
+    let ContentScratch {
+        pair,
+        order,
+        order_moved,
+        stable,
+        kept,
+        old_keys,
+        new_keys,
+        tails,
+        links,
+        in_place,
+    } = scratch;
+    let (old_entries, new_entries) = (before.entries(), after.entries());
+    // A content republished entry for entry in its old order (a layer
+    // update, a repaint that drew the same objects) pairs each entry with the
+    // one at its own position: no sort and no reordering to find.
+    let aligned = old_entries.len() == new_entries.len()
+        && old_entries
+            .iter()
+            .zip(new_entries)
+            .all(|(old, new)| pairing_key(old) == pairing_key(new));
+    pair.clear();
+    order_moved.clear();
+    if aligned {
+        pair.extend((0..new_entries.len()).map(Some));
+    } else {
+        pair_by_key(old_entries, new_entries, [old_keys, new_keys], pair);
+        order.clear();
+        order.extend(
+            pair.iter()
+                .enumerate()
+                .filter_map(|(index, old_index)| old_index.map(|old_index| (index, old_index))),
+        );
+        out_of_order(order, tails, links, in_place, order_moved);
+    }
+    // A new entry is stable when it continues an old one that draws the same
+    // under the continuation of the same parent.
+    stable.clear();
+    stable.resize(new_entries.len(), false);
+    kept.clear();
+    kept.resize(old_entries.len(), false);
+    for (index, entry) in new_entries.iter().enumerate() {
+        let Some(old_index) = pair[index] else {
+            continue;
+        };
+        let old_entry = &old_entries[old_index];
+        let same_parent = match (entry.parent(), old_entry.parent()) {
+            (None, None) => true,
+            (Some(parent), Some(old_parent)) => {
+                stable[parent.get()] && pair[parent.get()] == Some(old_parent.get())
+            }
+            _ => false,
+        };
+        if same_parent && same_entry(before, old_index, after, index) {
+            stable[index] = true;
+            kept[old_index] = true;
+        }
+    }
+    // Paired entries out of their old order: every one outside a longest run
+    // still in order moved past another, by the rule the differ uses.
+    for &(index, old_index) in order_moved.iter() {
+        stable[index] = false;
+        kept[old_index] = false;
+    }
+    let top = |entries: &[Entry], flags: &[bool], index: usize| {
+        !flags[index]
+            && entries[index]
+                .parent()
+                .is_none_or(|parent| flags[parent.get()])
+    };
+    for index in 0..new_entries.len() {
+        if top(new_entries, stable, index) {
+            footprints.add(new.entry_reach(key, EntryIndex::at(index)));
+        }
+    }
+    for index in 0..old_entries.len() {
+        if top(old_entries, kept, index) {
+            footprints.add(old.entry_reach(key, EntryIndex::at(index)));
+        }
+    }
+}
+
+/// Damages what a composited-layer update changed: `after` shares
+/// `before`'s stream, so only the effects whose layer changed draw
+/// differently, and each topmost one (none of the effects it sits under
+/// changed) damages its scope under both versions, as the general pairing
+/// would. It costs the content's effects and the scopes of the changed ones,
+/// never the content's other chunks.
+fn effects_damage(
+    key: NodeKey,
     before: &BoundaryContent,
     after: &BoundaryContent,
     old: Geometry<'_>,
     new: Geometry<'_>,
-    footprints: &mut Footprints,
+    footprints: &mut Footprints<'_>,
+    facts: &PatchFacts<'_>,
 ) {
-    let (old_entries, new_entries) = (before.entries(), after.entries());
-    let mut old_keys: Vec<((u8, u64, u32), usize)> = old_entries
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| (pairing_key(entry), index))
-        .collect();
-    let mut new_keys: Vec<((u8, u64, u32), usize)> = new_entries
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| (pairing_key(entry), index))
-        .collect();
+    let (entries, effects) = (after.entries(), after.effects());
+    let (old_layers, new_layers) = (before.layers(), after.layers());
+    // Whether each effect, or one it sits under, changed.
+    let mut changed: SmallVec<[bool; 32]> = SmallVec::with_capacity(effects.len());
+    let mut tops: SmallVec<[EntryIndex; 4]> = SmallVec::new();
+    for (position, &index) in effects.iter().enumerate() {
+        let own = !old_layers[position].same_effect(&new_layers[position]);
+        let above = entries[index.get()].parent().is_some_and(|parent| {
+            let at = effects[..position]
+                .binary_search(&parent)
+                .expect("BUG: an effect's parent is an earlier effect");
+            changed[at]
+        });
+        changed.push(own || above);
+        if own && !above {
+            tops.push(index);
+        }
+    }
+    // An effect none of whose descendants changed, over slots that draw the
+    // same in both versions, holds the same inside under both: it is folded
+    // once and taken through each version's own effect. The chain into the
+    // space that holds it is read once when the patch left every node above
+    // the boundary, and the boundary's placement, as they were and no
+    // follower sits on it.
+    let chain_kept = facts.share && same_chain(key, after, new, facts);
+    let structural = after.structural();
+    let mut reaches: SmallVec<[(Reach, Reach); 4]> = SmallVec::with_capacity(tops.len());
+    for &index in &tops {
+        let position = after
+            .effect_position(index)
+            .expect("BUG: a changed effect is among its content's effects");
+        let end = after.effect_scope(position).end;
+        let under_changed = effects[position + 1..]
+            .iter()
+            .zip(&changed[position + 1..])
+            .take_while(|(entry, _)| entry.get() < end)
+            .any(|(_, &changed)| changed);
+        let from = structural.partition_point(|entry| *entry <= index);
+        let to = structural.partition_point(|entry| entry.get() < end);
+        let slots_same = structural[from..to]
+            .iter()
+            .all(|entry| match &entries[entry.get()] {
+                Entry::Slot { node, .. } => new.same_slot(old, node.key()),
+                Entry::Effect { .. } | Entry::Chunk { .. } => true,
+            });
+        reaches.push(if facts.share && !under_changed && slots_same {
+            let inside = new.effect_inside(key, index);
+            let new_chain = new.entry_chain(key, index);
+            let old_chain = if chain_kept {
+                None
+            } else {
+                old.entry_chain(key, index)
+            };
+            let reach = |geometry: Geometry<'_>, chain: Option<&Links<'_>>| {
+                chain.map_or(Reach::Nothing, |chain| {
+                    geometry.effect_reach(chain, key, index, inside)
+                })
+            };
+            (
+                reach(new, new_chain.as_ref()),
+                reach(
+                    old,
+                    if chain_kept {
+                        new_chain.as_ref()
+                    } else {
+                        old_chain.as_ref()
+                    },
+                ),
+            )
+        } else {
+            (new.entry_reach(key, index), old.entry_reach(key, index))
+        });
+    }
+    for &(reach, _) in &reaches {
+        footprints.add(reach);
+    }
+    for &(_, reach) in &reaches {
+        footprints.add(reach);
+    }
+}
+
+/// Whether both versions read one chain from the surface into `key`'s
+/// content: the patch placed neither `key` nor any node above it,
+/// republished none above it, and no follower is on the way (a follower's
+/// transform is resolved in each version on its own). `after` is `key`'s
+/// content in `new`.
+fn same_chain(
+    key: NodeKey,
+    after: &BoundaryContent,
+    new: Geometry<'_>,
+    facts: &PatchFacts<'_>,
+) -> bool {
+    if facts.placed_marks.contains(key.slot())
+        || after
+            .links()
+            .iter()
+            .any(|(_, role, _)| *role == LinkRole::Follower)
+    {
+        return false;
+    }
+    let mut at = key;
+    while let Some(parent) = new.parent(at) {
+        if facts.touched_marks.contains(parent.slot())
+            || facts.placed_marks.contains(parent.slot())
+            || new.holds_followers(parent)
+        {
+            return false;
+        }
+        at = parent;
+    }
+    true
+}
+
+/// Fills `pair` so `pair[j]` is the old entry new entry `j` continues, by
+/// pairing key; a key that repeats pairs its first occurrences only. `keys`
+/// holds the two streams' keys while they pair.
+fn pair_by_key(
+    old_entries: &[Entry],
+    new_entries: &[Entry],
+    keys: [&mut Vec<(PairingKey, usize)>; 2],
+    pair: &mut Vec<Option<usize>>,
+) {
+    let [old_keys, new_keys] = keys;
+    old_keys.clear();
+    old_keys.extend(
+        old_entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (pairing_key(entry), index)),
+    );
+    new_keys.clear();
+    new_keys.extend(
+        new_entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (pairing_key(entry), index)),
+    );
     old_keys.sort_unstable();
     new_keys.sort_unstable();
-    // `pair[j]` is the old entry new entry `j` continues; a key that repeats
-    // pairs its first occurrences only.
-    let mut pair: Vec<Option<usize>> = vec![None; new_entries.len()];
+    pair.clear();
+    pair.resize(new_entries.len(), None);
     let (mut i, mut j) = (0, 0);
     while i < old_keys.len() && j < new_keys.len() {
         match old_keys[i].0.cmp(&new_keys[j].0) {
@@ -458,63 +793,23 @@ fn content_damage(
             }
         }
     }
-    // A new entry is stable when it continues an old one that draws the same
-    // under the continuation of the same parent.
-    let mut stable = vec![false; new_entries.len()];
-    let mut kept = vec![false; old_entries.len()];
-    for (index, entry) in new_entries.iter().enumerate() {
-        let Some(old_index) = pair[index] else {
-            continue;
-        };
-        let old_entry = &old_entries[old_index];
-        let same_parent = match (entry.parent(), old_entry.parent()) {
-            (None, None) => true,
-            (Some(parent), Some(old_parent)) => {
-                stable[parent.get()] && pair[parent.get()] == Some(old_parent.get())
-            }
-            _ => false,
-        };
-        if same_parent && same_entry(old_entry, entry) {
-            stable[index] = true;
-            kept[old_index] = true;
-        }
-    }
-    // Paired entries out of their old order: every one outside a longest run
-    // still in order moved past another, by the rule the differ uses.
-    let order: Vec<(usize, usize)> = pair
-        .iter()
-        .enumerate()
-        .filter_map(|(index, old_index)| old_index.map(|old_index| (index, old_index)))
-        .collect();
-    for (index, old_index) in out_of_order(&order) {
-        stable[index] = false;
-        kept[old_index] = false;
-    }
-    let top = |entries: &[Entry], flags: &[bool], index: usize| {
-        !flags[index]
-            && entries[index]
-                .parent()
-                .is_none_or(|parent| flags[parent.get()])
-    };
-    for index in 0..new_entries.len() {
-        if top(new_entries, &stable, index) {
-            footprints.add(new.entry_reach(key, EntryIndex::at(index)));
-        }
-    }
-    for index in 0..old_entries.len() {
-        if top(old_entries, &kept, index) {
-            footprints.add(old.entry_reach(key, EntryIndex::at(index)));
-        }
-    }
 }
 
-/// The `(new, old)` pairs, listed in new order, that lie outside a longest
-/// run whose old indexes increase.
-fn out_of_order(order: &[(usize, usize)]) -> Vec<(usize, usize)> {
+/// Fills `out` with the `(new, old)` pairs, listed in new order, that lie
+/// outside a longest run whose old indexes increase; `tails`, `links` and
+/// `in_place` are its working vectors.
+fn out_of_order(
+    order: &[(usize, usize)],
+    tails: &mut Vec<usize>,
+    links: &mut Vec<Option<usize>>,
+    in_place: &mut Vec<bool>,
+    out: &mut Vec<(usize, usize)>,
+) {
     // Patience sort: `tails[k]` ends the best increasing run of length
     // `k + 1`; `links` walks each run back.
-    let mut tails: Vec<usize> = Vec::new();
-    let mut links: Vec<Option<usize>> = vec![None; order.len()];
+    tails.clear();
+    links.clear();
+    links.resize(order.len(), None);
     for (index, &(_, old)) in order.iter().enumerate() {
         let length = tails.partition_point(|&tail| order[tail].1 < old);
         links[index] = length.checked_sub(1).map(|shorter| tails[shorter]);
@@ -524,17 +819,20 @@ fn out_of_order(order: &[(usize, usize)]) -> Vec<(usize, usize)> {
             tails[length] = index;
         }
     }
-    let mut in_place = vec![false; order.len()];
+    in_place.clear();
+    in_place.resize(order.len(), false);
     let mut cursor = tails.last().copied();
     while let Some(index) = cursor {
         in_place[index] = true;
         cursor = links[index];
     }
-    order
-        .iter()
-        .zip(in_place)
-        .filter_map(|(&pair, stays)| (!stays).then_some(pair))
-        .collect::<Vec<(usize, usize)>>()
+    out.clear();
+    out.extend(
+        order
+            .iter()
+            .zip(in_place.iter())
+            .filter_map(|(&pair, &stays)| (!stays).then_some(pair)),
+    );
 }
 
 /// `region` closed over what the entries of the attached filtered nodes of
@@ -551,8 +849,9 @@ fn close_filtered(
     versions: [(Geometry<'_>, &VersionInner); 2],
     surface: (u32, u32),
     cost: &mut FootprintCost,
+    closures: &mut Vec<Closure>,
 ) -> DamageRegion {
-    let mut closures = Vec::new();
+    closures.clear();
     let mut waiting = Vec::new();
     for (geometry, version) in versions {
         for (_, &key) in version.filtered.iter() {
@@ -566,7 +865,7 @@ fn close_filtered(
                 geometry,
                 key,
                 record.content(),
-                &mut closures,
+                closures,
                 &mut cost.filter_input_reads,
             ) {
                 waiting.push((geometry, version, key, geometry.subtree_reach(key)));
@@ -584,9 +883,9 @@ fn close_filtered(
                 return true;
             }
             for (at, ctm, input) in geometry.filter_inputs(key, &mut cost.filter_input_reads) {
-                let Some(Entry::Effect { layer, .. }) = version
+                let Some(layer) = version
                     .record(key)
-                    .and_then(|record| record.content().entries().get(at.entry.get()))
+                    .and_then(|record| record.content().effect_layer(at.entry))
                 else {
                     continue;
                 };
@@ -620,7 +919,7 @@ fn direct_closures(
     reads: &mut u64,
 ) -> bool {
     let mut foreground = false;
-    for &index in content.closure_entries() {
+    for index in content.closure_entries() {
         *reads = reads.saturating_add(1);
         let Some(entry) = content.entries().get(index.get()) else {
             continue;
@@ -630,8 +929,11 @@ fn direct_closures(
             entry: index,
         };
         match entry {
-            Entry::Effect { layer, .. } => match layer {
-                Layer::BackdropFilter(_) | Layer::ColorFilter(_) => {
+            Entry::Effect { .. } => match content
+                .effect_layer(index)
+                .expect("BUG: an effect entry has a layer")
+            {
+                layer @ (Layer::BackdropFilter(_) | Layer::ColorFilter(_)) => {
                     if let Some(ctm) = geometry.effect_ctm(at) {
                         out.push(read_closure(layer, &ctm, Rect::ZERO));
                     }

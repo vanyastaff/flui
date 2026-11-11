@@ -21,7 +21,7 @@ use flui_foundation::inspect::{
     InspectId, Level, Link, NodeRef, OwnedField, OwnedValue, SnapshotError, SnapshotNode,
     SnapshotQuery, Unit, snapshot,
 };
-use flui_layer::LayerTree;
+
 use flui_protocol::{
     InspectField, InspectLevel, InspectNode, InspectParams, InspectReading, InspectUnit,
     InspectValue, LogicalRect, NonFinite,
@@ -151,12 +151,17 @@ pub(crate) fn deliver_each<T>(
 impl PresentationState {
     /// Reads the scene the window is about to submit for every layer read parked on it, and holds
     /// the readings: they are delivered only if the scene is shown ([`Self::settle_agent_layer_reads`]).
-    pub(crate) fn stage_agent_layer_reads(&self, scene: &LayerTree) {
+    /// The version is flattened into a layer tree only when a read is parked.
+    pub(crate) fn stage_agent_layer_reads(&self, scene: &flui_layer::SceneVersion) {
         // A scene that was staged and never submitted shows nothing: its reads wait again.
         drop(self.settle_agent_layer_reads(false));
         let parked = std::mem::take(&mut *self.agent_layer_reads.borrow_mut());
+        if parked.is_empty() {
+            return;
+        }
+        let tree = scene.flatten();
         let staged = parked.into_iter().map(|read| {
-            let reading = reading_from(snapshot(scene, read.query));
+            let reading = reading_from(snapshot(&tree, read.query));
             StagedLayerRead { read, reading }
         });
         self.agent_layer_staged.borrow_mut().extend(staged);

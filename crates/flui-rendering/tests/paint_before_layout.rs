@@ -20,7 +20,8 @@
 
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{
-    constraints::BoxConstraints, error::RenderError, pipeline::PipelineOwner, traits::RenderObject,
+    constraints::BoxConstraints, error::RenderError, pipeline::PipelineOwner, testing::SceneHost,
+    traits::RenderObject,
 };
 
 fn mount_two_node_tree() -> (
@@ -47,7 +48,8 @@ fn mount_two_node_tree() -> (
 pub(crate) fn run_paint_refuses_to_start_with_layout_work_pending() {
     let (owner, child_id) = mount_two_node_tree();
 
-    let (mut owner, frame) = owner.run_frame();
+    let mut scene = SceneHost::new();
+    let (mut owner, frame) = scene.run_frame(owner);
     frame
         .expect("frame 1 succeeds")
         .expect("frame 1 produces a layer tree");
@@ -60,7 +62,7 @@ pub(crate) fn run_paint_refuses_to_start_with_layout_work_pending() {
     );
 
     let mut owner = owner.into_layout().into_compositing().into_paint();
-    let result = owner.run_paint();
+    let (result, _) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
 
     match result {
         Err(RenderError::PaintBeforeLayout) => {}

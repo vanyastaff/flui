@@ -10,7 +10,8 @@ use flui_foundation::id::{GenId, Marker};
 ///
 /// Every [`SceneOwner`](super::SceneOwner), and every
 /// [`renew`](super::SceneOwner::renew) of one, takes a lineage no other has,
-/// so a sequence number that restarts never equals one from before.
+/// so a sequence number issued again after a spent sequence restarts never
+/// equals one from before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Lineage(NonZeroU64);
 

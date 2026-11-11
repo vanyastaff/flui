@@ -5,9 +5,10 @@ use std::sync::Arc;
 use flui_painting::paint::TextureId;
 use smallvec::SmallVec;
 
-use flui_foundation::geometry::Rect;
+use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 
 use super::content::{BoundaryContent, Bounds, EntryIndex, LinkRole};
+use super::geometry::Geometry;
 use super::id::{Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::owner::Placement;
 use super::table::{Table, TableCost};
@@ -286,6 +287,72 @@ impl SceneVersion {
             .flat_map(|users| users.iter().map(|address| self.address(*address)))
     }
 
+    /// The transform the renderer applies at the follower entry `at` so its
+    /// content lands on its leader: what [`resolve_follower_transform`]
+    /// answers over [`Self::flatten`]'s tree, read off the version without
+    /// building one. `None` when nothing is drawn or hit there: `at` is not an
+    /// attached follower of this version, it is unlinked and hidden, a clip
+    /// on the leader's chain leaves out its anchor under
+    /// [`LeaderClip::Hide`](crate::LeaderClip::Hide), a chain is singular or
+    /// not finite, or followers nest past the limit.
+    ///
+    /// [`resolve_follower_transform`]: crate::resolve_follower_transform
+    #[must_use]
+    pub fn follower_transform(&self, at: EntryAddress) -> Option<Matrix4> {
+        if at.node.lineage() != self.lineage() {
+            return None;
+        }
+        let record = self.0.record(at.node.key())?;
+        if !matches!(
+            record.content().effect_layer(at.entry),
+            Some(crate::Layer::Follower(_))
+        ) {
+            return None;
+        }
+        let geometry = Geometry::shown(&self.0);
+        if !geometry.is_attached(at.node.key()) {
+            return None;
+        }
+        geometry
+            .resolve(
+                Address {
+                    node: at.node.key(),
+                    entry: at.entry,
+                },
+                0,
+            )
+            .ok()
+    }
+
+    /// Where the leader publishing `link` has its top-left corner on the
+    /// surface, as [`leader_origin`](crate::leader_origin) answers over
+    /// [`Self::flatten`]'s tree: `None` without an attached leader, or when a
+    /// transform on its chain is singular or not finite, or a follower on it
+    /// resolves to nothing.
+    #[must_use]
+    pub fn leader_origin(&self, link: LayerLink) -> Option<Point<f64>> {
+        Geometry::shown(&self.0).leader_origin(link)
+    }
+
+    /// The size of the leader publishing `link` that a follower resolves
+    /// against, the last attached one, as [`LayerTree::leaders`]' leader
+    /// answers over [`Self::flatten`]'s tree; `None` without one.
+    ///
+    /// [`LayerTree::leaders`]: crate::LayerTree::leaders
+    #[must_use]
+    pub fn leader_size(&self, link: LayerLink) -> Option<Size<f64>> {
+        let geometry = Geometry::shown(&self.0);
+        self.leaders(link)
+            .filter(|at| geometry.is_attached(at.node.key()))
+            .filter_map(
+                |at| match self.node(at.node)?.content().effect_layer(at.entry) {
+                    Some(crate::Layer::Leader(leader)) => Some(leader.size()),
+                    _ => None,
+                },
+            )
+            .last()
+    }
+
     /// The nodes whose content holds an effect that reads pixels outside the
     /// content under it (a backdrop or image filter), by slot.
     pub fn filtered_nodes(&self) -> impl Iterator<Item = SceneNodeId> + '_ {
@@ -354,10 +421,7 @@ impl VersionInner {
         for (texture, entry) in content.textures() {
             self.textures
                 .get_or_default(texture.get(), cost)
-                .push(Address {
-                    node,
-                    entry: *entry,
-                });
+                .push(Address { node, entry });
         }
         if content.is_filtered() {
             self.filtered.insert(node.table_key(), node, cost);
@@ -365,41 +429,117 @@ impl VersionInner {
     }
 }
 
-#[cfg(feature = "testing")]
 mod flatten {
+    use std::sync::Arc;
+
     use flui_foundation::LayerId;
 
     use super::SceneVersion;
     use crate::layer::{Layer, OffsetLayer, PictureLayer};
     use crate::scene::content::Entry;
-    use crate::tree::LayerTree;
+    use crate::scene::id::SceneNodeId;
+    use crate::tree::{LayerNode, LayerTree};
 
     impl SceneVersion {
         /// The layer tree the version paints from its root: each node an
         /// [`OffsetLayer`] at its placement, each effect its layer, each chunk
-        /// a [`PictureLayer`]. Unattached nodes are left out.
+        /// a [`PictureLayer`]. Unattached nodes are left out. The tree is
+        /// numbered as the version's scene, so a layer id kept from an earlier
+        /// version is told apart.
         ///
-        /// The oracle a retained frame is compared against
+        /// What the raster lane hands the engine until the engine walks the
+        /// version itself, and the oracle a retained frame is compared against
         /// (ADR-0304 §11).
         #[must_use]
         pub fn flatten(&self) -> LayerTree {
             let root = self
                 .node(self.root())
                 .expect("BUG: a version holds its root");
-            let mut tree = LayerTree::new(Layer::from(OffsetLayer::new(root.placement().offset())));
-            let mut pending = vec![(self.root(), tree.root())];
-            while let Some((id, at)) = pending.pop() {
+            let mut tree = LayerTree::new(Layer::from(OffsetLayer::new(root.placement().offset())))
+                .with_scene(self.id().seq());
+            let at = tree.root();
+            self.fill(&mut tree, self.root(), at, 0);
+            tree
+        }
+
+        /// The layer tree `node` paints, rooted at the effect its whole
+        /// content sits under when there is one, else at an [`OffsetLayer`]
+        /// at its placement: a pipeline's frame node flattens to the tree its
+        /// paint built before the scene was retained, rooted at its
+        /// device-pixel-ratio layer. `None` when the version holds no such node.
+        #[must_use]
+        pub fn flatten_node(&self, node: SceneNodeId) -> Option<LayerTree> {
+            let held = self.node(node)?;
+            let content = held.content();
+            let entries = content.entries();
+            let enclosing = matches!(entries.first(), Some(Entry::Effect { .. }))
+                && entries.iter().skip(1).all(|entry| entry.parent().is_some());
+            if enclosing
+                && let Some(Entry::Effect { owner, .. }) = entries.first()
+                && let Some((_, layer)) = content.effect_layers().next()
+            {
+                let mut tree = LayerTree::new(LayerNode::new(layer.clone()).with_render(*owner))
+                    .with_scene(self.id().seq());
+                let at = tree.root();
+                // An effect over one child at its origin holds that child's
+                // content directly: the root boundary under a frame's
+                // device-pixel-ratio layer.
+                if let [_, Entry::Slot { node: child, .. }] = entries
+                    && self.node(*child).is_some_and(|child| {
+                        child.placement().offset() == flui_foundation::geometry::Offset::ZERO
+                    })
+                {
+                    self.fill(&mut tree, *child, at, 0);
+                } else {
+                    self.fill(&mut tree, node, at, 1);
+                }
+                return Some(tree);
+            }
+            let mut tree = LayerTree::new(Layer::from(OffsetLayer::new(held.placement().offset())))
+                .with_scene(self.id().seq());
+            let at = tree.root();
+            self.fill(&mut tree, node, at, 0);
+            Some(tree)
+        }
+
+        /// Pushes the entries of `node` from `skip` on, and the nodes they
+        /// slot, under `at`; an entry under a skipped one goes under `at`.
+        fn fill(&self, tree: &mut LayerTree, node: SceneNodeId, at: LayerId, skip: usize) {
+            let mut pending = vec![(node, at, skip)];
+            while let Some((id, at, skip)) = pending.pop() {
                 let node = self
                     .node(id)
                     .expect("BUG: a slot names a node of its version");
-                let mut placed: Vec<LayerId> = Vec::with_capacity(node.content().entries().len());
-                for entry in node.content().entries() {
+                let content = node.content();
+                let mut placed: Vec<LayerId> = Vec::with_capacity(content.entries().len());
+                // The effects are in paint order, so a cursor walks their layers.
+                let mut layers = content.effect_layers().map(|(_, layer)| layer);
+                for (position, entry) in content.entries().iter().enumerate() {
+                    let effect_layer = match entry {
+                        Entry::Effect { .. } => layers.next(),
+                        Entry::Chunk { .. } | Entry::Slot { .. } => None,
+                    };
+                    if position < skip {
+                        placed.push(at);
+                        continue;
+                    }
                     let parent = entry.parent().map_or(at, |index| placed[index.get()]);
                     let layer = match entry {
-                        Entry::Effect { layer, .. } => tree.push_child(parent, layer.clone()),
+                        Entry::Effect { owner, .. } => tree.push_child(
+                            parent,
+                            LayerNode::new(
+                                effect_layer
+                                    .expect("BUG: each effect entry has a layer")
+                                    .clone(),
+                            )
+                            .with_render(*owner),
+                        ),
                         Entry::Chunk { chunk, .. } => tree.push_child(
                             parent,
-                            Layer::from(PictureLayer::new(chunk.commands().clone())),
+                            LayerNode::new(Layer::from(PictureLayer::from_shared(Arc::clone(
+                                chunk.shared_commands(),
+                            ))))
+                            .with_render(chunk.owner()),
                         ),
                         Entry::Slot { node: child, .. } => {
                             let placement = self
@@ -410,14 +550,139 @@ mod flatten {
                                 parent,
                                 Layer::from(OffsetLayer::new(placement.offset())),
                             );
-                            pending.push((*child, offset));
+                            pending.push((*child, offset, 0));
                             offset
                         }
                     };
                     placed.push(layer);
                 }
             }
-            tree
+        }
+    }
+}
+
+mod annotations {
+    use std::any::Any;
+    use std::sync::Arc;
+
+    use flui_foundation::geometry::Point;
+    use smallvec::SmallVec;
+
+    use super::{EntryAddress, SceneVersion};
+    use crate::layer::Layer;
+    use crate::scene::content::{Entry, EntryIndex};
+    use crate::scene::id::SceneNodeId;
+    use crate::tree::annotations::clip_admits;
+
+    impl SceneVersion {
+        /// The topmost `T` an annotated region holds at `point` on the
+        /// surface, as [`LayerTree::find_annotation`] answers over
+        /// [`Self::flatten`]'s tree, read off the version without building
+        /// it.
+        ///
+        /// [`LayerTree::find_annotation`]: crate::LayerTree::find_annotation
+        #[must_use]
+        pub fn find_annotation<T: Any + Send + Sync>(&self, point: Point<f64>) -> Option<Arc<T>> {
+            let root = self.node(self.root())?;
+            let offset = root.placement().offset();
+            self.annotation_in(
+                self.root(),
+                Point::new(point.x - offset.dx, point.y - offset.dy),
+            )
+        }
+
+        /// The topmost `T` in `node`'s content at `point`, in the node's own
+        /// space.
+        fn annotation_in<T: Any + Send + Sync>(
+            &self,
+            node: SceneNodeId,
+            point: Point<f64>,
+        ) -> Option<Arc<T>> {
+            let content = Arc::clone(self.node(node)?.content());
+            let entries = content.entries();
+            // Each effect's point in its own space, `None` where the effect,
+            // or one it sits under, does not take `point`.
+            let mut local: SmallVec<[Option<Point<f64>>; 32]> = SmallVec::new();
+            for (index, entry) in entries.iter().enumerate() {
+                let under = match entry.parent() {
+                    None => Some(point),
+                    Some(parent) => local[parent.get()],
+                };
+                local.push(match (entry, under) {
+                    (Entry::Effect { .. }, Some(under)) => content
+                        .effect_layer(EntryIndex::at(index))
+                        .and_then(|layer| {
+                            self.point_in_effect(node, index, layer, under)
+                                .filter(|at| clip_admits(layer, *at))
+                        }),
+                    _ => None,
+                });
+            }
+            // Reversed paint order is the tree's topmost-first order: an
+            // effect's descendants and later siblings come before it.
+            for (index, entry) in entries.iter().enumerate().rev() {
+                match entry {
+                    Entry::Effect { .. } => {
+                        if let Some(Layer::AnnotatedRegion(region)) =
+                            content.effect_layer(EntryIndex::at(index))
+                            && let Some(at) = local[index]
+                            && (region.is_sized_by_parent() || region.bounds().contains(at))
+                            && let Some(value) = region.value().downcast::<T>()
+                        {
+                            return Some(value);
+                        }
+                    }
+                    Entry::Slot {
+                        node: child,
+                        parent,
+                    } => {
+                        let under = match parent {
+                            None => Some(point),
+                            Some(parent) => local[parent.get()],
+                        };
+                        let Some(under) = under else {
+                            continue;
+                        };
+                        let Some(placed) = self.node(*child) else {
+                            continue;
+                        };
+                        let offset = placed.placement().offset();
+                        if let Some(found) = self.annotation_in(
+                            *child,
+                            Point::new(under.x - offset.dx, under.y - offset.dy),
+                        ) {
+                            return Some(found);
+                        }
+                    }
+                    Entry::Chunk { .. } => {}
+                }
+            }
+            None
+        }
+
+        /// `point` in the effect's own space, `None` when its placement
+        /// cannot be inverted or resolved.
+        fn point_in_effect(
+            &self,
+            node: SceneNodeId,
+            index: usize,
+            layer: &Layer,
+            point: Point<f64>,
+        ) -> Option<Point<f64>> {
+            let transform = match layer {
+                Layer::Transform(transform) => *transform.transform(),
+                Layer::Follower(_) => self.follower_transform(EntryAddress {
+                    node,
+                    entry: crate::scene::content::EntryIndex::at(index),
+                })?,
+                _ => {
+                    let offset = layer.local_translation();
+                    return Some(Point::new(point.x - offset.dx, point.y - offset.dy));
+                }
+            };
+            let inverse = transform.try_inverse()?;
+            let (x, y) = inverse.unproject_to_plane(point.x, point.y)?;
+            Some(Point::new(x, y))
         }
     }
 }

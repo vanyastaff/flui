@@ -258,7 +258,9 @@ fn counter(report: &FrameReport, name: &str) -> u64 {
 
 /// A full reassemble — every element rebuilt and every render object
 /// re-laid-out and repainted, with semantics on — touches every phase, so
-/// every counter but the retained-layer one moves. Removing any increment
+/// every counter moves but three: the retained-layer one, the full-damage
+/// one, which only a frame with no base on screen moves, and the depth one,
+/// which only a reparented boundary moves. Removing any other increment
 /// site fails here.
 #[test]
 fn perf_counters_are_live_on_a_full_reassemble() {
@@ -269,7 +271,10 @@ fn perf_counters_are_live_on_a_full_reassemble() {
     record("full_reassemble", &report, allocations);
 
     for (name, value) in report.counters() {
-        if name == "layers_reused" {
+        if matches!(
+            name,
+            "layers_reused" | "damage_full" | "scene_depth_updates"
+        ) {
             continue;
         }
         assert!(
@@ -370,6 +375,11 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
         "a tick must not repaint the panel's rows: {report:#?}"
     );
     assert_eq!(report.pipeline.nodes_laid_out, 0, "{report:#?}");
+    assert_eq!(
+        report.scene.scene_depth_updates, 0,
+        "a slide moves the panel's node without reparenting it: {report:#?}"
+    );
+    assert_eq!(report.scene.damage_full, 0, "{report:#?}");
 }
 
 /// The two tree sizes a `perf_scaling_` scenario compares, by the name
@@ -566,4 +576,131 @@ fn perf_raw_button_over_text() {
         render_nodes <= 1,
         "a button adds {render_nodes} render nodes to its child"
     );
+}
+
+/// A caret standing in for a text field's: a thin box under a repaint
+/// boundary of its own, shown or hidden by a signal, as a blink toggles it.
+#[derive(Clone, StatefulView)]
+struct Caret {
+    shown: SharedSignal<bool>,
+}
+
+struct CaretState {
+    shown: SharedSignal<bool>,
+}
+
+impl StatefulView for Caret {
+    type State = CaretState;
+    fn create_state(&self) -> Self::State {
+        CaretState {
+            shown: self.shown.clone(),
+        }
+    }
+}
+
+impl ViewState<Caret> for CaretState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.shown.bind(ctx);
+    }
+    fn build(&self, _view: &Caret, ctx: &dyn BuildContext) -> impl IntoView {
+        let color = if self.shown.get(ctx) {
+            Color::rgb(0, 0, 0)
+        } else {
+            Color::rgb(255, 255, 255)
+        };
+        SizedBox::new(2.0, LABEL_HEIGHT).child(ColoredBox::new(color))
+    }
+}
+
+/// A caret over `rows` painted rows in one eager column under a boundary of
+/// their own: every row is mounted, laid out and painted once.
+#[derive(Clone, StatelessView)]
+struct CaretOverRows {
+    shown: SharedSignal<bool>,
+    rows: usize,
+}
+
+impl StatelessView for CaretOverRows {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        let rows: Vec<BoxedView> = (0..self.rows)
+            .map(|row| {
+                let shade = (row % 200) as u8;
+                SizedBox::new(WIDTH, ROW_HEIGHT)
+                    .child(ColoredBox::new(Color::rgb(shade, 80, 120)))
+                    .boxed()
+            })
+            .collect();
+        Column::new(vec![
+            RepaintBoundary::new()
+                .child(Caret {
+                    shown: self.shown.clone(),
+                })
+                .boxed(),
+            Expanded::new(
+                SingleChildScrollView::new().child(RepaintBoundary::new().child(Column::new(rows))),
+            )
+            .boxed(),
+        ])
+    }
+}
+
+/// The report of [`SCALING_FRAMES`] caret blinks over `rows` rows, with the
+/// allocations they made.
+fn caret_blinks(rows: usize) -> (FrameReport, u64) {
+    let shown = SharedSignal::new(true);
+    let mut binding = HeadlessBinding::new();
+    let root = GestureArenaScope::new(
+        binding.arena().clone(),
+        FocusTreeRoot::new(app_root(CaretOverRows {
+            shown: shown.clone(),
+            rows,
+        })),
+    );
+    let _ = binding.mount_root(
+        &root,
+        MountOwners::fresh(),
+        MountOptions::tight(WIDTH, HEIGHT),
+    );
+    for _ in 0..2 {
+        let _ = binding.pump_frame_report(FRAME);
+    }
+    perf_measured(|| {
+        let mut total = FrameReport::default();
+        for blink in 0..SCALING_FRAMES {
+            shown.set(blink % 2 == 1);
+            total += &binding.pump_frame_report(FRAME);
+        }
+        total
+    })
+}
+
+/// A caret blink repaints the caret's boundary alone and patches one node,
+/// over 1 000 rows as over 10 000: the frame names no other boundary, so
+/// nothing it does grows with the tree (ADR-0304 §8).
+#[test]
+fn perf_a_caret_blink_in_a_10k_list_costs_the_same_on_any_tree_size() {
+    let (small, small_allocations) = caret_blinks(1_000);
+    let (large, large_allocations) = caret_blinks(10_000);
+    record("caret_blink_in_10k_list", &large, large_allocations);
+
+    for name in [
+        "nodes_painted",
+        "scene_ops",
+        "scene_nodes_visited",
+        "damage_rects",
+    ] {
+        assert_eq!(
+            counter(&small, name),
+            counter(&large, name),
+            "{name}: {small:#?} over 1 000 rows, {large:#?} over 10 000"
+        );
+    }
+    let blinks = SCALING_FRAMES as u64;
+    assert_eq!(
+        counter(&large, "scene_ops"),
+        blinks,
+        "one Publish of the caret's boundary per blink: {large:#?}"
+    );
+    assert_eq!(counter(&large, "damage_full"), 0, "{large:#?}");
+    assert_eq!(small_allocations, large_allocations);
 }

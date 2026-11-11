@@ -644,43 +644,32 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         &mut self.render_tree
     }
 
-    /// Returns a reference to the layer tree from the last paint phase.
-    pub fn layer_tree(&self) -> Option<&flui_layer::LayerTree> {
-        self.last_layer_tree.as_ref()
-    }
-
-    /// Takes the layer tree from the last paint phase.
-    ///
-    /// This removes the layer tree from the pipeline owner, returning ownership
-    /// to the caller. Useful for passing to the compositor.
-    ///
-    /// Phase-agnostic: works in any phase. `run_frame` calls this on
-    /// `<Semantics>` to extract the layer tree before transitioning back to
-    /// `<Idle>`.
-    pub fn take_layer_tree(&mut self) -> Option<flui_layer::LayerTree> {
-        self.last_layer_tree.take()
-    }
-
-    /// Puts back a layer tree taken and not delivered, so the next frame
-    /// returns it, unless a newer paint has replaced it since.
-    pub fn restore_layer_tree(&mut self, layer_tree: flui_layer::LayerTree) {
-        self.last_layer_tree.get_or_insert(layer_tree);
-    }
-
     /// Device pixel ratio threaded into every paint pass.
     pub fn device_pixel_ratio(&self) -> f64 {
         self.device_pixel_ratio
     }
 
-    /// Number of repaint boundaries whose painted output is currently kept
-    /// for reuse.
+    /// Number of repaint boundaries whose published content is currently
+    /// recorded.
     ///
-    /// Diagnostic surface for the retention cache — a test asserting that
+    /// Diagnostic surface for the boundary records — a test asserting that
     /// removing a node drops its entry has nothing else to look at, and the
     /// alternative is making the map itself public.
     #[must_use]
-    pub fn retained_boundary_count(&self) -> usize {
-        self.retained_boundaries.len()
+    pub fn boundary_record_count(&self) -> usize {
+        self.boundary_records.len()
+    }
+
+    /// The scene node the repaint boundary `id` is published at in the last
+    /// applied version, `None` without a record.
+    ///
+    /// Diagnostic surface beside [`Self::boundary_record_count`]: what a test
+    /// or an inspector reads a boundary's published content through.
+    #[must_use]
+    pub fn boundary_scene_node(&self, id: RenderId) -> Option<flui_layer::SceneNodeId> {
+        self.boundary_records
+            .get(&id)
+            .map(super::paint::BoundaryRecord::node)
     }
 
     /// Removes the subtree rooted at `id` — THE dispose site.
@@ -747,12 +736,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // the map does not accumulate entries for nodes that no longer
         // exist.
         self.layout_poison.evict(&removed);
-        // So do retained paint outputs. A stale entry can never be SERVED to a
+        // So do boundary records. A stale entry can never be SERVED to a
         // different node — `RenderId` is generational, so a recycled slab slot
         // misses the map — but without this the map grows for the lifetime of
-        // the owner as boundaries come and go.
-        self.retained_boundaries
-            .retain(|id, _| !removed.contains(id));
+        // the owner as boundaries come and go. Their nodes are retired by the
+        // paint that republishes the parent naming them.
+        for id in &removed {
+            if let Some(record) = self.boundary_records.remove(id) {
+                self.follower_boundaries.remove(id);
+                self.orphaned_nodes.push(record.node());
+            }
+        }
 
         let removed_nodes = self.render_tree.take_subtree(id);
         let count = removed_nodes.len();

@@ -190,13 +190,15 @@ impl RenderTester {
     #[must_use]
     pub fn run_frame(self) -> FrameRun {
         let (owner, root_id, registry) = self.build();
-        let (owner, result) = owner.run_frame();
+        let mut scene = super::SceneHost::new();
+        let (owner, result) = scene.run_frame(owner);
         let layer_tree = result.expect("run_frame must succeed for a well-formed test tree");
         FrameRun {
             owner,
             root_id,
             registry,
             layer_tree,
+            scene,
         }
     }
 
@@ -223,13 +225,15 @@ impl RenderTester {
     /// [`paint_raw`]: crate::protocol::RenderObject::paint_raw
     pub fn try_run_frame(self) -> Result<FrameRun, RenderError> {
         let (owner, root_id, registry) = self.build();
-        let (owner, result) = owner.run_frame();
+        let mut scene = super::SceneHost::new();
+        let (owner, result) = scene.run_frame(owner);
         let layer_tree = result.map_err(flui_foundation::TreeError::into_error)?;
         Ok(FrameRun {
             owner,
             root_id,
             registry,
             layer_tree,
+            scene,
         })
     }
 
@@ -331,6 +335,8 @@ pub struct FrameRun {
     root_id: RenderId,
     registry: RenderLabelRegistry,
     layer_tree: Option<LayerTree>,
+    /// The scene the frames are applied to.
+    scene: super::SceneHost,
 }
 
 impl FrameRun {
@@ -403,8 +409,8 @@ impl FrameRun {
     /// next frame starts from the failed one.
     pub fn try_pump(&mut self) -> Result<FrameReport, RenderError> {
         self.layer_tree = self
-            .owner
-            .run_frame_in_place()
+            .scene
+            .run_frame_in_place(&mut self.owner)
             .map_err(flui_foundation::TreeError::into_error)?;
         Ok(self.report())
     }
@@ -601,15 +607,17 @@ impl FrameRun {
             owner,
             root_id,
             registry,
+            mut scene,
             ..
         } = self;
-        let (owner, result) = owner.run_frame();
+        let (owner, result) = scene.run_frame(owner);
         let layer_tree = result.expect("run_frame must succeed for a well-formed test tree");
         Self {
             owner,
             root_id,
             registry,
             layer_tree,
+            scene,
         }
     }
 
@@ -737,12 +745,12 @@ impl RenderTester {
             .run_compositing()
             .expect("run_compositing must succeed for a well-formed test tree");
         let mut owner = owner.into_paint();
-        owner
-            .run_paint()
-            .expect("run_paint must succeed for a well-formed test tree");
-        // take_layer_tree() is on impl<Phase: PipelinePhase> PipelineOwner<Phase>
-        // so it is reachable here on PipelineOwner<PaintPhase>.
-        let layer_tree = owner.take_layer_tree();
+        let mut scene = super::SceneHost::new();
+        let ((), layer_tree) = scene.drive(&mut owner, |owner, writer| {
+            owner
+                .run_paint(writer)
+                .expect("run_paint must succeed for a well-formed test tree");
+        });
         PaintRun {
             owner,
             root_id,
@@ -794,9 +802,11 @@ impl RenderTester {
             .run_compositing()
             .expect("run_compositing must succeed for a well-formed test tree");
         let mut owner = owner.into_paint();
-        owner
-            .run_paint()
-            .expect("run_paint must succeed for a well-formed test tree");
+        let _ = super::SceneHost::new().drive(&mut owner, |owner, writer| {
+            owner
+                .run_paint(writer)
+                .expect("run_paint must succeed for a well-formed test tree");
+        });
         let mut owner = owner.into_semantics();
         owner
             .run_semantics()
@@ -826,9 +836,8 @@ pub struct PaintRun {
     owner: PipelineOwner<PaintPhase>,
     root_id: RenderId,
     registry: RenderLabelRegistry,
-    /// The layer tree produced by `run_paint`, extracted with `take_layer_tree`
-    /// immediately after the paint pass so the owner can be stored without
-    /// holding a borrow.
+    /// The frame node's tree, flattened from the scene the paint pass was
+    /// applied to.
     layer_tree: Option<LayerTree>,
 }
 
@@ -978,9 +987,11 @@ impl SemanticsRun {
             .run_compositing()
             .expect("run_compositing must succeed for a well-formed test tree");
         let mut owner = owner.into_paint();
-        owner
-            .run_paint()
-            .expect("run_paint must succeed for a well-formed test tree");
+        let _ = super::SceneHost::new().drive(&mut owner, |owner, writer| {
+            owner
+                .run_paint(writer)
+                .expect("run_paint must succeed for a well-formed test tree");
+        });
         let mut owner = owner.into_semantics();
         owner
             .run_semantics()

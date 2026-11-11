@@ -48,7 +48,7 @@ use std::{
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Matrix4;
-use flui_layer::LayerTree;
+
 use flui_semantics::SemanticsOwner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -249,19 +249,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// announces each named route.
     semantics_route_change_sink: Option<flui_semantics::platform::RouteChangeSink>,
 
-    /// The layer tree produced by the last paint phase.
-    last_layer_tree: Option<LayerTree>,
-
-    /// Paint passes that committed a layer tree, which numbers each tree's scene so a layer id
-    /// from an earlier one is not read as a layer of the next.
-    scenes_painted: u64,
-
     /// Composite-resolved transforms for `Layer::Follower` render nodes,
-    /// keyed by `RenderId` (flui-rendering ARCHITECTURE.md, follower hit-testing) — a per-frame byproduct mirroring
-    /// `last_layer_tree`. Populated post-paint
-    /// (`paint.rs::run_paint`) by resolving each `FragmentComposer`-recorded
-    /// follower correlation via the SAME `flui_layer::resolve_follower_transform`
-    /// the GPU path (flui-engine's `render_layer_recursive`) resolves
+    /// keyed by `RenderId` (flui-rendering ARCHITECTURE.md, follower hit-testing), resolved
+    /// against each applied scene version (`scene_applied`) by
+    /// against each applied scene version (`scene_applied`) through
+    /// `SceneVersion::follower_transform`, the same resolution the engine
+    /// draws by over the flattened version.
     /// against. Present ⟹ the follower is visible this frame under the
     /// resolved transform; absent ⟹ either not a follower, or a hidden one
     /// (see `last_hidden_follower_ids`). Consulted generically by the
@@ -284,36 +277,43 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// registers them without checking the owner out.
     leader_watches: Rc<LeaderWatches>,
 
-    /// Painted output kept per repaint boundary, reused when that boundary is
-    /// clean on a later frame.
+    /// What this owner keeps of each repaint boundary it published in the
+    /// scene (ADR-0304 §8): its node, its content and where its parent placed
+    /// it. A boundary absent from the paint queue emits nothing.
     ///
-    /// Keyed by the boundary's `RenderId`, holding the layer subtree its last
-    /// paint produced. `run_paint` grafts the entry instead of descending when
-    /// the boundary is absent from the paint queue, which is only sound
-    /// because `run_layout` queues exactly the boundaries layout touched and
-    /// `mark_needs_paint` queues the rest.
-    ///
-    /// Entries are replaced on repaint and evicted when their node leaves the
-    /// tree. A stale entry cannot be served to a different node: `RenderId` is
-    /// generational, so a recycled slab slot carries a new generation and
-    /// misses the map.
-    retained_boundaries: FxHashMap<RenderId, paint::RetainedSubtree>,
+    /// Entries are replaced on repaint, dropped when their node is retired,
+    /// and evicted when their node leaves the tree. A stale entry cannot be
+    /// served to a different node: `RenderId` is generational, so a recycled
+    /// slab slot carries a new generation and misses the map.
+    boundary_records: FxHashMap<RenderId, paint::BoundaryRecord>,
 
-    /// The device pixel ratio the retained output above was recorded under.
+    /// The boundaries whose records hold followers, placed for hit-testing
+    /// on every applied version.
+    follower_boundaries: FxHashSet<RenderId>,
+
+    /// The frame node this owner publishes its root under.
+    scene_frame: Option<paint::FrameRecord>,
+
+    /// The last paint's patch, until the caller reports the version it was
+    /// applied as.
+    staged_scene: Option<paint::StagedScene>,
+
+    /// The collections a paint pass works in, kept between passes.
+    paint_scratch: Option<Box<paint::PaintScratch>>,
+
+    /// Nodes of removed boundaries, retired by the paint that republishes
+    /// the parent that named them.
+
+    /// Nodes of a scene the owner dropped its records of while keeping the
+    /// lineage (a new pixel ratio, a staged patch never applied): the next
+    /// patch retires each one still in the version it patches.
+    abandoned_nodes: Vec<flui_layer::SceneNodeId>,
+    orphaned_nodes: Vec<flui_layer::SceneNodeId>,
+
+    /// The device pixel ratio the recorded output above was recorded under.
     /// A paint pass under another ratio drops it first, without waking anyone:
     /// a ratio change is observed where it is applied, but acted on at paint.
     retained_pixel_ratio: f64,
-
-    /// The root boundary's committed content token, with the root it belongs
-    /// to.
-    ///
-    /// Every other boundary keeps its token in its retained capture, so the
-    /// token dies with the capture on every eviction path. The root is never
-    /// captured (it has no parent to graft it), so its token lives here:
-    /// kept on a frame that did not queue the root, replaced on one that did
-    /// (see `run_paint` and `flui-rendering`'s `ARCHITECTURE.md`, "Paint
-    /// certifies a boundary's content token").
-    root_content: Option<(RenderId, flui_layer::ContentToken)>,
 
     /// `RenderId`s of `Layer::Follower` nodes correlated during the last
     /// paint phase that resolved to `None` (unlinked with
@@ -399,7 +399,8 @@ impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
                 "debug_doing_semantics",
                 &self.scheduler.debug_doing_semantics(),
             )
-            .field("has_layer_tree", &self.last_layer_tree.is_some())
+            .field("boundary_records", &self.boundary_records.len())
+            .field("scene_staged", &self.staged_scene.is_some())
             .field(
                 "follower_transform_count",
                 &self.last_follower_transforms.len(),
@@ -444,14 +445,17 @@ where
         unchecked_semantics_diagnostics: from.unchecked_semantics_diagnostics,
         semantics_update_callback: from.semantics_update_callback,
         semantics_route_change_sink: from.semantics_route_change_sink,
-        last_layer_tree: from.last_layer_tree,
-        scenes_painted: from.scenes_painted,
         last_follower_transforms: from.last_follower_transforms,
         last_child_paint_orders: from.last_child_paint_orders,
         leader_watches: from.leader_watches,
-        retained_boundaries: from.retained_boundaries,
+        boundary_records: from.boundary_records,
+        follower_boundaries: from.follower_boundaries,
+        scene_frame: from.scene_frame,
+        staged_scene: from.staged_scene,
+        paint_scratch: from.paint_scratch,
+        orphaned_nodes: from.orphaned_nodes,
+        abandoned_nodes: from.abandoned_nodes,
         retained_pixel_ratio: from.retained_pixel_ratio,
-        root_content: from.root_content,
         last_hidden_follower_ids: from.last_hidden_follower_ids,
         device_pixel_ratio: from.device_pixel_ratio,
         dirty_sender: from.dirty_sender,
@@ -1297,7 +1301,8 @@ mod tests {
         // which would make this test miss the intentional paint panic.
         owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
-        let (owner, result) = owner.run_frame();
+        let mut scene = crate::testing::SceneHost::new();
+        let (owner, result) = scene.run_frame(owner);
 
         std::panic::set_hook(prev);
 
@@ -1323,7 +1328,7 @@ mod tests {
 
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let (owner, second_result) = owner.run_frame();
+        let (owner, second_result) = scene.run_frame(owner);
         std::panic::set_hook(prev);
 
         let _second_err =
