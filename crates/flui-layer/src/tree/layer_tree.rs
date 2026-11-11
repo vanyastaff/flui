@@ -17,8 +17,9 @@ use std::num::NonZeroU64;
 
 use flui_foundation::{LayerId, RenderId};
 
+use super::stamp::BoundaryStamp;
 #[cfg(any(test, feature = "testing"))]
-use super::stamp::{BoundaryStamp, ContentToken};
+use super::stamp::ContentToken;
 use crate::{LayerLink, layer::Layer};
 
 /// A [`Layer`] plus its position in the tree.
@@ -34,7 +35,14 @@ pub struct LayerNode {
     /// The repaint boundary a hand-built test tree stamps on a layer, and the
     /// version of the content it painted: the input of the tree differ the
     /// damage readback suites still compare against.
-    #[cfg(any(test, feature = "testing"))]
+    ///
+    /// Present in every build, `None` outside tests: a field that existed only
+    /// under `testing` would give this type two layouts, and a hot-reload host
+    /// drops trees its plugin built with the other one.
+    #[cfg_attr(
+        not(any(test, feature = "testing")),
+        expect(dead_code, reason = "read only by the testing damage oracle")
+    )]
     boundary: Option<BoundaryStamp>,
 }
 
@@ -46,7 +54,6 @@ impl LayerNode {
             children: Vec::new(),
             layer,
             render: None,
-            #[cfg(any(test, feature = "testing"))]
             boundary: None,
         }
     }
