@@ -43,7 +43,7 @@ semantics_nodes_updated = 81
 
 [raw_button_over_text]
 allocations = 44
-bytes = 6382
+bytes = 6430
 elements = 2
 reallocations = 2
 render_nodes = 1

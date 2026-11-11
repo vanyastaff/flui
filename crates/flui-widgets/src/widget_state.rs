@@ -13,7 +13,7 @@
 //! # Set representation: bitflags, not `HashSet`
 //!
 //! A widget's active states are a [`WidgetStates`], a [`bitflags`] bitset over
-//! a `u8` rather than a `HashSet<WidgetState>` — the crate is
+//! a `u16` rather than a `HashSet<WidgetState>` — the crate is
 //! already a workspace dependency (`flui-rendering`'s dirty-flag storage
 //! uses the same house style for a small, closed set of boolean flags). Eight
 //! states fit in one byte; a bitset is `Copy`, allocation-free, and
@@ -87,7 +87,9 @@ use flui_foundation::{ChangeNotifier, Listenable};
 pub enum WidgetState {
     /// The pointer is hovering over the widget.
     Hovered,
-    /// The widget holds keyboard focus (or was tapped into focus).
+    /// The widget holds focus, by any cause: a key, traversal, a pointer
+    /// press or a request from code. A reader that shows focus (a state
+    /// layer, a ring, a halo) resolves on [`FocusVisible`](Self::FocusVisible).
     Focused,
     /// The user is actively pressing down on the widget.
     Pressed,
@@ -102,10 +104,15 @@ pub enum WidgetState {
     Disabled,
     /// The widget has entered an invalid/error state.
     Error,
+    /// The widget holds focus and the focus is shown: it was moved or last
+    /// used by a key, traversal or assistive technology (ADR-0079). A
+    /// pointer press that focuses the widget sets [`Focused`](Self::Focused)
+    /// alone.
+    FocusVisible,
 }
 
 impl WidgetState {
-    /// This state's bit in [`WidgetStates`]' backing `u8`.
+    /// This state's bit in [`WidgetStates`]' backing `u16`.
     const fn flag(self) -> WidgetStates {
         match self {
             Self::Hovered => WidgetStates::HOVERED,
@@ -116,6 +123,7 @@ impl WidgetState {
             Self::ScrolledUnder => WidgetStates::SCROLLED_UNDER,
             Self::Disabled => WidgetStates::DISABLED,
             Self::Error => WidgetStates::ERROR,
+            Self::FocusVisible => WidgetStates::FOCUS_VISIBLE,
         }
     }
 }
@@ -126,7 +134,7 @@ bitflags::bitflags! {
     /// See the module doc for why this is a bitset rather than a
     /// `HashSet<WidgetState>`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-    pub struct WidgetStates: u8 {
+    pub struct WidgetStates: u16 {
         /// See [`WidgetState::Hovered`].
         const HOVERED = 1 << 0;
         /// See [`WidgetState::Focused`].
@@ -143,6 +151,8 @@ bitflags::bitflags! {
         const DISABLED = 1 << 6;
         /// See [`WidgetState::Error`].
         const ERROR = 1 << 7;
+        /// See [`WidgetState::FocusVisible`].
+        const FOCUS_VISIBLE = 1 << 8;
     }
 }
 
@@ -336,7 +346,13 @@ impl<T: PartialEq> PartialEq for WidgetStateProperty<T> {
 /// listeners.
 #[derive(Clone)]
 pub struct WidgetStatesController {
-    value: Rc<Cell<WidgetStates>>,
+    /// One handle: a control keeps a controller in its view, its state and
+    /// its recognizers.
+    shared: Rc<SharedStates>,
+}
+
+struct SharedStates {
+    value: Cell<WidgetStates>,
     notifier: ChangeNotifier,
 }
 
@@ -346,15 +362,17 @@ impl WidgetStatesController {
     #[must_use]
     pub fn new(initial: WidgetStates) -> Self {
         Self {
-            value: Rc::new(Cell::new(initial)),
-            notifier: ChangeNotifier::new(),
+            shared: Rc::new(SharedStates {
+                value: Cell::new(initial),
+                notifier: ChangeNotifier::new(),
+            }),
         }
     }
 
     /// The current set of active states.
     #[must_use]
     pub fn value(&self) -> WidgetStates {
-        self.value.get()
+        self.shared.value.get()
     }
 
     /// Whether `self` and `other` share the same underlying state cell —
@@ -370,21 +388,35 @@ impl WidgetStatesController {
     /// re-homes its listener on such a swap.
     #[must_use]
     pub fn is_same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.value, &other.value)
+        Rc::ptr_eq(&self.shared, &other.shared)
     }
 
     /// Adds `state` to the set if `add` is `true`, removes it otherwise.
     /// Notifies listeners only if the set actually changed.
     pub fn update(&self, state: WidgetState, add: bool) {
-        let before = self.value.get();
+        let before = self.shared.value.get();
         let after = if add {
             before.with_state(state)
         } else {
             before.without_state(state)
         };
-        self.value.set(after);
+        self.shared.value.set(after);
         if after != before {
-            self.notifier.notify_listeners();
+            self.shared.notifier.notify_listeners();
+        }
+    }
+}
+
+impl WidgetStatesController {
+    /// Replaces the states of `mask` with those `values` has of them, and
+    /// notifies once if the set changed. The owner of several states writes
+    /// them together this way, so a listener never sees half of a change.
+    pub(crate) fn write(&self, mask: WidgetStates, values: WidgetStates) {
+        let before = self.shared.value.get();
+        let after = before.difference(mask).union(values.intersection(mask));
+        self.shared.value.set(after);
+        if after != before {
+            self.shared.notifier.notify_listeners();
         }
     }
 }
@@ -405,12 +437,12 @@ impl fmt::Debug for WidgetStatesController {
 
 impl Listenable for WidgetStatesController {
     fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
-        self.notifier.listen(listener)
+        self.shared.notifier.listen(listener)
     }
     fn listen_with_recovery(
         &self,
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
-        self.notifier.listen_with_recovery(relay)
+        self.shared.notifier.listen_with_recovery(relay)
     }
 }

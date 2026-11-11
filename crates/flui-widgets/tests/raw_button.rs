@@ -13,7 +13,10 @@ use flui_widgets::interaction::{
     Action as IntentAction, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent,
     ButtonActivateIntent, Focus, FocusRing, GestureDetector,
 };
-use flui_widgets::{Column, RawButton, Semantics, SemanticsRole, Text, column};
+use flui_widgets::{
+    Column, RawButton, Semantics, SemanticsRole, Text, WidgetState, WidgetStates,
+    WidgetStatesController, column,
+};
 
 use crate::common::{LaidOut, lay_out, loose};
 
@@ -658,5 +661,149 @@ pub(crate) fn disabled_raw_button_is_disabled_in_every_part() {
         *log.borrow(),
         ["press", "press", "press", "press"],
         "the activation key reaches neither the disabled button nor the action above it"
+    );
+}
+
+/// A button given a states controller, with the switches the test turns.
+#[derive(Clone, StatefulView)]
+struct Stated {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+    shown: flui_testing::widgets::SharedSignal<bool>,
+    first: flui_testing::widgets::SharedSignal<bool>,
+    controllers: [WidgetStatesController; 2],
+}
+
+struct StatedState {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+    shown: flui_testing::widgets::SharedSignal<bool>,
+    first: flui_testing::widgets::SharedSignal<bool>,
+}
+
+impl StatefulView for Stated {
+    type State = StatedState;
+    fn create_state(&self) -> Self::State {
+        StatedState {
+            enabled: self.enabled.clone(),
+            shown: self.shown.clone(),
+            first: self.first.clone(),
+        }
+    }
+}
+
+impl ViewState<Stated> for StatedState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.enabled.bind(ctx);
+        self.shown.bind(ctx);
+        self.first.bind(ctx);
+    }
+
+    fn build(&self, view: &Stated, ctx: &dyn BuildContext) -> impl IntoView {
+        if !self.shown.get(ctx) {
+            return flui_widgets::SizedBox::new(120.0, 60.0).boxed();
+        }
+        let controller = &view.controllers[usize::from(!self.first.get(ctx))];
+        let mut button =
+            RawButton::new(flui_widgets::SizedBox::new(120.0, 60.0).child(Text::new("Press")))
+                .states_controller(controller.clone());
+        if self.enabled.get(ctx) {
+            button = button.on_press(|_cx: &mut EventCx<'_>| {});
+        }
+        button.boxed()
+    }
+}
+
+/// The button writes its interaction states to the controller it is given
+/// (ADR-0322 §3): `Pressed` for a contact that is down, `Focused` and
+/// `FocusVisible` for the focus a key gave it, `Disabled` for the switch;
+/// disabling under a contact leaves `Disabled` alone, and a controller the
+/// button stops writing to, by a swap or by unmounting, keeps nothing.
+///
+/// Red-check: drop the `states` the button hands its node (every row but
+/// the first fails), or the clearing in the node's `dispose` (the last row).
+pub(crate) fn raw_button_writes_its_states_to_the_controller() {
+    use std::time::Duration;
+
+    use crate::keyboard_focus::tab;
+
+    let enabled = flui_testing::widgets::SharedSignal::new(true);
+    let shown = flui_testing::widgets::SharedSignal::new(true);
+    let first = flui_testing::widgets::SharedSignal::new(true);
+    let controllers = [
+        WidgetStatesController::default(),
+        WidgetStatesController::default(),
+    ];
+    let [one, other] = controllers.clone();
+    let mut app = lay_out(
+        Stated {
+            enabled: enabled.clone(),
+            shown: shown.clone(),
+            first: first.clone(),
+            controllers,
+        },
+        loose(400.0),
+    );
+    let manager = app.focus_manager();
+    let focus_states = WidgetStates::FOCUSED | WidgetStates::FOCUS_VISIBLE;
+    assert_eq!(one.value(), WidgetStates::NONE, "an idle button");
+
+    app.dispatch_pointer_down(20.0, 20.0);
+    app.pump_for(Duration::from_millis(200));
+    assert!(
+        one.value().contains_state(WidgetState::Pressed),
+        "a contact that is down presses the button"
+    );
+    app.dispatch_pointer_up(20.0, 20.0);
+    app.pump_for(Duration::from_millis(400));
+    assert!(
+        !one.value().contains_state(WidgetState::Pressed),
+        "and its release ends the press"
+    );
+
+    assert!(app.enter_owner_scope(|| tab(&manager)));
+    app.pump();
+    assert_eq!(
+        one.value().intersection(focus_states),
+        focus_states,
+        "focus a key gave is held and shown"
+    );
+
+    app.dispatch_pointer_down(20.0, 20.0);
+    app.pump_for(Duration::from_millis(200));
+    assert!(one.value().contains_state(WidgetState::Pressed));
+    enabled.set(false);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::DISABLED,
+        "a button disabled under a contact, with the focus, is disabled and nothing else"
+    );
+    app.dispatch_pointer_up(20.0, 20.0);
+    app.pump_for(Duration::from_millis(400));
+    assert_eq!(one.value(), WidgetStates::DISABLED);
+
+    enabled.set(true);
+    app.pump();
+    assert!(app.enter_owner_scope(|| tab(&manager)));
+    app.pump();
+    assert_eq!(one.value(), focus_states);
+    first.set(false);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::NONE,
+        "a controller the button stops writing to keeps none of its states"
+    );
+    assert_eq!(
+        other.value(),
+        focus_states,
+        "and the one it is given starts at what the button is"
+    );
+
+    shown.set(false);
+    app.pump();
+    assert_eq!(
+        other.value(),
+        WidgetStates::NONE,
+        "a controller keeps no state of a button that is gone"
     );
 }

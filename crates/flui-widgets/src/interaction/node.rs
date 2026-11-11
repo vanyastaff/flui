@@ -38,13 +38,14 @@ use super::actions::{
     Action, ActionChain, EnclosingActions, ErasedAction, FocusRecord, Intent, layered_chain,
     shared_action,
 };
-use super::focus::render_box_rect_provider;
+use super::focus::{FocusChangeHandler, render_box_rect_provider};
 use super::focus_host::{FocusConfig, FocusHost};
 use super::focus_ring::DefaultFocusRingStyle;
 use super::gesture_detector::TapSlot;
 use super::listener::release_targets;
 use super::raw_gesture_detector::RecognizerHost;
 use crate::support::EventCallback;
+use crate::widget_state::{WidgetState, WidgetStates, WidgetStatesController};
 use crate::{Listener, Semantics};
 
 /// The behaviours of a control around its child, in one element.
@@ -62,6 +63,8 @@ pub(crate) struct InteractiveNode {
     /// Shared, so a clone of the view copies no list.
     actions: Rc<Vec<(TypeId, ErasedAction)>>,
     semantics: Option<Semantics>,
+    /// Where the node writes the interaction states it owns (ADR-0322 §3).
+    states: Option<WidgetStatesController>,
     child: BoxedView,
 }
 
@@ -74,6 +77,7 @@ impl std::fmt::Debug for InteractiveNode {
             .field("focus", &self.focus.is_some())
             .field("actions", &self.actions.len())
             .field("semantics", &self.semantics.is_some())
+            .field("states", &self.states.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -90,6 +94,7 @@ impl InteractiveNode {
             focus_ring: false,
             actions: Rc::default(),
             semantics: None,
+            states: None,
             child,
         }
     }
@@ -124,9 +129,24 @@ impl InteractiveNode {
     /// The focus part's configuration: the control's own, conjoined with
     /// the switch.
     fn focus_config(&self) -> Option<FocusConfig> {
-        self.focus.as_ref().map(|config| FocusConfig {
-            can_request_focus: Some(config.can_request_focus.unwrap_or(true) && self.enabled),
-            ..config.clone()
+        self.focus.as_ref().map(|config| {
+            let mut config = FocusConfig {
+                can_request_focus: Some(config.can_request_focus.unwrap_or(true) && self.enabled),
+                ..config.clone()
+            };
+            if let Some(states) = &self.states {
+                config.on_focus_change = Some(writing_focus(
+                    states,
+                    WidgetState::Focused,
+                    config.on_focus_change.take(),
+                ));
+                config.on_visible_focus_change = Some(writing_focus(
+                    states,
+                    WidgetState::FocusVisible,
+                    config.on_visible_focus_change.take(),
+                ));
+            }
+            config
         })
     }
 
@@ -196,6 +216,42 @@ impl InteractiveNode {
         self.semantics = Some(semantics);
         self
     }
+
+    /// Write the interaction states the node owns to `controller`
+    /// (ADR-0322 §3): `Pressed` while a contact its tap tracks is down,
+    /// `Focused` while its focus node holds the primary focus,
+    /// `FocusVisible` while that focus is shown, and `Disabled` while the
+    /// switch is off. No other part of the tree writes them for the control.
+    /// The node clears them from a controller it stops writing to, by a
+    /// swap or by unmounting.
+    #[must_use]
+    pub(crate) fn states(mut self, controller: WidgetStatesController) -> Self {
+        self.states = Some(controller);
+        self
+    }
+}
+
+/// The states a node writes to its controller.
+const WRITTEN: WidgetStates = WidgetStates::PRESSED
+    .union(WidgetStates::FOCUSED)
+    .union(WidgetStates::FOCUS_VISIBLE)
+    .union(WidgetStates::DISABLED);
+
+/// A focus handler that writes `state` to `states`, then calls the
+/// control's own. The value is committed before either listener runs
+/// (ADR-0287).
+fn writing_focus(
+    states: &WidgetStatesController,
+    state: WidgetState,
+    then: Option<FocusChangeHandler>,
+) -> FocusChangeHandler {
+    let states = states.clone();
+    Rc::new(move |cx: &mut EventCx<'_>, on: bool| {
+        states.update(state, on);
+        if let Some(then) = &then {
+            then(cx, on);
+        }
+    })
 }
 
 /// The hosts of a mounted [`InteractiveNode`].
@@ -217,9 +273,39 @@ pub(crate) struct InteractiveNodeState {
     ring_style: FocusRingStyle,
     /// Names the render object, for the focus node to measure.
     anchor: SubtreeAnchor,
+    /// The controller the node writes its states to, and the switch it
+    /// writes `Disabled` from.
+    states: Option<WidgetStatesController>,
+    enabled: bool,
 }
 
 impl InteractiveNodeState {
+    /// Bring the controller to what the node is now. The focus states come
+    /// from the focus node, so a controller given to a control that already
+    /// holds focus starts right; a control with no tap has no contact, so
+    /// nothing of it is pressed.
+    fn write_states(&self) {
+        let Some(states) = &self.states else {
+            return;
+        };
+        let node = self.focus_node();
+        let mut values = WidgetStates::NONE;
+        if !self.enabled {
+            values |= WidgetStates::DISABLED;
+        }
+        if node.is_some_and(|node| node.has_primary_focus()) {
+            values |= WidgetStates::FOCUSED;
+        }
+        if node.is_some_and(|node| node.has_visible_focus()) {
+            values |= WidgetStates::FOCUS_VISIBLE;
+        }
+        let mut mask = WRITTEN.difference(WidgetStates::PRESSED);
+        if !self.tap.is_set() {
+            mask |= WidgetStates::PRESSED;
+        }
+        states.write(mask, values);
+    }
+
     fn layer_actions(&mut self) {
         self.chain = (!self.own_actions.is_empty())
             .then(|| layered_chain(self.ambient_actions.clone(), Rc::clone(&self.own_actions)));
@@ -293,7 +379,7 @@ impl StatefulRenderView for InteractiveNode {
     type State = InteractiveNodeState;
 
     fn create_state(&self) -> Self::State {
-        let tap = TapSlot::new(self.live_tap());
+        let tap = TapSlot::new(self.live_tap(), self.states.as_ref());
         InteractiveNodeState {
             recognizers: RecognizerHost::new(tap.factory().as_slice()),
             tap,
@@ -304,6 +390,8 @@ impl StatefulRenderView for InteractiveNode {
             platform: None,
             ring_style: FocusRingStyle::BUILT_IN,
             anchor: SubtreeAnchor::new(),
+            states: self.states.clone(),
+            enabled: self.enabled,
         }
     }
 
@@ -338,6 +426,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
                 record,
             );
         }
+        self.write_states();
     }
 
     fn did_change_dependencies(&mut self, cx: &dyn LifecycleContext) {
@@ -355,7 +444,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
     fn did_update_view(&mut self, _old: &InteractiveNode, new: &InteractiveNode) {
         let mut failure = FirstPanic::new();
         failure.contain(|| {
-            self.tap.set(new.live_tap());
+            self.tap.set(new.live_tap(), new.states.as_ref());
             self.recognizers.update(self.tap.factory().as_slice());
         });
         // The replaced bindings drop here; an action is user code.
@@ -368,6 +457,19 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
                 focus.record(record);
             });
         }
+        // A controller the node stops writing to keeps none of its states;
+        // a controller's listener is user code.
+        let replaced = self.states.take().filter(|old| {
+            !new.states
+                .as_ref()
+                .is_some_and(|states| states.is_same(old))
+        });
+        if let Some(replaced) = replaced {
+            failure.contain(|| replaced.write(WRITTEN, WidgetStates::NONE));
+        }
+        self.states.clone_from(&new.states);
+        self.enabled = new.enabled;
+        failure.contain(|| self.write_states());
         failure.resume();
     }
 
@@ -434,9 +536,13 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
         failure.contain(|| self.recognizers.dispose());
         // A request from assistive technology that arrives late finds no
         // callback; the outgoing closure is user code.
-        failure.contain(|| self.tap.set(None));
+        failure.contain(|| self.tap.set(None, None));
         if let Some(focus) = &mut self.focus {
             failure.contain(|| focus.dispose());
+        }
+        // A shared controller keeps no state of a control that is gone.
+        if let Some(states) = self.states.take() {
+            failure.contain(|| states.write(WRITTEN, WidgetStates::NONE));
         }
         failure.resume();
     }

@@ -149,9 +149,11 @@ states, then runs the cancel callbacks.
 
 ### §3 Interaction states are one value, read at paint
 
-The node owns a `WidgetStatesController` (`crates/flui-widgets/src/widget_state.rs`), or shares
-the one given to `states`. It writes five states of `WidgetStates` and no other part of the tree
-writes them for that control:
+A control gives its node a `WidgetStatesController` (`crates/flui-widgets/src/widget_state.rs`):
+its own, or the one an application handed it (`RawButton::states_controller`). The node writes
+five states of `WidgetStates` to it and no other part of the tree writes them for that control. A
+node given no controller writes none and keeps none: its only reader would be its own focus ring,
+which reads the focus node.
 
 - `Hovered`: a pointer is inside the mouse region;
 - `Pressed`: a contact a recognizer tracks is down and not yet rejected;
@@ -159,20 +161,20 @@ writes them for that control:
 - `FocusVisible`: the node holds focus and focus is shown (ADR-0079);
 - `Disabled`: §2.
 
-`WidgetState::FocusVisible` is new and `WidgetStates` widens from `u8` to `u16` for it.
-`Focused` becomes "holds focus, by any cause"; the readers that mean "show it" (state-layer
-overlays, rings, halos) resolve on `FocusVisible`, and the change that adds the variant moves
-them.
+`Focused` is "holds focus, by any cause" and `FocusVisible` is the focus a user can see; the
+readers that mean "show it" (state-layer overlays, rings, halos) resolve on `FocusVisible`.
+`WidgetStates` is a `u16`.
 
 The value is a `Cell` behind the controller, and the controller is a `Listenable`. A reader at
 paint (a state layer, a Cupertino highlight) holds the controller, reads `value()` in `paint`, and
 returns it as its repaint listenable, so a hover repaints that render object and rebuilds nothing.
-The focus ring of §1 is such a reader inside the node. A reader at build subscribes with
-`listen`, as today. The node sets the cell, then notifies (ADR-0287); a listener that panics is
-handled by the notifier's first-failure custody, and the value it was notified of stays committed.
+A reader at build subscribes with `listen`, as today. The node sets the cell, then notifies
+(ADR-0287); a listener that panics is handled by the notifier's first-failure custody, and the
+value it was notified of stays committed.
 
-When the element unmounts, the node clears the states it wrote from a controller it was
-given, so a shared controller keeps no state of a control that is gone.
+When the element unmounts, or the control hands the node another controller, the node clears the
+states it wrote from the one it stops writing to, so a shared controller keeps no state of a
+control that is gone. A controller given later starts at what the node is.
 
 The node may be built first with the states written and the wrappers' rebuild-on-change readers
 kept; moving a reader to paint does not change this shape.
@@ -341,7 +343,7 @@ impl RenderObjectContext<'_> {
 | Here | Flutter | Why it differs |
 |---|---|---|
 | The private node behind a control | a control's `State` composing `Focus`, `Actions`, `MouseRegion`, `GestureDetector`, `Semantics` (`InkResponse`, `FocusableActionDetector`) | measured: fifteen elements and seven render nodes per control (table above); the widgets an author writes are the same |
-| `WidgetStates`, `WidgetStatesController`, a reader that repaints | `WidgetState`, `WidgetStatesController`, `WidgetStateProperty` | none |
+| `WidgetStates`, `WidgetStatesController`, a reader that repaints, `RawButton::states_controller` | `WidgetState`, `WidgetStatesController`, `WidgetStateProperty`, `statesController` of `InkWell` and `ButtonStyleButton` | none |
 | `WidgetState::FocusVisible` | `FocusManager.highlightMode` and `FocusableActionDetector.onShowFocusHighlight` | one value a painter reads, where Flutter has a state and a separate callback |
 | `StatefulRenderView` (§4) | a `RenderObjectElement` subclass that keeps state, which any Flutter library may write | FLUI's elements are one generic `Element<V, Arity, Behavior>`, so the capability is a behaviour kind and not a subclass |
 | `provide` (§5) | `Element.updateInheritance`, which any element may override to enter `_inheritedElements` | the same mechanism, typed: the value type is the key and `ProvidedValue` carries `updateShouldNotify` |
@@ -366,8 +368,8 @@ render object or already owns the element the value comes from.
 - Bad, because `RenderInteractive` implements hit testing, semantics and paint that five small
   render objects split today, and the focus and recognizer logic must be extracted into hosts
   before the node exists.
-- Bad, because `Focused` changes meaning for existing `WidgetStateProperty` resolvers; the change
-  that adds `FocusVisible` has to move every reader.
+- Bad, because a `WidgetStateProperty` resolver ported from Flutter that shows focus on `Focused`
+  shows it after a click too; it has to resolve on `FocusVisible`.
 
 ### Confirmation
 

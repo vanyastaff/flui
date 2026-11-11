@@ -114,8 +114,10 @@ Amends §1 and the `Escape` item of "Not implemented"; the rest stands.
   visible focus: focus moved by a key, traversal or assistive technology (`Focus` requests it with
   `FocusCause::Assistive`), not focus set by a pointer press. `RawButton` is a Tab stop with
   `on_press`, answers the activation intents and draws the ring.
-- **Material shows visible focus once.** `WidgetState::Focused` on an `InkWell` is visible focus
-  (`Focus::on_visible_focus_change`), so a click leaves no overlay or halo. The well draws a
+- **Material shows visible focus once.** An `InkWell` writes `WidgetState::Focused` while it holds
+  focus and `WidgetState::FocusVisible` while that focus is visible
+  (`Focus::on_visible_focus_change`); state layers and halos resolve on `FocusVisible`
+  (ADR-0322 §3), so a click leaves no overlay or halo. The well draws a
   `FocusRing` in the style `ThemeData::focus_ring` provides through `Theme`, and the stock
   overlay ramps have no focused tier; a checkbox, switch or radio keeps its M3 halo instead.
 
