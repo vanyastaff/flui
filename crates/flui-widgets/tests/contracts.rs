@@ -1738,6 +1738,7 @@ fn nested_scroll_channel() {
             ("anchored_drag::anchored_drag_is_no_drop_autoscroll_target", crate::anchored_drag::anchored_drag_is_no_drop_autoscroll_target),
             ("anchored_drag::anchored_drag_is_a_tab_stop_and_a_named_slider", crate::anchored_drag::anchored_drag_is_a_tab_stop_and_a_named_slider),
             ("anchored_drag::anchored_drag_offset_listenable_follows_every_move", crate::anchored_drag::anchored_drag_offset_listenable_follows_every_move),
+            ("anchored_drag::anchored_drag_stays_bounded_under_every_platform_convention", crate::anchored_drag::anchored_drag_stays_bounded_under_every_platform_convention),
             ("swipe_actions::swipe_actions_reveal_settle_and_perform_a_tapped_action", crate::swipe_actions::swipe_actions_reveal_settle_and_perform_a_tapped_action),
             ("swipe_actions::swipe_actions_full_swipe_performs_the_first_action_on_release", crate::swipe_actions::swipe_actions_full_swipe_performs_the_first_action_on_release),
             ("swipe_actions::swipe_actions_mirror_right_to_left", crate::swipe_actions::swipe_actions_mirror_right_to_left),
