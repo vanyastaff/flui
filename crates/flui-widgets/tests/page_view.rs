@@ -393,6 +393,34 @@ fn allowed_devices_name_who_may_turn_the_page() {
         Some(1.0),
         "every device by default"
     );
+
+    // A page view that names no devices asks the subtree's behavior.
+    use std::rc::Rc;
+    #[derive(Debug)]
+    struct TouchOnly;
+    impl flui_widgets::ScrollBehavior for TouchOnly {
+        fn drag_devices(&self, _details: &flui_widgets::ScrollBehaviorDetails) -> PointerKindSet {
+            PointerKindSet::TOUCH
+        }
+    }
+    let behavior: Rc<dyn flui_widgets::ScrollBehavior> = Rc::new(TouchOnly);
+    let configured = |device: Device| {
+        let controller = PageController::new();
+        let view = PageView::new(pages(3), pager_alternatives()).controller(controller.clone());
+        let behavior = Rc::clone(&behavior);
+        let (mut laid, _vsync) = mount_tree(move |vsync| {
+            flui_widgets::ScrollConfiguration::new(behavior, VsyncScope::new(vsync, view)).boxed()
+        });
+        laid.replay(&slow_drag(device, at(280.0, 150.0), at(80.0, 150.0)));
+        settle(&mut laid);
+        controller.page()
+    };
+    assert_eq!(configured(Device::Touch), Some(1.0));
+    assert_eq!(
+        configured(Device::Mouse),
+        Some(0.0),
+        "the behavior refuses a mouse drag"
+    );
 }
 
 #[test]

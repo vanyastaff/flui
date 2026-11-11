@@ -424,6 +424,11 @@ pub enum EngineError {
         height: u32,
     },
 
+    /// Every slot id of a GPU context is spent: each slot index was detached
+    /// at its last generation, so none can name a new slot.
+    #[error("the GPU context has no slot id left")]
+    SlotIdentityExhausted,
+
     /// A pixel readback did not complete within its bound.
     ///
     /// The GPU never signalled the copy's completion: a stalled device or
@@ -500,7 +505,8 @@ impl EngineError {
             | Self::DeviceCreation(_)
             | Self::InvalidTargetSize { .. }
             | Self::ReadbackTimedOut { .. }
-            | Self::NotInitialized => Recoverability::Fatal,
+            | Self::NotInitialized
+            | Self::SlotIdentityExhausted => Recoverability::Fatal,
             Self::UnsupportedMaskShader
             | Self::UnsupportedBackdropFilter { .. }
             | Self::UnsupportedImageFilter { .. }

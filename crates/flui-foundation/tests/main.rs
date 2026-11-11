@@ -13,6 +13,9 @@ mod claim_slot;
 #[path = "generation.rs"]
 mod generation;
 
+#[path = "slot_index.rs"]
+mod slot_index;
+
 #[path = "sequence.rs"]
 mod sequence;
 

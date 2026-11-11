@@ -426,7 +426,7 @@ pub struct PageView {
     scroll_direction: Axis,
     on_page_changed: Option<OnPageChanged>,
     cache_extent: Option<(f64, CacheExtentStyle)>,
-    allowed_devices: PointerKindSet,
+    allowed_devices: Option<PointerKindSet>,
     autofocus: bool,
     children: Vec<BoxedView>,
     alternatives: GestureAlternatives,
@@ -444,7 +444,7 @@ impl PageView {
             scroll_direction: Axis::Horizontal,
             on_page_changed: None,
             cache_extent: Some((0.0, CacheExtentStyle::Viewport)),
-            allowed_devices: PointerKindSet::all(),
+            allowed_devices: None,
             autofocus: false,
             children: super::sliver_list::wrap_in_repaint_boundaries(children.into_boxed_vec()),
         }
@@ -493,11 +493,12 @@ impl PageView {
         self
     }
 
-    /// Admit only drags and presses of these pointer kinds (default: all).
+    /// Admit only drags and presses of these pointer kinds (default: what
+    /// the [`ScrollBehavior`](crate::ScrollBehavior) answers).
     /// See [`Scrollable::allowed_devices`].
     #[must_use]
     pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
-        self.allowed_devices = devices;
+        self.allowed_devices = Some(devices);
         self
     }
 
@@ -792,9 +793,11 @@ impl ViewState<PageView> for PageViewState {
         })
         .controller(controller.scroll_controller())
         .snap_policy(Rc::clone(&self.snap))
-        .allowed_devices(view.allowed_devices)
         .autofocus(view.autofocus)
         .scroll_direction(scroll_direction);
+        if let Some(devices) = view.allowed_devices {
+            scrollable = scrollable.allowed_devices(devices);
+        }
         if page_count > 0 {
             let page = usize::try_from(self.last_reported_page.get())
                 .unwrap_or(0)
