@@ -4053,6 +4053,20 @@ mod native_windows {
                 pump_pointer_thread();
                 std::thread::sleep(Duration::from_millis(2));
             }
+            // FLUI_DIAG (temporary): what the system holds of both contacts.
+            for id in 1..=4_u32 {
+                let mut info = POINTER_INFO::default();
+                // SAFETY: a live local; a stale id is refused.
+                let got = unsafe {
+                    windows::Win32::UI::Input::Pointer::GetPointerInfo(id, &raw mut info)
+                };
+                eprintln!(
+                    "FLUI_DIAG inject {flags:?} -> {injected:?}; pointer {id}: {} frame={} flags={:#x}",
+                    got.is_ok(),
+                    info.frameId,
+                    info.pointerFlags.0
+                );
+            }
             injected
         };
         let held = POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT;

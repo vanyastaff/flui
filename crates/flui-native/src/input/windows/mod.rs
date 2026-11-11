@@ -1890,6 +1890,11 @@ mod raw {
     /// for its other pointers.
     pub(super) fn skip_frame_messages(raw: u32) {
         use windows::Win32::UI::Input::Pointer::SkipPointerFrameMessages;
+        // FLUI_DIAG (temporary): a run that leaves the frame's other messages.
+        if std::env::var_os("FLUI_DIAG_NO_SKIP").is_some() {
+            eprintln!("FLUI_DIAG   skip disabled");
+            return;
+        }
         // SAFETY: only the id of the message being handled is passed; a refused
         // call leaves the other messages to arrive, each a frame of its own.
         if unsafe { SkipPointerFrameMessages(raw) }.is_err() {
