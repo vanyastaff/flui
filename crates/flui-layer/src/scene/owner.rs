@@ -350,6 +350,11 @@ pub struct SceneOwner {
     /// for the property test.
     #[cfg(feature = "testing")]
     planted: Option<usize>,
+    /// Whether effect updates are damaged by each version's own scope and
+    /// chain, never by the inside and chain the versions share: the path the
+    /// shared one must equal, for the equivalence test.
+    #[cfg(feature = "testing")]
+    unshared: bool,
     /// Why a publication without a base is full.
     full: FullReason,
     /// The newest version the raster side reported holding.
@@ -401,6 +406,8 @@ impl SceneOwner {
             patch_damage: DamageRegion::Full(FullReason::FirstFrame),
             #[cfg(feature = "testing")]
             planted: None,
+            #[cfg(feature = "testing")]
+            unshared: false,
             full: FullReason::FirstFrame,
             acked: None,
             pending: PendingLog::default(),
@@ -615,6 +622,15 @@ impl SceneOwner {
         self.planted = Some(op);
     }
 
+    /// Makes every later apply damage an effect update by each version's own
+    /// scope and chain, as if the versions shared neither the effect's inside
+    /// nor the chain above it: the path the shared fold must equal, which a
+    /// test runs beside it.
+    #[cfg(feature = "testing")]
+    pub fn force_unshared_effect_updates(&mut self) {
+        self.unshared = true;
+    }
+
     /// Applies the operations the writer buffered, all or nothing, and
     /// returns the new version's id with what the owner let go of: the
     /// version it replaced and the contents a fold of the pending log
@@ -631,6 +647,10 @@ impl SceneOwner {
         let planted = self.planted.take();
         #[cfg(not(feature = "testing"))]
         let planted = None;
+        #[cfg(feature = "testing")]
+        let share = !self.unshared;
+        #[cfg(not(feature = "testing"))]
+        let share = true;
         let mut ops = std::mem::take(&mut self.ops);
         let built = Patch::build(
             &self.current,
@@ -639,6 +659,7 @@ impl SceneOwner {
             &ops,
             surface.size,
             planted,
+            share,
         )
         .and_then(|built| {
             let seq = self
@@ -791,6 +812,7 @@ impl<'a> Patch<'a> {
         ops: &[SceneOp],
         surface: (u32, u32),
         planted: Option<usize>,
+        share: bool,
     ) -> Result<Built, SceneError> {
         scratch.reset();
         let base = current.inner();
@@ -825,6 +847,7 @@ impl<'a> Patch<'a> {
                     touched_marks: &patch.scratch.touched,
                     placed_marks: &patch.scratch.placed_marks,
                     skip,
+                    share,
                 },
                 surface,
                 &mut patch.cost,

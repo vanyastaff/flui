@@ -1052,7 +1052,7 @@ impl<'v> Geometry<'v> {
             let mut links = Links::new();
             match *step {
                 Up::Place(node) => {
-                    links.push(Link::Translate(self.record(node).placement().offset()))
+                    links.push(Link::Translate(self.record(node).placement().offset()));
                 }
                 Up::Effect(at) => {
                     let Some(layer) = self.record(at.node).content().effect_layer(at.entry) else {
@@ -1079,7 +1079,7 @@ impl<'v> Geometry<'v> {
         for step in steps.iter().rev() {
             match *step {
                 Up::Place(node) => {
-                    out.push(Link::Translate(self.record(node).placement().offset()))
+                    out.push(Link::Translate(self.record(node).placement().offset()));
                 }
                 Up::Effect(at) => {
                     if let Some(layer) = self.record(at.node).content().effect_layer(at.entry) {

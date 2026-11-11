@@ -247,12 +247,11 @@ impl SceneSlot {
     #[cfg(feature = "hot-reload")]
     pub(crate) fn renew(&self, reason: ResyncReason) -> ReleasedContents {
         let mut scene = self.scene.borrow_mut();
-        match scene.as_mut() {
-            Some(scene) => scene.renew(reason),
-            None => {
-                self.renew_owed.set(Some(reason));
-                ReleasedContents::default()
-            }
+        if let Some(scene) = scene.as_mut() {
+            scene.renew(reason)
+        } else {
+            self.renew_owed.set(Some(reason));
+            ReleasedContents::default()
         }
     }
 }

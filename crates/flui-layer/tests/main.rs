@@ -461,32 +461,46 @@ fn a_version_resolves_links_and_annotations_as_its_flattened_tree_does() {
 /// A composited-layer update shares its content's stream and damages and
 /// bounds what a content built afresh with its layers would (ADR-0304 §2,
 /// §4).
+///
+/// Each row runs twice: as production damages an effect update, reading the
+/// inside and the chain both versions share once, and reading each
+/// version's own. Both damage and publish the same, read for read: the
+/// sharing conditions are pinned by this equivalence, since the other
+/// operations of a patch cover most of what a wrongly shared read misses.
 #[test]
 fn scene_effect_update() {
     use scene_effect_update as u;
-    run_rows(
-        "scene_effect_update",
-        &[
-            (
-                "a_nested_effect_update_damages_its_scope_and_moves_the_bounds",
-                u::a_nested_effect_update_damages_its_scope_and_moves_the_bounds,
-            ),
-            (
-                "an_outer_effect_update_damages_its_unchanged_descendants",
-                u::an_outer_effect_update_damages_its_unchanged_descendants,
-            ),
-            (
-                "an_effect_update_equals_a_content_built_afresh",
-                u::an_effect_update_equals_a_content_built_afresh,
-            ),
-            (
-                "an_update_of_an_effect_and_its_descendant_folds_each_inside",
-                u::an_update_of_an_effect_and_its_descendant_folds_each_inside,
-            ),
-            (
-                "an_effect_update_of_a_reparented_boundary_reads_each_versions_chain",
-                u::an_effect_update_of_a_reparented_boundary_reads_each_versions_chain,
-            ),
-        ],
-    );
+    let rows: [(&str, u::Row); 6] = [
+        (
+            "an_effect_update_over_a_moved_slot_folds_each_inside",
+            u::an_effect_update_over_a_moved_slot_folds_each_inside,
+        ),
+        (
+            "a_nested_effect_update_damages_its_scope_and_moves_the_bounds",
+            u::a_nested_effect_update_damages_its_scope_and_moves_the_bounds,
+        ),
+        (
+            "an_outer_effect_update_damages_its_unchanged_descendants",
+            u::an_outer_effect_update_damages_its_unchanged_descendants,
+        ),
+        (
+            "an_effect_update_equals_a_content_built_afresh",
+            u::an_effect_update_equals_a_content_built_afresh,
+        ),
+        (
+            "an_update_of_an_effect_and_its_descendant_folds_each_inside",
+            u::an_update_of_an_effect_and_its_descendant_folds_each_inside,
+        ),
+        (
+            "an_effect_update_of_a_reparented_boundary_reads_each_versions_chain",
+            u::an_effect_update_of_a_reparented_boundary_reads_each_versions_chain,
+        ),
+    ];
+    for (name, row) in rows {
+        let (mut shared, mut unshared) = (u::Run::shared(), u::Run::unshared());
+        row(&mut shared);
+        row(&mut unshared);
+        assert!(!shared.seen.is_empty(), "{name}: the row reads its damage");
+        assert_eq!(shared.seen, unshared.seen, "{name}");
+    }
 }

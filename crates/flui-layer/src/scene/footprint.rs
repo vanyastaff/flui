@@ -32,6 +32,10 @@ pub(crate) struct PatchFacts<'p> {
     /// A node whose operations leave no footprint: the planted defect the
     /// property test must catch.
     pub(crate) skip: Option<NodeKey>,
+    /// Whether an effect update reads the inside and the chain both
+    /// versions share once; `false` reads each version's own, the path a
+    /// test holds the shared one equal to.
+    pub(crate) share: bool,
 }
 
 /// What the pass costs, for the owner's counters.
@@ -171,8 +175,7 @@ pub(crate) fn patch_damage(
         }
         content_damage(
             key,
-            before.content(),
-            after.content(),
+            (before.content(), after.content()),
             old,
             new,
             &mut footprints,
@@ -524,8 +527,7 @@ fn same_entry(
 /// scope.
 fn content_damage(
     key: NodeKey,
-    before: &BoundaryContent,
-    after: &BoundaryContent,
+    (before, after): (&BoundaryContent, &BoundaryContent),
     old: Geometry<'_>,
     new: Geometry<'_>,
     footprints: &mut Footprints<'_>,
@@ -657,7 +659,7 @@ fn effects_damage(
     // space that holds it is read once when the patch left every node above
     // the boundary, and the boundary's placement, as they were and no
     // follower sits on it.
-    let chain_kept = same_chain(key, after, new, facts);
+    let chain_kept = facts.share && same_chain(key, after, new, facts);
     let structural = after.structural();
     let mut reaches: SmallVec<[(Reach, Reach); 4]> = SmallVec::with_capacity(tops.len());
     for &index in &tops {
@@ -678,7 +680,7 @@ fn effects_damage(
                 Entry::Slot { node, .. } => new.same_slot(old, node.key()),
                 Entry::Effect { .. } | Entry::Chunk { .. } => true,
             });
-        reaches.push(if !under_changed && slots_same {
+        reaches.push(if facts.share && !under_changed && slots_same {
             let inside = new.effect_inside(key, index);
             let new_chain = new.entry_chain(key, index);
             let old_chain = if chain_kept {

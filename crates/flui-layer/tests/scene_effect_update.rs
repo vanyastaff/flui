@@ -21,6 +21,52 @@ const SURFACE: SurfaceKey = SurfaceKey {
     generation: SurfaceGeneration::ZERO,
 };
 
+
+/// A row of the table, run under each damage path.
+pub(crate) type Row = fn(&mut Run);
+/// How a row's owners damage an effect update, and what they published.
+pub(crate) struct Run {
+    unshared: bool,
+    /// Each damage a row read, with the version it was read on, flattened.
+    pub(crate) seen: Vec<(DamageRegion, String)>,
+}
+
+impl Run {
+    /// The damage path production takes: the inside and the chain the
+    /// versions share are read once.
+    pub(crate) fn shared() -> Self {
+        Self {
+            unshared: false,
+            seen: Vec::new(),
+        }
+    }
+
+    /// Each version's own scope and chain, the path the shared one must
+    /// equal.
+    pub(crate) fn unshared() -> Self {
+        Self {
+            unshared: true,
+            seen: Vec::new(),
+        }
+    }
+
+    fn owner(&self) -> SceneOwner {
+        let mut owner = SceneOwner::new();
+        if self.unshared {
+            owner.force_unshared_effect_updates();
+        }
+        owner
+    }
+
+    /// The last patch's damage, recorded with the version it published.
+    fn damage(&mut self, owner: &SceneOwner) -> DamageRegion {
+        let damage = owner.patch_damage();
+        self.seen
+            .push((damage, format!("{:?}", owner.current().flatten())));
+        damage
+    }
+}
+
 fn chunk(owner: u32, version: ContentVersion, rect: Rect<f64>) -> Arc<Chunk> {
     let mut canvas = Canvas::new();
     canvas.draw_rect(rect, &Paint::fill(Color::RED));
@@ -75,9 +121,10 @@ fn covered(damage: &[DamageRect], rect: DamageRect) -> bool {
 
 /// A boundary `node` the root slots, its content published and applied.
 fn scene_with(
+    run: &Run,
     content: impl FnOnce(&mut SceneWriter<'_>) -> (SceneNodeId, Arc<BoundaryContent>),
 ) -> (SceneOwner, SceneNodeId, Arc<BoundaryContent>) {
-    let mut owner = SceneOwner::new();
+    let mut owner = run.owner();
     let mut writer = owner.writer();
     let (node, content) = content(&mut writer);
     let root = writer.current().root();
@@ -93,9 +140,9 @@ fn scene_with(
 /// scope under its old and new layer, though the outer one is unchanged, and
 /// the boundary's subtree bounds follow it: a later move of the boundary
 /// damages the chunk where the new transform put it.
-pub(crate) fn a_nested_effect_update_damages_its_scope_and_moves_the_bounds() {
+pub(crate) fn a_nested_effect_update_damages_its_scope_and_moves_the_bounds(run: &mut Run) {
     let mut inner = None;
-    let (mut owner, node, content) = scene_with(|writer| {
+    let (mut owner, node, content) = scene_with(run, |writer| {
         let node = writer.mint_node();
         let version = writer.next_content_version().expect("a version");
         let mut content = BoundaryContent::builder();
@@ -118,7 +165,7 @@ pub(crate) fn a_nested_effect_update_damages_its_scope_and_moves_the_bounds() {
     let mut writer = owner.writer();
     writer.push(publish(node, Arc::new(updated)));
     owner.apply(SURFACE).expect("the inner transform changes");
-    let damage = rects(owner.patch_damage());
+    let damage = rects(run.damage(&owner));
     assert!(
         covered(&damage, covering(10.0, 10.0, 20.0, 20.0)),
         "{damage:?}"
@@ -135,7 +182,7 @@ pub(crate) fn a_nested_effect_update_damages_its_scope_and_moves_the_bounds() {
     let mut writer = owner.writer();
     writer.push(place(node, 0.0, 100.0));
     owner.apply(SURFACE).expect("the boundary moves");
-    let damage = rects(owner.patch_damage());
+    let damage = rects(run.damage(&owner));
     assert!(
         covered(&damage, covering(210.0, 110.0, 220.0, 120.0)),
         "the subtree bounds hold the chunk where the new transform draws it: {damage:?}"
@@ -144,9 +191,9 @@ pub(crate) fn a_nested_effect_update_damages_its_scope_and_moves_the_bounds() {
 
 /// Updating an effect damages the chunks of an unchanged effect under it
 /// under both of the outer layers, and nothing outside its scope.
-pub(crate) fn an_outer_effect_update_damages_its_unchanged_descendants() {
+pub(crate) fn an_outer_effect_update_damages_its_unchanged_descendants(run: &mut Run) {
     let mut outer = None;
-    let (mut owner, node, content) = scene_with(|writer| {
+    let (mut owner, node, content) = scene_with(run, |writer| {
         let node = writer.mint_node();
         let version = writer.next_content_version().expect("a version");
         let mut content = BoundaryContent::builder();
@@ -166,7 +213,7 @@ pub(crate) fn an_outer_effect_update_damages_its_unchanged_descendants() {
     let mut writer = owner.writer();
     writer.push(publish(node, Arc::new(updated)));
     owner.apply(SURFACE).expect("the outer transform changes");
-    let damage = rects(owner.patch_damage());
+    let damage = rects(run.damage(&owner));
     assert!(
         covered(&damage, covering(10.0, 10.0, 20.0, 20.0)),
         "{damage:?}"
@@ -243,7 +290,7 @@ fn shape_of(content: &BoundaryContent) -> Vec<String> {
 /// A content an effect update derives equals one built afresh with the same
 /// layers: its entries, its layers, its slots, the damage of publishing it
 /// over the content before and the bounds a later move damages.
-pub(crate) fn an_effect_update_equals_a_content_built_afresh() {
+pub(crate) fn an_effect_update_equals_a_content_built_afresh(run: &mut Run) {
     let shapes = [
         Shape {
             name: "a transform under a clip",
@@ -284,7 +331,7 @@ pub(crate) fn an_effect_update_equals_a_content_built_afresh() {
     ];
     for shape in shapes {
         let name = shape.name;
-        let mut owner = SceneOwner::new();
+        let mut owner = run.owner();
         let mut writer = owner.writer();
         let root = writer.current().root();
         let node = writer.mint_node();
@@ -357,11 +404,11 @@ pub(crate) fn an_effect_update_equals_a_content_built_afresh() {
             let mut writer = owner.writer();
             writer.push(publish(node, content));
             owner.apply(SURFACE).expect("the layers change");
-            let published = owner.patch_damage();
+            let published = run.damage(&owner);
             let mut writer = owner.writer();
             writer.push(place(node, 7.0, 3.0));
             owner.apply(SURFACE).expect("the boundary moves");
-            outcomes.push((published, owner.patch_damage()));
+            outcomes.push((published, run.damage(&owner)));
         }
         assert_eq!(outcomes[0], outcomes[1], "{name}: damage and bounds");
         assert_ne!(
@@ -375,10 +422,10 @@ pub(crate) fn an_effect_update_equals_a_content_built_afresh() {
 /// An update that changes an effect and one nested under it damages the
 /// nested chunk under both old layers and both new ones: the outer effect's
 /// inside differs between the versions, so it is folded under each.
-pub(crate) fn an_update_of_an_effect_and_its_descendant_folds_each_inside() {
+pub(crate) fn an_update_of_an_effect_and_its_descendant_folds_each_inside(run: &mut Run) {
     let mut outer = None;
     let mut inner = None;
-    let (mut owner, node, content) = scene_with(|writer| {
+    let (mut owner, node, content) = scene_with(run, |writer| {
         let node = writer.mint_node();
         let version = writer.next_content_version().expect("a version");
         let mut content = BoundaryContent::builder();
@@ -400,7 +447,7 @@ pub(crate) fn an_update_of_an_effect_and_its_descendant_folds_each_inside() {
     let mut writer = owner.writer();
     writer.push(publish(node, Arc::new(updated)));
     owner.apply(SURFACE).expect("both effects change");
-    let damage = rects(owner.patch_damage());
+    let damage = rects(run.damage(&owner));
     assert!(
         covered(&damage, covering(10.0, 10.0, 20.0, 20.0)),
         "the chunk under both old layers: {damage:?}"
@@ -414,8 +461,8 @@ pub(crate) fn an_update_of_an_effect_and_its_descendant_folds_each_inside() {
 /// An effect update in the patch that also moves its boundary under another
 /// parent damages the effect's scope through the old parent's chain under
 /// the old version and the new parent's under the new one.
-pub(crate) fn an_effect_update_of_a_reparented_boundary_reads_each_versions_chain() {
-    let mut owner = SceneOwner::new();
+pub(crate) fn an_effect_update_of_a_reparented_boundary_reads_each_versions_chain(run: &mut Run) {
+    let mut owner = run.owner();
     let mut writer = owner.writer();
     let root = writer.current().root();
     let (left, right, node) = (writer.mint_node(), writer.mint_node(), writer.mint_node());
@@ -454,7 +501,7 @@ pub(crate) fn an_effect_update_of_a_reparented_boundary_reads_each_versions_chai
     owner
         .apply(SURFACE)
         .expect("the effect changes as the boundary moves to the right parent");
-    let damage = rects(owner.patch_damage());
+    let damage = rects(run.damage(&owner));
     assert!(
         covered(&damage, covering(0.0, 0.0, 10.0, 10.0)),
         "under the left parent with the old layer: {damage:?}"
@@ -462,5 +509,49 @@ pub(crate) fn an_effect_update_of_a_reparented_boundary_reads_each_versions_chai
     assert!(
         covered(&damage, covering(420.0, 300.0, 430.0, 310.0)),
         "under the right parent with the new layer: {damage:?}"
+    );
+}
+
+/// An effect update in the patch that also moves a boundary its scope slots
+/// damages the slot where each version draws it: the slot differs between
+/// the versions, so the effect's inside is folded under each, and nothing is
+/// drawn where neither version put the slot.
+pub(crate) fn an_effect_update_over_a_moved_slot_folds_each_inside(run: &mut Run) {
+    let mut effect = None;
+    let mut child = None;
+    let (mut owner, node, content) = scene_with(run, |writer| {
+        let node = writer.mint_node();
+        let slotted = writer.mint_node();
+        let version = writer.next_content_version().expect("a version");
+        let mut leaf = BoundaryContent::builder();
+        leaf.chunk(chunk(4, version, Rect::from_xywh(0.0, 0.0, 10.0, 10.0)));
+        writer.push(publish(slotted, Arc::new(leaf.finish())));
+        writer.push(place(slotted, 100.0, 50.0));
+        let mut content = BoundaryContent::builder();
+        effect = Some(content.push_effect(translate(0.0, 0.0), RenderId::new(1), 0));
+        content.slot(slotted);
+        content.pop_effect();
+        child = Some(slotted);
+        (node, Arc::new(content.finish()))
+    });
+    let (effect, child) = (effect.expect("the effect"), child.expect("the slot"));
+
+    let updated = content
+        .with_effects([(effect, translate(40.0, 0.0))])
+        .expect("an effect entry");
+    let mut writer = owner.writer();
+    writer.push(publish(node, Arc::new(updated)));
+    writer.push(place(child, 300.0, 50.0));
+    owner
+        .apply(SURFACE)
+        .expect("the effect changes and the slot moves");
+    let damage = rects(run.damage(&owner));
+    assert!(
+        covered(&damage, covering(100.0, 50.0, 110.0, 60.0)),
+        "the slot where the old version drew it: {damage:?}"
+    );
+    assert!(
+        covered(&damage, covering(340.0, 50.0, 350.0, 60.0)),
+        "the slot where the new version draws it: {damage:?}"
     );
 }
