@@ -137,6 +137,25 @@ pub fn collection_holds(fonts: &FontCollection, family: &str) -> bool {
     fonts.holds(family)
 }
 
+/// The paragraph with every face's font bytes replaced by `bytes`, so a test
+/// owns what a recorded paragraph's last owner drops: the caller's bytes are
+/// user code, run when the last `Arc` to them goes. Ids, glyphs and placement
+/// stay unchanged.
+#[must_use]
+pub fn paragraph_with_font_bytes(
+    paragraph: &crate::ShapedParagraph,
+    bytes: &crate::glyphs::FontBytes,
+) -> crate::ShapedParagraph {
+    let mut paragraph = paragraph.clone();
+    for face in &mut paragraph.faces {
+        *face = crate::display_list::FontFace::new(
+            crate::display_list::FontBlob::new(face.blob().id(), std::sync::Arc::clone(bytes)),
+            face.key().index,
+        );
+    }
+    paragraph
+}
+
 /// Gives the paragraph's faces deterministic ids to model independent plugin
 /// images whose local blob counters restart. This fixture changes ids only;
 /// the font bytes, shaped glyphs and placement stay unchanged.
