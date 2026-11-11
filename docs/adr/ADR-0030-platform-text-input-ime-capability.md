@@ -58,7 +58,7 @@ cannot honor. `PlatformInput` carries IME events as `PlatformInput::Ime`.
 
 The winit backend converts `WindowEvent::Ime` in a pure, unit-tested function
 and returns a `WinitTextInput` wrapping its `Arc<winit::window::Window>`. The
-headless backend's `FakeTextInput` records every call, and `MockWindow`
+headless backend's `FakeTextInput` records every call, and `HeadlessHostWindow`
 returns the same instance on every `text_input()` call so tests can observe
 the history independently of whoever attached.
 

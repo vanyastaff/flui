@@ -1694,7 +1694,7 @@ fn reporting_callback_panics(panics: &CallbackPanics) -> AppConfig {
 /// running after each.
 fn tap(
     run: &flui_app::testing::HeadlessRunHandle,
-    window: &flui_native::MockWindow,
+    window: &flui_native::HeadlessHostWindow,
     at: flui_foundation::geometry::Offset<f64>,
 ) {
     use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
@@ -1845,7 +1845,7 @@ pub(crate) fn a_panicking_post_frame_callback_reports_once_and_the_next_frame_bu
 /// last window as the user does and joins the run.
 fn close_after<V, F>(
     application: Application<V, F>,
-    drive: impl FnOnce(&flui_app::testing::HeadlessRunHandle, &flui_native::MockWindow),
+    drive: impl FnOnce(&flui_app::testing::HeadlessRunHandle, &flui_native::HeadlessHostWindow),
 ) -> flui_app::testing::ExitReport
 where
     V: flui_view::View + Clone + 'static,

@@ -13,7 +13,7 @@
   presentation's frame clock keeps the newest report, and a frame whose request names no present
   time bounds its idle work by the next refresh on the grid of a report at most eight refreshes old.
 - `HeadlessHost::report_presented`, `HeadlessWindow::with_presentation_reports` and
-  `MockWindow::simulate_presented` inject a presentation on the headless hosts; recordings carry it
+  `HeadlessHostWindow::simulate_presented` inject a presentation on the headless hosts; recordings carry it
   in their frame rows.
 - The window conformance kit checks `presentation_is_reported_exactly_when_claimed`, with
   `WindowFixture::present_and_request_frame`.

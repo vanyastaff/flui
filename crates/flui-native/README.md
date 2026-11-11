@@ -60,7 +60,7 @@ Activity `android_main` is handed, through `android_platform(app)`.
 - **Displays** — monitor enumeration, DPI/scale factors, device↔logical pixel
   conversion.
 
-The headless backend provides mock windows, an in-memory clipboard, and a
+The headless backend provides headless windows (`HeadlessHostWindow`), an in-memory clipboard, and a
 virtual 1920x1080 display so tests run without a display server or GPU —
 set `FLUI_HEADLESS=1` or call `headless_platform()` directly.
 

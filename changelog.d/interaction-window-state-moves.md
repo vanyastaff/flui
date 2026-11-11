@@ -8,6 +8,6 @@
 - `HeadlessHost` installs a `WindowHandle` for each window it opens, and
   `HeadlessHost::move_to_display` publishes a state on the new display, as a runner does; a move to
   the display the window is already on publishes nothing.
-- `MockWindow::simulate_move` takes a `Point` (the outer top-left corner), publishes the moved
+- `HeadlessHostWindow::simulate_move` takes a `Point` (the outer top-left corner), publishes the moved
   state, and is where `PlatformWindow::window_at` places the window under
   `HeadlessPlatform::with_window_placement`.
