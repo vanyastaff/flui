@@ -6,7 +6,7 @@
 use std::sync::atomic::AtomicU32;
 
 use flui_foundation::geometry::{Rect, Size};
-use flui_layer::{DamageRect, DamageRegion, LayerDiffer, TextureRegistration};
+use flui_layer::{DamageRect, DamageRegion, LayerDiffer, Region, TextureRegistration};
 use flui_painting::Alignment;
 use flui_painting::paint::{Image, TextureId};
 use flui_painting::styling::Color;
@@ -241,11 +241,12 @@ pub(crate) fn a_fed_frame_damages_only_the_texture() {
     fixture.ui_runtime.render_frame(&mut sink);
     let damage = damage.lock();
     assert_eq!(damage.len(), 2, "the texture's frame is submitted");
-    let texture = DamageRect::covering(Rect::from_ltrb(100.0, 100.0, 120.0, 120.0), SURFACE)
+    let texture = DamageRect::try_covering(Rect::from_ltrb(100.0, 100.0, 120.0, 120.0), SURFACE)
+        .expect("finite")
         .expect("the texture is on the surface");
     assert_eq!(
         damage[1],
-        DamageRegion::Partial(texture),
+        DamageRegion::Region(Region::new(texture)),
         "a texture frame damages the texture's box, not its enclosing boundary"
     );
 }

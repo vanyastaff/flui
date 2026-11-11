@@ -9,7 +9,10 @@ use std::collections::HashMap;
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Size;
-use flui_layer::{ContentToken, DamageRect, DamageRegion, Layer, LayerDiffer, LayerTree, Scene};
+use flui_layer::{
+    ContentToken, DamageRect, DamageRegion, FullReason, Layer, LayerDiffer, LayerTree, Region,
+    Scene,
+};
 use flui_objects::{
     RenderColoredBox, RenderFlex, RenderFollowerLayer, RenderOpacity, RenderRepaintBoundary,
 };
@@ -246,7 +249,10 @@ fn pipeline_frames_diff_to_the_changed_boundary_rect() {
     let mut differ = LayerDiffer::default();
 
     let (mut owner, first) = frame(owner);
-    assert_eq!(differ.diff(&Scene::new(first), surface), DamageRegion::Full);
+    assert_eq!(
+        differ.diff(&Scene::new(first), surface),
+        DamageRegion::Full(FullReason::FirstFrame)
+    );
 
     // The damage rect of a 10x10 boundary at its stamped layer's offset.
     let expected = |t: &LayerTree, boundary: RenderId| {
@@ -258,13 +264,14 @@ fn pipeline_frames_diff_to_the_changed_boundary_rect() {
                 _ => None,
             })
             .expect("a boundary's stamped layer is an OffsetLayer");
-        DamageRegion::Partial(
-            DamageRect::covering(
+        DamageRegion::Region(Region::new(
+            DamageRect::try_covering(
                 flui_foundation::geometry::Rect::from_xywh(origin.dx, origin.dy, 10.0, 10.0),
                 surface,
             )
+            .expect("finite")
             .expect("on the surface"),
-        )
+        ))
     };
 
     owner.mark_needs_paint(b);

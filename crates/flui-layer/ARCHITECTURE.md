@@ -124,7 +124,7 @@ that the type is nameable without an engine dependency — not its field set.
 `DamageTracker` (the renderer's per-frame dirty accumulator, ADR-0061's consuming half) moved to
 `flui-engine/src/damage.rs`; the seam message `DamageRegion` and its producer, `LayerDiffer`
 (decision 8), are defined here. Its
-three-rect merge was removed with the move: the one consumer reads `damage_rect()`, the bounding
+tracker's three-rect merge was removed with the move (the seam's `Region` keeps up to eight disjoint rects, ADR-0304 §5): the one consumer reads `damage_rect()`, the bounding
 union, through which the merge was unobservable. The overlay's numbers (a frame-clock reading of the
 presentation's frame history) are computed in `flui-runtime`, beside the presentation that knows when a frame was
 composited; `PerformanceOverlayLayer::record` composes the numbers it is handed through the

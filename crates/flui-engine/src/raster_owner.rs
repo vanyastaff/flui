@@ -1754,14 +1754,14 @@ impl<B: RasterBackend> RasterOwner<B> {
     }
 }
 
-/// Hands one frame's damage to `backend`'s accumulator.
+/// Hands one frame's damage to `backend`'s accumulator. The tracker keeps
+/// one rectangle, so a region reaches it as its bounds until the engine plans
+/// rect by rect (ADR-0304 §9).
 fn apply_damage<B: RasterBackend>(backend: &mut B, damage: DamageRegion) {
     match damage {
-        DamageRegion::Partial(rect) => backend.mark_dirty(rect.to_rect()),
+        DamageRegion::Region(region) => backend.mark_dirty(region.bounds().to_rect()),
         DamageRegion::Unchanged => {}
-        // `Full`, and any region a later producer adds before this match
-        // learns it: repainting everything is never wrong.
-        _ => backend.mark_full_repaint(),
+        DamageRegion::Full(_) => backend.mark_full_repaint(),
     }
 }
 
@@ -1976,7 +1976,11 @@ mod tests {
         gpu_resource_generation: GpuResourceGeneration,
     ) -> SceneSnapshot {
         let stamp = FrameStamp::new(address, epoch, surface_generation, gpu_resource_generation);
-        SceneSnapshot::new(stamp, DamageRegion::Full, scene_from_canvas())
+        SceneSnapshot::new(
+            stamp,
+            DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+            scene_from_canvas(),
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -2341,15 +2345,16 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn partial(l: f64, t: f64, r: f64, b: f64) -> DamageRegion {
-        DamageRegion::Partial(
-            flui_layer::DamageRect::covering(Rect::from_ltrb(l, t, r, b), (1000, 1000))
+        DamageRegion::Region(flui_layer::Region::new(
+            flui_layer::DamageRect::try_covering(Rect::from_ltrb(l, t, r, b), (1000, 1000))
+                .expect("finite")
                 .expect("on the surface"),
-        )
+        ))
     }
 
     fn rect_of(region: DamageRegion) -> Rect<f64> {
         match region {
-            DamageRegion::Partial(rect) => rect.to_rect(),
+            DamageRegion::Region(region) => region.bounds().to_rect(),
             other => panic!("expected a partial region, got {other:?}"),
         }
     }

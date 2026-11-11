@@ -11,7 +11,8 @@ use flui_painting::paint::ImageFilter;
 
 use super::DamageMode;
 use crate::{
-    ContentToken, DamageRect, DamageRegion, Layer, LayerTree, Scene, resolve_follower_transform,
+    ContentToken, DamageRect, DamageRegion, FullReason, Layer, LayerTree, Region, ResyncReason,
+    Scene, resolve_follower_transform,
 };
 
 /// Produces a frame's [`DamageRegion`] by comparing its repaint-boundary
@@ -34,11 +35,13 @@ use crate::{
 /// surface when a colour or image filter that paints transparent pixels is
 /// present.
 ///
-/// The answer is [`DamageRegion::Full`] when the frames cannot be paired:
-/// the first frame, a surface size change, a root that no boundary stamped or
-/// whose boundary or placement changed, a boundary stamped twice, or a
-/// damaged area above the mode's `full_above` fraction. It is
-/// [`DamageRegion::Unchanged`] when nothing differs.
+/// The answer is [`DamageRegion::Full`] when the frames cannot be paired,
+/// with its [`FullReason`]: the first frame, a surface size change, a root
+/// that no boundary stamped or whose boundary or placement changed, or a
+/// boundary stamped twice (`Resync(Rebuilt)`), a non-finite damaged area, or
+/// one above the mode's `full_above` fraction. It is
+/// [`DamageRegion::Unchanged`] when nothing differs, and otherwise a
+/// [`Region`] of the one rectangle covering every change.
 ///
 /// Damage is relative to the previous scene passed to [`Self::diff`]. A caller
 /// that renders a scene some other way (a plugin frame, a recovery path) calls
@@ -92,16 +95,17 @@ impl LayerDiffer {
     pub fn diff(&mut self, scene: &Scene, surface: (u32, u32)) -> DamageRegion {
         let DamageMode::On { full_above } = self.mode else {
             self.previous = None;
-            return DamageRegion::Full;
+            return DamageRegion::Full(FullReason::DamageOff);
         };
         if surface.0 == 0 || surface.1 == 0 {
             self.previous = None;
-            return DamageRegion::Full;
+            return DamageRegion::Full(FullReason::SurfaceChanged);
         }
         let current = Frame::capture(scene.tree(), surface);
         let region = match (&self.previous, &current) {
             (Some(previous), Some(current)) => compare(previous, current, full_above),
-            _ => DamageRegion::Full,
+            (None, _) => DamageRegion::Full(FullReason::FirstFrame),
+            (Some(_), None) => DamageRegion::Full(FullReason::Resync(ResyncReason::Rebuilt)),
         };
         self.previous = current;
         region
@@ -435,17 +439,21 @@ impl Frame {
 
 /// The damage of `current` against `previous`.
 fn compare(previous: &Frame, current: &Frame, full_above: f64) -> DamageRegion {
-    if previous.surface != current.surface || previous.root != current.root {
-        return DamageRegion::Full;
+    let rebuilt = DamageRegion::Full(FullReason::Resync(ResyncReason::Rebuilt));
+    if previous.surface != current.surface {
+        return DamageRegion::Full(FullReason::SurfaceChanged);
+    }
+    if previous.root != current.root {
+        return rebuilt;
     }
     let (Some(old_root), Some(new_root)) = (
         previous.boundaries.get(&previous.root),
         current.boundaries.get(&current.root),
     ) else {
-        return DamageRegion::Full;
+        return rebuilt;
     };
     if !same_placement(previous, old_root, current, new_root) {
-        return DamageRegion::Full;
+        return rebuilt;
     }
 
     let mut damage: Option<Rect<f64>> = None;
@@ -506,14 +514,19 @@ fn compare(previous: &Frame, current: &Frame, full_above: f64) -> DamageRegion {
         damage = Some(region);
     }
 
-    let Some(rect) = damage.and_then(|rect| DamageRect::covering(rect, current.surface)) else {
+    let Some(damage) = damage else {
         return DamageRegion::Unchanged;
+    };
+    let rect = match DamageRect::try_covering(damage, current.surface) {
+        Ok(Some(rect)) => rect,
+        Ok(None) => return DamageRegion::Unchanged,
+        Err(_) => return DamageRegion::Full(FullReason::NonFinite),
     };
     let surface_area = f64::from(current.surface.0) * f64::from(current.surface.1);
     if rect.area() as f64 > full_above * surface_area {
-        DamageRegion::Full
+        DamageRegion::Full(FullReason::AboveThreshold)
     } else {
-        DamageRegion::Partial(rect)
+        DamageRegion::Region(Region::new(rect))
     }
 }
 
