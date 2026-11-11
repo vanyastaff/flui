@@ -331,7 +331,7 @@ typed protocol tree rather than this diagnostics representation (ADR-0095).
 | Site | Primitive | Where | Why |
 |------|-----------|-------|-----|
 | `GlobalKey` ID counter | `AtomicU64` (static) | `key.rs:140, 462` | Monotonic key allocator. `fetch_add` only, no contention pattern. Off any hot path. |
-| `Notifier::listeners` | `Rc<ListenerStorage>` with `RefCell<HashMap<ListenerId, …>>` | `notifier_generic.rs` | Owner-local membership. Delivery snapshots registration order and releases every borrow before invocation or retirement. `ChangeNotifier` adapts this same storage. |
+| `Notifier::listeners` | `Rc<ListenerStorage>` with `RefCell<Listeners>`: registrations sorted by `ListenerId`, the first inline, a withdrawn one an empty slot until the empty outnumber the live | `notifier_generic.rs` | Owner-local membership. Delivery snapshots registration order and releases every borrow before invocation or retirement. `ChangeNotifier` adapts this same storage. |
 | `Notifier::next_id` | `Rc<Cell<usize>>` | `notifier_generic.rs` | Monotonic owner-local identities. Exhaustion refuses permanently before an identity can be reissued. |
 
 No `RwLock` in `flui-foundation`. No primitive listed here sits inside `perform_layout` / `paint` / `View::build`.
