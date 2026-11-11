@@ -23,6 +23,17 @@ use crate::pipeline::{
 
 use super::{DEFAULT_DIRTY_CHANNEL_CAPACITY, PIPELINE_ID_COUNTER, PipelineOwner, rebind_phase};
 
+/// The shared handles an owner is built over: its wake, its dirty channel,
+/// its same-thread inbox, its relocation seal and its leader watches.
+struct OwnerHandles {
+    notifier: SharedNotifier,
+    dirty_sender: DirtySender,
+    dirty_rx: crossbeam_channel::Receiver<super::super::handle::DirtyRequest>,
+    local_dirty: std::rc::Rc<super::super::local_invalidation::LocalDirtyInbox>,
+    relocation_owner_seal: std::rc::Rc<super::relocation::RelocationOwnerSeal>,
+    leader_watches: std::rc::Rc<super::LeaderWatches>,
+}
+
 impl PipelineOwner<Idle> {
     /// Creates a new pipeline owner in the [`Idle`] phase with the
     /// default dirty-channel capacity (`DEFAULT_DIRTY_CHANNEL_CAPACITY`,
@@ -58,8 +69,54 @@ impl PipelineOwner<Idle> {
         let notifier = SharedNotifier::default();
         let (dirty_sender, dirty_rx) =
             DirtySender::new_pair(dirty_channel_capacity, notifier.clone());
-        let scheduler = DirtyTracker::new(notifier.clone());
         let local_dirty = super::super::local_invalidation::LocalDirtyInbox::new(notifier.clone());
+        Self::over(
+            PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
+            text,
+            OwnerHandles {
+                notifier,
+                dirty_sender,
+                dirty_rx,
+                local_dirty,
+                relocation_owner_seal: std::rc::Rc::new(super::relocation::RelocationOwnerSeal),
+                leader_watches: std::rc::Rc::default(),
+            },
+        )
+    }
+
+    /// An owner with no tree and no queued work, over the handles of `self`:
+    /// what [`Self::in_place`] leaves in the slot while the owner is out.
+    ///
+    /// It shares `self`'s id, notifier, channel ends, inboxes and seal
+    /// instead of building its own, so it allocates nothing and mints no
+    /// pipeline id. Nothing reaches it: the slot is borrowed for as long as
+    /// it sits there, and dropping it only releases the shared handles.
+    fn vacant(&self) -> Self {
+        Self::over(
+            self.id,
+            self.text.clone(),
+            OwnerHandles {
+                notifier: self.notifier.clone(),
+                dirty_sender: self.dirty_sender.clone(),
+                dirty_rx: self.dirty_rx.clone(),
+                local_dirty: std::rc::Rc::clone(&self.local_dirty),
+                relocation_owner_seal: std::rc::Rc::clone(&self.relocation_owner_seal),
+                leader_watches: std::rc::Rc::clone(&self.leader_watches),
+            },
+        )
+    }
+
+    /// An empty owner over `handles`, numbered `id`, measuring through `text`.
+    fn over(id: u64, text: TextContextHandle, handles: OwnerHandles) -> Self {
+        let OwnerHandles {
+            notifier,
+            dirty_sender,
+            dirty_rx,
+            local_dirty,
+            relocation_owner_seal,
+            leader_watches,
+        } = handles;
+        let scheduler = DirtyTracker::new(notifier.clone());
         Self {
             // A context lent while a pipeline is built is a measurement
             // building one: seed zero, and the first drain after the loan
@@ -68,8 +125,8 @@ impl PipelineOwner<Idle> {
             text_measurers: crate::pipeline::TextMeasurers::default(),
             text_sizing: flui_painting::TextSizing::default(),
             text,
-            id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
-            relocation_owner_seal: std::rc::Rc::new(super::relocation::RelocationOwnerSeal),
+            id,
+            relocation_owner_seal,
             render_tree: RenderTree::new(),
             transform_paths: std::cell::RefCell::new(Vec::new()),
             root_id: None,
@@ -90,7 +147,7 @@ impl PipelineOwner<Idle> {
             scenes_painted: 0,
             last_follower_transforms: FxHashMap::default(),
             last_child_paint_orders: FxHashMap::default(),
-            leader_watches: std::rc::Rc::default(),
+            leader_watches,
             retained_boundaries: FxHashMap::default(),
             retained_pixel_ratio: 1.0,
             root_content: None,
@@ -234,11 +291,11 @@ impl PipelineOwner<Idle> {
     /// resumes.
     ///
     /// The only place an owner leaves its slot. While `frame` runs the slot
-    /// holds an empty placeholder over the same text context; it is dropped
-    /// once the owner is back, and runs no user code (an empty tree, a
-    /// notifier with no callbacks, a fresh channel).
+    /// holds [`Self::vacant`], which shares the owner's handles; it is dropped
+    /// once the owner is back, and runs no user code (an empty tree and
+    /// handle clones whose release calls nothing).
     fn in_place<R>(&mut self, frame: impl FnOnce(Self) -> (Self, Result<R, Unwind>)) -> R {
-        let placeholder = Self::new(self.text.clone());
+        let placeholder = self.vacant();
         let (owner, ended) = frame(std::mem::replace(self, placeholder));
         drop(std::mem::replace(self, owner));
         ended.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
