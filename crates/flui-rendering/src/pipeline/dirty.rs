@@ -69,14 +69,23 @@ impl DirtySet {
     }
 
     /// Pushes a node if not already present. Returns `true` if inserted.
+    ///
+    /// An entry of the same slot and another generation is replaced: the
+    /// tree reused the slot, so that node is gone.
     #[inline]
     pub fn push(&mut self, node: DirtyNode) -> bool {
-        if self.contains(&node.id) {
-            return false;
+        match self.index.occupant(&self.vec, node.id, |n| n.id) {
+            Some(position) if self.vec[position].id == node.id => false,
+            Some(position) => {
+                self.vec[position] = node;
+                true
+            }
+            None => {
+                self.index.insert(node.id, self.vec.len());
+                self.vec.push(node);
+                true
+            }
         }
-        self.index.insert(node.id, self.vec.len());
-        self.vec.push(node);
-        true
     }
 
     /// Returns `true` if the set contains the given id.
@@ -152,10 +161,11 @@ impl DirtySet {
     }
 
     /// Retains only entries matching the predicate.
+    ///
+    /// A panic in `f` leaves every entry queued and findable, in another
+    /// order (see [`SlotIndex::retain`]).
     pub fn retain(&mut self, f: impl FnMut(&DirtyNode) -> bool) {
-        self.index.remove_all(self.vec.iter().map(|n| n.id));
-        self.vec.retain(f);
-        self.index.reindex(self.vec.iter().map(|n| n.id));
+        self.index.retain(&mut self.vec, |n| n.id, f);
     }
 }
 
@@ -243,7 +253,13 @@ impl PaintQueue {
     /// `LayerUpdate` arriving for it is dropped rather than weakening it. An
     /// update arriving for an existing `LayerUpdate` appends its requester.
     pub fn enqueue(&mut self, id: RenderId, depth: usize, kind: PaintKind) -> bool {
-        if let Some(position) = self.position(id) {
+        let occupant = self.index.occupant(&self.entries, id, |e| e.id);
+        if let Some(position) = occupant.filter(|&p| self.entries[p].id != id) {
+            // The tree reused the slot: the queued node is gone.
+            self.entries[position] = PaintEntry { id, depth, kind };
+            return true;
+        }
+        if let Some(position) = occupant {
             let existing = &mut self.entries[position].kind;
             match (&mut *existing, kind) {
                 // A repaint subsumes any update, in either arrival order, and
@@ -354,9 +370,7 @@ impl PaintQueue {
     }
 
     fn retain(&mut self, keep: impl FnMut(&PaintEntry) -> bool) {
-        self.index.remove_all(self.entries.iter().map(|e| e.id));
-        self.entries.retain(keep);
-        self.index.reindex(self.entries.iter().map(|e| e.id));
+        self.index.retain(&mut self.entries, |e| e.id, keep);
     }
 }
 

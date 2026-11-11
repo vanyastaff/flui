@@ -64,12 +64,6 @@ impl<K> Default for SlotIndex<K> {
 }
 
 impl<K: SlotKey> SlotIndex<K> {
-    /// An empty index.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// The position of `key` in `entries`, or `None` when it is not listed.
     ///
     /// `key_of` reads an entry's key; the entry at the stored position must
@@ -77,11 +71,23 @@ impl<K: SlotKey> SlotIndex<K> {
     /// generation is not found.
     #[inline]
     pub fn find<E>(&self, entries: &[E], key: K, key_of: impl Fn(&E) -> K) -> Option<usize> {
+        self.occupant(entries, key, &key_of)
+            .filter(|&position| key_of(&entries[position]) == key)
+    }
+
+    /// The position of the entry that holds `key`'s slot, whatever its
+    /// generation, or `None` when the slot holds none.
+    ///
+    /// A list holds at most one key per slot. An owner that adds `key` and
+    /// finds an occupant of another generation replaces it: the arena reused
+    /// the slot, so the occupant's node is gone and its entry is stale.
+    #[inline]
+    pub fn occupant<E>(&self, entries: &[E], key: K, key_of: impl Fn(&E) -> K) -> Option<usize> {
         let stored = *self.positions.get(key.slot())?;
         let position = usize::try_from(stored).ok()?.checked_sub(1)?;
         entries
             .get(position)
-            .filter(|entry| key_of(entry) == key)
+            .filter(|entry| key_of(entry).slot() == key.slot())
             .map(|_| position)
     }
 
@@ -123,13 +129,42 @@ impl<K: SlotKey> SlotIndex<K> {
     }
 
     /// Records the position of every key in `keys`, in order: the owner's
-    /// list was reordered or shortened. The caller first passes the keys it
-    /// removed to [`Self::remove_all`].
+    /// list was reordered. The caller first passes the keys it removed to
+    /// [`Self::remove_all`].
     #[inline]
     pub fn reindex(&mut self, keys: impl IntoIterator<Item = K>) {
         for (position, key) in keys.into_iter().enumerate() {
             self.insert(key, position);
         }
+    }
+
+    /// Keeps the entries of `entries` for which `keep` returns `true`, in
+    /// order, and keeps this index in step.
+    ///
+    /// `keep` is the caller's code and may panic. Every step leaves each
+    /// entry still in `entries` at the position this index records, so a
+    /// panic that is caught leaves a list that is the original one reordered,
+    /// with nothing dropped and every entry findable.
+    pub fn retain<E>(
+        &mut self,
+        entries: &mut Vec<E>,
+        key_of: impl Fn(&E) -> K,
+        mut keep: impl FnMut(&E) -> bool,
+    ) {
+        let mut kept = 0;
+        for read in 0..entries.len() {
+            if !keep(&entries[read]) {
+                continue;
+            }
+            if kept != read {
+                entries.swap(kept, read);
+                self.insert(key_of(&entries[read]), read);
+                self.insert(key_of(&entries[kept]), kept);
+            }
+            kept += 1;
+        }
+        self.remove_all(entries[kept..].iter().map(&key_of));
+        entries.truncate(kept);
     }
 }
 
@@ -158,14 +193,23 @@ impl<K: SlotKey> SlotSet<K> {
     }
 
     /// Adds `key`; `true` when it was not a member.
+    ///
+    /// A member of the same slot and another generation is replaced: the
+    /// arena reused the slot, so that key is stale.
     #[inline]
     pub fn insert(&mut self, key: K) -> bool {
-        if self.contains(key) {
-            return false;
+        match self.index.occupant(&self.keys, key, |k| *k) {
+            Some(position) if self.keys[position] == key => false,
+            Some(position) => {
+                self.keys[position] = key;
+                true
+            }
+            None => {
+                self.index.insert(key, self.keys.len());
+                self.keys.push(key);
+                true
+            }
         }
-        self.index.insert(key, self.keys.len());
-        self.keys.push(key);
-        true
     }
 
     /// Whether `key` is a member.

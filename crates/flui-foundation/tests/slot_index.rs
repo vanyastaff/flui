@@ -56,7 +56,7 @@ fn remove_moves_the_last_member_and_keeps_it_findable() {
 #[test]
 fn an_index_confirms_the_entry_after_a_reorder() {
     let mut entries: Vec<RenderId> = [3, 1, 2].map(RenderId::new).to_vec();
-    let mut index = SlotIndex::<RenderId>::new();
+    let mut index = SlotIndex::<RenderId>::default();
     index.reindex(entries.iter().copied());
     entries.sort();
     // Not yet reindexed: a stale position never answers with a neighbour.
@@ -69,4 +69,61 @@ fn an_index_confirms_the_entry_after_a_reorder() {
     for (position, &id) in entries.iter().enumerate() {
         assert_eq!(index.find(&entries, id, |e| *e), Some(position));
     }
+}
+
+#[test]
+fn a_newer_generation_replaces_the_stale_member_of_its_slot() {
+    let mut set = SlotSet::<ElementId>::new();
+    let other = ElementId::new_gen(3, gen_of(1));
+    let old = ElementId::new_gen(7, gen_of(1));
+    let reused = ElementId::new_gen(7, gen_of(2));
+    set.insert(other);
+    set.insert(old);
+    assert!(set.insert(reused), "the reused slot's key is new");
+    assert_eq!(set.as_slice(), &[other, reused], "one key per slot");
+    assert!(!set.contains(old));
+    assert!(set.remove(reused));
+    assert_eq!(set.as_slice(), &[other], "nothing left behind unreachable");
+}
+
+#[test]
+fn a_panicking_retain_predicate_leaves_every_entry_findable() {
+    let mut entries: Vec<RenderId> = (1..=6).map(RenderId::new).collect();
+    let mut index = SlotIndex::<RenderId>::default();
+    index.reindex(entries.iter().copied());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the test contains the predicate's panic to read the list after it"
+    )]
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        index.retain(
+            &mut entries,
+            |e| *e,
+            |e| {
+                assert_ne!(*e, RenderId::new(5), "the predicate panics");
+                [2, 4, 6].map(RenderId::new).contains(e)
+            },
+        );
+    }));
+    assert!(caught.is_err());
+    let mut held = entries.clone();
+    held.sort();
+    assert_eq!(
+        held,
+        (1..=6).map(RenderId::new).collect::<Vec<_>>(),
+        "nothing dropped"
+    );
+    for (position, &id) in entries.iter().enumerate() {
+        assert_eq!(index.find(&entries, id, |e| *e), Some(position), "{id:?}");
+    }
+    index.retain(
+        &mut entries,
+        |e| *e,
+        |e| [2, 4, 6].map(RenderId::new).contains(e),
+    );
+    assert_eq!(entries, [2, 4, 6].map(RenderId::new));
+    for (position, &id) in entries.iter().enumerate() {
+        assert_eq!(index.find(&entries, id, |e| *e), Some(position));
+    }
+    assert_eq!(index.find(&entries, RenderId::new(1), |e| *e), None);
 }
