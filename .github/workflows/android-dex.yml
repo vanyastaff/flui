@@ -67,7 +67,7 @@ jobs:
           echo "JAVA_HOME=$java_home" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
           if [ ! -f "$sdk/build-tools/$BUILD_TOOLS/lib/d8.jar" ] || [ ! -f "$sdk/platforms/$PLATFORM/android.jar" ]; then
-            JAVA_HOME="$java_home" "$sdk/cmdline-tools/latest/bin/sdkmanager" \
+            (yes || true) | JAVA_HOME="$java_home" "$sdk/cmdline-tools/latest/bin/sdkmanager" \
               "build-tools;$BUILD_TOOLS" "platforms;$PLATFORM"
           fi
           "$java_home/bin/javac" -version
