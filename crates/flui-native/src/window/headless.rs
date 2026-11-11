@@ -1,6 +1,6 @@
-//! The headless window: [`HeadlessHostWindow`], the window double every
+//! The headless window: [`HeadlessHostWindow`], the native window every
 //! [`HeadlessPlatform`](crate::HeadlessPlatform) opens, its system chrome
-//! ([`FakeSystemChrome`]), what the headless "operating system" refuses or
+//! ([`HeadlessSystemChrome`]), what the headless "operating system" refuses or
 //! clamps ([`HeadlessWindowPolicy`]), so a test can see a window snapshot
 //! report the outcome rather than the request, and [`HeadlessWindows`], the
 //! windows the platform tracks.
@@ -1432,14 +1432,14 @@ impl HostWindow for HeadlessHostWindow {
     }
 }
 
-/// Records the overlay styles delivered through
+/// The system chrome of a [`HeadlessHostWindow`]: records the overlay styles delivered through
 /// [`PlatformWindow::system_chrome`], in delivery order.
 #[derive(Default)]
-pub struct FakeSystemChrome {
+pub struct HeadlessSystemChrome {
     styles: Mutex<Vec<flui_platform::SystemUiOverlayStyle>>,
 }
 
-impl FakeSystemChrome {
+impl HeadlessSystemChrome {
     /// Every delivered overlay style, in delivery order.
     #[must_use]
     pub fn styles(&self) -> Vec<flui_platform::SystemUiOverlayStyle> {
@@ -1447,15 +1447,15 @@ impl FakeSystemChrome {
     }
 }
 
-impl std::fmt::Debug for FakeSystemChrome {
+impl std::fmt::Debug for HeadlessSystemChrome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FakeSystemChrome")
+        f.debug_struct("HeadlessSystemChrome")
             .field("styles", &*self.styles.lock())
             .finish()
     }
 }
 
-impl flui_platform::PlatformSystemChrome for FakeSystemChrome {
+impl flui_platform::PlatformSystemChrome for HeadlessSystemChrome {
     fn set_overlay_style(&self, style: flui_platform::SystemUiOverlayStyle) {
         self.styles.lock().push(style);
     }
@@ -1466,7 +1466,7 @@ impl flui_platform::PlatformSystemChrome for FakeSystemChrome {
 }
 
 /// Each headless window records its own overlay styles.
-impl host::Chrome<()> for FakeSystemChrome {
+impl host::Chrome<()> for HeadlessSystemChrome {
     fn for_window((): &()) -> Arc<dyn flui_platform::PlatformSystemChrome> {
         Arc::new(Self::default())
     }
