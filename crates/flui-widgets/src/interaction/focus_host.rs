@@ -279,9 +279,6 @@ pub(crate) struct FocusHost {
     /// The node this one currently hangs under; `dependencies_changed`
     /// moves it when the provider changes.
     parent: Option<Rc<FocusNode>>,
-    /// The live geometry source, retained so a replacement node receives the
-    /// same one without reacquiring lifecycle-only context.
-    rect_provider: Option<RectProvider>,
     /// Generation-checked ownership of the geometry source installed on the
     /// current node.
     rect_provider_registration: Option<FocusNodeRegistration>,
@@ -333,7 +330,6 @@ impl FocusHost {
             traversal_registration,
             focus_manager: None,
             parent: None,
-            rect_provider: None,
             rect_provider_registration: None,
             action_chain: None,
             context_registration: None,
@@ -481,9 +477,10 @@ impl FocusHost {
         self.install_focus_listener();
         let rect_provider_registration =
             self.node.register_rect_provider(Rc::clone(&rect_provider));
-        *self.shared.reveal.rect.borrow_mut() = Some(Rc::clone(&rect_provider));
+        // Kept here for the reveal, and for a replacement node to receive
+        // the same one without reacquiring lifecycle-only context.
+        *self.shared.reveal.rect.borrow_mut() = Some(rect_provider);
         *self.shared.reveal.target.borrow_mut() = FocusRevealScope::of(ctx);
-        self.rect_provider = Some(rect_provider);
         self.rect_provider_registration = Some(rect_provider_registration);
         let attachment = parent
             .attach_node(&self.node)
@@ -554,10 +551,10 @@ impl FocusHost {
                 &mut replacement_key_handler_registration,
                 &self.shared,
             );
-            let replacement_rect_provider_registration = self
-                .rect_provider
-                .as_ref()
-                .map(|provider| replacement.register_rect_provider(Rc::clone(provider)));
+            // The provider the reveal reads is the one registered on the node.
+            let provider = self.shared.reveal.rect.borrow().clone();
+            let replacement_rect_provider_registration =
+                provider.map(|provider| replacement.register_rect_provider(provider));
             let replacement_context_registration = self
                 .action_chain
                 .as_ref()
