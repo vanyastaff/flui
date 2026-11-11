@@ -303,11 +303,16 @@ deterministic: `PaintCx::canvas` state belongs to the current run; `paint_child`
 later drawing starts with a fresh canvas. Effects covering children use the
 `with_clip_*` layer scopes.
 
-The composer brackets each nonempty run with save/restore when merging pictures.
-Raw command concatenation is insufficient: a clip recorded without an explicit
-save remains active during replay and would incorrectly clip the child and the
-parent's next run. The cost is two replay commands per nonempty run, while inline
-children still share one picture. The facade readback test
+A picture holds one render object's output (ADR-0304 §2): the composer seals the
+open run whenever the render object painting the next run changes, so a parent
+that paints before and after an inline child yields three pictures, and a render
+object that repaints changes only its own pictures
+(`a_picture_run_holds_one_render_objects_output`). Two runs of one render object
+still merge, when nothing between them paints (a child that draws nothing). The
+composer brackets each nonempty run with save/restore when merging them. Raw
+command concatenation is insufficient: a clip recorded without an explicit save
+remains active during replay and would incorrectly clip the parent's next run.
+The cost is two replay commands per nonempty run. The facade readback test
 `canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture` checks the parent
 clip, an unclipped child, and the resumed parent run through a real frame and GPU.
 
@@ -693,9 +698,12 @@ alongside the other `paint_effects` producers — see "the clip family" below
 for the command; N = 10 and N = 100 are unchanged from their first
 measurement and were not part of that re-run). Same shape as
 `RenderTransform`'s own numbers (226x / 1.69x at N = 1000) for the same
-reason: inline leaves merge into one
-`PictureLayer`, so the update arm stays flat while the repaint arm grows with
-N; layered leaves make the graft itself O(N), narrowing the win to a small
+reason: when measured, inline leaves merged into one
+`PictureLayer`, so the update arm stayed flat while the repaint arm grew with
+N (a picture now holds one render object's output, ADR-0304 §2, so the inline
+update arm clones one picture per leaf: at N = 1000 inline update is 50.0 µs against
+3.13 µs before and repaint 676 µs against 478 µs, until the retained scene of ADR-0304 §3
+replaces the graft); layered leaves make the graft itself O(N), narrowing the win to a small
 constant factor. The benches install no `SemanticsOwner`, so these ratios
 measure the paint side only; the `SEMANTICS` bit's cost is the unchanged
 baseline argued above, not something the numbers cover.

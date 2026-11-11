@@ -1,7 +1,7 @@
 # render-scaling: задачи
 
-- **Статус:** утверждена 2026-11-11; исполнение. Сделано: ничего. Следующие: RS1, RS3, RS4, RS5,
-  RS14 (не зависят друг от друга).
+- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS4. Следующие: RS1, RS3, RS5, RS14 (не
+  зависят друг от друга).
 - **Design:** [design.md](design.md); требования и ворота G1–G7: [requirements.md](requirements.md)
 - **База:** `main` @ `da69efa`. Пути и строки в ADR даны на `e5ba8fe8f`; перед правкой сверить.
 
@@ -272,4 +272,5 @@
 
 | Задача | PR | Состояние | Доказательство |
 |---|---|---|---|
-| RS1–RS19 | | не начата | |
+| RS4 | ветка `claude/project-thread-k5w05d-rs4` | готова | `rendering_it paint_matrix::a_picture_run_holds_one_render_objects_output` (падает без запечатывания по владельцу); readback `composited_layer_update_readback` и lib flui-engine на lavapipe без правки; снимки paint не перегенерированы; perf: `layers_produced` без изменений во всех сценариях, `slide_transition_tick.layers_reused` 1 → 30 (30 строк панели теперь 30 картинок, а не одна) |
+| RS1–RS3, RS5–RS19 | | не начата | |

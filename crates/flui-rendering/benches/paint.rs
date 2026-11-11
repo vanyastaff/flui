@@ -218,9 +218,10 @@ fn bench_eight_dirty_boundaries(c: &mut Criterion) {
 ///
 /// Read the two `layered` groups together, not separately:
 ///
-/// - **inline** — the leaves merge into one `PictureLayer`, so the retained
-///   capture is a handful of nodes at any `subtree` and the update arm is
-///   flat. This is the best case, and the one a background or a text run hits.
+/// - **inline** — plain leaves, each its own `PictureLayer` (a picture holds
+///   one render object's output, ADR-0304 §2), so the retained capture holds
+///   one picture per leaf and the update arm clones them all; nothing is
+///   re-recorded.
 /// - **layered** — every leaf is its own repaint boundary, so the capture's
 ///   layer count grows with `subtree` and the update arm grows with it too: a
 ///   graft clones every captured node. The win narrows to the ratio of
