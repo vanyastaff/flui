@@ -3,7 +3,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
 use crate::ui_runtime::UiRuntime;
-use flui_foundation::{PresentationAddress, geometry::WindowMetrics};
+use flui_foundation::{PresentationAddress, geometry::WindowMetrics, panic::FirstPanic};
 use flui_interaction::InputSurface;
 use flui_platform::{Brightness, PlatformInput, WindowDisplay, WindowExecutionState, WindowInsets};
 
@@ -259,21 +259,17 @@ impl PendingWindowState {
     ) {
         let recording = runtime.begin_recorded_input();
         let id = address.presentation_id;
-        let mut first = None;
+        let mut first = FirstPanic::new();
         // A display update asks for its own redraw, and only when it changes the
         // display the presentation holds (see `UiRuntime::apply_window_display`).
         let redraw = self.metrics.is_some() || self.insets.is_some() || self.brightness.is_some();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: surface resize runs contained so the first failure is kept"
-        )]
+        // Each step below runs contained so the first failure is kept.
         if let Some(metrics) = self.metrics {
-            first = catch_unwind(AssertUnwindSafe(|| {
+            first.contain(|| {
                 resize_surface(metrics);
                 runtime.set_pipeline_device_pixel_ratio_for(id, metrics.scale().get());
-            }))
-            .err();
-            if first.is_some() {
+            });
+            if first.is_held() {
                 // A merged batch still owns independent appearance/safe-area
                 // observations. A failed surface update must not discard them
                 // or publish geometry the native adapter did not accept.
@@ -281,17 +277,7 @@ impl PendingWindowState {
             }
         }
         if self.metrics.is_some() {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: gesture context refresh runs contained so the first failure is kept"
-            )]
-            let failure =
-                catch_unwind(AssertUnwindSafe(|| runtime.refresh_gesture_context_for(id))).err();
-            crate::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first,
-                failure,
-                "accepted pixel ratio gesture projection",
-            );
+            first.contain(|| runtime.refresh_gesture_context_for(id));
         }
         // The keyboard is held before the media query's update wakes anything:
         // a wake that panics must not leave the next frame sampling a motion
@@ -299,11 +285,7 @@ impl PendingWindowState {
         if let Some(insets) = self.insets {
             runtime.hold_keyboard_inset_for(id, insets.keyboard());
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: media query publication runs contained so the first failure is kept"
-        )]
-        let failure = catch_unwind(AssertUnwindSafe(|| {
+        first.contain(|| {
             if let Some(source) = runtime.media_query_for(id) {
                 source.update(|data| {
                     if let Some(metrics) = self.metrics {
@@ -325,39 +307,14 @@ impl PendingWindowState {
                     }
                 });
             }
-        }))
-        .err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first,
-            failure,
-            "window state publication",
-        );
+        });
         if let Some(update) = self.display {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a display update runs contained so the first failure is kept"
-            )]
-            let failure = catch_unwind(AssertUnwindSafe(|| {
+            first.contain(|| {
                 runtime.apply_window_display(id, update.get());
-            }))
-            .err();
-            crate::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first,
-                failure,
-                "window display publication",
-            );
+            });
         }
         if redraw {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a redraw request runs contained so the first failure is kept"
-            )]
-            let failure = catch_unwind(AssertUnwindSafe(|| runtime.request_redraw_of(id))).err();
-            crate::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first,
-                failure,
-                "window state redraw",
-            );
+            first.contain(|| runtime.request_redraw_of(id));
         }
         if recording {
             let applied = [
@@ -372,7 +329,7 @@ impl PendingWindowState {
                 runtime.record_applied(id, HostInput::Window(observation), InputOutcome::Handled);
             }
         }
-        super::finish_retirement(first);
+        first.resume();
     }
 }
 

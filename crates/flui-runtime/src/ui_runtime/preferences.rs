@@ -1,12 +1,8 @@
-use std::{
-    cell::RefCell,
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
-    rc::Rc,
-    sync::Arc,
-    time::Duration,
-};
+use std::{cell::RefCell, panic::resume_unwind, rc::Rc, sync::Arc, time::Duration};
 
-use flui_foundation::{MonotonicClock, PresentationId, geometry::DevicePixelRatio};
+use flui_foundation::{
+    MonotonicClock, PresentationId, geometry::DevicePixelRatio, panic::FirstPanic,
+};
 use flui_interaction::GestureProfiles;
 use flui_platform::{
     DisplayId, GestureGeometry, GesturePreferences, PreferenceQueryError, SystemPreferences,
@@ -320,35 +316,17 @@ impl UiRuntime {
             presentation.set_motion_override(preference);
             presentation.mark_redraw_pending();
         }
-        let mut first_failure = None;
+        let mut first_failure = FirstPanic::new();
         for presentation in self.presentations.iter() {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a presentation's motion policy runs contained so the others are refreshed"
-            )]
-            let failure = catch_unwind(AssertUnwindSafe(|| {
+            // A presentation's motion policy runs contained so the others are refreshed.
+            first_failure.contain(|| {
                 let policy = presentation.motion_policy();
                 presentation.media_query.update(|data| data.motion = policy);
-            }))
-            .err();
-            crate::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first_failure,
-                failure,
-                "application motion publication",
-            );
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a redraw request runs contained so other presentations are refreshed"
-            )]
-            let failure =
-                catch_unwind(AssertUnwindSafe(|| self.request_redraw_for(presentation))).err();
-            crate::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first_failure,
-                failure,
-                "application motion wake",
-            );
+            });
+            // A redraw request runs contained so other presentations are refreshed.
+            first_failure.contain(|| self.request_redraw_for(presentation));
         }
-        if let Some(failure) = first_failure {
+        if let Some(failure) = first_failure.into_payload() {
             resume_unwind(failure);
         }
     }
@@ -465,7 +443,7 @@ impl UiRuntime {
             .map(|snapshot| std::sync::Arc::clone(&snapshot.values));
         let unknown = SystemPreferences::default();
         let now = self.clock.now();
-        let mut first_failure = None;
+        let mut first_failure = FirstPanic::new();
         for presentation in self.presentations.iter() {
             let due = !presentation.closing_requested.get()
                 && presentation
@@ -476,26 +454,17 @@ impl UiRuntime {
             if !due || !turn.admit(presentation.id()) {
                 continue;
             }
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a presentation's refresh runs contained so the others are refreshed"
-            )]
-            let failure = catch_unwind(AssertUnwindSafe(|| {
+            // A presentation's refresh runs contained so the others are refreshed.
+            first_failure.contain(|| {
                 refresh(
                     presentation,
                     values.as_deref().unwrap_or(&unknown),
                     now,
                     false,
                 );
-            }))
-            .err();
-            crate::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first_failure,
-                failure,
-                "gesture geometry retry",
-            );
+            });
         }
-        if let Some(failure) = first_failure {
+        if let Some(failure) = first_failure.into_payload() {
             resume_unwind(failure);
         }
     }
@@ -540,39 +509,21 @@ impl UiRuntime {
                 presentation.mark_redraw_pending();
             }
         }
-        let mut first_failure = None;
+        let mut first_failure = FirstPanic::new();
         for presentation in self.presentations.iter() {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a presentation's refresh runs contained so the others are refreshed"
-            )]
-            if let Err(failure) = catch_unwind(AssertUnwindSafe(|| {
+            // A presentation's refresh runs contained so the others are refreshed.
+            first_failure.contain(|| {
                 refresh(presentation, &snapshot.values, self.clock.now(), true);
-            })) {
-                crate::lifecycle_state::preserve_first_lifecycle_panic(
-                    &mut first_failure,
-                    Some(failure),
-                    "system preferences publication",
-                );
-            }
+            });
             if motion_changed {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: a redraw request runs contained so other presentations are refreshed"
-                )]
-                let failure =
-                    catch_unwind(AssertUnwindSafe(|| self.request_redraw_for(presentation))).err();
-                crate::lifecycle_state::preserve_first_lifecycle_panic(
-                    &mut first_failure,
-                    failure,
-                    "system motion wake",
-                );
+                // A redraw request runs contained so other presentations are refreshed.
+                first_failure.contain(|| self.request_redraw_for(presentation));
             }
         }
         if self.begin_recorded_input() {
             self.record_preferences(snapshot.revision, Arc::clone(&snapshot.values));
         }
-        if let Some(failure) = first_failure {
+        if let Some(failure) = first_failure.into_payload() {
             resume_unwind(failure);
         }
     }

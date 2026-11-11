@@ -5,13 +5,12 @@
 //!
 //! # Resolution (ADR-0023)
 //!
-//! Resolution **stops at the first scope whose own map declares the intent's
-//! type at all** — enabled or not. A disabled mapping does **not** fall
-//! through to an enclosing scope's mapping for the same type. Actions are
-//! keyed by [`TypeId`] and **chained at provide time**: each `Actions` widget
-//! layers its own map over the enclosing chain, so one nearest-provider lookup
-//! sees, per intent type, the single entry of the nearest declaring scope,
-//! whether enabled or not.
+//! Resolution **stops at the first scope that declares the intent's type at
+//! all**, enabled or not. A disabled mapping does **not** fall through to an
+//! enclosing scope's mapping for the same type. Actions are keyed by
+//! [`TypeId`] and **chained at provide time**: each `Actions` widget publishes
+//! a link that shares its bindings and names the chain above it, and a lookup
+//! walks the links outward from the nearest provider.
 //!
 //! The erasure (`TypeId` key + `dyn Any` downcast inside the typed wrapper)
 //! is the same shape as the one sanctioned `Navigator` pop-result boundary
@@ -27,7 +26,6 @@
 //! node (ADR-0079).
 
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use flui_foundation::ChangeNotifier;
@@ -192,21 +190,53 @@ impl<T: Intent> Action<T> for CallbackAction<T> {
 // Erasure
 // ============================================================================
 
+/// How one action type answers one intent type, with both erased: the
+/// functions an [`ErasedAction`] reaches its action through. One table
+/// exists per pair of types, so binding an action allocates nothing beyond
+/// the action itself, and one action bound to several intent types is held
+/// once.
+struct BindingTable {
+    is_enabled: fn(&dyn Any, &dyn Any) -> bool,
+    invoke: fn(&dyn Any, &mut EventCx<'_>, &dyn Any) -> ActionOutcome,
+    to_key_event_result: fn(&dyn Any, &dyn Any, ActionOutcome) -> KeyEventResult,
+    /// The same binding as a disabled control declares it: never enabled.
+    /// `None` on a table that is that already.
+    switched_off: Option<&'static BindingTable>,
+}
+
+/// Names the [`BindingTable`] of action type `A` for intent type `T`.
+struct Binding<T, A>(std::marker::PhantomData<fn(&T, &A)>);
+
+impl<T: Intent, A: Action<T> + 'static> Binding<T, A> {
+    const TABLE: BindingTable = Self::table(
+        |action, intent| bound::<A>(action).is_enabled(typed::<T>(intent)),
+        Some(&Self::SWITCHED_OFF),
+    );
+
+    const SWITCHED_OFF: BindingTable = Self::table(|_action, _intent| false, None);
+
+    const fn table(
+        is_enabled: fn(&dyn Any, &dyn Any) -> bool,
+        switched_off: Option<&'static BindingTable>,
+    ) -> BindingTable {
+        BindingTable {
+            is_enabled,
+            invoke: |action, cx, intent| bound::<A>(action).invoke(cx, typed::<T>(intent)),
+            to_key_event_result: |action, intent, outcome| {
+                bound::<A>(action).to_key_event_result(typed::<T>(intent), outcome)
+            },
+            switched_off,
+        }
+    }
+}
+
 /// One `Action<T>` behind `dyn Any` intents, so a heterogeneous map can hold
 /// it. Reached only through the matching `TypeId`, so the inner downcast
 /// cannot fail.
-/// A predicate over an erased intent (`is_enabled`).
-type ErasedPredicate = Rc<dyn Fn(&dyn Any) -> bool>;
-/// The erased `invoke`, carrying its outcome back out.
-type ErasedInvoke = Rc<dyn Fn(&mut EventCx<'_>, &dyn Any) -> ActionOutcome>;
-/// The erased `to_key_event_result`.
-type ErasedKeyResult = Rc<dyn Fn(&dyn Any, ActionOutcome) -> KeyEventResult>;
-
 #[derive(Clone)]
 pub(crate) struct ErasedAction {
-    is_enabled: ErasedPredicate,
-    invoke: ErasedInvoke,
-    to_key_event_result: ErasedKeyResult,
+    action: Rc<dyn Any>,
+    table: &'static BindingTable,
     enablement_changes: Option<ChangeNotifier>,
 }
 
@@ -220,26 +250,41 @@ fn typed<T: Intent>(intent: &dyn Any) -> &T {
     )
 }
 
+/// The typed view of an erased action. A table is paired only with the
+/// action type it was made for, so the downcast cannot fail.
+fn bound<A: 'static>(action: &dyn Any) -> &A {
+    action
+        .downcast_ref::<A>()
+        .expect("BUG: a binding table was paired with an action of another type")
+}
+
 impl ErasedAction {
     fn new<T: Intent, A: Action<T> + 'static>(action: A) -> Self {
-        let action = Rc::new(action);
-        let enabled_action = Rc::clone(&action);
-        let key_result_action = Rc::clone(&action);
+        Self::shared::<T, A>(Rc::new(action))
+    }
+
+    /// `action` bound to `T` without a copy of its own: the bindings of one
+    /// action to several intent types share it.
+    fn shared<T: Intent, A: Action<T> + 'static>(action: Rc<A>) -> Self {
         let enablement_changes = action.enablement_changes();
         Self {
-            is_enabled: Rc::new(move |intent| enabled_action.is_enabled(typed::<T>(intent))),
-            invoke: Rc::new(move |cx: &mut EventCx<'_>, intent: &dyn Any| {
-                action.invoke(cx, typed::<T>(intent))
-            }),
-            to_key_event_result: Rc::new(move |intent, outcome| {
-                key_result_action.to_key_event_result(typed::<T>(intent), outcome)
-            }),
+            action,
+            table: &Binding::<T, A>::TABLE,
             enablement_changes,
         }
     }
 
+    /// This binding as a disabled control declares it: still bound, so the
+    /// intent stops here, and never enabled.
+    pub(crate) fn switched_off(&self) -> Self {
+        Self {
+            table: self.table.switched_off.unwrap_or(self.table),
+            ..self.clone()
+        }
+    }
+
     pub(crate) fn is_enabled(&self, intent: &dyn Any) -> bool {
-        (self.is_enabled)(intent)
+        (self.table.is_enabled)(&*self.action, intent)
     }
 
     /// The signal [`Action::enablement_changes`] gave when this was bound.
@@ -250,24 +295,77 @@ impl ErasedAction {
     /// Invoke outside a key dispatch: a gesture, a control's press, an
     /// assistive-technology action.
     pub(crate) fn invoke(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> ActionOutcome {
-        (self.invoke)(cx, intent)
+        (self.table.invoke)(&*self.action, cx, intent)
     }
 
     /// Invoke inside the key event's dispatch, then report what the key
     /// dispatch should do — **one** call, so the key result cannot disagree
     /// with what actually ran.
     pub(crate) fn invoke_for_key(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> KeyEventResult {
-        let outcome = (self.invoke)(cx, intent);
-        (self.to_key_event_result)(intent, outcome)
+        let outcome = (self.table.invoke)(&*self.action, cx, intent);
+        (self.table.to_key_event_result)(&*self.action, intent, outcome)
     }
 }
 
-/// Per intent type, the action bound by the **nearest** `Actions` scope that
-/// declares it — the single entry an ancestor walk would stop at,
-/// precomputed at provide time. A nearer scope's mapping
-/// entirely replaces an enclosing scope's mapping for the same type; there is
-/// no fallback list to search past it.
-pub(crate) type ActionChain = Rc<HashMap<TypeId, ErasedAction>>;
+/// The bindings in force at one position of the tree: the nearest scope's
+/// own, then each enclosing scope's.
+///
+/// A scope adds one link that shares its binding list and names the chain
+/// above it, so layering copies nothing however many bindings the enclosing
+/// scopes hold. A lookup walks the links outward and stops at the first that
+/// declares the type: a nearer scope's mapping entirely replaces an
+/// enclosing scope's mapping for the same type; there is no fallback list to
+/// search past it.
+#[derive(Clone)]
+pub(crate) struct ActionChain(Rc<ChainLink>);
+
+struct ChainLink {
+    own: Rc<Vec<(TypeId, ErasedAction)>>,
+    enclosing: Option<ActionChain>,
+}
+
+impl ActionChain {
+    /// The action the nearest declaring scope binds to `intent_type`,
+    /// enabled or not. A scope that binds the type twice answers with the
+    /// later binding.
+    pub(crate) fn get(&self, intent_type: TypeId) -> Option<&ErasedAction> {
+        let mut link: &ChainLink = &self.0;
+        loop {
+            let bound = link
+                .own
+                .iter()
+                .rev()
+                .find_map(|(bound, action)| (*bound == intent_type).then_some(action));
+            if bound.is_some() {
+                return bound;
+            }
+            link = &link.enclosing.as_ref()?.0;
+        }
+    }
+
+    /// Whether any scope of the chain declares `intent_type`.
+    pub(crate) fn declares(&self, intent_type: TypeId) -> bool {
+        self.get(intent_type).is_some()
+    }
+
+    /// Whether `self` and `other` are one chain: the same link, not merely
+    /// equal bindings.
+    pub(crate) fn is(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for ActionChain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut links = f.debug_list();
+        let mut link: Option<&ChainLink> = Some(&self.0);
+        while let Some(current) = link {
+            links.entry(&current.own.len());
+            link = current.enclosing.as_ref().map(|chain| &*chain.0);
+        }
+        links.finish()
+    }
+}
 
 /// The action bound to `intent`'s type, if its nearest declaring scope's
 /// mapping is enabled. The walk **stops** the moment a scope declares the
@@ -275,7 +373,7 @@ pub(crate) type ActionChain = Rc<HashMap<TypeId, ErasedAction>>;
 /// disabled nearest mapping therefore returns `None` here rather than
 /// falling through to an enclosing scope's mapping for the same type.
 pub(crate) fn resolve<'c>(chain: &'c ActionChain, intent: &dyn Any) -> Option<&'c ErasedAction> {
-    let action = chain.get(&intent.type_id())?;
+    let action = chain.get(intent.type_id())?;
     action.is_enabled(intent).then_some(action)
 }
 
@@ -294,7 +392,9 @@ pub(crate) fn resolve<'c>(chain: &'c ActionChain, intent: &dyn Any) -> Option<&'
 /// `build`, which has no event context (ADR-0086).
 #[derive(Clone)]
 pub struct Actions {
-    own: Vec<(TypeId, ErasedAction)>,
+    /// Shared, so a clone of the view and the chain link it publishes copy
+    /// no list.
+    own: Rc<Vec<(TypeId, ErasedAction)>>,
     child: BoxedView,
 }
 
@@ -302,7 +402,7 @@ impl Actions {
     /// An action scope around `child` with no bindings yet.
     pub fn new(child: impl IntoView) -> Self {
         Self {
-            own: Vec::new(),
+            own: Rc::default(),
             child: BoxedView::new(child.into_view()),
         }
     }
@@ -313,7 +413,7 @@ impl Actions {
     /// nearest declaring scope regardless of its enabled state.
     #[must_use]
     pub fn action<T: Intent>(mut self, action: impl Action<T> + 'static) -> Self {
-        self.own.push(erased_action(action));
+        Rc::make_mut(&mut self.own).push(erased_action(action));
         self
     }
 }
@@ -333,13 +433,11 @@ impl View for Actions {
 }
 
 impl StatelessView for Actions {
-    /// Layer this widget's bindings over the enclosing chain: own actions
-    /// **replace** the enclosing entry per type, so the nearest scope's
-    /// mapping is the only one a lookup ever sees, since resolution stops at
-    /// the nearest scope that declares the type at all. A type this widget does not declare keeps
-    /// falling back to whatever the enclosing chain already had. If `own`
-    /// binds the same type twice, the later call wins, same as a duplicate
-    /// key in a map literal.
+    /// Layer this widget's bindings over the enclosing chain: a lookup stops
+    /// at the nearest scope that declares the type at all, so a type this
+    /// widget declares is answered here and any other by the chain above.
+    /// If `own` binds the same type twice, the later call wins, same as a
+    /// duplicate key in a map literal.
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         self.child.clone()
     }
@@ -347,7 +445,7 @@ impl StatelessView for Actions {
     fn provide(&self, ctx: &dyn BuildContext, values: &mut Provided<'_>) {
         values.value(EnclosingActions(layered_chain(
             ambient_action_chain(ctx),
-            &self.own,
+            Rc::clone(&self.own),
         )));
     }
 }
@@ -357,19 +455,25 @@ impl StatelessView for Actions {
 /// entries in `own` win over earlier ones for the same type.
 pub(crate) fn layered_chain(
     enclosing: Option<ActionChain>,
-    own: &[(TypeId, ErasedAction)],
+    own: Rc<Vec<(TypeId, ErasedAction)>>,
 ) -> ActionChain {
-    let mut chain: HashMap<TypeId, ErasedAction> =
-        enclosing.map_or_default(|enclosing| (*enclosing).clone());
-    for (type_id, action) in own {
-        chain.insert(*type_id, action.clone());
-    }
-    Rc::new(chain)
+    ActionChain(Rc::new(ChainLink { own, enclosing }))
 }
 
 /// `action` as one entry of a chain, keyed by `T`.
 pub(crate) fn erased_action<T: Intent>(action: impl Action<T> + 'static) -> (TypeId, ErasedAction) {
     (TypeId::of::<T>(), ErasedAction::new(action))
+}
+
+/// `action` as one entry of a chain, keyed by `T`, sharing the action with
+/// the entries that bind it to other intent types.
+pub(crate) fn shared_action<T: Intent, A: Action<T> + 'static>(
+    action: &Rc<A>,
+) -> (TypeId, ErasedAction) {
+    (
+        TypeId::of::<T>(),
+        ErasedAction::shared::<T, A>(Rc::clone(action)),
+    )
 }
 
 /// What a focused widget records on its node for the `Shortcuts` above it:
@@ -401,7 +505,7 @@ impl FocusRecord {
     /// Whether `self` and `other` record the same chain and convention, so
     /// recording one over the other changes nothing.
     pub(crate) fn same_as(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.chain, &other.chain) && self.platform == other.platform
+        self.chain.is(&other.chain) && self.platform == other.platform
     }
 
     /// Record `self` on `node`, until the returned registration drops.
@@ -419,7 +523,7 @@ fn record_at(node: &FocusNode) -> Option<Rc<FocusRecord>> {
 /// The chain recorded on `node`: the bindings visible at the focused widget's
 /// position, which is where a shortcut's intent is resolved.
 pub(crate) fn chain_at(node: &FocusNode) -> Option<ActionChain> {
-    record_at(node).map(|record| Rc::clone(&record.chain))
+    record_at(node).map(|record| record.chain.clone())
 }
 
 /// The platform convention the widget that recorded on `node` was built
@@ -433,7 +537,7 @@ pub(crate) fn platform_at(node: &FocusNode) -> Option<TargetPlatform> {
 /// they re-read — which is why `Focus` records the chain with a dependency and
 /// `Shortcuts` reads the primary focus's record at key time (ADR-0079).
 pub(crate) fn ambient_action_chain(ctx: &dyn BuildContext) -> Option<ActionChain> {
-    ctx.get::<EnclosingActions, _>(|enclosing| Rc::clone(&enclosing.0))
+    ctx.get::<EnclosingActions, _>(|enclosing| enclosing.0.clone())
 }
 
 /// The layered [`ActionChain`] as an element publishes it to its subtree
@@ -442,17 +546,22 @@ pub(crate) fn ambient_action_chain(ctx: &dyn BuildContext) -> Option<ActionChain
 pub(crate) struct EnclosingActions(ActionChain);
 
 impl EnclosingActions {
+    /// `chain`, to publish from an element that layers its own bindings.
+    pub(crate) fn new(chain: ActionChain) -> Self {
+        Self(chain)
+    }
+
     /// The chain in force at `ctx`, registering a dependency: the reader
     /// rebuilds when an enclosing scope layers another chain.
     pub(crate) fn depend_on(ctx: &dyn BuildContext) -> Option<ActionChain> {
-        ctx.depend_on::<Self, _>(|enclosing| Rc::clone(&enclosing.0))
+        ctx.depend_on::<Self, _>(|enclosing| enclosing.0.clone())
     }
 }
 
 impl std::fmt::Debug for EnclosingActions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EnclosingActions")
-            .field("intent_types", &self.0.len())
+            .field("chain", &self.0)
             .finish()
     }
 }
@@ -461,7 +570,7 @@ impl ProvidedValue for EnclosingActions {
     /// Rebuilding an `Actions` mints a fresh chain, so dependents (a
     /// `Shortcuts` that captured the chain into its key handler) re-capture.
     fn update_should_notify(&self, old: &Self) -> bool {
-        !Rc::ptr_eq(&self.0, &old.0)
+        !self.0.is(&old.0)
     }
 }
 
@@ -486,7 +595,7 @@ impl ActionScope {
 impl std::fmt::Debug for ActionScope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ActionScope")
-            .field("intent_types", &self.chain.len())
+            .field("chain", &self.chain)
             .finish_non_exhaustive()
     }
 }
@@ -503,7 +612,7 @@ impl StatelessView for ActionScope {
     }
 
     fn provide(&self, _ctx: &dyn BuildContext, values: &mut Provided<'_>) {
-        values.value(EnclosingActions(Rc::clone(&self.chain)));
+        values.value(EnclosingActions(self.chain.clone()));
     }
 }
 // ============================================================================

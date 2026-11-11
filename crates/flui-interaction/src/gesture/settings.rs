@@ -97,6 +97,11 @@ impl GestureProfiles {
         }
     }
 
+    /// Whether every pointer kind is admitted with `settings`.
+    fn is_uniform(&self, settings: &GestureSettings) -> bool {
+        self.by_kind.iter().all(|slot| slot == settings)
+    }
+
     /// The profile a pointer of `kind` is admitted with.
     #[must_use]
     pub fn for_kind(&self, kind: PointerKind) -> &GestureSettings {
@@ -239,6 +244,9 @@ pub struct GestureSettingsProvider {
 
 #[derive(Debug, Clone)]
 enum SettingsProfile {
+    /// `GestureSettings::default()` for every pointer kind, held as no table:
+    /// what a recognizer builder starts from before its owner names a provider.
+    Neutral,
     Fixed(Rc<GestureProfiles>),
     Live(Rc<RefCell<GestureProfiles>>),
     /// An explicit subtree override over the provider it replaces, which still
@@ -252,6 +260,10 @@ enum SettingsProfile {
 impl PartialEq for SettingsProfile {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Neutral, Self::Neutral) => true,
+            (Self::Neutral, Self::Fixed(fixed)) | (Self::Fixed(fixed), Self::Neutral) => {
+                fixed.is_uniform(&GestureSettings::default())
+            }
             (Self::Fixed(left), Self::Fixed(right)) => left == right,
             (Self::Live(left), Self::Live(right)) => Rc::ptr_eq(left, right),
             (
@@ -273,6 +285,7 @@ impl SettingsProfile {
     /// The floors are timings only, so an override's target is its authored one.
     fn min_target(&self, kind: PointerKind) -> f64 {
         match self {
+            Self::Neutral => GestureSettings::default().values.min_target,
             Self::Fixed(profiles) => profiles.for_kind(kind).values.min_target,
             Self::Live(profiles) => profiles.borrow().for_kind(kind).values.min_target,
             Self::Override { authored, .. } => authored.min_target(kind),
@@ -281,6 +294,7 @@ impl SettingsProfile {
 
     fn snapshot(&self, kind: PointerKind) -> GestureSettings {
         match self {
+            Self::Neutral => GestureSettings::default(),
             Self::Fixed(profiles) => profiles.for_kind(kind).clone(),
             Self::Live(profiles) => profiles.borrow().for_kind(kind).clone(),
             Self::Override {
@@ -345,8 +359,13 @@ impl From<GestureProfiles> for GestureSettingsProvider {
 }
 
 impl Default for GestureSettingsProvider {
+    /// `GestureSettings::default()` for every pointer kind. It allocates
+    /// nothing: a recognizer builder starts from it and its owner usually
+    /// replaces it.
     fn default() -> Self {
-        GestureSettings::default().into()
+        Self {
+            profile: SettingsProfile::Neutral,
+        }
     }
 }
 

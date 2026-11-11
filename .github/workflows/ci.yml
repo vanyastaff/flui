@@ -392,10 +392,17 @@ jobs:
       # readback suites render on: without an adapter they skip, and the
       # gpu-test steps below run them on each backend with a missing adapter
       # as a failure (ADR-0244 §1).
-      - name: Ensure Xvfb, openbox, libxcb + xkbcommon, at-spi2-core, lavapipe and llvmpipe are available (flui-native X11 and AT-SPI tests, GPU readbacks)
-        run: |
-          sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb openbox libxcb1 libxkbcommon-x11-0 libxkbcommon0 dbus at-spi2-core mesa-vulkan-drivers libegl-mesa0 libgl1-mesa-dri
-          echo "FLUI_REQUIRE_ATSPI=1" >> "$GITHUB_ENV"
+      #
+      # Weston, sway and libwayland are the Wayland host's, started in the next step.
+      - name: Ensure Xvfb, openbox, libxcb + xkbcommon, at-spi2-core, lavapipe, llvmpipe and Weston are available (flui-native X11, Wayland and AT-SPI tests, GPU readbacks)
+        uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            xvfb openbox libxcb1 libxkbcommon-x11-0 libxkbcommon0 dbus at-spi2-core
+            mesa-vulkan-drivers libegl-mesa0 libgl1-mesa-dri weston sway libwayland-client0
+
+      - name: Require the AT-SPI bus
+        run: echo "FLUI_REQUIRE_ATSPI=1" >> "$GITHUB_ENV"
 
       # The native Wayland host's tests (`cargo xtask test` runs them apart
       # from the Xvfb suite) need a compositor: a headless Weston on a socket
@@ -406,7 +413,6 @@ jobs:
       # has no zwp_primary_selection.
       - name: Start a headless Weston (flui-native Wayland tests)
         run: |
-          sudo apt-get install -y --no-install-recommends weston sway libwayland-client0
           runtime_dir="$RUNNER_TEMP/xdg-runtime"
           mkdir -p "$runtime_dir"
           chmod 700 "$runtime_dir"
@@ -785,7 +791,9 @@ jobs:
           tool: cargo-nextest@0.9
 
       - name: Install valgrind
-        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends valgrind
+        uses: ./.github/actions/apt-install
+        with:
+          packages: valgrind
 
       - name: cargo xtask perf --check
         run: cargo xtask perf --check
@@ -1126,7 +1134,10 @@ jobs:
 
       - name: Install native C cross tools
         if: runner.os == 'Linux'
-        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends clang llvm
+        uses: ./.github/actions/apt-install
+        with:
+          packages: clang llvm
+          commands: clang clang-cl llvm-ar llvm-lib
 
       # The driver build the checks job saves; restored before the NDK step,
       # whose CC_/AR_ variables would change the key. Without it each Linux

@@ -151,8 +151,8 @@ impl<N: Notification> ElementBase for NotificationListenerElement<N> {
     fn build_into_views(
         &mut self,
         _owner: &mut flui_view::ElementOwner<'_>,
-    ) -> Vec<Box<dyn flui_view::View>> {
-        Vec::new()
+    ) -> flui_view::ChildViews {
+        flui_view::ChildViews::none()
     }
 
     fn mount(

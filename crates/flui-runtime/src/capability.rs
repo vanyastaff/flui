@@ -24,6 +24,7 @@ use std::{
 };
 
 use crossbeam_channel::{Receiver, SendError, Sender, unbounded};
+use flui_foundation::panic::FirstPanic;
 use flui_platform::{
     PlatformWindow, Unsupported, UnsupportedReason,
     capability::{
@@ -298,30 +299,22 @@ impl OwnerJobs {
     /// own first failure; a later panic is discarded, and every queued job is
     /// still dropped (ADR-0281 §3).
     #[must_use = "the first panic of a retirement belongs to the runtime's teardown"]
-    pub(crate) fn retire(&self) -> Option<Box<dyn std::any::Any + Send>> {
+    pub(crate) fn retire(&self) -> FirstPanic {
         // Close admission first: a post that races this retirement is either
         // queued before the drain below or refused, never accepted and lost.
         drop(self.admission.lock().take());
-        let mut first = self.pending.retire();
+        let mut first = FirstPanic::new();
+        if let Some(payload) = self.pending.retire() {
+            first.record(payload);
+        }
         while let Ok(job) = self.rx.try_recv() {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a queued job's drop runs contained so the drain finishes"
-            )]
-            let failure =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(job))).err();
-            flui_foundation::panic::FirstPanic::fold(&mut first, failure);
+            // A queued job's drop runs contained so the drain finishes.
+            first.contain(|| drop(job));
         }
-        let locals = self.locals.retire();
-        match (first, locals) {
-            (Some(first), later) => {
-                if let Some(later) = later {
-                    flui_foundation::panic::discard_payload(later);
-                }
-                Some(first)
-            }
-            (None, locals) => locals,
+        if let Some(payload) = self.locals.retire() {
+            first.record(payload);
         }
+        first
     }
 }
 
@@ -329,13 +322,7 @@ impl Drop for OwnerJobs {
     fn drop(&mut self) {
         // The UI runtime's teardown retires the queue before it resumes its
         // first failure; this is the backstop for a queue dropped without it.
-        if let Some(payload) = self.retire() {
-            if std::thread::panicking() {
-                flui_foundation::panic::discard_payload(payload);
-            } else {
-                std::panic::resume_unwind(payload);
-            }
-        }
+        self.retire().resume();
     }
 }
 
@@ -371,7 +358,7 @@ mod tests {
     fn a_post_after_retirement_is_refused_not_queued() {
         let jobs = OwnerJobs::new(|| {});
         let poster = jobs.completions().poster().clone();
-        assert!(jobs.retire().is_none());
+        assert!(!jobs.retire().is_held());
 
         assert_eq!(poster.post(|| {}), Err(OwnerRetired));
         assert!(!jobs.has_queued(), "a refused job is not left in the queue");

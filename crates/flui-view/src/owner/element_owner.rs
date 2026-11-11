@@ -281,6 +281,10 @@ pub struct ElementOwner<'a> {
     /// threaded into render-object lifecycle contexts.
     pub(crate) interaction_dispatch: &'a Option<flui_interaction::InteractionDispatchHandle>,
 
+    /// Whether the presentation collects its semantics tree, threaded into
+    /// render-object lifecycle contexts.
+    pub(crate) collects_semantics: bool,
+
     /// This presentation's fresh-hit-test capability, threaded into every
     /// `BuildCtx` the same way `text_input_handle` is.
     pub(crate) hit_test_handle: &'a Option<flui_interaction::HitTestHandle>,

@@ -398,27 +398,6 @@ pub(crate) fn an_undelivered_signal_keeps_the_due_close() {
     assert_eq!(due_signals(&signals), 1, "the owner was signalled once");
 }
 
-/// A waker that counts how often it is woken, so a test can tell a wake on
-/// the owner's turn from one inside the change.
-#[derive(Default)]
-struct CountingWaker(AtomicUsize);
-
-impl std::task::Wake for CountingWaker {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-impl CountingWaker {
-    fn wakes(&self) -> usize {
-        self.0.load(Ordering::SeqCst)
-    }
-}
-
 /// The owner wakes what a settle returned, as its containment boundary does.
 fn wake_on_the_owner_turn(wakers: Vec<Waker>) {
     for waker in wakers {
@@ -432,20 +411,20 @@ pub(crate) fn a_change_recorded_under_a_hold_wakes_on_the_owner_turn() {
     let (source, signals) = desktop_close_guard(true);
     let guard = source.guard();
     let _saving = guard.hold();
-    let counter = Arc::new(CountingWaker::default());
+    let counter = flui_foundation::testing::CountingWaker::new().shared();
     let waker = Waker::from(Arc::clone(&counter));
     let mut cx = Context::from_waker(&waker);
     let mut changed = std::pin::pin!(guard.changed());
     let pending_before = changed.as_mut().poll(&mut cx).is_pending();
 
     let _ = source.refuses(CloseReason::User);
-    let after_refuses = counter.wakes();
+    let after_refuses = counter.count();
     let settled = source.settle();
-    let after_settle = counter.wakes();
+    let after_settle = counter.count();
     wake_on_the_owner_turn(settled.wake);
 
     assert_eq!(
-        counter.wakes(),
+        counter.count(),
         1,
         "the owner wakes the waiter once, from what settle returned"
     );
@@ -469,21 +448,21 @@ pub(crate) fn a_change_taken_across_the_release_wakes_on_the_owner_turn() {
     let guard = source.guard();
     let saving = guard.hold();
     let _ = source.refuses(CloseReason::User);
-    let counter = Arc::new(CountingWaker::default());
+    let counter = flui_foundation::testing::CountingWaker::new().shared();
     let waker = Waker::from(Arc::clone(&counter));
     let mut cx = Context::from_waker(&waker);
     let mut changed = std::pin::pin!(guard.changed());
     let _ = changed.as_mut().poll(&mut cx);
 
     drop(saving);
-    let after_release = counter.wakes();
+    let after_release = counter.count();
     let settled = source.settle();
     let due = settled.close;
-    let after_settle = counter.wakes();
+    let after_settle = counter.count();
     wake_on_the_owner_turn(settled.wake);
 
     assert_eq!(
-        counter.wakes(),
+        counter.count(),
         1,
         "the owner wakes the waiter once, from what settle returned"
     );

@@ -4,6 +4,7 @@ use super::{
     recognizer::{GestureRecognizer, admits_device},
 };
 use crate::{containment::RoutePanic, events::PointerEvent, pointer::PointerDispatch};
+use smallvec::SmallVec;
 use std::rc::{Rc, Weak};
 
 type Admission = Rc<dyn Fn(PointerDispatch<'_>) -> bool>;
@@ -14,9 +15,12 @@ struct Attached {
 }
 
 /// Ordered weak recognizer attachments; widget state retains strong ownership.
+///
+/// One attachment is held inline: a listener that feeds a single recognizer,
+/// or a single group of them, allocates nothing for its set.
 #[derive(Clone, Default)]
 pub struct RecognizerSet {
-    entries: Vec<Attached>,
+    entries: SmallVec<[Attached; 1]>,
 }
 
 impl std::fmt::Debug for RecognizerSet {

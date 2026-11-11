@@ -1170,7 +1170,7 @@ impl UiRuntime {
     pub(super) fn release_counted_leases(
         &self,
         counted: Vec<(PresentationId, usize)>,
-    ) -> Option<Box<dyn std::any::Any + Send>> {
+    ) -> FirstPanic {
         let mut first = FirstPanic::new();
         for (presentation, count) in counted {
             let Some(state) = self.presentations.get(presentation) else {
@@ -1185,7 +1185,7 @@ impl UiRuntime {
                 .unwrap_or_default();
             first.contain(|| self.release_agent_leases(state, leases));
         }
-        first.into_payload()
+        first
     }
 
     /// Release what each of `leases` holds in `state`'s window, and drop the work queued through
@@ -1205,9 +1205,8 @@ impl UiRuntime {
         let mut sent = self.send_agent_input(state, batch);
         // An answer wakes its asker, user code: they go after the input is let go, and before a
         // panic continues.
-        if let Some(payload) = super::deliver_each(dropped, Abandoned::lease_released) {
-            sent.panic.record(payload);
-        }
+        sent.panic
+            .absorb(super::deliver_each(dropped, Abandoned::lease_released));
         sent.resume();
     }
 }

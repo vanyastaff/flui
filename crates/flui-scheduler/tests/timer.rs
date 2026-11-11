@@ -6,11 +6,11 @@ use std::future::Future;
 use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll, RawWaker, RawWakerVTable, Wake, Waker};
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::time::Duration;
 
 use flui_foundation::ManualClock;
+use flui_foundation::testing::CountingWaker;
 use flui_scheduler::{ClockSource, OwnerFrame, SchedulerBuilder, UpdateScheduler};
 
 /// A scheduler on a virtual clock, and its owner frame.
@@ -88,23 +88,13 @@ fn a_dropped_sleep_disarms_only_its_deadline() {
     );
 }
 
-/// A waker that counts its wakes; its `Arc` counts its live clones.
-#[derive(Default)]
-struct Counted(AtomicUsize);
-
-impl Wake for Counted {
-    fn wake(self: Arc<Self>) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
 /// A sleep outliving its owner never resolves and keeps no waker: the
 /// owner's teardown drops the wakers it held without waking them.
 #[test]
 fn a_sleep_outliving_its_owner_stays_pending_without_a_waker() {
     let (_clock, scheduler, owner) = on_virtual_clock();
     let timer = owner.async_driver().timer();
-    let counted = Arc::new(Counted::default());
+    let counted = CountingWaker::new().shared();
     let waker = Waker::from(Arc::clone(&counted));
     let mut cx = Context::from_waker(&waker);
     let mut sleep = pin!(timer.sleep(Duration::from_millis(5)));
@@ -119,7 +109,7 @@ fn a_sleep_outliving_its_owner_stays_pending_without_a_waker() {
         2,
         "dropping the owner wakes nothing"
     );
-    assert_eq!(counted.0.load(Ordering::SeqCst), 0, "without waking it");
+    assert_eq!(counted.count(), 0, "without waking it");
     assert_eq!(sleep.as_mut().poll(&mut cx), Poll::Pending);
     assert_eq!(
         Arc::strong_count(&counted),

@@ -13,10 +13,12 @@
 //! [`Scene`](crate::Scene) the raster lane is about to submit, and costs one
 //! pass over the tree. [`DamageMode::Off`] removes that cost entirely.
 
+pub(crate) mod closure;
 mod differ;
 #[cfg(test)]
 mod tests;
 
+pub use closure::{Closure, MAX_CLOSURE_ROUNDS, close_over, read_closure};
 pub use differ::LayerDiffer;
 
 /// Whether a [`LayerDiffer`] produces damage, and when a region is large

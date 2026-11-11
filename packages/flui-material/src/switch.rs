@@ -447,7 +447,7 @@ fn switch_default_thumb_color(colors: &ColorScheme, states: WidgetStates) -> Col
     if states.contains_state(WidgetState::Selected) {
         if states.contains_state(WidgetState::Pressed)
             || states.contains_state(WidgetState::Hovered)
-            || states.contains_state(WidgetState::Focused)
+            || states.contains_state(WidgetState::FocusVisible)
         {
             return colors.primary_container;
         }
@@ -455,7 +455,7 @@ fn switch_default_thumb_color(colors: &ColorScheme, states: WidgetStates) -> Col
     }
     if states.contains_state(WidgetState::Pressed)
         || states.contains_state(WidgetState::Hovered)
-        || states.contains_state(WidgetState::Focused)
+        || states.contains_state(WidgetState::FocusVisible)
     {
         return colors.on_surface_variant;
     }
@@ -500,7 +500,7 @@ fn switch_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> O
         if states.contains_state(WidgetState::Hovered) {
             return Some(colors.primary.with_opacity(StateLayerAlpha::M3.hovered));
         }
-        if states.contains_state(WidgetState::Focused) {
+        if states.contains_state(WidgetState::FocusVisible) {
             return Some(colors.primary.with_opacity(StateLayerAlpha::M3.focused));
         }
         return None;
@@ -511,7 +511,7 @@ fn switch_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> O
     if states.contains_state(WidgetState::Hovered) {
         return Some(colors.on_surface.with_opacity(StateLayerAlpha::M3.hovered));
     }
-    if states.contains_state(WidgetState::Focused) {
+    if states.contains_state(WidgetState::FocusVisible) {
         return Some(colors.on_surface.with_opacity(StateLayerAlpha::M3.focused));
     }
     None

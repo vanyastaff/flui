@@ -12,7 +12,7 @@
 use crate::motion_trace::AnimatedValue;
 use flui_animation::simulation::{
     BouncingScrollSimulation, FrictionSimulation, Simulation, SimulationBounds, SimulationError,
-    SimulationParameter, SpringDescription, SpringSimulation, SpringType, Tolerance,
+    SimulationParameter, SpeedLimit, SpringDescription, SpringSimulation, SpringType, Tolerance,
 };
 use flui_animation::{Animation, AnimationController, AnimationStatus};
 use proptest::prelude::*;
@@ -55,7 +55,8 @@ fn spring(omega: f64, zeta: f64) -> SpringDescription {
 
 /// A tolerance small enough that no reference row is at rest yet.
 fn exact() -> Tolerance {
-    Tolerance::try_new(f64::MIN_POSITIVE, f64::MIN_POSITIVE).expect("positive tolerance")
+    Tolerance::try_new(f64::MIN_POSITIVE, SpeedLimit::AtMost(f64::MIN_POSITIVE))
+        .expect("positive tolerance")
 }
 
 fn assert_close(label: &str, actual: f64, expected: f64) {
@@ -337,7 +338,7 @@ fn refusal_messages_name_the_admitted_range() {
     let message = |error: SimulationError| error.to_string();
     let unit = flui_animation::SpringCurve::try_new(
         spring(10.0, 1.0),
-        Tolerance::try_new(1.5, f64::INFINITY).expect("tolerance"),
+        Tolerance::try_new(1.5, SpeedLimit::Derived).expect("tolerance"),
     );
     for (refusal, expected) in [
         (
@@ -353,8 +354,8 @@ fn refusal_messages_name_the_admitted_range() {
             "drag = 1.5 is outside (0, 1)",
         ),
         (
-            Tolerance::try_new(1.0, -1.0).map(drop),
-            "velocity = -1 is outside (0, ∞]",
+            Tolerance::try_new(1.0, SpeedLimit::AtMost(-1.0)).map(drop),
+            "speed limit = -1 is outside (0, ∞)",
         ),
         (unit.map(drop), "unit distance = 1.5 is outside (0, 1)"),
         (
@@ -755,7 +756,7 @@ proptest! {
         derived in any::<bool>(),
     ) {
         let tolerance = if derived {
-            Tolerance::try_new(0.5, f64::INFINITY).expect("tolerance")
+            Tolerance::try_new(0.5, SpeedLimit::Derived).expect("tolerance")
         } else {
             Tolerance::DEFAULT
         };

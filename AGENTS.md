@@ -107,8 +107,9 @@ conversation:
   edit `CHANGELOG.md`. A platform-support change updates `crates/flui-native/platform-parity.toml`
   and restates `docs/platform-parity.md` from it (✅ only
   after a run on that platform) and `docs/gaps.md`.
-- Commits are `area: what changed`. CI executes Linux and wasm32 only; native and GPU changes are
-  run locally.
+- Commits are `area: what changed`. Pull-request CI executes Linux and wasm32 only; Windows,
+  macOS, the iOS Simulator and an Android emulator run nightly on main
+  (`nightly-platforms.yml`), so native and GPU changes are run locally before the PR.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
@@ -148,7 +149,7 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
 | Every `static`/`thread_local!` outside tests has a `globals` entry (an ADR that removes it, or an ADR-0097 grant) | `xtask globals` |
 | Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit handler, a closure handed to the OS) is a constant or one call of `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16) | `xtask panic-boundary` |
-| A value crosses a thread because the compiler proves it may: every `unsafe impl Send`/`Sync` is listed and the list only shrinks; `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed and the list only shrinks (ADR-0136 §3) | `xtask send-impls`, `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
+| A value crosses a thread because the compiler proves it may: every `unsafe impl Send`/`Sync` is listed and the list only shrinks; `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed under ADR-0136 §3 | `xtask send-impls`, `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
 | Test support is named `testing`; a hand-written `pump`/`advance`/`tick` or a `Mock*`/`Fake*`/`Scripted*`/`Recording*`/`Probe*` type in test code is in a kit or counted in the allowlist (ADR-0243) | `xtask testing` |
 | A constructor that can fail is `try_new`: every `new` returning `Result` or `Option` is listed and the list only shrinks | `xtask try-new` |
 | A production `expect` or `panic!` names its invariant (`BUG: `) or its `try_` twin; the per-file counts of the ones that do not only go down | `xtask panic-messages` |
@@ -255,6 +256,6 @@ by, with the better shape. What this repository keeps getting wrong:
 - a document that records a change by appending to a record instead of rewriting its rule, or a
   reversal that leaves other records teaching the old rule.
 
-Not a finding: a native or GPU path not yet run on its platform. CI runs Linux and wasm32 only;
+Not a finding: a native or GPU path not yet run on its platform. PR CI runs Linux and wasm32 only;
 the PR body names the platforms the change still needs a run on, and the owner runs them from a
 device list.

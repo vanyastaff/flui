@@ -281,9 +281,9 @@ pub(super) fn refresh_displays_with(
 fn deliver_displays(host: &super::InstalledHost) {
     use super::owner_dispatch::{RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime};
 
-    let mut first = None;
+    let mut first = flui_foundation::panic::FirstPanic::new();
     for (dispatcher, update) in host.displays().updates() {
-        super::installed_host::contain(&mut first, || {
+        first.contain(|| {
             // A refused delivery means the window is gone; nothing is owed.
             let _ = dispatch_platform_ui_runtime(
                 dispatcher,
@@ -291,7 +291,7 @@ fn deliver_displays(host: &super::InstalledHost) {
             );
         });
     }
-    super::installed_host::finish(first);
+    first.resume();
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -300,15 +300,15 @@ pub(super) fn drive_native_text_sizing() {
     super::owner_dispatch::with_owner_callback(|_| {
         let current = APP_RUNTIME.with(|slot| slot.borrow().installed_host.same_host(&host));
         if current {
-            let mut first = None;
-            super::installed_host::contain(&mut first, || {
+            let mut first = flui_foundation::panic::FirstPanic::new();
+            first.contain(|| {
                 if let Err(error) =
                     refresh_preferences_with(flui_native::OwnerPlatform::preferences)
                 {
                     tracing::warn!(%error, "mobile system preference refresh failed");
                 }
             });
-            super::installed_host::contain(&mut first, || {
+            first.contain(|| {
                 if let Err(error) =
                     refresh_displays_with(flui_native::OwnerPlatform::display_snapshot)
                 {
@@ -316,12 +316,12 @@ pub(super) fn drive_native_text_sizing() {
                 }
             });
             if APP_RUNTIME.with(|slot| slot.borrow().installed_host.same_host(&host)) {
-                super::installed_host::contain(&mut first, || {
+                first.contain(|| {
                     host.native()
                         .refresh_text_sizing(host.logical(), host.effects(), true);
                 });
             }
-            super::installed_host::finish(first);
+            first.resume();
         }
     });
 }
@@ -884,8 +884,8 @@ pub(crate) fn install_owner_platform(
                 // command that panics does not cost the turn the rest of its
                 // work: its panic is held apart, so the frame still runs, and
                 // is raised when the turn ends.
-                let mut commands = None;
-                super::installed_host::contain(&mut commands, || {
+                let mut commands = flui_foundation::panic::FirstPanic::new();
+                commands.contain(|| {
                     super::owner_dispatch::apply_queued_window_commands(
                         std::thread::current().id(),
                     );
@@ -900,18 +900,18 @@ pub(crate) fn install_owner_platform(
                         })
                     };
                     if !current() {
-                        super::installed_host::finish(commands);
+                        commands.resume();
                         return;
                     }
-                    let mut first = None;
-                    super::installed_host::contain(&mut first, || {
+                    let mut first = flui_foundation::panic::FirstPanic::new();
+                    first.contain(|| {
                         if let Err(error) =
                             refresh_preferences_with(flui_native::OwnerPlatform::preferences)
                         {
                             tracing::warn!(%error, "system preference refresh failed");
                         }
                     });
-                    super::installed_host::contain(&mut first, || {
+                    first.contain(|| {
                         if let Err(error) =
                             refresh_displays_with(flui_native::OwnerPlatform::display_snapshot)
                         {
@@ -920,29 +920,23 @@ pub(crate) fn install_owner_platform(
                     });
                     #[cfg(not(target_arch = "wasm32"))]
                     if current() {
-                        let recovery = if first.is_some() {
+                        let recovery = if first.is_held() {
                             flui_runtime::owner::RecoveryState::PreservingFailure
                         } else {
                             flui_runtime::owner::RecoveryState::Healthy
                         };
-                        super::installed_host::contain(&mut first, || {
+                        first.contain(|| {
                             super::secondary_window::drain_pending_secondary_window_completions(
                                 recovery,
                             );
                         });
-                        if first.is_none() && current() {
-                            super::installed_host::contain(
-                                &mut first,
-                                super::main_window::drive_main_window,
-                            );
-                            super::installed_host::contain(
-                                &mut first,
-                                super::main_window::drive_program_quit,
-                            );
+                        if !first.is_held() && current() {
+                            first.contain(super::main_window::drive_main_window);
+                            first.contain(super::main_window::drive_program_quit);
                         }
                     }
-                    flui_foundation::panic::FirstPanic::fold(&mut commands, first);
-                    super::installed_host::finish(commands);
+                    commands.absorb(first);
+                    commands.resume();
                 });
             }
         }))?;
@@ -1001,29 +995,29 @@ pub(crate) fn install_owner_platform(
         });
     // Publish the new incarnation before retiring old callbacks and native
     // resources. No outgoing destructor runs under the composition-root borrow.
-    let mut first = None;
+    let mut first = flui_foundation::panic::FirstPanic::new();
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    super::installed_host::contain(&mut first, install_wake_deadline_hook);
-    super::installed_host::contain(&mut first, || {
+    first.contain(install_wake_deadline_hook);
+    first.contain(|| {
         if let Err(error) = refresh_preferences_with(flui_native::OwnerPlatform::preferences) {
             tracing::warn!(%error, "initial system preference observation failed");
         }
     });
-    super::installed_host::contain(&mut first, || {
+    first.contain(|| {
         if let Err(error) = refresh_displays_with(flui_native::OwnerPlatform::display_snapshot) {
             tracing::warn!(%error, "initial display observation failed");
         }
     });
-    super::installed_host::contain(&mut first, || previous_host.shutdown());
-    super::installed_host::contain(&mut first, || drop(previous_host));
-    super::installed_host::contain(&mut first, || drop(previous_owner_turn_wake));
-    super::installed_host::contain(&mut first, || drop(previous_clipboard));
-    super::installed_host::contain(&mut first, || drop(previous));
-    super::installed_host::finish(first);
+    first.contain(|| previous_host.shutdown());
+    first.contain(|| drop(previous_host));
+    first.contain(|| drop(previous_owner_turn_wake));
+    first.contain(|| drop(previous_clipboard));
+    first.contain(|| drop(previous));
+    first.resume();
     Ok(())
 }
 

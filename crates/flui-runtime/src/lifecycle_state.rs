@@ -100,39 +100,6 @@ pub(crate) fn lifecycle_ladder(
     }
 }
 
-/// Keep the first panic of a multi-step lifecycle teardown: a later
-/// `candidate` payload is logged under `phase` and then discarded under
-/// containment (ADR-0281 §2), so the caller resumes the first failure once
-/// every step has run.
-pub fn preserve_first_lifecycle_panic(
-    first: &mut Option<Box<dyn std::any::Any + Send>>,
-    candidate: Option<Box<dyn std::any::Any + Send>>,
-    phase: &'static str,
-) {
-    let Some(candidate) = candidate else {
-        return;
-    };
-    if first.is_none() {
-        *first = Some(candidate);
-    } else {
-        // A tracing subscriber is user code: a panic it raises must not
-        // replace the first failure.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a subscriber's panic must not replace the first failure"
-        )]
-        if let Err(payload) = std::panic::catch_unwind(|| {
-            tracing::error!(
-                phase,
-                "lifecycle phase panicked after an earlier phase; only the first panic is resumed"
-            );
-        }) {
-            flui_foundation::panic::discard_payload(payload);
-        }
-        flui_foundation::panic::discard_payload(candidate);
-    }
-}
-
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod lifecycle_derivation_tests {
     use std::{

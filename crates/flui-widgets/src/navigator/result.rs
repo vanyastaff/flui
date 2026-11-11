@@ -269,7 +269,7 @@ mod tests {
     use std::rc::Weak;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::task::{RawWaker, RawWakerVTable, Wake};
+    use std::task::{RawWaker, RawWakerVTable};
 
     thread_local! {
         static REENTRY_SHARED: RefCell<Option<Weak<RefCell<Shared<i32>>>>> =
@@ -463,21 +463,14 @@ mod tests {
         assert_eq!(poll(&mut result, Waker::noop()), Poll::Ready(Ok(Some(9))));
     }
 
-    struct WakeCount(AtomicUsize);
-    impl Wake for WakeCount {
-        fn wake(self: Arc<Self>) {
-            self.0.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
     fn old_waiter_retirement_failure_preserves_replacement_and_next_completion() {
         let (completer, mut result) = Completer::new();
         let _reentry = ReentryFixture::install(&completer, false);
         let probe = probe();
         let old = probe.waker();
         assert_eq!(poll(&mut result, &old), Poll::Pending);
-        let counter = Arc::new(WakeCount(AtomicUsize::new(0)));
-        let replacement = Waker::from(Arc::clone(&counter));
+        let counter = flui_foundation::testing::CountingWaker::new().shared();
+        let replacement = counter.waker();
         probe.fail_drop.store(true, Ordering::Relaxed);
         let outcome = catch_unwind(AssertUnwindSafe(|| poll(&mut result, &replacement)));
         // Disarm cleanup before asserting which failure won.
@@ -485,7 +478,7 @@ mod tests {
         let failure = outcome.expect_err("old waiter retirement must fail");
         assert_eq!(failure.downcast_ref::<&str>(), Some(&"retirement failure"));
         assert!(completer.complete(Ok(Some(11))));
-        assert_eq!(counter.0.load(Ordering::Relaxed), 1);
+        assert_eq!(counter.count(), 1);
         assert_eq!(poll(&mut result, Waker::noop()), Poll::Ready(Ok(Some(11))));
     }
 

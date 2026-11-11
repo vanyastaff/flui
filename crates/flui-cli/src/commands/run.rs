@@ -200,14 +200,12 @@ fn start_agent_session(
                 .into(),
         });
     }
-    if !matches!(
-        target,
-        Target::Host | Target::Android(_) | Target::Browser(_)
-    ) {
+    if let Target::IosSimulator(_) = target {
         return Err(CliError::Unsupported {
             what: format!("`flui run --agent` on {}", target.label()),
-            reason: "the agent endpoint is a local socket, a pipe, an Android abstract socket \
-                     or a page's global; run it on this desktop, an Android device or a browser"
+            reason: "the iOS run launches the app once through `simctl` and carries no agent \
+                     endpoint to it; run it on this desktop, an Android device or a browser \
+                     (docs/gaps.md#the-driver-agent-cannot-reach-an-app-in-the-ios-simulator)"
                 .into(),
         });
     }

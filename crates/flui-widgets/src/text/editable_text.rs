@@ -1458,7 +1458,7 @@ impl EditableTextState {
         let enclosing = EnclosingActions::depend_on(ctx);
         let platform = flui_view::environment::PlatformConvention::of(ctx);
         let unchanged = match (&enclosing, &self.enclosing_action_chain) {
-            (Some(new), Some(held)) => Rc::ptr_eq(new, held),
+            (Some(new), Some(held)) => new.is(held),
             (None, None) => true,
             _ => false,
         };
@@ -1478,7 +1478,7 @@ impl EditableTextState {
         let action = self.clipboard_action();
         let chain = layered_chain(
             enclosing.clone(),
-            &[
+            Rc::new(vec![
                 erased_action::<CopySelectionTextIntent>(action.clone()),
                 erased_action::<PasteTextIntent>(action),
                 erased_action::<SelectAllTextIntent>(SelectAllTextAction {
@@ -1492,11 +1492,11 @@ impl EditableTextState {
                     self.touch_handles.menu(),
                     enclosing.as_ref(),
                 )),
-            ],
+            ]),
         );
         // Register the new record before the old token drops: the old one is
         // no longer current then, so dropping it leaves the new one in place.
-        let record = FocusRecord::new(Rc::clone(&chain), platform);
+        let record = FocusRecord::new(chain.clone(), platform);
         self.action_chain_registration = Some(record.register_on(&self.focus_node));
         self.focus_record = Some(record);
         self.action_chain = Some(chain);

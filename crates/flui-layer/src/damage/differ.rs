@@ -10,6 +10,7 @@ use flui_painting::DamageExtent;
 use flui_painting::paint::ImageFilter;
 
 use super::DamageMode;
+use super::closure::{Closure, close_over, filter_closure, is_projective, read_closure};
 use crate::{
     ContentToken, DamageRect, DamageRegion, FullReason, Layer, LayerTree, Region, ResyncReason,
     Scene, resolve_follower_transform,
@@ -25,15 +26,13 @@ use crate::{
 /// region), or kept with a different token or placement (both), or kept but
 /// painted in a different order relative to the other kept boundaries (both:
 /// every kept boundary outside the longest run still in its old order).
-/// Content that
-/// cannot be vouched for by a token — textures (a texture layer or a picture's
-/// texture draw), platform views, live canvases, performance overlays and
-/// anything under a follower — is damaged on every frame at its old and new
-/// positions. A backdrop filter whose (blur-reach
-/// widened) bounds meet the damage joins it, repeatedly, until nothing more
-/// joins; so does a foreground image filter's footprint, and the whole
-/// surface when a colour or image filter that paints transparent pixels is
-/// present.
+/// Content that cannot be vouched for by a token — textures (a texture layer
+/// or a picture's texture draw), platform views, live canvases, performance
+/// overlays and anything under a follower — is damaged on every frame at its
+/// old and new positions. The damage then closes over the [`read_closure`]
+/// of every effect in both frames with [`close_over`]: a filter whose reads
+/// or writes meet it takes both, to a fixed point, and one without a bound
+/// makes the frame `Full(Unbounded)`.
 ///
 /// The answer is [`DamageRegion::Full`] when the frames cannot be paired,
 /// with its [`FullReason`]: the first frame, a surface size change, a root
@@ -124,14 +123,8 @@ struct Frame {
     boundaries: HashMap<RenderId, Record>,
     /// Content no token vouches for, in surface pixels.
     volatile: Option<Rect<f64>>,
-    /// Every backdrop filter's surface bounds and how far its filter reads
-    /// past them, in surface pixels.
-    backdrops: Vec<(Rect<f64>, f64)>,
-    /// Every foreground image filter's footprint in surface pixels: its
-    /// children's extents grown by how far the filter spreads them; and the
-    /// whole surface for each colour or image filter that paints transparent
-    /// pixels.
-    foreground: Vec<Rect<f64>>,
+    /// What each filter of the frame reads and writes ([`read_closure`]).
+    closures: Vec<Closure>,
 }
 
 /// A foreground image filter the walk is inside of, accumulating its input.
@@ -202,8 +195,7 @@ impl Frame {
             effects: Vec::new(),
             boundaries: HashMap::new(),
             volatile: None,
-            backdrops: Vec::new(),
-            foreground: Vec::new(),
+            closures: Vec::new(),
         };
         let mut filters: Vec<ForegroundFilter> = Vec::new();
         // (parent link, index into `frame.effects`): a persistent list, so a
@@ -370,27 +362,20 @@ impl Frame {
                     if filter.color_filter().modifies_transparent_black() =>
                 {
                     clipped = false;
-                    frame.foreground.push(full);
+                    frame.closures.push(Closure::Unbounded);
                     Some(DamageExtent::Unbounded)
                 }
                 Layer::ImageFilter(filter) if filter.filter().modifies_transparent_black() => {
                     clipped = false;
-                    frame.foreground.push(full);
+                    frame.closures.push(Closure::Unbounded);
                     Some(DamageExtent::Unbounded)
                 }
                 Layer::BackdropFilter(backdrop) => {
                     clipped = false;
-                    let bounds = DamageExtent::rect(backdrop.bounds());
-                    if let Some(rect) = place(bounds, &ctx, full, false) {
-                        // A transform reads where its inverse sends the
-                        // bounds; past the surface it reads all of it.
-                        let read =
-                            transform_reach(backdrop.filter(), backdrop.bounds(), &ctx.transform)
-                                .min(full.width() + full.height());
-                        let reach = device_reach(backdrop.filter(), &ctx.transform).max(read);
-                        frame.backdrops.push((rect, reach));
-                    }
-                    Some(bounds)
+                    frame
+                        .closures
+                        .push(read_closure(layer, &ctx.transform, Rect::ZERO));
+                    Some(DamageExtent::rect(backdrop.bounds()))
                 }
                 _ => None,
             };
@@ -421,14 +406,12 @@ impl Frame {
             let Some(input) = filters[index].input else {
                 continue;
             };
-            let Some(footprint) =
-                footprint(&filters[index].filter, input, &filters[index].transform)
-                    .unwrap_or(full)
-                    .intersect(&full)
-            else {
-                continue;
+            let closure = filter_closure(&filters[index].filter, &filters[index].transform, input);
+            frame.closures.push(closure);
+            let footprint = match closure {
+                Closure::Bounded { writes, .. } => writes,
+                Closure::None | Closure::Unbounded => full,
             };
-            frame.foreground.push(footprint);
             if let Some(parent) = filters[index].parent {
                 filters[parent].input = Some(join(filters[parent].input, footprint));
             }
@@ -485,35 +468,6 @@ fn compare(previous: &Frame, current: &Frame, full_above: f64) -> DamageRegion {
     add(previous.volatile);
     add(current.volatile);
 
-    // A backdrop filter reads what is behind it: damage that reaches its
-    // input changes its whole output. A foreground image filter re-renders
-    // its children under the damage scissor and composites the result
-    // unscissored: damage that meets its footprint must take all of it, or
-    // the filter reads a truncated input and spreads it past the damage.
-    // Joining one filter can reach another, so repeat until a pass joins
-    // nothing.
-    if let Some(mut region) = damage {
-        loop {
-            let mut grew = false;
-            for &footprint in &current.foreground {
-                if region.overlaps(&footprint) && !region.contains_rect(&footprint) {
-                    region = region.union(&footprint);
-                    grew = true;
-                }
-            }
-            for &(bounds, reach) in &current.backdrops {
-                if region.overlaps(&bounds.expand(reach)) && !region.contains_rect(&bounds) {
-                    region = region.union(&bounds);
-                    grew = true;
-                }
-            }
-            if !grew {
-                break;
-            }
-        }
-        damage = Some(region);
-    }
-
     let Some(damage) = damage else {
         return DamageRegion::Unchanged;
     };
@@ -521,6 +475,16 @@ fn compare(previous: &Frame, current: &Frame, full_above: f64) -> DamageRegion {
         Ok(Some(rect)) => rect,
         Ok(None) => return DamageRegion::Unchanged,
         Err(_) => return DamageRegion::Full(FullReason::NonFinite),
+    };
+    // A filter reads around what it changes: damage that meets one takes
+    // all it reads and writes (ADR-0304 §6). The differ answers one rect.
+    let rect = match close_over(
+        DamageRegion::Region(Region::new(rect)),
+        current.closures.iter().copied(),
+        current.surface,
+    ) {
+        DamageRegion::Region(region) => region.bounds(),
+        other => return other,
     };
     let surface_area = f64::from(current.surface.0) * f64::from(current.surface.1);
     if rect.area() as f64 > full_above * surface_area {
@@ -662,141 +626,5 @@ fn clip_bounds(layer: &Layer) -> Option<Rect<f64>> {
         Layer::ClipPath(clip) if clip.clips() => Some(clip.bounds()),
         Layer::ClipSuperellipse(clip) if clip.clips() => Some(clip.bounds()),
         _ => None,
-    }
-}
-
-/// How far past its input rect `filter` reads, in local units.
-fn filter_reach(filter: &ImageFilter) -> f64 {
-    match filter {
-        ImageFilter::Blur { sigma_x, sigma_y } => 3.0 * sigma_x.abs().max(sigma_y.abs()),
-        ImageFilter::Dilate { radius } | ImageFilter::Erode { radius } => radius.abs(),
-        ImageFilter::Compose(filters) => filters.iter().map(filter_reach).sum(),
-        _ => 0.0,
-    }
-}
-
-/// How far past its input `filter` reaches in surface pixels under
-/// `transform`: the larger of its local reach scaled by the transform and the
-/// growth the GPU renderer gives it.
-///
-/// The renderer takes a filter's sigma and radius as physical pixels
-/// whatever the transform, and grows its output by the kernel half-width:
-/// `ceil(sqrt(3) x sigma)` for a blur (`flui-engine`'s `kernel_radius`),
-/// `ceil(radius)` for a morphology, summed through a composition. Under a
-/// shrinking transform that exceeds the scaled local reach; under a
-/// magnifying one the scaled reach is larger. Damage takes whichever is
-/// further, so it covers either reading of the sigma.
-fn device_reach(filter: &ImageFilter, transform: &Matrix4) -> f64 {
-    (filter_reach(filter) * max_scale(transform)).max(renderer_growth(filter))
-}
-
-/// How far past `bounds` a transform filter reads, in surface pixels under
-/// `transform`: where its inverse sends the bounds, mapped to the surface and
-/// measured against the bounds mapped the same way. Measuring in surface
-/// space keeps a sheared ancestor's mixing of the axes. A magnifier about a
-/// point inside reads within its bounds; a shrinking or displacing transform
-/// reads outside. A projective ancestor has no bound.
-fn transform_reach(filter: &ImageFilter, bounds: Rect<f64>, transform: &Matrix4) -> f64 {
-    match filter {
-        ImageFilter::Transform { transform: map, .. } => {
-            if is_projective(transform) {
-                return f64::INFINITY;
-            }
-            let m = &transform.m;
-            let to_surface =
-                |(x, y): (f64, f64)| (m[0] * x + m[4] * y + m[12], m[1] * x + m[5] * y + m[13]);
-            let [xx, yx, xy, yy, x0, y0] = map.inverse_coefficients();
-            let corners = [
-                bounds.top_left(),
-                bounds.top_right(),
-                bounds.bottom_left(),
-                bounds.bottom_right(),
-            ];
-            let box_of = |points: [(f64, f64); 4]| {
-                points.iter().fold(
-                    (
-                        f64::INFINITY,
-                        f64::INFINITY,
-                        f64::NEG_INFINITY,
-                        f64::NEG_INFINITY,
-                    ),
-                    |(left, top, right, bottom), &(x, y)| {
-                        (left.min(x), top.min(y), right.max(x), bottom.max(y))
-                    },
-                )
-            };
-            let (left, top, right, bottom) =
-                box_of(corners.map(|corner| to_surface((corner.x, corner.y))));
-            let (read_left, read_top, read_right, read_bottom) = box_of(corners.map(|corner| {
-                to_surface((
-                    xx * corner.x + xy * corner.y + x0,
-                    yx * corner.x + yy * corner.y + y0,
-                ))
-            }));
-            (left - read_left)
-                .max(read_right - right)
-                .max(top - read_top)
-                .max(read_bottom - bottom)
-                .max(0.0)
-                // A bilinear read also takes the texel past the edge.
-                + 1.0
-        }
-        ImageFilter::Compose(filters) => filters
-            .iter()
-            .map(|filter| transform_reach(filter, bounds, transform))
-            .sum(),
-        _ => 0.0,
-    }
-}
-/// The growth the GPU renderer gives `filter`, in physical pixels.
-fn renderer_growth(filter: &ImageFilter) -> f64 {
-    match filter {
-        ImageFilter::Blur { sigma_x, sigma_y } => {
-            (3.0_f64.sqrt() * sigma_x.abs().max(sigma_y.abs())).ceil()
-        }
-        ImageFilter::Dilate { radius } | ImageFilter::Erode { radius } => radius.abs().ceil(),
-        ImageFilter::Compose(filters) => filters.iter().map(renderer_growth).sum(),
-        _ => 0.0,
-    }
-}
-
-/// The largest factor `transform` stretches a local length by.
-fn max_scale(transform: &Matrix4) -> f64 {
-    let m = &transform.m;
-    m[0].hypot(m[1]).max(m[4].hypot(m[5]))
-}
-
-/// Whether `transform` maps the plane projectively; see
-/// `flui_painting`'s damage extent for why a projective map is not bounded.
-fn is_projective(transform: &Matrix4) -> bool {
-    let m = &transform.m;
-    m[3].abs() > f64::EPSILON || m[7].abs() > f64::EPSILON || (m[15] - 1.0).abs() > f64::EPSILON
-}
-
-/// Where `filter` draws what it takes from `input` (surface pixels) under
-/// `transform`: spread by a kernel's reach, or moved where a transform
-/// sends it, a texel past for a bilinear read. `None` when that has no
-/// bound, under a projective ancestor.
-fn footprint(filter: &ImageFilter, input: Rect<f64>, transform: &Matrix4) -> Option<Rect<f64>> {
-    match filter {
-        ImageFilter::Transform { transform: map, .. } => {
-            if is_projective(transform) {
-                return None;
-            }
-            let [xx, yx, xy, yy, x0, y0] = map.inverse_coefficients();
-            let mut shown_to_source = Matrix4::IDENTITY;
-            shown_to_source.m[0] = xx;
-            shown_to_source.m[1] = yx;
-            shown_to_source.m[4] = xy;
-            shown_to_source.m[5] = yy;
-            shown_to_source.m[12] = x0;
-            shown_to_source.m[13] = y0;
-            let moved = *transform * shown_to_source.try_inverse()? * transform.try_inverse()?;
-            Some(moved.transform_rect(&input).expand(1.0)).filter(Rect::is_finite)
-        }
-        ImageFilter::Compose(filters) => filters
-            .iter()
-            .try_fold(input, |input, filter| footprint(filter, input, transform)),
-        _ => Some(input.expand(device_reach(filter, transform))),
     }
 }

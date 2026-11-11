@@ -50,6 +50,18 @@ pub trait StatefulRenderView: Clone + 'static + Sized {
 
     /// Creates the render object, once, when the element mounts.
     fn create_render_object(&self, cx: &RenderObjectContext<'_>) -> Self::RenderObject;
+
+    /// Releases what the render object holds in the owner's runtime, such as
+    /// the targets registered for it, before it is removed from the render
+    /// tree. It runs once, after the state's `dispose`, and also for an
+    /// element whose state never initialized: what `create_render_object`
+    /// registered is released either way.
+    fn did_unmount_render_object(
+        &self,
+        _cx: &RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+    }
 }
 
 /// The state of a [`StatefulRenderView`].
@@ -63,7 +75,7 @@ pub trait StatefulRenderView: Clone + 'static + Sized {
 ///    `did_change_dependencies` when an inherited value read in a lifecycle
 ///    hook changed; each is followed by a build.
 /// 4. `deactivate` and `activate` around a move by `GlobalKey`.
-/// 5. `dispose`, once, before the render object is removed, and only if
+/// 5. `dispose`, once, before the render object is released and removed, and only if
 ///    `init_state` ran.
 ///
 /// A change of the state that the render object must see schedules the

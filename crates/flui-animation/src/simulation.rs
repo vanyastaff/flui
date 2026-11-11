@@ -64,8 +64,10 @@ pub enum SimulationParameter {
     Drag,
     /// A start or target position.
     Position,
-    /// An initial velocity, or a tolerance's velocity limit.
+    /// An initial velocity.
     Velocity,
+    /// A tolerance's [`SpeedLimit::AtMost`] speed.
+    SpeedLimit,
     /// A tolerance's distance.
     Distance,
     /// A distance tolerance on a unit (0 → 1) motion, such as a spring
@@ -86,12 +88,12 @@ impl SimulationParameter {
             | Self::DampingRatio
             | Self::DampingFraction
             | Self::Duration
+            | Self::SpeedLimit
             | Self::Distance
             | Self::DevicePixelRatio => "(0, ∞)",
             Self::Bounce => "(-1, 1)",
             Self::Drag | Self::UnitDistance => "(0, 1)",
-            Self::Velocity => "(0, ∞]",
-            Self::Position => "the finite values",
+            Self::Position | Self::Velocity => "the finite values",
         }
     }
 }
@@ -109,6 +111,7 @@ impl fmt::Display for SimulationParameter {
             Self::Drag => "drag",
             Self::Position => "position",
             Self::Velocity => "velocity",
+            Self::SpeedLimit => "speed limit",
             Self::Distance => "distance",
             Self::UnitDistance => "unit distance",
             Self::DevicePixelRatio => "device pixel ratio",
@@ -198,69 +201,96 @@ fn before_start(time: f64) -> bool {
 // Tolerance
 // ---------------------------------------------------------------------------
 
-/// How close to rest a simulation must be before it reports done.
+/// The speed a simulation must fall below before it rests, beside its
+/// [`Tolerance`] distance.
 ///
-/// A simulation rests from the first moment after which it stays within
-/// `distance` of its resting position and, unless the velocity limit is
-/// infinite, below `velocity` in speed. With an infinite velocity limit the
-/// simulation derives one from its own time scale: `distance * ω` for a
-/// spring, and for friction the speed at which the remaining glide is
-/// `distance`.
+/// Flutter's `Tolerance.velocity` is a plain `double`; here the two ways to
+/// bound speed are variants, so "derive it" is a case the compiler checks
+/// rather than a sentinel float (`f64::INFINITY`) every reader has to know.
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_animation::simulation::Tolerance;
+/// use flui_animation::simulation::{SpeedLimit, Tolerance};
 ///
-/// let precise = Tolerance::try_new(1e-4, 1e-4)?;
+/// let screen = Tolerance::try_new(0.25, SpeedLimit::Derived)?;
+/// let precise = Tolerance::try_new(1e-4, SpeedLimit::AtMost(1e-4))?;
+/// assert_eq!(screen, Tolerance::for_device_pixel_ratio(2.0)?);
+/// assert_ne!(precise, screen);
+/// assert!(Tolerance::try_new(0.25, SpeedLimit::AtMost(f64::INFINITY)).is_err());
+/// # Ok::<(), flui_animation::simulation::SimulationError>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SpeedLimit {
+    /// Derived from the motion's own time scale: `distance * ω` for a
+    /// spring, and for friction the speed at which the remaining glide is
+    /// `distance`. Speed still counts; only its bound is derived.
+    Derived,
+    /// At most this speed (finite, `> 0`) in position units per second.
+    AtMost(f64),
+}
+
+/// How close to rest a simulation must be before it reports done.
+///
+/// A simulation rests from the first moment after which it stays within
+/// `distance` of its resting position and below its [`SpeedLimit`] in speed.
+///
+/// # Examples
+///
+/// ```
+/// use flui_animation::simulation::{SpeedLimit, Tolerance};
+///
+/// let precise = Tolerance::try_new(1e-4, SpeedLimit::AtMost(1e-4))?;
 /// let screen = Tolerance::for_device_pixel_ratio(2.0)?; // a quarter logical pixel
 /// assert_ne!(precise, screen);
-/// assert!(Tolerance::try_new(f64::NAN, 1.0).is_err());
+/// assert!(Tolerance::try_new(f64::NAN, SpeedLimit::AtMost(1.0)).is_err());
 /// # Ok::<(), flui_animation::simulation::SimulationError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tolerance {
     pub(crate) distance: f64,
-    pub(crate) velocity: f64,
+    /// An `AtMost` limit here is finite and positive.
+    pub(crate) speed: SpeedLimit,
 }
 
 impl Tolerance {
-    /// `distance` and `velocity` of `0.001` in the simulation's own units.
+    /// `distance` of `0.001` and a speed limit of `0.001` per second, in the
+    /// simulation's own units.
     pub const DEFAULT: Self = Self {
         distance: 1e-3,
-        velocity: 1e-3,
+        speed: SpeedLimit::AtMost(1e-3),
     };
 
     /// A tolerance of `distance` (finite, `> 0`) in position units and
-    /// `velocity` (`> 0`, `f64::INFINITY` for a velocity limit derived from
-    /// the simulation's own time scale) in position units per second.
+    /// `speed`.
     ///
     /// # Errors
     ///
     /// [`SimulationError::NonFinite`] naming [`SimulationParameter::Distance`]
-    /// or [`SimulationParameter::Velocity`] for a NaN, an infinite distance or
-    /// a negative-infinite velocity; [`SimulationError::OutOfRange`] for a
+    /// or [`SimulationParameter::SpeedLimit`] for a NaN or infinite distance or
+    /// [`SpeedLimit::AtMost`] speed; [`SimulationError::OutOfRange`] for a
     /// non-positive one.
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::Tolerance;
+    /// use flui_animation::simulation::{SpeedLimit, Tolerance};
     ///
-    /// assert!(Tolerance::try_new(0.5, f64::INFINITY).is_ok());
-    /// assert!(Tolerance::try_new(0.0, 1.0).is_err());
+    /// assert!(Tolerance::try_new(0.5, SpeedLimit::Derived).is_ok());
+    /// assert!(Tolerance::try_new(0.0, SpeedLimit::AtMost(1.0)).is_err());
+    /// assert!(Tolerance::try_new(0.5, SpeedLimit::AtMost(0.0)).is_err());
     /// ```
-    pub fn try_new(distance: f64, velocity: f64) -> Result<Self, SimulationError> {
+    pub fn try_new(distance: f64, speed: SpeedLimit) -> Result<Self, SimulationError> {
         let distance = positive(SimulationParameter::Distance, distance)?;
-        if velocity.is_nan() || velocity <= 0.0 {
-            return Err(refused(SimulationParameter::Velocity, velocity));
+        if let SpeedLimit::AtMost(limit) = speed {
+            positive(SimulationParameter::SpeedLimit, limit)?;
         }
-        Ok(Self { distance, velocity })
+        Ok(Self { distance, speed })
     }
 
     /// Half a device pixel at `device_pixel_ratio` device pixels per logical
-    /// pixel, with a derived velocity limit: the tolerance for a motion in
-    /// logical pixels whose rest must not be visible.
+    /// pixel, with a [`SpeedLimit::Derived`] speed: the tolerance for a
+    /// motion in logical pixels whose rest must not be visible.
     ///
     /// # Errors
     ///
@@ -272,26 +302,25 @@ impl Tolerance {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::Tolerance;
+    /// use flui_animation::simulation::{SpeedLimit, Tolerance};
     ///
     /// assert_eq!(
     ///     Tolerance::for_device_pixel_ratio(2.0)?,
-    ///     Tolerance::try_new(0.25, f64::INFINITY)?,
+    ///     Tolerance::try_new(0.25, SpeedLimit::Derived)?,
     /// );
     /// # Ok::<(), flui_animation::simulation::SimulationError>(())
     /// ```
     pub fn for_device_pixel_ratio(device_pixel_ratio: f64) -> Result<Self, SimulationError> {
         let ratio = positive(SimulationParameter::DevicePixelRatio, device_pixel_ratio)?;
-        Self::try_new(0.5 / ratio, f64::INFINITY)
+        Self::try_new(0.5 / ratio, SpeedLimit::Derived)
             .map_err(|_| refused(SimulationParameter::DevicePixelRatio, device_pixel_ratio))
     }
 
     /// The speed limit for a motion whose natural rate is `rate` per second.
     fn velocity_limit(self, rate: f64) -> f64 {
-        if self.velocity.is_infinite() {
-            self.distance * rate
-        } else {
-            self.velocity
+        match self.speed {
+            SpeedLimit::Derived => self.distance * rate,
+            SpeedLimit::AtMost(limit) => limit,
         }
     }
 }
@@ -630,10 +659,10 @@ impl SpringSimulation {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
+    /// use flui_animation::simulation::{Simulation, SpeedLimit, SpringDescription, SpringSimulation, Tolerance};
     ///
     /// let spring = SpringDescription::try_new(1.0, 100.0, 10.0)?;
-    /// let sim = SpringSimulation::try_new(spring, 0.0, 100.0, 0.0, Tolerance::try_new(0.5, f64::INFINITY)?)?;
+    /// let sim = SpringSimulation::try_new(spring, 0.0, 100.0, 0.0, Tolerance::try_new(0.5, SpeedLimit::Derived)?)?;
     /// assert!(!sim.is_done(0.1));
     /// assert!(SpringSimulation::try_new(spring, f64::NAN, 1.0, 0.0, Tolerance::DEFAULT).is_err());
     /// # Ok::<(), flui_animation::simulation::SimulationError>(())
@@ -1098,9 +1127,9 @@ impl FrictionSimulation {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::{FrictionSimulation, Simulation, Tolerance};
+    /// use flui_animation::simulation::{FrictionSimulation, Simulation, SpeedLimit, Tolerance};
     ///
-    /// let sim = FrictionSimulation::try_new(0.135, 0.0, 1000.0, Tolerance::try_new(0.5, f64::INFINITY)?)?;
+    /// let sim = FrictionSimulation::try_new(0.135, 0.0, 1000.0, Tolerance::try_new(0.5, SpeedLimit::Derived)?)?;
     /// let resting = sim.x(f64::INFINITY);
     /// assert!(resting > 0.0);
     /// assert!(sim.is_done(10.0));
@@ -1121,13 +1150,14 @@ impl FrictionSimulation {
         let velocity = finite(SimulationParameter::Velocity, velocity)?;
         let drag_log = drag.ln();
         let final_x = representable(position - velocity / drag_log)?;
-        // Remaining glide |v(t)/ln d| <= distance, and |v(t)| <= the limit.
-        // Compare in log space: distance * rate can underflow even when the
-        // corresponding time to rest is finite and representable.
-        let log_speed_limit = tolerance
-            .velocity
-            .ln()
-            .min(tolerance.distance.ln() + (-drag_log).ln());
+        // Remaining glide |v(t)/ln d| <= distance, and |v(t)| <= a fixed
+        // limit. Compare in log space: distance * rate can underflow even
+        // when the corresponding time to rest is finite and representable.
+        let log_glide_limit = tolerance.distance.ln() + (-drag_log).ln();
+        let log_speed_limit = match tolerance.speed {
+            SpeedLimit::Derived => log_glide_limit,
+            SpeedLimit::AtMost(limit) => limit.ln().min(log_glide_limit),
+        };
         let log_speed = velocity.abs().ln();
         let rest_secs = if log_speed <= log_speed_limit {
             0.0

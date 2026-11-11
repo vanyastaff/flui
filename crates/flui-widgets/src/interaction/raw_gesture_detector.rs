@@ -2,15 +2,17 @@
 //! [`GestureRecognizerFactory`] values and keeps each one alive across
 //! rebuilds, reconfiguring it in place.
 
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::{any::Any, any::TypeId, rc::Rc};
+
+use smallvec::SmallVec;
 
 use flui_foundation::ViewKey;
 use flui_foundation::geometry::Axis;
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::pointer::{EventPropagation, PanZoomDispatch, SmartZoomDispatch};
 use flui_interaction::{
     GestureArena, GestureRecognizer, GestureSettingsProvider, PointerDispatch, PointerEvent,
-    PointerEventExt, PointerKind, cancel_all,
+    PointerEventExt, PointerKind, RecognizerSet, cancel_all,
 };
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::WriterSource;
@@ -80,28 +82,28 @@ impl RecognizerContext {
 }
 
 /// A recognizer built by a factory and kept by the detector's state.
-trait LiveRecognizer {
+trait LiveRecognizer: 'static {
     fn as_any(&self) -> &dyn Any;
     fn recognizer(&self) -> &dyn GestureRecognizer;
-    fn attach(&self, listener: Listener, admission: Option<&ContactAdmission>) -> Listener;
+    fn attach(self: Rc<Self>, set: &mut RecognizerSet, admission: Option<&ContactAdmission>);
 }
 
-impl<R: GestureRecognizer + 'static> LiveRecognizer for Rc<R> {
+impl<R: GestureRecognizer + 'static> LiveRecognizer for R {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn recognizer(&self) -> &dyn GestureRecognizer {
-        &**self
+        self
     }
 
-    fn attach(&self, listener: Listener, admission: Option<&ContactAdmission>) -> Listener {
+    fn attach(self: Rc<Self>, set: &mut RecognizerSet, admission: Option<&ContactAdmission>) {
         match admission {
             Some(admission) => {
                 let admission = admission.clone();
-                listener.recognizer_when(self, move |dispatch| admission.admits(dispatch))
+                set.attach_when(&self, move |dispatch| admission.admits(dispatch));
             }
-            None => listener.recognizer(self),
+            None => set.attach(&self),
         }
     }
 }
@@ -174,7 +176,7 @@ impl std::fmt::Debug for ContactAdmission {
 /// A factory with its recognizer type erased, so one detector holds several.
 trait ErasedFactory {
     fn factory_type(&self) -> TypeId;
-    fn create_live(&self, cx: &RecognizerContext) -> Box<dyn LiveRecognizer>;
+    fn create_live(&self, cx: &RecognizerContext) -> Rc<dyn LiveRecognizer>;
     fn update_live(&self, live: &dyn LiveRecognizer);
 }
 
@@ -184,12 +186,12 @@ impl<F: GestureRecognizerFactory> ErasedFactory for F {
         TypeId::of::<F>()
     }
 
-    fn create_live(&self, cx: &RecognizerContext) -> Box<dyn LiveRecognizer> {
-        Box::new(GestureRecognizerFactory::create(self, cx))
+    fn create_live(&self, cx: &RecognizerContext) -> Rc<dyn LiveRecognizer> {
+        GestureRecognizerFactory::create(self, cx)
     }
 
     fn update_live(&self, live: &dyn LiveRecognizer) {
-        let recognizer = live.as_any().downcast_ref::<Rc<F::Recognizer>>().expect(
+        let recognizer = live.as_any().downcast_ref::<F::Recognizer>().expect(
             "BUG: a live recognizer is matched only to a factory of the type that created it",
         );
         GestureRecognizerFactory::update(self, recognizer);
@@ -197,15 +199,33 @@ impl<F: GestureRecognizerFactory> ErasedFactory for F {
 }
 
 #[derive(Clone)]
-struct FactoryEntry {
+pub(crate) struct FactoryEntry {
     key: Option<Rc<dyn ViewKey>>,
     factory: Rc<dyn ErasedFactory>,
+}
+
+impl FactoryEntry {
+    /// A recognizer identified by its factory's type.
+    pub(crate) fn new(factory: impl GestureRecognizerFactory) -> Self {
+        Self {
+            key: None,
+            factory: Rc::new(factory),
+        }
+    }
+
+    /// A recognizer identified by its factory's type and `key`.
+    pub(crate) fn keyed(key: impl ViewKey, factory: impl GestureRecognizerFactory) -> Self {
+        Self {
+            key: Some(Rc::new(key)),
+            factory: Rc::new(factory),
+        }
+    }
 }
 
 struct Slot {
     factory_type: TypeId,
     key: Option<Rc<dyn ViewKey>>,
-    live: Box<dyn LiveRecognizer>,
+    live: Rc<dyn LiveRecognizer>,
 }
 
 impl Slot {
@@ -294,10 +314,7 @@ impl RawGestureDetector {
     /// Add a recognizer, identified by its factory's type.
     #[must_use]
     pub fn recognizer(mut self, factory: impl GestureRecognizerFactory) -> Self {
-        self.factories.push(FactoryEntry {
-            key: None,
-            factory: Rc::new(factory),
-        });
+        self.factories.push(FactoryEntry::new(factory));
         self
     }
 
@@ -310,10 +327,7 @@ impl RawGestureDetector {
         key: impl ViewKey,
         factory: impl GestureRecognizerFactory,
     ) -> Self {
-        self.factories.push(FactoryEntry {
-            key: Some(Rc::new(key)),
-            factory: Rc::new(factory),
-        });
+        self.factories.push(FactoryEntry::keyed(key, factory));
         self
     }
 
@@ -370,17 +384,28 @@ impl RawGestureDetector {
     }
 }
 
+/// The live recognizers of one element: built from a list of factories,
+/// kept across rebuilds and reconfigured in place.
+///
+/// [`RawGestureDetector`] owns one, and so does every other element that
+/// mounts recognizers of its own (ADR-0322 §1). The owner forwards its
+/// lifecycle hooks and routes the pointer stream to
+/// [`recognizer_set`](Self::recognizer_set).
+pub(crate) struct RecognizerHost {
+    factories: SmallVec<[FactoryEntry; 1]>,
+    context: Option<RecognizerContext>,
+    slots: SmallVec<[Slot; 1]>,
+}
+
 /// The live recognizers of a mounted [`RawGestureDetector`].
 pub struct RawGestureDetectorState {
-    factories: Vec<FactoryEntry>,
-    context: Option<RecognizerContext>,
-    slots: Vec<Slot>,
+    host: RecognizerHost,
 }
 
 impl std::fmt::Debug for RawGestureDetectorState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RawGestureDetectorState")
-            .field("recognizers", &self.slots.len())
+            .field("recognizers", &self.host.slots.len())
             .finish_non_exhaustive()
     }
 }
@@ -390,9 +415,7 @@ impl StatefulView for RawGestureDetector {
 
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         RawGestureDetectorState {
-            factories: self.factories.clone(),
-            context: None,
-            slots: Vec::new(),
+            host: RecognizerHost::new(&self.factories),
         }
     }
 }
@@ -404,7 +427,7 @@ fn context_of(ctx: &dyn LifecycleContext) -> RecognizerContext {
     }
 }
 
-fn create_slots(factories: &[FactoryEntry], cx: &RecognizerContext) -> Vec<Slot> {
+fn create_slots(factories: &[FactoryEntry], cx: &RecognizerContext) -> SmallVec<[Slot; 1]> {
     factories
         .iter()
         .map(|entry| Slot {
@@ -419,14 +442,43 @@ fn cancel_slots(slots: &[Slot]) {
     cancel_all(slots.iter().map(|slot| slot.live.recognizer()));
 }
 
-impl ViewState<RawGestureDetector> for RawGestureDetectorState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+impl RecognizerHost {
+    /// A host for `factories`. No recognizer exists until
+    /// [`init`](Self::init).
+    pub(crate) fn new(factories: &[FactoryEntry]) -> Self {
+        Self {
+            factories: SmallVec::from(factories),
+            context: None,
+            slots: SmallVec::new(),
+        }
+    }
+
+    /// What the recognizers were built with, once [`init`](Self::init) ran.
+    pub(crate) fn context(&self) -> Option<&RecognizerContext> {
+        self.context.as_ref()
+    }
+
+    /// The live recognizers as the attachments a pointer handler delivers
+    /// to, in list order. With `admission`, a contact reaches them only when
+    /// it accepts the contact's Down.
+    pub(crate) fn recognizer_set(&self, admission: Option<&ContactAdmission>) -> RecognizerSet {
+        let mut set = RecognizerSet::default();
+        for slot in &self.slots {
+            Rc::clone(&slot.live).attach(&mut set, admission);
+        }
+        set
+    }
+
+    /// The owner's `init_state`: build a recognizer per factory.
+    pub(crate) fn init(&mut self, ctx: &dyn LifecycleContext) {
         let cx = context_of(ctx);
         self.slots = create_slots(&self.factories, &cx);
         self.context = Some(cx);
     }
 
-    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+    /// The owner's `did_change_dependencies`: a changed gesture policy
+    /// rebuilds every recognizer.
+    pub(crate) fn dependencies_changed(&mut self, ctx: &dyn LifecycleContext) {
         let incoming = context_of(ctx);
         let changed = self
             .context
@@ -444,16 +496,39 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
         cancel_slots(&outgoing);
     }
 
-    fn did_update_view(&mut self, _old_view: &RawGestureDetector, new_view: &RawGestureDetector) {
-        let Some(cx) = self.context.clone() else {
-            self.factories.clone_from(&new_view.factories);
+    /// The owner's `did_update_view`: follow a new list of factories.
+    pub(crate) fn update(&mut self, factories: &[FactoryEntry]) {
+        let mut failure = FirstPanic::new();
+        let Some(cx) = &self.context else {
+            let outgoing = std::mem::replace(&mut self.factories, SmallVec::from(factories));
+            failure.contain(|| drop(outgoing));
+            failure.resume();
             return;
         };
+        // The usual rebuild names the recognizers it already has, in their
+        // order: nothing is created or retired, and nothing is allocated.
+        // The pairing below gives each factory the first unclaimed match,
+        // which is then the slot at its own index.
+        let unchanged = factories.len() == self.slots.len()
+            && self
+                .slots
+                .iter()
+                .zip(factories)
+                .all(|(slot, entry)| slot.matches(entry));
+        if unchanged {
+            let outgoing = std::mem::replace(&mut self.factories, SmallVec::from(factories));
+            // A replaced factory's captures are user code.
+            failure.contain(|| drop(outgoing));
+            for (entry, slot) in self.factories.iter().zip(&self.slots) {
+                failure.contain(|| entry.factory.update_live(&*slot.live));
+            }
+            failure.resume();
+            return;
+        }
         // Pair each incoming factory with the first unclaimed live recognizer
         // of its type and key; no user code runs here.
         let mut claimed = vec![false; self.slots.len()];
-        let pairing: Vec<Option<usize>> = new_view
-            .factories
+        let pairing: Vec<Option<usize>> = factories
             .iter()
             .map(|entry| {
                 let index = self
@@ -467,11 +542,10 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
             .collect();
         // Factories without a live recognizer create one before anything is
         // committed: a panicking `create` leaves the mounted set intact.
-        let mut created: Vec<Option<Box<dyn LiveRecognizer>>> = new_view
-            .factories
+        let mut created: Vec<Option<Rc<dyn LiveRecognizer>>> = factories
             .iter()
             .zip(&pairing)
-            .map(|(entry, paired)| paired.is_none().then(|| entry.factory.create_live(&cx)))
+            .map(|(entry, paired)| paired.is_none().then(|| entry.factory.create_live(cx)))
             .collect();
 
         let mut outgoing: Vec<Option<Slot>> = std::mem::take(&mut self.slots)
@@ -479,7 +553,7 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
             .map(Some)
             .collect();
         let mut updates = Vec::new();
-        for (index, entry) in new_view.factories.iter().enumerate() {
+        for (index, entry) in factories.iter().enumerate() {
             let slot = match pairing[index] {
                 Some(paired) => {
                     updates.push(index);
@@ -497,37 +571,42 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
             };
             self.slots.push(slot);
         }
-        self.factories.clone_from(&new_view.factories);
+        let replaced = std::mem::replace(&mut self.factories, SmallVec::from(factories));
         // A retired recognizer's callbacks may panic on cancellation, and a
         // factory's update may panic too: every kept recognizer is still
         // updated, and the first failure is resumed after the last.
         let retired: Vec<Slot> = outgoing.into_iter().flatten().collect();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a retired recognizer's cancel panic must not skip updates"
-        )]
-        let mut first = catch_unwind(AssertUnwindSafe(|| cancel_slots(&retired))).err();
-        drop(retired);
+        failure.contain(|| cancel_slots(&retired));
+        failure.contain(|| drop(retired));
+        failure.contain(|| drop(replaced));
         for index in updates {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a factory's update panic must not skip the other recognizers"
-            )]
-            let updated = catch_unwind(AssertUnwindSafe(|| {
+            failure.contain(|| {
                 self.factories[index]
                     .factory
                     .update_live(&*self.slots[index].live);
-            }));
-            if let Err(payload) = updated {
-                match first {
-                    Some(_) => flui_foundation::panic::discard_payload(payload),
-                    None => first = Some(payload),
-                }
-            }
+            });
         }
-        if let Some(payload) = first {
-            resume_unwind(payload);
-        }
+        failure.resume();
+    }
+
+    /// The owner's `dispose`: cancel every recognizer.
+    pub(crate) fn dispose(&mut self) {
+        let outgoing = std::mem::take(&mut self.slots);
+        cancel_slots(&outgoing);
+    }
+}
+
+impl ViewState<RawGestureDetector> for RawGestureDetectorState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.host.init(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.host.dependencies_changed(ctx);
+    }
+
+    fn did_update_view(&mut self, _old_view: &RawGestureDetector, new_view: &RawGestureDetector) {
+        self.host.update(&new_view.factories);
     }
 
     fn build(&self, view: &RawGestureDetector, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -539,13 +618,11 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
             listener = listener.on_pointer_pan_zoom_claim(move |dispatch| claim(dispatch));
         }
         // Without a context (no lane yet) there is no writer to answer with.
-        if let (Some(claim), Some(cx)) = (view.smart_zoom_claim.clone(), &self.context) {
+        if let (Some(claim), Some(cx)) = (view.smart_zoom_claim.clone(), self.host.context()) {
             let writer = cx.writer().clone();
             listener = listener.on_smart_zoom_claim(move |dispatch| claim(dispatch, &writer));
         }
-        let listener = self.slots.iter().fold(listener, |listener, slot| {
-            slot.live.attach(listener, view.admission.as_ref())
-        });
+        let listener = listener.recognizers(self.host.recognizer_set(view.admission.as_ref()));
         match view.child.clone().into_inner() {
             Some(child) => listener.child(child),
             None => listener,
@@ -553,7 +630,6 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
     }
 
     fn dispose(&mut self) {
-        let outgoing = std::mem::take(&mut self.slots);
-        cancel_slots(&outgoing);
+        self.host.dispose();
     }
 }

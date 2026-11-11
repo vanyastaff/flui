@@ -204,7 +204,7 @@ fn resolve_elevation(states: &WidgetStates, enabled_elevation: f64) -> f64 {
         ELEVATION_PRESSED
     } else if states.contains_state(WidgetState::Hovered) {
         ELEVATION_HOVERED
-    } else if states.contains_state(WidgetState::Focused) {
+    } else if states.contains_state(WidgetState::FocusVisible) {
         ELEVATION_FOCUSED
     } else {
         enabled_elevation

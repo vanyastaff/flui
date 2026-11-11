@@ -127,7 +127,7 @@ const INLINE_CHILDREN: usize = 8;
 pub(crate) fn reconcile_children_by_id(
     tree: &mut ElementTree,
     parent_id: ElementId,
-    new_views: &[Box<dyn View>],
+    new_views: &crate::view::ChildViews,
     owner: &mut crate::ElementOwner<'_>,
 ) {
     let _reconcile_guard = tree.begin_reconcile(parent_id);
@@ -174,14 +174,14 @@ pub(crate) fn reconcile_children_by_id(
         let Some(old_id) = old_slots[old_top] else {
             break;
         };
-        if !can_update_by_id(tree, old_id, new_views[new_top].as_ref()) {
+        if !can_update_by_id(tree, old_id, view_at(new_views, new_top)) {
             break;
         }
         let now = update_child(
             tree,
             parent_id,
             old_id,
-            new_views[new_top].as_ref(),
+            view_at(new_views, new_top),
             new_top,
             owner,
         );
@@ -193,8 +193,8 @@ pub(crate) fn reconcile_children_by_id(
             emit_event(&ReconcileEvent::reuse(
                 parent_id,
                 new_top,
-                new_views[new_top].view_type_id(),
-                new_views[new_top]
+                view_at(new_views, new_top).view_type_id(),
+                view_at(new_views, new_top)
                     .key()
                     .map(flui_foundation::ViewKey::key_hash),
             ));
@@ -217,7 +217,7 @@ pub(crate) fn reconcile_children_by_id(
         let Some(old_id) = old_slots[old_bottom - 1] else {
             break;
         };
-        if !can_update_by_id(tree, old_id, new_views[new_bottom - 1].as_ref()) {
+        if !can_update_by_id(tree, old_id, view_at(new_views, new_bottom - 1)) {
             break;
         }
         old_bottom -= 1;
@@ -269,7 +269,7 @@ pub(crate) fn reconcile_children_by_id(
     // does not also remove them.
     for new_offset in 0..(new_bottom - new_top) {
         let new_slot = new_top + new_offset;
-        let new_view = new_views[new_slot].as_ref();
+        let new_view = view_at(new_views, new_slot);
         if let Some(old_idx) = claim_old_for_new(tree, new_view, &mut old_keyed, &old_slots) {
             // Clear the claim by index in O(1) and take its id; `take`
             // leaves `None`, so phase 5b will not also remove this reused
@@ -335,7 +335,7 @@ pub(crate) fn reconcile_children_by_id(
             tree,
             parent_id,
             old_id,
-            new_views[new_idx].as_ref(),
+            view_at(new_views, new_idx),
             new_idx,
             owner,
         );
@@ -346,10 +346,10 @@ pub(crate) fn reconcile_children_by_id(
         // because both indices are `bottom + offset`.)
         if now == old_id {
             scheduling_reasons.push(crate::RebuildReason::ParentUpdate);
-            let key_hash = new_views[new_idx]
+            let key_hash = view_at(new_views, new_idx)
                 .key()
                 .map(flui_foundation::ViewKey::key_hash);
-            let view_type = new_views[new_idx].view_type_id();
+            let view_type = view_at(new_views, new_idx).view_type_id();
             emit_event(&if old_bottom == new_bottom {
                 ReconcileEvent::reuse(parent_id, new_idx, view_type, key_hash)
             } else {
@@ -702,3 +702,11 @@ fn set_child_slot(tree: &mut ElementTree, id: ElementId, slot: usize) {
 #[cfg(test)]
 #[path = "id_reconcile/tests.rs"]
 mod tests;
+
+/// The new view at `index`; every index the reconciler reads stays below
+/// `new_views.len()`.
+fn view_at(new_views: &crate::view::ChildViews, index: usize) -> &dyn View {
+    new_views
+        .get(index)
+        .expect("BUG: a reconcile index stays below the new view count")
+}

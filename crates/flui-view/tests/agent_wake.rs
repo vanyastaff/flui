@@ -4,40 +4,16 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Wake, Waker};
+use std::task::Waker;
 
+use flui_foundation::testing::{CountingWaker, panicking_waker};
 use flui_protocol::ErrorCode;
 use flui_view::__runtime::reply_pair;
-
-/// Counts its wakes.
-#[derive(Default)]
-struct Wakes(AtomicUsize);
-
-impl Wakes {
-    fn count(&self) -> usize {
-        self.0.load(Ordering::SeqCst)
-    }
-}
-
-impl Wake for Wakes {
-    fn wake(self: Arc<Self>) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-/// Panics when woken.
-struct Panics;
-
-impl Wake for Panics {
-    fn wake(self: Arc<Self>) {
-        panic!("the waker panics");
-    }
-}
 
 #[test]
 fn an_answer_wakes_the_last_waker_registered_once_when_it_is_sent() {
     let (reply, mut answer) = reply_pair::<u32>();
-    let (first, last) = (Arc::new(Wakes::default()), Arc::new(Wakes::default()));
+    let (first, last) = (CountingWaker::new().shared(), CountingWaker::new().shared());
     answer.register(&Waker::from(Arc::clone(&first)));
     answer.register(&Waker::from(Arc::clone(&last)));
     assert!(reply.send(Ok(7)));
@@ -50,7 +26,7 @@ fn an_answer_wakes_the_last_waker_registered_once_when_it_is_sent() {
 #[test]
 fn an_answer_wakes_its_waker_when_the_owner_goes_without_sending() {
     let (reply, mut answer) = reply_pair::<u32>();
-    let wakes = Arc::new(Wakes::default());
+    let wakes = CountingWaker::new().shared();
     answer.register(&Waker::from(Arc::clone(&wakes)));
     let kept = reply.clone();
     drop(reply);
@@ -83,7 +59,7 @@ fn a_waker_that_panics_leaves_the_answer_sent_and_is_reported() {
     use tracing_subscriber::layer::SubscriberExt as _;
 
     let (reply, mut answer) = reply_pair::<u32>();
-    answer.register(&Waker::from(Arc::new(Panics)));
+    answer.register(&panicking_waker("the waker panics"));
     let errors = Errors::default();
     let subscriber = tracing_subscriber::registry().with(errors.clone());
     let sent = tracing::subscriber::with_default(subscriber, || reply.send(Ok(7)));

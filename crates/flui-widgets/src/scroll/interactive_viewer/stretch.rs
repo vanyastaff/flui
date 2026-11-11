@@ -7,7 +7,7 @@
 //! that never reaches its limit, so a contact can pull the scene at most one
 //! viewport past its edge and zoom it at most [`SCALE_LIMIT`] past a bound.
 
-use flui_animation::{SimulationError, SpringDescription, SpringSimulation, Tolerance};
+use flui_animation::{SimulationError, SpeedLimit, SpringDescription, SpringSimulation, Tolerance};
 use flui_foundation::geometry::{Matrix4, Offset};
 
 /// How hard the rubber band pulls back: the iOS scroll view's coefficient.
@@ -117,11 +117,23 @@ fn spring() -> Result<SpringDescription, SimulationError> {
 /// The run that brings a released overlay back: its fraction, from one to
 /// rest.
 pub(super) fn release_run() -> Result<SpringSimulation, SimulationError> {
-    SpringSimulation::try_new(spring()?, 1.0, 0.0, 0.0, Tolerance::try_new(1e-3, 1e-2)?)
+    SpringSimulation::try_new(
+        spring()?,
+        1.0,
+        0.0,
+        0.0,
+        Tolerance::try_new(1e-3, SpeedLimit::AtMost(1e-2))?,
+    )
 }
 
 /// The run of a fling stopped at its boundary at `speed` (viewport pixels
 /// per second): the overshoot past the bound in pixels, out and back.
 pub(super) fn overshoot_run(speed: f64) -> Result<SpringSimulation, SimulationError> {
-    SpringSimulation::try_new(spring()?, 0.0, 0.0, speed, Tolerance::try_new(0.25, 1.0)?)
+    SpringSimulation::try_new(
+        spring()?,
+        0.0,
+        0.0,
+        speed,
+        Tolerance::try_new(0.25, SpeedLimit::AtMost(1.0))?,
+    )
 }

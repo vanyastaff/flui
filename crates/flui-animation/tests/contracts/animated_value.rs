@@ -1008,12 +1008,8 @@ fn owning_animated_value_contract() {
 
 fn owner_retirement_joins_every_delivery_channel() {
     use flui_foundation::Listenable;
-    use std::{
-        future::Future,
-        pin::Pin,
-        sync::Arc,
-        task::{Context, Wake, Waker},
-    };
+    use flui_foundation::testing::CountingWaker;
+    use std::{future::Future, pin::Pin, task::Context};
 
     #[derive(Clone)]
     struct Target {
@@ -1055,15 +1051,6 @@ fn owner_retirement_joins_every_delivery_channel() {
         panic!("owner retirement delivery failure");
     }
     fn healthy() {}
-    struct ProbeWake(fn());
-    impl Wake for ProbeWake {
-        fn wake(self: Arc<Self>) {
-            self.wake_by_ref();
-        }
-        fn wake_by_ref(self: &Arc<Self>) {
-            (self.0)();
-        }
-    }
 
     let mut observed = Vec::new();
     let mut expected = Vec::new();
@@ -1111,7 +1098,7 @@ fn owner_retirement_joins_every_delivery_channel() {
                 }
                 "waiter" => {
                     for action in [first, release_owner] {
-                        let wake = Waker::from(Arc::new(ProbeWake(action)));
+                        let wake = CountingWaker::calling(action).shared().waker();
                         let mut future = run.clone();
                         assert!(
                             Pin::new(&mut future)

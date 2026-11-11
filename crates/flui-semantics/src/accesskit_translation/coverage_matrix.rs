@@ -12,7 +12,7 @@ use accesskit_consumer::{FilterResult, NodeRef, common_filter};
 use smallvec::SmallVec;
 
 use super::{PublishView, to_node};
-use crate::attributes::SemanticsAttributes;
+use crate::attributes::{RareAttributes, SemanticsAttributes};
 use crate::identity::AccessibilityNodeId;
 use crate::properties::{HeadingLevel, TextDirection};
 use crate::role::{LiveSetting, SemanticsRole};
@@ -163,24 +163,31 @@ fn every_published_attribute_reads_through_the_consumer() {
         live_atomic: _,
         label: _,
         value: _,
-        numeric_range: _,
         hint: _,
+        identifier: _,
+        text_direction: _,
+        heading_level: _,
+        role: _,
+        // Published as `TextRun` children, read through the consumer by
+        // `tests/text_runs.rs`.
+        text: _,
+        collection: _,
+        // Destructured below.
+        rare: _,
+    } = SemanticsAttributes::default();
+    let RareAttributes {
+        numeric_range: _,
         tooltip: _,
         placeholder: _,
         keyboard_shortcut: _,
         language: _,
         url: _,
         role_description: _,
-        identifier: _,
-        text_direction: _,
         custom_actions: _,
         scroll_position: _,
         scroll_axis_direction: _,
         scroll_extent_max: _,
         scroll_extent_min: _,
-        collection: _,
-        heading_level: _,
-        role: _,
         // Resolved into `labelled_by` and the other relations by
         // `to_published_node`: the resolved ids are pinned by
         // `relations_resolve_through_anchors_across_publication`, and the name a
@@ -200,9 +207,6 @@ fn every_published_attribute_reads_through_the_consumer() {
         platform_view_id: _,
         max_value_length: _,
         current_value_length: _,
-        // Published as `TextRun` children, read through the consumer by
-        // `tests/text_runs.rs`.
-        text: _,
         // Published as the text selection of a document, in the runs of the
         // texts beneath it; read through the consumer by the widget rows of
         // ADR-0214.
@@ -210,7 +214,7 @@ fn every_published_attribute_reads_through_the_consumer() {
         // Published as `TextRun` children of the hosting region, read through
         // the consumer by the link rows of `selection_area`.
         hosted_runs: _,
-    } = SemanticsAttributes::default();
+    } = RareAttributes::default();
     let States {
         toggled: _,
         selected: _,
@@ -271,7 +275,7 @@ fn every_published_attribute_reads_through_the_consumer() {
         Row::new(
             "numeric range",
             R::Slider,
-            |a| a.numeric_range = Some(range()),
+            |a| a.rare_mut().numeric_range = Some(range()),
             |n| {
                 n.numeric_value() == Some(4.0)
                     && n.min_numeric_value() == Some(0.0)
@@ -288,13 +292,13 @@ fn every_published_attribute_reads_through_the_consumer() {
         Row::new(
             "tooltip",
             R::Button,
-            |a| a.tooltip = Some("Send".into()),
+            |a| a.rare_mut().tooltip = Some("Send".into()),
             |n| n.data().tooltip() == Some("Send"),
         ),
         Row::new(
             "placeholder",
             R::TextInput,
-            |a| a.placeholder = Some("Search".into()),
+            |a| a.rare_mut().placeholder = Some("Search".into()),
             |n| n.placeholder() == Some("Search"),
         ),
         Row::new(
@@ -321,7 +325,7 @@ fn every_published_attribute_reads_through_the_consumer() {
             ..Row::new(
                 "custom actions",
                 R::ListItem,
-                |a| a.custom_actions = smallvec::smallvec!["Archive".into()],
+                |a| a.rare_mut().custom_actions = smallvec::smallvec!["Archive".into()],
                 |n| {
                     n.data()
                         .custom_actions()
@@ -334,9 +338,9 @@ fn every_published_attribute_reads_through_the_consumer() {
             "vertical scroll",
             R::ScrollView,
             |a| {
-                a.scroll_position = Some(20.0);
-                a.scroll_extent_min = Some(0.0);
-                a.scroll_extent_max = Some(100.0);
+                a.rare_mut().scroll_position = Some(20.0);
+                a.rare_mut().scroll_extent_min = Some(0.0);
+                a.rare_mut().scroll_extent_max = Some(100.0);
             },
             |n| {
                 n.scroll_y() == Some(20.0)
@@ -348,10 +352,10 @@ fn every_published_attribute_reads_through_the_consumer() {
             "horizontal scroll",
             R::ScrollView,
             |a| {
-                a.scroll_axis_direction =
+                a.rare_mut().scroll_axis_direction =
                     Some(flui_foundation::geometry::AxisDirection::LeftToRight);
-                a.scroll_position = Some(20.0);
-                a.scroll_extent_max = Some(100.0);
+                a.rare_mut().scroll_position = Some(20.0);
+                a.rare_mut().scroll_extent_max = Some(100.0);
             },
             |n| {
                 n.scroll_x() == Some(20.0)
@@ -363,11 +367,11 @@ fn every_published_attribute_reads_through_the_consumer() {
             "a list growing up is published from the top edge",
             R::ScrollView,
             |a| {
-                a.scroll_axis_direction =
+                a.rare_mut().scroll_axis_direction =
                     Some(flui_foundation::geometry::AxisDirection::BottomToTop);
-                a.scroll_position = Some(20.0);
-                a.scroll_extent_min = Some(0.0);
-                a.scroll_extent_max = Some(100.0);
+                a.rare_mut().scroll_position = Some(20.0);
+                a.rare_mut().scroll_extent_min = Some(0.0);
+                a.rare_mut().scroll_extent_max = Some(100.0);
             },
             |n| {
                 n.scroll_y() == Some(80.0)
@@ -379,11 +383,11 @@ fn every_published_attribute_reads_through_the_consumer() {
             "a right-to-left scroll is published from the left edge",
             R::ScrollView,
             |a| {
-                a.scroll_axis_direction =
+                a.rare_mut().scroll_axis_direction =
                     Some(flui_foundation::geometry::AxisDirection::RightToLeft);
-                a.scroll_position = Some(30.0);
-                a.scroll_extent_min = Some(10.0);
-                a.scroll_extent_max = Some(110.0);
+                a.rare_mut().scroll_position = Some(30.0);
+                a.rare_mut().scroll_extent_min = Some(10.0);
+                a.rare_mut().scroll_extent_max = Some(110.0);
             },
             |n| n.scroll_x() == Some(90.0) && n.scroll_y().is_none(),
         ),
@@ -391,11 +395,11 @@ fn every_published_attribute_reads_through_the_consumer() {
             "a reversed scroll with an unbounded extent has no position",
             R::ScrollView,
             |a| {
-                a.scroll_axis_direction =
+                a.rare_mut().scroll_axis_direction =
                     Some(flui_foundation::geometry::AxisDirection::BottomToTop);
-                a.scroll_position = Some(20.0);
-                a.scroll_extent_min = Some(0.0);
-                a.scroll_extent_max = Some(f64::INFINITY);
+                a.rare_mut().scroll_position = Some(20.0);
+                a.rare_mut().scroll_extent_min = Some(0.0);
+                a.rare_mut().scroll_extent_max = Some(f64::INFINITY);
             },
             |n| n.scroll_y().is_none() && n.scroll_y_min() == Some(0.0),
         ),
@@ -669,7 +673,7 @@ fn every_published_attribute_reads_through_the_consumer() {
         Row::new(
             "keyboard shortcut",
             R::Button,
-            |a| a.keyboard_shortcut = Some("Control+S".into()),
+            |a| a.rare_mut().keyboard_shortcut = Some("Control+S".into()),
             |n| n.data().keyboard_shortcut() == Some("Control+S"),
         ),
         Row::new(
@@ -677,7 +681,7 @@ fn every_published_attribute_reads_through_the_consumer() {
             R::None,
             |a| {
                 a.label = Some("Bonjour".into());
-                a.language = Some("fr-FR".into());
+                a.rare_mut().language = Some("fr-FR".into());
             },
             |n| n.data().language() == Some("fr-FR"),
         ),
@@ -686,21 +690,21 @@ fn every_published_attribute_reads_through_the_consumer() {
             R::Link,
             |a| {
                 a.label = Some("Docs".into());
-                a.url = Some("https://example.org/docs".into());
+                a.rare_mut().url = Some("https://example.org/docs".into());
             },
             |n| n.data().url() == Some("https://example.org/docs"),
         ),
         Row::new(
             "role description",
             R::Group,
-            |a| a.role_description = Some("slide".into()),
+            |a| a.rare_mut().role_description = Some("slide".into()),
             |n| n.data().role_description() == Some("slide"),
         ),
         Row::new(
             "large step",
             R::Slider,
             |a| {
-                a.numeric_range = Some(range().with_jump(5.0).expect("positive jump"));
+                a.rare_mut().numeric_range = Some(range().with_jump(5.0).expect("positive jump"));
             },
             |n| n.data().numeric_value_jump() == Some(5.0),
         ),
@@ -865,13 +869,13 @@ fn an_inapplicable_attribute_is_not_published() {
         Row::new(
             "a range on a button",
             R::Button,
-            |a| a.numeric_range = Some(range()),
+            |a| a.rare_mut().numeric_range = Some(range()),
             |n| n.numeric_value().is_none(),
         ),
         Row::new(
             "a placeholder on a button",
             R::Button,
-            |a| a.placeholder = Some("Search".into()),
+            |a| a.rare_mut().placeholder = Some("Search".into()),
             |n| n.placeholder().is_none(),
         ),
         Row::new(

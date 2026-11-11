@@ -169,10 +169,10 @@ The same loader feeds `cargo xtask send-positions`
 `flui-sdk`, built with every feature and with private items, it lists every place the reached
 API names `Send` or `Sync` that an author wrote (a supertrait, private sealed ones included, a
 bound, `dyn … + Send`, `-> impl Trait + Send`, an explicit `impl Send`) against
-`tools/xtask/allowlists/send-positions.toml`, which only shrinks. A synthetic auto-trait
-implementation is not a position: it follows from a type's fields, no author decided it, and a
-new data type would add one against a list that only shrinks; trybuild pins the owner types that
-must stay `!Send`, a consumer test the handles meant to cross a thread.
+`tools/xtask/allowlists/send-positions.toml`, under ADR-0136 §3's rule. A synthetic auto-trait
+implementation is not a position: it follows from a type's fields and no author decided it;
+trybuild pins the owner types that must stay `!Send`, a consumer test the handles meant to
+cross a thread.
 
 ## Alternatives considered
 

@@ -176,8 +176,8 @@ pub use reverse::ReverseAnimation;
 pub use run_future::{AnimationRunFuture, RunCanceled};
 pub use simulation::{
     BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
-    SimulationBounds, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,
-    SpringType, Tolerance,
+    SimulationBounds, SimulationError, SimulationParameter, SpeedLimit, SpringDescription,
+    SpringSimulation, SpringType, Tolerance,
 };
 pub use stagger::{Stagger, StaggerOrigin};
 pub use status_subscription::StatusSubscription;

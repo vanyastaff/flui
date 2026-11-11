@@ -441,8 +441,7 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         // menu.
         let enclosing = EnclosingActions::depend_on(ctx);
         let chain = self.model.action_chain(enclosing);
-        self.model
-            .configure_menu(ctx, &view.menu, Rc::clone(&chain));
+        self.model.configure_menu(ctx, &view.menu, chain.clone());
         let content = SelectionGestures {
             model: Rc::clone(&self.model),
             child: SelectionScope {

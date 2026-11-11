@@ -5,9 +5,10 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
-use std::task::{Wake, Waker};
+use std::task::Waker;
 use std::time::Duration;
 
+use flui_foundation::testing::CountingWaker;
 use flui_interaction::events::Code;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform::PlatformInput;
@@ -77,20 +78,6 @@ impl DevAgentHook for Served {
 
     fn window_opened(&mut self, window: AgentWindow) {
         self.0.window_opened(window);
-    }
-}
-
-/// Counts its wakes: the transport's signal that the session has more to do.
-#[derive(Default)]
-struct Wakes(AtomicUsize);
-
-impl Wake for Wakes {
-    fn wake(self: Arc<Self>) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -183,7 +170,7 @@ fn greeted_as(
 fn a_conversation_answers_in_order_as_the_owner_drains_and_wakes_its_transport() {
     let service = service(Limits::default(), None);
     let (mut host, _agent, presses) = shown(&service);
-    let wakes = Arc::new(Wakes::default());
+    let wakes = CountingWaker::new().shared();
     let waker = Waker::from(Arc::clone(&wakes));
     let now = Instant::now();
     let mut session = greeted(&service, now, &waker);
@@ -196,11 +183,11 @@ fn a_conversation_answers_in_order_as_the_owner_drains_and_wakes_its_transport()
         transmitted(&mut session).is_empty(),
         "nothing answers before the owner drains"
     );
-    let woken = wakes.0.load(Ordering::SeqCst);
+    let woken = wakes.count();
 
     let _ = host.pump(Duration::ZERO);
     assert!(
-        wakes.0.load(Ordering::SeqCst) > woken,
+        wakes.count() > woken,
         "the owner's answer woke the transport"
     );
     session.poll(now, &waker);
@@ -236,7 +223,7 @@ fn an_act_past_its_deadline_answers_timeout_and_still_runs() {
     };
     let service = service(limits, None);
     let (mut host, _agent, presses) = shown(&service);
-    let waker = Waker::from(Arc::new(Wakes::default()));
+    let waker = CountingWaker::new().shared().waker();
     let now = Instant::now();
     let mut session = greeted(&service, now, &waker);
 
@@ -271,7 +258,7 @@ fn an_act_past_its_deadline_answers_timeout_and_still_runs() {
 #[test]
 fn a_conversation_without_the_right_hello_in_time_closes_without_a_word() {
     let service = service(Limits::default(), None);
-    let waker = Waker::from(Arc::new(Wakes::default()));
+    let waker = CountingWaker::new().shared().waker();
     let now = Instant::now();
 
     let mut silent = service.accept(now).expect("a conversation");
@@ -297,7 +284,7 @@ fn the_service_takes_conversations_up_to_its_limit_and_none_once_stopped() {
         ..Limits::default()
     };
     let service = service(limits, None);
-    let wakes = Arc::new(Wakes::default());
+    let wakes = CountingWaker::new().shared();
     let waker = Waker::from(Arc::clone(&wakes));
     let now = Instant::now();
     let first = greeted(&service, now, &waker);
@@ -308,10 +295,10 @@ fn the_service_takes_conversations_up_to_its_limit_and_none_once_stopped() {
     let mut third = service.accept(now).expect("the first one's place");
     third.poll(now, &waker);
 
-    let woken = wakes.0.load(Ordering::SeqCst);
+    let woken = wakes.count();
     service.stop();
     assert!(
-        wakes.0.load(Ordering::SeqCst) >= woken + 2,
+        wakes.count() >= woken + 2,
         "stopping woke both conversations"
     );
     for session in [&mut second, &mut third] {
@@ -340,7 +327,7 @@ fn refused_hello(service: &Service, now: Instant, waker: &Waker, role: Option<&s
 fn one_driver_at_a_time_and_an_observer_only_reads() {
     let service = service(Limits::default(), None);
     let (mut host, _agent, presses) = shown(&service);
-    let waker = Waker::from(Arc::new(Wakes::default()));
+    let waker = CountingWaker::new().shared().waker();
     let now = Instant::now();
     let (mut driver, welcome) = greeted_as(&service, now, &waker, None);
     let methods = &welcome["hello"]["capabilities"]["methods"];
@@ -414,7 +401,7 @@ fn the_drivers_end_runs_its_obligation_once_and_not_after_a_stop() {
             counted.fetch_add(1, Ordering::SeqCst);
         })),
     );
-    let waker = Waker::from(Arc::new(Wakes::default()));
+    let waker = CountingWaker::new().shared().waker();
     let now = Instant::now();
     let driver = greeted(&service, now, &waker);
     let (observer, _) = greeted_as(&service, now, &waker, Some("observer"));
@@ -456,7 +443,7 @@ fn service_with_obligation(gone: impl Fn() + Send + Sync + 'static) -> Service {
 fn a_subscription_streams_the_windows_events_as_it_publishes_them() {
     let service = service(Limits::default(), None);
     let (mut host, _agent, _presses) = shown(&service);
-    let wakes = Arc::new(Wakes::default());
+    let wakes = CountingWaker::new().shared();
     let waker = Waker::from(Arc::clone(&wakes));
     let now = Instant::now();
     // It watches as an observer while the driver below acts.
@@ -477,15 +464,15 @@ fn a_subscription_streams_the_windows_events_as_it_publishes_them() {
 
     // Another conversation's press commits a frame with a new tree: only the window's events
     // wake this one.
-    let actor_waker = Waker::from(Arc::new(Wakes::default()));
+    let actor_waker = CountingWaker::new().shared().waker();
     let mut actor = greeted(&service, now, &actor_waker);
     actor.receive(&press_go(1), now);
     actor.poll(now, &actor_waker);
-    let woken = wakes.0.load(Ordering::SeqCst);
+    let woken = wakes.count();
     let _ = host.pump(Duration::from_millis(16));
     let _ = host.pump(Duration::from_millis(16));
     assert!(
-        wakes.0.load(Ordering::SeqCst) > woken,
+        wakes.count() > woken,
         "the window's events woke the transport"
     );
     session.poll(now, &waker);
@@ -522,7 +509,7 @@ fn input_a_connection_holds_is_let_go_when_it_goes() {
     )
     .expect("mount");
     let _ = host.pump(Duration::from_millis(16));
-    let waker = Waker::from(Arc::new(Wakes::default()));
+    let waker = CountingWaker::new().shared().waker();
     let now = Instant::now();
     let (mut session, welcome) = greeted_as(&service, now, &waker, None);
     for method in ["input.inject", "input.release"] {
@@ -681,7 +668,7 @@ fn keys(rows: &[&Value]) -> usize {
 fn a_recording_streams_the_runtimes_rows_to_its_connection_until_it_stops() {
     let service = service(Limits::default(), None);
     let (mut host, _agent, _presses) = shown(&service);
-    let waker = Waker::from(Arc::new(Wakes::default()));
+    let waker = CountingWaker::new().shared().waker();
     let now = Instant::now();
     let (mut recorder, welcome) = greeted_as(&service, now, &waker, Some("observer"));
     assert_eq!(
@@ -787,7 +774,7 @@ fn a_recording_ends_with_its_window_or_runtime_and_goes_with_its_connection() {
         .expect("mount the second window");
         host.serve_window(second, &mut agent);
         let _ = host.pump(Duration::from_millis(16));
-        let waker = Waker::from(Arc::new(Wakes::default()));
+        let waker = CountingWaker::new().shared().waker();
         let now = Instant::now();
 
         let mut gone = greeted_as(&service, now, &waker, Some("observer")).0;
@@ -858,7 +845,7 @@ fn a_recording_counts_the_rows_its_reader_fell_behind_on() {
     const KEYS: usize = 1100;
     let service = service(Limits::default(), None);
     let (mut host, _agent, _presses) = shown(&service);
-    let waker = Waker::from(Arc::new(Wakes::default()));
+    let waker = CountingWaker::new().shared().waker();
     let now = Instant::now();
     let mut recorder = greeted_as(&service, now, &waker, Some("observer")).0;
     let mut lines = record(&mut recorder, &mut host, None, now, &waker);
@@ -904,7 +891,7 @@ fn a_connection_holds_its_recordings_up_to_its_limit_and_stops_only_its_own() {
     };
     let service = service(limits, None);
     let (mut host, _agent, _presses) = shown(&service);
-    let waker = Waker::from(Arc::new(Wakes::default()));
+    let waker = CountingWaker::new().shared().waker();
     let now = Instant::now();
     let mut recorder = greeted_as(&service, now, &waker, Some("observer")).0;
     let mut other = greeted_as(&service, now, &waker, Some("observer")).0;
@@ -1029,7 +1016,7 @@ fn native_of(lines: &[Value]) -> Vec<(u64, &Value)> {
 fn a_native_recording_begins_each_stream_with_its_setup_and_streams_its_lines() {
     let service = native_service();
     let (mut host, _agent, _presses) = shown(&service);
-    let waker = Waker::from(Arc::new(Wakes::default()));
+    let waker = CountingWaker::new().shared().waker();
     let now = Instant::now();
     let journaled = host.attach_native_journal();
     assert_eq!(
@@ -1200,7 +1187,7 @@ fn a_native_stream_that_floods_a_recording_loses_its_own_rows_not_the_input() {
     const KEYS: usize = 200;
     let service = native_service();
     let (mut host, _agent, _presses) = shown(&service);
-    let waker = Waker::from(Arc::new(Wakes::default()));
+    let waker = CountingWaker::new().shared().waker();
     let now = Instant::now();
     let journaled = host.attach_native_journal();
     let mut recorder = greeted_as(&service, now, &waker, Some("observer")).0;
@@ -1308,7 +1295,7 @@ fn a_native_recording_is_refused_without_the_input_or_a_journal() {
         };
         let (mut host, _agent, _presses) = shown(&service);
         let _journal = case.attached.then(|| host.attach_native_journal());
-        let waker = Waker::from(Arc::new(Wakes::default()));
+        let waker = CountingWaker::new().shared().waker();
         let now = Instant::now();
         let mut recorder = greeted_as(&service, now, &waker, Some("observer")).0;
         recorder.receive(

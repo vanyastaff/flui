@@ -241,8 +241,8 @@ pub use reactive::{
 };
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
-    AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementDepth, ElementExt,
-    ErrorView, ErrorViewBuilder, FieldMask, FieldSet, FrameworkError, InheritedData,
+    AnimatedElement, AnimatedView, BoxedElement, BoxedView, ChildViews, ElementBase, ElementDepth,
+    ElementExt, ErrorView, ErrorViewBuilder, FieldMask, FieldSet, FrameworkError, InheritedData,
     InheritedElement, InheritedView, IntoElement, IntoView, Memo, ParentDataConfig,
     ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement, RenderObjectContext,
     RenderObjectContextError, RenderView, RenderViewState, RootRenderElement, RootRenderView,

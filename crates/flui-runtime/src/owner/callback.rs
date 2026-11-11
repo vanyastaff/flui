@@ -1,7 +1,7 @@
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use flui_foundation::panic::FirstPanic;
 use std::rc::Rc;
 
-use super::{DispatchError, OwnerCore, OwnerEffects, OwnerHost, finish_retirement};
+use super::{DispatchError, OwnerCore, OwnerEffects, OwnerHost};
 
 const CALLBACK_BUDGET: usize = 32;
 
@@ -95,16 +95,13 @@ impl Drop for OwnerCallback<'_> {
         // synchronous reentry must not acquire a fresh delivery budget.
         let reset = CallbackReset(Rc::clone(&self.core));
         let panicking = std::thread::panicking();
-        let mut first_failure = if panicking {
+        let mut first_failure = FirstPanic::new();
+        if panicking {
             self.core.state.borrow_mut().callback_remaining = 0;
-            None
         } else {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: the owner turn records a callback's panic and exits (ADR-0258)"
-            )]
-            catch_unwind(AssertUnwindSafe(|| self.core.continue_work(self.effects))).err()
-        };
+            // The owner turn records a callback's panic and exits (ADR-0258).
+            first_failure.contain(|| self.core.continue_work(self.effects));
+        }
         self.core
             .post_continuation(self.effects, &mut first_failure);
         drop(reset);
@@ -112,10 +109,10 @@ impl Drop for OwnerCallback<'_> {
         // the OS drag sessions decided during it start (ADR-0211 §7). A start
         // that runs the OS's modal loop delivers native callbacks from inside
         // it, and each is a fresh outermost callback with its own budget.
-        if !panicking && first_failure.is_none() {
+        if !panicking && !first_failure.is_held() {
             self.core.enter_pending_os_drags(&mut first_failure);
         }
-        finish_retirement(first_failure);
+        first_failure.resume();
     }
 }
 

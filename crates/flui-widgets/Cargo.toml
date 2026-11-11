@@ -94,8 +94,9 @@ criterion = { workspace = true }
 flui-animation = { workspace = true, features = ["diagnostics"] }
 tracing-subscriber = { workspace = true }
 static_assertions = { workspace = true }
-# Integration tests drive the real layout pipeline through the render harness.
-flui-foundation = { workspace = true }
+# Integration tests drive the real layout pipeline through the render harness, and
+# wake-counting tests take their wakers from the foundation kit.
+flui-foundation = { workspace = true, features = ["testing"] }
 flui-rendering = { workspace = true, features = ["testing"] }
 # `testing` reaches the fixpoint's lazy-band pass budget so a widget test can
 # drive the deferral path with ordinary content.

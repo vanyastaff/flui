@@ -777,15 +777,15 @@ assert!(SimulationBounds::try_new(1.0, 0.0).is_err());
 ### Tolerance
 
 ```rust
-use flui_animation::simulation::Tolerance;
+use flui_animation::simulation::{SpeedLimit, Tolerance};
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 // Distance and speed limits, in the simulation's units.
-let precise = Tolerance::try_new(1e-4, 1e-4)?;
-// Half a device pixel at a ratio of 2, with a velocity limit derived from
+let precise = Tolerance::try_new(1e-4, SpeedLimit::AtMost(1e-4))?;
+// Half a device pixel at a ratio of 2, with a speed limit derived from
 // the motion's own time scale: what scroll physics use.
 let screen = Tolerance::for_device_pixel_ratio(2.0)?;
-assert_eq!(screen, Tolerance::try_new(0.25, f64::INFINITY)?);
+assert_eq!(screen, Tolerance::try_new(0.25, SpeedLimit::Derived)?);
 # let _ = precise;
 # Ok(())
 # }
