@@ -38,6 +38,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  RUSTUP_HOME: ${{ github.workspace }}/../flui-android-dex-rustup
   # The tools `classes.dex.toml` records; the SDK step installs them when the
   # runner image lacks them, and `xtask android-dex` falls back to the newest
   # installed version (and says so) only if that fails.
