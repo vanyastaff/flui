@@ -42,6 +42,8 @@ pub struct RenderObjectContext<'a> {
     /// The deferred dependent-record sink [`depend_on`](Self::depend_on)
     /// records into; drained by `build_scope`.
     dep_sink: Option<&'a parking_lot::Mutex<Vec<DependentRecord>>>,
+    /// Whether the presentation collects its semantics tree.
+    collects_semantics: bool,
 }
 
 /// Errors returned by owner-runtime operations exposed through
@@ -64,6 +66,7 @@ impl<'a> RenderObjectContext<'a> {
     pub(crate) const fn new(
         interaction_dispatch: Option<&'a flui_interaction::InteractionDispatchHandle>,
         graph: Option<&'a Reactive>,
+        collects_semantics: bool,
     ) -> Self {
         Self {
             interaction_dispatch,
@@ -72,6 +75,7 @@ impl<'a> RenderObjectContext<'a> {
             element_id: None,
             depth: 0,
             dep_sink: None,
+            collects_semantics,
         }
     }
 
@@ -85,6 +89,7 @@ impl<'a> RenderObjectContext<'a> {
         element_id: ElementId,
         depth: usize,
         dep_sink: &'a parking_lot::Mutex<Vec<DependentRecord>>,
+        collects_semantics: bool,
     ) -> Self {
         Self {
             interaction_dispatch,
@@ -93,6 +98,7 @@ impl<'a> RenderObjectContext<'a> {
             element_id: Some(element_id),
             depth,
             dep_sink: Some(dep_sink),
+            collects_semantics,
         }
     }
 
@@ -100,7 +106,18 @@ impl<'a> RenderObjectContext<'a> {
     /// mounted under a FLUI owner runtime.
     #[must_use]
     pub const fn detached() -> Self {
-        Self::new(None, None)
+        Self::new(None, None, true)
+    }
+
+    /// Whether the presentation this render object belongs to collects its
+    /// semantics tree: assistive technology is attached, or an agent or a
+    /// test holds the tree. What exists only for a collected tree is
+    /// registered while this holds and released when it stops; the
+    /// configuration is pushed again to every render view when it changes.
+    /// `true` outside a runtime, which says nothing else.
+    #[must_use]
+    pub const fn collects_semantics(&self) -> bool {
+        self.collects_semantics
     }
 
     /// Read the nearest ancestor [`InheritedView`] of type `I`, registering a
