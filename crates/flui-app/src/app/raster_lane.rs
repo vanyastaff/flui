@@ -106,6 +106,17 @@ struct LaneStampInner {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+impl LaneStampInner {
+    /// The surface a frame measured with this sample is drawn on.
+    fn surface_key(self) -> flui_layer::SurfaceKey {
+        flui_layer::SurfaceKey {
+            size: self.physical_size,
+            generation: self.surface_generation,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl LaneStamp {
     fn sample(&self) -> LaneStampInner {
         *self.inner.lock()
@@ -369,7 +380,7 @@ impl<B: RasterBackend> RasterLane<B> {
                 tracing::warn!(%error, "raster lane: external texture frame refused");
             }
         }
-        let damage = self.damage.damage_for(&publication, surface.physical_size);
+        let damage = self.damage.damage_for(&publication, surface.surface_key());
         let shown = publication.scene.id();
         // The engine draws the flattened tree until it walks versions itself.
         let snapshot =
@@ -400,12 +411,12 @@ impl<B: RasterBackend> RasterLane<B> {
             // backend's own answer for this very frame.
             PumpOutcome::Presented { disposition, .. } => match disposition {
                 PresentDisposition::Presented => {
-                    self.damage.shown(shown, surface.physical_size);
+                    self.damage.shown(shown, surface.surface_key());
                     SubmitVerdict::Presented
                 }
                 PresentDisposition::NotShown => SubmitVerdict::NotShown,
                 PresentDisposition::NoDamage => {
-                    self.damage.shown(shown, surface.physical_size);
+                    self.damage.shown(shown, surface.surface_key());
                     SubmitVerdict::NoPresent
                 }
             },
@@ -434,6 +445,8 @@ impl<B: RasterBackend> RasterLane<B> {
                 // rather than silently dropped, so the arm stays honest if
                 // that wiring lands without this match being revisited.
                 tracing::warn!("raster lane: frame rejected on the GPU-resource axis");
+                // The resources the image was drawn with are gone with it.
+                self.damage.forget();
                 SubmitVerdict::SurfaceStale
             }
             PumpOutcome::DeviceLost { .. } => {

@@ -388,7 +388,10 @@ nodes are shared. The raster mailbox stays latest-wins (`raster_owner.rs:3-8`); 
 frame's damage folds into the survivor as it does now (`raster_owner.rs:791-797`), and the survivor
 takes the older base.
 
-The raster side holds, per presentation, the version whose image it last committed. It accepts a
+The raster side holds, per presentation, the version whose image it last committed and the
+`SurfaceKey` that image is on (`RasterBase`). A publication for another key, a surface recreated at
+the same size included, is `Full(SurfaceChanged)`, and a lost device or lost GPU resources forget
+both, since the image went with them. It accepts a
 publication's damage when that version and the base share a lineage and `base.seq <= held.seq`,
 because damage from an older base covers every change since a newer one; otherwise the frame is
 `Full(Resync(BaseMismatch))`, or `Full(Resync(RasterReset))` when it holds nothing. After a

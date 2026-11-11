@@ -436,6 +436,10 @@ fn pending_log_contract() {
                 "a_fold_releases_its_contents_after_the_owner_is_released",
                 p::a_fold_releases_its_contents_after_the_owner_is_released,
             ),
+            (
+                "a_recreated_surface_of_the_same_size_draws_in_full",
+                p::a_recreated_surface_of_the_same_size_draws_in_full,
+            ),
         ],
     );
 }

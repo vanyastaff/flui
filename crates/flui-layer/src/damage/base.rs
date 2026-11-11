@@ -1,7 +1,7 @@
 //! The raster side's half of the damage contract (ADR-0304 §7): the version
 //! whose image it holds, and whether a publication's damage applies to it.
 
-use crate::scene::{ScenePublication, SceneVersionId};
+use crate::scene::{ScenePublication, SceneVersionId, SurfaceKey};
 use crate::scene_snapshot::{DamageRegion, FullReason, ResyncReason};
 
 use super::DamageMode;
@@ -10,7 +10,9 @@ use super::DamageMode;
 ///
 /// A [`ScenePublication`] carries the damage since the version the producer
 /// last heard was shown. That damage applies to an image of that version or
-/// of a later one of the same lineage, on a surface of the same size: the
+/// of a later one of the same lineage, on the same surface (size and
+/// configuration generation, so a recreated surface of an unchanged size
+/// holds no image to repair): the
 /// changes since a later version are a subset of it. Anything else is drawn
 /// in full, for the reason it names.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -22,7 +24,7 @@ pub struct RasterBase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Shown {
     version: SceneVersionId,
-    surface: (u32, u32),
+    surface: SurfaceKey,
 }
 
 impl RasterBase {
@@ -37,14 +39,13 @@ impl RasterBase {
         self.mode = mode;
     }
 
-    /// The damage to draw `publication` with on a surface of `surface`
-    /// physical pixels `(width, height)`.
+    /// The damage to draw `publication` with on `surface`.
     #[must_use]
-    pub fn damage_for(&self, publication: &ScenePublication, surface: (u32, u32)) -> DamageRegion {
+    pub fn damage_for(&self, publication: &ScenePublication, surface: SurfaceKey) -> DamageRegion {
         let DamageMode::On { full_above } = self.mode else {
             return DamageRegion::Full(FullReason::DamageOff);
         };
-        if surface.0 == 0 || surface.1 == 0 {
+        if surface.size.0 == 0 || surface.size.1 == 0 {
             return DamageRegion::Full(FullReason::SurfaceChanged);
         }
         let Some(base) = publication.base else {
@@ -61,7 +62,7 @@ impl RasterBase {
         }
         match publication.damage {
             DamageRegion::Region(region) => {
-                let surface_area = f64::from(surface.0) * f64::from(surface.1);
+                let surface_area = f64::from(surface.size.0) * f64::from(surface.size.1);
                 #[expect(
                     clippy::cast_precision_loss,
                     reason = "an area compared against a fraction of the surface"
@@ -77,9 +78,9 @@ impl RasterBase {
         }
     }
 
-    /// The image of `version`, drawn on a surface of `surface` pixels, is on
+    /// The image of `version`, drawn on `surface`, is on
     /// screen.
-    pub fn shown(&mut self, version: SceneVersionId, surface: (u32, u32)) {
+    pub fn shown(&mut self, version: SceneVersionId, surface: SurfaceKey) {
         self.shown = Some(Shown { version, surface });
     }
 
