@@ -339,7 +339,7 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         // returned child is always the one to reconcile; clear the flag now
         // that it has been handed off.
         self.needs_build = false;
-        crate::view::ChildViews::one(dyn_clone::clone_box(&self.view.child as &dyn View))
+        crate::view::ChildViews::copy_of(&self.view.child)
     }
 
     fn pipeline_owner(&self) -> Option<PipelineCell> {

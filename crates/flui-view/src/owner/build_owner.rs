@@ -2090,7 +2090,7 @@ impl BuildOwner {
                 crate::tree::id_reconcile::reconcile_children_by_id(
                     tree,
                     id,
-                    new_views.as_slice(),
+                    &new_views,
                     &mut element_owner,
                 );
             }));

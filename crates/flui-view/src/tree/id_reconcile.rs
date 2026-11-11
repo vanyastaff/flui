@@ -127,7 +127,7 @@ const INLINE_CHILDREN: usize = 8;
 pub(crate) fn reconcile_children_by_id(
     tree: &mut ElementTree,
     parent_id: ElementId,
-    new_views: &[Box<dyn View>],
+    new_views: &crate::view::ChildViews,
     owner: &mut crate::ElementOwner<'_>,
 ) {
     let _reconcile_guard = tree.begin_reconcile(parent_id);
@@ -174,17 +174,10 @@ pub(crate) fn reconcile_children_by_id(
         let Some(old_id) = old_slots[old_top] else {
             break;
         };
-        if !can_update_by_id(tree, old_id, new_views[new_top].as_ref()) {
+        if !can_update_by_id(tree, old_id, &new_views[new_top]) {
             break;
         }
-        let now = update_child(
-            tree,
-            parent_id,
-            old_id,
-            new_views[new_top].as_ref(),
-            new_top,
-            owner,
-        );
+        let now = update_child(tree, parent_id, old_id, &new_views[new_top], new_top, owner);
         if now == old_id {
             scheduling_reasons.push(crate::RebuildReason::ParentUpdate);
             // Top scan is same-slot (old_top == new_top throughout): the
@@ -217,7 +210,7 @@ pub(crate) fn reconcile_children_by_id(
         let Some(old_id) = old_slots[old_bottom - 1] else {
             break;
         };
-        if !can_update_by_id(tree, old_id, new_views[new_bottom - 1].as_ref()) {
+        if !can_update_by_id(tree, old_id, &new_views[new_bottom - 1]) {
             break;
         }
         old_bottom -= 1;
@@ -269,7 +262,7 @@ pub(crate) fn reconcile_children_by_id(
     // does not also remove them.
     for new_offset in 0..(new_bottom - new_top) {
         let new_slot = new_top + new_offset;
-        let new_view = new_views[new_slot].as_ref();
+        let new_view = &new_views[new_slot];
         if let Some(old_idx) = claim_old_for_new(tree, new_view, &mut old_keyed, &old_slots) {
             // Clear the claim by index in O(1) and take its id; `take`
             // leaves `None`, so phase 5b will not also remove this reused
@@ -331,14 +324,7 @@ pub(crate) fn reconcile_children_by_id(
             .take()
             .expect("phase-2 bottom-scan recorded this slot as a match; it cannot be None");
         let new_idx = new_bottom + offset;
-        let now = update_child(
-            tree,
-            parent_id,
-            old_id,
-            new_views[new_idx].as_ref(),
-            new_idx,
-            owner,
-        );
+        let now = update_child(tree, parent_id, old_id, &new_views[new_idx], new_idx, owner);
         // The bottom slice stays at the tail of both lists; it shifts
         // slot only when the middle changed size, i.e. when the deltas
         // are asymmetric (`old_bottom != new_bottom`) — then `Reorder`,

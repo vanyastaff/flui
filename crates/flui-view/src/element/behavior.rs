@@ -1230,7 +1230,7 @@ where
         let mut child_views = crate::view::ChildViews::none();
         if core.view().has_children() {
             core.view().visit_child_views(&mut |child_view| {
-                child_views.push(dyn_clone::clone_box(child_view));
+                child_views.push_copy_of(child_view);
             });
         }
 
@@ -1244,7 +1244,7 @@ where
         tracing::debug!(
             "RenderBehavior::build_into_views completed render_id={:?} children={}",
             self.render_id,
-            child_views.as_slice().len()
+            child_views.len()
         );
 
         child_views

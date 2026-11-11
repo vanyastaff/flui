@@ -35,7 +35,7 @@ use flui_foundation::RenderId;
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
     owner::{LifecycleHook, RecoveredAt, RecoveredPanic},
-    view::{BoxedView, FrameworkError, IntoView, View},
+    view::{FrameworkError, IntoView, View},
 };
 
 // ============================================================================
@@ -310,10 +310,10 @@ where
     A: ElementArity,
     R: IntoView,
 {
-    let boxed: Box<dyn View> = Box::new(child_view.into_view());
+    let child = crate::view::ChildViews::of(child_view.into_view());
     core.clear_dirty();
     tracing::debug!("{}::build_into_views completed", behavior_name);
-    crate::view::ChildViews::one(boxed)
+    child
 }
 
 /// Full `build_into_views` body for behaviors that delegate to a `child()`
@@ -347,13 +347,10 @@ where
         return crate::view::ChildViews::none();
     }
     let child_view = get_child(core.view());
-    // A child held as a `BoxedView` is shared, not copied: the clone is the
-    // same allocation, which keeps the child's identity for the reconcile.
-    let child_view: BoxedView = match child_view.as_any().downcast_ref::<BoxedView>() {
-        Some(shared) => shared.clone(),
-        None => BoxedView::from(dyn_clone::clone_box(child_view)),
-    };
-    single_child_views(core, child_view, behavior_name)
+    let child = crate::view::ChildViews::copy_of(child_view);
+    core.clear_dirty();
+    tracing::debug!("{}::build_into_views completed", behavior_name);
+    child
 }
 
 // ============================================================================
