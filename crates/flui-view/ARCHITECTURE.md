@@ -398,7 +398,7 @@ methods vanish with them, as intended.
 are also exported by `flui-view`, and therefore by `flui::view`. This includes
 `TaskToken`, `BoxedTask`, local scheduling errors, and the timing value types
 used by post-frame callbacks, including the cross-platform `Instant`. Widget
-authors can store explicitly typed capabilities acquired in `init_state` without
+authors can store explicitly typed capabilities acquired in `create_state` or `init_state` without
 adding scheduler dependencies. These are reexports of the existing types, not
 new wrappers or duplicated scheduler state: task-token cancellation and weak
 post-frame ownership keep their existing contracts.

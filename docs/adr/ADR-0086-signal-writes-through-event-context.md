@@ -212,7 +212,7 @@ depend on the reactive graph; gesture callbacks do not receive an `EventCx`.
 *Amended 2026-10-30.* These callbacks lost their `Send` bound
 ([ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) §1) but receive no `cx`:
 `Listenable` lives in `flui-foundation`, below the signal graph. A write from one goes through
-a `WriterSource` captured in `init_state`, `did_change_dependencies` or a `RenderObjectContext`.
+a `WriterSource` captured in `create_state`, `init_state`, `did_change_dependencies` or a `RenderObjectContext`.
 Opening an `EventCx` inside another is allowed and is not transactional: each write applies at
 once, in call order, and writes made before a panic stay applied. A controller mutated during
 `build` refuses the mutation. A listener's panic is held until the notification round ends and
