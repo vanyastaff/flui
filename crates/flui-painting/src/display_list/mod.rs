@@ -280,10 +280,13 @@ impl DisplayList {
     /// Appends a balanced paint run inside its own save/restore scope.
     ///
     /// The run inherits the caller's clip state, but its clips do not affect
-    /// subsequent commands. An empty run records nothing. The caller must
-    /// provide balanced save/restore commands within the run.
+    /// subsequent commands. An empty run records no command but still adds
+    /// its [`non_finite`](Self::non_finite) counts: a run whose every op was
+    /// refused is empty. The caller must provide balanced save/restore
+    /// commands within the run.
     pub fn append_isolated(&mut self, other: DisplayList) {
         if other.is_empty() {
+            self.non_finite = self.non_finite.saturating_add(other.non_finite);
             return;
         }
         self.push(DrawCommand::untransformed(DrawOp::Save));

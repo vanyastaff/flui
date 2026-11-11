@@ -501,6 +501,19 @@ pub(crate) fn a_non_finite_op_is_refused_by_kind() {
     combined.append_isolated(list.clone());
     combined.append(list);
     assert_eq!(combined.non_finite().transform, 6);
+
+    // A run whose every op was refused is empty, and an isolated append
+    // still counts it.
+    let refused = flui_painting::testing::record(|canvas| {
+        canvas.draw_rect(
+            Rect::from_ltrb(0.0, 0.0, f64::NAN, 10.0),
+            &Paint::fill(Color::RED),
+        );
+    });
+    assert!(refused.is_empty());
+    combined.append_isolated(refused);
+    assert_eq!(combined.non_finite().geometry, 1);
+    assert_eq!(combined.non_finite().transform, 6);
 }
 
 /// Font bytes whose destructor panics: user code a recorded paragraph's last
