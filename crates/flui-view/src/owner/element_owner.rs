@@ -37,6 +37,7 @@ use std::{
 
 use std::any::{Any, TypeId};
 
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{CreationSite, ElementId, RenderId, ViewKey};
 use flui_interaction::FocusManager;
 
@@ -633,11 +634,8 @@ impl ElementOwner<'_> {
             .recovered_panics
             .last()
             .expect("BUG: just recorded a recovered panic");
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a tracing subscriber's panic must not lose the recorded panic"
-        )]
-        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // A tracing subscriber's panic must not lose the recorded panic.
+        FirstPanic::new().contain(|| {
             tracing::error!(
                 at = ?panic.at,
                 hook = %panic.hook,
@@ -645,9 +643,7 @@ impl ElementOwner<'_> {
                 panic_message = %panic.error.message,
                 "lifecycle hook panicked; contained"
             );
-        })) {
-            flui_foundation::panic::discard_payload(payload);
-        }
+        });
     }
 
     /// Stage a behavior-attributed panic while its containing transaction is
@@ -656,11 +652,8 @@ impl ElementOwner<'_> {
     /// Reporting is transaction-neutral and cannot discard the staged token.
     /// The containing seam commits it only after the replacement succeeds.
     fn stage_recovered_panic(panic: RecoveredPanic) -> StagedRecoveredPanic {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a tracing subscriber's panic must not discard the staged token"
-        )]
-        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // A tracing subscriber's panic must not discard the staged token.
+        FirstPanic::new().contain(|| {
             tracing::error!(
                 at = ?panic.at,
                 hook = %panic.hook,
@@ -668,9 +661,7 @@ impl ElementOwner<'_> {
                 panic_message = %panic.error.message,
                 "lifecycle hook panicked; recovery transaction pending"
             );
-        })) {
-            flui_foundation::panic::discard_payload(payload);
-        }
+        });
         StagedRecoveredPanic::new(panic)
     }
 
