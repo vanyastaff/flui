@@ -2,140 +2,132 @@
 //!
 //! A control answers pointer contacts, tracks the mouse, describes itself to
 //! assistive technology and marks keyboard focus. Composed from wrappers,
-//! each of those is a render object of its own ([`RenderListener`],
-//! [`RenderMouseRegion`], `RenderSemanticsAnnotations` and two decorated
-//! boxes for the ring). This object does the four for one child, and a part
-//! that is absent costs nothing: it holds no target, describes nothing and
-//! paints nothing (ADR-0322 §1).
+//! each of those is a render object of its own around the child:
+//! [`RenderListener`], [`RenderMouseRegion`], [`RenderSemanticsAnnotations`]
+//! and two decorated boxes for the ring. This object lays out, paints and
+//! hit-tests once for the four (ADR-0322 §1).
 //!
-//! Like the objects it stands for, it stores only data-plane identities
-//! (ADR-0027): the handlers live with the element that owns it.
+//! It does not restate what those objects know. Each behaviour is a *part*:
+//! the value of the object that carries it alone, configured by the same
+//! code that configures it there, and asked the same questions. A part that
+//! is absent registers nothing, describes nothing and paints nothing.
 //!
-//! [`RenderListener`]: super::RenderListener
-//! [`RenderMouseRegion`]: super::RenderMouseRegion
+//! Like its parts, it stores only data-plane identities (ADR-0027): the
+//! handlers live with the element that owns it.
 
-use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_foundation::{RenderId, Single};
 use flui_rendering::{
     RenderUpdateImpact,
     constraints::BoxConstraints,
     context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxLayoutContext, PaintCx},
     hit_testing::{
-        CursorRequest, HitTestBehavior, MouseRegionTarget, MouseTrackerAnnotation, PointerTarget,
+        CursorRequest, HitTestBehavior, MouseTrackerAnnotation, PanZoomTarget, PointerTarget,
+        ScrollTarget, SmartZoomTarget,
     },
+    input_regions::InputRegionSink,
     parent_data::BoxParentData,
+    pipeline::LocalRenderInvalidationHandle,
     semantics::SemanticsConfiguration,
     traits::{RenderBox, TextBaseline},
 };
 
-use super::FocusRingStyle;
+use super::{FocusRingStyle, RenderListener, RenderMouseRegion};
+use crate::RenderSemanticsAnnotations;
 
-/// A single-child box of its child's size that answers the hit test for a
-/// control, carries its pointer and mouse targets, describes its one
-/// semantics configuration and paints its focus ring over the child.
+/// A single-child box of its child's size that is hit as its pointer part
+/// says, carries the targets of its pointer and mouse parts on one hit
+/// entry, describes its semantics part and paints its focus ring over the
+/// child.
 #[derive(Clone, Debug)]
 pub struct RenderInteractive {
-    behavior: HitTestBehavior,
-    pointer_target: Option<PointerTarget>,
-    claims_presses: bool,
-    mouse_target: Option<MouseRegionTarget>,
-    cursor: CursorRequest,
-    semantics: SemanticsConfiguration,
+    pointer: RenderListener,
+    mouse: Option<RenderMouseRegion>,
+    semantics: Option<RenderSemanticsAnnotations>,
     focus_ring: Option<FocusRingStyle>,
+    /// Kept so a semantics part set after the object attached is attached
+    /// too.
+    invalidation: Option<LocalRenderInvalidationHandle>,
     has_child: bool,
 }
 
 impl RenderInteractive {
-    /// An object with no part: it lays out and paints its child, is hit
-    /// where `behavior` says and delivers nothing.
+    /// An object with its pointer part alone: `pointer` decides where the
+    /// object is hit and which contacts it delivers.
     #[must_use]
-    pub fn new(behavior: HitTestBehavior) -> Self {
+    pub fn new(pointer: RenderListener) -> Self {
         Self {
-            behavior,
-            pointer_target: None,
-            claims_presses: false,
-            mouse_target: None,
-            cursor: CursorRequest::Defer,
-            semantics: SemanticsConfiguration::new(),
+            pointer,
+            mouse: None,
+            semantics: None,
             focus_ring: None,
+            invalidation: None,
             has_child: false,
         }
     }
 
-    /// Where the object is hit: over its whole box (`Opaque`), where its
-    /// child is (`DeferToChild`), or where its child is while contacts on
-    /// the rest of the box also reach what is behind (`Translucent`).
+    /// The pointer part: the hit-test behaviour and the pointer, scroll,
+    /// pan-zoom and smart-zoom targets.
     #[must_use]
-    pub const fn behavior(&self) -> HitTestBehavior {
-        self.behavior
+    pub const fn pointer(&self) -> &RenderListener {
+        &self.pointer
     }
 
-    /// Replaces the hit-test behavior. Hit testing reads it at the next
-    /// contact; nothing is laid out or painted again.
-    pub fn set_behavior(&mut self, behavior: HitTestBehavior) {
-        self.behavior = behavior;
+    /// The pointer part, to configure as a [`RenderListener`] is.
+    pub fn pointer_mut(&mut self) -> &mut RenderListener {
+        &mut self.pointer
     }
 
-    /// The pointer target the object's hit entries carry.
+    /// The mouse part: the target of enter, hover and exit, and the cursor.
+    /// Where the object is hit is the pointer part's alone; the mouse part's
+    /// own behaviour and opacity are not read.
     #[must_use]
-    pub const fn pointer_target(&self) -> Option<PointerTarget> {
-        self.pointer_target
+    pub const fn mouse(&self) -> Option<&RenderMouseRegion> {
+        self.mouse.as_ref()
     }
 
-    /// Replaces the pointer target. `claims_presses` says whether the
-    /// control takes presses (it has a press handler or adds recognizers to
-    /// the arena): under an application's title bar such a control is cut
-    /// out of the move area. The input regions are collected on composited
-    /// frames, so a change of the claim marks paint.
-    pub fn set_pointer_target(
+    /// The mouse part, to configure as a [`RenderMouseRegion`] is.
+    pub fn mouse_mut(&mut self) -> Option<&mut RenderMouseRegion> {
+        self.mouse.as_mut()
+    }
+
+    /// Sets or removes the mouse part, returning the previous one so its
+    /// target can be released.
+    pub fn set_mouse(&mut self, mouse: Option<RenderMouseRegion>) -> Option<RenderMouseRegion> {
+        std::mem::replace(&mut self.mouse, mouse)
+    }
+
+    /// The semantics part.
+    #[must_use]
+    pub const fn semantics(&self) -> Option<&RenderSemanticsAnnotations> {
+        self.semantics.as_ref()
+    }
+
+    /// The semantics part, to configure as a [`RenderSemanticsAnnotations`]
+    /// is. The impact its setters return is the object's.
+    pub fn semantics_mut(&mut self) -> Option<&mut RenderSemanticsAnnotations> {
+        self.semantics.as_mut()
+    }
+
+    /// Sets or removes the semantics part, returning the previous one so its
+    /// action route can be released. The object describes itself again.
+    pub fn set_semantics(
         &mut self,
-        target: Option<PointerTarget>,
-        claims_presses: bool,
-    ) -> RenderUpdateImpact {
-        self.pointer_target = target;
-        if self.claims_presses == claims_presses {
-            return RenderUpdateImpact::NONE;
+        semantics: Option<RenderSemanticsAnnotations>,
+    ) -> (Option<RenderSemanticsAnnotations>, RenderUpdateImpact) {
+        let mut previous = std::mem::replace(&mut self.semantics, semantics);
+        if let Some(previous) = &mut previous {
+            RenderBox::detach(previous);
         }
-        self.claims_presses = claims_presses;
-        RenderUpdateImpact::PAINT
-    }
-
-    /// The mouse target that receives enter, hover and exit.
-    #[must_use]
-    pub const fn mouse_region_target(&self) -> Option<MouseRegionTarget> {
-        self.mouse_target
-    }
-
-    /// Replaces the mouse target.
-    pub fn set_mouse_region_target(&mut self, target: Option<MouseRegionTarget>) {
-        self.mouse_target = target;
-    }
-
-    /// The cursor shown over the object.
-    #[must_use]
-    pub const fn cursor(&self) -> CursorRequest {
-        self.cursor
-    }
-
-    /// Replaces the cursor. The mouse tracker reads it at its next pass.
-    pub fn set_cursor(&mut self, cursor: CursorRequest) {
-        self.cursor = cursor;
-    }
-
-    /// The semantics the object describes.
-    #[must_use]
-    pub const fn semantics(&self) -> &SemanticsConfiguration {
-        &self.semantics
-    }
-
-    /// Replaces the semantics configuration, whole: the boundary, the role,
-    /// the flags and the actions of the control are one value.
-    pub fn set_semantics(&mut self, configuration: SemanticsConfiguration) -> RenderUpdateImpact {
-        if self.semantics == configuration {
-            return RenderUpdateImpact::NONE;
+        if let (Some(part), Some(handle)) = (&mut self.semantics, &self.invalidation) {
+            RenderBox::attach(part, handle.clone());
         }
-        self.semantics = configuration;
-        RenderUpdateImpact::SEMANTICS
+        let impact = if previous.is_none() && self.semantics.is_none() {
+            RenderUpdateImpact::NONE
+        } else {
+            RenderUpdateImpact::SEMANTICS
+        };
+        (previous, impact)
     }
 
     /// The focus ring painted over the child, while one is shown.
@@ -160,14 +152,12 @@ impl flui_foundation::inspect::Inspect for RenderInteractive {
     }
 
     fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
-        out.field("behavior", &self.behavior);
-        out.field("has_pointer_target", &self.pointer_target.is_some())
+        out.field("behavior", &self.pointer.behavior());
+        out.field("has_pointer_target", &self.pointer.target().is_some())
             .default(&false);
-        out.field("claims_presses", &self.claims_presses)
+        out.field("has_mouse_part", &self.mouse.is_some())
             .default(&false);
-        out.field("has_mouse_target", &self.mouse_target.is_some())
-            .default(&false);
-        out.field("has_semantics", &self.semantics.has_been_annotated())
+        out.field("has_semantics_part", &self.semantics.is_some())
             .default(&false);
         out.field("focus_ring", &self.focus_ring.is_some())
             .default(&false);
@@ -233,49 +223,79 @@ impl RenderBox for RenderInteractive {
         }
     }
 
-    fn describe_input_regions(
-        &self,
-        _size: Size,
-        regions: &mut flui_rendering::input_regions::InputRegionSink,
-    ) {
-        if self.claims_presses {
-            regions.claim_presses();
-        }
+    fn describe_input_regions(&self, size: Size, regions: &mut InputRegionSink) {
+        RenderBox::describe_input_regions(&self.pointer, size, regions);
     }
 
+    /// The rule of [`RenderListener`], on this object's own child.
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         if !ctx.is_within_own_size() {
             return false;
         }
         // The child first, so what is under the control registers before it.
         let child_hit = self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO);
-        let hit_target = match self.behavior {
+        let behavior = self.pointer.behavior();
+        let hit_target = match behavior {
             HitTestBehavior::Opaque => true,
             HitTestBehavior::DeferToChild | HitTestBehavior::Translucent => child_hit,
         };
-        if !hit_target && self.behavior == HitTestBehavior::Translucent {
+        if !hit_target && behavior == HitTestBehavior::Translucent {
             ctx.register_self_hit_entry();
         }
         hit_target
     }
 
     fn pointer_target(&self) -> Option<PointerTarget> {
-        self.pointer_target
+        RenderBox::pointer_target(&self.pointer)
+    }
+
+    fn scroll_target(&self) -> Option<ScrollTarget> {
+        RenderBox::scroll_target(&self.pointer)
+    }
+
+    fn pan_zoom_target(&self) -> Option<PanZoomTarget> {
+        RenderBox::pan_zoom_target(&self.pointer)
+    }
+
+    fn smart_zoom_target(&self) -> Option<SmartZoomTarget> {
+        RenderBox::smart_zoom_target(&self.pointer)
     }
 
     fn mouse_cursor(&self) -> CursorRequest {
-        self.cursor
+        self.mouse
+            .as_ref()
+            .map_or(CursorRequest::Defer, RenderBox::mouse_cursor)
     }
 
-    fn mouse_tracker_annotation(
-        &self,
-        id: flui_foundation::RenderId,
-    ) -> Option<MouseTrackerAnnotation> {
-        self.mouse_target
-            .map(|target| MouseTrackerAnnotation::new(id, target))
+    fn mouse_tracker_annotation(&self, id: RenderId) -> Option<MouseTrackerAnnotation> {
+        self.mouse
+            .as_ref()
+            .and_then(|mouse| RenderBox::mouse_tracker_annotation(mouse, id))
     }
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
-        *config = self.semantics.clone();
+        if let Some(semantics) = &self.semantics {
+            RenderBox::describe_semantics_configuration(semantics, config);
+        }
+    }
+
+    fn excludes_semantics_subtree(&self) -> bool {
+        self.semantics
+            .as_ref()
+            .is_some_and(RenderBox::excludes_semantics_subtree)
+    }
+
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
+        if let Some(semantics) = &mut self.semantics {
+            RenderBox::attach(semantics, handle.clone());
+        }
+        self.invalidation = Some(handle);
+    }
+
+    fn detach(&mut self) {
+        self.invalidation = None;
+        if let Some(semantics) = &mut self.semantics {
+            RenderBox::detach(semantics);
+        }
     }
 }

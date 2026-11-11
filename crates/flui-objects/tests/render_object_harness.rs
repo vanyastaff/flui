@@ -1489,9 +1489,13 @@ fn harness_interactive_carries_its_pointer_and_mouse_targets_on_one_entry() {
         )
     });
 
-    let mut interactive = RenderInteractive::new(HitTestBehavior::Opaque);
-    let _ = interactive.set_pointer_target(Some(pointer_target), true);
-    interactive.set_mouse_region_target(Some(mouse_target));
+    let mut mouse = RenderMouseRegion::new();
+    mouse.set_mouse_region_target(Some(mouse_target));
+    let mut interactive = RenderInteractive::new(RenderListener::new(
+        Some(pointer_target),
+        HitTestBehavior::Opaque,
+    ));
+    assert!(interactive.set_mouse(Some(mouse)).is_none());
 
     // The child fills a quarter of the box; an opaque control is hit over
     // all of it.
@@ -1552,7 +1556,10 @@ fn harness_interactive_behavior_decides_the_hit_outside_its_child() {
         let run = RenderTester::mount(
             box_node(RenderStack::new())
                 .child(box_node(RenderColoredBox::red(80.0, 80.0)).label("behind"))
-                .child(box_node(RenderInteractive::new(behavior)).label("interactive")),
+                .child(
+                    box_node(RenderInteractive::new(RenderListener::new(None, behavior)))
+                        .label("interactive"),
+                ),
         )
         .with_constraints(loose(200.0))
         .run_frame();
@@ -1576,18 +1583,26 @@ fn harness_interactive_describes_one_semantics_configuration() {
     let mut configuration = labelled("Submit");
     configuration.set_role(SemanticsRole::Button);
     configuration.set_enabled(Some(true));
-    configuration.set_semantics_boundary(true);
 
-    let mut interactive = RenderInteractive::new(HitTestBehavior::Opaque);
+    let mut interactive =
+        RenderInteractive::new(RenderListener::new(None, HitTestBehavior::Opaque));
+    let (previous, impact) = interactive.set_semantics(Some(
+        RenderSemanticsAnnotations::from_configuration(configuration).with_container(true),
+    ));
+    assert!(previous.is_none());
+    assert_eq!(impact, flui_rendering::RenderUpdateImpact::SEMANTICS);
     assert_eq!(
-        interactive.set_semantics(configuration.clone()),
+        interactive
+            .semantics_mut()
+            .expect("the part was set")
+            .set_container(false),
         flui_rendering::RenderUpdateImpact::SEMANTICS,
+        "the part is configured as the object it is",
     );
-    assert_eq!(
-        interactive.set_semantics(configuration),
-        flui_rendering::RenderUpdateImpact::NONE,
-        "an equal configuration invalidates nothing",
-    );
+    let _ = interactive
+        .semantics_mut()
+        .expect("the part was set")
+        .set_container(true);
 
     let run = RenderTester::mount(
         box_node(interactive)
@@ -1614,7 +1629,11 @@ fn harness_interactive_describes_one_semantics_configuration() {
     };
     let trees = [
         box_node(RenderAlign::new(Alignment::TOP_LEFT)).child(
-            box_node(RenderInteractive::new(HitTestBehavior::Opaque)).child(labelled_child()),
+            box_node(RenderInteractive::new(RenderListener::new(
+                None,
+                HitTestBehavior::Opaque,
+            )))
+            .child(labelled_child()),
         ),
         box_node(RenderAlign::new(Alignment::TOP_LEFT)).child(labelled_child()),
     ]
@@ -1636,7 +1655,8 @@ fn harness_interactive_describes_one_semantics_configuration() {
 /// The ring is the last thing painted, inside the box, and only while shown.
 fn harness_interactive_paints_the_focus_ring_over_its_child() {
     let commands = |ring: Option<FocusRingStyle>| {
-        let mut interactive = RenderInteractive::new(HitTestBehavior::Opaque);
+        let mut interactive =
+            RenderInteractive::new(RenderListener::new(None, HitTestBehavior::Opaque));
         let _ = interactive.set_focus_ring(ring);
         let run = RenderTester::mount(
             box_node(interactive).child(box_node(RenderColoredBox::blue(40.0, 40.0))),
@@ -1678,7 +1698,8 @@ fn harness_interactive_paints_the_focus_ring_over_its_child() {
         ringed.join("\n"),
     );
 
-    let mut interactive = RenderInteractive::new(HitTestBehavior::Opaque);
+    let mut interactive =
+        RenderInteractive::new(RenderListener::new(None, HitTestBehavior::Opaque));
     assert_eq!(
         interactive.set_focus_ring(Some(FocusRingStyle::BUILT_IN)),
         flui_rendering::RenderUpdateImpact::PAINT,
@@ -1691,15 +1712,41 @@ fn harness_interactive_paints_the_focus_ring_over_its_child() {
 
 /// A control that takes presses is cut out of a window's move area.
 fn harness_interactive_claims_presses_for_the_input_regions() {
-    let mut interactive = RenderInteractive::new(HitTestBehavior::Opaque);
-    assert_eq!(
-        interactive.set_pointer_target(None, true),
-        flui_rendering::RenderUpdateImpact::PAINT,
-        "the regions are collected at paint",
+    use flui_rendering::input_regions::{InputRegion, InputRegionKind};
+    let regions = |claims: bool| {
+        let mut listener = RenderListener::new(None, HitTestBehavior::Opaque);
+        let _ = listener.set_claims_presses(claims);
+        let run = RenderTester::mount(
+            box_node(RenderInputRegion::new(InputRegionKind::WindowMove)).child(
+                box_node(RenderStack::new())
+                    .child(box_node(RenderColoredBox::red(200.0, 32.0)))
+                    .child(
+                        box_node(RenderInteractive::new(listener))
+                            .child(box_node(RenderColoredBox::green(20.0, 20.0)))
+                            .with_stack_parent_data(
+                                StackParentData::new().with_top(6.0).with_left(10.0),
+                            ),
+                    ),
+            ),
+        )
+        .with_size(Size::new(200.0, 32.0))
+        .run_frame();
+        run.owner().input_regions()
+    };
+    let move_area = InputRegion::new(
+        InputRegionKind::WindowMove,
+        Rect::from_ltrb(0.0, 0.0, 200.0, 32.0),
     );
+    assert_eq!(regions(false), vec![move_area]);
     assert_eq!(
-        interactive.set_pointer_target(None, true),
-        flui_rendering::RenderUpdateImpact::NONE,
+        regions(true),
+        vec![
+            move_area,
+            InputRegion::new(
+                InputRegionKind::WindowContent,
+                Rect::from_ltrb(10.0, 6.0, 30.0, 26.0),
+            ),
+        ],
     );
 }
 
@@ -1711,12 +1758,15 @@ fn harness_interactive_preserves_child_baselines() {
                 .with_text_baseline(TextBaseline::Alphabetic),
         )
         .child(
-            box_node(RenderInteractive::new(HitTestBehavior::Opaque))
-                .label("interactive")
-                .child(box_node(SizedBaselineProbe {
-                    box_size: Size::new(100.0, 50.0),
-                    alphabetic_offset: Some(40.0),
-                })),
+            box_node(RenderInteractive::new(RenderListener::new(
+                None,
+                HitTestBehavior::Opaque,
+            )))
+            .label("interactive")
+            .child(box_node(SizedBaselineProbe {
+                box_size: Size::new(100.0, 50.0),
+                alphabetic_offset: Some(40.0),
+            })),
         )
         .child(
             box_node(SizedBaselineProbe {
