@@ -5,9 +5,10 @@ use std::sync::Arc;
 use flui_painting::paint::TextureId;
 use smallvec::SmallVec;
 
-use flui_foundation::geometry::Rect;
+use flui_foundation::geometry::{Matrix4, Point, Rect};
 
-use super::content::{BoundaryContent, Bounds, EntryIndex, LinkRole};
+use super::content::{BoundaryContent, Bounds, Entry, EntryIndex, LinkRole};
+use super::geometry::Geometry;
 use super::id::{Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::owner::Placement;
 use super::table::{Table, TableCost};
@@ -284,6 +285,56 @@ impl SceneVersion {
             .get(texture.get())
             .into_iter()
             .flat_map(|users| users.iter().map(|address| self.address(*address)))
+    }
+
+    /// The transform the renderer applies at the follower entry `at` so its
+    /// content lands on its leader: what [`resolve_follower_transform`]
+    /// answers over [`Self::flatten`]'s tree, read off the version without
+    /// building one. `None` when nothing is drawn or hit there: `at` is not an
+    /// attached follower of this version, it is unlinked and hidden, a clip
+    /// on the leader's chain leaves out its anchor under
+    /// [`LeaderClip::Hide`](crate::LeaderClip::Hide), a chain is singular or
+    /// not finite, or followers nest past the limit.
+    ///
+    /// [`resolve_follower_transform`]: crate::resolve_follower_transform
+    #[must_use]
+    pub fn follower_transform(&self, at: EntryAddress) -> Option<Matrix4> {
+        if at.node.lineage() != self.lineage() {
+            return None;
+        }
+        let record = self.0.record(at.node.key())?;
+        if !matches!(
+            record.content().entries().get(at.entry.get()),
+            Some(Entry::Effect {
+                layer: crate::Layer::Follower(_),
+                ..
+            })
+        ) {
+            return None;
+        }
+        let geometry = Geometry::shown(&self.0);
+        if !geometry.is_attached(at.node.key()) {
+            return None;
+        }
+        geometry
+            .resolve(
+                Address {
+                    node: at.node.key(),
+                    entry: at.entry,
+                },
+                0,
+            )
+            .ok()
+    }
+
+    /// Where the leader publishing `link` has its top-left corner on the
+    /// surface, as [`leader_origin`](crate::leader_origin) answers over
+    /// [`Self::flatten`]'s tree: `None` without an attached leader, or when a
+    /// transform on its chain is singular or not finite, or a follower on it
+    /// resolves to nothing.
+    #[must_use]
+    pub fn leader_origin(&self, link: LayerLink) -> Option<Point<f64>> {
+        Geometry::shown(&self.0).leader_origin(link)
     }
 
     /// The nodes whose content holds an effect that reads pixels outside the

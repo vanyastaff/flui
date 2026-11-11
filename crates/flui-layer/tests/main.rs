@@ -18,6 +18,8 @@ mod region;
 mod scene;
 #[path = "scene_damage.rs"]
 mod scene_damage;
+#[path = "scene_links.rs"]
+mod scene_links;
 #[path = "texture_registry.rs"]
 mod texture_registry;
 
@@ -437,4 +439,11 @@ fn pending_log_contract() {
 #[test]
 fn patch_damage_covers_diff_damage() {
     scene_damage::patch_damage_covers_diff_damage();
+}
+
+/// A scene version resolves followers and leaders as the tree it flattens to
+/// does (ADR-0304 §8).
+#[test]
+fn a_version_resolves_links_as_its_flattened_tree_does() {
+    scene_links::a_version_resolves_links_as_its_flattened_tree_does();
 }

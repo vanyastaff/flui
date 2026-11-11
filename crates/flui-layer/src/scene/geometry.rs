@@ -11,7 +11,7 @@
 use std::cell::Cell;
 use std::ops::Range;
 
-use flui_foundation::geometry::{Matrix4, Offset, Rect};
+use flui_foundation::geometry::{Matrix4, Offset, Point, Rect};
 use flui_painting::DamageExtent;
 use flui_painting::paint::ImageFilter;
 use smallvec::SmallVec;
@@ -22,6 +22,7 @@ use super::version::{Address, NodeRecord, VersionInner};
 use crate::damage::closure::{device_spread, footprint, moved};
 use crate::layer::Layer;
 use crate::link::{MAX_FOLLOWER_NESTING, invert};
+use crate::tree::annotations::clip_admits;
 use crate::{LayerLink, LeaderClip};
 
 /// One step from a space into the one it holds, as a footprint crosses it
@@ -297,6 +298,10 @@ pub(crate) struct Geometry<'v> {
     version: &'v VersionInner,
     /// What the resolutions it makes report, when a patch is being read.
     watch: Option<&'v Watch<'v>>,
+    /// Whether a follower under [`LeaderClip::Hide`] whose leader's anchor a
+    /// clip on the leader's chain leaves out resolves to nothing, as the
+    /// renderer draws it. A footprint reader leaves it shown and over-reports.
+    clip_hides: bool,
 }
 
 impl<'v> Geometry<'v> {
@@ -304,6 +309,17 @@ impl<'v> Geometry<'v> {
         Self {
             version,
             watch: None,
+            clip_hides: false,
+        }
+    }
+
+    /// A reader that resolves followers exactly as the renderer draws them,
+    /// a leader clip that hides one included.
+    pub(crate) fn shown(version: &'v VersionInner) -> Self {
+        Self {
+            version,
+            watch: None,
+            clip_hides: true,
         }
     }
 
@@ -311,6 +327,7 @@ impl<'v> Geometry<'v> {
     pub(crate) fn watching(version: &'v VersionInner, watch: &'v Watch<'v>) -> Self {
         Self {
             version,
+            clip_hides: false,
             watch: Some(watch),
         }
     }
@@ -686,6 +703,13 @@ impl<'v> Geometry<'v> {
             leader_up.pop();
             follower_up.pop();
         }
+        if self.clip_hides && follower.leader_clip() == LeaderClip::Hide {
+            self.admit_anchor(
+                &leader_up,
+                follower.leader_anchor().along_size(leader.size()),
+                chains,
+            )?;
+        }
         let mut leader_links = Links::new();
         self.up_links(&leader_up, &mut leader_links, chains);
         let mut follower_links = Links::new();
@@ -731,6 +755,53 @@ impl<'v> Geometry<'v> {
                 None => return Err(Unattached),
             }
         }
+    }
+
+    /// Where the leader publishing `link` has its top-left corner on the
+    /// surface: `None` without an attached leader, or when its chain is
+    /// singular, not finite or holds a follower that resolves to nothing.
+    pub(crate) fn leader_origin(self, link: LayerLink) -> Option<Point<f64>> {
+        let at = self.leader(link)?;
+        let mut steps = self.ancestry(at).ok()?;
+        steps.insert(0, Up::Effect(at));
+        let mut links = Links::new();
+        // A follower on the chain resolves one level deep, as `leader_origin`
+        // over a layer tree counts it.
+        self.up_links(&steps, &mut links, 1);
+        let (x, y) = product(&links).ok()?.project_plane_point(0.0, 0.0)?;
+        (x.is_finite() && y.is_finite()).then(|| Point::new(x, y))
+    }
+
+    /// Whether every clip above the leader on its chain (`steps`, innermost
+    /// first and the leader itself first of all) admits the leader's anchor
+    /// point, projected through the chain below that clip, as
+    /// `resolve_follower_transform` tests it: `Hidden` when one leaves it out.
+    fn admit_anchor(self, steps: &[Up], anchor: Offset, nesting: usize) -> Result<(), Unresolved> {
+        let mut chain = Matrix4::IDENTITY;
+        for (index, step) in steps.iter().enumerate() {
+            let mut links = Links::new();
+            match *step {
+                Up::Place(node) => links.push(Link::Matrix(placement(self.record(node)))),
+                Up::Effect(at) => {
+                    let Entry::Effect { layer, .. } =
+                        &self.record(at.node).content().entries()[at.entry.get()]
+                    else {
+                        continue;
+                    };
+                    if index > 0 {
+                        let (x, y) = chain
+                            .project_plane_point(anchor.dx, anchor.dy)
+                            .ok_or(Unresolved::Hidden)?;
+                        if !clip_admits(layer, Point::new(x, y)) {
+                            return Err(Unresolved::Hidden);
+                        }
+                    }
+                    self.effect_links(layer, at, &mut links, nesting);
+                }
+            }
+            chain = product(&links)? * chain;
+        }
+        Ok(())
     }
 
     /// The links of `steps` (innermost first), outermost first.
