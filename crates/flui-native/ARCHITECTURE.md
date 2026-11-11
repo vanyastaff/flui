@@ -4677,13 +4677,14 @@ feedback. `FluiView` holds a taken drop's `ClipData` and URI permissions under t
 (`drag::android::drops::java_key`) until the target concludes it, and a request reads one
 representation from it under its limits (`clip::delivered`): text, HTML and the URI list on the
 requesting thread, a URI's bytes on a thread of their own, at most `drops::MAX_READS` at once,
-answered `SourceGone` when the offer retires first and `TimedOut` past `drops::READ_TIMEOUT`, when
+answered `SourceGone` when the offer retires first and `TimedOut` `drops::READ_TIMEOUT` after it
+was asked for, its wait for a place included (a waiting request times out where it waits), when
 the view cancels the open and closes the stream (`cancelDropRead`, on a cancel worker of the
 transport's, so neither the owner thread nor the watch waits on it) and the read keeps its place
 until its thread ends; at most `drops::MAX_WAITING` wait, and past them a request is `Busy`. A
-thread that cannot start answers what it was for (`drops::settle`): without the watch the running
-reads answer `SourceGone` and none starts with no deadline, a read with no thread answers
-`SourceGone`, and a cancel worker that cannot start is tried again by the watch every
+thread that cannot start answers what it was for (`drops::settle`): without the watch the waiting
+requests and running reads answer `SourceGone` and none starts with no deadline, a read with no
+thread answers `SourceGone`, and a cancel worker that cannot start is tried again by the watch every
 `drops::CANCEL_RETRY`. The view lets go of a refused drop at once,
 and of every held one when it leaves the window. Requests are completed, and reading threads
 started, with the drops unlocked (`drops::After`).

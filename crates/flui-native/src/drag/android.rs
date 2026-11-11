@@ -364,9 +364,10 @@ mod drops {
     /// its entry back when the next is asked for.
     pub(super) const MAX_WAITING: usize = 64;
 
-    /// How long a read of a URI's bytes may take, as the X11 and Wayland
+    /// How long a request for a URI's bytes may take from when it is
+    /// accepted, its wait for a place included, as the X11 and Wayland
     /// targets give a fetch: past it the request is answered
-    /// [`TransferError::TimedOut`] and the Java read is unblocked.
+    /// [`TransferError::TimedOut`] and a Java read it started is unblocked.
     pub(super) const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
     /// How often the watch tries again to start a cancel worker that could
@@ -454,6 +455,9 @@ mod drops {
         descriptor: RepresentationDescriptor,
         limits: TransferLimits,
         completer: TransferCompleter,
+        /// When the request times out, set when it is accepted: a read that
+        /// takes a place keeps it, so it bounds the whole wait.
+        deadline: Instant,
     }
 
     /// A read of a URI's bytes holding a place until its thread ends; its
@@ -689,7 +693,10 @@ mod drops {
                         descriptor,
                         limits,
                         completer,
+                        deadline: now + READ_TIMEOUT,
                     });
+                    // The watch times it while it waits too.
+                    self.ensure_watch(after);
                     self.start_waiting(now, after);
                     // Cancellations a worker could not start for try again.
                     self.queue_cancels(Vec::new(), after);
@@ -727,9 +734,18 @@ mod drops {
             Ok((source, descriptor))
         }
 
+        /// A watch starts through `after` when none runs.
+        fn ensure_watch(&mut self, after: &mut After) {
+            if !self.watching {
+                self.watching = true;
+                after.watch = true;
+            }
+        }
+
         /// Give the waiting reads the places the running ones leave, in
-        /// order, each due by [`READ_TIMEOUT`] from `now`; one whose request
-        /// was dropped meanwhile is let go of.
+        /// order, each keeping the deadline its request was accepted with;
+        /// one whose request was dropped meanwhile is let go of, and one past
+        /// its deadline at `now` times out.
         fn start_waiting(&mut self, now: Instant, after: &mut After) {
             while self.reading.len() < MAX_READS {
                 let Some(wanted) = self.waiting.pop_front() else {
@@ -737,6 +753,10 @@ mod drops {
                 };
                 if wanted.completer.is_cancelled() {
                     after.gone.push(wanted.completer);
+                    continue;
+                }
+                if wanted.deadline <= now {
+                    after.timed_out.push(wanted.completer);
                     continue;
                 }
                 let Ok(ticket) = self.tickets.next() else {
@@ -748,7 +768,7 @@ mod drops {
                     Reading {
                         id: wanted.id,
                         completer: Some(wanted.completer),
-                        deadline: now + READ_TIMEOUT,
+                        deadline: wanted.deadline,
                         entered: false,
                         cancelled: false,
                     },
@@ -759,10 +779,7 @@ mod drops {
                     descriptor: wanted.descriptor,
                     limits: wanted.limits,
                 });
-                if !self.watching {
-                    self.watching = true;
-                    after.watch = true;
-                }
+                self.ensure_watch(after);
             }
         }
 
@@ -803,11 +820,12 @@ mod drops {
 
         /// The watch's turn at `now`: each read past its deadline is answered
         /// [`TransferError::TimedOut`] and its Java read unblocked, keeping
-        /// its place until its thread ends. Returns when to look again, the
-        /// earliest deadline still to come, or [`CANCEL_RETRY`] from `now`
-        /// while cancellations wait for a worker that could not start, which
-        /// this turn starts again; `None` ends the watch, and the next read to
-        /// start starts another.
+        /// its place until its thread ends, and each request still waiting
+        /// for a place past its deadline is answered the same and let go of.
+        /// Returns when to look again, the earliest deadline still to come,
+        /// or [`CANCEL_RETRY`] from `now` while cancellations wait for a
+        /// worker that could not start, which this turn starts again; `None`
+        /// ends the watch, and the next request starts another.
         pub(super) fn expire(&mut self, now: Instant, after: &mut After) -> Option<Instant> {
             // Cancellations queued with no worker are left by one that could
             // not start ([`Self::uncancel`]): the watch stays to try again.
@@ -826,6 +844,19 @@ mod drops {
                 } else {
                     next = Some(next.map_or(reading.deadline, |next| next.min(reading.deadline)));
                 }
+            }
+            // A waiting request times out where it waits: no read has to end
+            // for it, so reads that block for good hold up no deadline.
+            let (late, kept): (VecDeque<Wanted>, VecDeque<Wanted>) =
+                std::mem::take(&mut self.waiting)
+                    .into_iter()
+                    .partition(|wanted| wanted.deadline <= now);
+            self.waiting = kept;
+            after
+                .timed_out
+                .extend(late.into_iter().map(|wanted| wanted.completer));
+            if let Some(first) = self.waiting.iter().map(|wanted| wanted.deadline).min() {
+                next = Some(next.map_or(first, |next| next.min(first)));
             }
             self.watching = next.is_some();
             self.queue_cancels(unblock, after);
@@ -861,12 +892,18 @@ mod drops {
             }
         }
 
-        /// The watch could not start, so nothing would time the running
-        /// reads: each is refused [`TransferError::SourceGone`] through
-        /// `after` and stopped, a thread inside its Java read unblocked, and
-        /// the next read to start tries for a watch again.
+        /// The watch could not start, so nothing would time the accepted
+        /// requests: each waiting one and each running read is refused
+        /// [`TransferError::SourceGone`] through `after`, a running read
+        /// stopped and its thread unblocked when inside its Java read, and
+        /// the next request tries for a watch again.
         pub(super) fn unwatched(&mut self, after: &mut After) {
             self.watching = false;
+            after.gone.extend(
+                std::mem::take(&mut self.waiting)
+                    .into_iter()
+                    .map(|wanted| wanted.completer),
+            );
             let mut unblock = Vec::new();
             for (ticket, reading) in &mut self.reading {
                 if reading.cancelled {
@@ -993,9 +1030,10 @@ mod drops {
     /// requests whose offer retired or whose read timed out, then start the
     /// cancel worker, the watch and the reads that found a place through
     /// `spawn`, at `now`. A thread that cannot start leaves no accepted
-    /// request unanswered: without the watch no read runs with no deadline,
-    /// so every running read is refused [`TransferError::SourceGone`]
-    /// ([`Drops::unwatched`]) and none of those just placed is started; a
+    /// request unanswered: without the watch no request waits with no
+    /// deadline, so every waiting request and running read is refused
+    /// [`TransferError::SourceGone`] ([`Drops::unwatched`]) and none of the
+    /// reads just placed is started; a
     /// read that cannot start is refused the same and gives its place on;
     /// the cancel worker that cannot start is tried again by the watch
     /// ([`Drops::uncancel`]). A waker's panic is raised once everything is

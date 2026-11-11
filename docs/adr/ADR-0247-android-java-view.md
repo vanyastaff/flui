@@ -87,7 +87,8 @@ handwriting, and brings Gradle and AppCompat with it. The research note compares
    before it asks for the drop, so nothing of the clip crosses JNI then; a request reads one
    representation from the held clip under its limits, the length counted before anything is
    copied: the text, HTML and URI list at once, a URI's bytes through the content resolver on a
-   thread of their own, at most four at once and each within five seconds, past which its open is
+   thread of their own, at most four at once, each request answered within five seconds of being
+   asked, its wait for a place included; past them an open it started is
    cancelled and its stream closed by a cancel worker, off the owner thread; at most 64 more
    wait, and a request past them is refused
    `Busy`. Concluding the drop lets go of its clip and

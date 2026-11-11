@@ -398,10 +398,10 @@ fn waiting_reads_are_bounded() {
 
 /// A read past `READ_TIMEOUT` is answered `TimedOut` and, once inside its
 /// Java read, is asked to stop exactly once; it keeps its place until its
-/// thread ends, and only then does a waiting read start. One that never
-/// entered its Java read is sent no cancellation and finds nothing to read.
-/// The watch looks again at the next deadline, ends when no read is left to
-/// time, and the next read to start starts another.
+/// thread ends, while a request waiting for that place times out where it
+/// waits. One that never entered its Java read is sent no cancellation and
+/// finds nothing to read. The watch looks again at the next deadline, ends
+/// when no request is left to time, and the next request starts another.
 fn a_read_past_its_deadline_times_out() {
     let mut drops = Drops::default();
     let id = hovering(&mut drops, &["image/png"]);
@@ -461,12 +461,16 @@ fn a_read_past_its_deadline_times_out() {
         None,
         "the watch ends"
     );
-    assert_eq!(after.timed_out.len(), MAX_READS - 1);
+    assert_eq!(
+        after.timed_out.len(),
+        MAX_READS,
+        "the queued request times out where it waits, with the reads ahead of it"
+    );
     assert!(!after.cancel_worker, "no thread entered those Java reads");
     for completer in std::mem::take(&mut after.timed_out) {
         completer.complete(Err(TransferError::TimedOut));
     }
-    for request in &mut rest {
+    for request in rest.iter_mut().chain(std::iter::once(&mut queued)) {
         assert!(matches!(
             poll(request),
             Poll::Ready(Err(TransferError::TimedOut))
@@ -484,13 +488,15 @@ fn a_read_past_its_deadline_times_out() {
             .is_none(),
         "what it read late answers nothing"
     );
+    assert!(after.is_empty(), "nothing waits for its place");
+    let mut fresh = wanted(&mut drops, id, late, &mut after);
     let [next]: [UriRead; 1] = std::mem::take(&mut after.start)
         .try_into()
-        .expect("its place goes to the queued read once its thread ends");
-    assert!(after.watch, "the next read starts another watch");
+        .expect("its place goes to the next request once its thread ends");
+    assert!(after.watch, "the next request starts another watch");
     assert_eq!(drops.expire(late, &mut after), Some(late + READ_TIMEOUT));
     assert!(drops.begin_read(next.ticket));
-    assert!(poll(&mut queued).is_pending());
+    assert!(poll(&mut fresh).is_pending());
 }
 
 /// Two reads that entered their Java reads, `MAX_READS` placed in all: the
@@ -694,7 +700,7 @@ fn a_watch_that_cannot_start_refuses_its_reads() {
             Spawn::CancelWorker => Ok(()),
         },
     );
-    assert_eq!(watches, 2, "each read placed asks for a watch");
+    assert_eq!(watches, 1, "the waiting read is refused with them");
     assert_eq!(reads, 0, "no read starts without a deadline");
     for request in &mut requests {
         assert!(
@@ -834,6 +840,54 @@ fn with_no_thread_every_request_is_answered() {
     }
 }
 
+/// A request waiting for a place times out within the deadline it was
+/// accepted with, though the four reads ahead of it block for good, and the
+/// watch stays for it after theirs have passed.
+fn a_waiting_request_times_out_behind_blocked_reads() {
+    let drops = Mutex::new(Drops::default());
+    let start = Instant::now();
+    let mut after = After::default();
+    let (mut running, _reads) = entered_reads(&mut drops.lock(), start, &mut after);
+    let id = hovering(&mut drops.lock(), &["image/png"]);
+    dropped(&mut drops.lock(), id);
+    let asked = start + Duration::from_secs(4);
+    let mut fifth = wanted(&mut drops.lock(), id, asked, &mut after);
+    assert!(after.start.is_empty(), "it waits for a place");
+    let clock = std::cell::Cell::new(asked);
+    let answered = std::cell::RefCell::new(None);
+    super::watch(
+        &drops,
+        || clock.get(),
+        |next| clock.set(next),
+        |mut after| {
+            for completer in std::mem::take(&mut after.timed_out) {
+                completer.complete(Err(TransferError::TimedOut));
+            }
+            let mut answered = answered.borrow_mut();
+            if answered.is_none()
+                && let Poll::Ready(result) = poll(&mut fifth)
+            {
+                *answered = Some((result, clock.get()));
+            }
+        },
+    );
+    let answered = answered.into_inner();
+    assert!(
+        matches!(
+            answered,
+            Some((Err(TransferError::TimedOut), at)) if at == asked + READ_TIMEOUT
+        ),
+        "it times out at the deadline it was accepted with, not {answered:?}"
+    );
+    for request in &mut running {
+        assert!(matches!(
+            poll(request),
+            Poll::Ready(Err(TransferError::TimedOut))
+        ));
+    }
+    assert!(drops.lock().waiting.is_empty(), "and it is let go of");
+}
+
 /// FLUI's own drag dropped on its own target reports the action the target
 /// took, once.
 fn our_own_drop_reports_its_action() {
@@ -902,6 +956,10 @@ fn android_drop_state() {
             (
                 "with_no_thread_every_request_is_answered",
                 with_no_thread_every_request_is_answered,
+            ),
+            (
+                "a_waiting_request_times_out_behind_blocked_reads",
+                a_waiting_request_times_out_behind_blocked_reads,
             ),
             (
                 "a_read_past_its_deadline_times_out",
