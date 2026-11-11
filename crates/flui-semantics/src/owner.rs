@@ -518,6 +518,7 @@ impl OfferRecord {
 fn reads_text_as_number(config: &crate::SemanticsConfiguration) -> bool {
     config.effective_actions_as_bits() & SemanticsAction::SetValue.value() == 0
         && crate::applicability::retain_applicable(config.attributes())
+            .rare()
             .numeric_range
             .is_some()
 }
@@ -1415,6 +1416,7 @@ impl SemanticsOwner {
         // the one the handler now serves.
         if let ActionCall::SetNumericValue(value) = call
             && !(published
+                .rare()
                 .numeric_range
                 .is_some_and(|range| range.contains(value))
                 && delivered.range_admits(value))

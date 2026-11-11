@@ -53,9 +53,10 @@ event's dispatch and writes through its `EventCx` — and `CallbackAction::new` 
 `Fn(&mut EventCx<'_>, &T) -> R`. `Actions::maybe_invoke` is removed: its only caller could be
 `build`, which has no event context; `is_enabled` and `to_key_event_result` stay queries. Each
 `Actions` widget
-layers its bindings over the enclosing chain at provide time — `HashMap<TypeId, ErasedAction>`,
-a nearer scope's mapping for a type **replacing** the enclosing one — so a single
-nearest-provider lookup gives what Flutter's ancestor walk gives. As in Flutter, a disabled
+publishes at provide time a link that shares its bindings and names the enclosing chain. A lookup
+walks the links outward and stops at the first scope that declares the type, a nearer scope's
+mapping for a type **replacing** the enclosing one: Flutter's ancestor walk over the scopes alone,
+and layering copies no binding of an enclosing scope. As in Flutter, a disabled
 nearer action stops resolution at its own scope; it does not fall through to an enclosing
 mapping (`actions_test.dart`, "Disabled actions stop propagation to an ancestor").
 

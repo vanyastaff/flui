@@ -815,8 +815,9 @@ pub struct StatefulBehavior<V: StatefulView> {
     /// The view `create_state` saw, held while a parent updates this element
     /// before its first build. `did_update_view` then runs right after
     /// `init_state`, so a state never observes an update before its
-    /// initialization and still learns of every configuration change.
-    pending_update: Option<V>,
+    /// initialization and still learns of every configuration change. Boxed:
+    /// it is held only in that window, and a view can be a kilobyte.
+    pending_update: Option<Box<V>>,
     /// The view or the dependencies changed since `ViewState::apply_view`
     /// last ran; the next build calls it first.
     apply_pending: bool,
@@ -1075,7 +1076,7 @@ where
         self.apply_pending = true;
         if !self.initialized {
             if self.pending_update.is_none() {
-                self.pending_update = Some(old_view.clone());
+                self.pending_update = Some(Box::new(old_view.clone()));
             }
             return;
         }
