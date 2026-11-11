@@ -46,30 +46,28 @@ jobs:
           tool: cargo-nextest@0.9
       - name: Build
         run: cargo nextest run -p flui-native --locked --test platform_it --no-run
-      - name: A real Alt+F4 and the rows with TabTip running, then after killing it
+      - name: When the touch keyboard host appears after a touch
         run: |
           set +e
           one() {
-            echo "::group::$1"
-            FLUI_NATIVE_WINDOW_CONTRACT_CHILD=$1 cargo nextest run -p flui-native --locked --test platform_it --no-capture -E 'test(=contract::test_window_lifecycle_contract)' 2>&1 | grep -E "panicked|assertion|left:|right:|CANNOT_VERIFY|PASS|FAIL|FLUI_DIAG"
-            echo "::endgroup::"
+            FLUI_NATIVE_WINDOW_CONTRACT_CHILD=$1 cargo nextest run -p flui-native --locked --test platform_it --no-capture -E 'test(=contract::test_window_lifecycle_contract)' 2>&1 | grep -E "PASS \[|FAIL \["
           }
-          tabtip() { echo "TabTip: $(tasklist //fi 'imagename eq TabTip.exe' //fo csv //nh)"; }
-          six() {
-            for row in unhandled_system_key_closes_window allowed_system_key_closes_window system_key_close_honours_veto a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once a_pointer_routed_mouse_hovers_the_window a_leave_callback_that_hovers_again_keeps_the_hover; do one $row; done
+          watch() {
+            start=$(date +%s%N)
+            for i in $(seq 1 80); do
+              if tasklist //fi 'imagename eq TabTip.exe' //fo csv //nh | grep -q TabTip; then
+                echo "TabTip after $(( ($(date +%s%N) - start) / 1000000 )) ms"; return
+              fi
+              sleep 0.25
+            done
+            echo "no TabTip within 20 s"
           }
-          tabtip
-          one diag_real_alt_f4_closes_the_foreground_window
-          one two_injected_touches_arrive_as_one_pointer_frame
-          sleep 15
-          tabtip
-          one diag_real_alt_f4_closes_the_foreground_window
-          six
-          taskkill //F //IM TabTip.exe
-          sleep 3
-          tabtip
-          one diag_real_alt_f4_closes_the_foreground_window
-          six
-          sleep 15
-          tabtip
+          for row in focus_loss_ends_a_touch_and_silences_its_tail synthetic_touch_and_pen_reach_native_pointer_dispatch two_injected_touches_arrive_as_one_pointer_frame a_captured_native_pointer_session_replays_to_what_it_delivered; do
+            echo "== $row"
+            one $row & pid=$!
+            watch
+            wait $pid
+            taskkill //F //IM TabTip.exe
+            sleep 2
+          done
           exit 0
