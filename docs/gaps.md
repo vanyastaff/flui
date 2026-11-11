@@ -517,6 +517,15 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - **ADR-0313 §3.** The render slab keeps its hand-rolled slot generations (`crates/flui-rendering/src/storage/node_slab.rs`, its `RETIRED` sentinel) instead of the ledger; the adoption lands with #2241.
 - **ADR-0322 §1–§3, §7.** Built: §4 (`StatefulRenderView`, `RenderViewState`), §5 (`ProvidedValue`, `Provided`, `provide`), with `Focus`, `FocusScope` and `Actions` publishing from their own elements, and of §1 `RenderInteractive`, the `FocusHost` and `RecognizerHost` that the wrappers and the node run on, and the node itself with its pointer, tap, focus, focus-ring, action and semantics parts, which `RawButton` mounts; §6 holds for `RawButton` (`raw_button_a11y_tree_matches_wrappers`, `raw_button_in_scrollable_contests_like_gesture_detector`, `nested_raw_button_contests_like_gesture_detector`). Not built: the node is `pub(crate)` and has no mouse part, recognizer slots beyond tap, or states controller, so no catalog control can mount it (§1, §7); enablement is still each part's own switch (§2); `WidgetStates` is a `u8` without `FocusVisible` (`crates/flui-widgets/src/widget_state.rs`), and `InkWell` rebuilds on every state change (`packages/flui-material/src/ink_well.rs`) (§3). The order is §2 and §3 on the node, then the control families; the numbers that close it are in [An interactive widget costs eighteen elements](#an-interactive-widget-costs-eighteen-elements).
 
+### Two rest distances for logical pixels
+
+> **Environments:** all · **Who it hurts:** Apps that mix a scroll fling with an animated offset, size or rect on a dense display, where the two settle at visibly different precision · **Parity:** none (animation has no row)
+
+- A scroll fling rests within half a device pixel: `Tolerance::for_device_pixel_ratio` gives `0.5 / dpr` logical pixels (`crates/flui-animation/src/simulation.rs`, used by `crates/flui-widgets/src/scroll/scroll_physics.rs`; ADR-0155, ADR-0200). At a ratio of 3 that is about 0.17 logical pixels.
+- Animated geometry rests within a fixed 0.01 logical pixels whatever the display: the converters' rest thresholds in `crates/flui-animation/src/value_conversion.rs` (ADR-0186), and the controller's fling tolerance `FLING_TOLERANCE` in `crates/flui-animation/src/controller.rs`. That is about 17 times finer than the fling at a ratio of 3.
+- No record chooses one source for rest in logical pixels or says why the two differ. A candidate ADR after the render-scaling gates.
+- The entry closes when one rule decides rest in logical pixels for both, or an accepted record states why they differ, with a test of each.
+
 ### No scroll notifications
 
 > **Environments:** all · **Who it hurts:** Widgets that react to a scroll view below them (a pull-down header, an infinite-scroll loader, a scroll-linked fade) · **Parity:** none yet (scrolling widgets have no row)
