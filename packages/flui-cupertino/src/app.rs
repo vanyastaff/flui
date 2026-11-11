@@ -24,8 +24,10 @@
 //! - **`CupertinoUserInterfaceLevel`** — no elevation ambient exists in FLUI
 //!   yet; dynamic colors already resolve elevation as their base variant
 //!   (see `colors.rs`).
-//! - **`DefaultSelectionStyle`**, **`ScrollConfiguration`** /
-//!   `CupertinoScrollBehavior` — neither widget exists in FLUI yet.
+//! - **`DefaultSelectionStyle`** — the app does not install one yet.
+//! - **`CupertinoScrollBehavior`** — the app installs no `ScrollConfiguration`,
+//!   so its scroll views follow `DefaultScrollBehavior` until the Cupertino
+//!   behavior lands with its scrollbar and overscroll indicator.
 //! - **`HeroControllerScope`** — FLUI's `Navigator` auto-installs a default
 //!   hero controller, so no explicit scope is needed here.
 //! - **`CupertinoLocalizations`** — FLUI ships no Cupertino resource set

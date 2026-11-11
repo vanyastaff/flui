@@ -242,8 +242,8 @@ pub trait ScrollPhysics: std::fmt::Debug {
     /// Create a `Simulation` that coasts the viewport to rest after the user
     /// lifts their finger.
     ///
-    /// Returns `None` when the velocity is below the minimum fling threshold
-    /// (or when the scroll is already at rest at a valid position), so the
+    /// Returns `None` for a zero velocity, which the drag gives a release
+    /// below the platform's minimum fling velocity, so the
     /// caller can skip animation entirely.
     ///
     /// The simulation positions are in logical pixels, matching
@@ -286,39 +286,95 @@ pub type SharedScrollPhysics = Rc<dyn ScrollPhysics>;
 /// release from outside the range (the content shrank under a run, or the
 /// offset was written past an edge) springs back to the nearest extent on a
 /// critically damped spring, whatever its velocity.
-#[derive(Debug, Clone, Copy)]
+///
+/// Whether a release flings at all is the drag gesture's question: its
+/// release velocity is already zero below the platform's minimum fling
+/// velocity (`GestureSettings::min_fling_velocity`), and a zero velocity
+/// starts no fling here.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClampingScrollPhysics {
-    /// Below this absolute velocity (logical px / s) no fling is started.
-    ///
-    /// Default is ~50 px/s; 0 px/s disables the threshold (always
-    /// fling). Kept as a field rather than a constant so callers can tune it
-    /// without a full custom implementation.
-    pub min_fling_velocity_px_per_sec: f64,
-    /// Friction drag coefficient for the fling deceleration. Must be in `(0,
-    /// 1)`. The default is approximately `0.135` in
-    /// `BoundedFrictionSimulation`.
-    pub fling_drag_coefficient: f64,
+    fling_drag_coefficient: f64,
 }
 
 impl ClampingScrollPhysics {
-    /// Default Android-matching physics (drag ≈ 0.135, min-fling ≈ 50 px/s).
+    /// The fling drag coefficient of [`Self::new`].
+    pub const DEFAULT_FLING_DRAG_COEFFICIENT: f64 = 0.135;
+
+    /// Android-matching physics: a fling keeps
+    /// [`Self::DEFAULT_FLING_DRAG_COEFFICIENT`] of its velocity each second.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
-            min_fling_velocity_px_per_sec: 50.0,
-            fling_drag_coefficient: 0.135,
+            fling_drag_coefficient: Self::DEFAULT_FLING_DRAG_COEFFICIENT,
         }
+    }
+
+    /// Physics whose fling keeps `fling_drag_coefficient` of its velocity
+    /// each second.
+    ///
+    /// # Errors
+    ///
+    /// [`ScrollPhysicsError::OutOfRange`] when the coefficient is not in the
+    /// open range `(0, 1)`, NaN included.
+    pub fn try_new(fling_drag_coefficient: f64) -> Result<Self, ScrollPhysicsError> {
+        Ok(Self {
+            fling_drag_coefficient: unit_open(
+                ScrollPhysicsParameter::FlingDragCoefficient,
+                fling_drag_coefficient,
+            )?,
+        })
+    }
+
+    /// The share of its velocity a fling keeps each second.
+    #[must_use]
+    pub const fn fling_drag_coefficient(&self) -> f64 {
+        self.fling_drag_coefficient
     }
 }
 
 impl Default for ClampingScrollPhysics {
-    /// Returns the same values as [`ClampingScrollPhysics::new`] — notably
-    /// `fling_drag_coefficient = 0.135`, which `#[derive(Default)]` cannot
-    /// provide (it would zero-initialize every field, and a drag coefficient of
-    /// 0 is invalid for `BoundedFrictionSimulation`).
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// A [`ScrollPhysics`] parameter a constructor checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ScrollPhysicsParameter {
+    /// The share of its velocity a fling keeps each second.
+    FlingDragCoefficient,
+    /// The share of a pull at the edge that moves overscrolled content.
+    OverscrollSpringCoefficient,
+}
+
+/// Why a physics constructor refused its parameters.
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ScrollPhysicsError {
+    /// The parameter is not in the open range `(0, 1)`, or is NaN.
+    #[error("{parameter:?} must be in the open range (0, 1), got {value}")]
+    OutOfRange {
+        /// The parameter refused.
+        parameter: ScrollPhysicsParameter,
+        /// The value given.
+        value: f64,
+    },
+}
+
+/// `value` when it lies in the open range `(0, 1)`.
+fn unit_open(parameter: ScrollPhysicsParameter, value: f64) -> Result<f64, ScrollPhysicsError> {
+    if value > 0.0 && value < 1.0 {
+        Ok(value)
+    } else {
+        Err(ScrollPhysicsError::OutOfRange { parameter, value })
+    }
+}
+
+/// Whether a release at `velocity_px_per_sec` starts a fling: the drag
+/// already zeroed a release below the platform's minimum.
+fn flings(velocity_px_per_sec: f64) -> bool {
+    velocity_px_per_sec != 0.0 && velocity_px_per_sec.is_finite()
 }
 
 impl ScrollPhysics for ClampingScrollPhysics {
@@ -354,8 +410,8 @@ impl ScrollPhysics for ClampingScrollPhysics {
             .ok()?;
             return Some(Box::new(simulation));
         }
-        // Skip fling below the configured threshold.
-        if velocity_px_per_sec.abs() < self.min_fling_velocity_px_per_sec {
+        // A release the drag zeroed starts no fling.
+        if !flings(velocity_px_per_sec) {
             return None;
         }
         // A NaN position or an invalid drag: no fling.
@@ -371,7 +427,7 @@ impl ScrollPhysics for ClampingScrollPhysics {
     }
 
     fn boundary_velocity(&self, metrics: &ScrollMetrics, velocity_px_per_sec: f64) -> Option<f64> {
-        if velocity_px_per_sec.abs() < self.min_fling_velocity_px_per_sec
+        if !flings(velocity_px_per_sec)
             || metrics.pixels < metrics.min_scroll_extent
             || metrics.pixels > metrics.max_scroll_extent
         {
@@ -410,33 +466,78 @@ impl ScrollPhysics for ClampingScrollPhysics {
 /// a spring returns the position to the nearest edge; a fling inside the
 /// range that friction would carry past an edge overscrolls on the same
 /// spring and returns ([`BouncingScrollSimulation`]).
+///
+/// As with [`ClampingScrollPhysics`], whether a release flings is the drag
+/// gesture's question.
 #[derive(Debug, Clone, Copy)]
 pub struct BouncingScrollPhysics {
-    /// Resistance applied when dragging past the edge, default 0.52: the
-    /// share of a pull at the edge that moves the content, falling with the
-    /// square of the viewport share left as the overscroll grows.
-    /// Range `(0, 1)`: smaller = stiffer.
-    pub overscroll_spring_coefficient: f64,
-    /// Spring configuration used for the snap-back animation. The default is
-    /// `SpringDescription::with_damping_ratio(1.0, 500.0, 0.75)`.
-    pub spring: SpringDescription,
-    /// Below this absolute velocity (px/s) no fling is started.
-    pub min_fling_velocity_px_per_sec: f64,
-    /// Friction drag coefficient for in-bounds fling deceleration.
-    pub fling_drag_coefficient: f64,
+    overscroll_spring_coefficient: f64,
+    spring: SpringDescription,
+    fling_drag_coefficient: f64,
 }
 
 impl BouncingScrollPhysics {
-    /// Default iOS-matching physics.
+    /// The overscroll resistance of [`Self::new`].
+    pub const DEFAULT_OVERSCROLL_SPRING_COEFFICIENT: f64 = 0.52;
+
+    /// iOS-matching physics: resistance
+    /// [`Self::DEFAULT_OVERSCROLL_SPRING_COEFFICIENT`] at the edge, a
+    /// critically underdamped return spring (mass 1, stiffness 500, damping
+    /// ratio 0.75) and the fling drag of
+    /// [`ClampingScrollPhysics::DEFAULT_FLING_DRAG_COEFFICIENT`].
     #[must_use]
     pub fn new() -> Self {
         Self {
-            overscroll_spring_coefficient: 0.52,
+            overscroll_spring_coefficient: Self::DEFAULT_OVERSCROLL_SPRING_COEFFICIENT,
             spring: SpringDescription::with_damping_ratio(1.0, 500.0, 0.75)
                 .expect("BUG: default scroll spring is in the admitted domain"),
-            min_fling_velocity_px_per_sec: 50.0,
-            fling_drag_coefficient: 0.135,
+            fling_drag_coefficient: ClampingScrollPhysics::DEFAULT_FLING_DRAG_COEFFICIENT,
         }
+    }
+
+    /// Physics that resists a pull at the edge by
+    /// `overscroll_spring_coefficient` (smaller is stiffer), returns along
+    /// `spring` and flings keeping `fling_drag_coefficient` of the velocity
+    /// each second.
+    ///
+    /// # Errors
+    ///
+    /// [`ScrollPhysicsError::OutOfRange`] when either coefficient is not in
+    /// the open range `(0, 1)`, NaN included.
+    pub fn try_new(
+        overscroll_spring_coefficient: f64,
+        spring: SpringDescription,
+        fling_drag_coefficient: f64,
+    ) -> Result<Self, ScrollPhysicsError> {
+        Ok(Self {
+            overscroll_spring_coefficient: unit_open(
+                ScrollPhysicsParameter::OverscrollSpringCoefficient,
+                overscroll_spring_coefficient,
+            )?,
+            spring,
+            fling_drag_coefficient: unit_open(
+                ScrollPhysicsParameter::FlingDragCoefficient,
+                fling_drag_coefficient,
+            )?,
+        })
+    }
+
+    /// The share of a pull at the edge that moves overscrolled content.
+    #[must_use]
+    pub const fn overscroll_spring_coefficient(&self) -> f64 {
+        self.overscroll_spring_coefficient
+    }
+
+    /// The spring that returns overscrolled content to the edge.
+    #[must_use]
+    pub const fn spring(&self) -> SpringDescription {
+        self.spring
+    }
+
+    /// The share of its velocity a fling keeps each second.
+    #[must_use]
+    pub const fn fling_drag_coefficient(&self) -> f64 {
+        self.fling_drag_coefficient
     }
 }
 
@@ -519,9 +620,9 @@ impl ScrollPhysics for BouncingScrollPhysics {
             .ok()?;
             return Some(Box::new(spring));
         }
-        // Within bounds: fling if velocity is above the threshold. A fling
+        // Within bounds: fling unless the drag zeroed the release. A fling
         // the friction would carry past an edge overscrolls and springs back.
-        if velocity_px_per_sec.abs() < self.min_fling_velocity_px_per_sec {
+        if !flings(velocity_px_per_sec) {
             return None;
         }
         let simulation = BouncingScrollSimulation::try_new(
