@@ -281,6 +281,6 @@
 | Задача | PR | Состояние | Доказательство |
 |---|---|---|---|
 | RS1 | #2384 | готова | `painting_it recording_contract::a_non_finite_op_is_refused_by_kind`, `…a_destructor_that_panics_during_reset_leaves_the_canvas_empty` (падает без порядка `reset`); `a_non_finite_op_is_omitted_and_the_frame_draws`, `inline_picture_replay_owns_its_root_clips` на lavapipe; `.snap` не тронуты; `rg draw_picture crates packages` пуст |
-| RS3 | ветка `claude/project-thread-k5w05d-rs3` | готова | `layer_it region_contract` (четыре строки), `union_table`, `bounds_round_outward_with_aa_margin`; `damage_readback_tests` на lavapipe без правки ожиданий; `_ =>` над `DamageRegion`, `FullReason`, `ResyncReason` нет |
+| RS3 | #2383 | готова | `layer_it region_contract` (четыре строки), `union_table`, `bounds_round_outward_with_aa_margin`; `damage_readback_tests` на lavapipe без правки ожиданий; `_ =>` над `DamageRegion`, `FullReason`, `ResyncReason` нет |
 | RS14 | #2382 | готова; `RasterExecutor` переходит в RS15 вместе с командами, его единственный API это ход по ним | `every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format` (lavapipe): 3 слота в двух форматах дают 1 instance, 1 device, 1 атлас, 2 набора пайплайнов, 0 сборок на перерисовке; до: 3/3/3/3 |
 | RS2, RS4–RS13, RS15–RS19 | | не начата | |
