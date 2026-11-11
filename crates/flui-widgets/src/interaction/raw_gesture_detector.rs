@@ -2,11 +2,13 @@
 //! [`GestureRecognizerFactory`] values and keeps each one alive across
 //! rebuilds, reconfiguring it in place.
 
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::{any::Any, any::TypeId, rc::Rc};
+
+use smallvec::SmallVec;
 
 use flui_foundation::ViewKey;
 use flui_foundation::geometry::Axis;
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::pointer::{EventPropagation, PanZoomDispatch, SmartZoomDispatch};
 use flui_interaction::{
     GestureArena, GestureRecognizer, GestureSettingsProvider, PointerDispatch, PointerEvent,
@@ -80,28 +82,28 @@ impl RecognizerContext {
 }
 
 /// A recognizer built by a factory and kept by the detector's state.
-trait LiveRecognizer {
+trait LiveRecognizer: 'static {
     fn as_any(&self) -> &dyn Any;
     fn recognizer(&self) -> &dyn GestureRecognizer;
-    fn attach(&self, set: &mut RecognizerSet, admission: Option<&ContactAdmission>);
+    fn attach(self: Rc<Self>, set: &mut RecognizerSet, admission: Option<&ContactAdmission>);
 }
 
-impl<R: GestureRecognizer + 'static> LiveRecognizer for Rc<R> {
+impl<R: GestureRecognizer + 'static> LiveRecognizer for R {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn recognizer(&self) -> &dyn GestureRecognizer {
-        &**self
+        self
     }
 
-    fn attach(&self, set: &mut RecognizerSet, admission: Option<&ContactAdmission>) {
+    fn attach(self: Rc<Self>, set: &mut RecognizerSet, admission: Option<&ContactAdmission>) {
         match admission {
             Some(admission) => {
                 let admission = admission.clone();
-                set.attach_when(self, move |dispatch| admission.admits(dispatch));
+                set.attach_when(&self, move |dispatch| admission.admits(dispatch));
             }
-            None => set.attach(self),
+            None => set.attach(&self),
         }
     }
 }
@@ -174,7 +176,7 @@ impl std::fmt::Debug for ContactAdmission {
 /// A factory with its recognizer type erased, so one detector holds several.
 trait ErasedFactory {
     fn factory_type(&self) -> TypeId;
-    fn create_live(&self, cx: &RecognizerContext) -> Box<dyn LiveRecognizer>;
+    fn create_live(&self, cx: &RecognizerContext) -> Rc<dyn LiveRecognizer>;
     fn update_live(&self, live: &dyn LiveRecognizer);
 }
 
@@ -184,12 +186,12 @@ impl<F: GestureRecognizerFactory> ErasedFactory for F {
         TypeId::of::<F>()
     }
 
-    fn create_live(&self, cx: &RecognizerContext) -> Box<dyn LiveRecognizer> {
-        Box::new(GestureRecognizerFactory::create(self, cx))
+    fn create_live(&self, cx: &RecognizerContext) -> Rc<dyn LiveRecognizer> {
+        GestureRecognizerFactory::create(self, cx)
     }
 
     fn update_live(&self, live: &dyn LiveRecognizer) {
-        let recognizer = live.as_any().downcast_ref::<Rc<F::Recognizer>>().expect(
+        let recognizer = live.as_any().downcast_ref::<F::Recognizer>().expect(
             "BUG: a live recognizer is matched only to a factory of the type that created it",
         );
         GestureRecognizerFactory::update(self, recognizer);
@@ -223,7 +225,7 @@ impl FactoryEntry {
 struct Slot {
     factory_type: TypeId,
     key: Option<Rc<dyn ViewKey>>,
-    live: Box<dyn LiveRecognizer>,
+    live: Rc<dyn LiveRecognizer>,
 }
 
 impl Slot {
@@ -390,9 +392,9 @@ impl RawGestureDetector {
 /// lifecycle hooks and routes the pointer stream to
 /// [`recognizer_set`](Self::recognizer_set).
 pub(crate) struct RecognizerHost {
-    factories: Vec<FactoryEntry>,
+    factories: SmallVec<[FactoryEntry; 1]>,
     context: Option<RecognizerContext>,
-    slots: Vec<Slot>,
+    slots: SmallVec<[Slot; 1]>,
 }
 
 /// The live recognizers of a mounted [`RawGestureDetector`].
@@ -425,7 +427,7 @@ fn context_of(ctx: &dyn LifecycleContext) -> RecognizerContext {
     }
 }
 
-fn create_slots(factories: &[FactoryEntry], cx: &RecognizerContext) -> Vec<Slot> {
+fn create_slots(factories: &[FactoryEntry], cx: &RecognizerContext) -> SmallVec<[Slot; 1]> {
     factories
         .iter()
         .map(|entry| Slot {
@@ -445,9 +447,9 @@ impl RecognizerHost {
     /// [`init`](Self::init).
     pub(crate) fn new(factories: &[FactoryEntry]) -> Self {
         Self {
-            factories: factories.to_vec(),
+            factories: SmallVec::from(factories),
             context: None,
-            slots: Vec::new(),
+            slots: SmallVec::new(),
         }
     }
 
@@ -462,7 +464,7 @@ impl RecognizerHost {
     pub(crate) fn recognizer_set(&self, admission: Option<&ContactAdmission>) -> RecognizerSet {
         let mut set = RecognizerSet::default();
         for slot in &self.slots {
-            slot.live.attach(&mut set, admission);
+            Rc::clone(&slot.live).attach(&mut set, admission);
         }
         set
     }
@@ -496,10 +498,33 @@ impl RecognizerHost {
 
     /// The owner's `did_update_view`: follow a new list of factories.
     pub(crate) fn update(&mut self, factories: &[FactoryEntry]) {
-        let Some(cx) = self.context.clone() else {
-            self.factories = factories.to_vec();
+        let mut failure = FirstPanic::new();
+        let Some(cx) = &self.context else {
+            let outgoing = std::mem::replace(&mut self.factories, SmallVec::from(factories));
+            failure.contain(|| drop(outgoing));
+            failure.resume();
             return;
         };
+        // The usual rebuild names the recognizers it already has, in their
+        // order: nothing is created or retired, and nothing is allocated.
+        // The pairing below gives each factory the first unclaimed match,
+        // which is then the slot at its own index.
+        let unchanged = factories.len() == self.slots.len()
+            && self
+                .slots
+                .iter()
+                .zip(factories)
+                .all(|(slot, entry)| slot.matches(entry));
+        if unchanged {
+            let outgoing = std::mem::replace(&mut self.factories, SmallVec::from(factories));
+            // A replaced factory's captures are user code.
+            failure.contain(|| drop(outgoing));
+            for (entry, slot) in self.factories.iter().zip(&self.slots) {
+                failure.contain(|| entry.factory.update_live(&*slot.live));
+            }
+            failure.resume();
+            return;
+        }
         // Pair each incoming factory with the first unclaimed live recognizer
         // of its type and key; no user code runs here.
         let mut claimed = vec![false; self.slots.len()];
@@ -517,10 +542,10 @@ impl RecognizerHost {
             .collect();
         // Factories without a live recognizer create one before anything is
         // committed: a panicking `create` leaves the mounted set intact.
-        let mut created: Vec<Option<Box<dyn LiveRecognizer>>> = factories
+        let mut created: Vec<Option<Rc<dyn LiveRecognizer>>> = factories
             .iter()
             .zip(&pairing)
-            .map(|(entry, paired)| paired.is_none().then(|| entry.factory.create_live(&cx)))
+            .map(|(entry, paired)| paired.is_none().then(|| entry.factory.create_live(cx)))
             .collect();
 
         let mut outgoing: Vec<Option<Slot>> = std::mem::take(&mut self.slots)
@@ -546,37 +571,22 @@ impl RecognizerHost {
             };
             self.slots.push(slot);
         }
-        self.factories = factories.to_vec();
+        let replaced = std::mem::replace(&mut self.factories, SmallVec::from(factories));
         // A retired recognizer's callbacks may panic on cancellation, and a
         // factory's update may panic too: every kept recognizer is still
         // updated, and the first failure is resumed after the last.
         let retired: Vec<Slot> = outgoing.into_iter().flatten().collect();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a retired recognizer's cancel panic must not skip updates"
-        )]
-        let mut first = catch_unwind(AssertUnwindSafe(|| cancel_slots(&retired))).err();
-        drop(retired);
+        failure.contain(|| cancel_slots(&retired));
+        failure.contain(|| drop(retired));
+        failure.contain(|| drop(replaced));
         for index in updates {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a factory's update panic must not skip the other recognizers"
-            )]
-            let updated = catch_unwind(AssertUnwindSafe(|| {
+            failure.contain(|| {
                 self.factories[index]
                     .factory
                     .update_live(&*self.slots[index].live);
-            }));
-            if let Err(payload) = updated {
-                match first {
-                    Some(_) => flui_foundation::panic::discard_payload(payload),
-                    None => first = Some(payload),
-                }
-            }
+            });
         }
-        if let Some(payload) = first {
-            resume_unwind(payload);
-        }
+        failure.resume();
     }
 
     /// The owner's `dispose`: cancel every recognizer.

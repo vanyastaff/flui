@@ -239,7 +239,7 @@ impl StatefulRenderView for InteractiveNode {
     fn create_state(&self) -> Self::State {
         let tap = TapSlot::new(self.on_tap.clone());
         InteractiveNodeState {
-            recognizers: RecognizerHost::new(&tap.factories()),
+            recognizers: RecognizerHost::new(tap.factory().as_slice()),
             tap,
             focus: self.focus.as_ref().map(FocusHost::new),
             own_actions: Rc::clone(&self.actions),
@@ -300,7 +300,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
         let mut failure = FirstPanic::new();
         failure.contain(|| {
             self.tap.set(new.on_tap.clone());
-            self.recognizers.update(&self.tap.factories());
+            self.recognizers.update(self.tap.factory().as_slice());
         });
         // The replaced bindings drop here; an action is user code.
         failure.contain(|| self.own_actions = Rc::clone(&new.actions));
