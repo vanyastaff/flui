@@ -17,6 +17,10 @@
 //!   (`ANDROID_HOME`); `javac` output can differ between JDK releases, so a
 //!   mismatch names the recorded tools.
 //! - `--write` compiles and writes the dex and its record.
+//!
+//! Without a local JDK or SDK, `.github/workflows/android-dex.yml` runs
+//! `--write` (or `--rebuild`) on a GitHub runner by hand and uploads the dex
+//! and its record as an artifact to commit.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -179,7 +183,7 @@ pub(crate) fn android_dex(args: &AndroidDexArgs) -> anyhow::Result<ExitCode> {
     if record.sources != digest {
         failures.push(format!(
             "the Java sources under {SOURCES} changed since the dex was built; \
-             run `cargo xtask android-dex --write`"
+             run `cargo xtask android-dex --write`, or the `Android dex` workflow on a runner"
         ));
     }
     if record.dex != hex(&Sha256::digest(&dex)) {
