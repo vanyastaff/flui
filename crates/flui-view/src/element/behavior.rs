@@ -588,19 +588,20 @@ where
         // mutable `owner` reborrow for `build_or_recover` is still free.
         let ctx_choice = make_build_ctx(core, owner);
         let ctx = ctx_choice.as_ctx();
-        // The children this build returns mount under what is published here.
-        {
-            let view = core.view().clone();
-            publish_provided(&mut self.publication, core, owner, |values| {
-                view.provide(ctx, values);
-            });
-        }
+        // One clone of the view serves `provide` and `build`, taken before the
+        // reactive phase is armed: between the two hooks nothing the author
+        // wrote runs (no `Clone`, no `Drop`), so the phase `publish_provided`
+        // arms is always handed to `build_or_recover_begun`. The children
+        // this build returns mount under what is published here.
+        let view = core.view().clone();
+        publish_provided(&mut self.publication, core, owner, |values| {
+            view.provide(ctx, values);
+        });
         // The user `build()` is wrapped in `catch_unwind`: a panicking
         // build is caught and substituted with the registered
         // `ErrorView`. The catch covers ONLY the build expression — the
         // `view` borrow is moved into the closure so nothing of `core`
         // is mutated under the catch.
-        let view = core.view().clone();
         let child_view = super::behavior_commons::build_or_recover_begun(
             core,
             owner,
@@ -894,21 +895,21 @@ where
             }
             self.apply_pending = false;
         }
-        // The children this build returns mount under what is published here.
-        {
-            let view = core.view().clone();
-            let state = &self.state;
-            publish_provided(&mut self.publication, core, owner, |values| {
-                state.provide(&view, ctx, values);
-            });
-        }
+        // One clone of the view serves `provide` and `build`, taken before the
+        // reactive phase is armed: between the two hooks nothing the author
+        // wrote runs (no `Clone`, no `Drop`), so the phase `publish_provided`
+        // arms is always handed to `build_or_recover_begun`. The children
+        // this build returns mount under what is published here.
+        let view = core.view().clone();
+        let state = &self.state;
+        publish_provided(&mut self.publication, core, owner, |values| {
+            state.provide(&view, ctx, values);
+        });
         // The user `ViewState::build` is wrapped in `catch_unwind`: a
         // panicking build is caught and substituted with the registered
         // `ErrorView`. The catch covers ONLY the build expression — the
         // `view` borrow is moved into the closure (cloned) and `state` is
         // captured by reference, independent of `core`.
-        let view = core.view().clone();
-        let state = &self.state;
         let child_view = super::behavior_commons::build_or_recover_begun(
             core,
             owner,

@@ -747,3 +747,53 @@ pub(crate) fn a_signal_read_in_provide_republishes_on_write() {
         }
     }
 }
+
+/// A view whose next clone to drop after `provide` ran panics, once.
+#[derive(Clone)]
+struct Brittle {
+    armed: Rc<Cell<bool>>,
+}
+
+impl StatelessView for Brittle {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Leaf
+    }
+
+    fn provide(&self, _ctx: &dyn BuildContext, _values: &mut Provided<'_>) {
+        self.armed.set(true);
+    }
+}
+
+impl View for Brittle {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl Drop for Brittle {
+    fn drop(&mut self) {
+        assert!(!self.armed.replace(false), "authored drop failure");
+    }
+}
+
+/// Whatever of the author's fails between `provide` and the end of `build`,
+/// the build phase ends with the build: a signal is writable afterwards.
+pub(crate) fn a_failure_after_provide_ends_the_build_phase() {
+    let frames = Frames::empty();
+    let signal = frames.owner.borrow().signal_graph().signal(0u32);
+    let writer = frames.owner.borrow().writer_source();
+    let armed = Rc::new(Cell::new(false));
+    let mounted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        frames.mounted(&Group(vec![
+            Brittle {
+                armed: Rc::clone(&armed),
+            }
+            .boxed(),
+        ]))
+    }));
+    assert!(!armed.get(), "the authored failure fired");
+    drop(mounted);
+    writer
+        .write(|cx| signal.set(cx, 1))
+        .expect("no build is in progress");
+}
