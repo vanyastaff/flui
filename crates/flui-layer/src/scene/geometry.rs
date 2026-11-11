@@ -5,10 +5,11 @@
 //! Scene space is the surface's device pixels. Footprints only over-report:
 //! a filter spreads by its reach under the transform relative to the
 //! boundary that holds it, and by its renderer kernel in device pixels, which
-//! a scope and a subtree carry beside their local bounds (`scope_kernel`) and
+//! a scope and a subtree carry beside their local bounds (`Scope`) and
 //! add once mapped to the surface, where no ancestor scales it.
 
 use std::cell::Cell;
+use std::ops::Range;
 
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_painting::DamageExtent;
@@ -42,6 +43,30 @@ pub(crate) enum Link<'v> {
 }
 
 pub(crate) type Links<'v> = SmallVec<[Link<'v>; 16]>;
+
+/// What a scope draws, in the space that holds it, and how far its filters
+/// spread that in device pixels once mapped to the surface.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Scope {
+    pub(crate) local: Reach,
+    pub(crate) kernel: f64,
+}
+
+impl Scope {
+    const EMPTY: Self = Self {
+        local: Reach::Nothing,
+        kernel: 0.0,
+    };
+
+    /// Both scopes, side by side: the union of what they draw and the
+    /// larger kernel.
+    fn join(self, other: Self) -> Self {
+        Self {
+            local: self.local.union(other.local),
+            kernel: self.kernel.max(other.kernel),
+        }
+    }
+}
 
 /// Where something lands, in one space.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -197,27 +222,40 @@ enum Up {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Unattached;
 
+/// What the follower resolutions of a patch's footprint report.
+pub(crate) struct Watch<'v> {
+    /// Every resolution, nested ones included.
+    pub(crate) resolutions: Cell<u64>,
+    /// Whether the patch touched or placed a node.
+    pub(crate) changed: &'v dyn Fn(NodeKey) -> bool,
+    /// Whether a resolution met a follower under [`LeaderClip::Hide`] with a
+    /// changed node on its leader's branch: a clip there can show or hide it,
+    /// and with it every follower whose chain passes through it, with no
+    /// transform changed.
+    pub(crate) hiding_changed: Cell<bool>,
+}
+
 /// Reads one version's geometry.
 #[derive(Clone, Copy)]
 pub(crate) struct Geometry<'v> {
     version: &'v VersionInner,
-    /// Counts every follower resolution, nested ones included.
-    resolutions: Option<&'v Cell<u64>>,
+    /// What the resolutions it makes report, when a patch is being read.
+    watch: Option<&'v Watch<'v>>,
 }
 
 impl<'v> Geometry<'v> {
     pub(crate) fn new(version: &'v VersionInner) -> Self {
         Self {
             version,
-            resolutions: None,
+            watch: None,
         }
     }
 
-    /// A reader that counts its follower resolutions in `resolutions`.
-    pub(crate) fn counting(version: &'v VersionInner, resolutions: &'v Cell<u64>) -> Self {
+    /// A reader whose follower resolutions report to `watch`.
+    pub(crate) fn watching(version: &'v VersionInner, watch: &'v Watch<'v>) -> Self {
         Self {
             version,
-            resolutions: Some(resolutions),
+            watch: Some(watch),
         }
     }
 
@@ -251,24 +289,6 @@ impl<'v> Geometry<'v> {
             .rev()
             .copied()
             .find(|leader| self.is_attached(leader.node))
-    }
-
-    /// The node of the leader the follower at `at` hides behind: its leader,
-    /// when it follows one under [`LeaderClip::Hide`], since a clip on the
-    /// leader's branch then shows or hides it without changing its
-    /// transform.
-    pub(crate) fn hiding_leader(self, at: Address) -> Option<NodeKey> {
-        let Entry::Effect {
-            layer: Layer::Follower(follower),
-            ..
-        } = &self.record(at.node).content().entries()[at.entry.get()]
-        else {
-            return None;
-        };
-        if follower.leader_clip() != LeaderClip::Hide {
-            return None;
-        }
-        self.leader(follower.link()).map(|leader| leader.node)
     }
 
     /// `key` and every node above it.
@@ -404,74 +424,68 @@ impl<'v> Geometry<'v> {
         }
     }
 
-    /// Where `entry` of `key` and everything in its scope land, in the space
-    /// its parent effect gives (`key`'s own space for a top-level entry).
-    pub(crate) fn scope_local(self, key: NodeKey, entry: EntryIndex, nesting: usize) -> Reach {
+    /// What the entries of `key` in `range`, one effect's whole scope or the
+    /// whole content, draw in the space that holds them (`key`'s own space
+    /// for a top-level entry), and how far, in device pixels, the filters
+    /// among them spread it once mapped to the surface (`device_spread`),
+    /// slotted subtrees included. One pass from the last entry back folds
+    /// each into its parent's, so a chain of effects of any depth costs no
+    /// stack.
+    fn scope(self, key: NodeKey, range: Range<usize>) -> Scope {
         let content = self.record(key).content();
-        match &content.entries()[entry.get()] {
-            Entry::Chunk { chunk, .. } => Reach::of(chunk.bounds()),
-            Entry::Slot { node, .. } => {
-                let child = self.record(node.key());
-                map_out(
-                    &[Link::Matrix(placement(child))],
-                    Reach::of(child.subtree()),
-                )
-            }
-            Entry::Effect { layer, .. } => {
-                let mut links = Links::new();
-                self.effect_links(layer, Address { node: key, entry }, &mut links, nesting);
-                let mut inside = Reach::Nothing;
-                for child in children(content, entry) {
-                    inside = inside.union(self.scope_local(key, child, nesting));
+        let entries = &content.entries()[range.clone()];
+        let mut inside = vec![Scope::EMPTY; entries.len()];
+        let mut whole = Scope::EMPTY;
+        for (offset, entry) in entries.iter().enumerate().rev() {
+            let scope = match entry {
+                Entry::Chunk { chunk, .. } => Scope {
+                    local: Reach::of(chunk.bounds()),
+                    kernel: 0.0,
+                },
+                Entry::Slot { node, .. } => {
+                    let child = self.record(node.key());
+                    Scope {
+                        local: map_out(
+                            &[Link::Matrix(placement(child))],
+                            Reach::of(child.subtree()),
+                        ),
+                        kernel: child.kernel(),
+                    }
                 }
-                map_out(&links, inside)
+                Entry::Effect { layer, .. } => {
+                    let held = inside[offset];
+                    let mut links = Links::new();
+                    let at = Address {
+                        node: key,
+                        entry: EntryIndex::at(range.start + offset),
+                    };
+                    self.effect_links(layer, at, &mut links, 0);
+                    Scope {
+                        local: map_out(&links, held.local),
+                        kernel: match layer {
+                            Layer::ImageFilter(filter) => {
+                                device_spread(filter.filter(), held.kernel)
+                            }
+                            _ => held.kernel,
+                        },
+                    }
+                }
+            };
+            match entry.parent() {
+                Some(parent) if parent.get() >= range.start => {
+                    let held = &mut inside[parent.get() - range.start];
+                    *held = held.join(scope);
+                }
+                _ => whole = whole.join(scope),
             }
         }
+        whole
     }
 
     /// What `key`'s content and subtree change, in its own space, from its
-    /// children's stored bounds.
-    pub(crate) fn subtree_local(self, key: NodeKey) -> Reach {
-        let content = self.record(key).content();
-        let mut reach = Reach::Nothing;
-        for (position, entry) in content.entries().iter().enumerate() {
-            if entry.parent().is_none() {
-                reach = reach.union(self.scope_local(key, EntryIndex::at(position), 0));
-            }
-        }
-        reach
-    }
-
-    /// How far, in device pixels, the filters in the scope of `entry` of
-    /// `key` spread what it draws past its local reach mapped to the surface
-    /// (`device_spread`), slotted subtrees included.
-    pub(crate) fn scope_kernel(self, key: NodeKey, entry: EntryIndex) -> f64 {
-        let content = self.record(key).content();
-        match &content.entries()[entry.get()] {
-            Entry::Chunk { .. } => 0.0,
-            Entry::Slot { node, .. } => self.record(node.key()).kernel(),
-            Entry::Effect { layer, .. } => {
-                let inner = children(content, entry)
-                    .map(|child| self.scope_kernel(key, child))
-                    .fold(0.0, f64::max);
-                match layer {
-                    Layer::ImageFilter(filter) => device_spread(filter.filter(), inner),
-                    _ => inner,
-                }
-            }
-        }
-    }
-
-    /// `scope_kernel` over `key`'s whole content.
-    pub(crate) fn subtree_kernel(self, key: NodeKey) -> f64 {
-        let content = self.record(key).content();
-        content
-            .entries()
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| entry.parent().is_none())
-            .map(|(position, _)| self.scope_kernel(key, EntryIndex::at(position)))
-            .fold(0.0, f64::max)
+    /// children's stored bounds, and its filters' device kernel.
+    pub(crate) fn subtree_scope(self, key: NodeKey) -> Scope {
+        self.scope(key, 0..self.record(key).content().entries().len())
     }
 
     /// Where `entry` of `key` and its scope land on the surface; nothing when
@@ -482,11 +496,11 @@ impl<'v> Geometry<'v> {
             return Reach::Nothing;
         }
         self.content_links(key, entry, &mut links, 0);
-        map_out_spread(
-            &links,
-            self.scope_local(key, entry, 0),
-            self.scope_kernel(key, entry),
-        )
+        let scope = self.scope(
+            key,
+            entry.get()..scope_end(self.record(key).content(), entry),
+        );
+        map_out_spread(&links, scope.local, scope.kernel)
     }
 
     /// Where `key`'s subtree lands on the surface, from its stored bounds;
@@ -521,14 +535,9 @@ impl<'v> Geometry<'v> {
             return Reach::Nothing;
         };
         let content = self.record(at.node).content();
-        let mut inside = Reach::Nothing;
-        let mut kernel: f64 = 0.0;
-        for child in children(content, at.entry) {
-            inside = inside.union(self.scope_local(at.node, child, 0));
-            kernel = kernel.max(self.scope_kernel(at.node, child));
-        }
-        match inside {
-            Reach::Rect(rect) => mapped(&ctm, rect).spread(kernel),
+        let inside = self.scope(at.node, at.entry.get() + 1..scope_end(content, at.entry));
+        match inside.local {
+            Reach::Rect(rect) => mapped(&ctm, rect).spread(inside.kernel),
             other => other,
         }
     }
@@ -539,10 +548,14 @@ impl<'v> Geometry<'v> {
     /// its own offset applied, both from their lowest common ancestor. This is
     /// `resolve_follower_transform`'s rule (ADR-0276), its nesting counted
     /// the same way. A leader clip that hides the follower is not consulted: a
-    /// footprint that shows a hidden follower over-reports.
+    /// footprint that shows a hidden follower over-reports, and a watching
+    /// reader reports each one under `LeaderClip::Hide` whose leader's branch
+    /// the patch changed, this one or one on either chain.
     pub(crate) fn resolve(self, at: Address, nesting: usize) -> Result<Matrix4, Unresolved> {
-        if let Some(resolutions) = self.resolutions {
-            resolutions.set(resolutions.get().saturating_add(1));
+        if let Some(watch) = self.watch {
+            watch
+                .resolutions
+                .set(watch.resolutions.get().saturating_add(1));
         }
         if nesting > MAX_FOLLOWER_NESTING {
             return Err(Unresolved::TooDeep);
@@ -575,6 +588,12 @@ impl<'v> Geometry<'v> {
         else {
             return unlinked();
         };
+        if let Some(watch) = self.watch
+            && follower.leader_clip() == LeaderClip::Hide
+            && self.path_up(leader_at.node).any(watch.changed)
+        {
+            watch.hiding_changed.set(true);
+        }
         if self.is_inside(leader_at, at) {
             tracing::warn!(
                 "a leader is inside its follower's subtree (a leader must precede its \
@@ -706,20 +725,18 @@ fn placement(record: &NodeRecord) -> Matrix4 {
     Matrix4::translation(offset.dx, offset.dy, 0.0)
 }
 
-/// The entries whose parent is `effect`: they follow it, before the first
-/// entry outside its scope.
-fn children(
-    content: &BoundaryContent,
-    effect: EntryIndex,
-) -> impl Iterator<Item = EntryIndex> + '_ {
-    content.entries()[effect.get() + 1..]
-        .iter()
-        .enumerate()
-        .take_while(move |(offset, _)| {
-            in_scope(content, EntryIndex::at(effect.get() + 1 + offset), effect)
+/// The position after the scope of `entry`: an effect's scope follows it,
+/// and the first entry whose parent precedes `entry` or that has none ends
+/// it.
+fn scope_end(content: &BoundaryContent, entry: EntryIndex) -> usize {
+    let entries = content.entries();
+    (entry.get() + 1..entries.len())
+        .find(|&position| {
+            entries[position]
+                .parent()
+                .is_none_or(|parent| parent.get() < entry.get())
         })
-        .filter(move |(_, entry)| entry.parent() == Some(effect))
-        .map(move |(offset, _)| EntryIndex::at(effect.get() + 1 + offset))
+        .unwrap_or(entries.len())
 }
 
 /// Whether `entry` sits under `effect` in `content`.

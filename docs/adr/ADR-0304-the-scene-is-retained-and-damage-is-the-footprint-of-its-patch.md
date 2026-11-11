@@ -251,7 +251,9 @@ version before and after it:
 - `Retire` damages nothing, since only a node no slot names can be retired.
 - After the operations every follower is resolved again (O(followers × depth), counted as
   `followers_resolved`); one whose transform changed damages its subtree footprint under the old and
-  the new transform. A follower is no longer damaged every frame. The followers of a republished
+  the new transform, and so does one under `LeaderClip::Hide` whose leader's branch the patch
+  changed, or whose chains pass through such a follower. A follower is no longer damaged every
+  frame. The followers of a republished
   boundary pair with its old ones in one pass over each side's links (`follower_pairing_reads`).
 
 A subtree's footprint is its `subtree_bounds` mapped through the chain to the surface, grown by

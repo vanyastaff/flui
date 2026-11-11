@@ -9,7 +9,7 @@ use std::sync::Arc;
 use flui_foundation::geometry::{Matrix4, Rect};
 
 use super::content::{BoundaryContent, Bounds, Entry, EntryIndex, LinkRole};
-use super::geometry::{Geometry, Link, Links, Reach, map_out};
+use super::geometry::{Geometry, Link, Links, Reach, Watch, map_out};
 use super::id::NodeKey;
 use super::owner::SlotMarks;
 use super::table::TableCost;
@@ -158,26 +158,26 @@ pub(crate) fn patch_damage(
 /// A follower that hides when its leader's branch clips its anchor counts as
 /// moved too when the patch touched or placed a node on that branch, in
 /// either version: a clip there can show or hide it with the transform
-/// unchanged, and its footprint covers it either way.
+/// unchanged, and its footprint covers it either way. So does one whose
+/// chain passes through such a follower: hidden, it hides the chain.
 fn moved_followers(
     base: &VersionInner,
     next: &VersionInner,
     facts: &PatchFacts<'_>,
     cost: &mut FootprintCost,
 ) -> Vec<(Address, Address)> {
-    let resolutions = Cell::new(0_u64);
-    let (old, new) = (
-        Geometry::counting(base, &resolutions),
-        Geometry::counting(next, &resolutions),
-    );
     let changed = |key: NodeKey| {
         facts.touched_marks.contains(key.slot()) || facts.placed_marks.contains(key.slot())
     };
-    let branch_changed = |geometry: Geometry<'_>, at: Address| {
-        geometry
-            .hiding_leader(at)
-            .is_some_and(|leader| geometry.path_up(leader).any(changed))
+    let watch = Watch {
+        resolutions: Cell::new(0),
+        changed: &changed,
+        hiding_changed: Cell::new(false),
     };
+    let (old, new) = (
+        Geometry::watching(base, &watch),
+        Geometry::watching(next, &watch),
+    );
     let pairs = FollowerPairs::of(base, next, facts.touched, &mut cost.pairing_reads);
     let mut moved = Vec::new();
     for (_, users) in next.links.iter() {
@@ -185,14 +185,17 @@ fn moved_followers(
             let Some(before) = pairs.before(base, next, after) else {
                 continue;
             };
+            watch.hiding_changed.set(false);
             let then = old.resolve(before, 0);
             let now = new.resolve(after, 0);
-            if then != now || branch_changed(old, before) || branch_changed(new, after) {
+            if then != now || watch.hiding_changed.get() {
                 moved.push((before, after));
             }
         }
     }
-    cost.followers_resolved = cost.followers_resolved.saturating_add(resolutions.get());
+    cost.followers_resolved = cost
+        .followers_resolved
+        .saturating_add(watch.resolutions.get());
     moved
 }
 
@@ -319,8 +322,8 @@ fn update_bounds(
     exact.dedup();
     for &(_, key) in &exact {
         let geometry = Geometry::new(next);
-        let bounds = geometry.subtree_local(key).bounds();
-        let kernel = geometry.subtree_kernel(key);
+        let scope = geometry.subtree_scope(key);
+        let (bounds, kernel) = (scope.local.bounds(), scope.kernel);
         let record = next
             .nodes
             .get_mut(key.table_key(), table)

@@ -354,12 +354,20 @@ fn scene_patch_damage() {
                 d::nested_followers_resolve_below_their_common_ancestor,
             ),
             (
+                "a_deep_effect_chain_applies_without_recursion",
+                d::a_deep_effect_chain_applies_without_recursion,
+            ),
+            (
                 "sibling_followers_pair_in_one_pass_over_their_links",
                 d::sibling_followers_pair_in_one_pass_over_their_links,
             ),
             (
                 "a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it",
                 d::a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it,
+            ),
+            (
+                "a_hidden_follower_hides_the_followers_of_the_leader_inside_it",
+                d::a_hidden_follower_hides_the_followers_of_the_leader_inside_it,
             ),
             (
                 "a_filter_under_a_shrinking_ancestor_damages_its_device_kernel",

@@ -226,7 +226,9 @@ pixels, which bounds in a boundary's space would shrink under a shrinking ancest
 its own to the maximum of its children's, a sum along a chain), and a
 footprint adds it once mapped to the surface. The region then closes over the filtered nodes of
 both versions. A follower under `LeaderClip::Hide` is damaged when the patch changes a node on its
-leader's branch. A surface change between applies is
+leader's branch, and so is every follower whose chains pass through it, since hidden it hides
+them. Footprints fold an effect chain from its last entry back, without recursion. A surface
+change between applies is
 `Full(SurfaceChanged)`, and `renew` makes the next one `Full(Resync(_))`.
 
 Pinned by `layer_it`: `scene_patch_damage`, `patch_damage_covers_diff_damage` (random patches,

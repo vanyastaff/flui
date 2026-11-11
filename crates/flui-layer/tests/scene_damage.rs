@@ -450,6 +450,81 @@ pub(crate) fn a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it() 
     );
 }
 
+/// A follower under `LeaderClip::Hide` that a clip on its leader's branch
+/// hides takes with it the leader inside it, and so another follower that
+/// escapes clips: the second follower's footprint is damaged, though only
+/// the first one's leader branch changed.
+pub(crate) fn a_hidden_follower_hides_the_followers_of_the_leader_inside_it() {
+    let (outer, inner) = (LayerLink::new(), LayerLink::new());
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let (p, leader, hiding, escaping) = (
+        writer.mint_node(),
+        writer.mint_node(),
+        writer.mint_node(),
+        writer.mint_node(),
+    );
+    let mut leading = BoundaryContent::builder();
+    leading.push_effect(
+        Layer::from(LeaderLayer::new(outer, Size::new(10.0, 10.0))),
+        RenderId::new(1),
+        0,
+    );
+    writer.push(publish(leader, leading.finish()));
+    let mut relay = BoundaryContent::builder();
+    relay.push_effect(
+        Layer::from(FollowerLayer::new(outer).with_leader_clip(LeaderClip::Hide)),
+        RenderId::new(2),
+        0,
+    );
+    relay.push_effect(
+        Layer::from(LeaderLayer::new(inner, Size::new(10.0, 10.0))),
+        RenderId::new(2),
+        1,
+    );
+    writer.push(publish(hiding, relay.finish()));
+    let version = writer.next_content_version().expect("a version");
+    let mut following = BoundaryContent::builder();
+    following.push_effect(Layer::from(FollowerLayer::new(inner)), RenderId::new(3), 0);
+    following.chunk(chunk(3, version, Rect::from_xywh(0.0, 0.0, 20.0, 20.0)));
+    writer.push(publish(escaping, following.finish()));
+    let clipped = |clip: Rect<f64>| {
+        let mut content = BoundaryContent::builder();
+        content.push_effect(
+            Layer::from(ClipRectLayer::new(clip, Clip::HardEdge)),
+            RenderId::new(4),
+            0,
+        );
+        content.slot(leader);
+        content.finish()
+    };
+    writer.push(publish(p, clipped(Rect::from_xywh(0.0, 0.0, 50.0, 50.0))));
+    let mut top = BoundaryContent::builder();
+    top.slot(p);
+    top.slot(hiding);
+    top.slot(escaping);
+    writer.push(publish(root, top.finish()));
+    writer.push(place(p, 100.0, 100.0));
+    owner
+        .apply(SURFACE)
+        .expect("a follower that hides, holding the leader of one that escapes");
+
+    let mut writer = owner.writer();
+    writer.push(publish(
+        p,
+        clipped(Rect::from_xywh(200.0, 200.0, 50.0, 50.0)),
+    ));
+    owner
+        .apply(SURFACE)
+        .expect("the clip moves off the first leader's anchor");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(100.0, 100.0, 120.0, 120.0)),
+        "the escaping follower's pixels: {damage:?}"
+    );
+}
+
 /// A filter under a shrinking ancestor spreads by the renderer's
 /// device-pixel kernel, not by its local reach scaled down: a move of its
 /// boundary damages where the kernel lands, even when the shrunk content
@@ -490,6 +565,52 @@ pub(crate) fn a_filter_under_a_shrinking_ancestor_damages_its_device_kernel() {
         covered(&damage, covering(0.0, 90.0, 8.0, 110.0)),
         "the kernel's on-surface pixels: {damage:?}"
     );
+}
+
+/// A boundary of thirty thousand nested effects publishes and moves on a
+/// thread of 256 KiB of stack: its footprint folds the chain without
+/// recursion.
+pub(crate) fn a_deep_effect_chain_applies_without_recursion() {
+    const DEPTH: u32 = 30_000;
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let mut owner = SceneOwner::new();
+            let mut writer = owner.writer();
+            let root = writer.current().root();
+            let deep = writer.mint_node();
+            let version = writer.next_content_version().expect("a version");
+            let mut content = BoundaryContent::builder();
+            for ordinal in 0..DEPTH {
+                content.push_effect(
+                    Layer::from(OffsetLayer::new(Offset::new(0.001, 0.0))),
+                    RenderId::new(1),
+                    ordinal,
+                );
+            }
+            content.chunk(chunk(1, version, Rect::from_ltrb(0.0, 0.0, 10.0, 10.0)));
+            writer.push(publish(deep, content.finish()));
+            let mut top = BoundaryContent::builder();
+            top.slot(deep);
+            writer.push(publish(root, top.finish()));
+            owner.apply(SURFACE).expect("a deep chain");
+
+            let mut writer = owner.writer();
+            writer.push(place(deep, 50.0, 0.0));
+            owner.apply(SURFACE).expect("the deep boundary moves");
+            let damage = rects(owner.patch_damage());
+            assert!(
+                covered(&damage, covering(30.0, 0.0, 40.0, 10.0)),
+                "the chain's offsets carried: {damage:?}"
+            );
+            assert!(
+                covered(&damage, covering(80.0, 0.0, 90.0, 10.0)),
+                "and the placement: {damage:?}"
+            );
+        })
+        .expect("a test thread")
+        .join()
+        .expect("no stack overflow");
 }
 
 /// Followers pair across a patch in one pass over a republished boundary's
