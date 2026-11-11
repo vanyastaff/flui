@@ -6,7 +6,7 @@
 //! in its profile, read as well in case its stderr is not a console's.
 
 use std::collections::VecDeque;
-use std::io::{BufRead as _, BufReader};
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
@@ -145,9 +145,10 @@ impl AttachError {
 struct StderrTail(Arc<Mutex<VecDeque<String>>>);
 
 impl StderrTail {
-    fn push(&self, mut line: String) {
-        if line.len() > STDERR_LINE {
-            let mut end = STDERR_LINE;
+    /// Keeps `line`, which `cut` says was longer than what was read of it.
+    fn push(&self, mut line: String, cut: bool) {
+        if cut || line.len() > STDERR_LINE {
+            let mut end = line.len().min(STDERR_LINE);
             while !line.is_char_boundary(end) {
                 end -= 1;
             }
@@ -165,6 +166,41 @@ impl StderrTail {
     fn lines(&self) -> Vec<String> {
         let lines = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         lines.iter().cloned().collect()
+    }
+}
+
+/// Reads one line of `reader` into `line`, keeping at most its first `limit` bytes and
+/// consuming the rest, so a browser that writes a long line without a break costs no more than
+/// `limit`. `None` at the end of the stream, else whether the line was longer than `limit`.
+fn read_line_within(
+    reader: &mut impl BufRead,
+    line: &mut Vec<u8>,
+    limit: usize,
+) -> io::Result<Option<bool>> {
+    line.clear();
+    let mut read_any = false;
+    let mut cut = false;
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(available) => available,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if available.is_empty() {
+            return Ok(read_any.then_some(cut));
+        }
+        read_any = true;
+        let (text, used, ended) = match available.iter().position(|&byte| byte == b'\n') {
+            Some(at) => (&available[..at], at + 1, true),
+            None => (available, available.len(), false),
+        };
+        let room = limit - line.len();
+        cut |= text.len() > room;
+        line.extend_from_slice(&text[..text.len().min(room)]);
+        reader.consume(used);
+        if ended {
+            return Ok(Some(cut));
+        }
     }
 }
 
@@ -213,14 +249,14 @@ impl LaunchedBrowser {
                     // Read to the end, the link's or not, so the browser never blocks on a
                     // full pipe; a line that is not text is kept as far as it is.
                     let mut reader = BufReader::new(stderr);
-                    let mut bytes = Vec::new();
-                    while matches!(reader.read_until(b'\n', &mut bytes), Ok(read) if read > 0) {
+                    let mut bytes = Vec::with_capacity(STDERR_LINE);
+                    while let Ok(Some(cut)) = read_line_within(&mut reader, &mut bytes, STDERR_LINE)
+                    {
                         let line = String::from_utf8_lossy(&bytes).trim_end().to_owned();
-                        bytes.clear();
                         if let Some(url) = listening_url(dialect, &line) {
                             let _ = listening.send(url);
                         }
-                        tail.push(line);
+                        tail.push(line, cut);
                     }
                 })
                 .map_err(LaunchError::Start)?;
@@ -447,6 +483,33 @@ mod tests {
         assert_eq!(
             listening_url(Dialect::Bidi, "DevTools listening on ws://x"),
             None
+        );
+    }
+
+    /// A line far longer than the bound is read past without being held: what is kept of it
+    /// stays within the bound, and the lines around it are read whole.
+    #[test]
+    fn a_long_stderr_line_is_read_past_within_its_bound() {
+        let long = vec![b'x'; 4 << 20];
+        let stream: Vec<u8> = [&b"first\n"[..], &long, b"\nlast"].concat();
+        let mut reader = io::BufReader::with_capacity(8 << 10, &stream[..]);
+        let mut line = Vec::with_capacity(STDERR_LINE);
+
+        let mut read = Vec::new();
+        while let Some(cut) =
+            read_line_within(&mut reader, &mut line, STDERR_LINE).expect("a slice reads")
+        {
+            assert!(line.capacity() <= STDERR_LINE, "{}", line.capacity());
+            read.push((String::from_utf8_lossy(&line).into_owned(), cut));
+        }
+
+        assert_eq!(
+            read,
+            [
+                ("first".to_owned(), false),
+                ("x".repeat(STDERR_LINE), true),
+                ("last".to_owned(), false),
+            ]
         );
     }
 
