@@ -78,7 +78,7 @@ impl View for Home {
 
 impl StatefulView for Home {
     type State = HomeState;
-    fn create_state(&self) -> HomeState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> HomeState {
         HomeState {
             probe: self.probe.clone(),
         }

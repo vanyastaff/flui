@@ -5,6 +5,7 @@
 //! against the chain the field recorded on its node. The clipboard read back
 //! is the one the harness installs, the headless platform's type.
 
+use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers};
@@ -395,7 +396,7 @@ struct PrimaryAcquirerState {
 impl flui_view::StatefulView for PrimaryAcquirer {
     type State = PrimaryAcquirerState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         PrimaryAcquirerState {
             handle: Rc::clone(&self.handle),
         }

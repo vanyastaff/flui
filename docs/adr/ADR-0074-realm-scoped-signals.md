@@ -137,7 +137,7 @@ impl<T> Signal<T> {
 `SignalError` is `Released`, `ForeignGraph`, `WrittenDuringBuild`, `CreatedDuringBuild`,
 `Reentrant` (`#[non_exhaustive]`).
 
-- **Creation is owned.** The idiom is `cx.signal(value)` from `init_state` (or
+- **Creation is owned.** The idiom is `cx.signal(value)` from `create_state` (or
   `did_change_dependencies`): the slot is owned by that element and released when it unmounts.
   App-level state uses `Reactive::signal(value)`, released with the UI runtime;
   `Reactive::signal_owned_by(element, value)` is the explicit form. All have `try_` variants.
@@ -309,7 +309,7 @@ A headless test builds the model with the binding's `reactive()`, writes with
 
 ### 5.7 Rules without hooks
 
-- A signal is created explicitly (`cx.signal(v)` in `init_state`, or `r.signal(v)` at the app
+- A signal is created explicitly (`cx.signal(v)` in `create_state`, or `r.signal(v)` at the app
   root) and held in a field. There is no `use_signal()` whose identity is its call index; `build`
   may read signals in any order, conditionally, or in loops.
 - `build` stays a pure function of `(View, State, reads)`; reads are recorded, not ordered.

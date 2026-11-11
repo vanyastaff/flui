@@ -201,7 +201,7 @@ struct ObservedRootState {
 impl StatefulView for ObservedRoot {
     type State = ObservedRootState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ObservedRootState {
             observed: self.observed.clone(),
             _sentinel: self.observed.states.plant(),

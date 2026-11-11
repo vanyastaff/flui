@@ -951,7 +951,7 @@ type MenuOpener = Rc<dyn Fn(&mut EventCx<'_>, MenuCause, Option<Offset<f64>>)>;
 impl StatefulView for GestureAlternatives {
     type State = GestureAlternativesState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let platform = TargetPlatform::current();
         for command in self.commands() {
             command.warn_reserved_keys(platform, &[]);
@@ -1506,7 +1506,7 @@ struct FocusDecorationsState {
 impl StatefulView for FocusDecorations {
     type State = FocusDecorationsState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FocusDecorationsState {
             focus_manager: None,
             rebuild: None,

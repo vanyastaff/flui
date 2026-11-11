@@ -1658,7 +1658,7 @@ mod tests {
     impl crate::StatefulView for RegistryStateView {
         type State = RegistryState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             RegistryState(self.value)
         }
     }
@@ -1744,7 +1744,7 @@ mod tests {
     impl crate::StatefulView for KeyedLookupParent {
         type State = RegistryState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             RegistryState(self.value)
         }
     }
@@ -1840,7 +1840,7 @@ mod tests {
     impl crate::StatefulView for DisposeMarkerView {
         type State = DisposeMarkerState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             DisposeMarkerState {
                 disposed: Arc::clone(&self.disposed),
             }

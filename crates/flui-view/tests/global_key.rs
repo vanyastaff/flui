@@ -12,6 +12,7 @@
 //! pass.
 
 use flui_foundation::ViewKey;
+use flui_view::LifecycleContext;
 // The duplicate-key fixture runs only where the debug check panics.
 #[cfg(debug_assertions)]
 use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtocol};
@@ -75,7 +76,7 @@ impl KeyedCounterState {
 impl StatefulView for KeyedCounter {
     type State = KeyedCounterState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         KeyedCounterState {
             count: self.initial,
             sentinel: 0,
@@ -174,7 +175,10 @@ fn set_sentinel(
             Some(e) => e,
             None => return false,
         };
-    downcast.state_mut().sentinel = value;
+    let Some(state) = downcast.state_mut() else {
+        return false;
+    };
+    state.sentinel = value;
     true
 }
 

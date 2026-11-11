@@ -1154,7 +1154,7 @@ fn motion_hook<K: Copy + Eq + 'static>(
 impl<K: Copy + Eq + 'static> StatefulView for AnchoredDrag<K> {
     type State = AnchoredDragState<K>;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AnchoredDragState::new(&self.controller, Rc::default(), Rc::default())
     }
 }

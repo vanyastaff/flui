@@ -255,7 +255,7 @@ impl std::fmt::Debug for RadioState {
 impl<T: PartialEq + Clone + 'static> StatefulView for Radio<T> {
     type State = RadioState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let initial = if self.is_selected() {
             WidgetStates::from(WidgetState::Selected)
         } else {

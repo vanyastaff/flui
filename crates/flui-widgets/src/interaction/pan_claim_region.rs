@@ -45,7 +45,7 @@ impl std::fmt::Debug for PanClaimRegion {
 impl StatefulView for PanClaimRegion {
     type State = PanClaimRegionState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         PanClaimRegionState {
             claim: self.claim,
             region: None,

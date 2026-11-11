@@ -184,7 +184,7 @@ impl std::fmt::Debug for ActivityIndicatorState {
 impl StatefulView for ActivityIndicator {
     type State = ActivityIndicatorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ActivityIndicatorState {
             controller: AnimationController::builder(CYCLE)
                 .debug_label("ActivityIndicator")

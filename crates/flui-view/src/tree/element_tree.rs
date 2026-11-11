@@ -3075,7 +3075,7 @@ mod tests {
     impl crate::StatefulView for ActiveRetakePanicsOnActivate {
         type State = ActiveRetakePanicState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             ActiveRetakePanicState {
                 armed: std::rc::Rc::clone(&self.armed),
             }

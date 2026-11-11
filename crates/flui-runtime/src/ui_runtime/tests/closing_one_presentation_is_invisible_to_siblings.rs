@@ -79,7 +79,7 @@ struct CloseCapabilities {
 impl StatefulView for CloseObserver {
     type State = Self;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.clone()
     }
 }
@@ -419,7 +419,7 @@ struct SiblingProbe {
 impl StatefulView for SiblingProbe {
     type State = Self;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.clone()
     }
 }
@@ -1825,7 +1825,7 @@ struct FailingTeardownState;
 impl StatefulView for FailingTeardownRoot {
     type State = FailingTeardownState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FailingTeardownState
     }
 }

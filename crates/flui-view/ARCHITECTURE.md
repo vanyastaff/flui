@@ -447,7 +447,7 @@ a live tree without re-locking the tree the drain already holds.
 
 **Scope.** The context is only reachable inside build/lifecycle calls, so it cannot be
 stashed and used after its element is defunct. Capability acquisition is split out by type (ADR-0078:
-`LifecycleContext` in `init_state`/`did_change_dependencies`, `BuildContext` in `build`).
+`LifecycleContext` in `create_state`/`init_state`/`did_change_dependencies`, `BuildContext` in `build`).
 
 ### Inherited reads are O(1) and field-precise; reading is depending
 
@@ -540,8 +540,8 @@ cross-thread `UiCommand::SignalWrite` to the presentation that minted the slot),
 itself (`BuildOwner::signal_graph`, which no build context reaches), for minting test signals
 and inspecting the reader registry; writing still needs a source. An event callback may
 return `()` or a write's `Result`; `EventOutcome::report` logs a refused write on
-`flui.signals` rather than dropping it silently. A `Signal::default()` handle names graph 0,
-which `Reactive::new` never mints, and is refused with `Unbound`.
+`flui.signals` rather than dropping it silently. A state creates its signals in
+`StatefulView::create_state`, so no handle exists before its graph slot does.
 
 The borrowed `Writer` and `EventCx` also implement pure `ReadGraph`: an event's
 `peek` observes current values without creating a build subscription. Owner-bound

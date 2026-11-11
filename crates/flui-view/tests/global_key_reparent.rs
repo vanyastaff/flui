@@ -16,6 +16,7 @@
 
 #![cfg(feature = "testing")]
 use flui_foundation::ViewKey;
+use flui_view::LifecycleContext;
 use flui_view::{
     BuildContext, BuildOwner, ElementTree, GlobalKey, IntoView, StatefulView, View, ViewExt,
     ViewState,
@@ -42,7 +43,7 @@ struct Spacer;
 
 impl StatefulView for Spacer {
     type State = SpacerState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SpacerState
     }
 }
@@ -87,7 +88,7 @@ impl CounterState {
 
 impl StatefulView for KeyedCounter {
     type State = CounterState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         CounterState {
             count: self.initial,
         }

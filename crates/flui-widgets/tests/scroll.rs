@@ -7,6 +7,7 @@
 //! 5. `ScrollController::animate_to` (ADR-0037) — curve-driven animation,
 //!    grab-to-cancel, and jump_to-cancels-in-flight.
 
+use flui_view::LifecycleContext;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -5113,7 +5114,7 @@ struct ScrollInBuildState;
 
 impl flui_view::StatefulView for ScrollInBuild {
     type State = ScrollInBuildState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ScrollInBuildState
     }
 }

@@ -81,7 +81,7 @@ pub struct CircularProgressIndicatorState {
 impl StatefulView for CircularProgressIndicator {
     type State = CircularProgressIndicatorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         CircularProgressIndicatorState {
             fraction: Fraction::new(self.value),
         }

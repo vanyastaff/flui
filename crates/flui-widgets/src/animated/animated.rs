@@ -84,7 +84,7 @@ impl<T: TwoWayConverter + 'static> std::fmt::Debug for AnimatedState<T> {
 impl<T: TwoWayConverter + 'static> StatefulView for Animated<T> {
     type State = AnimatedState<T>;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let animation = ImplicitMotion::new(
             "Animated",
             self.target.clone(),

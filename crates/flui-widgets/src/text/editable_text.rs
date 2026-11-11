@@ -936,7 +936,7 @@ impl std::fmt::Debug for EditableTextState {
 impl StatefulView for EditableText {
     type State = EditableTextState;
 
-    fn create_state(&self) -> EditableTextState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> EditableTextState {
         let focus_node = Rc::clone(&self.focus_node);
         focus_node.set_can_request_focus(self.enabled);
         EditableTextState {

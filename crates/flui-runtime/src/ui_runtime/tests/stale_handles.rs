@@ -29,7 +29,7 @@ impl Drop for HandleSourceState {
 impl StatefulView for HandleSource {
     type State = HandleSourceState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         HandleSourceState(self.clone())
     }
 }

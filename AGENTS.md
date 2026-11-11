@@ -50,6 +50,7 @@ and edits its row.
 | State only the owner thread touches | `Rc` with `Cell`/`RefCell`; a re-entry that finds it busy gets a typed outcome (ADR-0266) | `Arc<Mutex<_>>`, atomics, `try_lock` as a re-entrancy detector, `Send + Sync` on a callback that never leaves the thread |
 | A list of listeners | `Notifier<Arg>`, `ChangeNotifier`; a listener's owned handle is a `Subscription` from its channel's `listen` | a hand-rolled `Vec` of callbacks guarded by a `notifying: bool` |
 | A new identity | `IdMint<I>` and `IdExhausted` (`flui_foundation::sequence`), its `AtomicIdMint` where two threads mint one id domain, or a generational key whose slot generations `GenSlots` carries (ADR-0313) | `wrapping_add`, a `pub` integer field, an ID derived from an OS handle or pointer |
+| A state's signals and capability handles | created in `StatefulView::create_state(&self, ctx)`, so the state is born bound | an `Option` field that `init_state` fills with `Some(ctx.…)` ([gaps](docs/gaps.md
 | A test that drives an application's frames | `flui_testing::HeadlessHost` over `UiRuntime::pump` and its manual clock | `HeadlessBinding::pump_frame`, which ADR-0083 removes |
 | Which crate may depend on which | `tier`, `order` and `reach` (ADR-0081) | reasoning from `layer = N`, which ADR-0081 removed |
 | A platform's status, a version floor, an open gap | `crates/flui-native/platform-parity.toml` (rendered into `docs/platform-parity.md`), `platform-support.toml`, `docs/gaps.md` | a status line in an ADR, a spec or an `ARCHITECTURE.md`; a hand edit of `docs/platform-parity.md` |
@@ -125,7 +126,7 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 
 | Rule | Enforced by |
 |------|-------------|
-| Presentation capabilities (`rebuild_handle`, `focus_manager`, `text_input_handle`, `pipeline_owner`, …) are acquired only in `init_state`/`did_change_dependencies` | `LifecycleContext`, which only those hooks receive (ADR-0078) |
+| Presentation capabilities (`rebuild_handle`, `focus_manager`, `text_input_handle`, `pipeline_owner`, …) and signals are acquired only in `create_state`/`init_state`/`did_change_dependencies` | `LifecycleContext`, which only those hooks receive (ADR-0078) |
 | Signals are read in `build`, never written or created there | run-time guard in `flui-view::reactive` (ADR-0074) |
 | **ID offset** — plain slab-backed IDs (`ViewId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize` (`slab_index + 1`); generational keys (`ElementId`, `RenderId`, `UiRuntimeId`) are minted with `new_gen(slab_index, generation)` and read with `.index()` | ID newtypes |
 | Logical and device geometry don't mix (ADR-0098) | trybuild `crates/flui-painting/tests/compile_fail/` |

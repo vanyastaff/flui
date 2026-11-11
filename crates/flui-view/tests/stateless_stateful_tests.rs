@@ -96,7 +96,7 @@ struct HookOrderState {
 impl StatefulView for HookOrderView {
     type State = HookOrderState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.log
             .lock()
             .expect("the hook log is never poisoned")
@@ -236,7 +236,7 @@ struct LifecycleCallbackState {
 impl StatefulView for LifecycleCallbackView {
     type State = LifecycleCallbackState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         LifecycleCallbackState {
             init_called: Arc::new(AtomicUsize::new(0)),
             dispose_called: Arc::new(AtomicUsize::new(0)),
@@ -278,27 +278,21 @@ impl View for LifecycleCallbackView {
 
 pub(crate) fn stateful_activate_and_deactivate_require_completed_init_state() {
     let view = LifecycleCallbackView;
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
+    let mut element = StatefulElement::new(&view, StatefulBehavior::new());
     let mut owner = BuildOwner::new();
     element.mount(None, 0, &mut owner.element_owner_mut());
 
-    let deactivate_count = element.state().deactivate_called.clone();
-    let activate_count = element.state().activate_called.clone();
-    assert_eq!(deactivate_count.load(Ordering::SeqCst), 0);
-    assert_eq!(activate_count.load(Ordering::SeqCst), 0);
+    assert!(
+        element.state().is_none(),
+        "the state is created at the first build, not at mount"
+    );
 
     element.deactivate(&mut owner.element_owner_mut());
     element.activate(&mut owner.element_owner_mut());
 
-    assert_eq!(
-        deactivate_count.load(Ordering::SeqCst),
-        0,
-        "deactivate must not run before init_state completes"
-    );
-    assert_eq!(
-        activate_count.load(Ordering::SeqCst),
-        0,
-        "activate must not run before init_state completes"
+    assert!(
+        element.state().is_none(),
+        "deactivate and activate before the first build neither create the state nor reach it"
     );
 }
 

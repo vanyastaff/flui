@@ -102,7 +102,7 @@ At the original census, one catalog callback was invoked from `build`: `Animated
 The owner-local migration now delivers it after the frame. A callback called
 from `build` cannot be handed a typed write capability, because `build` has none.
 
-Element-local state is a `Signal<T>`, created in `init_state` through `ctx.signal(value)`
+Element-local state is a `Signal<T>`, created in `create_state` through `ctx.signal(value)`
 (`crates/flui-view/src/context/build_context.rs`); no other local-state handle exists.
 
 ### What the panel measured
@@ -424,8 +424,7 @@ examples crates/flui-cli/src/templates` finds nothing (no annotation), and `git 
   out), and `EventOutcome` added to an existing `use`. `.report()` logs a refused write, as
   `RawButton` does with a press's `Result`. It disappears when the setter
   itself takes `cx`.
-- *Moving state to `Signal`*: `#[derive(Default)]` on the state, `Signal::default()` in
-  `create_state` and `ctx.signal(0)` in `init_state`.
+- *Moving state to `Signal`*: `ctx.signal(0)` in `create_state`.
 - *Collateral outside the pilot*: none in code. One layout defect surfaced and was fixed in the
   pilot file itself: the todo `ListView` sat in a bare `Column`, got unbounded height, and its
   rows were never reachable (not in the semantics tree, not hit); it is now `Expanded`.

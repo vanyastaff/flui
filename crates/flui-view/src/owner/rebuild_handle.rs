@@ -212,7 +212,7 @@ mod tests {
     impl StatefulView for Capturing {
         type State = CapturingState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
             CapturingState {
                 captured: Arc::clone(&self.captured),
                 builds: Arc::clone(&self.builds),

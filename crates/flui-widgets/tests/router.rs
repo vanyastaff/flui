@@ -131,7 +131,7 @@ impl View for Page {
 
 impl StatefulView for Page {
     type State = PageState;
-    fn create_state(&self) -> PageState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> PageState {
         PageState {
             probe: self.probe.clone(),
         }
@@ -569,7 +569,7 @@ impl View for DropPage {
 impl StatefulView for DropPage {
     type State = DropPageState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DropPageState(self.probe.clone())
     }
 }
@@ -1208,13 +1208,16 @@ fn terminal_router_construction_matrix(case: &str) {
         let router =
             Router::<CloneRoute>::from_location("/clone", |_, _| Text::new("page").boxed())
                 .expect("known path");
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if case == "router-clone" {
-                drop(router.clone());
-            } else {
-                drop(router.create_state());
-            }
-        }))
+        let failure = if case == "router-clone" {
+            let failure =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(router.clone())));
+            drop(router);
+            failure
+        } else {
+            // The state's copy of the initial stack is made at the first
+            // build, from the mounted router.
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(mount(router))))
+        }
         .expect_err("second route clone fails");
         assert_eq!(
             flui_foundation::panic::payload_text(failure.as_ref()),
@@ -1225,12 +1228,10 @@ fn terminal_router_construction_matrix(case: &str) {
             1,
             "the copy made before the failing clone is destroyed by its unwind"
         );
-        drop(router);
     }
     let healthy = Router::new(AppRoute::Home, |_, _| Text::new("recovery").boxed());
     drop(healthy.clone());
-    drop(healthy.create_state());
-    drop(healthy);
+    drop(mount(healthy));
 }
 
 fn terminal_seeded_modal_releases_its_factories() {
@@ -1744,7 +1745,7 @@ impl View for HandleKeeper {
 
 impl StatefulView for HandleKeeper {
     type State = HandleKeeperState;
-    fn create_state(&self) -> HandleKeeperState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> HandleKeeperState {
         HandleKeeperState {
             router: Rc::clone(&self.router),
         }

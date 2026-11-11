@@ -480,7 +480,7 @@ impl WidgetsAppState {
 impl<F: AppForm> StatefulView for WidgetsApp<F> {
     type State = WidgetsAppState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // The router form: only `WidgetsApp::router` sets it, and a
         // `WidgetsApp<RouterForm>` has no navigator builders.
         if self.router.is_some() {

@@ -35,6 +35,7 @@
 
 use flui_foundation::ViewKey;
 use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtocol};
+use flui_view::LifecycleContext;
 use flui_view::{
     BuildContext, BuildOwner, ElementId, ElementTree, GlobalKey, IntoView, KeyLookup, RenderView,
     StatefulView, StatelessView, View, ViewExt, ViewState,
@@ -78,7 +79,7 @@ struct Keyed {
 impl StatefulView for Keyed {
     type State = KeyedState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         KeyedState { tag: self.tag }
     }
 }

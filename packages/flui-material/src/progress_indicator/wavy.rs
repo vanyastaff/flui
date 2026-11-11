@@ -342,7 +342,7 @@ pub struct CircularWavyProgressIndicatorState {
 impl StatefulView for LinearWavyProgressIndicator {
     type State = LinearWavyProgressIndicatorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         LinearWavyProgressIndicatorState {
             waves: Waves::new(linear::CYCLE, self.value),
             bars: Rc::new(Bars::new()),
@@ -353,7 +353,7 @@ impl StatefulView for LinearWavyProgressIndicator {
 impl StatefulView for CircularWavyProgressIndicator {
     type State = CircularWavyProgressIndicatorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         CircularWavyProgressIndicatorState {
             waves: Waves::new(ActivityArc::CYCLE, self.value),
             arc: Rc::new(ActivityArc::new()),

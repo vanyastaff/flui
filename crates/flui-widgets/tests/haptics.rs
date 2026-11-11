@@ -35,7 +35,7 @@ struct ProbeState {
 impl StatefulView for Probe {
     type State = ProbeState;
 
-    fn create_state(&self) -> ProbeState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> ProbeState {
         ProbeState {
             slot: Rc::clone(&self.slot),
         }

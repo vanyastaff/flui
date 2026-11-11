@@ -658,40 +658,56 @@ where
 /// Behavior for StatefulView elements.
 ///
 /// Manages persistent state and calls state.build().
+///
+/// The state does not exist until the element's first build: that is where
+/// a [`LifecycleContext`] first exists, so `StatefulView::create_state`
+/// runs there, from the element's current view, right before `init_state`.
+/// A parent that updates the element before its first build therefore needs
+/// no replay of `did_update_view`: the state is made from the newest view.
 #[derive(Debug)]
 pub struct StatefulBehavior<V: StatefulView> {
-    /// The persistent state for this element.
-    pub state: V::State,
+    /// The persistent state for this element, `None` until the first build
+    /// creates it.
+    state: Option<V::State>,
+    /// `init_state` returned. A state whose `init_state` never ran or
+    /// panicked receives no other lifecycle hook.
     initialized: bool,
-    /// The view `create_state` saw, held while a parent updates this element
-    /// before its first build. `did_update_view` then runs right after
-    /// `init_state`, so a state never observes an update before its
-    /// initialization and still learns of every configuration change.
-    pending_update: Option<V>,
     /// The view or the dependencies changed since `ViewState::apply_view`
     /// last ran; the next build calls it first.
     apply_pending: bool,
 }
 
 impl<V: StatefulView> StatefulBehavior<V> {
-    /// Create a new StatefulBehavior by creating the state from the view.
-    pub fn new(view: &V) -> Self {
+    /// A behavior whose state the element's first build creates.
+    pub fn new() -> Self {
         Self {
-            state: view.create_state(),
+            state: None,
             initialized: false,
-            pending_update: None,
             apply_pending: true,
         }
     }
 
-    /// Get a reference to the state.
-    pub fn state(&self) -> &V::State {
-        &self.state
+    /// The state, once the element's first build has created it.
+    pub fn state(&self) -> Option<&V::State> {
+        self.state.as_ref()
     }
 
-    /// Get a mutable reference to the state.
-    pub fn state_mut(&mut self) -> &mut V::State {
-        &mut self.state
+    /// The state, mutably, once the element's first build has created it.
+    pub fn state_mut(&mut self) -> Option<&mut V::State> {
+        self.state.as_mut()
+    }
+
+    /// The state of an initialized element.
+    fn initialized_state(&mut self) -> &mut V::State {
+        self.state
+            .as_mut()
+            .expect("BUG: an initialized StatefulElement holds the state its first build created")
+    }
+}
+
+impl<V: StatefulView> Default for StatefulBehavior<V> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -712,7 +728,7 @@ where
     /// bound, so the resulting `&dyn Any` has a well-defined `TypeId`
     /// equal to `TypeId::of::<V::State>()`.
     fn state_as_any(&self) -> Option<&dyn std::any::Any> {
-        Some(&self.state as &dyn std::any::Any)
+        self.state.as_ref().map(|state| state as &dyn std::any::Any)
     }
 
     fn build_into_views(
@@ -727,18 +743,24 @@ where
         let ctx_choice = make_build_ctx(core, owner);
         let ctx = ctx_choice.as_ctx();
 
-        // Initialize state on first build — must run before the
-        // `should_build` guard so a freshly-mounted `StatefulView` calls
-        // `init_state` exactly once even if the element is clean.
+        // Create and initialize the state on first build — must run before
+        // the `should_build` guard so a freshly-mounted `StatefulView` calls
+        // `create_state` and `init_state` exactly once even if the element is
+        // clean. Both run from the element's current view, so an update that
+        // reached the element before this build is already in the state.
         if !self.initialized {
             let sink_start = lifecycle_sink_len(owner);
             let lifecycle_ctx = ctx_choice.as_lifecycle_ctx();
+            let view = core.view();
+            let state = &mut self.state;
             #[expect(
                 clippy::disallowed_methods,
-                reason = "ADR-0287: a state's init_state panic is recorded and the element recovers"
+                reason = "ADR-0287: a state's create_state or init_state panic is recorded and the element recovers"
             )]
             let init = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                self.state.init_state(lifecycle_ctx);
+                state
+                    .get_or_insert_with(|| view.create_state(lifecycle_ctx))
+                    .init_state(lifecycle_ctx);
             }));
             mark_lifecycle_records(owner, sink_start);
             if let Err(payload) = init {
@@ -753,26 +775,6 @@ where
                 std::panic::resume_unwind(payload);
             }
             self.initialized = true;
-            if let Some(old_view) = self.pending_update.take() {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: a state's did_update_view panic is recorded and the element recovers"
-                )]
-                let update = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    self.state.did_update_view(&old_view, core.view());
-                }));
-                if let Err(payload) = update {
-                    owner.record_armed_lifecycle_panic(
-                        core.self_id(),
-                        core.creation_site(),
-                        TypeId::of::<V>(),
-                        LifecycleHook::Update,
-                        payload.as_ref(),
-                        "updating StatefulElement after its init_state",
-                    );
-                    std::panic::resume_unwind(payload);
-                }
-            }
         }
 
         if !super::behavior_commons::should_build_with_trace(core, "StatefulBehavior") {
@@ -780,12 +782,13 @@ where
         }
         if self.apply_pending {
             let sink_start = lifecycle_sink_len(owner);
+            let state = self.initialized_state();
             #[expect(
                 clippy::disallowed_methods,
                 reason = "ADR-0287: a state's apply_view panic is recorded and the element recovers"
             )]
             let applied = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                self.state.apply_view(core.view(), ctx_choice.as_ctx());
+                state.apply_view(core.view(), ctx_choice.as_ctx());
             }));
             mark_lifecycle_records(owner, sink_start);
             if let Err(payload) = applied {
@@ -807,7 +810,7 @@ where
         // `view` borrow is moved into the closure (cloned) and `state` is
         // captured by reference, independent of `core`.
         let view = core.view().clone();
-        let state = &self.state;
+        let state = &*self.initialized_state();
         let child_view =
             super::behavior_commons::build_or_recover(core, owner, "StatefulElement", move || {
                 // See `StatelessBehavior::build_into_views` for the
@@ -830,8 +833,8 @@ where
     /// at mount, so a state whose `init_state` never ran — it panicked, or the
     /// element was removed before its first `build_scope` drain ever reached
     /// it — has never acquired whatever `dispose` would release, so `dispose`
-    /// must not run for it either; `create_state` must not itself acquire
-    /// lifecycle resources, so nothing leaks by skipping it here.
+    /// must not run for it either. What `create_state` acquired (signals,
+    /// capability handles) is element-owned or dropped with the state.
     /// `self.initialized` is set `true` only after `init_state` *returns*
     /// (see `build_into_views` above), so a panicking `init_state` leaves
     /// it `false` and this guard holds.
@@ -860,7 +863,9 @@ where
             clippy::disallowed_methods,
             reason = "ADR-0287: a state's dispose panic is recorded; later elements still unmount"
         )]
-        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.dispose())) {
+        if let Err(payload) =
+            std::panic::catch_unwind(AssertUnwindSafe(|| self.initialized_state().dispose()))
+        {
             owner.record_hook_panic(
                 core.self_id(),
                 core.creation_site(),
@@ -903,7 +908,9 @@ where
             clippy::disallowed_methods,
             reason = "ADR-0287: a state's activate panic is recorded against its element"
         )]
-        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.activate())) {
+        if let Err(payload) =
+            std::panic::catch_unwind(AssertUnwindSafe(|| self.initialized_state().activate()))
+        {
             owner.record_armed_lifecycle_panic(
                 core.self_id(),
                 core.creation_site(),
@@ -939,7 +946,8 @@ where
             clippy::disallowed_methods,
             reason = "ADR-0287: a state's deactivate panic is recorded and the flip still happens"
         )]
-        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.deactivate()))
+        if let Err(payload) =
+            std::panic::catch_unwind(AssertUnwindSafe(|| self.initialized_state().deactivate()))
         {
             owner.record_hook_panic(
                 core.self_id(),
@@ -960,17 +968,16 @@ where
         _owner: &mut crate::ElementOwner<'_>,
     ) {
         // A parent can rebuild this element between its mount and its first
-        // build (`init_state` runs in the build drain, not at mount). Keep the
-        // view the state was created from; the first build delivers the update.
+        // build (`create_state` and `init_state` run in the build drain, not
+        // at mount). The first build creates the state from the newest view,
+        // so an uninitialized state has no older view to be told about.
         self.apply_pending = true;
         if !self.initialized {
-            if self.pending_update.is_none() {
-                self.pending_update = Some(old_view.clone());
-            }
             return;
         }
         // `core.view()` is already the freshly-swapped-in configuration here.
-        self.state.did_update_view(old_view, core.view());
+        self.initialized_state()
+            .did_update_view(old_view, core.view());
     }
 
     /// Fire `ViewState::did_change_dependencies` on the owned state.
@@ -996,6 +1003,11 @@ where
         // changed inherited value via `depend_on` resolves against the real
         // ancestor chain.
         self.apply_pending = true;
+        // A dependency registers during a build, which created the state
+        // first; an element with no state has nothing to notify.
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
         let ctx_choice = make_build_ctx(core, owner);
         let sink_start = lifecycle_sink_len(owner);
         #[expect(
@@ -1003,8 +1015,7 @@ where
             reason = "ADR-0287: a state's did_change_dependencies panic is recorded, not unwound"
         )]
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            self.state
-                .did_change_dependencies(ctx_choice.as_lifecycle_ctx());
+            state.did_change_dependencies(ctx_choice.as_lifecycle_ctx());
         }));
         mark_lifecycle_records(owner, sink_start);
         if let Err(payload) = outcome {
@@ -1769,22 +1780,28 @@ impl<V> AnimatedBehavior<V>
 where
     V: AnimatedView,
 {
-    /// Create a new AnimatedBehavior for the given view.
-    pub fn new(view: &V) -> Self {
+    /// A behavior whose state the element's first build creates.
+    pub fn new() -> Self {
         Self {
-            stateful: StatefulBehavior::new(view),
+            stateful: StatefulBehavior::new(),
             subscribed: None,
         }
     }
 
-    /// Get a reference to the state.
-    pub fn state(&self) -> &V::State {
-        &self.stateful.state
+    /// The state, once the element's first build has created it.
+    pub fn state(&self) -> Option<&V::State> {
+        self.stateful.state()
     }
 
-    /// Get a mutable reference to the state.
-    pub fn state_mut(&mut self) -> &mut V::State {
-        &mut self.stateful.state
+    /// The state, mutably, once the element's first build has created it.
+    pub fn state_mut(&mut self) -> Option<&mut V::State> {
+        self.stateful.state_mut()
+    }
+}
+
+impl<V: AnimatedView> Default for AnimatedBehavior<V> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

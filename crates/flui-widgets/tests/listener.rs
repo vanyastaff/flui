@@ -645,7 +645,7 @@ pub(crate) fn custom_recognizer_competes_through_a_listener() {
     }
     impl StatefulView for Attached {
         type State = State;
-        fn create_state(&self) -> State {
+        fn create_state(&self, _ctx: &dyn LifecycleContext) -> State {
             State {
                 events: Rc::clone(&self.0),
                 custom: None,

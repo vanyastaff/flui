@@ -3,6 +3,7 @@
 //! Tests the lifecycle states and transitions: Initial → Active ⇄ Inactive →
 //! Defunct
 
+use flui_view::LifecycleContext;
 use std::future::Future;
 use std::sync::{
     Arc, Mutex,
@@ -73,7 +74,7 @@ struct LifecycleTrackingState {
 impl StatefulView for LifecycleTrackingView {
     type State = LifecycleTrackingState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         LifecycleTrackingState {
             disposed: self.disposed.clone(),
             activated: self.activated.clone(),

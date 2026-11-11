@@ -39,7 +39,7 @@ impl flui_view::View for VideoSurface {
 impl StatefulView for VideoSurface {
     type State = VideoSurfaceState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         VideoSurfaceState {
             shared: Arc::clone(&self.shared),
             id: None,

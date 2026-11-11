@@ -73,18 +73,14 @@ struct AgentCounterState {
 impl StatefulView for AgentCounter {
     type State = AgentCounterState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         AgentCounterState {
-            count: Signal::default(),
+            count: ctx.signal(0),
         }
     }
 }
 
 impl ViewState<AgentCounter> for AgentCounterState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.count = ctx.signal(0);
-    }
-
     fn build(&self, _view: &AgentCounter, ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count;
 

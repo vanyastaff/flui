@@ -122,7 +122,7 @@ impl fmt::Debug for ContextMenuArea {
 impl StatefulView for ContextMenuArea {
     type State = ContextMenuAreaState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ContextMenuAreaState {
             anchor: SubtreeAnchor::new(),
             session: Rc::new(MenuSession::default()),

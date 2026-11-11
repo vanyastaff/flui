@@ -1004,8 +1004,7 @@ impl BuildOwner {
     /// ordering hint: [`build_scope`](Self::build_scope) re-derives every
     /// queued element's authoritative tree depth from its node before draining
     /// (see `rekey_dirty_depths`), so a caller that
-    /// only knows the sibling slot index (e.g. `setState` via
-    /// `ElementCore::schedule_self_build`) cannot mis-order the drain.
+    /// only knows the sibling slot index cannot mis-order the drain.
     pub fn schedule_build_for(&mut self, id: ElementId, depth: usize, reason: RebuildReason) {
         self.external_inbox.note_local_admission();
         let newly_queued = match self.dirty_reasons.entry(id) {
@@ -3349,7 +3348,7 @@ mod tests {
     impl crate::StatefulView for KeyedDependencyView {
         type State = KeyedDependencyState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             KeyedDependencyState {
                 dependency_calls: Arc::clone(&self.dependency_calls),
             }
@@ -3676,7 +3675,7 @@ mod tests {
     impl crate::StatefulView for MidDrainSelfRescheduler {
         type State = MidDrainSelfReschedulerState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             MidDrainSelfReschedulerState {
                 build_calls: Arc::clone(&self.build_calls),
                 should_reschedule: Arc::clone(&self.should_reschedule),
@@ -3732,7 +3731,7 @@ mod tests {
     impl crate::StatefulView for MidDrainRootPanic {
         type State = MidDrainRootPanicState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             MidDrainRootPanicState {
                 trigger_panic: Arc::clone(&self.trigger_panic),
             }

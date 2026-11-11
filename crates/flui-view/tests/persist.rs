@@ -140,7 +140,7 @@ struct NoteOpenerState {
 impl StatefulView for NoteOpener {
     type State = NoteOpenerState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         NoteOpenerState {
             opened: Rc::clone(&self.opened),
         }
@@ -174,7 +174,7 @@ struct TwoOpenersState(TwoOpeners);
 impl StatefulView for TwoOpeners {
     type State = TwoOpenersState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         TwoOpenersState(self.clone())
     }
 }

@@ -38,7 +38,7 @@ impl View for Probe {
 impl StatefulView for Probe {
     type State = ProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.0.set(self.0.get() + 1);
         ProbeState
     }

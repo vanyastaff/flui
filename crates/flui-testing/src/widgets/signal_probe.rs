@@ -140,40 +140,36 @@ impl std::fmt::Debug for ProbeRoot {
 }
 
 /// The state of a [`ProbeRoot`]: the two signals and the writer source,
-/// acquired in `init_state`.
-#[derive(Debug, Default)]
+/// acquired in `create_state`.
+#[derive(Debug)]
 pub struct ProbeRootState {
     count: Signal<u32>,
     released: Signal<u32>,
-    writer: Option<WriterSource>,
+    writer: WriterSource,
 }
 
 impl StatefulView for ProbeRoot {
     type State = ProbeRootState;
 
-    fn create_state(&self) -> Self::State {
-        ProbeRootState::default()
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let gone = flui_view::Reactive::new();
+        let released = gone.signal(0);
+        gone.release(released.slot());
+        ProbeRootState {
+            count: ctx.signal(0),
+            released,
+            writer: ctx.writer_source(),
+        }
     }
 }
 
 impl ViewState<ProbeRoot> for ProbeRootState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.count = ctx.signal(0);
-        let gone = flui_view::Reactive::new();
-        self.released = gone.signal(0);
-        gone.release(self.released.slot());
-        self.writer = Some(ctx.writer_source());
-    }
-
     fn build(&self, view: &ProbeRoot, ctx: &dyn BuildContext) -> impl IntoView {
         let seen = &view.probe.seen;
-        let writer = self
-            .writer
-            .clone()
-            .expect("BUG: init_state acquires the writer source before the first build");
-        let previous = seen.count.replace(Some((self.count, writer)));
+        let previous = seen.count.replace(Some((self.count, self.writer.clone())));
         drop(previous);
-        seen.writer.borrow_mut().clone_from(&self.writer);
+        let previous = seen.writer.replace(Some(self.writer.clone()));
+        drop(previous);
         seen.reads.borrow_mut().push(self.count.get(ctx));
         (view.probe.builder)(ProbeSignals {
             count: self.count,

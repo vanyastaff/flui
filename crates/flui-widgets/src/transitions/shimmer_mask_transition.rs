@@ -1,6 +1,7 @@
 //! [`ShimmerMaskTransition`] — sweeps the shimmer band an [`Animation`] holds
 //! over its child, for the shimmer effect.
 
+use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_animation::Animation;
@@ -67,7 +68,7 @@ impl ViewState<ShimmerMaskTransition> for ShimmerMaskTransitionState {
 impl StatefulView for ShimmerMaskTransition {
     type State = ShimmerMaskTransitionState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ShimmerMaskTransitionState {
             sweep: ProxySlot::new(&self.sweep),
         }

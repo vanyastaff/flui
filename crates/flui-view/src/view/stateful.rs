@@ -15,44 +15,53 @@ use crate::context::{BuildContext, LifecycleContext};
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_view::{StatefulView, ViewState, BuildContext, IntoView};
+/// use flui_view::{BuildContextExt, LifecycleContext, Signal, StatefulView, ViewState, BuildContext, IntoView};
 ///
+/// #[derive(Clone)]
 /// struct Counter {
 ///     initial: i32,
 /// }
 ///
 /// struct CounterState {
-///     count: i32,
+///     count: Signal<i32>,
 /// }
 ///
 /// impl StatefulView for Counter {
 ///     type State = CounterState;
 ///
-///     fn create_state(&self) -> Self::State {
-///         CounterState { count: self.initial }
+///     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+///         CounterState { count: ctx.signal(self.initial) }
 ///     }
 /// }
 ///
 /// impl ViewState<Counter> for CounterState {
-///     fn build(&self, view: &Counter, ctx: &dyn BuildContext) -> impl IntoView {
-///         Text::new(format!("Count: {}", self.count))
+///     fn build(&self, _view: &Counter, ctx: &dyn BuildContext) -> impl IntoView {
+///         Text::new(format!("Count: {}", self.count.get(ctx)))
 ///     }
 /// }
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not implement `StatefulView`",
     label = "missing `impl StatefulView for {Self}`",
-    note = "a stateful view names its state and creates it: `impl StatefulView for {Self} {{ type State = MyState; fn create_state(&self) -> MyState {{ .. }} }}`, where `MyState: ViewState<{Self}>`"
+    note = "a stateful view names its state and creates it: `impl StatefulView for {Self} {{ type State = MyState; fn create_state(&self, ctx: &dyn LifecycleContext) -> MyState {{ .. }} }}`, where `MyState: ViewState<{Self}>`"
 )]
 pub trait StatefulView: Clone + 'static + Sized {
     /// The State type for this View.
     type State: ViewState<Self>;
 
-    /// Create the initial state.
+    /// Create the state, with its signals and capabilities already bound.
     ///
-    /// Called once when the Element is first created.
-    /// The returned state will persist across View rebuilds.
-    fn create_state(&self) -> Self::State;
+    /// Called exactly once per element, at its first build and before
+    /// [`ViewState::init_state`], from the element's current view. `ctx` is
+    /// the same [`LifecycleContext`] `init_state` receives: create the
+    /// state's signals here (`ctx.signal(..)`), so a state never holds a
+    /// signal that is not yet bound, and acquire the presentation
+    /// capabilities the state keeps. The returned state persists across
+    /// View rebuilds.
+    ///
+    /// A panic here is recorded like a panic in `init_state`, and the next
+    /// build of the element calls `create_state` again.
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State;
 }
 
 /// Persistent state for a StatefulView.
@@ -62,7 +71,8 @@ pub trait StatefulView: Clone + 'static + Sized {
 ///
 /// # Lifecycle
 ///
-/// 1. `init_state()` - Called once after creation
+/// 0. `StatefulView::create_state()` - Creates the state, with its signals, at the first build
+/// 1. `init_state()` - Called once, right after creation
 /// 2. `did_change_dependencies()` - Called when inherited data changes
 /// 3. `apply_view()` - Called before a build that follows a new View config or a dependency change
 /// 4. `build()` - Called to create child Views (may be called many times)
@@ -76,11 +86,12 @@ pub trait StatefulView: Clone + 'static + Sized {
     note = "`ViewState<V>` is implemented for the type named as `type State` in `impl StatefulView for {V}`; its `build(&self, view: &{V}, ctx: &dyn BuildContext)` returns the child view"
 )]
 pub trait ViewState<V: StatefulView>: 'static {
-    /// Called once after the state is created.
+    /// Called once, right after [`StatefulView::create_state`].
     ///
-    /// Use this for one-time initialization, and to acquire the presentation
-    /// capabilities on [`LifecycleContext`] (rebuild, post-frame, focus, …) that
-    /// `build` cannot reach. Store them in the state and fire them from callbacks.
+    /// Use this for one-time work that needs the created state: registering
+    /// it somewhere, or a post-frame callback that names it. Signals and the
+    /// presentation capabilities the state holds (rebuild, focus, …) are
+    /// created in `create_state`, so the state never holds an unbound handle.
     fn init_state(&mut self, _ctx: &dyn LifecycleContext) {}
 
     /// Called when an already-registered `InheritedView` dependency changes.

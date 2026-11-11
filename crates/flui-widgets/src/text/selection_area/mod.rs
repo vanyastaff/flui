@@ -294,7 +294,7 @@ impl View for SelectionArea {
 impl StatefulView for SelectionArea {
     type State = SelectionAreaState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SelectionAreaState {
             model: Rc::new_cyclic(|this| SelectionModel {
                 this: Weak::clone(this),
@@ -1318,7 +1318,7 @@ impl View for SelectableParagraph {
 impl StatefulView for SelectableParagraph {
     type State = SelectableParagraphState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SelectableParagraphState {
             entry: Rc::new(SelectableEntry {
                 anchor: SemanticsAnchor::new(),

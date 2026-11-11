@@ -123,7 +123,7 @@ struct InitStatePanicChildState {
 impl StatefulView for InitStatePanicChild {
     type State = InitStatePanicChildState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         InitStatePanicChildState {
             failed_id: self.failed_id.clone(),
             init_calls: self.init_calls.clone(),
@@ -226,7 +226,7 @@ struct DisposeCounterState {
 impl StatefulView for DisposeCounter {
     type State = DisposeCounterState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DisposeCounterState {
             armed: self.armed.clone(),
             disposed: self.disposed.clone(),
@@ -635,7 +635,7 @@ struct DeactivateCounterState {
 impl StatefulView for DeactivateCounter {
     type State = DeactivateCounterState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DeactivateCounterState {
             armed: self.armed.clone(),
             deactivated: self.deactivated.clone(),

@@ -1,6 +1,7 @@
 //! [`SlideTransition`] — animates its child's position as a fraction of its
 //! own size from an [`Animation<TranslationFraction>`].
 
+use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_animation::{Animation, ProxyAnimation};
@@ -126,7 +127,7 @@ impl ViewState<SlideTransition> for SlideTransitionState {
 impl StatefulView for SlideTransition {
     type State = SlideTransitionState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SlideTransitionState {
             proxy: ProxyAnimation::new(Rc::clone(&self.position)),
             position: Rc::clone(&self.position),

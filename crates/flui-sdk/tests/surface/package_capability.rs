@@ -47,7 +47,7 @@ struct GaugeState {
 impl StatefulView for Gauge {
     type State = GaugeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         GaugeState {
             level: Rc::clone(&self.level),
         }

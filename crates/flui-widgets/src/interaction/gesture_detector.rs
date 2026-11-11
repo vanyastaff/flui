@@ -1607,7 +1607,7 @@ impl std::fmt::Debug for GestureDetectorState {
 impl StatefulView for GestureDetector {
     type State = GestureDetectorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let live = Rc::new(LiveCallbacks::default());
         live.refresh(self);
         GestureDetectorState {

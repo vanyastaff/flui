@@ -292,7 +292,7 @@ pub(crate) mod local_history {
     impl StatefulView for HandleProbe {
         type State = HandleProbeState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
             HandleProbeState {
                 sink: Arc::clone(&self.sink),
             }
@@ -424,9 +424,9 @@ pub(crate) mod local_history {
     impl StatefulView for PopsInBuild {
         type State = PopsInBuildState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
             PopsInBuildState {
-                count: Signal::default(),
+                count: ctx.signal(0),
                 acquired: Rc::clone(&self.acquired),
             }
         }
@@ -445,7 +445,6 @@ pub(crate) mod local_history {
 
     impl ViewState<PopsInBuild> for PopsInBuildState {
         fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-            self.count = ctx.signal(0);
             let acquired = Acquired {
                 count: self.count,
                 writer: ctx.writer_source(),

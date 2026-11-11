@@ -107,7 +107,7 @@ impl View for TickerMode {
 impl StatefulView for TickerMode {
     type State = TickerModeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let registry = Vsync::new();
         registry.set_muted(!self.enabled);
         TickerModeState {

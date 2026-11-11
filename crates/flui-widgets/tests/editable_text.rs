@@ -53,7 +53,7 @@ pub(crate) mod native_actions {
     impl StatefulView for FieldHost {
         type State = FieldHostState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
             FieldHostState {
                 pipeline: Rc::clone(&self.pipeline),
             }

@@ -252,13 +252,21 @@ impl<R: Routable> View for Router<R> {
 impl<R: Routable> StatefulView for Router<R> {
     type State = RouterState<R>;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        RouterState::new(self)
+    }
+}
+
+impl<R: Routable> RouterState<R> {
+    /// The state of `router`: its shared stack, observer and a copy of its
+    /// initial routes.
+    fn new(router: &Router<R>) -> Self {
         let shared = Rc::new(RouterShared {
             navigator: Terminal::new(NavigatorHandle::addressed(type_name::<R>())),
             stack: RefCell::new(Vec::new()),
-            page: Terminal::new(Rc::new(RefCell::new(Rc::clone(&self.page)))),
-            transitions: Terminal::new(Rc::new(RefCell::new(self.transitions.clone()))),
-            transition_duration: Cell::new(self.transition_duration),
+            page: Terminal::new(Rc::new(RefCell::new(Rc::clone(&router.page)))),
+            transitions: Terminal::new(Rc::new(RefCell::new(router.transitions.clone()))),
+            transition_duration: Cell::new(router.transition_duration),
             mounted: Cell::new(false),
             announcer: StackAnnouncer::default(),
         });
@@ -268,7 +276,7 @@ impl<R: Routable> StatefulView for Router<R> {
         RouterState {
             shared: Terminal::new(shared),
             observer: Terminal::new(observer),
-            initial: clone_routes(self.initial.iter()),
+            initial: clone_routes(router.initial.iter()),
         }
     }
 }
@@ -712,7 +720,7 @@ mod seed_tests {
             };
             let mut router = Router::new(value(0), |_, _| crate::Text::new("page").boxed());
             router.initial.extend([value(1), value(2)]);
-            let mut state = router.create_state();
+            let mut state = RouterState::new(&router);
             drop(router);
             RouteId::leave_process_identities(1);
             armed.store(true, Ordering::SeqCst);

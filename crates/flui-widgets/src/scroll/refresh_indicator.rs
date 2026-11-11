@@ -759,7 +759,7 @@ impl fmt::Debug for RefreshIndicatorState {
 impl StatefulView for RefreshIndicator {
     type State = RefreshIndicatorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let settle = AnimationController::builder(SETTLE)
             .debug_label("RefreshIndicator.settle")
             .build_on(None);
@@ -888,7 +888,7 @@ struct RefreshBodyState;
 impl StatefulView for RefreshBody {
     type State = RefreshBodyState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         RefreshBodyState
     }
 }
@@ -960,7 +960,7 @@ struct RefreshOverlayState {
 impl StatefulView for RefreshOverlay {
     type State = RefreshOverlayState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         RefreshOverlayState {
             rebuild: None,
             subscription: None,

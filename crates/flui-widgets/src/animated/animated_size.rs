@@ -145,7 +145,7 @@ impl std::fmt::Debug for AnimatedSizeState {
 impl StatefulView for AnimatedSize {
     type State = AnimatedSizeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AnimatedSizeState {
             size: SizeMotion::new(self.motion.clone(), None),
             mounted: Rc::new(Cell::new(true)),

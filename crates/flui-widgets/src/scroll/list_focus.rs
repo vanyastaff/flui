@@ -669,7 +669,7 @@ pub(crate) struct FocusableListState {
 impl StatefulView for FocusableList {
     type State = FocusableListState;
 
-    fn create_state(&self) -> FocusableListState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> FocusableListState {
         let node = FocusNode::new();
         let controller = ListFocusController::new(Rc::clone(&node));
         apply_config(&controller, &self.config);
@@ -878,7 +878,7 @@ pub(crate) struct ListItemFocusState {
 impl StatefulView for ListItemFocus {
     type State = ListItemFocusState;
 
-    fn create_state(&self) -> ListItemFocusState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> ListItemFocusState {
         let node = FocusNode::new();
 
         ListItemFocusState {

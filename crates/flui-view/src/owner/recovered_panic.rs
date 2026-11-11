@@ -66,7 +66,8 @@ pub enum LifecycleHook {
     /// `StatelessView::build` / `ViewState::build` — the read half of
     /// `ElementBase::build_into_views`.
     Build,
-    /// `ViewState::init_state`, run once during the first build-scope drain,
+    /// `StatefulView::create_state` and `ViewState::init_state`, run once
+    /// during the first build-scope drain,
     /// immediately before the first build.
     InitState,
     /// `ViewState::apply_view`, run right before a build that follows a first
@@ -75,11 +76,11 @@ pub enum LifecycleHook {
     /// `ViewState::did_change_dependencies`, run when an ancestor
     /// `InheritedView` this element depends on notifies a change.
     DidChangeDependencies,
-    /// A fresh element's `View::create_element` (including `create_state`
-    /// for a `StatefulView`) or `RenderView::create_render_object`. The
+    /// A fresh element's `View::create_element`
+    /// or `RenderView::create_render_object`. The
     /// [`FrameworkError`] `details` breadcrumb carries which of the two
-    /// actually panicked. `ViewState::init_state` is NOT this hook — it
-    /// runs later, in the `build_scope` drain, not during `mount`. See
+    /// actually panicked. `create_state` and `init_state` are NOT this hook:
+    /// they run later, in the `build_scope` drain, not during `mount`. See
     /// [`Self::InitState`].
     Mount,
     /// A bounded `GlobalKey` retake's `activate_subtree` call, reactivating

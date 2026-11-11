@@ -46,7 +46,7 @@ impl View for Leaf {
 /// What the probe hands back to the test.
 #[derive(Default)]
 struct Seen {
-    /// The signal and source `init_state` acquired.
+    /// The signal and source `create_state` acquired.
     acquired: RefCell<Option<(Signal<u32>, WriterSource)>>,
     /// Every value `build` read, in order.
     reads: RefCell<Vec<u32>>,
@@ -56,7 +56,7 @@ struct Seen {
     write_in_build: RefCell<Option<Result<(), SignalError>>>,
 }
 
-/// Acquires a signal and a writer source in `init_state` and reads the
+/// Acquires a signal and a writer source in `create_state` and reads the
 /// signal in `build`. With `write_in_build`, `build` also runs a callback that
 /// writes through the source, as a widget invoking a user callback
 /// synchronously inside its own `build` would.
@@ -66,32 +66,26 @@ struct Probe {
     write_in_build: bool,
 }
 
-#[derive(Default)]
 struct ProbeState {
     count: Signal<u32>,
-    writer: Option<WriterSource>,
+    writer: WriterSource,
 }
 
 impl StatefulView for Probe {
     type State = ProbeState;
 
-    fn create_state(&self) -> Self::State {
-        ProbeState::default()
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        ProbeState {
+            count: ctx.signal(0),
+            writer: ctx.writer_source(),
+        }
     }
 }
 
 impl ViewState<Probe> for ProbeState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.count = ctx.signal(0);
-        self.writer = Some(ctx.writer_source());
-    }
-
     fn build(&self, view: &Probe, ctx: &dyn BuildContext) -> impl IntoView {
         view.seen.id.set(Some(ctx.element_id()));
-        let writer = self
-            .writer
-            .clone()
-            .expect("init_state acquired the writer source");
+        let writer = &self.writer;
         view.seen
             .acquired
             .borrow_mut()

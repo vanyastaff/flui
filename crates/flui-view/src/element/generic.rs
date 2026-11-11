@@ -250,23 +250,6 @@ impl CoreState {
         );
     }
 
-    fn schedule_self_build(
-        &self,
-        owner: &mut crate::ElementOwner<'_>,
-        reason: crate::RebuildReason,
-    ) {
-        debug_assert!(
-            self.self_id.is_some(),
-            "ElementCore::schedule_self_build called before set_self_id: \
-             a slab-resident element must be stamped with its ElementId at \
-             mount (ElementTree::insert / mount_root_* do this) before any \
-             setState can schedule it."
-        );
-        if let Some(id) = self.self_id {
-            owner.schedule_build_for(id, self.depth, reason);
-        }
-    }
-
     fn rebuild_handle(&self) -> crate::RebuildHandle {
         match (self.external_scheduler.clone(), self.self_id) {
             (Some(scheduler), Some(element)) => crate::RebuildHandle::new(scheduler, element),
@@ -395,25 +378,6 @@ where
     /// [`crate::tree::ElementNode::parent`].
     pub(crate) fn element_parent(&self) -> Option<ElementId> {
         self.state.element_parent
-    }
-
-    /// Push this element onto the dirty heap so
-    /// [`BuildOwner::build_scope`](crate::BuildOwner) reaches it.
-    ///
-    /// E3 (atomic box→arena swap): the slab/drain model rebuilds only
-    /// elements on the heap, so `setState` flips dirty AND schedules via
-    /// this. Uses the element's own stamped `self_id` + `depth`. If
-    /// `self_id` is unset — a hand-rolled element that bypassed
-    /// `ElementTree::insert` / `mount_root_*` — scheduling is skipped (the
-    /// element is not slab-addressable, so `build_scope` could not reach
-    /// it anyway); a `debug_assert!` makes that framework-invariant
-    /// violation loud in tests.
-    pub(crate) fn schedule_self_build(
-        &self,
-        owner: &mut crate::ElementOwner<'_>,
-        reason: crate::RebuildReason,
-    ) {
-        self.state.schedule_self_build(owner, reason);
     }
 
     // NOTE: the production build/reconcile path reads `self_id` through

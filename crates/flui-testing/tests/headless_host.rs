@@ -256,7 +256,7 @@ struct ClosesAgainOnDetachState {
 impl StatefulView for ClosesAgainOnDetach {
     type State = ClosesAgainOnDetachState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ClosesAgainOnDetachState {
             view: self.clone(),
             observation: None,

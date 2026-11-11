@@ -107,18 +107,17 @@ pub use writer::{
 
 /// Process-wide counter that gives every [`Reactive`] graph a distinct id, so
 /// a [`SignalSlot`] is meaningful only against the graph that minted it. Id 0
-/// ([`SignalSlot::UNBOUND_GRAPH`]) is never handed out: it names the unbound
-/// handle [`Signal::default`].
+/// ([`SignalSlot::NO_GRAPH`]) is never handed out.
 static NEXT_GRAPH_ID: AtomicU32 = AtomicU32::new(1);
 
 /// Takes the next graph id from `counter`. The space is never reused: a wrapped
 /// id would let a stale [`SignalSlot`] of a dropped graph validate against a
-/// live one, so the counter parks at the unbound id after the last and every
+/// live one, so the counter parks at the no-graph id after the last and every
 /// later graph is refused.
 fn next_graph_id(counter: &AtomicU32) -> u32 {
     counter
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            (current != SignalSlot::UNBOUND_GRAPH).then(|| current.wrapping_add(1))
+            (current != SignalSlot::NO_GRAPH).then(|| current.wrapping_add(1))
         })
         .expect("BUG: reactive graph id space exhausted")
 }
@@ -359,7 +358,7 @@ impl Reactive {
                 target: "flui.signals",
                 element = ?element,
                 owner = ?owner,
-                "refused: a signal was created during build (create it in init_state and hold the handle)"
+                "refused: a signal was created during build (create it in create_state and hold the handle)"
             );
             return Err((SignalError::CreatedDuringBuild { element }, value));
         }
@@ -466,9 +465,6 @@ impl Reactive {
     fn check(&self, inner: &Inner, slot: SignalSlot) -> Result<(), SignalError> {
         if inner.closed {
             return Err(SignalError::OwnerClosed);
-        }
-        if slot.is_unbound() {
-            return Err(SignalError::Unbound);
         }
         if slot.graph() != self.id {
             return Err(SignalError::ForeignGraph {
@@ -1217,8 +1213,7 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
     /// # Errors
     ///
     /// [`SignalError::WrittenDuringBuild`] from inside a `build`, plus the
-    /// handle errors of [`Signal::try_with`] and [`SignalError::Unbound`] for
-    /// a [`Signal::default`] handle.
+    /// handle errors of [`Signal::try_with`].
     fn set<W: WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<(), SignalError>;
 
     /// Mutate in place and mark every reader.

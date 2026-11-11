@@ -1,4 +1,5 @@
 //! Recovery drops opaque payloads once it has recorded them, before invoking factories and diagnostics.
+use flui_view::LifecycleContext;
 use flui_view::{
     BuildContext, BuildOwner, ElementTree, ErrorView, IntoView, LifecycleHook, RebuildReason,
     RecoveredAt, StatefulView, StatelessView, View, ViewExt, ViewState,
@@ -55,7 +56,7 @@ struct InitState {
 }
 impl StatefulView for InitSubject {
     type State = InitState;
-    fn create_state(&self) -> InitState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> InitState {
         InitState {
             observed: Rc::clone(&self.observed),
         }

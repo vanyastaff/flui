@@ -1,0 +1,1 @@
+| A state's signals and capability handles | created in `StatefulView::create_state(&self, ctx)`, so the state is born bound | an `Option` field that `init_state` fills with `Some(ctx.…)` ([gaps](docs/gaps.md
