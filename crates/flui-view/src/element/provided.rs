@@ -9,7 +9,7 @@
 //!
 //! Dependents live in the same [`Dependents`] ledger an inherited element
 //! keeps. Each published type owns one bit of the dependent's
-//! [`FieldSet`](crate::view::FieldSet), so a value that changes notifies only
+//! [`FieldSet`], so a value that changes notifies only
 //! the elements that read that value.
 
 use std::any::{Any, TypeId};
