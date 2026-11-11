@@ -1559,10 +1559,16 @@ axes otherwise) leaves the pixel (`native_pen_position_keeps_himetric_precision`
 `synthetic_touch_and_pen_reach_native_pointer_dispatch` holds each injected pen press
 against its own himetric reading and device rectangles within 1e-6).
 
-Each pointer of a multi-touch frame is still decoded from its own message, so a
-two-finger frame reaches a recognizer as two steps; one step per frame
-(`GetPointerFrameInfoHistory`, `SkipPointerFrameMessages`) needs a frame unit in
-the shared pointer vocabulary first.
+A frame of several touches or pens reaches the window as one
+`PlatformInput::PointerFrame`. Its pointers are read from the frame's own
+history (`GetPointerFrameTouchInfoHistory`, `GetPointerFramePenInfoHistory`,
+`GetPointerFrameInfoHistory`: one row per entry, one column per pointer), never
+from `GetPointerInfo`, which answers for the message last retrieved for that
+pointer: for a pointer other than the message's own, its previous frame. The
+system still sends one message per pointer of the frame. Each is retrieved and
+the frame is delivered on the first, by its frame id; `SkipPointerFrameMessages`
+is not used, because the system then held back the next frame of the pointers
+whose messages it discarded (`two_injected_touches_arrive_as_one_pointer_frame`).
 
 The private `native_pointer_decoding_contracts` rows
 `coalesced_burst_is_ordered_by_performance_count` and

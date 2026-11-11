@@ -108,11 +108,12 @@ focus ring as a foreground. A part that is absent allocates nothing and register
 element's state holds what the wrappers' states hold today: the `FocusNode` and its attachment,
 the recognizers, the action chain, the states controller.
 
-The focus logic (`FocusState` in `crates/flui-widgets/src/interaction/focus.rs`: node, attachment,
-reparenting, autofocus, the rule that only the current attachment may focus the node from
-assistive technology) moves into one `FocusHost` that `Focus` and the node both own an instance
-of. Recognizer mounting does the same with the body of `RawGestureDetector`. One implementation,
-two hosts.
+The focus logic (node, configuration, attachment, reparenting, replacement, autofocus, the rule
+that only the current attachment may focus the node from assistive technology) is one
+`FocusHost` (`crates/flui-widgets/src/interaction/focus_host.rs`) that `Focus` and the node both
+own an instance of. Its owner forwards the lifecycle hooks and says how the node is measured: an
+anchor over the child for `Focus`, the render object itself for the node. Recognizer mounting
+does the same with the body of `RawGestureDetector`. One implementation, two hosts.
 
 ### §2 Enablement has one source
 

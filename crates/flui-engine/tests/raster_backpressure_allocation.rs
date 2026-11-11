@@ -9,6 +9,11 @@
 //! in this workspace — each `tests/*.rs` file compiles to its own process,
 //! and `#[global_allocator]` is process-wide.
 
+#![expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 

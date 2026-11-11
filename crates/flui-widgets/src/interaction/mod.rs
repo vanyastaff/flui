@@ -9,6 +9,7 @@ mod companion;
 mod draggable;
 mod drop_target;
 pub(crate) mod focus;
+mod focus_host;
 pub(crate) mod focus_reveal;
 mod focus_ring;
 mod focus_traversal_group;

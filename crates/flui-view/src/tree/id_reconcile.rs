@@ -71,11 +71,17 @@
 
 use std::collections::HashMap;
 
+use smallvec::SmallVec;
+
 use flui_foundation::ElementId;
 
 use super::element_tree::{ElementTree, ProvisionalOrder};
 use super::reconcile_event::{ReconcileEvent, emit as emit_event};
 use crate::view::{ElementBase, View};
+
+/// Children a reconcile keeps on the stack: most parents hold a handful, and
+/// a reconcile that fits allocates only the result it stores.
+const INLINE_CHILDREN: usize = 8;
 
 /// Reconcile the slab-resident children of `parent_id` against
 /// `new_views`, then write the resulting child-id list back onto the
@@ -134,7 +140,8 @@ pub(crate) fn reconcile_children_by_id(
         // panic — a caller may legitimately race a removed parent.)
         return;
     };
-    let old_ids: Vec<ElementId> = parent_node.child_ids().to_vec();
+    let old_ids: SmallVec<[ElementId; INLINE_CHILDREN]> =
+        SmallVec::from_slice(parent_node.child_ids());
     // `parent_node` borrow ends here (not used again before re-borrow).
 
     // ── Step 2: snapshot the old children's match keys. Each `tree.get`
@@ -148,15 +155,16 @@ pub(crate) fn reconcile_children_by_id(
     // `Some(id)` while the slot is still a claim candidate; `take()`n to
     // `None` once a new view claims it — a working buffer of per-slot
     // claim candidates.
-    let mut old_slots: Vec<Option<ElementId>> = old_ids.iter().copied().map(Some).collect();
+    let mut old_slots: SmallVec<[Option<ElementId>; INLINE_CHILDREN]> =
+        old_ids.iter().copied().map(Some).collect();
 
     // The reconciled id list, built front-to-back in new-view order.
     let mut result: Vec<ElementId> = Vec::with_capacity(new_len);
-    // Scheduling cause for every surviving child. Kept beside the owned result
-    // during reconciliation so fresh mounts and in-place updates remain
+    // Scheduling cause for every surviving child, pushed beside its id in
+    // `result` (same index), so fresh mounts and in-place updates remain
     // distinguishable when the final depth-aware scheduling pass runs.
-    let mut scheduling_reasons: HashMap<ElementId, crate::RebuildReason> =
-        HashMap::with_capacity(new_len);
+    let mut scheduling_reasons: SmallVec<[crate::RebuildReason; INLINE_CHILDREN]> =
+        SmallVec::with_capacity(new_len);
 
     // ── Phase 1: sync the top of both lists while children match.
     // Same-slot reuse: update the old child in place, keep its id.
@@ -178,7 +186,7 @@ pub(crate) fn reconcile_children_by_id(
             owner,
         );
         if now == old_id {
-            scheduling_reasons.insert(now, crate::RebuildReason::ParentUpdate);
+            scheduling_reasons.push(crate::RebuildReason::ParentUpdate);
             // Top scan is same-slot (old_top == new_top throughout): the
             // surviving child neither moved nor was recreated — a `Reuse`
             // disposition. A recovery substitute emitted its own `Mount`.
@@ -191,7 +199,7 @@ pub(crate) fn reconcile_children_by_id(
                     .map(flui_foundation::ViewKey::key_hash),
             ));
         } else {
-            scheduling_reasons.insert(now, crate::RebuildReason::InitialMount);
+            scheduling_reasons.push(crate::RebuildReason::InitialMount);
         }
         old_slots[old_top] = None;
         result.push(now);
@@ -276,7 +284,7 @@ pub(crate) fn reconcile_children_by_id(
             let stayed = slot_of(tree, old_id) == Some(new_slot);
             let now = update_child(tree, parent_id, old_id, new_view, new_slot, owner);
             if now == old_id {
-                scheduling_reasons.insert(now, crate::RebuildReason::ParentUpdate);
+                scheduling_reasons.push(crate::RebuildReason::ParentUpdate);
                 let key_hash = new_view.key().map(flui_foundation::ViewKey::key_hash);
                 let view_type = new_view.view_type_id();
                 emit_event(&if stayed {
@@ -295,7 +303,7 @@ pub(crate) fn reconcile_children_by_id(
                     });
                 }
             } else {
-                scheduling_reasons.insert(now, crate::RebuildReason::InitialMount);
+                scheduling_reasons.push(crate::RebuildReason::InitialMount);
             }
             result.push(now);
         } else {
@@ -311,7 +319,7 @@ pub(crate) fn reconcile_children_by_id(
                 ProvisionalOrder::during_reconcile(&result, &old_slots),
                 "mounting child during reconcile",
             );
-            scheduling_reasons.insert(new_id, crate::RebuildReason::InitialMount);
+            scheduling_reasons.push(crate::RebuildReason::InitialMount);
             result.push(new_id);
         }
     }
@@ -337,7 +345,7 @@ pub(crate) fn reconcile_children_by_id(
         // else `Reuse`. (`old_idx == new_idx` reduces to this equality
         // because both indices are `bottom + offset`.)
         if now == old_id {
-            scheduling_reasons.insert(now, crate::RebuildReason::ParentUpdate);
+            scheduling_reasons.push(crate::RebuildReason::ParentUpdate);
             let key_hash = new_views[new_idx]
                 .key()
                 .map(flui_foundation::ViewKey::key_hash);
@@ -356,7 +364,7 @@ pub(crate) fn reconcile_children_by_id(
                 });
             }
         } else {
-            scheduling_reasons.insert(now, crate::RebuildReason::InitialMount);
+            scheduling_reasons.push(crate::RebuildReason::InitialMount);
         }
         result.push(now);
     }
@@ -412,9 +420,9 @@ pub(crate) fn reconcile_children_by_id(
         {
             let depth = node.depth();
             let reason = scheduling_reasons
-                .get(&id)
+                .get(slot)
                 .copied()
-                .expect("BUG: every reconciled child must have a scheduling cause");
+                .expect("BUG: every reconciled child pushed its scheduling cause beside its id");
             owner.schedule_build_for(id, depth, reason);
         }
     }
@@ -424,7 +432,7 @@ pub(crate) fn reconcile_children_by_id(
     // removal cannot affect the parent, but a stale parent is handled
     // defensively): if it no longer resolves we drop the result rather
     // than panic.
-    let render_children_changed = old_ids != result;
+    let render_children_changed = old_ids.as_slice() != result.as_slice();
     if let Some(parent_node) = tree.get_mut(parent_id) {
         parent_node.set_child_ids(result);
     }
