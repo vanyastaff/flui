@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::{Matrix4, Rect};
 
-use crate::display_list::{DisplayList, DrawCommand, DrawOp, Paint};
+use crate::display_list::{DisplayList, DrawOp, Paint, paint_finite};
 
 pub mod clipping;
 pub mod drawing;
@@ -56,11 +56,19 @@ pub struct Canvas {
     /// Save/restore stack (stores previous states).
     pub(crate) save_stack: Vec<CanvasState>,
 
-    /// Per-recording paint interning pool.
+    /// Per-recording paint interning pool, each paint with whether its values
+    /// are finite, checked once when it was interned.
     ///
     /// Equal paints share an allocation. `Paint` is not `Hash`, so lookup
     /// uses equality over this vector. `reset()` clears the pool.
-    pub(crate) paint_pool: Vec<Arc<Paint>>,
+    pub(crate) paint_pool: Vec<InternedPaint>,
+}
+
+/// A paint of the canvas's pool and whether its values are finite.
+#[derive(Debug, Clone)]
+pub(crate) struct InternedPaint {
+    paint: Arc<Paint>,
+    finite: bool,
 }
 
 impl Canvas {
@@ -74,12 +82,17 @@ impl Canvas {
         }
     }
 
-    /// Records `op` under the current transform.
+    /// Records `op` under the current transform; an op that is not finite, or
+    /// a transform that is not, is refused by the list (ADR-0306 §4).
     #[inline]
     pub(crate) fn record(&mut self, op: DrawOp) {
-        self.display_list.push(DrawCommand {
-            transform: self.transform,
-            op,
+        let pool = &self.paint_pool;
+        self.display_list.record(&self.transform, op, |paint| {
+            // Every paint an op holds came from the pool; a miss is checked
+            // as it stands.
+            pool.iter()
+                .find(|interned| Arc::ptr_eq(&interned.paint, paint))
+                .map_or_else(|| paint_finite(paint), |interned| interned.finite)
         });
     }
 
@@ -87,12 +100,15 @@ impl Canvas {
     /// inserting a fresh allocation only on a cache miss.
     pub(crate) fn intern_paint(&mut self, paint: &Paint) -> Arc<Paint> {
         for existing in &self.paint_pool {
-            if **existing == *paint {
-                return Arc::clone(existing);
+            if *existing.paint == *paint {
+                return Arc::clone(&existing.paint);
             }
         }
         let arc = Arc::new(paint.clone());
-        self.paint_pool.push(Arc::clone(&arc));
+        self.paint_pool.push(InternedPaint {
+            paint: Arc::clone(&arc),
+            finite: paint_finite(paint),
+        });
         arc
     }
 
@@ -129,6 +145,15 @@ impl Canvas {
             );
         }
 
+        let non_finite = self.display_list.non_finite();
+        if !non_finite.is_empty() {
+            tracing::warn!(
+                transform = non_finite.transform,
+                geometry = non_finite.geometry,
+                "Canvas refused non-finite ops"
+            );
+        }
+
         tracing::debug!(
             commands = self.display_list.len(),
             bounds = ?self.display_list.bounds(),
@@ -146,11 +171,18 @@ impl Canvas {
 
     /// Resets the canvas to its initial state, clearing all commands and
     /// state. More efficient than `Canvas::new()` when reusing.
+    ///
+    /// Every field is reset before the recorded ops are dropped: an op's
+    /// destructor can run user code (a paragraph's font bytes are a caller's
+    /// `Arc<dyn AsRef<[u8]>>`), and one that panics leaves an empty canvas
+    /// with no cached extent (ADR-0306 §7).
     pub fn reset(&mut self) {
-        self.display_list.clear();
+        let commands = std::mem::take(&mut self.display_list);
+        let paints = std::mem::take(&mut self.paint_pool);
         self.transform = Matrix4::identity();
         self.save_stack.clear();
-        self.paint_pool.clear();
+        drop(paints);
+        drop(commands);
     }
 
     // ===== Query Methods =====

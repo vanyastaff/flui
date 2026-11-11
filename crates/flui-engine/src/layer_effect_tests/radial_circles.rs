@@ -206,7 +206,9 @@ pub(super) fn decoration_preserves_both_circles(renderer: &HeadlessRenderer) {
 }
 pub(super) fn radial_refusal_and_next_frame(renderer: &HeadlessRenderer) {
     let center = Offset::new(24.5, 24.5);
-    let inputs = [
+    // A non-finite focal value never reaches the engine: the canvas omits the
+    // draw at record (ADR-0306 §4), and the frame draws without it.
+    let non_finite = [
         radial(
             center,
             16.0,
@@ -214,8 +216,21 @@ pub(super) fn radial_refusal_and_next_frame(renderer: &HeadlessRenderer) {
             None,
             TileMode::Clamp,
         ),
-        radial(center, 16.0, None, Some(-1.0), TileMode::Clamp),
         radial(center, 16.0, None, Some(f64::INFINITY), TileMode::Clamp),
+    ];
+    for shader in non_finite {
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+            &Paint::fill(Color::WHITE).with_shader(shader),
+        );
+        let list = canvas.finish();
+        assert_eq!(list.non_finite().geometry, 1);
+        assert!(list.is_empty(), "the refused draw is absent");
+    }
+    // Finite but invalid values are the engine's typed refusal.
+    let inputs = [
+        radial(center, 16.0, None, Some(-1.0), TileMode::Clamp),
         radial(center, 16.0, None, Some(16.0), TileMode::Clamp),
         radial(center, -1.0, None, None, TileMode::Clamp),
         radial(center, 1e100, None, None, TileMode::Clamp),

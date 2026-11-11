@@ -32,7 +32,7 @@
   state) waits for an owner turn instead of being lost.
 - iOS: the platform's `on_scene_event` also takes what makes the handler of each session's window,
   asked before UIKit's scene gets the window; a scene whose handler cannot be made is refused.
-- `MockWindow::simulate_surface_change(SurfaceChange)` replaces `simulate_surface_status(bool)`.
+- `HeadlessHostWindow::simulate_surface_change(SurfaceChange)` replaces `simulate_surface_status(bool)`.
 
 ### Removed
 

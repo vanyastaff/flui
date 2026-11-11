@@ -107,7 +107,7 @@ pub use box_fit::{BoxFit, BoxShape, FittedSizes};
 pub use canvas::Canvas;
 pub use decoration::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
 pub use display_list::{
-    BlurSigma, DamageExtent, DisplayList, DrawCommand, DrawOp, ShapedParagraph,
+    BlurSigma, DamageExtent, DisplayList, DrawCommand, DrawOp, NonFiniteOps, ShapedParagraph,
 };
 pub use error::RegisterFontError;
 pub use glyphs::{

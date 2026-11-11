@@ -93,8 +93,8 @@ use crate::scroll::nested::{
 };
 use crate::scroll::scroll_owner::{MoveOutcome, OwnerConfig, OwnerEnv, ScrollOwner};
 use crate::scroll::{
-    ClampingScrollPhysics, ScrollController, ScrollMetrics, ScrollView, ScrollViewConfig,
-    SharedScrollPhysics, SnapPolicy,
+    DefaultScrollBehavior, ScrollBehavior, ScrollBehaviorDetails, ScrollConfiguration,
+    ScrollController, ScrollMetrics, ScrollView, ScrollViewConfig, SharedScrollPhysics, SnapPolicy,
 };
 use crate::support::command_modifiers;
 use crate::{DragSlot, Focus, GestureDetector, Listener, Semantics};
@@ -327,8 +327,9 @@ struct WheelMotion {
 /// position into the [`ScrollController`] each tick.
 pub struct ScrollableState {
     recognizer_owner: Rc<()>,
-    /// Stable policy identity across ordinary default-config rebuilds.
-    default_physics: SharedScrollPhysics,
+    /// The physics the behavior answered and what it was asked, so a
+    /// rebuild under the same behavior, platform and axis keeps one physics.
+    behavior_physics: Option<BehaviorAnswer>,
     /// The node arrow, page, space, Home and End keys reach this scrollable
     /// through, when it or something inside it has the focus.
     focus: Rc<FocusNode>,
@@ -418,9 +419,35 @@ pub struct ScrollableState {
     applied: Option<Applied>,
 }
 
+/// A physics a [`ScrollBehavior`] answered, with the question: the behavior
+/// asked (`None` for [`DefaultScrollBehavior`]) and the details.
+struct BehaviorAnswer {
+    behavior: Option<Rc<dyn ScrollBehavior>>,
+    details: ScrollBehaviorDetails,
+    physics: SharedScrollPhysics,
+}
+
+impl BehaviorAnswer {
+    /// Whether this answers `behavior` about `details`.
+    fn answers(
+        &self,
+        behavior: Option<&Rc<dyn ScrollBehavior>>,
+        details: ScrollBehaviorDetails,
+    ) -> bool {
+        let same_behavior = match (&self.behavior, behavior) {
+            (Some(held), Some(asked)) => Rc::ptr_eq(held, asked),
+            (None, None) => true,
+            _ => false,
+        };
+        same_behavior && self.details == details
+    }
+}
+
 /// The configuration `ScrollableState::apply_view` hands to `build`.
 #[derive(Clone)]
 struct Applied {
+    /// The pointer kinds whose drags and presses this scrollable admits.
+    devices: PointerKindSet,
     axis_direction: AxisDirection,
     owner: Rc<ScrollOwner>,
     move_to: Option<Rc<dyn Fn(f64, ScrollCause)>>,
@@ -463,7 +490,7 @@ impl StatefulView for Scrollable {
         ScrollableState {
             _key_cancel: key_cancel,
             recognizer_owner: Rc::new(()),
-            default_physics: Rc::new(ClampingScrollPhysics::new()),
+            behavior_physics: None,
             focus: Rc::clone(&focus),
             reveal: Rc::new(ScrollReveal::new(focus)),
             scroll_controller: self.config.controller.clone().unwrap_or_default(),
@@ -763,12 +790,36 @@ impl ViewState<Scrollable> for ScrollableState {
     }
 
     fn apply_view(&mut self, view: &Scrollable, ctx: &dyn BuildContext) {
-        let physics = view
+        // What the view leaves open, the behavior answers.
+        let behavior = ScrollConfiguration::maybe_of(ctx);
+        let details = ScrollBehaviorDetails::new(
+            flui_view::environment::PlatformConvention::of(ctx),
+            view.config.scroll_direction,
+        );
+        let asked: &dyn ScrollBehavior = behavior.as_deref().unwrap_or(&DefaultScrollBehavior);
+        let devices = view
             .config
-            .physics
-            .as_ref()
-            .unwrap_or(&self.default_physics)
-            .clone();
+            .devices
+            .unwrap_or_else(|| asked.drag_devices(&details));
+        let physics = match &view.config.physics {
+            Some(physics) => Rc::clone(physics),
+            None => match &self.behavior_physics {
+                Some(answer) if answer.answers(behavior.as_ref(), details) => {
+                    Rc::clone(&answer.physics)
+                }
+                _ => {
+                    let physics = asked.physics(&details);
+                    let replaced = self.behavior_physics.replace(BehaviorAnswer {
+                        behavior: behavior.clone(),
+                        details,
+                        physics: Rc::clone(&physics),
+                    });
+                    // A user physics' destructor runs with nothing borrowed.
+                    drop(replaced);
+                    physics
+                }
+            },
+        };
         // No explicit override: resolve the way the standard scroll views
         // resolve their viewport's `AxisDirection` — same helper, same
         // ambient `Directionality`, same axis and `reverse` — so the two
@@ -817,6 +868,7 @@ impl ViewState<Scrollable> for ScrollableState {
             None => DefaultWidgetsLocalizations.scroll_position_label(),
         };
         self.applied = Some(Applied {
+            devices,
             axis_direction,
             owner,
             move_to,
@@ -830,7 +882,7 @@ impl ViewState<Scrollable> for ScrollableState {
             .clone()
             .expect("BUG: `apply_view` runs before every build");
         let anchored = view.anchored.is_some();
-        let devices = view.config.devices;
+        let devices = applied.devices;
         let fling_controller = self.fling_controller.controller().clone();
 
         // The viewport re-lays itself out from the render side:
@@ -1010,7 +1062,7 @@ impl ScrollableState {
             .anchored
             .as_ref()
             .and_then(|leaf| leaf.cancelled.clone());
-        let devices = view.config.devices;
+        let devices = applied.devices;
         // Clones for the gesture callbacks; each closure needs its own
         // `Arc`-counted handle (no refcount bump at call time).
         let fling_stop = self.fling_controller.controller().clone();

@@ -227,11 +227,8 @@ enum Contact {
 
 /// The platform's command modifier, as the app's shortcuts bind it.
 fn command() -> Modifiers {
-    if cfg!(any(target_os = "macos", target_os = "ios")) {
-        Modifiers::META
-    } else {
-        Modifiers::CONTROL
-    }
+    // A tree outside a runtime follows the platform-neutral conventions.
+    Modifiers::CONTROL
 }
 
 /// A drag selects across texts and highlights them; a drag back toward its

@@ -14,7 +14,7 @@
   have now, and gives the command back to admit again.
 - `WindowCommand::admit_and_apply` and `CommandRefusal`: admit against a window's snapshot and
   apply at once, admitting once more when superseded.
-- `MockWindow::simulate_capabilities`: the headless window system revises what a window honours.
+- `HeadlessHostWindow::simulate_capabilities`: the headless window system revises what a window honours.
 - `flui_testing::window_commands::AdmitAndApply` (`admit_and_apply`, `close_now`,
   `close_for_cleanup`) and the conformance check `a_command_admitted_before_a_revision_is_superseded`
   with `WindowFixture::revise_capabilities`.

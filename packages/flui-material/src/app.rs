@@ -17,7 +17,7 @@
 //! 1. [`Theme`](crate::Theme) — publishing the [`ThemeData`] resolved by
 //!    [`ThemeMode`] × ambient platform brightness and contrast preference.
 //! 2. [`PageTransitions`] — the page transition
-//!    [`ThemeData::page_transitions_theme`] names for [`ThemeData::platform`],
+//!    [`ThemeData::page_transitions_theme`] names for the tree's [`PlatformConvention`],
 //!    and the dialog fade for popups, which routes given no transitions of
 //!    their own adopt when the navigator installs them (ADR-0221). Material
 //!    page pushes therefore animate.
@@ -33,8 +33,10 @@
 //!
 //! ## Deferred (named gaps, not silent ones)
 //!
-//! - **`DefaultSelectionStyle`**, **`ScrollConfiguration`** /
-//!   `MaterialScrollBehavior` — neither widget exists in FLUI yet.
+//! - **`DefaultSelectionStyle`** — the app does not install one yet.
+//! - **`MaterialScrollBehavior`** — the app installs no `ScrollConfiguration`,
+//!   so its scroll views follow `DefaultScrollBehavior` until the Material
+//!   behavior lands with its scrollbar and overscroll indicator.
 //! - **Material hero motion** — Material spec heroes fly along an arc; FLUI
 //!   has no arc tween yet, and the `Navigator`'s auto-installed default
 //!   controller already provides (linear) flights, so no hero-controller scope
@@ -63,7 +65,7 @@ use flui_sdk::painting::Color;
 use flui_sdk::painting::{FontWeight, TextStyle};
 use flui_sdk::platform::{Brightness, Locale};
 use flui_sdk::view::BoxedView;
-use flui_sdk::view::environment::MediaQuery;
+use flui_sdk::view::environment::{MediaQuery, PlatformConvention};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     AppBuilder, BoxedLocalizationsDelegate, NavigatorHandle, NavigatorObserver, PageTransitions,
@@ -393,7 +395,7 @@ impl StatelessView for MaterialApp {
             // route given no transitions of its own (ADR-0221 D3).
             let page = resolved
                 .page_transitions_theme
-                .transition_for(resolved.platform)
+                .transition_for(PlatformConvention::of(ctx))
                 .builder();
             let routes = PageTransitions::new(ScaffoldMessenger::new(inner))
                 .page(page)

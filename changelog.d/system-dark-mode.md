@@ -1,6 +1,6 @@
 ### Added
 
-- **Headless appearance injection** (`flui-native`): `MockWindow::simulate_appearance` reports
+- **Headless appearance injection** (`flui-native`): `HeadlessHostWindow::simulate_appearance` reports
   a system light/dark change to the window, firing `on_appearance_changed` only when the value
   changes, so a test can drive `MediaQueryData::platform_brightness`.
 - **`Brightness: From<WindowAppearance>`** (`flui-platform`): the light/dark half of an

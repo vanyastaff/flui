@@ -42,7 +42,8 @@ handwriting, and brings Gradle and AppCompat with it. The research note compares
    built with. `classes.dex.toml` records the digests of the sources and the dex and the tools
    that compiled them; `cargo xtask android-dex` checks both digests in `cargo xtask checks`
    (no JDK needed), `--rebuild` recompiles with `javac` and `d8` and requires the same bytes, and
-   `--write` regenerates them.
+   `--write` regenerates them; the `Android dex` workflow (`.github/workflows/android-dex.yml`)
+   runs either on a GitHub runner, so changing the sources needs no local JDK or SDK.
 2. **Delivery.** At platform start the backend posts the installation to the Java main thread
    (`AndroidApp::run_on_java_main_thread`), not to `android_on_create`, whose symbol belongs to
    the application. From API 26 the bytes load through `InMemoryDexClassLoader`; on API 23–25

@@ -983,3 +983,39 @@ pub(crate) fn anchored_drag_offset_listenable_follows_every_move() {
     anchors.jump_to(Stop::Far).expect("an anchor");
     assert_eq!(heard.get(), before + 1, "a jump that moves nothing is not");
 }
+
+/// A drag past the outermost anchor stays on it under every platform
+/// convention: the leaf's bounds are its own, not the subtree's
+/// `ScrollBehavior`'s, which bounces on Apple platforms.
+pub(crate) fn anchored_drag_stays_bounded_under_every_platform_convention() {
+    use flui_platform::TargetPlatform;
+    use flui_view::environment::PlatformConvention;
+
+    for platform in [
+        TargetPlatform::MacOS,
+        TargetPlatform::iOS,
+        TargetPlatform::Linux,
+    ] {
+        let vsync = Vsync::new();
+        let anchors = controller(stops(&[(Stop::Closed, 0.0), (Stop::Open, 120.0)]));
+        let view = PlatformConvention::new(platform, drag_view(&anchors, Axis::Horizontal));
+        let mut laid = mount(view, &vsync);
+        laid.dispatch_pointer_down(10.0, 150.0);
+        let mut farthest = 0.0_f64;
+        for step in 1..=10 {
+            laid.dispatch_pointer_move_after(
+                10.0 + f64::from(step) * 25.0,
+                150.0,
+                Duration::from_millis(16),
+            );
+            farthest = farthest.max(anchors.offset());
+        }
+        assert_eq!(
+            farthest, 120.0,
+            "{platform:?}: the drag stops at the outer anchor"
+        );
+        laid.dispatch_pointer_up(260.0, 150.0);
+        settle(&mut laid);
+        assert_eq!(anchors.offset(), 120.0, "{platform:?}");
+    }
+}

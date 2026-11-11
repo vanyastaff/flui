@@ -969,7 +969,7 @@ trait depends on `flui-platform` instead.
     (`FrameRequest::presented`): the newest report wins, a report no later
     than one kept or carried is dropped, and one still ahead of the request's
     delivery waits. The headless window reports what a test injects
-    (`MockWindow::simulate_presented`). The web and X11 windows answer
+    (`HeadlessHostWindow::simulate_presented`). The web and X11 windows answer
     `NotOnThisPlatform` (a browser names the frame's start, never its showing;
     an X11 present completes on the GPU driver's connection),
     and UIKit and the Activity
@@ -4252,7 +4252,7 @@ refuses, or one that lost its text, stops the replay with a `ReplayError` that n
 the row and its line, never a skipped row; `replay` is the target that takes a
 registry's input alone. The headless host is the target of the other streams
 in the tests: its host events take the `app` rows, a headless window takes
-the `window` rows and, through `MockWindow::simulate_state`, the `window_state`
+the `window` rows and, through `HeadlessHostWindow::simulate_state`, the `window_state`
 rows, and its
 preference source and display controls take the
 `platform` rows, answering the application's next read as the recorded one

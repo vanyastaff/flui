@@ -15,7 +15,7 @@
   (apart from its revision) and of `WindowCapabilities` (apart from its owner and revision), for
   the same reason (`WindowState::into_parts`, `WindowStateParts::into_state`,
   `WindowCapabilities::into_parts`, `CapabilityParts::into_capabilities`).
-- **`flui-native`**: `MockWindow::simulate_state` publishes a whole snapshot as the window system's
+- **`flui-native`**: `HeadlessHostWindow::simulate_state` publishes a whole snapshot as the window system's
   report, through the window's successor rules.
 - **`flui-runtime`**: `FrameFailureKind::DeviceLost { recovery }` reports a frame dropped on a lost
   GPU device, with `DeviceRecovery` (`Pending`, `Failed { attempts }`, `Abandoned { attempts }`)

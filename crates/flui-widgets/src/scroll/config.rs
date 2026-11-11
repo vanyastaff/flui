@@ -30,14 +30,16 @@ pub struct ScrollViewConfig {
     pub(crate) scroll_direction: Axis,
     /// Whether offset `0.0` sits at the trailing edge of the axis.
     pub(crate) reverse: bool,
-    /// An authored boundary and fling policy; `None` uses the owner's default.
+    /// An authored boundary and fling policy; `None` asks the
+    /// [`ScrollBehavior`](crate::ScrollBehavior).
     pub(crate) physics: Option<SharedScrollPhysics>,
     /// Where a release comes to rest, when not where the physics coasts.
     pub(crate) snap: Option<SharedSnapPolicy>,
     /// Whether this scrollable's remainder goes up its scroll chain.
     pub(crate) overscroll: OverscrollBehavior,
-    /// The pointer kinds whose drags and presses the scrollable admits.
-    pub(crate) devices: PointerKindSet,
+    /// The pointer kinds whose drags and presses the scrollable admits;
+    /// `None` asks the [`ScrollBehavior`](crate::ScrollBehavior).
+    pub(crate) devices: Option<PointerKindSet>,
     /// The logical distances wheel lines and characters resolve to.
     pub(crate) wheel_distances: WheelScrollDistances,
     /// What assistive technology reads for the scroll view.
@@ -55,7 +57,7 @@ impl Default for ScrollViewConfig {
             physics: None,
             snap: None,
             overscroll: OverscrollBehavior::Auto,
-            devices: PointerKindSet::all(),
+            devices: None,
             wheel_distances: WheelScrollDistances::default(),
             semantic_label: None,
             autofocus: false,
@@ -99,8 +101,9 @@ pub trait ScrollView: Sized {
         self
     }
 
-    /// Override the boundary and fling behaviour (default:
-    /// [`ClampingScrollPhysics`](crate::ClampingScrollPhysics)).
+    /// Override the boundary and fling behaviour (default: what the
+    /// [`ScrollBehavior`](crate::ScrollBehavior) of the nearest
+    /// [`ScrollConfiguration`](crate::ScrollConfiguration) answers).
     #[must_use]
     fn physics(mut self, physics: SharedScrollPhysics) -> Self {
         self.scroll_config_mut().physics = Some(physics);
@@ -126,14 +129,16 @@ pub trait ScrollView: Sized {
         self
     }
 
-    /// Admit only drags and presses of these pointer kinds (default: all). A
+    /// Admit only drags and presses of these pointer kinds (default: what
+    /// the [`ScrollBehavior`](crate::ScrollBehavior) answers, all kinds
+    /// unless it says otherwise). A
     /// refused contact never reaches the scrollable's arena, so a pen that
     /// draws beside a finger that scrolls leaves the scrollable alone. Wheel
     /// and trackpad scrolling, keys, assistive actions and the controller are
     /// not contacts and are unaffected.
     #[must_use]
     fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
-        self.scroll_config_mut().devices = devices;
+        self.scroll_config_mut().devices = Some(devices);
         self
     }
 

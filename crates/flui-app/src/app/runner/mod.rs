@@ -132,13 +132,19 @@ pub(crate) fn presentation_window(
     keep_native_window(&host);
     let accessibility = host.accessibility();
     let text_store_host = text_store_host_of(&host);
+    // The runner names the platform it was built for: the tree follows its
+    // conventions, and host observations replace the gesture values the OS
+    // publishes (ADR-0212 §4). The one place a platform is taken from the
+    // compile target.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the runner is the root default of PlatformConvention"
+    )]
+    let platform = flui_platform::TargetPlatform::current();
     crate::app::presentation::PresentationWindow::new(host, accessibility)
         .with_text_store_host(text_store_host)
-        // The runner names the platform it was built for; host observations
-        // then replace the values the OS publishes (ADR-0212 §4).
-        .with_gesture_profiles(flui_interaction::GestureProfiles::preset(
-            flui_platform::TargetPlatform::current(),
-        ))
+        .with_platform(platform)
+        .with_gesture_profiles(flui_interaction::GestureProfiles::preset(platform))
 }
 
 /// The window a deferred open built, taken on the owner thread, which is the

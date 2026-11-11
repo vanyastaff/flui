@@ -122,7 +122,7 @@ pub(crate) fn tab_bar_view_with_its_tab_bar() {
     let controller = TabController::new(3, 1);
     for command in controller.step_alternatives().commands() {
         assert_eq!(
-            command.keys(TargetPlatform::current()).count(),
+            command.keys(TargetPlatform::Unknown).count(),
             1,
             "{:?} is bound to its key",
             command.label()

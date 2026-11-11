@@ -7,7 +7,7 @@
 - `WindowState::is_seen`: the window is visible and not minimized.
 - `CloseRequestError::Refused`: `request_presentation_close` reports a window that refused to close
   (an Android window) instead of answering `Ok`.
-- `flui_native::HeadlessWindowSystem` and `MockWindow::window_system`: what the headless window
+- `flui_native::HeadlessWindowSystem` and `HeadlessHostWindow::window_system`: what the headless window
   system holds for a window (metrics, focus, visibility), for a conformance fixture to
   read back.
 

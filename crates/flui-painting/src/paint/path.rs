@@ -84,6 +84,12 @@ pub struct Path {
 
     /// Cached bounding box (invalidated when the geometry changes).
     bounds: Option<Rect<f64>>,
+
+    /// Whether every point of the geometry is finite, kept current by every edit.
+    ///
+    /// The cached bounds cannot stand in: kurbo folds segment boxes with `f64::min` and
+    /// `max`, which drop a NaN operand, so a path holding a NaN can report finite bounds.
+    finite: bool,
 }
 
 fn to_kurbo(point: Point<f64>) -> kurbo::Point {
@@ -298,6 +304,7 @@ impl Path {
             hint: ShapeHint::None,
             fill_type,
             bounds: None,
+            finite: true,
         }
     }
 
@@ -463,12 +470,24 @@ impl Path {
         closed.as_slice().winding(point)
     }
 
-    /// The geometry, copied if it is shared, with the cached bounds and the shape hint
-    /// dropped: every edit goes through here.
-    fn edit(&mut self) -> &mut kurbo::BezPath {
+    /// Applies `change` to the geometry, copied if it is shared, with the cached bounds and
+    /// the shape hint dropped and the finiteness flag brought up to date: every edit goes
+    /// through here.
+    ///
+    /// An edit appends elements or truncates them all away, so only the appended tail is
+    /// checked; a shorter result is checked whole.
+    fn edit(&mut self, change: impl FnOnce(&mut kurbo::BezPath)) {
         self.bounds = None;
         self.hint = ShapeHint::None;
-        Arc::make_mut(&mut self.geometry)
+        let geometry = Arc::make_mut(&mut self.geometry);
+        let before = geometry.elements().len();
+        change(geometry);
+        let elements = geometry.elements();
+        self.finite = if elements.len() >= before {
+            self.finite && elements_are_finite(&elements[before..])
+        } else {
+            elements_are_finite(elements)
+        };
     }
 
     /// Where the pen is: the end of the last element, the start of a contour just closed, or
@@ -501,13 +520,13 @@ impl Path {
     fn begin_at_pen(&mut self) {
         if !self.contour_open() {
             let pen = self.pen();
-            self.edit().move_to(pen);
+            self.edit(|path| path.move_to(pen));
         }
     }
 
     /// Starts a new contour at `point` without drawing.
     pub fn move_to(&mut self, point: Point<f64>) {
-        self.edit().move_to(to_kurbo(point));
+        self.edit(|path| path.move_to(to_kurbo(point)));
     }
 
     /// Adds a straight line from the pen to `point`.
@@ -516,48 +535,48 @@ impl Path {
     /// of the contour just closed.
     pub fn line_to(&mut self, point: Point<f64>) {
         self.begin_at_pen();
-        self.edit().line_to(to_kurbo(point));
+        self.edit(|path| path.line_to(to_kurbo(point)));
     }
 
     /// Adds a quadratic Bézier curve from the pen to `end`, pulled toward `control`.
     /// Starts where [`Self::line_to`] does.
     pub fn quadratic_bezier_to(&mut self, control: Point<f64>, end: Point<f64>) {
         self.begin_at_pen();
-        self.edit().quad_to(to_kurbo(control), to_kurbo(end));
+        self.edit(|path| path.quad_to(to_kurbo(control), to_kurbo(end)));
     }
 
     /// Adds a cubic Bézier curve from the pen to `end`, with `control1` shaping its start and
     /// `control2` its end. Starts where [`Self::line_to`] does.
     pub fn cubic_to(&mut self, control1: Point<f64>, control2: Point<f64>, end: Point<f64>) {
         self.begin_at_pen();
-        self.edit()
-            .curve_to(to_kurbo(control1), to_kurbo(control2), to_kurbo(end));
+        self.edit(|path| path.curve_to(to_kurbo(control1), to_kurbo(control2), to_kurbo(end)));
     }
 
     /// Closes the current contour with a line back to its start. Does nothing when no contour
     /// is open.
     pub fn close(&mut self) {
         if self.contour_open() {
-            self.edit().close_path();
+            self.edit(kurbo::BezPath::close_path);
         }
     }
 
     /// Adds `rect` as a closed contour of its own, clockwise from its top-left corner (y-down).
     /// An open contour before it stays open: a stroke does not gain a closing edge.
     pub fn add_rect(&mut self, rect: Rect<f64>) {
-        let path = self.edit();
-        path.move_to((rect.left(), rect.top()));
-        path.line_to((rect.right(), rect.top()));
-        path.line_to((rect.right(), rect.bottom()));
-        path.line_to((rect.left(), rect.bottom()));
-        path.close_path();
+        self.edit(|path| {
+            path.move_to((rect.left(), rect.top()));
+            path.line_to((rect.right(), rect.top()));
+            path.line_to((rect.right(), rect.bottom()));
+            path.line_to((rect.left(), rect.bottom()));
+            path.close_path();
+        });
     }
 
     /// Adds the oval inscribed in `rect` as a closed contour of its own, clockwise from its
     /// rightmost point (y-down), like [`Self::add_rect`].
     pub fn add_oval(&mut self, rect: Rect<f64>) {
         let ellipse = kurbo::Ellipse::from_rect(to_kurbo_rect(rect));
-        self.edit().extend(ellipse.path_elements(CURVE_TOLERANCE));
+        self.edit(|path| path.extend(ellipse.path_elements(CURVE_TOLERANCE)));
         // kurbo leaves the ellipse's contour open; a standalone shape is closed.
         self.close();
     }
@@ -588,12 +607,12 @@ impl Path {
             );
         if self.contour_open() {
             if self.pen() != start {
-                self.edit().line_to(start);
+                self.edit(|path| path.line_to(start));
             }
         } else {
-            self.edit().move_to(start);
+            self.edit(|path| path.move_to(start));
         }
-        self.edit().extend(arc.append_iter(CURVE_TOLERANCE));
+        self.edit(|path| path.extend(arc.append_iter(CURVE_TOLERANCE)));
     }
 
     /// The path's elements in order.
@@ -628,7 +647,7 @@ impl Path {
 
     /// Removes every element. The fill type is kept.
     pub fn reset(&mut self) {
-        self.edit().truncate(0);
+        self.edit(|path| path.truncate(0));
     }
 
     /// The cached bounding box, if [`Self::bounds`] computed one and no edit has invalidated
@@ -665,6 +684,7 @@ impl Path {
         let mut path = (*self.geometry).clone();
         path.apply_affine(Affine::translate((offset.dx, offset.dy)));
         Self {
+            finite: elements_are_finite(path.elements()),
             geometry: Arc::new(path),
             hint: self.hint.translate(offset),
             fill_type: self.fill_type,
@@ -675,6 +695,7 @@ impl Path {
     /// A path with this geometry and fill type and no shape hint.
     fn derived(&self, geometry: kurbo::BezPath) -> Self {
         Self {
+            finite: elements_are_finite(geometry.elements()),
             geometry: Arc::new(geometry),
             hint: ShapeHint::None,
             fill_type: self.fill_type,
@@ -1064,18 +1085,26 @@ impl Path {
         path.is_finite().then_some(path)
     }
 
-    /// Whether every point of the geometry is finite.
-    fn is_finite(&self) -> bool {
-        self.geometry.elements().iter().all(|element| {
-            let points: &[kurbo::Point] = match element {
-                PathEl::MoveTo(p) | PathEl::LineTo(p) => std::slice::from_ref(p),
-                PathEl::QuadTo(c, p) => &[*c, *p],
-                PathEl::CurveTo(c1, c2, p) => &[*c1, *c2, *p],
-                PathEl::ClosePath => &[],
-            };
-            points.iter().all(|p| p.x.is_finite() && p.y.is_finite())
-        })
+    /// Whether every point of the geometry is finite: a flag every edit keeps current, so
+    /// asking costs nothing.
+    #[must_use]
+    #[inline]
+    pub(crate) fn is_finite(&self) -> bool {
+        self.finite
     }
+}
+
+/// Whether every point of `elements` is finite.
+fn elements_are_finite(elements: &[PathEl]) -> bool {
+    elements.iter().all(|element| {
+        let points: &[kurbo::Point] = match element {
+            PathEl::MoveTo(p) | PathEl::LineTo(p) => std::slice::from_ref(p),
+            PathEl::QuadTo(c, p) => &[*c, *p],
+            PathEl::CurveTo(c1, c2, p) => &[*c1, *c2, *p],
+            PathEl::ClosePath => &[],
+        };
+        points.iter().all(|p| p.x.is_finite() && p.y.is_finite())
+    })
 }
 
 impl Default for Path {

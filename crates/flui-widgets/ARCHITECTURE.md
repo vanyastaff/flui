@@ -1026,6 +1026,24 @@ resolved once from the configured axis, `reverse` and the ambient `Directionalit
 scrollable orients its gestures by the same value. `standard_scroll_views_scroll_themselves`
 drags and wheels each of them, forward and reversed, with no `Scrollable` of the caller's.
 
+### A scroll view asks its `ScrollBehavior` what its configuration leaves open
+
+`ScrollViewConfig` holds only what the author said: `physics` and `devices` are `None` until a
+builder sets them. `Scrollable` resolves each open setting by asking the `ScrollBehavior` of the
+nearest `ScrollConfiguration`, or `DefaultScrollBehavior` where there is none, with a
+`ScrollBehaviorDetails` of the `PlatformConvention` it is built under and its axis. The default
+behavior answers `BouncingScrollPhysics` on macOS and iOS, `ClampingScrollPhysics` elsewhere, and
+every pointer kind for drags. A `ScrollConfiguration` notifies its dependents only when its
+behavior is another `Rc`, and a scrollable keeps the physics it was answered until the behavior,
+the platform or the axis changes, so a rebuild keeps one physics and its owner
+(`a_scroll_view_asks_its_behavior_again_only_when_it_changes`). What the view names wins over the
+behavior (`a_scroll_configuration_answers_what_a_scroll_view_leaves_open`).
+
+Whether a release flings is the drag gesture's question: `DragEndDetails::fling_velocity` is zero
+below `GestureSettings::min_fling_velocity`, and the standard physics fling on any other finite
+velocity, with no threshold of their own. Their coefficients are private and checked by
+`try_new`, which refuses a value outside the open range `(0, 1)` with `ScrollPhysicsError`.
+
 ### Programmatic scroll replacement preserves the published velocity
 
 `ScrollController::animate_to` services its command through the existing owning
@@ -2526,26 +2544,13 @@ is what fails if the second segmenter comes back.
   Delete) come from ICU4X's grapheme segmenter, a different UAX #29 mode
   with no dictionary dependency, and are correct for
   every script including all the ones named above.
-- **The word-jump modifier's platform source is compile-time only, and
-  that is already known wrong for at least one real target.**
-  `is_word_jump_modifier` resolves `TargetPlatform::current()` — a
-  `cfg(target_os)` compile-time constant — once per `EditableText` key
-  handler, in `build_key_handler`. `wasm32` matches none of
-  `current()`'s `target_os` arms and falls through to `Unknown` →
-  Control, but a `flui` app compiled to `wasm32` and running in a Safari
-  tab on macOS needs Alt instead: native Ctrl+Arrow is the OS's own
-  Spaces-switch shortcut there, so a page that binds Control for
-  word-jump would never even see the chord. Web and embedded targets
-  need `TargetPlatform` resolved at RUNTIME, not baked in at compile
-  time — the gap `GestureSettings::preset` closes for gestures by taking
-  the platform as a value rather than reading the compile target. `word_jump_modifier`
-  is already split into a pure `(platform) -> Modifiers` function
-  specifically so a future runtime-resolved source has one place to
-  plug in — `build_key_handler`'s `let platform = TargetPlatform::current();`
-  — without touching the mapping table itself. Not fixed here: this
-  change did not add a runtime-platform-resolution mechanism to
-  `flui-widgets`, and inventing one for this one call site would be
-  premature relative to `GestureSettings`' own still-open gap.
+- **The word-jump modifier follows the tree's `PlatformConvention`.**
+  `is_word_jump_modifier` takes the platform the field or area read from
+  `PlatformConvention::of` at its last build, which the runtime installs
+  from the platform its runner names. `word_jump_modifier` stays a pure
+  `(platform) -> Modifiers` table. A `wasm32` build is named `Unknown`
+  (Control) until the web runner reports the browser's OS: a Safari tab on
+  macOS needs Alt, since Ctrl+Arrow switches Spaces there (`docs/gaps.md`).
 
 **Replacement tests:**
 `two_space_run_word_boundary`, a row of flui-painting's `caret_contract`
@@ -2865,8 +2870,8 @@ technology reads when it appears. **Unasserted:** no test pins this.
 
 **Choice:** `DefaultFocusTraversal`, which `app_root` installs above every
 application root, binds the three chords (Cmd on macOS and iOS, Control
-elsewhere — a pure table resolved once per state from
-`TargetPlatform::current()`). The chord resolves at the
+elsewhere — a pure table resolved in each build from
+`PlatformConvention::of`). The chord resolves at the
 primary focus like the traversal keys: an `EditableText` answers it on its own
 node, and with no text field focused nothing does, so the chord keeps
 bubbling. **Tests:** `tests/editable_text_clipboard.rs`

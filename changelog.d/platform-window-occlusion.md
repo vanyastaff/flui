@@ -17,5 +17,5 @@
 - **`flui-native`**: on Wayland, Android, iOS and the Web, where an application cannot hide its
   window, `visible` stays `true` while the window is open, and a suspended toplevel, a stopped
   Activity, a background scene or a hidden document is `occluded`.
-- **`flui-native`**: `MockWindow::simulate_visibility` is now `simulate_occlusion`, and
+- **`flui-native`**: `HeadlessHostWindow::simulate_visibility` is now `simulate_occlusion`, and
   `HeadlessWindowSystem` gains `occluded`; hiding a headless window is `WindowCommand::Hide`.

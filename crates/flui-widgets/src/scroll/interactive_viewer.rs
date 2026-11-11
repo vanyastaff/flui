@@ -2018,7 +2018,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
         self.controller.dispose();
     }
 
-    fn build(&self, view: &InteractiveViewer, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &InteractiveViewer, ctx: &dyn BuildContext) -> impl IntoView {
         let core = Rc::clone(&self.core);
         let content = self.content(view);
         let mount = AlternativesMount {
@@ -2032,7 +2032,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             .can_request_focus(false)
             .on_key_event(move |_cx, event| key_core.key_pan(event));
         let mut shortcuts = Shortcuts::new(keys);
-        for (activator, intent) in zoom_keys(TargetPlatform::current()) {
+        for (activator, intent) in zoom_keys(flui_view::environment::PlatformConvention::of(ctx)) {
             shortcuts = shortcuts.shortcut(activator, intent);
         }
         Actions::new(shortcuts)
