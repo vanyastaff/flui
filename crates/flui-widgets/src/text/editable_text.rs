@@ -41,8 +41,8 @@ use flui_view::{BoxedView, CreationSite, RenderView, impl_render_view};
 use crate::AnimatedBuilder;
 use crate::interaction::actions::{
     Action, ActionChain, ActionChainProvider, ActionOutcome, ActivateIntent, ActivationPressIntent,
-    CopySelectionTextIntent, DismissIntent, PasteTextIntent, SelectAllTextIntent,
-    ShowContextMenuIntent, as_node_context, erased_action, layered_chain,
+    CopySelectionTextIntent, DismissIntent, FocusRecord, PasteTextIntent, SelectAllTextIntent,
+    ShowContextMenuIntent, erased_action, layered_chain,
 };
 use crate::semantics::Semantics;
 use crate::support::{command_modifiers, ref_callback};
@@ -909,6 +909,8 @@ pub struct EditableTextState {
     /// This field's clipboard actions layered over the enclosing chain: the
     /// record on its focus node that a `Shortcuts` resolves intents against.
     action_chain: Option<ActionChain>,
+    /// The record `action_chain` and the convention make on the focus node.
+    focus_record: Option<FocusRecord>,
     /// Generation-checked ownership of that record on the node.
     action_chain_registration: Option<FocusNodeRegistration>,
     /// The latest view's `autofocus`.
@@ -982,6 +984,7 @@ impl StatefulView for EditableText {
             text_store: None,
             enclosing_action_chain: None,
             action_chain: None,
+            focus_record: None,
             action_chain_registration: None,
             autofocus: self.autofocus,
             did_autofocus: false,
@@ -1453,12 +1456,18 @@ impl EditableTextState {
     /// `Focus` keeps (ADR-0079).
     fn record_action_chain(&mut self, ctx: &dyn BuildContext) {
         let enclosing = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+        let platform = flui_view::environment::PlatformConvention::of(ctx);
         let unchanged = match (&enclosing, &self.enclosing_action_chain) {
             (Some(new), Some(held)) => Rc::ptr_eq(new, held),
             (None, None) => true,
             _ => false,
         };
+        let same_platform = self
+            .focus_record
+            .as_ref()
+            .is_some_and(|record| record.platform() == platform);
         if unchanged
+            && same_platform
             && self
                 .action_chain_registration
                 .as_ref()
@@ -1487,8 +1496,9 @@ impl EditableTextState {
         );
         // Register the new record before the old token drops: the old one is
         // no longer current then, so dropping it leaves the new one in place.
-        self.action_chain_registration =
-            Some(self.focus_node.register_context(as_node_context(&chain)));
+        let record = FocusRecord::new(Rc::clone(&chain), platform);
+        self.action_chain_registration = Some(record.register_on(&self.focus_node));
+        self.focus_record = Some(record);
         self.action_chain = Some(chain);
         self.enclosing_action_chain = enclosing;
     }
@@ -2083,9 +2093,9 @@ impl ViewState<EditableText> for EditableTextState {
                 .as_ref()
                 .map(|provider| replacement.register_rect_provider(Rc::clone(provider)));
             let replacement_action_chain_registration = self
-                .action_chain
+                .focus_record
                 .as_ref()
-                .map(|chain| replacement.register_context(as_node_context(chain)));
+                .map(|record| record.register_on(&replacement));
 
             // Keep observing the old node while the transaction reports an
             // exact-primary loss, so the current IME session is detached.

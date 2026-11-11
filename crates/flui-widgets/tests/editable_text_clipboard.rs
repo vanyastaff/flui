@@ -617,21 +617,21 @@ pub(crate) fn a_field_follows_the_platform_convention_it_is_built_under() {
             None,
             Modifiers::ALT,
             Modifiers::CONTROL,
-            Some(Modifiers::META),
+            Modifiers::META,
         ),
         (
             TargetPlatform::Linux,
             None,
             Modifiers::CONTROL,
             Modifiers::META,
-            Some(Modifiers::CONTROL),
+            Modifiers::CONTROL,
         ),
         (
             TargetPlatform::Linux,
             Some(TargetPlatform::MacOS),
             Modifiers::ALT,
             Modifiers::CONTROL,
-            None,
+            Modifiers::META,
         ),
     ] {
         let row = format!("window {window:?}, wrapped {wrapped:?}");
@@ -650,16 +650,14 @@ pub(crate) fn a_field_follows_the_platform_convention_it_is_built_under() {
             WORD,
             "{row}: the other platform's modifier does not jump by word"
         );
-        if let Some(command) = command {
-            controller.set_selection(0, 3);
-            assert!(
-                harness
-                    .focus_manager()
-                    .dispatch_key_event(&chord("c", command))
-                    .is_handled(),
-                "{row}: the platform's command chord copies"
-            );
-            assert_eq!(harness.clipboard().text().as_deref(), Some("one"), "{row}");
-        }
+        controller.set_selection(0, 3);
+        assert!(
+            harness
+                .focus_manager()
+                .dispatch_key_event(&chord("c", command))
+                .is_handled(),
+            "{row}: the convention's command chord copies"
+        );
+        assert_eq!(harness.clipboard().text().as_deref(), Some("one"), "{row}");
     }
 }
