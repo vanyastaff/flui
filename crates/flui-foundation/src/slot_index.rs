@@ -141,10 +141,11 @@ impl<K: SlotKey> SlotIndex<K> {
     /// Keeps the entries of `entries` for which `keep` returns `true`, in
     /// order, and keeps this index in step.
     ///
-    /// `keep` is the caller's code and may panic. Every step leaves each
-    /// entry still in `entries` at the position this index records, so a
-    /// panic that is caught leaves a list that is the original one reordered,
-    /// with nothing dropped and every entry findable.
+    /// `keep`, `key_of` and an entry's `Drop` are the caller's code and may
+    /// panic. Every step leaves each entry still in `entries` at the position
+    /// this index records, and an entry leaves the list and the index
+    /// together, so a panic that is caught leaves the surviving entries
+    /// reordered and every one of them findable.
     pub fn retain<E>(
         &mut self,
         entries: &mut Vec<E>,
@@ -157,14 +158,24 @@ impl<K: SlotKey> SlotIndex<K> {
                 continue;
             }
             if kept != read {
+                // Both keys are read before anything moves, so a `key_of`
+                // that panics leaves the list and the index as they were.
+                let rejected = key_of(&entries[kept]);
+                let retained = key_of(&entries[read]);
                 entries.swap(kept, read);
-                self.insert(key_of(&entries[read]), read);
-                self.insert(key_of(&entries[kept]), kept);
+                self.insert(rejected, read);
+                self.insert(retained, kept);
             }
             kept += 1;
         }
-        self.remove_all(entries[kept..].iter().map(&key_of));
-        entries.truncate(kept);
+        // One entry at a time from the end: an entry leaves the index and the
+        // list together, so a panic in `key_of` or in an entry's `Drop`
+        // leaves every entry still listed findable.
+        while entries.len() > kept {
+            let Some(last) = entries.last() else { break };
+            self.remove(key_of(last));
+            drop(entries.pop());
+        }
     }
 }
 

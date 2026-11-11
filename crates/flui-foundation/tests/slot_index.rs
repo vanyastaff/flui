@@ -127,3 +127,26 @@ fn a_panicking_retain_predicate_leaves_every_entry_findable() {
     }
     assert_eq!(index.find(&entries, RenderId::new(1), |e| *e), None);
 }
+
+#[test]
+fn a_panicking_key_read_during_retain_moves_nothing() {
+    let mut entries: Vec<RenderId> = [1, 2].map(RenderId::new).to_vec();
+    let mut index = SlotIndex::<RenderId>::default();
+    index.reindex(entries.iter().copied());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the test contains the key reader's panic to read the list after it"
+    )]
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        index.retain(
+            &mut entries,
+            |_| panic!("the key reader panics"),
+            |e| *e == RenderId::new(2),
+        );
+    }));
+    assert!(caught.is_err());
+    assert_eq!(entries, [1, 2].map(RenderId::new));
+    for (position, &id) in entries.iter().enumerate() {
+        assert_eq!(index.find(&entries, id, |e| *e), Some(position), "{id:?}");
+    }
+}
