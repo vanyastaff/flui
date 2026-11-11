@@ -155,9 +155,12 @@ pub struct GpuContext {
     slots: SlotTable,
     #[cfg(test)]
     builds: ContextBuilds,
-    /// How many of the next frames panic in the middle of their recording.
+    /// How many of the next offscreen frames panic after their recording.
     #[cfg(test)]
     panics_ahead: u32,
+    /// When set, the next torn painter's drop panics.
+    #[cfg(test)]
+    panic_in_next_cleanup: bool,
     _one_mutator: PhantomData<Cell<()>>,
 }
 
@@ -387,6 +390,8 @@ impl GpuContext {
             },
             #[cfg(test)]
             panics_ahead: 0,
+            #[cfg(test)]
+            panic_in_next_cleanup: false,
             _one_mutator: PhantomData,
         }
     }
@@ -527,43 +532,39 @@ impl GpuContext {
         let domain = &self.domain;
         let mut caught = FirstPanic::new();
         let drawn = caught.contain(|| {
-            #[cfg(test)]
-            assert!(!panics, "injected panic in the middle of a slot's frame");
             painter.begin_frame_in_scope();
             painter.resize(size.0, size.1);
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            crate::headless::clear_to_background(domain, &view)?;
-            {
-                let mut backend = LayerDispatcher::new(&mut painter);
-                crate::layer_walk::record_layer_tree(tree, tree.root(), &mut backend)?;
-            }
-            let mut encoder =
-                domain
-                    .device()
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("FLUI Slot Render Encoder"),
-                    });
-            painter.render_to_texture(&texture, &mut encoder)?;
-            painter.submit_encoder(encoder)?;
+            let drawn = (|| {
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                crate::headless::clear_to_background(domain, &view)?;
+                {
+                    let mut backend = LayerDispatcher::new(&mut painter);
+                    crate::layer_walk::record_layer_tree(tree, tree.root(), &mut backend)?;
+                }
+                #[cfg(test)]
+                assert!(!panics, "injected panic in the middle of a slot's frame");
+                let mut encoder =
+                    domain
+                        .device()
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("FLUI Slot Render Encoder"),
+                        });
+                painter.render_to_texture(&texture, &mut encoder)?;
+                painter.submit_encoder(encoder).map(|_submitted| ())
+            })();
+            // Once a frame began, an error closes it as a completed frame
+            // does, with its encoder discarded, as the window path's frame
+            // protocol closes its own: the painter is whole for the next one.
             painter.finish_frame();
-            Ok(())
+            drawn
         });
-        match drawn {
-            Some(Ok(())) => {
-                self.painter = Some(painter);
-                Ok(())
-            }
-            // A recording that failed part way is torn as an unwound one is.
-            Some(Err(error)) => {
-                self.keep_pipelines(painter);
-                Err(error)
-            }
-            None => {
-                self.keep_pipelines(painter);
-                caught.resume();
-                unreachable!("BUG: a contained call that did not return holds its panic")
-            }
-        }
+        let Some(drawn) = drawn else {
+            self.keep_pipelines(painter, &mut caught);
+            caught.resume();
+            unreachable!("BUG: a contained call that did not return holds its panic")
+        };
+        self.painter = Some(painter);
+        drawn
     }
 
     /// Render `scene` into window `slot` and present it, repainting at least
@@ -601,8 +602,6 @@ impl GpuContext {
             .blit
             .take()
             .unwrap_or_else(|| OffscreenRenderer::with_domain(Arc::clone(&self.domain)));
-        #[cfg(test)]
-        let panics = self.injected_panic();
         let Self {
             adapter,
             domain,
@@ -614,8 +613,6 @@ impl GpuContext {
         };
         let mut caught = FirstPanic::new();
         let rendered = caught.contain(|| {
-            #[cfg(test)]
-            assert!(!panics, "injected panic in the middle of a window's frame");
             window.render(
                 &gpu_of(adapter, domain),
                 &mut painter,
@@ -626,22 +623,33 @@ impl GpuContext {
         });
         self.blit = Some(blit);
         let Some(rendered) = rendered else {
-            self.keep_pipelines(painter);
+            self.keep_pipelines(painter, &mut caught);
             caught.resume();
             unreachable!("BUG: a contained call that did not return holds its panic")
         };
-        // An error leaves the painter as a renderer keeps its own after one:
+        // An error leaves the painter whole, as on the offscreen path:
         // acquire errors come before it records, and a recording error is
         // closed by the frame protocol's cleanup.
         self.painter = Some(painter);
         rendered
     }
 
-    /// Drop `painter`, whose frame unwound or failed part way, and keep its
-    /// pipelines for the next painter: its glyph atlas, image and path caches
-    /// and scratch pools can be torn, and every slot shares them.
-    fn keep_pipelines(&mut self, painter: WgpuPainter) {
-        self.pipelines = Some(painter.into_pipelines());
+    /// Drop `painter`, whose frame unwound, and keep its pipelines for the
+    /// next painter: its glyph atlas, image and path caches and scratch pools
+    /// can be torn, and every slot shares them.
+    ///
+    /// The drop runs under `caught`, which holds the frame's panic: a cached
+    /// value's destructor is not ours, and one that panics costs the library
+    /// too, while the frame's panic stays the one the slot's record gets.
+    fn keep_pipelines(&mut self, painter: WgpuPainter, caught: &mut FirstPanic) {
+        #[cfg(test)]
+        let cleanup_panics = std::mem::take(&mut self.panic_in_next_cleanup);
+        self.pipelines = caught.contain(|| {
+            let pipelines = painter.into_pipelines();
+            #[cfg(test)]
+            assert!(!cleanup_panics, "injected panic dropping a torn painter");
+            pipelines
+        });
     }
 
     /// The pixels offscreen `slot` holds, tightly packed, top row first,
@@ -661,17 +669,25 @@ impl GpuContext {
         self.builds
     }
 
-    /// Make the next frame panic in the middle of its recording.
+    /// Make the next offscreen frame panic after its recording, before its
+    /// submission.
     #[cfg(test)]
     pub(crate) fn panic_in_next_frame(&mut self) {
         self.panic_in_next_frames(1);
     }
 
-    /// Make each of the next `frames` frames panic in the middle of its
+    /// Make each of the next `frames` offscreen frames panic after its
     /// recording, whichever slots they are of.
     #[cfg(test)]
     pub(crate) fn panic_in_next_frames(&mut self, frames: u32) {
         self.panics_ahead = frames;
+    }
+
+    /// Make the drop of the next torn painter panic, as a cached value's
+    /// destructor can.
+    #[cfg(test)]
+    pub(crate) fn panic_in_next_cleanup(&mut self) {
+        self.panic_in_next_cleanup = true;
     }
 
     /// Whether this frame panics, counting it off.
@@ -1116,10 +1132,14 @@ mod tests {
     }
 
     /// A frame that panics costs the caches every slot shares, not the
-    /// pipelines: two slots whose frames both panic in one turn each settle
-    /// `Retry` and each keep their own payload, the slot that did not draw
-    /// keeps its committed image, and the next turn draws every slot over a
+    /// pipelines: two slots whose frames both panic in one turn, after their
+    /// recording and before their submission, each settle `Retry` and each
+    /// keep their own payload, and the next turn draws every slot over a
     /// fresh glyph atlas with no pipeline built again (ADR-0305 §7).
+    ///
+    /// An offscreen slot is cleared before it records, so a frame that panics
+    /// leaves its target cleared, not as it was: the slot's committed image
+    /// does not survive, and its `Retry` is what makes the owner draw it again.
     ///
     /// Red-check: drop the pipelines with the painter in
     /// `GpuContext::keep_pipelines` and the next painter builds its pipeline
@@ -1182,7 +1202,7 @@ mod tests {
 
         executor.backend_mut().panic_in_next_frames(2);
         assert_eq!(
-            draw(&mut executor, LayerTree::default),
+            draw(&mut executor, square_and_glyph),
             [RasterVerdict::Retry; 2],
             "both panicking frames settle Retry"
         );
@@ -1192,13 +1212,13 @@ mod tests {
                 "each slot's record holds its own panic"
             );
         }
-        assert_eq!(
+        assert_ne!(
             executor
                 .backend()
                 .read_slot(second_slot)
                 .expect("the slot reads back"),
             committed,
-            "a slot whose frame did not draw keeps its committed image"
+            "the panicking frame cleared its target before it recorded"
         );
 
         assert_eq!(
@@ -1225,6 +1245,73 @@ mod tests {
                 "the rebuilt caches draw the same frame"
             );
         }
+    }
+
+    /// Dropping the painter a frame unwound with runs destructors that are not
+    /// ours (a cached value's), so it runs contained: when one panics too, the
+    /// slot's record still holds the frame's panic, not the cleanup's, and the
+    /// next turn draws the slot (ADR-0305 §7, ADR-0281).
+    ///
+    /// Red-check: drop the torn painter outside `caught` in
+    /// `GpuContext::keep_pipelines` and the cleanup's panic unwinds out of
+    /// the frame, discarding the frame's: the record holds the cleanup's.
+    #[test]
+    fn a_torn_painter_whose_drop_panics_keeps_the_frames_panic() {
+        use crate::raster_executor::SlotFailure;
+
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let (mut executor, sender) = RasterExecutor::new(context, || {});
+        let slot = sender.mint_slot().expect("a slot id is left");
+        let address = PresentationAddress {
+            ui_runtime_id: UiRuntimeId::new(1),
+            presentation_id: PresentationId::new(1),
+        };
+        let receipt = sender
+            .send(RasterCommand::Attach {
+                slot,
+                address,
+                target: SlotTarget::Offscreen {
+                    size: DeviceSize::new(32, 16),
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                config: SlotConfig::new(),
+            })
+            .expect("the attach is accepted");
+        let SendReceipt::Configured(generation) = receipt else {
+            panic!("an attach of a positive size configures the slot: {receipt:?}");
+        };
+        let draw = |executor: &mut RasterExecutor<GpuContext>| {
+            sender
+                .send(frame(slot, address, generation, square_and_glyph()))
+                .expect("the frame is accepted");
+            let _ = executor.turn();
+            let mut settled = Vec::new();
+            sender.drain_settlements(slot, &mut settled);
+            assert_eq!(settled.len(), 1, "the frame settles once");
+            settled[0].verdict
+        };
+        assert_eq!(draw(&mut executor), RasterVerdict::Presented);
+
+        executor.backend_mut().panic_in_next_frame();
+        executor.backend_mut().panic_in_next_cleanup();
+        assert_eq!(draw(&mut executor), RasterVerdict::Retry);
+        let Some(SlotFailure::Panicked(payload)) = sender.take_failure(slot) else {
+            panic!("the slot's record holds a panic");
+        };
+        assert_eq!(
+            payload.downcast_ref::<&str>().copied(),
+            Some("injected panic in the middle of a slot's frame"),
+            "the record holds the frame's panic, not the cleanup's"
+        );
+        flui_foundation::panic::discard_payload(payload);
+
+        assert_eq!(
+            draw(&mut executor),
+            RasterVerdict::Presented,
+            "the turn after the panic draws the slot"
+        );
     }
 
     /// A window whose surface the context's adapter cannot present to is
