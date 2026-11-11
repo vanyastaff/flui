@@ -394,3 +394,105 @@ fn a_paint_panic_applies_no_patch_and_keeps_the_presented_version() {
         "the retry paints the boundary the failed pass owed"
     );
 }
+
+/// A parent that paints its one child at the `dx` it holds, as the bits of an `f64`.
+#[derive(Debug)]
+struct PaintsChildAt(Arc<std::sync::atomic::AtomicU64>);
+
+impl flui_foundation::inspect::Inspect for PaintsChildAt {
+    fn kind(&self) -> &'static str {
+        "PaintsChildAt"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
+
+impl flui_rendering::traits::RenderBox for PaintsChildAt {
+    type Arity = flui_foundation::Single;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_foundation::Single,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> flui_rendering::RenderResult<Size> {
+        let constraints = *ctx.constraints();
+        ctx.layout_child(0, constraints.loosen())?;
+        Ok(constraints.biggest())
+    }
+
+    flui_rendering::forward_single_child_box_queries!();
+
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Single>) {
+        let dx = f64::from_bits(self.0.load(std::sync::atomic::Ordering::Relaxed));
+        ctx.paint_child_at(flui_foundation::geometry::Offset::new(dx, 0.0));
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<
+            '_,
+            flui_foundation::Single,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> bool {
+        false
+    }
+}
+
+/// A boundary placed at a non-finite offset is not published at a stand-in: it keeps the
+/// placement its node holds, and a later frame at the same offset finds nothing to move
+/// (ADR-0054).
+#[test]
+fn a_boundary_placed_at_a_non_finite_offset_keeps_its_last_placement() {
+    let dx = Arc::new(std::sync::atomic::AtomicU64::new(5.0_f64.to_bits()));
+    let (owner, registry) = mount(
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(PaintsChildAt(Arc::clone(&dx)))
+                .label("parent")
+                .child(
+                    box_node(RenderRepaintBoundary::new())
+                        .label("placed")
+                        .child(leaf()),
+                ),
+        ),
+    );
+    let parent = registry.get("parent").expect("labelled");
+    let placed = registry.get("placed").expect("labelled");
+    let placement = |scene: &SceneHost, owner: &PipelineOwner<Idle>| {
+        let node = owner.boundary_scene_node(placed).expect("published");
+        scene
+            .version()
+            .node(node)
+            .expect("live node")
+            .placement()
+            .offset()
+    };
+    let mut scene = SceneHost::new();
+    let mut owner = frame(&mut scene, owner);
+    let first = placement(&scene, &owner);
+    assert!(first.dx > 0.0, "precondition: placed at a finite offset");
+
+    for bad in [f64::NAN, f64::INFINITY] {
+        dx.store(bad.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        owner.mark_needs_paint(parent);
+        owner = frame(&mut scene, owner);
+        assert_eq!(
+            placement(&scene, &owner),
+            first,
+            "{bad} keeps the last placement"
+        );
+
+        let before = owner.counters();
+        owner.mark_needs_paint(parent);
+        owner = frame(&mut scene, owner);
+        assert_eq!(
+            owner.counters().since(before).scene_ops,
+            1,
+            "{bad}: one Publish of the repainted root, no Place of the boundary"
+        );
+    }
+}

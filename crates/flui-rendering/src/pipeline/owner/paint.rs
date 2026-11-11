@@ -932,9 +932,32 @@ impl PipelineOwner<PaintPhase> {
         let Some(child_node) = self.render_tree.get(child_id) else {
             return Ok(());
         };
-        let placement = origin + offset_override.unwrap_or_else(|| child_node.offset());
-        let region_anchor = anchor.map(|frame| frame.rebased(placement));
+        let computed = origin + offset_override.unwrap_or_else(|| child_node.offset());
         let committed = self.boundary_records.get(&child_id);
+        // Non-finite geometry is never published (ADR-0054): the boundary stays
+        // where its slot last put it, at its parent's origin when it has never
+        // been placed, and its record holds that placement, so the next frame
+        // finds nothing to move.
+        let placement = if computed.is_finite() {
+            computed
+        } else {
+            tracing::warn!(
+                boundary = child_id.as_u64(),
+                offset = ?computed,
+                "paint: a boundary placed at a non-finite offset keeps its last placement"
+            );
+            committed.map_or_else(
+                || {
+                    if origin.is_finite() {
+                        origin
+                    } else {
+                        Offset::ZERO
+                    }
+                },
+                |record| record.placed.placement,
+            )
+        };
+        let region_anchor = anchor.map(|frame| frame.rebased(placement));
         let node = if composer.served(child_id) {
             composer.node_of(self, child_id)
         } else {
@@ -1954,10 +1977,8 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
             ops += 1;
         }
         for (node, offset) in self.work.places.drain(..) {
-            let placement = Placement::try_new(offset).unwrap_or_else(|_| {
-                tracing::warn!(?offset, "paint: a boundary placed at a non-finite offset");
-                Placement::ZERO
-            });
+            let placement = Placement::try_new(offset)
+                .expect("BUG: a boundary is placed only at a finite offset");
             self.writer.push(SceneOp::Place { node, placement });
             ops += 1;
         }
