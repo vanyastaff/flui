@@ -40,7 +40,7 @@ use flui::view::persist::{DecodeError, Document, PersistError, Persisted, Revisi
 use flui::view::{AsyncDriver, CloseGuard, StaleClose, TaskToken, View};
 use flui::widgets::{
     AnimatedBuilder, BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea,
-    WidgetStateProperty, column,
+    WidgetStateProperty,
 };
 use serde::{Deserialize, Serialize};
 
@@ -823,7 +823,7 @@ impl ViewState<Root> for RootState {
                     let reload = TextButton::new(Text::new("Reload")).on_pressed(move |cx| {
                         attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
                     });
-                    return Column::new(column![Text::new("Loading notes"), reload]).boxed();
+                    return Column::new((Text::new("Loading notes"), reload)).boxed();
                 }
                 if let Some(error) = snapshot.error() {
                     let resume = documents.data.clone();
@@ -838,7 +838,7 @@ impl ViewState<Root> for RootState {
                     });
                     let message = Text::new(format!("Load failed: {error}"));
                     if !matches!(error, LoadFailure::Unreadable(_)) {
-                        return Column::new(column![message, retry]).boxed();
+                        return Column::new((message, retry)).boxed();
                     }
                     let data = documents.data.clone();
                     let starting_over = Rc::clone(&starting_over);
@@ -850,7 +850,7 @@ impl ViewState<Root> for RootState {
                             starting_over.set(true);
                             attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
                         });
-                    return Column::new(column![message, retry, start_over]).boxed();
+                    return Column::new((message, retry, start_over)).boxed();
                 }
                 let read = snapshot
                     .data()
@@ -1051,14 +1051,14 @@ impl ViewState<Screen> for ScreenState {
             Route::Note { id } => editor(cx, id, shared, &router, &self.form, &self.focus),
             Route::Settings => settings(cx, shared),
         };
-        SafeArea::new().child(Column::new(column![
+        SafeArea::new().child(Column::new((
             Row::new(header(&view.route, &router)),
             Text::new(shared.status.get(cx)),
             storage_banner(&shared.data),
             place_banner(&shared.session),
             close_decision(shared.close.as_ref()),
             Expanded::new(content),
-        ]))
+        )))
     }
 
     fn dispose(&mut self) {
@@ -1183,7 +1183,7 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
     };
     let toggle = shared.clone();
     let add = shared.clone();
-    Column::new(column![
+    Column::new((
         Row::new(vec![
             on_current_page(
                 if compact {
@@ -1213,7 +1213,7 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
             .boxed(),
         ]),
         Expanded::new(rows),
-    ])
+    ))
     .boxed()
 }
 
@@ -1282,7 +1282,7 @@ fn editor(
     let delete = shared.clone();
     let validate = form.clone();
     let edits = shared.edits.clone();
-    Form::new(Column::new(column![
+    Form::new(Column::new((
         Text::new(format!("Editing note {id}")),
         TextFormField::new(shared.draft.clone())
             .focus_node(Rc::clone(focus))
@@ -1319,7 +1319,7 @@ fn editor(
                 save.status
                     .set(cx, message)
                     .expect("BUG: the loaded state's signals outlive its screens");
-            }
+            },
         ),
         on_current_page(
             "Delete note",
@@ -1339,9 +1339,9 @@ fn editor(
                     .set(cx, format!("Deleted note {id}"))
                     .expect("BUG: the loaded state's signals outlive its screens");
                 router.pop().expect("BUG: mounted Router");
-            }
+            },
         ),
-    ]))
+    )))
     .handle(form.clone())
     .on_changed(move |_cx| {
         if let Some(edits) = &edits {
@@ -1477,11 +1477,7 @@ fn close_decision(close: Option<&CloseWatch>) -> BoxedView {
                 })
                 .boxed(),
         ]);
-        Column::new(column![
-            Text::new("Closing: unsaved changes would be lost"),
-            buttons
-        ])
-        .boxed()
+        Column::new((Text::new("Closing: unsaved changes would be lost"), buttons)).boxed()
     })
     .boxed()
 }

@@ -10,7 +10,6 @@ use flui_platform::input_regions::{
 use flui_platform::{AppTitleBar, PlatformWindow as _, WindowCommand, WindowFrame, WindowMode};
 use flui_testing::window_commands::AdmitAndApply as _;
 use flui_view::{EventCx, IntoView, View};
-use flui_widgets::row;
 use flui_widgets::{
     ColoredBox, GestureDetector, MouseRegion, Positioned, SizedBox, Stack, WindowCaptionButton,
     WindowMovePassThrough, WindowResizeArea, WindowTitleBar,
@@ -41,8 +40,8 @@ fn button(width: f64) -> impl View {
 /// decoration that passes its presses through at x 70 and a close button at x 170, over a
 /// resize band along the window's top edge.
 fn bar() -> impl View {
-    Stack::new(row![
-        WindowTitleBar::new().child(Stack::new(row![
+    Stack::new((
+        WindowTitleBar::new().child(Stack::new((
             SizedBox::new(200.0, 32.0).child(ColoredBox::new(Color::rgb(230, 230, 230))),
             Positioned::new(button(20.0)).left(10.0).top(6.0),
             Positioned::new(MouseRegion::new().child(SizedBox::new(20.0, 20.0)))
@@ -54,11 +53,11 @@ fn bar() -> impl View {
             Positioned::new(WindowCaptionButton::close(SizedBox::new(20.0, 20.0)))
                 .left(170.0)
                 .top(6.0),
-        ])),
+        ))),
         Positioned::new(WindowResizeArea::new(ResizeEdge::Top).child(SizedBox::new(200.0, 4.0)))
             .left(0.0)
             .top(0.0),
-    ])
+    ))
 }
 
 fn with_frame(frame: WindowFrame) -> LaidOut {
@@ -150,10 +149,10 @@ pub(crate) fn a_maximized_window_is_not_resized_from_its_border() {
 }
 
 fn caption(button: impl IntoView) -> impl View {
-    Stack::new(row![
+    Stack::new((
         SizedBox::new(200.0, 200.0),
         Positioned::new(button).left(0.0).top(0.0),
-    ])
+    ))
 }
 
 pub(crate) fn the_maximize_button_maximizes_and_restores() {

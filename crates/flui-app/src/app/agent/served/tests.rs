@@ -16,7 +16,7 @@ use flui_protocol::{ActParams, ActionName, AppInfo, Condition, Locator, Node, Ta
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::prelude::*;
 use flui_view::{Signal, StatefulView, ViewState};
-use flui_widgets::{Column, RawButton, Text, column};
+use flui_widgets::{Column, RawButton, Text};
 use interprocess::local_socket::Stream;
 use interprocess::local_socket::traits::Stream as _;
 use serde_json::{Value, json};
@@ -57,13 +57,13 @@ impl ViewState<Counter> for CounterState {
     fn build(&self, view: &Counter, ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count;
         let presses = Arc::clone(&view.presses);
-        Column::new(column![
+        Column::new((
             Text::new(format!("Count: {}", count.get(ctx))),
             RawButton::new(Text::new("Increment")).on_press(move |cx| {
                 presses.fetch_add(1, Ordering::SeqCst);
                 count.update(cx, |n| *n += 1)
             }),
-        ])
+        ))
     }
 }
 

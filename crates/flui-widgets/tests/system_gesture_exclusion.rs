@@ -11,7 +11,6 @@ use flui_platform::{DisplayId, DisplayKey, DisplayRegistry};
 use flui_testing::log_capture;
 use flui_view::{IntoView, View};
 use flui_widgets::ScrollView;
-use flui_widgets::row;
 use flui_widgets::{
     ClipRect, ColoredBox, Positioned, SizedBox, Stack, SystemGestureExclusion, Transform,
 };
@@ -27,10 +26,10 @@ fn device(left: i32, top: i32, right: i32, bottom: i32) -> DeviceInputRegion {
 
 /// A 200-px window painted `background`, with `content` positioned at (`left`, `top`).
 fn window(background: Color, left: f64, top: f64, content: impl IntoView) -> impl View {
-    Stack::new(row![
+    Stack::new((
         SizedBox::new(200.0, 200.0).child(ColoredBox::new(background)),
         Positioned::new(content).left(left).top(top),
-    ])
+    ))
 }
 
 fn excluded(width: f64, height: f64) -> SystemGestureExclusion {
@@ -88,9 +87,9 @@ pub(crate) fn a_transformed_region_reports_its_bounding_box() {
 }
 
 pub(crate) fn a_clipped_region_reports_the_intersection() {
-    let clipped = ClipRect::new().child(SizedBox::new(40.0, 40.0).child(Stack::new(row![
+    let clipped = ClipRect::new().child(SizedBox::new(40.0, 40.0).child(Stack::new((
         Positioned::new(excluded(100.0, 100.0)).left(20.0).top(20.0),
-    ])));
+    ))));
     let laid = mounted(clipped);
     assert_eq!(
         laid.window().input_region_updates(),
@@ -113,13 +112,13 @@ pub(crate) fn a_region_beyond_the_window_is_clamped_to_it() {
 /// branches between them, which the walk does not enter, change nothing.
 pub(crate) fn regions_in_separate_branches_come_out_in_paint_order() {
     let plain = || SizedBox::new(10.0, 10.0).child(ColoredBox::new(GREY));
-    let laid = mounted(Stack::new(row![
+    let laid = mounted(Stack::new((
         Positioned::new(plain()).left(0.0).top(0.0),
         Positioned::new(excluded(20.0, 20.0)).left(0.0).top(0.0),
         Positioned::new(plain()).left(50.0).top(50.0),
         Positioned::new(excluded(10.0, 30.0)).left(100.0).top(40.0),
         Positioned::new(plain()).left(150.0).top(150.0),
-    ]));
+    )));
     assert_eq!(
         laid.window().input_region_updates(),
         vec![vec![device(10, 20, 30, 40), device(110, 60, 120, 90)]]
@@ -194,11 +193,11 @@ pub(crate) fn fractional_region_edges_round_outward() {
 /// A sibling region beside `content` at the origin, so a frame that reports only the
 /// sibling was composited and dropped `content`'s region.
 fn beside_a_sibling(content: impl IntoView) -> impl View {
-    Stack::new(row![
+    Stack::new((
         SizedBox::new(200.0, 200.0).child(ColoredBox::new(GREY)),
         Positioned::new(excluded(5.0, 5.0)).left(0.0).top(0.0),
         Positioned::new(content).left(100.0).top(100.0),
-    ])
+    ))
 }
 
 pub(crate) fn a_degenerate_transform_drops_the_region_with_a_diagnostic() {

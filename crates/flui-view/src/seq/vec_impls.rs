@@ -5,8 +5,8 @@
 //!   `ListView::builder` with one item type) sits here.
 //! - `Vec<BoxedView>` — heterogeneous dynamic; the more general
 //!   shape (a `ListView` of items whose types vary by row, a
-//!   conditional `column!` that escapes >16 children to the
-//!   dynamic-fallback path per FR-013's cap).
+//!   conditional list, or a list past the tuple path's 16
+//!   children).
 //!
 //! Per-child `dyn`-dispatch cost is the same as the tuple path's
 //! `&dyn View` callback boundary — both pay one `dyn`-call per
@@ -53,3 +53,28 @@ impl<V: View> ViewSeq for Vec<V> {
 // `specialization`-style override (or a marker-trait variant of
 // `ViewSeq`) can short-circuit the round-trip in a follow-up
 // without breaking authoring code.
+
+/// A fixed list of children of one type: `Column::new([a, b, c])`.
+impl<V: View, const N: usize> ViewSeq for [V; N] {
+    #[inline]
+    fn len(&self) -> usize {
+        N
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        N == 0
+    }
+
+    #[inline]
+    fn for_each<F: FnMut(usize, &dyn View)>(&self, mut f: F) {
+        for (i, v) in self.iter().enumerate() {
+            f(i, v);
+        }
+    }
+
+    #[inline]
+    fn into_boxed_vec(self) -> Vec<BoxedView> {
+        self.into_iter().map(ViewExt::boxed).collect()
+    }
+}

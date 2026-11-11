@@ -24,7 +24,7 @@ other widgets. Three shapes, no inheritance simulation:
 - **Render-object widget.** Implements `RenderView`, wraps one render box; a single child is
   stored as `Child` and set with `.child(impl IntoView)`.
 - **Multi-child render widget.** `Flex`/`Row`/`Column` are generic over `C: ViewSeq` with
-  default `Vec<BoxedView>`, so one type serves both child paths: `row!`/`column!` produce a
+  default `Vec<BoxedView>`, so one type serves both child paths: a tuple `(a, b)` is a
   monomorphic tuple, a `Vec<BoxedView>` carries a dynamic list.
 - **Composition widget.** A `StatelessView` whose `build` composes other widgets. `SafeArea` is
   the exemplar.

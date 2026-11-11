@@ -3825,10 +3825,10 @@ fn two_fields(
     first: &Rc<FocusNode>,
     second: &Rc<FocusNode>,
 ) -> impl flui_view::View {
-    flui_widgets::Column::new(flui_widgets::column![
+    flui_widgets::Column::new((
         EditableText::new(controllers.0.clone(), Rc::clone(first)),
         EditableText::new(controllers.1.clone(), Rc::clone(second)),
-    ])
+    ))
 }
 
 /// One rebuild hands the focused first field the second field's node,
@@ -3924,10 +3924,10 @@ fn editable_update_obscuring_and_to_a_node_attached_elsewhere() {
         .expect("the second field's node is attached");
     let contained = Arc::new(std::sync::Mutex::new(Vec::new()));
     tracing::subscriber::with_default(ContainedPanics(Arc::clone(&contained)), || {
-        harness.swap_root(flui_widgets::Column::new(flui_widgets::column![
+        harness.swap_root(flui_widgets::Column::new((
             EditableText::new(controllers.0.clone(), Rc::clone(&second)).obscure_text(true),
             EditableText::new(controllers.1.clone(), Rc::clone(&second)),
-        ]));
+        )));
     });
     field.set_observer(None);
     assert_eq!(

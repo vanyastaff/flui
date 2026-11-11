@@ -1593,10 +1593,9 @@ fn close_the_last_window_of(
     first: FailingNote,
     second: FailingNote,
 ) -> flui_app::testing::ExitReport {
-    let application = Application::new(move |_| {
-        flui_widgets::Column::new(flui_widgets::column![first.clone(), second.clone()])
-    })
-    .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+    let application =
+        Application::new(move |_| flui_widgets::Column::new((first.clone(), second.clone())))
+            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
     let run = HeadlessRun::start(application);
     run.run_owner_turn();
     let windows = run.open_windows();

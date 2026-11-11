@@ -1589,6 +1589,7 @@ fn layout_and_render_object_wiring() {
             ("unchanged_child::a_child_handed_back_unchanged_is_built_only_when_something_it_reads_changes", crate::unchanged_child::a_child_handed_back_unchanged_is_built_only_when_something_it_reads_changes),
             ("unchanged_child::a_lazily_mounted_item_handed_back_unchanged_is_not_built_again", crate::unchanged_child::a_lazily_mounted_item_handed_back_unchanged_is_not_built_again),
             ("component_child_ordering::component_child_keeps_slot_order_before_a_render_sibling", crate::component_child_ordering::component_child_keeps_slot_order_before_a_render_sibling),
+            ("component_child_ordering::an_array_of_children_lays_out_in_array_order", crate::component_child_ordering::an_array_of_children_lays_out_in_array_order),
             ("component_child_ordering::a_lazy_list_item_keeps_its_containers_children_in_slot_order", crate::component_child_ordering::a_lazy_list_item_keeps_its_containers_children_in_slot_order),
             ("parent_data_ancestry::expanded_under_stack_panics_at_attach_with_ancestry_diagnostic", crate::parent_data_ancestry::expanded_under_stack_panics_at_attach_with_ancestry_diagnostic),
             ("layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list", crate::layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list),
