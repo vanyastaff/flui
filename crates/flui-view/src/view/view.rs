@@ -231,7 +231,7 @@ clone_trait_object!(View);
 ///
 /// Most elements build exactly one child, and [`ChildViews::one`] holds it
 /// without a list of its own; [`ChildViews::none`] holds nothing,
-/// [`ChildViews::push`] appends, and a `Vec` of boxes converts. A child
+/// and a `Vec` of boxes converts for an element with several. A child
 /// given as a [`BoxedView`](crate::BoxedView) is held shared: the reconciler
 /// reads it where it is, so it costs no box of its own and keeps its
 /// identity.
@@ -309,12 +309,6 @@ impl ChildViews {
     /// Appends a copy of `view`, shared when it is a `BoxedView`.
     pub(crate) fn push_copy_of(&mut self, view: &dyn View) {
         self.push_child(ChildView::copy_of(view));
-    }
-
-    /// Appends `view` after the child views already held: a `BoxedView` is
-    /// held shared, any other view is boxed.
-    pub fn push<V: View>(&mut self, view: V) {
-        self.push_child(ChildView::of(view));
     }
 
     fn push_child(&mut self, view: ChildView) {

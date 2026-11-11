@@ -36,39 +36,21 @@ fn types(views: &ChildViews) -> Vec<TypeId> {
 
 #[test]
 fn child_views_keep_the_order_they_were_given() {
-    let cases: [(&str, ChildViews, Vec<TypeId>); 5] = [
+    let cases: [(&str, ChildViews, Vec<TypeId>); 3] = [
         ("none", ChildViews::none(), Vec::new()),
         ("one", ChildViews::one(First), vec![TypeId::of::<First>()]),
-        (
-            "pushed onto none",
-            {
-                let mut views = ChildViews::none();
-                views.push(First);
-                views
-            },
-            vec![TypeId::of::<First>()],
-        ),
-        (
-            "pushed onto one",
-            {
-                let mut views = ChildViews::one(First);
-                views.push(Second);
-                views.push(Third);
-                views
-            },
-            vec![
-                TypeId::of::<First>(),
-                TypeId::of::<Second>(),
-                TypeId::of::<Third>(),
-            ],
-        ),
         (
             "from a list",
             ChildViews::from(vec![
                 Box::new(Second) as Box<dyn View>,
                 Box::new(First) as Box<dyn View>,
+                Box::new(Third) as Box<dyn View>,
             ]),
-            vec![TypeId::of::<Second>(), TypeId::of::<First>()],
+            vec![
+                TypeId::of::<Second>(),
+                TypeId::of::<First>(),
+                TypeId::of::<Third>(),
+            ],
         ),
     ];
     for (case, views, expected) in cases {
@@ -82,17 +64,14 @@ fn child_views_keep_the_order_they_were_given() {
 #[test]
 fn a_shared_child_view_is_the_parent_s_own() {
     let held = First.boxed();
-    let mut pushed = ChildViews::none();
-    pushed.push(held.clone());
-    for (case, views) in [("one", ChildViews::one(held.clone())), ("pushed", pushed)] {
-        let handed = views.get(0).expect("one child view");
-        let shared = handed
-            .as_any()
-            .downcast_ref::<BoxedView>()
-            .expect("a shared child is handed on as the BoxedView itself");
-        assert!(
-            std::ptr::addr_eq(shared.as_view(), held.as_view()),
-            "{case}: the child view was copied"
-        );
-    }
+    let views = ChildViews::one(held.clone());
+    let handed = views.get(0).expect("one child view");
+    let shared = handed
+        .as_any()
+        .downcast_ref::<BoxedView>()
+        .expect("a shared child is handed on as the BoxedView itself");
+    assert!(
+        std::ptr::addr_eq(shared.as_view(), held.as_view()),
+        "the child view was copied"
+    );
 }
