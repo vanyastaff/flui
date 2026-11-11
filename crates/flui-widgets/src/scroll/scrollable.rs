@@ -94,7 +94,8 @@ use crate::scroll::nested::{
 use crate::scroll::scroll_owner::{MoveOutcome, OwnerConfig, OwnerEnv, ScrollOwner};
 use crate::scroll::{
     DefaultScrollBehavior, ScrollBehavior, ScrollBehaviorDetails, ScrollConfiguration,
-    ScrollController, ScrollMetrics, ScrollView, ScrollViewConfig, SharedScrollPhysics, SnapPolicy,
+    ScrollController, ScrollMetrics, ScrollView, ScrollViewConfig, ScrollableDetails,
+    SharedScrollPhysics, SnapPolicy,
 };
 use crate::support::command_modifiers;
 use crate::{DragSlot, Focus, GestureDetector, Listener, Semantics};
@@ -117,6 +118,7 @@ use flui_view::environment::VsyncScope;
 
 use super::anchored_drag::AnchoredLeaf;
 use super::scroll_controller::ScrollableHooks;
+use super::scroll_observer::{ObservedBy, ObservedScroll};
 use super::scroll_position_scope::ScrollPositionScope;
 use crate::anchored_box::AnchoredBox;
 
@@ -267,7 +269,8 @@ impl Scrollable {
     /// clamping physics and a position of its own, which it keeps across
     /// rebuilds for as long as it is mounted. Call
     /// [`ScrollView::controller`] to share the position with a
-    /// [`Scrollbar`](super::Scrollbar) or to read the offset programmatically.
+    /// [`Scrollbar`](super::Scrollbar) beside it or to read the offset programmatically;
+    /// a bar over it finds the position by itself.
     pub fn new(viewport: impl Fn(ScrollPosition) -> BoxedView + 'static) -> Self {
         Self::with_config(ScrollViewConfig::default(), Rc::new(viewport))
     }
@@ -417,6 +420,9 @@ pub struct ScrollableState {
     /// `build` to read: the axis direction, the semantic mover (none for an
     /// anchored drag) and the label of the position control.
     applied: Option<Applied>,
+    /// This scroll view's attachment to the scroll observer above it, if
+    /// it is the one at depth zero there.
+    observed_by: ObservedBy,
 }
 
 /// A physics a [`ScrollBehavior`] answered, with the question: the behavior
@@ -452,6 +458,13 @@ struct Applied {
     owner: Rc<ScrollOwner>,
     move_to: Option<Rc<dyn Fn(f64, ScrollCause)>>,
     position_label: &'static str,
+    /// The behavior asked, `None` for [`DefaultScrollBehavior`], and the
+    /// platform convention it was asked under.
+    behavior: Option<Rc<dyn ScrollBehavior>>,
+    platform: flui_platform::TargetPlatform,
+    /// Whether a [`Scrollbar`](crate::Scrollbar) above already follows
+    /// this scroll view.
+    under_scrollbar: bool,
 }
 
 impl std::fmt::Debug for ScrollableState {
@@ -509,6 +522,7 @@ impl StatefulView for Scrollable {
             command_listener: None,
             pipeline: None,
             applied: None,
+            observed_by: ObservedBy::default(),
         }
     }
 }
@@ -867,12 +881,29 @@ impl ViewState<Scrollable> for ScrollableState {
             Some(localizations) => localizations.scroll_position_label(),
             None => DefaultWidgetsLocalizations.scroll_position_label(),
         };
+        // The observer above hears of this scroll view only when no other
+        // sits between them; an anchored drag is no scroll view.
+        if view.anchored.is_some() {
+            self.observed_by.clear();
+        } else {
+            self.observed_by.sync(
+                ctx,
+                ObservedScroll {
+                    controller: self.scroll_controller.clone(),
+                    axis_direction,
+                },
+            );
+        }
+        let under_scrollbar = self.observed_by.under_scrollbar();
         self.applied = Some(Applied {
             devices,
             axis_direction,
             owner,
             move_to,
             position_label,
+            behavior,
+            platform: details.platform(),
+            under_scrollbar,
         });
     }
 
@@ -893,7 +924,29 @@ impl ViewState<Scrollable> for ScrollableState {
         // every sliver view underneath on every offset write. What genuinely
         // needed the notify — servicing an `animate_to`/`jump_to` command —
         // is a listener now (`install_command_listener`).
-        let gestures = self.drag_gestures(view, &applied, self.viewport_content(view));
+        let gestures = self
+            .drag_gestures(view, &applied, self.viewport_content(view))
+            .boxed();
+        // The behavior's bar, unless a bar above already follows this
+        // scroll view. Inside the listener, so a wheel over the bar still
+        // reaches what encloses the scroll view once the bar cannot move.
+        let gestures = if anchored || applied.under_scrollbar {
+            gestures
+        } else {
+            let asked: &dyn ScrollBehavior = applied
+                .behavior
+                .as_deref()
+                .unwrap_or(&DefaultScrollBehavior);
+            asked.build_scrollbar(
+                ctx,
+                gestures,
+                &ScrollableDetails::new(
+                    applied.platform,
+                    applied.axis_direction,
+                    self.scroll_controller.clone(),
+                ),
+            )
+        };
         // A touchpad pan contests the contact with the recognizers that feed
         // on it along this axis, while there is anywhere to scroll
         // (ADR-0251). An anchored drag is moved by its own drag.
@@ -915,7 +968,7 @@ impl ViewState<Scrollable> for ScrollableState {
             .on_pointer_signal(self.inertia_cancel(&applied))
             .child(if anchored {
                 // An anchored drag is no drop autoscroll target.
-                gestures.boxed()
+                gestures
             } else {
                 DragAutoscrollAnchor::new(Rc::clone(&self.autoscroll), Child::some(gestures))
                     .boxed()
@@ -989,6 +1042,8 @@ impl ViewState<Scrollable> for ScrollableState {
     }
 
     fn dispose(&mut self) {
+        // The bar above stops following a scroll view that is gone.
+        self.observed_by.clear();
         self.retire_owner();
         self.reveal.motion.borrow_mut().take();
         self.reveal.parent.borrow_mut().take();

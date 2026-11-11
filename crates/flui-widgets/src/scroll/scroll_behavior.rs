@@ -18,7 +18,11 @@ use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, View};
 
-use crate::scroll::{BouncingScrollPhysics, ClampingScrollPhysics, SharedScrollPhysics};
+use flui_rendering::constraints::AxisDirection;
+
+use crate::scroll::{
+    BouncingScrollPhysics, ClampingScrollPhysics, ScrollController, SharedScrollPhysics,
+};
 
 /// What a scroll view asks its [`ScrollBehavior`] about: the platform
 /// convention it is built under and the axis it scrolls along.
@@ -48,6 +52,52 @@ impl ScrollBehaviorDetails {
     }
 }
 
+/// The scroll view a [`ScrollBehavior`] decorates in
+/// [`build_scrollbar`](ScrollBehavior::build_scrollbar): the platform
+/// convention it is built under, the direction its offset grows in and the
+/// controller that moves it.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ScrollableDetails {
+    platform: TargetPlatform,
+    axis_direction: AxisDirection,
+    controller: ScrollController,
+}
+
+impl ScrollableDetails {
+    /// A scroll view moved by `controller` whose offset grows toward
+    /// `axis_direction`, built under `platform`.
+    #[must_use]
+    pub fn new(
+        platform: TargetPlatform,
+        axis_direction: AxisDirection,
+        controller: ScrollController,
+    ) -> Self {
+        Self {
+            platform,
+            axis_direction,
+            controller,
+        }
+    }
+
+    /// The platform whose conventions the scroll view follows.
+    pub const fn platform(&self) -> TargetPlatform {
+        self.platform
+    }
+
+    /// The direction the scroll view's offset grows in.
+    #[must_use]
+    pub const fn axis_direction(&self) -> AxisDirection {
+        self.axis_direction
+    }
+
+    /// The controller that moves the scroll view.
+    #[must_use]
+    pub const fn controller(&self) -> &ScrollController {
+        &self.controller
+    }
+}
+
 /// How the scroll views under a [`ScrollConfiguration`] scroll where their
 /// own configuration says nothing.
 ///
@@ -73,6 +123,20 @@ pub trait ScrollBehavior: std::fmt::Debug {
             | PointerKindSet::PEN
             | PointerKindSet::TRACKPAD
             | PointerKindSet::VIRTUAL
+    }
+
+    /// What a scroll view shows over its content: `child` as it is. A
+    /// behavior for a desktop convention wraps it in a
+    /// [`Scrollbar`](crate::Scrollbar) attached to
+    /// [`details`](ScrollableDetails::controller); `ctx` is the scroll
+    /// view's own context.
+    fn build_scrollbar(
+        &self,
+        _ctx: &dyn BuildContext,
+        child: BoxedView,
+        _details: &ScrollableDetails,
+    ) -> BoxedView {
+        child
     }
 }
 

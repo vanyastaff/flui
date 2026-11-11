@@ -702,51 +702,6 @@ impl ScrollController {
     pub fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
         self.position.listenable()
     }
-
-    // -- Scrollbar helpers ---------------------------------------------------
-
-    /// The fraction of the viewport covered by the scrollbar thumb.
-    ///
-    /// `thumb_fraction = viewport / (viewport + scroll_extent)` — the standard
-    /// proportional-scrollbar formula. Returns `1.0` when there is nothing to
-    /// scroll (content fits in the viewport), and `0.0` when the viewport
-    /// dimension is unknown (before the first layout).
-    #[must_use]
-    pub fn thumb_fraction(&self) -> f64 {
-        let viewport = self.viewport_dimension_pixels();
-        let content_length = viewport + self.scroll_extent();
-        if content_length <= 0.0 {
-            return 1.0;
-        }
-        (viewport / content_length).clamp(0.0, 1.0)
-    }
-
-    /// The offset fraction of the scrollbar thumb along the *available*
-    /// track (the track length minus the thumb's own extent) — the fraction
-    /// into `[0, 1]` (where 0 = top, 1 = bottom) at which the top of the
-    /// thumb sits.
-    ///
-    /// `thumb_offset_fraction = (pixels - min_scroll_extent) / scroll_extent`.
-    /// Multiplying this by `available_track` (`viewport_dimension_pixels -
-    /// thumb_height`, using the ACTUAL, already-min-clamped thumb height)
-    /// gives the thumb's pixel offset: flush
-    /// with the track's start at `pixels == min_scroll_extent` and flush with
-    /// its end at `pixels == max_scroll_extent`, in both the unclamped and
-    /// min-thumb-length-clamped cases.
-    ///
-    /// This does NOT itself fold in `(1 - thumb_fraction)` — a caller must
-    /// not multiply by the raw `viewport_dimension_pixels` (which does, for
-    /// an unclamped thumb, equal `available_track / (1 - thumb_fraction)`,
-    /// silently double-applying the factor and stopping short of the
-    /// track's end).
-    #[must_use]
-    pub fn thumb_offset_fraction(&self) -> f64 {
-        let scroll_extent = self.scroll_extent();
-        if scroll_extent <= 0.0 {
-            return 0.0;
-        }
-        (self.pixels() - self.min_scroll_extent()) / scroll_extent
-    }
 }
 
 // ---------------------------------------------------------------------------
