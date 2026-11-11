@@ -15,7 +15,7 @@ every clone, so each rebuild of a wrapper updated its child, marked it dirty
 and built it again, and so on down the whole subtree.
 
 `Focus` and `FocusScope` rebuild on every focus edge so that the descendants
-reading their state stay current (`FocusParentProvider` carries a revision for
+reading their state stay current (the `FocusParent` value they publish carries a revision for
 exactly that). The first focus gain of an app, which a `Scrollable`'s drag
 start causes by focusing the scroll view, flips `has_focus` on every enclosing
 focus node, and each rebuilt the app's whole subtree. A root that made a

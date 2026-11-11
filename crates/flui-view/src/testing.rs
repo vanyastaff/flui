@@ -131,8 +131,7 @@ impl ElementBuildContext {
     fn find_inherited_provider(&self, type_id: std::any::TypeId) -> Option<ElementId> {
         self.tree
             .borrow()
-            .get(self.element_id)?
-            .inherited_provider(type_id)
+            .enclosing_provider(self.element_id, type_id)
     }
 
     /// Walk strict-ancestors (parent and up) of `self.element_id`,
@@ -281,7 +280,12 @@ impl BuildContext for ElementBuildContext {
 
         // Register dependency (id + depth).
         // Outside a build drain there is no build whose reads could
-        // re-derive this one, so it is kept like a lifecycle read.
+        // re-derive this one, so it is kept like a lifecycle read. An element
+        // that publishes several values keeps one field per type.
+        let mask = accessor
+            .provided(type_id)
+            .and_then(|provided| provided.field)
+            .unwrap_or(mask);
         accessor.record_lifecycle_dependent(
             crate::context::CrateToken::new(),
             self_id,
@@ -294,8 +298,10 @@ impl BuildContext for ElementBuildContext {
         // Hand the view out to the callback. The view reference is
         // borrowed for the lifetime of the callback only; it cannot
         // escape into `build()` because the closure is `FnOnce`.
-        let view_any = accessor.view_as_any();
-        callback(view_any);
+        let Some(provided) = accessor.provided(type_id) else {
+            return false;
+        };
+        callback(provided.value);
 
         true
     }
@@ -315,8 +321,10 @@ impl BuildContext for ElementBuildContext {
         let Some(accessor) = node.element().as_inherited() else {
             return false;
         };
-        let view_any = accessor.view_as_any();
-        callback(view_any);
+        let Some(provided) = accessor.provided(type_id) else {
+            return false;
+        };
+        callback(provided.value);
         true
     }
 

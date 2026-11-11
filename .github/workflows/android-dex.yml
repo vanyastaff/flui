@@ -2,7 +2,9 @@ name: Android dex
 
 # Compiles the dex of the Android backend's Java classes
 # (`crates/flui-native/android/classes.dex`, ADR-0247) on a GitHub runner, so
-# changing the Java sources needs no local JDK or Android SDK. Run it by hand
+# changing the Java sources needs no local JDK or Android SDK. A pull request
+# that changes the sources (or this file) runs it in `write` mode, so its
+# checks carry the `android-dex` artifact to commit. Or run it by hand
 # on the branch that changed them:
 #
 #   gh workflow run android-dex.yml --ref <branch>             # mode: write
@@ -12,13 +14,12 @@ name: Android dex
 # `classes.dex.toml` as the `android-dex` artifact; commit both to the branch.
 # `rebuild` runs `--rebuild`, which requires the checked-in dex to reproduce
 # byte for byte with the recorded build tools and platform. PR CI checks only
-# the digests (`cargo xtask checks`), which needs no JDK. A pull request that
-# edits this file runs it in `write` mode, so a change to the job is tried
-# before it reaches main.
+# the digests (`cargo xtask checks`), which needs no JDK.
 
 on:
   pull_request:
     paths:
+      - "crates/flui-native/android/java/**"
       - ".github/workflows/android-dex.yml"
   workflow_dispatch:
     inputs:
