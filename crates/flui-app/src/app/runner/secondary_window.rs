@@ -1470,21 +1470,13 @@ mod tests {
     }
 
     fn shutdown_settles_all_requests_when_a_receiver_waker_panics() {
+        use flui_foundation::testing::panicking_waker;
         use std::{
             future::Future,
             pin::Pin,
             sync::atomic::AtomicUsize,
-            task::{Context, Poll, Wake, Waker},
+            task::{Context, Poll},
         };
-        struct PanickingWake;
-        impl Wake for PanickingWake {
-            fn wake(self: Arc<Self>) {
-                panic!("cancelled receiver wake");
-            }
-            fn wake_by_ref(self: &Arc<Self>) {
-                panic!("cancelled receiver wake");
-            }
-        }
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         Box::new(HeadlessPlatform::new())
             .run(crate::app::runner::app_handler(|owner| {
@@ -1529,7 +1521,7 @@ mod tests {
                         });
                     });
                 }
-                let waker = Waker::from(Arc::new(PanickingWake));
+                let waker = panicking_waker("cancelled receiver wake");
                 assert!(matches!(
                     Pin::new(&mut requests[0]).poll(&mut Context::from_waker(&waker)),
                     Poll::Pending
@@ -1566,17 +1558,12 @@ mod tests {
     }
 
     fn receipt_wake_failure_retries_the_accepted_installation_tail() {
+        use flui_foundation::testing::panicking_waker;
         use std::{
             future::Future,
             pin::Pin,
-            task::{Context, Poll, Wake, Waker},
+            task::{Context, Poll},
         };
-        struct PanickingWake;
-        impl Wake for PanickingWake {
-            fn wake(self: Arc<Self>) {
-                panic!("installed receiver wake");
-            }
-        }
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         let platform = HeadlessPlatform::new();
         let turns = platform.owner_turns();
@@ -1629,7 +1616,7 @@ mod tests {
                     };
                     let (reply, mut request) = crate::app::WindowRequest::new();
                     if first {
-                        let waker = Waker::from(Arc::new(PanickingWake));
+                        let waker = panicking_waker("installed receiver wake");
                         assert!(matches!(
                             Pin::new(&mut request).poll(&mut Context::from_waker(&waker)),
                             Poll::Pending

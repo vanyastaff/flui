@@ -4,26 +4,10 @@
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Wake, Waker};
 
 use flui_foundation::panic::{Obligation, PanicRecovery, commit, commit_into, payload_text};
+use flui_foundation::testing::CountingWaker;
 use flui_foundation::{IdExhausted, TicketSource};
-
-/// Counts its wakes.
-struct CountingWake(AtomicUsize);
-
-impl Wake for CountingWake {
-    fn wake(self: Arc<Self>) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-fn counting_waker() -> (Waker, Arc<CountingWake>) {
-    let wake = Arc::new(CountingWake(AtomicUsize::new(0)));
-    (Waker::from(Arc::clone(&wake)), wake)
-}
 
 /// Counts its drops; panics in its destructor when `fails`.
 struct Destroyed {
@@ -176,7 +160,8 @@ fn a_queued_failure_during_an_unwind_is_discarded() {
 /// resumed.
 fn a_failed_mutation_wakes_and_runs_no_call() {
     let cell = RefCell::new(0_u32);
-    let (waker, wakes) = counting_waker();
+    let wakes = CountingWaker::new().shared();
+    let waker = wakes.waker();
     let ran = Rc::new(Cell::new(0));
     let drops = Rc::new(Cell::new(0));
     let (counted, captured, released) = (Rc::clone(&ran), Rc::clone(&drops), Rc::clone(&drops));
@@ -211,11 +196,7 @@ fn a_failed_mutation_wakes_and_runs_no_call() {
         2,
         "the call's capture and the released value were destroyed"
     );
-    assert_eq!(
-        wakes.0.load(Ordering::SeqCst),
-        1,
-        "the waker was still woken"
-    );
+    assert_eq!(wakes.count(), 1, "the waker was still woken");
     assert!(cell.try_borrow_mut().is_ok(), "the cell is free again");
 }
 

@@ -1,4 +1,5 @@
 //! Executor and owner failures around the public request/reply contract.
+use flui_foundation::testing::CountingWaker;
 use flui_foundation::{ClaimHandle, ClaimOutcome, claim_slot};
 use std::future::Future;
 use std::io::Read;
@@ -6,7 +7,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, RawWaker, RawWakerVTable, Wake, Waker};
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::time::{Duration, Instant};
 
 struct Bomb(Arc<AtomicUsize>);
@@ -16,30 +17,14 @@ impl Drop for Bomb {
         panic!("envelope retirement");
     }
 }
-struct Executor {
-    calls: Arc<AtomicUsize>,
-    action: Box<dyn Fn() + Send + Sync>,
-    _captures: Vec<Bomb>,
-}
-impl Wake for Executor {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        (self.action)();
-    }
-}
+/// A waker that counts into `calls`, runs `action`, and keeps `captures` until it is
+/// dropped.
 fn executor(
-    calls: &Arc<AtomicUsize>,
+    calls: &Arc<CountingWaker>,
     action: impl Fn() + Send + Sync + 'static,
     captures: Vec<Bomb>,
 ) -> Waker {
-    Waker::from(Arc::new(Executor {
-        calls: Arc::clone(calls),
-        action: Box::new(action),
-        _captures: captures,
-    }))
+    calls.retiring_waker(action, captures)
 }
 fn register<T>(handle: &mut ClaimHandle<T>, waker: &Waker) {
     assert!(
@@ -117,7 +102,7 @@ fn clone_reenters_delivery() {
 
 fn clone_failure_keeps_the_previous_registration() {
     let (slot, mut handle) = claim_slot::<u32>(Arc::new(|| {}));
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = CountingWaker::new().shared();
     let previous = executor(&calls, || {}, Vec::new());
     register(&mut handle, &previous);
     let failing = cloning_waker(|| panic!("clone primary"));
@@ -128,7 +113,7 @@ fn clone_failure_keeps_the_previous_registration() {
         "clone primary",
     );
     slot.deliver(43).expect("pending after clone failure");
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.count(), 1);
     assert_eq!(handle.try_take(), Some(43));
     next_request();
 }
@@ -137,13 +122,13 @@ fn replacement_retirement_keeps_the_new_registration() {
     let (slot, mut handle) = claim_slot::<u32>(Arc::new(|| {}));
     let drops = Arc::new(AtomicUsize::new(0));
     let previous = executor(
-        &Arc::new(AtomicUsize::new(0)),
+        &CountingWaker::new().shared(),
         || {},
         vec![Bomb(Arc::clone(&drops))],
     );
     register(&mut handle, &previous);
     drop(previous);
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = CountingWaker::new().shared();
     let replacement = executor(&calls, || {}, Vec::new());
     assert_failure(
         catch_unwind(AssertUnwindSafe(|| {
@@ -153,7 +138,7 @@ fn replacement_retirement_keeps_the_new_registration() {
     );
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     slot.deliver(47).expect("pending after retirement failure");
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.count(), 1);
     assert_eq!(handle.try_take(), Some(47));
     next_request();
 }
@@ -161,7 +146,7 @@ fn replacement_retirement_keeps_the_new_registration() {
 fn delivered_wake_failure() {
     let (slot, mut handle) = claim_slot::<u32>(Arc::new(|| {}));
     let drops = Arc::new(AtomicUsize::new(0));
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = CountingWaker::new().shared();
     let waker = executor(
         &calls,
         || {
@@ -175,7 +160,7 @@ fn delivered_wake_failure() {
         slot.deliver(53).expect("pending");
     }));
     assert_failure(failure, "wake primary");
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.count(), 1);
     assert_eq!(
         drops.load(Ordering::SeqCst),
         1,
@@ -191,7 +176,7 @@ fn delivered_wake_failure() {
 
 fn successful_wake_retirement_preserves_the_delivery() {
     let (slot, mut handle) = claim_slot::<u32>(Arc::new(|| {}));
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = CountingWaker::new().shared();
     let drops = Arc::new(AtomicUsize::new(0));
     let waker = executor(&calls, || {}, vec![Bomb(Arc::clone(&drops))]);
     register(&mut handle, &waker);
@@ -202,7 +187,7 @@ fn successful_wake_retirement_preserves_the_delivery() {
         })),
         "envelope retirement",
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.count(), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert_eq!(handle.try_take(), Some(61));
     next_request();
@@ -211,7 +196,7 @@ fn successful_wake_retirement_preserves_the_delivery() {
 fn owner_disconnect(unwinding: bool, wake_fails: bool) {
     let (slot, mut handle) = claim_slot::<u32>(Arc::new(|| {}));
     let drops = Arc::new(AtomicUsize::new(0));
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = CountingWaker::new().shared();
     let waker = executor(
         &calls,
         move || {
@@ -233,7 +218,7 @@ fn owner_disconnect(unwinding: bool, wake_fails: bool) {
             "disconnect wake"
         },
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.count(), 1);
     assert_eq!(
         drops.load(Ordering::SeqCst),
         1,
@@ -256,7 +241,7 @@ fn abandonment_competition(owner_fails: bool, task_fails: bool, unwinding: bool)
         owner_count.fetch_add(1, Ordering::SeqCst);
         assert!(!owner_fails, "abandonment primary");
     }));
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = CountingWaker::new().shared();
     let waker = executor(
         &calls,
         move || {
@@ -281,7 +266,7 @@ fn abandonment_competition(owner_fails: bool, task_fails: bool, unwinding: bool)
     );
     assert_eq!(owner_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
-        calls.load(Ordering::SeqCst),
+        calls.count(),
         1,
         "owner failure cannot starve the task wake"
     );

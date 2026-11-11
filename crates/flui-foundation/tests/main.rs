@@ -64,3 +64,6 @@ mod inspect;
 
 #[path = "geometry/window_metrics.rs"]
 mod window_metrics;
+
+// The `testing` feature's wakers.
+mod testing_kit;

@@ -4,8 +4,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering as AtomicOrdering;
-use std::task::{Context, Poll, Wake, Waker};
-use std::thread::Thread;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use flui_platform::http::{HeaderName, HeaderValue, Http, HttpError, HttpRequest, StatusCode};
@@ -16,13 +15,10 @@ use crate::testing::http::{Body, Scripted};
 /// Polls `future` to its end on this thread; a future still pending after
 /// five seconds fails the test.
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    struct Unpark(Thread);
-    impl Wake for Unpark {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-    let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
+    let thread = std::thread::current();
+    let waker = flui_foundation::testing::CountingWaker::calling(move || thread.unpark())
+        .shared()
+        .waker();
     let mut cx = Context::from_waker(&waker);
     let mut future = std::pin::pin!(future);
     let until = Instant::now() + Duration::from_secs(5);

@@ -1091,25 +1091,15 @@ fn explicit_finish_allows_owner_release_during_delivery() {
 }
 
 fn explicit_finish_preserves_success_after_waker_failure() {
+    use flui_foundation::testing::CountingWaker;
     use std::future::Future;
     use std::pin::Pin;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::task::{Context, Poll, Wake, Waker};
+    use std::task::{Context, Poll, Waker};
 
-    struct FailingWake(Arc<AtomicUsize>);
-    impl Wake for FailingWake {
-        fn wake(self: Arc<Self>) {
-            self.wake_by_ref();
-        }
-        fn wake_by_ref(self: &Arc<Self>) {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            panic!("completion wake failure");
-        }
-    }
     let controller = controller();
     let mut run = controller.forward().unwrap();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let waker = Waker::from(Arc::new(FailingWake(Arc::clone(&calls))));
+    let calls = CountingWaker::calling(|| panic!("completion wake failure")).shared();
+    let waker = calls.waker();
     assert!(matches!(
         Pin::new(&mut run).poll(&mut Context::from_waker(&waker)),
         Poll::Pending
@@ -1119,14 +1109,14 @@ fn explicit_finish_preserves_success_after_waker_failure() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("completion wake failure")
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.count(), 1);
     assert_eq!(controller.value(), 1.0);
     assert!(matches!(
         Pin::new(&mut run).poll(&mut Context::from_waker(Waker::noop())),
         Poll::Ready(Ok(()))
     ));
     controller.finish().unwrap();
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.count(), 1);
     let next = controller.reverse().unwrap();
     controller.finish().unwrap();
     assert_eq!(controller.value(), 0.0);
