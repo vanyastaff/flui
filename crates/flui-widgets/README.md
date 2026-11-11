@@ -7,20 +7,19 @@ outside, the gold-standard render machine underneath.
 
 ```rust
 use flui_widgets::prelude::*;
-use flui_widgets::{column, row}; // the ViewSeq macros (shadow std's same-named)
 
 Container::new()
     .color(Color::rgb(18, 18, 24))
     .padding(EdgeInsets::all(24.0))
-    .child(Column::new(column![
+    .child(Column::new((
         Text::new("Hello, FLUI"),
         SizedBox::height(12.0),
-        Row::new(row![
+        Row::new((
             ColoredBox::new(Color::rgb(229, 57, 53)).child(SizedBox::square(64.0)),
             SizedBox::width(12.0),
             ClipOval::new().child(SizedBox::square(64.0)),
-        ]),
-    ]))
+        )),
+    )))
 # ;
 ```
 
@@ -47,7 +46,7 @@ and a chainable `#[must_use]` builder API.
 - **Render-object widget** — wraps one render box (`Padding`, `Container`,
   `Text`, …): a `RenderView` + `impl_render_view!`.
 - **Multi-child widget** — `Row`/`Column`/`Stack`: generic over
-  `C: ViewSeq` (default `Vec<BoxedView>`), so the static `column!`/`row!` tuple
+  `C: ViewSeq` (default `Vec<BoxedView>`), so the static tuple `(a, b)`
   path (monomorphic per child) and the dynamic `Vec<BoxedView>` path are *one
   type* (contract C2).
 - **Composition widget** — `SafeArea`: a `StatelessView` that builds other

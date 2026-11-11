@@ -30,21 +30,20 @@
 //!
 //! Widgets favour a constructor + chainable-config surface (with
 //! `bon` builders reserved for the widest future configuration objects). Single
-//! children are taken as `impl IntoView`; heterogeneous child lists use the
-//! [`ViewSeq`](flui_view::seq::ViewSeq)-backed `column!`/`row!` macros (the
-//! static tuple path) or `Vec<BoxedView>` (the dynamic path).
+//! children are taken as `impl IntoView`; a list of children is a
+//! [`ViewSeq`](flui_view::seq::ViewSeq): a tuple (the static path), an array
+//! of one type, or `Vec<BoxedView>` (the dynamic path).
 //!
 //! ```rust
 //! use flui_widgets::prelude::*;
-//! use flui_widgets::{column, row}; // ViewSeq macros (shadow std's same-named)
 //!
 //! let _tree = Container::new()
 //!     .padding(EdgeInsets::all(8.0))
 //!     .color(Color::rgb(26, 102, 230))
-//!     .child(Column::new(column![
+//!     .child(Column::new((
 //!         Text::new("Hello"),
 //!         Padding::all(4.0).child(Text::new("World")),
-//!     ]));
+//!     )));
 //! ```
 //!
 //! [`RenderView`]: flui_view::prelude::RenderView
@@ -360,11 +359,7 @@ pub use widget_state::{
 };
 pub use wrap::Wrap;
 
-// The heterogeneous-children macros (contract C2's static tuple path). Kept out
-// of the prelude glob: their names collide with `std`'s `column!`/`row!`, so
-// they must be imported explicitly (`use flui_widgets::{column, row};`), which
-// shadows the std macros — a glob import would be ambiguous instead.
-pub use flui_view::{HapticsMode, column, row};
+pub use flui_view::HapticsMode;
 
 // Flex/stack configuration enums consumed by `Row`/`Column`/`Flex`/`Stack`
 // (re-exported from the `flui-objects` catalog, their home beside
@@ -416,10 +411,7 @@ pub use flui_rendering::semantics::{
 /// Commonly used widgets and supporting types for `use flui_widgets::prelude::*;`.
 pub mod prelude {
     // Authoring spine re-exported so a single prelude import is enough to write
-    // a widget tree (View traits, BuildContext, ViewSeq, derives). The
-    // `column!`/`row!` macros are intentionally NOT globbed here (they collide
-    // with `std`'s same-named macros) — import them explicitly from the crate
-    // root: `use flui_widgets::{column, row};`.
+    // a widget tree (View traits, BuildContext, ViewSeq, derives).
     pub use flui_view::prelude::*;
 
     // The widget catalog.

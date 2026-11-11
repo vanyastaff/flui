@@ -26,7 +26,7 @@ use flui_view::{BoxedView, ViewExt};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ConstrainedBox, CustomMultiChildLayout, LayoutId, MultiChildLayoutContext,
-    MultiChildLayoutDelegate, Padding, SizedBox, row,
+    MultiChildLayoutDelegate, Padding, SizedBox,
 };
 
 /// A builder that records the constraints it was handed.
@@ -243,13 +243,13 @@ pub(crate) fn a_layout_builder_feeding_its_own_constraints_paints_without_panick
     let laid = lay_out(
         CustomMultiChildLayout::new(
             Alternating::default(),
-            row![LayoutId::new(
+            (LayoutId::new(
                 "builder",
                 LayoutBuilder::new(move |_ctx, constraints: BoxConstraints| {
                     builds.set(builds.get() + 1);
                     SizedBox::new(constraints.max_width, 20.0)
                 }),
-            )],
+            ),),
         ),
         loose(400.0),
     );

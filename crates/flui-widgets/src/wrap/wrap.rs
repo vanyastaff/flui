@@ -45,7 +45,7 @@ use crate::support::generic_render_view_element;
 /// ```
 ///
 /// Generic over `C: ViewSeq`: a `Vec<BoxedView>` carries a dynamic child list;
-/// a static tuple via `column!` / `row!` keeps each child monomorphic.
+/// a static tuple `(a, b)` keeps each child monomorphic.
 #[derive(Clone)]
 pub struct Wrap<C = Vec<BoxedView>> {
     direction: Axis,

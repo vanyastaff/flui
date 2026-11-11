@@ -10,7 +10,7 @@ use flui_foundation::inspect::{
 };
 use flui_testing::widgets::{LaidOut, lay_out, tight};
 use flui_view::prelude::*;
-use flui_widgets::{Center, Column, RawButton, SizedBox, Text, column};
+use flui_widgets::{Center, Column, RawButton, SizedBox, Text};
 
 #[derive(Clone, StatefulView)]
 struct CounterView;
@@ -32,12 +32,12 @@ impl StatefulView for CounterView {
 impl ViewState<CounterView> for CounterState {
     fn build(&self, _view: &CounterView, ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count;
-        Center::new().child(Column::new(column![
+        Center::new().child(Column::new((
             Text::new(count.get(ctx).to_string()),
             SizedBox::height(16.0),
             RawButton::new(Text::new("Increment"))
                 .on_press(move |cx| count.update(cx, |n| *n += 1)),
-        ]))
+        )))
     }
 }
 

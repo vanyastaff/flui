@@ -16,7 +16,7 @@ use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::Signal;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook};
 use flui_view::prelude::*;
-use flui_widgets::{Center, Column, RawButton, Text, column};
+use flui_widgets::{Center, Column, RawButton, Text};
 use parking_lot::Mutex;
 
 /// A button named "Go" that moves under a new parent each time it is pressed, so every press
@@ -53,11 +53,11 @@ impl ViewState<Moving> for MovingState {
         } else {
             Center::new().child(go).into_view().boxed()
         };
-        Column::new(column![
+        Column::new((
             go,
             RawButton::new(Text::new("Same")).on_press(|_| {}),
             RawButton::new(Text::new("Same")).on_press(|_| {}),
-        ])
+        ))
     }
 }
 
