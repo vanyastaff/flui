@@ -1146,21 +1146,44 @@ fn ordinary_and_advanced_gradient_numeric_refusals_recover(renderer: &HeadlessRe
         start_angle,
         end_angle,
     };
-    let invalid = [
+    // A non-finite shader value never reaches the engine: the canvas omits the
+    // draw at record (ADR-0306 §4), so the frame draws without it.
+    let non_finite = [
         (
             "NaN linear endpoint",
             linear(Offset::new(f64::NAN, 0.0), None),
         ),
         (
-            "unrepresentable radius",
-            radial(Offset::new(16.0, 16.0), 1e100),
-        ),
-        ("negative radius", radial(Offset::new(16.0, 16.0), -1.0)),
-        (
             "NaN radial centre",
             radial(Offset::new(16.0, f64::NAN), 16.0),
         ),
         ("NaN sweep angle", sweep(f64::NAN, std::f64::consts::TAU)),
+        ("NaN stop", linear(Offset::ZERO, Some(vec![0.0, f64::NAN]))),
+    ];
+    for (name, shader) in non_finite {
+        let mut canvas = Canvas::new();
+        let mut paint = Paint::fill(Color::WHITE).with_anti_alias(false);
+        paint.shader = Some(shader);
+        canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 32.0, 32.0), &paint);
+        canvas.draw_rect(
+            Rect::from_xywh(32.0, 32.0, 32.0, 32.0),
+            &Paint::fill(Color::GREEN),
+        );
+        let list = canvas.finish();
+        assert_eq!(list.non_finite().geometry, 1, "{name}: counted at record");
+        let tree = LayerTree::new(Layer::from(PictureLayer::new(list)));
+        let frame = capture(renderer, &tree);
+        expect_pixel(&frame, (48, 48), [0, 255, 0, 255]);
+        expect_pixel(&frame, (16, 16), [255; 4]);
+    }
+    // Finite but unrepresentable or inconsistent values are the engine's
+    // typed refusal.
+    let invalid = [
+        (
+            "unrepresentable radius",
+            radial(Offset::new(16.0, 16.0), 1e100),
+        ),
+        ("negative radius", radial(Offset::new(16.0, 16.0), -1.0)),
         ("unrepresentable sweep span", sweep(-3e38, 3e38)),
         (
             "unrepresentable linear parameter",
@@ -1176,7 +1199,6 @@ fn ordinary_and_advanced_gradient_numeric_refusals_recover(renderer: &HeadlessRe
             "radial squared distance overflows",
             radial(Offset::new(1e30, 0.0), 1e30),
         ),
-        ("NaN stop", linear(Offset::ZERO, Some(vec![0.0, f64::NAN]))),
         (
             "decreasing effective stops",
             linear(Offset::ZERO, Some(vec![0.8, 0.2])),

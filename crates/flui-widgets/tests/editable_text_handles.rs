@@ -952,9 +952,9 @@ pub(crate) fn a_handle_drag_shows_the_magnifier_over_the_dragged_end() {
     let mut scene = Scene::over(CaretHandle::on_tap());
     let ((shown, _), _) = drag_caret(&mut scene);
     assert_eq!(
-        PlainMagnifier::for_platform(TargetPlatform::current()),
+        PlainMagnifier::for_platform(TargetPlatform::Unknown),
         None,
-        "the host is a desktop"
+        "the tree follows no platform, so it takes the neutral conventions"
     );
     assert!(shown.is_empty(), "a desktop shows none: {shown:?}");
 

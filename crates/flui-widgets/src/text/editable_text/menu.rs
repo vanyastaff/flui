@@ -50,7 +50,7 @@ impl EditableText {
 
     /// When a touch shows the toolbar, in place of the nearest
     /// [`DefaultSelectionControls`]' policy or the platform's
-    /// ([`SelectionMenuPolicy::default`]).
+    /// ([`SelectionMenuPolicy::for_platform`] of the [`PlatformConvention`](flui_view::environment::PlatformConvention)).
     #[must_use]
     pub fn menu_policy(mut self, policy: SelectionMenuPolicy) -> Self {
         self.menu.set_policy(policy);

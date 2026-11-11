@@ -281,7 +281,7 @@ fn observed_app(
 struct Started {
     run: HeadlessRunHandle,
     handle: AppHandle,
-    window: flui_native::MockWindow,
+    window: flui_native::HeadlessHostWindow,
     renderer: StandInRenderer,
 }
 

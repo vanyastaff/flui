@@ -1254,7 +1254,7 @@ fn agent_notification_follows_live_native_initialization() {
         live: Arc<AtomicUsize>,
         /// The window to close from the agent's hook, which is `Send`: the
         /// headless window's own type is, where `dyn PlatformWindow` is not.
-        close: Option<flui_native::MockWindow>,
+        close: Option<flui_native::HeadlessHostWindow>,
     }
     impl DevAgentHook for Agent {
         fn attach(&mut self) -> bool {
@@ -1283,7 +1283,7 @@ fn agent_notification_follows_live_native_initialization() {
         let host = crate::app::window_test_support::headless_test_host_window();
         let mock = host
             .as_any()
-            .downcast_ref::<flui_native::MockWindow>()
+            .downcast_ref::<flui_native::HeadlessHostWindow>()
             .expect("a headless window")
             .clone();
         let window: Rc<dyn PlatformWindow> = host;

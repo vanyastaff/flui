@@ -32,7 +32,7 @@ use flui_interaction::{
     PointerEventExt, PointerId, PointerKindSet, TapGestureRecognizer, TapUpDetails,
 };
 use flui_platform::TargetPlatform;
-use flui_view::environment::{GestureArenaScope, GesturePolicy};
+use flui_view::environment::{GestureArenaScope, GesturePolicy, PlatformConvention};
 use flui_view::prelude::*;
 use flui_view::{InheritedView, RebuildHandle, RebuildReason, WriterSource, impl_inherited_view};
 use smallvec::SmallVec;
@@ -50,7 +50,7 @@ use super::raw_gesture_detector::{
     GestureRecognizerFactory, RawGestureDetector, RecognizerContext,
 };
 use super::recognizer_attachment::RecognizerAttachment;
-use super::shortcuts::{Shortcuts, SingleActivator, reserved_key};
+use super::shortcuts::{Shortcuts, SingleActivator, reserved_key, with_command_modifier};
 use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
 };
@@ -85,8 +85,30 @@ pub struct GestureCommand {
     label: Rc<str>,
     intent: Rc<dyn Intent>,
     intent_name: &'static str,
-    keys: Vec<SingleActivator>,
+    keys: Vec<CommandKey>,
 }
+
+/// One key of a [`GestureCommand`], before the platform resolves it.
+#[derive(Clone, Debug, PartialEq)]
+enum CommandKey {
+    /// The activator as given.
+    Fixed(SingleActivator),
+    /// The activator with the platform's command modifier.
+    Command(SingleActivator),
+}
+
+impl CommandKey {
+    fn on(&self, platform: TargetPlatform) -> SingleActivator {
+        match self {
+            Self::Fixed(activator) => activator.clone(),
+            Self::Command(activator) => with_command_modifier(platform, activator.clone()),
+        }
+    }
+}
+
+/// One platform of each command-modifier convention, which together cover
+/// every platform a command key can resolve on.
+const COMMAND_FAMILIES: [TargetPlatform; 2] = [TargetPlatform::MacOS, TargetPlatform::Linux];
 
 impl GestureCommand {
     /// A command performing `intent`, shown as `label`, with no keys.
@@ -102,13 +124,24 @@ impl GestureCommand {
 
     /// Also perform the command on `activator` while focus is in the row.
     ///
-    /// A key that already means something on the running platform — Tab,
-    /// Enter, Space or Escape, going back, closing the window or tab, or
-    /// typing and editing in a text field — is not bound, with a warning:
-    /// Escape never performs a command (ADR-0216 §1).
+    /// A key that already means something on the platform the tree follows
+    /// ([`PlatformConvention`]) — Tab, Enter, Space or Escape, going back,
+    /// closing the window or tab, or typing and editing in a text field — is
+    /// not bound, with a warning: Escape never performs a command
+    /// (ADR-0216 §1).
     #[must_use]
     pub fn key(mut self, activator: SingleActivator) -> Self {
-        self.keys.push(activator);
+        self.keys.push(CommandKey::Fixed(activator));
+        self
+    }
+
+    /// Also perform the command on `activator` with the platform's command
+    /// modifier: Cmd on macOS and iOS, Control elsewhere, resolved from the
+    /// [`PlatformConvention`] the row is built under. Reserved keys are left
+    /// unbound as for [`key`](Self::key).
+    #[must_use]
+    pub fn command_key(mut self, activator: SingleActivator) -> Self {
+        self.keys.push(CommandKey::Command(activator));
         self
     }
 
@@ -118,12 +151,19 @@ impl GestureCommand {
         &self.label
     }
 
-    /// The keys bound to the command on `platform`: its own, less any the
-    /// platform reserves.
-    pub fn keys(&self, platform: TargetPlatform) -> impl Iterator<Item = &SingleActivator> + '_ {
-        self.keys
-            .iter()
+    /// The keys bound to the command on `platform`: its own, resolved for
+    /// that platform, less any the platform reserves.
+    pub fn keys(&self, platform: TargetPlatform) -> impl Iterator<Item = SingleActivator> + '_ {
+        self.resolved_keys(platform)
             .filter(move |activator| reserved_key(platform, activator).is_none())
+    }
+
+    /// Every key of the command resolved for `platform`, reserved or not.
+    pub(crate) fn resolved_keys(
+        &self,
+        platform: TargetPlatform,
+    ) -> impl Iterator<Item = SingleActivator> + '_ {
+        self.keys.iter().map(move |key| key.on(platform))
     }
 
     /// What performs this command from a gesture, resolved through the
@@ -201,12 +241,12 @@ impl GestureCommand {
 
     /// Report this command's keys reserved on `platform`, except those
     /// `already` reported.
-    fn warn_reserved_keys(&self, platform: TargetPlatform, already: &[&SingleActivator]) {
-        for activator in &self.keys {
+    fn warn_reserved_keys(&self, platform: TargetPlatform, already: &[SingleActivator]) {
+        for activator in self.resolved_keys(platform) {
             if already.contains(&activator) {
                 continue;
             }
-            if let Some(reserved) = reserved_key(platform, activator) {
+            if let Some(reserved) = reserved_key(platform, &activator) {
                 tracing::warn!(
                     target: "flui.a11y",
                     command = &*self.label,
@@ -833,7 +873,7 @@ impl GestureAlternatives {
             hold: None,
         };
         let mut seen: Vec<&str> = Vec::new();
-        let mut keys: Vec<&SingleActivator> = Vec::new();
+        let mut keys: [Vec<SingleActivator>; 2] = [Vec::new(), Vec::new()];
         for command in alternatives.commands() {
             if command.label().is_empty() {
                 return Err(GestureAlternativesError::EmptyLabel);
@@ -844,12 +884,19 @@ impl GestureAlternatives {
                 });
             }
             seen.push(command.label());
-            let earlier = keys.len();
-            for key in &command.keys {
-                if keys[..earlier].iter().any(|earlier| earlier.overlaps(key)) {
-                    return Err(GestureAlternativesError::DuplicateKey { key: key.clone() });
+            // A command key resolves per platform, so two commands collide
+            // when they share a key under either modifier convention.
+            for (family, earlier_keys) in COMMAND_FAMILIES.iter().zip(keys.iter_mut()) {
+                let earlier = earlier_keys.len();
+                for key in command.resolved_keys(*family) {
+                    if earlier_keys[..earlier]
+                        .iter()
+                        .any(|earlier| earlier.overlaps(&key))
+                    {
+                        return Err(GestureAlternativesError::DuplicateKey { key });
+                    }
+                    earlier_keys.push(key);
                 }
-                keys.push(key);
             }
             if let Alternative::Companion(spec) = &alternatives.alternative
                 && !spec.link.accepts(command.intent_any())
@@ -952,11 +999,8 @@ impl StatefulView for GestureAlternatives {
     type State = GestureAlternativesState;
 
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        let platform = TargetPlatform::current();
-        for command in self.commands() {
-            command.warn_reserved_keys(platform, &[]);
-        }
         GestureAlternativesState {
+            warned_for: Cell::new(None),
             opener: OpenerSlot::new(Rc::new(|_cx, _cause, _position| {})),
             menu: self.is_menu(),
             given_hold: self.hold.clone(),
@@ -1013,6 +1057,9 @@ pub struct GestureAlternativesState {
     /// `on_focus_change`), so focus that leaves and comes back by pointer
     /// within one frame does not find it still set.
     control_revealed: Rc<Cell<bool>>,
+    /// The platform whose reserved keys were last reported, so a rebuild
+    /// reports again only when the convention changes.
+    warned_for: Cell<Option<TargetPlatform>>,
 }
 
 /// A menu's long press: a hold whose successors are the long-press drags
@@ -1162,15 +1209,17 @@ impl ViewState<GestureAlternatives> for GestureAlternativesState {
     /// the long press another hold replaces it.
     fn did_update_view(&mut self, old_view: &GestureAlternatives, new_view: &GestureAlternatives) {
         // A rebuild reports only the reserved keys it brings: those the
-        // command already had were reported when it got them.
-        let platform = TargetPlatform::current();
-        for command in new_view.commands() {
-            let already: Vec<&SingleActivator> = old_view
-                .commands()
-                .filter(|old| old.label == command.label)
-                .flat_map(|old| &old.keys)
-                .collect();
-            command.warn_reserved_keys(platform, &already);
+        // command already had were reported when it got them. Before the
+        // first build nothing was reported, and that build reports them all.
+        if let Some(platform) = self.warned_for.get() {
+            for command in new_view.commands() {
+                let already: Vec<SingleActivator> = old_view
+                    .commands()
+                    .filter(|old| old.label == command.label)
+                    .flat_map(|old| old.resolved_keys(platform))
+                    .collect();
+                command.warn_reserved_keys(platform, &already);
+            }
         }
         self.menu = new_view.is_menu();
         self.given_hold.clone_from(&new_view.hold);
@@ -1229,7 +1278,13 @@ impl GestureAlternatives {
     ) -> BoxedView {
         let opener_slot = &state.opener;
         let chain = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
-        let platform = TargetPlatform::current();
+        let platform = PlatformConvention::of(ctx);
+        if state.warned_for.get() != Some(platform) {
+            state.warned_for.set(Some(platform));
+            for command in self.commands() {
+                command.warn_reserved_keys(platform, &[]);
+            }
+        }
         let content = self
             .child
             .clone()
@@ -1243,7 +1298,7 @@ impl GestureAlternatives {
         let mut shortcuts_bindings = Vec::new();
         for command in self.commands() {
             for activator in command.keys(platform) {
-                shortcuts_bindings.push((activator.clone(), Rc::clone(&command.intent)));
+                shortcuts_bindings.push((activator, Rc::clone(&command.intent)));
             }
             if let Some(changes) = command.offer_changes_in(chain.as_ref()) {
                 semantics = semantics.refresh_on(changes);

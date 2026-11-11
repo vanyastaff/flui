@@ -59,6 +59,12 @@ pub trait StatefulView: Clone + 'static + Sized {
     /// capabilities the state keeps. The returned state persists across
     /// View rebuilds.
     ///
+    /// Flutter's `createState` takes no context and its `initState` creates
+    /// what needs one. Here the context arrives one step earlier so a field
+    /// can be the handle itself: a `Signal<T>` has no unbound value, and a
+    /// state never holds an `Option` that `init_state` fills in. `init_state`
+    /// stays, for work that needs the created state.
+    ///
     /// A panic here is recorded like a panic in `init_state`, and the next
     /// build of the element calls `create_state` again.
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State;

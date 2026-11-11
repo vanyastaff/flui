@@ -1690,7 +1690,8 @@ fn save_layer_output_preserves_damage_and_recovers_after_invalid_clip() {
                 let mut canvas = Canvas::new();
                 green_background(&mut canvas);
                 if invalid {
-                    canvas.clip_rect(Rect::from_xywh(f64::NAN, 0.0, 20.0, 20.0));
+                    // Finite but inverted: the engine refuses it at the frame.
+                    canvas.clip_rect(Rect::from_xywh(20.0, 0.0, -20.0, 20.0));
                 }
                 canvas.save_layer(None, &Paint::fill(Color::WHITE).with_opacity(opacity));
                 canvas.draw_rect(

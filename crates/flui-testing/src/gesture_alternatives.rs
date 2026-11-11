@@ -142,6 +142,10 @@ impl<M> GestureAlternativesCheck<M> {
     }
 }
 
+/// The platform whose conventions every path follows: the neutral one, so
+/// the keys a check drives never depend on the machine that runs it.
+const PLATFORM: TargetPlatform = TargetPlatform::Unknown;
+
 /// What one path left behind.
 #[derive(Debug, PartialEq)]
 struct Outcome<M> {
@@ -192,12 +196,7 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
         let commands: Vec<(GestureCommand, Vec<SingleActivator>)> = probe
             .alternatives
             .commands()
-            .map(|command| {
-                (
-                    command.clone(),
-                    command.keys(TargetPlatform::current()).cloned().collect(),
-                )
-            })
+            .map(|command| (command.clone(), command.keys(PLATFORM).collect()))
             .collect();
         let pointer = match probe.alternatives.alternative() {
             Alternative::VisibleControl(_) => PointerPath::Controls,
@@ -273,7 +272,10 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
 
     fn mount(&self) -> Mounted<M> {
         let subject = (self.check.mount)();
-        let mut laid = lay_out(subject.view, self.check.constraints);
+        let mut laid = lay_out(
+            flui_view::environment::PlatformConvention::new(PLATFORM, subject.view),
+            self.check.constraints,
+        );
         laid.enable_semantics();
         laid.pump();
         Mounted {
@@ -600,7 +602,7 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
                 Opener::RevealedControl(Some(device)),
             ));
         }
-        for key in ShowContextMenuIntent::default_keys(TargetPlatform::current()) {
+        for key in ShowContextMenuIntent::default_keys(PLATFORM) {
             openers.push((format!("the menu key {key:?}"), Opener::Key(key)));
         }
         for (name, opener) in &openers {

@@ -194,13 +194,6 @@ impl SelectionMenuPolicy {
     }
 }
 
-impl Default for SelectionMenuPolicy {
-    /// The toolbar of the platform the app is built for.
-    fn default() -> Self {
-        Self::for_platform(TargetPlatform::current())
-    }
-}
-
 /// Sets the selection controls of the selection areas and editable texts
 /// beneath it that set none of their own: their touch handles, when a tap
 /// shows a caret handle, their menu's look and policy, and the app's own
@@ -294,12 +287,13 @@ impl SelectionControls {
     pub(crate) fn magnifier(
         own: Option<&MagnifierChoice>,
         controls: Option<&Self>,
+        platform: TargetPlatform,
     ) -> Option<Rc<dyn SelectionMagnifier>> {
         let choice = own.or_else(|| controls.and_then(|controls| controls.magnifier.as_ref()));
         match choice {
             Some(MagnifierChoice::Show(magnifier)) => Some(Rc::clone(magnifier)),
             Some(MagnifierChoice::Hide) => None,
-            None => PlainMagnifier::for_platform(TargetPlatform::current())
+            None => PlainMagnifier::for_platform(platform)
                 .map(|plain| Rc::new(plain) as Rc<dyn SelectionMagnifier>),
         }
     }
@@ -347,7 +341,7 @@ impl DefaultSelectionControls {
     }
 
     /// When a tap in an editable text beneath shows a caret handle, in
-    /// place of the platform's ([`CaretHandle::default`]).
+    /// place of the platform's ([`CaretHandle::for_platform`] of the [`PlatformConvention`](flui_view::environment::PlatformConvention)).
     #[must_use]
     pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
         self.own.caret_handle = Some(caret_handle);
@@ -355,7 +349,7 @@ impl DefaultSelectionControls {
     }
 
     /// What a touch long press in an editable text beneath selects, in
-    /// place of the platform's ([`LongPressSelection::default`]).
+    /// place of the platform's ([`LongPressSelection::for_platform`] of the [`PlatformConvention`](flui_view::environment::PlatformConvention)).
     #[must_use]
     pub fn long_press(mut self, selection: LongPressSelection) -> Self {
         self.own.long_press = Some(selection);
@@ -377,7 +371,7 @@ impl DefaultSelectionControls {
     }
 
     /// Which touches show the toolbar beneath, in place of the platform's
-    /// ([`SelectionMenuPolicy::default`]).
+    /// ([`SelectionMenuPolicy::for_platform`] of the [`PlatformConvention`](flui_view::environment::PlatformConvention)).
     #[must_use]
     pub fn menu_policy(mut self, policy: SelectionMenuPolicy) -> Self {
         self.own.policy = Some(policy);
@@ -439,7 +433,11 @@ impl DefaultSelectionControls {
         ctx: &dyn BuildContext,
         own: Option<&MagnifierChoice>,
     ) -> Option<Rc<dyn SelectionMagnifier>> {
-        SelectionControls::magnifier(own, Self::controls_of(ctx).as_deref())
+        SelectionControls::magnifier(
+            own,
+            Self::controls_of(ctx).as_deref(),
+            flui_view::environment::PlatformConvention::of(ctx),
+        )
     }
 
     /// Everything the scopes above `ctx` set, registering a dependency.

@@ -341,7 +341,7 @@ fn lift_alice_to(laid: &LaidOut, (x, y): (f64, f64)) {
 fn chord(letter: &str) -> SingleActivator {
     let activator = SingleActivator::character(letter);
     if matches!(
-        TargetPlatform::current(),
+        TargetPlatform::Unknown,
         TargetPlatform::MacOS | TargetPlatform::iOS
     ) {
         activator.meta()

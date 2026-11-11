@@ -60,6 +60,7 @@ use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
 use flui_interaction::InputSequenceId;
 use flui_painting::typography::TextDirection;
+#[cfg(test)]
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::NamedKey;
 use flui_view::prelude::StatefulView;
@@ -103,25 +104,24 @@ impl Intent for RefreshIntent {}
 
 impl RefreshIntent {
     /// The refresh command, labelled `label` ("Refresh inbox"), with the
-    /// running platform's refresh keys: F5, and Cmd+R on macOS and iOS or
-    /// Ctrl+R elsewhere.
+    /// refresh keys of the platform the tree follows: F5, and Cmd+R on macOS
+    /// and iOS or Ctrl+R elsewhere.
     #[must_use]
     pub fn command(label: impl Into<String>) -> GestureCommand {
-        refresh_keys(TargetPlatform::current())
-            .into_iter()
-            .fold(GestureCommand::new(label, Self), GestureCommand::key)
+        GestureCommand::new(label, Self)
+            .key(SingleActivator::named(NamedKey::F5))
+            .command_key(SingleActivator::character("r"))
     }
 }
 
-/// The refresh keys on `platform`: F5, and Cmd+R on macOS and iOS or Ctrl+R
-/// elsewhere. The collision table checks them on every platform.
-pub(crate) fn refresh_keys(platform: TargetPlatform) -> [SingleActivator; 2] {
-    let chord = SingleActivator::character("r");
-    let reload = match platform {
-        TargetPlatform::MacOS | TargetPlatform::iOS => chord.meta(),
-        _ => chord.control(),
-    };
-    [SingleActivator::named(NamedKey::F5), reload]
+/// The refresh keys [`RefreshIntent::command`] binds on `platform`: F5, and
+/// Cmd+R on macOS and iOS or Ctrl+R elsewhere. The collision table checks
+/// them on every platform.
+#[cfg(test)]
+pub(crate) fn refresh_keys(platform: TargetPlatform) -> Vec<SingleActivator> {
+    RefreshIntent::command("refresh")
+        .resolved_keys(platform)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

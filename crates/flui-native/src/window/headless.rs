@@ -1,6 +1,6 @@
-//! The headless window: [`MockWindow`], the window double every
+//! The headless window: [`HeadlessHostWindow`], the native window every
 //! [`HeadlessPlatform`](crate::HeadlessPlatform) opens, its system chrome
-//! ([`FakeSystemChrome`]), what the headless "operating system" refuses or
+//! ([`HeadlessSystemChrome`]), what the headless "operating system" refuses or
 //! clamps ([`HeadlessWindowPolicy`]), so a test can see a window snapshot
 //! report the outcome rather than the request, and [`HeadlessWindows`], the
 //! windows the platform tracks.
@@ -69,7 +69,7 @@ impl HeadlessWindowPolicy {
     }
 }
 
-/// The ids of the mock windows of every
+/// The ids of the headless windows of every
 /// [`HeadlessPlatform`](crate::HeadlessPlatform) in the process.
 ///
 /// A headless test builds several independent platforms whose windows later
@@ -111,7 +111,7 @@ impl std::fmt::Debug for HeadlessWindows {
 
 struct Tracked {
     /// The open windows, in the order they opened: the last is topmost.
-    windows: Vec<MockWindow>,
+    windows: Vec<HeadlessHostWindow>,
     active: Option<WindowId>,
     /// Whether the windows sit on one desktop and answer
     /// [`PlatformWindow::window_at`] ([`HeadlessPlatform::with_window_placement`](crate::HeadlessPlatform::with_window_placement)).
@@ -161,7 +161,7 @@ impl OpenWindows for HeadlessWindows {
 }
 
 impl TrackedWindows for HeadlessWindows {
-    /// Builds a fresh mock window under an already-locked `state`, threading
+    /// Builds a fresh headless window under an already-locked `state`, threading
     /// it through the same register/activate bookkeeping for the synchronous
     /// `Platform::open_window` and the deferred-open resolution
     /// ([`HeadlessDeferredWindowOpens::resolve_next`](crate::HeadlessDeferredWindowOpens::resolve_next)),
@@ -184,12 +184,12 @@ impl TrackedWindows for HeadlessWindows {
         let input = state
             .input_availability
             .with_present(state.devices.present());
-        let mut window = MockWindow::new(
+        let mut window = HeadlessHostWindow::new(
             window_id,
             options,
             platform,
             Arc::downgrade(&self),
-            MockWindowHost {
+            HeadlessWindowSetup {
                 positions: self.positions,
                 text_store_host: state.text_store_host.clone(),
                 display,
@@ -256,12 +256,12 @@ impl TrackedWindows for HeadlessWindows {
 
 /// The headless windows' test controls: builders taken before
 /// [`Platform::run`](crate::Platform::run) consumes the platform.
-impl<H: Host<Loop = HeadlessLoop, Window = MockWindow>> HostPlatform<H> {
+impl<H: Host<Loop = HeadlessLoop, Window = HeadlessHostWindow>> HostPlatform<H> {
     /// Place this backend's windows on one desktop, as Win32 and AppKit place
     /// theirs: each window's content starts at the position its published
     /// [`WindowState`] reports (this host draws no frame; a window opens where
     /// its options place it or at the desktop origin, and
-    /// [`MockWindow::simulate_move`], a move command or a mode change moves
+    /// [`HeadlessHostWindow::simulate_move`], a move command or a mode change moves
     /// it), the window opened last is topmost, and [`PlatformWindow::window_at`] answers from
     /// that layout. Without it `window_at` answers
     /// [`WindowAt::Unknown`](flui_platform::WindowAt::Unknown), as on Wayland.
@@ -313,7 +313,7 @@ pub struct HeadlessOpenWindows {
 impl HeadlessOpenWindows {
     /// Every open window, in the order it opened: the last is topmost.
     #[must_use]
-    pub fn all(&self) -> Vec<MockWindow> {
+    pub fn all(&self) -> Vec<HeadlessHostWindow> {
         self.windows
             .upgrade()
             .map(|windows| windows.tracked.lock().windows.clone())
@@ -322,7 +322,7 @@ impl HeadlessOpenWindows {
 
     /// The open window `id`, `None` once it closed.
     #[must_use]
-    pub fn get(&self, id: WindowId) -> Option<MockWindow> {
+    pub fn get(&self, id: WindowId) -> Option<HeadlessHostWindow> {
         let windows = self.windows.upgrade()?;
         let tracked = windows.tracked.lock();
         tracked
@@ -333,7 +333,7 @@ impl HeadlessOpenWindows {
     }
 }
 
-impl host::Window<HeadlessLoop> for MockWindow {
+impl host::Window<HeadlessLoop> for HeadlessHostWindow {
     type Shared = HeadlessWindows;
     /// A headless window is made of nothing the positions need.
     type Ref = ();
@@ -344,7 +344,7 @@ impl host::Window<HeadlessLoop> for MockWindow {
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
-        tracing::info!(?options, "Creating mock window");
+        tracing::info!(?options, "Creating headless window");
 
         let platform_state = Arc::downgrade(&owner.state);
         owner.with_state(|state| {
@@ -369,7 +369,7 @@ impl host::Window<HeadlessLoop> for MockWindow {
 // ==================== Mock Implementations ====================
 
 /// A simulated move of a window named a display its platform does not hold
-/// ([`MockWindow::simulate_move_to`]).
+/// ([`HeadlessHostWindow::simulate_move_to`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("the platform holds no display {display:?}")]
 #[non_exhaustive]
@@ -379,7 +379,7 @@ pub struct UnknownDisplay {
 }
 
 /// What a headless window's simulated window system holds
-/// ([`MockWindow::window_system`]).
+/// ([`HeadlessHostWindow::window_system`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct HeadlessWindowSystem {
@@ -392,7 +392,7 @@ pub struct HeadlessWindowSystem {
     /// Whether the window is shown and open.
     pub visible: bool,
     /// Whether the simulated system says none of the window reaches the
-    /// screen ([`MockWindow::simulate_occlusion`]).
+    /// screen ([`HeadlessHostWindow::simulate_occlusion`]).
     pub occluded: bool,
     /// The input regions the simulated system honours for the window, as
     /// the platform's input availability says
@@ -403,12 +403,14 @@ pub struct HeadlessWindowSystem {
     pub material: WindowMaterial,
 }
 
-/// The canonical test/headless window double.
+/// The native window of the headless host.
 ///
-/// Every window [`HeadlessPlatform`](crate::HeadlessPlatform) opens is a `MockWindow`: a fully
-/// functional [`PlatformWindow`] that needs no
-/// display server. Beyond the trait surface it offers what a test harness
-/// needs to drive a window from the outside:
+/// Every window [`HeadlessPlatform`](crate::HeadlessPlatform) opens is a `HeadlessHostWindow`:
+/// the [`HostWindow`] a runner drives, a fully functional [`PlatformWindow`] that needs no
+/// display server, owned by the headless owner loop as an OS window is owned by its backend's.
+/// It is not `flui_testing::HeadlessWindow`, the window a `HeadlessHost` presents a UI runtime
+/// into with no host at all. Beyond the trait surface it offers what a test harness needs to
+/// drive a window from the outside:
 ///
 /// - a configurable scale factor ([`Self::simulate_scale_factor_change`],
 ///   delivered through the resize path exactly like a native host);
@@ -422,11 +424,11 @@ pub struct HeadlessWindowSystem {
 ///
 /// There is no public constructor: obtain one by opening a window on a
 /// [`HeadlessPlatform`](crate::HeadlessPlatform) and downcasting the returned
-/// `Rc<dyn PlatformWindow>` via its `as_any()` to `&MockWindow`.
+/// `Rc<dyn PlatformWindow>` via its `as_any()` to `&HeadlessHostWindow`.
 #[derive(Clone)]
-pub struct MockWindow {
+pub struct HeadlessHostWindow {
     id: WindowId,
-    state: Arc<Mutex<MockWindowState>>,
+    state: Arc<Mutex<HeadlessHostWindowState>>,
     /// The published snapshot, shared by every clone of this window.
     window_state: Arc<WindowStateCell>,
     /// What the window's state publisher reads; the delivery holds it weakly.
@@ -459,7 +461,7 @@ pub struct MockWindow {
     presents: Arc<std::sync::atomic::AtomicU64>,
 }
 
-/// How a [`MockWindow`] asks its owner for a frame from another thread: the
+/// How a [`HeadlessHostWindow`] asks its owner for a frame from another thread: the
 /// frame callback is owner code, so it runs in an owner turn, coalesced with
 /// any request already queued, as a native backend posts its redraw.
 #[derive(Clone)]
@@ -468,7 +470,7 @@ struct OwnerRedraw {
     wake: crate::owner::signal::WindowWake,
 }
 
-/// How a [`MockWindow`] is asked for a frame, from any thread: on the owner
+/// How a [`HeadlessHostWindow`] is asked for a frame, from any thread: on the owner
 /// its handler's `frame_requested` runs now; from another thread the request
 /// waits for the owner's next turn.
 #[derive(Clone)]
@@ -527,10 +529,10 @@ impl flui_platform::SurfaceTarget for HeadlessSurface {
     }
 }
 
-impl std::fmt::Debug for MockWindow {
+impl std::fmt::Debug for HeadlessHostWindow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let state = self.state.lock();
-        f.debug_struct("MockWindow")
+        f.debug_struct("HeadlessHostWindow")
             .field("id", &self.id)
             .field("title", &state.title)
             .field("position", &state.position)
@@ -548,7 +550,7 @@ impl std::fmt::Debug for MockWindow {
 /// `availability`: a closed window takes none, and an `Unavailable`
 /// capability is refused as admission refuses a command.
 fn takes(
-    state: &MockWindowState,
+    state: &HeadlessHostWindowState,
     availability: flui_platform::Availability,
 ) -> Result<(), Unsupported> {
     if state.closed {
@@ -560,14 +562,14 @@ fn takes(
     Ok(())
 }
 
-/// What a [`MockWindow`] handed its simulated OS as input regions.
+/// What a [`HeadlessHostWindow`] handed its simulated OS as input regions.
 #[derive(Debug, Default)]
 struct RecordedInputRegions {
     projection: ProjectedInputRegions,
     updates: Vec<Vec<DeviceInputRegion>>,
 }
 /// What the platform hands a window it opens.
-struct MockWindowHost {
+struct HeadlessWindowSetup {
     /// What the window hands out of the window-level positions.
     positions: WindowPositions<()>,
     text_store_host: Option<TextStoreHostFactory>,
@@ -580,8 +582,8 @@ struct MockWindowHost {
     limits: HeadlessWindowPolicy,
 }
 
-/// Mutable state for headless MockWindow
-struct MockWindowState {
+/// The mutable state of a [`HeadlessHostWindow`].
+struct HeadlessHostWindowState {
     /// Every [`PlatformWindow::set_frame_rate_hint`] the window took, in order.
     frame_rate_hints: Vec<flui_platform::FrameRateHint>,
     /// Every [`WindowCommand::SetMaterial`] the window applied, in order.
@@ -612,11 +614,11 @@ struct MockWindowState {
     /// What the simulated window system lets this window do now.
     capabilities: WindowCapabilities,
     /// A snapshot the simulated window system reported in place of what the
-    /// model says ([`MockWindow::simulate_state`]), until the model changes.
+    /// model says ([`HeadlessHostWindow::simulate_state`]), until the model changes.
     reported: Option<WindowState>,
 }
 
-impl MockWindowState {
+impl HeadlessHostWindowState {
     fn geometry(&self) -> WindowGeometry {
         WindowGeometry::new(Some(self.position), self.size)
     }
@@ -689,7 +691,7 @@ impl MockWindowState {
 /// closed window is detached; a size or scale that is not a drawable area
 /// reports no metrics. The hover is what the last hover report said. A
 /// snapshot the window system reported is read as it was reported.
-fn sample_window_state(model: &MockWindowState, hovered: bool) -> WindowState {
+fn sample_window_state(model: &HeadlessHostWindowState, hovered: bool) -> WindowState {
     if let Some(reported) = &model.reported {
         return reported.clone();
     }
@@ -748,7 +750,7 @@ fn sample_window_state(model: &MockWindowState, hovered: bool) -> WindowState {
 /// Read what `model` says now into the snapshot, announcing nothing.
 fn read_window_state(
     cell: &WindowStateCell,
-    model: &Mutex<MockWindowState>,
+    model: &Mutex<HeadlessHostWindowState>,
     delivery: &WindowDelivery,
 ) -> crate::window::state::Published {
     cell.invalidate();
@@ -759,7 +761,7 @@ fn read_window_state(
 /// held by every clone of the window.
 struct SnapshotSource {
     cell: Arc<WindowStateCell>,
-    model: Arc<Mutex<MockWindowState>>,
+    model: Arc<Mutex<HeadlessHostWindowState>>,
     delivery: Weak<WindowDelivery>,
 }
 
@@ -773,16 +775,16 @@ impl SnapshotSource {
     }
 }
 
-impl MockWindow {
+impl HeadlessHostWindow {
     fn new(
         id: WindowId,
         options: WindowOptions,
         platform_state: Weak<Mutex<HeadlessState>>,
         windows: Weak<HeadlessWindows>,
-        host: MockWindowHost,
+        host: HeadlessWindowSetup,
         delivery: WindowDelivery,
     ) -> Self {
-        let MockWindowHost {
+        let HeadlessWindowSetup {
             positions,
             text_store_host,
             display,
@@ -790,7 +792,7 @@ impl MockWindow {
             capabilities,
             limits,
         } = host;
-        let mut model = MockWindowState {
+        let mut model = HeadlessHostWindowState {
             frame_rate_hints: Vec::new(),
             materials: Vec::new(),
             title: options.title.clone(),
@@ -1192,7 +1194,7 @@ impl MockWindow {
     }
 }
 
-impl PlatformWindow for MockWindow {
+impl PlatformWindow for HeadlessHostWindow {
     fn id(&self) -> WindowId {
         self.id
     }
@@ -1394,13 +1396,13 @@ impl PlatformWindow for MockWindow {
     }
 }
 
-impl crate::host_window::CoreHostWindow for MockWindow {
+impl crate::host_window::CoreHostWindow for HeadlessHostWindow {
     fn window_delivery(&self) -> &WindowDelivery {
         &self.delivery
     }
 }
 
-impl HostWindow for MockWindow {
+impl HostWindow for HeadlessHostWindow {
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
         Some(Arc::clone(&self.facets.accessibility) as _)
     }
@@ -1430,14 +1432,14 @@ impl HostWindow for MockWindow {
     }
 }
 
-/// Records the overlay styles delivered through
+/// The system chrome of a [`HeadlessHostWindow`]: records the overlay styles delivered through
 /// [`PlatformWindow::system_chrome`], in delivery order.
 #[derive(Default)]
-pub struct FakeSystemChrome {
+pub struct HeadlessSystemChrome {
     styles: Mutex<Vec<flui_platform::SystemUiOverlayStyle>>,
 }
 
-impl FakeSystemChrome {
+impl HeadlessSystemChrome {
     /// Every delivered overlay style, in delivery order.
     #[must_use]
     pub fn styles(&self) -> Vec<flui_platform::SystemUiOverlayStyle> {
@@ -1445,15 +1447,15 @@ impl FakeSystemChrome {
     }
 }
 
-impl std::fmt::Debug for FakeSystemChrome {
+impl std::fmt::Debug for HeadlessSystemChrome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FakeSystemChrome")
+        f.debug_struct("HeadlessSystemChrome")
             .field("styles", &*self.styles.lock())
             .finish()
     }
 }
 
-impl flui_platform::PlatformSystemChrome for FakeSystemChrome {
+impl flui_platform::PlatformSystemChrome for HeadlessSystemChrome {
     fn set_overlay_style(&self, style: flui_platform::SystemUiOverlayStyle) {
         self.styles.lock().push(style);
     }
@@ -1464,7 +1466,7 @@ impl flui_platform::PlatformSystemChrome for FakeSystemChrome {
 }
 
 /// Each headless window records its own overlay styles.
-impl host::Chrome<()> for FakeSystemChrome {
+impl host::Chrome<()> for HeadlessSystemChrome {
     fn for_window((): &()) -> Arc<dyn flui_platform::PlatformSystemChrome> {
         Arc::new(Self::default())
     }

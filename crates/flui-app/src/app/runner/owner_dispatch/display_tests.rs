@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_native::{
-    DisplayChange, DisplaySpec, HeadlessDisplayControls, HeadlessOwnerTurns, HeadlessPlatform,
-    MockWindow, Platform as _,
+    DisplayChange, DisplaySpec, HeadlessDisplayControls, HeadlessHostWindow, HeadlessOwnerTurns,
+    HeadlessPlatform, Platform as _,
 };
 use flui_platform::PlatformWindow;
 use flui_platform::{DisplayId, DisplaySnapshot, WindowDisplay};
@@ -88,7 +88,7 @@ impl Drop for Rig {
 /// An installed window: its native handle, its presentation, and what the
 /// presentation asked of the window.
 struct Win {
-    native: MockWindow,
+    native: HeadlessHostWindow,
     /// The platform keeps its windows alive; the headless one does not, so the
     /// test does.
     window: Rc<dyn PlatformWindow>,
@@ -128,7 +128,7 @@ fn install_window(
             .expect("headless windows are ready");
     let native = host_window
         .as_any()
-        .downcast_ref::<MockWindow>()
+        .downcast_ref::<HeadlessHostWindow>()
         .expect("headless window")
         .clone();
     let window: Rc<dyn PlatformWindow> = host_window;

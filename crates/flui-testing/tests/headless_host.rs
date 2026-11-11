@@ -903,3 +903,58 @@ fn tab_moves_focus_in_a_headless_host_attached_app() {
         );
     }
 }
+
+/// Records the platform its subtree follows at each build.
+#[derive(Clone, flui_view::prelude::StatelessView)]
+struct ReadsConvention {
+    seen: Rc<Cell<Option<flui_platform::TargetPlatform>>>,
+}
+
+impl flui_view::prelude::StatelessView for ReadsConvention {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        self.seen
+            .set(Some(flui_view::environment::PlatformConvention::of(ctx)));
+        flui_widgets::SizedBox::shrink()
+    }
+}
+
+/// The tree follows the platform its window names, never the machine that
+/// runs it: without one the neutral conventions, and a `PlatformConvention`
+/// wrapper overrides the window's for its subtree.
+#[test]
+fn the_tree_follows_the_platform_its_window_names() {
+    use flui_platform::TargetPlatform;
+    use flui_view::environment::PlatformConvention;
+
+    for (named, wrapped, expected) in [
+        (None, None, TargetPlatform::Unknown),
+        (Some(TargetPlatform::MacOS), None, TargetPlatform::MacOS),
+        (Some(TargetPlatform::Android), None, TargetPlatform::Android),
+        (
+            Some(TargetPlatform::Windows),
+            Some(TargetPlatform::iOS),
+            TargetPlatform::iOS,
+        ),
+    ] {
+        let mut window = HeadlessWindow::new(40, 24);
+        if let Some(platform) = named {
+            window = window.with_platform(platform);
+        }
+        let mut host = HeadlessHost::new(window);
+        let seen = Rc::new(Cell::new(None));
+        let reader = ReadsConvention {
+            seen: Rc::clone(&seen),
+        };
+        match wrapped {
+            Some(platform) => host.attach(&PlatformConvention::new(platform, reader)),
+            None => host.attach(&reader),
+        }
+        .expect("attach");
+        let _ = host.pump(Duration::from_millis(16));
+        assert_eq!(
+            seen.get(),
+            Some(expected),
+            "named {named:?}, wrapped {wrapped:?}"
+        );
+    }
+}

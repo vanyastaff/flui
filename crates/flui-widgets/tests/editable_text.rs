@@ -1354,13 +1354,7 @@ pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
                     Code::KeyV,
                     EventTime::from_nanos(0)
                 )
-                .with_modifiers(
-                    if cfg!(any(target_os = "macos", target_os = "ios")) {
-                        Modifiers::META
-                    } else {
-                        Modifiers::CONTROL
-                    }
-                )
+                .with_modifiers(Modifiers::CONTROL)
             )
             .is_handled(),
         "paste: the chord is consumed while composing"

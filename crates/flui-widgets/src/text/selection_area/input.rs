@@ -19,7 +19,6 @@ use flui_interaction::{
 use flui_objects::RenderParagraph;
 use flui_painting::text_boundaries;
 use flui_painting::typography::{LineMetrics, TextAffinity, TextPosition};
-use flui_platform::TargetPlatform;
 use flui_platform::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
 use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
@@ -678,7 +677,7 @@ impl SelectionModel {
         let Some(selection) = self.selection.borrow().clone() else {
             return KeyEventResult::Ignored;
         };
-        let by_word = is_word_jump_modifier(modifiers, TargetPlatform::current());
+        let by_word = is_word_jump_modifier(modifiers, self.platform.get());
         let memory = self.caret.get();
         let mut next_memory = CaretMemory::default();
         let ordered = self.ordered();
