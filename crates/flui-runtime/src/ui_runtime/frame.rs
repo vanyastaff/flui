@@ -643,10 +643,13 @@ impl UiRuntime {
         // The scene is lent out of its slot from here to the publication:
         // the code the frame runs meanwhile (paint bodies, callbacks, a
         // subscriber) finds it lent and is refused, never a borrow error.
-        let mut scene = presentation
-            .scene
-            .lend()
-            .expect("BUG: one frame at a time produces a presentation's scene");
+        // A second frame never gets here while it is lent: `pump` takes the
+        // runtime by `&mut`, and a re-entered internal pump is refused by the
+        // owner frame's admission before any segment runs
+        // (`rejected_nested_pump_preserves_outer_commits_and_animation_time`).
+        let mut scene = presentation.scene.lend().expect(
+            "BUG: a frame is admitted once at a time, so its presentation's scene is in its slot",
+        );
         let painted = {
             let pipeline = presentation.pipeline();
             scene.produce(
