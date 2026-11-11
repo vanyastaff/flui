@@ -729,8 +729,8 @@ impl PipelineCache {
     /// Get a reference to the viewport bind group layout
     ///
     /// This is needed to create bind groups that are compatible with pipelines
-    /// created by this cache. In wgpu, bind groups must be created with the
-    /// exact same layout object that the pipeline expects.
+    /// created by this cache: a bind group binds under a pipeline whose layout
+    /// at that index has the same entries (WebGPU group equivalence).
     pub(crate) fn viewport_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.viewport_bind_group_layout
     }

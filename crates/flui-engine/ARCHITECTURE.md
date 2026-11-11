@@ -56,7 +56,7 @@ oversized radii against the same public path commands without a shape hint.
 
 | Concern | Files | What lives there |
 |---|---|---|
-| Entry points | `renderer.rs`, `headless.rs` | `Renderer` (a window's device, queue, surface, recovery) and `HeadlessRenderer` (rasterise a tree to RGBA8 bytes) |
+| Entry points | `renderer.rs`, `gpu_context.rs`, `headless.rs` | `Renderer` (a window's device, queue, surface, recovery); `GpuContext` (one instance, device and painter shared by every slot, ADR-0305 §1; offscreen slots today); `HeadlessRenderer` (a context with one offscreen slot, rasterising a tree to RGBA8 bytes) |
 | Window ownership | `window_target.rs`, `surface_lease.rs`, `adapter.rs` | The owned `'static` handle source a surface is created over; the lease that pins surface-before-target drop order; adapter/device acquisition policy |
 | Frame walk | `layer_walk.rs`, `layer_render.rs`, `layer_dispatcher.rs`, `layer_offscreen.rs`, `layer_compositor.rs` | Iterative layer traversal; per-variant lowering of `Layer`; `DrawCommand` → painter routing; offscreen layer rendering and compositing; save/restore layer state |
 | Recording | `painter/`, `batches/`, `command_ir.rs`, `state_stack.rs` | `WgpuPainter` (per-frame coordinator), `DrawBatcher` (per-primitive record methods), the Command IR they write, the transform/clip stacks |
