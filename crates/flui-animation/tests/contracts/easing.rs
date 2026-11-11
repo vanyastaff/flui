@@ -2,7 +2,7 @@
 
 use flui_animation::{
     Curve, LinearStop, PiecewiseLinear, PiecewiseLinearError, SharedCurve, SimulationError,
-    SimulationParameter, SpringCurve, SpringDescription, Tolerance,
+    SimulationParameter, SpeedLimit, SpringCurve, SpringDescription, Tolerance,
 };
 use std::time::Duration;
 
@@ -210,7 +210,11 @@ fn curves_keep_normalized_input_policy_and_value_equality() {
 fn spring_matches_independent_physical_references() {
     for damping in [10.0, 20.0, 40.0] {
         let spring = SpringDescription::try_new(1.0, 100.0, damping).unwrap();
-        let curve = SpringCurve::try_new(spring, Tolerance::try_new(1e-6, 1e-6).unwrap()).unwrap();
+        let curve = SpringCurve::try_new(
+            spring,
+            Tolerance::try_new(1e-6, SpeedLimit::AtMost(1e-6)).unwrap(),
+        )
+        .unwrap();
         let omega: f64 = 10.0;
         let zeta = damping / 20.0;
         for time in [0.05, 0.1, 0.25, 0.3] {
@@ -258,7 +262,10 @@ fn spring_matches_independent_physical_references() {
 fn spring_refuses_unusable_duration_and_admits_nanosecond_motion() {
     let spring = SpringDescription::try_new(1.0, 100.0, 20.0).unwrap();
     assert!(matches!(
-        SpringCurve::try_new(spring, Tolerance::try_new(1.0, 1.0).unwrap()),
+        SpringCurve::try_new(
+            spring,
+            Tolerance::try_new(1.0, SpeedLimit::AtMost(1.0)).unwrap()
+        ),
         Err(SimulationError::OutOfRange {
             parameter: SimulationParameter::UnitDistance,
             value: 1.0
