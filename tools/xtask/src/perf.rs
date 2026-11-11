@@ -4,15 +4,26 @@
 //! The scenarios are `flui-widgets`' `perf` test target. Each one mounts a
 //! small app, applies one change, and records the frame's work — elements
 //! rebuilt, nodes laid out and painted, layers produced and reused, semantics
-//! nodes published, frames produced — as counts, never timings. Counts are a
-//! deterministic function of the tree and the change, so the comparison is
-//! exact and a difference is a finding: a count that rose is a regression, and
-//! one that fell asks for `--bless`, so an improvement is locked in and a later
-//! regression back up to the old value cannot pass unnoticed.
+//! nodes published, frames produced — and the heap it allocated, as counts,
+//! never timings. Counts are a deterministic function of the tree and the
+//! change, so the comparison is exact, by the kind of counter:
+//!
+//! - a **work** counter (elements rebuilt, nodes laid out, layers produced, …)
+//!   describes what the frame did, so any difference is a finding: a rise is a
+//!   regression, and a fall is work that went missing until `--bless` says it
+//!   was meant;
+//! - a **cost** counter (a name with `alloc` or `bytes` in it) only has to stay
+//!   at or under its baseline. A fall prints as an improvement and passes, so a
+//!   PR that makes a scenario cheaper needs no baseline edit. `--bless` on a
+//!   fresh `main` ratchets the baseline down to it, so a later rise back to the
+//!   old value fails.
+//!
+//! The baseline is one file per scenario under `BASELINE_DIR`, so two changes
+//! that each move a different scenario touch different files.
 //!
 //! Advisory by default (findings print, the command exits 0); `--check` makes
-//! any finding fatal. `--self-test` compares planted fixtures in memory and
-//! builds nothing, which is why it is the half that runs in `cargo xtask
+//! any failing finding fatal. `--self-test` compares planted fixtures in memory
+//! and builds nothing, which is why it is the half that runs in `cargo xtask
 //! checks`.
 
 use std::collections::BTreeMap;
@@ -29,13 +40,14 @@ mod instructions;
 /// The package whose `perf` test target holds the scenarios.
 const PACKAGE: &str = "flui-widgets";
 
-/// The baseline, inside the scenarios' crate so a change to it is classified
-/// as a change to that crate and runs its lane.
-const BASELINE: &str = "crates/flui-widgets/perf/baseline.toml";
+/// The baseline, one `<scenario>.toml` per scenario, inside the scenarios'
+/// crate so a change to it is classified as a change to that crate and runs
+/// its lane.
+const BASELINE_DIR: &str = "crates/flui-widgets/perf/baseline";
 
-/// Written above the tables of a blessed baseline.
+/// Written above the table of a blessed baseline file.
 const BASELINE_HEADER: &str = "# Written by `cargo xtask perf --bless`; counts, not timings.\n\
-# One table per scenario of crates/flui-widgets/tests/perf.rs.\n";
+# One scenario of crates/flui-widgets/tests/perf.rs.\n";
 
 /// Scenario name → counter name → value.
 type Counts = BTreeMap<String, BTreeMap<String, u64>>;
@@ -43,8 +55,9 @@ type Counts = BTreeMap<String, BTreeMap<String, u64>>;
 /// Arguments for `cargo xtask perf`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct PerfArgs {
-    /// Fail when any counter differs from the baseline (with `--instructions`: when a
-    /// scaling scenario grows with the tree).
+    /// Fail when a cost counter (a name with `alloc` or `bytes`) rose above the
+    /// baseline, or a work counter differs from it; a cost that fell is reported
+    /// and passes (with `--instructions`: when a scaling scenario grows with the tree).
     #[arg(long, conflicts_with_all = ["bless", "self_test"])]
     check: bool,
     /// Rewrite the baseline from this run.
@@ -65,7 +78,7 @@ pub(crate) struct PerfArgs {
 enum Mode {
     /// Print them and exit 0.
     Advisory,
-    /// Exit 1 on any.
+    /// Exit 1 on any finding that fails.
     Check,
     /// Rewrite the baseline and exit 0.
     Bless,
@@ -81,7 +94,15 @@ enum Finding {
         base: u64,
         current: u64,
     },
-    /// A counter fell: bless it so the ratchet holds the new value.
+    /// A work counter fell: the frame does less than the baseline says, which
+    /// is lost work unless `--bless` records it as meant.
+    Fell {
+        scenario: String,
+        counter: String,
+        base: u64,
+        current: u64,
+    },
+    /// A cost counter fell. It passes; `--bless` on `main` ratchets it.
     Improved {
         scenario: String,
         counter: String,
@@ -107,6 +128,16 @@ impl fmt::Display for Finding {
                 base,
                 current,
             } => write!(f, "REGRESSED  {scenario}.{counter}: {base} -> {current}"),
+            Self::Fell {
+                scenario,
+                counter,
+                base,
+                current,
+            } => write!(
+                f,
+                "FELL       {scenario}.{counter}: {base} -> {current} (work went missing, \
+                 or run `cargo xtask perf --bless`)"
+            ),
             Self::Improved {
                 scenario,
                 counter,
@@ -114,7 +145,7 @@ impl fmt::Display for Finding {
                 current,
             } => write!(
                 f,
-                "IMPROVED   {scenario}.{counter}: {base} -> {current} (run `cargo xtask perf --bless`)"
+                "IMPROVED   {scenario}.{counter}: {base} -> {current} (passes; `--bless` on main ratchets it)"
             ),
             Self::MissingScenario { scenario } => {
                 write!(
@@ -134,6 +165,19 @@ impl fmt::Display for Finding {
             }
         }
     }
+}
+
+impl Finding {
+    /// Whether `--check` fails on it: everything but a cost that fell.
+    fn fails(&self) -> bool {
+        !matches!(self, Self::Improved { .. })
+    }
+}
+
+/// Whether `counter` measures cost (heap traffic), which only has to stay at
+/// or under its baseline, rather than work, which has to match it.
+fn is_cost(counter: &str) -> bool {
+    counter.contains("alloc") || counter.contains("bytes")
 }
 
 /// `cargo xtask perf`.
@@ -200,10 +244,8 @@ fn report(root: &Path, out: &Path, mode: Mode, scenarios_passed: bool) -> anyhow
     }
 
     if mode == Mode::Bless {
-        let baseline_path = root.join(BASELINE);
-        std::fs::write(&baseline_path, render(&current)?)
-            .with_context(|| format!("writing {}", baseline_path.display()))?;
-        println!("perf: blessed {BASELINE} ({} scenarios)", current.len());
+        bless(root, &current)?;
+        println!("perf: blessed {BASELINE_DIR} ({} scenarios)", current.len());
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -213,21 +255,67 @@ fn report(root: &Path, out: &Path, mode: Mode, scenarios_passed: bool) -> anyhow
     for finding in &findings {
         println!("{finding}");
     }
-    Ok(outcome(mode, findings.len()))
+    let failing = findings.iter().filter(|finding| finding.fails()).count();
+    Ok(outcome(mode, failing))
 }
 
-/// The checked-in baseline, or no scenarios when there is none yet.
+/// The file that holds `scenario`'s baseline.
+fn baseline_file(root: &Path, scenario: &str) -> PathBuf {
+    root.join(BASELINE_DIR).join(format!("{scenario}.toml"))
+}
+
+/// Writes one baseline file per scenario of `current` and removes the file of
+/// a scenario the run no longer reports.
+fn bless(root: &Path, current: &Counts) -> anyhow::Result<()> {
+    let dir = root.join(BASELINE_DIR);
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    for (scenario, counters) in current {
+        let one: Counts = [(scenario.clone(), counters.clone())].into_iter().collect();
+        let path = baseline_file(root, scenario);
+        std::fs::write(&path, render(&one)?)
+            .with_context(|| format!("writing {}", path.display()))?;
+    }
+    for scenario in load_baseline(root)?.keys() {
+        if !current.contains_key(scenario) {
+            let path = baseline_file(root, scenario);
+            std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// The checked-in baseline, or no scenarios when there is none yet. Each
+/// `<scenario>.toml` holds exactly the table of its own scenario.
 fn load_baseline(root: &Path) -> anyhow::Result<Counts> {
-    let baseline_path = root.join(BASELINE);
-    if !baseline_path.exists() {
-        println!("perf: no baseline at {BASELINE}; run `cargo xtask perf --bless`");
+    let dir = root.join(BASELINE_DIR);
+    if !dir.exists() {
+        println!("perf: no baseline at {BASELINE_DIR}; run `cargo xtask perf --bless`");
         return Ok(Counts::new());
     }
-    parse(
-        &std::fs::read_to_string(&baseline_path)
-            .with_context(|| format!("reading {}", baseline_path.display()))?,
-    )
-    .with_context(|| format!("parsing {BASELINE}"))
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .with_context(|| format!("listing {}", dir.display()))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<_, _>>()?;
+    files.retain(|file| file.extension().is_some_and(|ext| ext == "toml"));
+    files.sort();
+    let mut counts = Counts::new();
+    for file in files {
+        let stem = file
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .with_context(|| format!("{} has no UTF-8 name", file.display()))?
+            .to_owned();
+        let table = parse(
+            &std::fs::read_to_string(&file)
+                .with_context(|| format!("reading {}", file.display()))?,
+        )
+        .with_context(|| format!("parsing {}", file.display()))?;
+        if table.len() != 1 || !table.contains_key(&stem) {
+            bail!("{} must hold exactly the table [{stem}]", file.display());
+        }
+        counts.extend(table);
+    }
+    Ok(counts)
 }
 
 /// Runs the scenarios with `FLUI_PERF_OUT=out` and returns whether every one
@@ -319,8 +407,15 @@ fn compare(baseline: &Counts, current: &Counts) -> Vec<Finding> {
                     base,
                     current: value,
                 });
-            } else if value < base {
+            } else if value < base && is_cost(counter) {
                 findings.push(Finding::Improved {
+                    scenario: scenario.clone(),
+                    counter: counter.clone(),
+                    base,
+                    current: value,
+                });
+            } else if value < base {
+                findings.push(Finding::Fell {
                     scenario: scenario.clone(),
                     counter: counter.clone(),
                     base,
@@ -347,20 +442,20 @@ fn compare(baseline: &Counts, current: &Counts) -> Vec<Finding> {
     findings
 }
 
-/// The exit code for `findings` findings under `mode`.
-fn outcome(mode: Mode, findings: usize) -> ExitCode {
+/// The exit code for `failing` failing findings under `mode`.
+fn outcome(mode: Mode, failing: usize) -> ExitCode {
     match mode {
         Mode::Bless => ExitCode::SUCCESS,
-        Mode::Check if findings > 0 => {
-            println!("perf: {findings} findings against {BASELINE}");
+        Mode::Check if failing > 0 => {
+            println!("perf: {failing} failing findings against {BASELINE_DIR}");
             ExitCode::FAILURE
         }
         Mode::Check => {
-            println!("perf: matches {BASELINE}");
+            println!("perf: holds {BASELINE_DIR}");
             ExitCode::SUCCESS
         }
         Mode::Advisory => {
-            println!("advisory: {findings} findings");
+            println!("advisory: {failing} failing findings");
             ExitCode::SUCCESS
         }
     }
@@ -383,7 +478,8 @@ fn print_table(baseline: &Counts, current: &Counts) {
 }
 
 /// The planted comparison: a baseline and a run that differ by exactly one
-/// regression, one improvement, one missing scenario and one new counter.
+/// regression, one work counter that fell, one cost that fell (the only
+/// finding that passes), one missing scenario and one new counter.
 fn self_test_fixture() -> (Counts, Counts, Vec<Finding>) {
     let table = |pairs: &[(&str, u64)]| -> BTreeMap<String, u64> {
         pairs
@@ -394,7 +490,11 @@ fn self_test_fixture() -> (Counts, Counts, Vec<Finding>) {
     let baseline: Counts = [
         (
             "scroll".to_owned(),
-            table(&[("nodes_laid_out", 40), ("nodes_painted", 30)]),
+            table(&[
+                ("allocations", 12),
+                ("nodes_laid_out", 40),
+                ("nodes_painted", 30),
+            ]),
         ),
         ("idle".to_owned(), table(&[("frames_produced", 0)])),
         ("gone".to_owned(), table(&[("frames_produced", 1)])),
@@ -404,7 +504,11 @@ fn self_test_fixture() -> (Counts, Counts, Vec<Finding>) {
     let current: Counts = [
         (
             "scroll".to_owned(),
-            table(&[("nodes_laid_out", 41), ("nodes_painted", 29)]),
+            table(&[
+                ("allocations", 11),
+                ("nodes_laid_out", 41),
+                ("nodes_painted", 29),
+            ]),
         ),
         (
             "idle".to_owned(),
@@ -414,13 +518,19 @@ fn self_test_fixture() -> (Counts, Counts, Vec<Finding>) {
     .into_iter()
     .collect();
     let expected = vec![
+        Finding::Improved {
+            scenario: "scroll".to_owned(),
+            counter: "allocations".to_owned(),
+            base: 12,
+            current: 11,
+        },
         Finding::Regressed {
             scenario: "scroll".to_owned(),
             counter: "nodes_laid_out".to_owned(),
             base: 40,
             current: 41,
         },
-        Finding::Improved {
+        Finding::Fell {
             scenario: "scroll".to_owned(),
             counter: "nodes_painted".to_owned(),
             base: 30,
@@ -449,8 +559,12 @@ fn self_test() -> ExitCode {
         .and_then(|text| parse(&text))
         .is_ok_and(|parsed| parsed == current);
     let tolerance = instructions_tolerance_holds();
-    if found == expected && round_trip && tolerance {
-        println!("perf self-test: the comparison reports exactly the 4 planted findings");
+    let passing: Vec<&Finding> = found.iter().filter(|finding| !finding.fails()).collect();
+    let only_cost_passes = matches!(passing.as_slice(), [Finding::Improved { counter, .. }] if counter == "allocations");
+    if found == expected && only_cost_passes && round_trip && tolerance {
+        println!(
+            "perf self-test: the comparison reports exactly the 5 planted findings, and only the cost that fell passes"
+        );
         return ExitCode::SUCCESS;
     }
     for finding in expected.iter().filter(|finding| !found.contains(finding)) {
@@ -458,6 +572,9 @@ fn self_test() -> ExitCode {
     }
     for finding in found.iter().filter(|finding| !expected.contains(finding)) {
         println!("perf self-test: UNEXPECTED {finding}");
+    }
+    if !only_cost_passes {
+        println!("perf self-test: a finding other than the fallen cost passes `--check`");
     }
     if !round_trip {
         println!("perf self-test: a blessed baseline does not parse back to itself");
@@ -549,11 +666,50 @@ mod tests {
             one("text_change", "nodes_laid_out", 4)
         );
         assert!(
-            !root.join(BASELINE).exists(),
+            !root.join(BASELINE_DIR).exists(),
             "a failed run must not bless its numbers"
         );
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&out);
+    }
+
+    fn bless_writes_one_file_per_scenario_and_drops_a_stale_one() {
+        let root = scratch("bless-root");
+        let stale = root.join(BASELINE_DIR).join("gone.toml");
+        std::fs::create_dir_all(stale.parent().expect("the baseline dir")).expect("create dir");
+        std::fs::write(&stale, "[gone]\nframes_produced = 1\n").expect("plant a stale file");
+        let (_, current, _) = self_test_fixture();
+
+        bless(&root, &current).expect("blesses");
+
+        assert!(
+            !stale.exists(),
+            "a scenario the run no longer reports keeps no file"
+        );
+        for scenario in current.keys() {
+            assert!(
+                baseline_file(&root, scenario).exists(),
+                "{scenario} has its own file"
+            );
+        }
+        assert_eq!(load_baseline(&root).expect("loads"), current);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn a_baseline_file_holds_only_its_own_scenario() {
+        let root = scratch("misnamed-root");
+        let dir = root.join(BASELINE_DIR);
+        std::fs::create_dir_all(&dir).expect("create dir");
+        std::fs::write(dir.join("scroll.toml"), "[idle]\nframes_produced = 0\n")
+            .expect("plant a misnamed table");
+
+        let loaded = load_baseline(&root);
+
+        assert!(
+            loaded.is_err(),
+            "a file whose table is another scenario's: {loaded:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn instruction_runs_read_what_cargo_libtest_and_callgrind_print() {
@@ -600,6 +756,14 @@ mod tests {
                 (
                     "a_failed_run_still_writes_its_records_and_never_blesses",
                     a_failed_run_still_writes_its_records_and_never_blesses as fn(),
+                ),
+                (
+                    "bless_writes_one_file_per_scenario_and_drops_a_stale_one",
+                    bless_writes_one_file_per_scenario_and_drops_a_stale_one as fn(),
+                ),
+                (
+                    "a_baseline_file_holds_only_its_own_scenario",
+                    a_baseline_file_holds_only_its_own_scenario as fn(),
                 ),
                 (
                     "instruction_runs_read_what_cargo_libtest_and_callgrind_print",

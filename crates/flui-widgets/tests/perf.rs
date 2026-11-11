@@ -4,7 +4,8 @@
 //! 10 000-row list — applies one change, pumps, and asserts bounds on the
 //! frame's [`FrameReport`]. The bounds are the budget and hold on every host;
 //! the exact values are what `cargo xtask perf` compares against the checked-in
-//! baseline (`crates/flui-widgets/perf/baseline.toml`), and it collects them
+//! baseline (one file per scenario in `crates/flui-widgets/perf/baseline/`),
+//! and it collects them
 //! through `FLUI_PERF_OUT`: when that variable names a directory, each scenario
 //! writes `<dir>/<scenario>.toml` **before** asserting, so a broken budget still
 //! reports its numbers.
@@ -13,8 +14,8 @@
 //! heap on the test thread, counted by this target's `#[global_allocator]`:
 //! `allocations` (a `realloc` included), `reallocations` (the buffers among
 //! them that outgrew their capacity) and `allocated_bytes`. Like the frame
-//! counters they are a function of the tree and the change, not of the host,
-//! so they ratchet the same way.
+//! counters they are a function of the tree and the change, not of the host;
+//! they only have to stay at or under the baseline, which `--bless` ratchets.
 //!
 //! A `perf_scaling_` scenario runs the same change on a small and a large tree
 //! and asserts that the two cost the same: equal allocations here, and equal

@@ -1,0 +1,9 @@
+# Written by `cargo xtask perf --bless`; counts, not timings.
+# One scenario of crates/flui-widgets/tests/perf.rs.
+
+[semantics_action_over_text]
+allocations = 12
+bytes = 2427
+elements = 1
+reallocations = 1
+render_nodes = 1

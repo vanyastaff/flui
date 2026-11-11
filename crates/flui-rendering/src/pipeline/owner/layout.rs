@@ -653,6 +653,7 @@ impl PipelineOwner<Layout> {
             &mut self.render_tree,
             id,
             &self.layout_poison,
+            &self.layout_buffers,
             crate::pipeline::TextLender::new(text.cell(), &self.text_measurers, &self.text_sizing),
             #[cfg(any(test, feature = "testing"))]
             &self.parent_data_seeds,

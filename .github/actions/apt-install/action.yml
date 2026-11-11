@@ -1,0 +1,136 @@
+name: Install apt packages
+description: >-
+  Makes Ubuntu packages available without the network where it can: a package the runner image
+  has is not fetched, a command the image ships under LLVM's versioned directory is put on PATH,
+  and the rest comes from .deb files main cached for this image. Only what is still missing goes
+  to the archive, with retries and mirrors outside ubuntu.com.
+
+inputs:
+  packages:
+    description: Space-separated package names, installed with --no-install-recommends.
+    required: true
+  commands:
+    description: >-
+      Space-separated commands the packages are installed for. When every one is on PATH, or in
+      the newest /usr/lib/llvm-N/bin the image has (which then goes on PATH), nothing is
+      installed. Empty: decided by the packages alone.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # The key holds the runner image and the packages it lacks, so a new image (which brings
+    # other versions of the dependencies it has) starts a new entry instead of restoring .debs
+    # that no longer fit it.
+    - name: What the image lacks
+      id: need
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        COMMANDS: ${{ inputs.commands }}
+      run: |
+        set -euo pipefail
+        if [ -n "$COMMANDS" ]; then
+          llvm="$(ls -d /usr/lib/llvm-*/bin 2>/dev/null | sort -V | tail -n 1 || true)"
+          found=yes
+          for command in $COMMANDS; do
+            if ! command -v "$command" > /dev/null && ! [ -n "$llvm" -a -x "$llvm/$command" ]; then
+              found=no
+            fi
+          done
+          if [ "$found" = yes ]; then
+            [ -n "$llvm" ] && echo "$llvm" >> "$GITHUB_PATH"
+            echo "::notice::apt: $COMMANDS found in the image${llvm:+ (with $llvm)}; nothing installed"
+            echo "missing=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+        fi
+        missing=""
+        for package in $(printf '%s\n' $PACKAGES | sort -u); do
+          status="$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)"
+          [ "$status" = "install ok installed" ] || missing="$missing $package"
+        done
+        missing="${missing# }"
+        echo "missing=$missing" >> "$GITHUB_OUTPUT"
+        if [ -z "$missing" ]; then
+          echo "::notice::apt: every package is in the image; nothing installed"
+          exit 0
+        fi
+        hash="$(printf '%s' "$missing" | sha256sum | cut -c1-16)"
+        echo "key=apt-${ImageOS:-unknown}-${ImageVersion:-unknown}-${RUNNER_ARCH}-${hash}" >> "$GITHUB_OUTPUT"
+        echo "dir=$RUNNER_TEMP/apt-debs" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the packages
+      id: restore
+      if: steps.need.outputs.missing != ''
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.need.outputs.dir }}
+        key: ${{ steps.need.outputs.key }}
+
+    - name: Install
+      if: steps.need.outputs.missing != ''
+      shell: bash
+      env:
+        PACKAGES: ${{ steps.need.outputs.missing }}
+        DEBS: ${{ steps.need.outputs.dir }}
+        HIT: ${{ steps.restore.outputs.cache-hit }}
+      run: |
+        set -euo pipefail
+        start=$SECONDS
+        # A local .deb needs no package list: apt resolves it against the other files and what
+        # the image has installed. When one is missing, the step installs from the archive.
+        if [ "$HIT" = "true" ] && sudo apt-get install -y --no-install-recommends \
+            "$DEBS"/*.deb; then
+          echo "::notice::apt: $(du -sh "$DEBS" | cut -f1) of cached packages installed in $((SECONDS - start)) s"
+          exit 0
+        fi
+        mkdir -p "$DEBS/partial"
+        # The image reaches the archive through ubuntu.com hosts (azure.archive, archive and
+        # security, from a mirror list or the sources). When none of them resolves, apt would
+        # time out on each host for each file, so the image's sources are pointed at mirrors
+        # under other domains before apt starts.
+        list=/etc/apt/apt-mirrors.txt
+        sources=(/etc/apt/sources.list.d/*.sources /etc/apt/sources.list)
+        hosts="$(cat "$list" "${sources[@]}" 2>/dev/null | grep -v "^[[:space:]]*#" \
+          | grep -oE 'https?://[a-z0-9.-]*ubuntu\.com' | sed 's#^.*//##' | sort -u || true)"
+        resolved=no
+        for host in $hosts; do
+          getent hosts "$host" > /dev/null && resolved=yes
+        done
+        if [ -n "$hosts" ] && [ "$resolved" = no ]; then
+          echo "::warning::apt: none of $(echo $hosts) resolves; using mirrors outside ubuntu.com"
+          if [ -f "$list" ]; then
+            printf '%s\n' \
+              https://mirrors.edge.kernel.org/ubuntu/ \
+              https://mirror.us.leaseweb.net/ubuntu/ \
+              https://ftp.halifax.rwth-aachen.de/ubuntu/ | sudo tee "$list" > /dev/null
+          fi
+          for file in "${sources[@]}"; do
+            [ -f "$file" ] && sudo sed -i -E \
+              's#https?://([a-z0-9.-]*\.)?(archive|security)\.ubuntu\.com/ubuntu/?#https://mirrors.edge.kernel.org/ubuntu/#g' "$file"
+          done
+        fi
+        retry=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+        for attempt in 1 2 3; do
+          if sudo apt-get "${retry[@]}" update -y \
+              && sudo apt-get "${retry[@]}" install -y --no-install-recommends \
+                -o Dir::Cache::Archives="$DEBS" $PACKAGES; then
+            sudo chown -R "$(id -u):$(id -g)" "$DEBS"
+            rm -rf "$DEBS/partial" "$DEBS/lock"
+            echo "::notice::apt: $PACKAGES: $(du -sh "$DEBS" | cut -f1) downloaded and installed in $((SECONDS - start)) s"
+            exit 0
+          fi
+          echo "::warning::apt: attempt $attempt failed"
+          [ "$attempt" -lt 3 ] && sleep $((attempt * 30))
+        done
+        exit 1
+
+    # Saved from main only, as the Rust caches are: a pull request reads main's entry.
+    - name: Save the packages
+      if: steps.need.outputs.missing != '' && steps.restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.need.outputs.dir }}
+        key: ${{ steps.need.outputs.key }}
