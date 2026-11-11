@@ -711,10 +711,12 @@ impl UiRuntime {
                 drop(version);
                 FramePaintOutcome::Painted(publication)
             }
-            crate::presentation_scene::Produced::Refused { released } => {
+            crate::presentation_scene::Produced::Refused { released, retry } => {
                 drop(scene);
                 drop(released);
-                FramePaintOutcome::Errored { retry: true }
+                // A second refusal in a row is not cured by a rebuild: the frame
+                // fails and the next one waits for a change to ask for it.
+                FramePaintOutcome::Errored { retry }
             }
         };
         phases.lap(FramePhase::Paint);

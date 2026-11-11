@@ -30,6 +30,10 @@ pub(crate) struct PresentationScene {
     owner: SceneOwner,
     /// The overlay's node while the overlay is shown.
     overlay: Option<SceneNodeId>,
+    /// Patches refused in a row since the last one applied: a second
+    /// refusal is a producer defect a rebuild did not cure, so it asks for
+    /// no retry.
+    refusals: u8,
 }
 
 /// What [`PresentationScene::apply`] did with a frame's patch.
@@ -40,8 +44,12 @@ pub(crate) enum Produced {
         released: ReleasedContents,
     },
     /// The owner refused the patch and renewed its lineage; the pipeline
-    /// repaints into it on the next frame.
-    Refused { released: ReleasedContents },
+    /// repaints into it on the next frame, which `retry` asks for unless
+    /// the patch before was refused too.
+    Refused {
+        released: ReleasedContents,
+        retry: bool,
+    },
 }
 
 /// The debug overlay a frame composes beside the pipeline's frame node: the
@@ -138,19 +146,24 @@ impl PresentationScene {
             generation: SurfaceGeneration::ZERO,
         };
         match self.owner.apply(surface) {
-            Ok(applied) => Produced::Applied {
-                version: self.owner.current().clone(),
-                released: applied.released,
-            },
+            Ok(applied) => {
+                self.refusals = 0;
+                Produced::Applied {
+                    version: self.owner.current().clone(),
+                    released: applied.released,
+                }
+            }
             Err(error) => {
+                self.overlay = None;
+                self.refusals = self.refusals.saturating_add(1);
+                let retry = self.refusals < 2;
+                let released = self.owner.renew(ResyncReason::Rebuilt);
                 tracing::error!(
                     %error,
+                    retry,
                     "BUG: the pipeline's scene patch was refused; the scene is rebuilt"
                 );
-                self.overlay = None;
-                Produced::Refused {
-                    released: self.owner.renew(ResyncReason::Rebuilt),
-                }
+                Produced::Refused { released, retry }
             }
         }
     }
@@ -393,5 +406,22 @@ mod tests {
             matches!(frame(&mut scene, None), Produced::Applied { .. }),
             "the next patch applies to the new lineage"
         );
+    }
+
+    /// A refusal asks for one retry; a second in a row asks for none, since
+    /// the rebuild did not cure it, and a patch that applies resets the count.
+    #[test]
+    fn a_second_refusal_in_a_row_asks_for_no_retry() {
+        let mut scene = PresentationScene::default();
+        let foreign = SceneOwner::new().writer().mint_node();
+        let retries = |scene: &mut PresentationScene| match frame(scene, Some(foreign)) {
+            Produced::Refused { retry, .. } => retry,
+            Produced::Applied { .. } => panic!("a node of another lineage is refused"),
+        };
+        assert!(retries(&mut scene), "the first refusal retries");
+        assert!(!retries(&mut scene), "the second in a row does not");
+        assert!(!retries(&mut scene));
+        assert!(matches!(frame(&mut scene, None), Produced::Applied { .. }));
+        assert!(retries(&mut scene), "an applied patch resets the count");
     }
 }
