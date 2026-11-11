@@ -246,6 +246,9 @@ mod native_windows {
     };
 
     const CHILD: &str = "FLUI_NATIVE_WINDOW_CONTRACT_CHILD";
+    /// The process ids of the touch keyboard hosts that ran before the
+    /// contract's first row, comma-separated: the hosts no row may end.
+    const HOSTS_BEFORE: &str = "FLUI_NATIVE_WINDOW_CONTRACT_TOUCH_HOSTS_BEFORE";
     const CASES: &[(&str, fn())] = &[
         (
             "touchpad_viewport_initialises_and_survives_its_messages",
@@ -770,9 +773,24 @@ mod native_windows {
     }
 
     pub(super) fn run_children() {
+        // A touch keyboard host one row's touches started can outlive that
+        // row: it starts after the row's device has stopped watching, or
+        // Windows starts it again once the row has ended it. The next row
+        // would then take it for the desktop's own and keep it, and the rows
+        // after it fail, in this process and in the next one on the runner.
+        // So the hosts are counted once, here, and every host started after
+        // that is ended between the rows and after the last one.
+        let before = touch_keyboard_hosts();
+        if !before.is_empty() {
+            eprintln!(
+                "a touch keyboard host was running before the contract ({before:?}): \
+                 its system-key and hover rows may fail while it runs"
+            );
+        }
         let mut failures = Vec::new();
         for &(name, _) in CASES {
-            let outcome = std::panic::catch_unwind(|| run_child(name));
+            let outcome = std::panic::catch_unwind(|| run_child(name, &before));
+            end_touch_keyboard_hosts_except(&before);
             if outcome.is_err() {
                 failures.push(name);
             }
@@ -783,7 +801,12 @@ mod native_windows {
         );
     }
 
-    fn run_child(name: &str) {
+    fn run_child(name: &str, hosts_before: &[u32]) {
+        let hosts_before = hosts_before
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<String>>()
+            .join(",");
         let mut child = Command::new(std::env::current_exe().expect("test binary"))
             .args([
                 "--exact",
@@ -791,6 +814,7 @@ mod native_windows {
                 "--nocapture",
             ])
             .env(CHILD, name)
+            .env(HOSTS_BEFORE, hosts_before)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -4091,7 +4115,7 @@ mod native_windows {
             },
         };
         let platform = WindowsPlatform::try_new().expect("native Windows platform");
-        let mut devices = Vec::<SyntheticPointerDevice>::new();
+        let mut watches = Vec::<TouchKeyboardWatch>::new();
         let (delivered, recordings) = record(Backend::Win32, || {
             let (window, _close) = open_pointer_target(&platform)?;
             let hwnd = hwnd_of(&window);
@@ -4107,11 +4131,7 @@ mod native_windows {
             let events = record_pointer(&window);
             for native_kind in [PT_TOUCH, PT_PEN] {
                 let device = match SyntheticPointerDevice::try_new(native_kind, 1) {
-                    Ok(device) => {
-                        let handle = device.handle();
-                        devices.push(device);
-                        handle
-                    }
+                    Ok(device) => device,
                     Err(error) => {
                         eprintln!(
                             "CANNOT_VERIFY native capture: CreateSyntheticPointerDevice refused: {error}"
@@ -4181,11 +4201,13 @@ mod native_windows {
                     };
                     // SAFETY: the union arm matches the type and the device;
                     // the packet outlives the synchronous native copy.
-                    let injected = unsafe { InjectSyntheticPointerInput(device, &[packet]) };
+                    let injected =
+                        unsafe { InjectSyntheticPointerInput(device.handle(), &[packet]) };
                     if let Err(error) = injected {
                         eprintln!(
                             "CANNOT_VERIFY native capture: InjectSyntheticPointerInput refused: {error}"
                         );
+                        watches.push(device.retire());
                         return None;
                     }
                     let limit = Instant::now() + Duration::from_millis(300);
@@ -4194,14 +4216,18 @@ mod native_windows {
                         std::thread::sleep(Duration::from_millis(2));
                     }
                 }
+                // The touch device is gone before the pen's first contact, so
+                // the registry journals its removal there, as the golden has
+                // it; the host its touches started is ended after recording.
+                watches.push(device.retire());
             }
             let delivered = events.lock().expect("pointer log").clone();
             window.close_now();
             Some(delivered)
         });
-        // Only now, with the recording finished, do the devices end what
-        // their touches started.
-        drop(devices);
+        // Only now, with the recording finished, do the watches end the touch
+        // keyboard host the touches started.
+        drop(watches);
         let Some(delivered) = delivered else {
             return;
         };
@@ -4438,23 +4464,17 @@ mod native_windows {
     /// with the window still foreground and active. A real Alt+F4 still
     /// closes the window then, so it is the injected session that changes,
     /// not the window. Dropping the device, on every exit of the row a panic
-    /// included, ends the `TabTip.exe` its touches started where none was
-    /// running before, so the rows after it, in this process or the next,
-    /// start from the desktop they had.
+    /// included, destroys it and ends the `TabTip.exe` its touches started;
+    /// [`retire`](Self::retire) destroys it now and hands that ending to a
+    /// [`TouchKeyboardWatch`] the row drops later. The contract's parent ends
+    /// what is left between the rows (`run_children`).
     struct SyntheticPointerDevice {
         handle: windows::Win32::UI::Controls::HSYNTHETICPOINTERDEVICE,
-        /// A touch keyboard host was running before the device existed: it is
-        /// not this row's to end, and the touches start no second one.
-        host_was_running: bool,
-        created: Instant,
+        /// `None` once [`retire`](Self::retire) has handed it out.
+        watch: Option<TouchKeyboardWatch>,
     }
 
     impl SyntheticPointerDevice {
-        /// How long after the device's creation its touches can still start
-        /// the touch keyboard's host. On the hosted runner it appears within
-        /// five seconds of the row's process starting.
-        const HOST_START: Duration = Duration::from_secs(8);
-
         #[expect(unsafe_code, reason = "creates an ephemeral synthetic pointer device")]
         fn try_new(
             kind: windows::Win32::UI::WindowsAndMessaging::POINTER_INPUT_TYPE,
@@ -4463,61 +4483,131 @@ mod native_windows {
             use windows::Win32::UI::Controls::{
                 CreateSyntheticPointerDevice, POINTER_FEEDBACK_NONE,
             };
-            let host_was_running = !touch_keyboard_hosts().is_empty();
+            // The hosts are counted before the device exists; the watch is armed
+            // only once it does, so a refused device waits for nothing.
+            let spared = TouchKeyboardWatch::spared_hosts();
             // SAFETY: plain values in; the returned handle is owned by `Self`,
             // which destroys it once.
             let handle =
                 unsafe { CreateSyntheticPointerDevice(kind, contacts, POINTER_FEEDBACK_NONE) }?;
             Ok(Self {
                 handle,
-                host_was_running,
-                created: Instant::now(),
+                watch: Some(TouchKeyboardWatch::arm(spared)),
             })
         }
 
         fn handle(&self) -> windows::Win32::UI::Controls::HSYNTHETICPOINTERDEVICE {
             self.handle
         }
+
+        /// Destroy the device now, so the pointer registry sees it removed
+        /// where a row's golden expects it, and keep ending the touch keyboard
+        /// host for when the returned watch drops.
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        fn retire(mut self) -> TouchKeyboardWatch {
+            self.watch
+                .take()
+                .expect("BUG: a live device holds its watch until it retires")
+        }
     }
 
     impl Drop for SyntheticPointerDevice {
-        #[expect(
-            unsafe_code,
-            reason = "destroys the synthetic device and ends the touch keyboard host its touches started"
-        )]
+        #[expect(unsafe_code, reason = "destroys the synthetic pointer device")]
         fn drop(&mut self) {
-            use windows::Win32::{
-                Foundation::CloseHandle,
-                System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess},
-                UI::Controls::DestroySyntheticPointerDevice,
-            };
+            use windows::Win32::UI::Controls::DestroySyntheticPointerDevice;
             // SAFETY: `try_new` created this handle and nothing else destroys it.
             unsafe { DestroySyntheticPointerDevice(self.handle) };
-            if self.host_was_running {
-                return;
+            // The watch, when the device still holds it, ends the host its
+            // touches started, after the device is gone.
+            drop(self.watch.take());
+        }
+    }
+
+    /// Ends, when it drops, the touch keyboard hosts started since it was
+    /// created: every `TabTip.exe` but the ones that ran before the contract
+    /// (the parent's count, in `HOSTS_BEFORE`) or, for a row run alone,
+    /// before the watch.
+    struct TouchKeyboardWatch {
+        spared: Vec<u32>,
+        created: Instant,
+    }
+
+    impl TouchKeyboardWatch {
+        /// How long after the device's creation its touches can still start
+        /// the touch keyboard's host. On the hosted runner it appears within
+        /// five seconds of the row's process starting.
+        const HOST_START: Duration = Duration::from_secs(8);
+
+        /// The hosts no watch may end: the parent's count, or the running ones
+        /// for a row run alone.
+        fn spared_hosts() -> Vec<u32> {
+            match std::env::var(HOSTS_BEFORE) {
+                Ok(listed) => listed
+                    .split(',')
+                    .filter(|pid| !pid.is_empty())
+                    .map(|pid| pid.parse::<u32>().expect("the parent lists process ids"))
+                    .collect::<Vec<u32>>(),
+                Err(_) => touch_keyboard_hosts(),
             }
+        }
+
+        fn arm(spared: Vec<u32>) -> Self {
+            Self {
+                spared,
+                created: Instant::now(),
+            }
+        }
+    }
+
+    impl Drop for TouchKeyboardWatch {
+        fn drop(&mut self) {
             let deadline = self.created + Self::HOST_START;
-            let started = loop {
-                let started: Vec<u32> = touch_keyboard_hosts();
-                if !started.is_empty() || Instant::now() >= deadline {
-                    break started;
+            // Where the desktop's own host still runs, touches start no
+            // second one: there is nothing to wait for.
+            let desktop_host = touch_keyboard_hosts()
+                .iter()
+                .any(|pid| self.spared.contains(pid));
+            if !desktop_host {
+                loop {
+                    let started = touch_keyboard_hosts()
+                        .into_iter()
+                        .any(|pid| !self.spared.contains(&pid));
+                    if started || Instant::now() >= deadline {
+                        break;
+                    }
+                    // The thread's windows keep answering while the host starts.
+                    pump_pointer_thread();
+                    std::thread::sleep(Duration::from_millis(50));
                 }
-                // The thread's windows keep answering while the host starts.
-                pump_pointer_thread();
-                std::thread::sleep(Duration::from_millis(50));
+            }
+            end_touch_keyboard_hosts_except(&self.spared);
+        }
+    }
+
+    /// End every running `TabTip.exe` whose process id `spared` does not hold.
+    #[expect(
+        unsafe_code,
+        reason = "ends the touch keyboard hosts a row's touches started"
+    )]
+    fn end_touch_keyboard_hosts_except(spared: &[u32]) {
+        use windows::Win32::{
+            Foundation::CloseHandle,
+            System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess},
+        };
+        for pid in touch_keyboard_hosts() {
+            if spared.contains(&pid) {
+                continue;
+            }
+            // SAFETY: a process id from the snapshot; a process that has
+            // exited since makes the open fail, which leaves nothing to end.
+            let Ok(process) = (unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) }) else {
+                continue;
             };
-            for pid in started {
-                // SAFETY: a process id from the snapshot; a process that has
-                // exited since makes the open fail, which leaves nothing to end.
-                let Ok(process) = (unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) }) else {
-                    continue;
-                };
-                // SAFETY: `process` is the handle opened above with the
-                // terminate right, closed once below.
-                unsafe {
-                    let _ = TerminateProcess(process, 1);
-                    let _ = CloseHandle(process);
-                }
+            // SAFETY: `process` is the handle opened above with the
+            // terminate right, closed once below.
+            unsafe {
+                let _ = TerminateProcess(process, 1);
+                let _ = CloseHandle(process);
             }
         }
     }
