@@ -129,10 +129,63 @@ pub(crate) fn patch_damage(
         footprints.add(old.entry_reach(before.node, before.entry));
         footprints.add(new.entry_reach(after.node, after.entry));
     }
-    let region = footprints.region(surface);
+    // A foreground filter whose scope or placement the patch changed seeds
+    // the damage with its whole footprint: a subtree's stored bounds spread
+    // a filter in the boundary's space, which a shrinking ancestor shrinks
+    // below the renderer's device-pixel kernel, and the closure below only
+    // grows a seed that meets it.
+    let mut above_changes: Vec<u64> = Vec::new();
+    for (geometry, version) in [(old, base), (new, &*next)] {
+        let changed = facts
+            .touched
+            .iter()
+            .chain(facts.placed)
+            .copied()
+            .chain(moved.iter().map(|(before, after)| {
+                if std::ptr::eq(version, base) {
+                    before.node
+                } else {
+                    after.node
+                }
+            }));
+        for key in changed {
+            if version.record(key).is_some() {
+                above_changes.extend(geometry.path_up(key).map(NodeKey::table_key));
+            }
+        }
+    }
+    above_changes.sort_unstable();
+    above_changes.dedup();
+    let changed = |key: NodeKey| {
+        facts.touched_marks.contains(key.slot()) || facts.placed_marks.contains(key.slot())
+    };
+    let affected = |geometry: Geometry<'_>, key: NodeKey| {
+        above_changes.binary_search(&key.table_key()).is_ok() || geometry.path_up(key).any(changed)
+    };
     let mut closures = Vec::new();
-    closures_of(old, base, &mut closures);
-    closures_of(new, next, &mut closures);
+    let mut seeds = Vec::new();
+    closures_of(
+        old,
+        base,
+        &mut closures,
+        &mut |key| affected(old, key),
+        &mut seeds,
+    );
+    closures_of(
+        new,
+        next,
+        &mut closures,
+        &mut |key| affected(new, key),
+        &mut seeds,
+    );
+    for seed in seeds {
+        footprints.add(match seed {
+            Closure::None => Reach::Nothing,
+            Closure::Bounded { reads, writes } => Reach::rect(reads.union(&writes)),
+            Closure::Unbounded => Reach::Unbounded,
+        });
+    }
+    let region = footprints.region(surface);
     (close_over(region, closures, surface), cost)
 }
 
@@ -437,8 +490,15 @@ fn out_of_order(order: &[(usize, usize)]) -> Vec<(usize, usize)> {
 }
 
 /// What each entry with a read closure in an attached filtered node of
-/// `version` reads and writes.
-fn closures_of(geometry: Geometry<'_>, version: &VersionInner, out: &mut Vec<Closure>) {
+/// `version` reads and writes; a foreground filter of a node `affected`
+/// accepts is pushed to `seeds` too.
+fn closures_of(
+    geometry: Geometry<'_>,
+    version: &VersionInner,
+    out: &mut Vec<Closure>,
+    affected: &mut dyn FnMut(NodeKey) -> bool,
+    seeds: &mut Vec<Closure>,
+) {
     for (_, &key) in version.filtered.iter() {
         let Some(record) = version.record(key) else {
             continue;
@@ -465,7 +525,13 @@ fn closures_of(geometry: Geometry<'_>, version: &VersionInner, out: &mut Vec<Clo
                             continue;
                         };
                         match geometry.filter_input(at) {
-                            Reach::Rect(content) => out.push(read_closure(layer, &ctm, content)),
+                            Reach::Rect(content) => {
+                                let closure = read_closure(layer, &ctm, content);
+                                if affected(key) {
+                                    seeds.push(closure);
+                                }
+                                out.push(closure);
+                            }
                             Reach::Nothing => {}
                             Reach::Unbounded | Reach::NonFinite => out.push(Closure::Unbounded),
                         }

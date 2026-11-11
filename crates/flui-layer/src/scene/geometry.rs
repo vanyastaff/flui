@@ -61,7 +61,7 @@ impl Reach {
         }
     }
 
-    fn rect(rect: Rect<f64>) -> Self {
+    pub(crate) fn rect(rect: Rect<f64>) -> Self {
         if !rect.is_finite() {
             Self::NonFinite
         } else if rect.width() > 0.0 && rect.height() > 0.0 {

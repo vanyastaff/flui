@@ -217,7 +217,11 @@ by its node); a changed chunk or effect, or an unpaired entry, damages its old a
 kept entries outside the longest increasing run of their old order damage both positions. `Place`
 damages the moved subtree at both placements. After the operations every follower is resolved
 again in both versions, and one whose transform changed damages its subtree under both. The
-region then closes over the filtered nodes of both versions. A surface change between applies is
+region then closes over the filtered nodes of both versions; a foreground filter whose node, an
+ancestor or a descendant the patch changed seeds it with its whole footprint first, since stored
+bounds spread a filter in the boundary's space and a shrinking ancestor shrinks that below the
+renderer's device-pixel kernel. A follower under `LeaderClip::Hide` is damaged when the patch
+changes a node on its leader's branch. A surface change between applies is
 `Full(SurfaceChanged)`, and `renew` makes the next one `Full(Resync(_))`.
 
 Pinned by `layer_it`: `scene_patch_damage`, `patch_damage_covers_diff_damage` (random patches,

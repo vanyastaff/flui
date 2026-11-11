@@ -9,10 +9,10 @@ use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
 use flui_foundation::{LayerId, RenderId, SurfaceGeneration};
 use flui_layer::{
     BackdropFilterLayer, BoundaryContent, Chunk, ClipRectLayer, Closure, ContentToken,
-    ContentVersion, DamageMode, DamageRect, DamageRegion, Entry, FollowerLayer, Layer, LayerDiffer,
-    LayerLink, LayerNode, LayerTree, LeaderClip, LeaderLayer, OffsetLayer, OpacityLayer,
-    PictureLayer, Placement, Region, Scene, SceneNodeId, SceneOp, SceneOwner, SceneVersion,
-    SurfaceKey, TransformLayer, close_over, read_closure, resolve_follower_transform,
+    ContentVersion, DamageMode, DamageRect, DamageRegion, Entry, FollowerLayer, ImageFilterLayer,
+    Layer, LayerDiffer, LayerLink, LayerNode, LayerTree, LeaderClip, LeaderLayer, OffsetLayer,
+    OpacityLayer, PictureLayer, Placement, Region, Scene, SceneNodeId, SceneOp, SceneOwner,
+    SceneVersion, SurfaceKey, TransformLayer, close_over, read_closure, resolve_follower_transform,
 };
 use flui_painting::paint::{BlendMode, Clip, ImageFilter};
 use flui_painting::styling::Color;
@@ -295,6 +295,48 @@ pub(crate) fn a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it() 
     assert!(
         covered(&damage, covering(100.0, 100.0, 120.0, 120.0)),
         "the hidden follower's pixels: {damage:?}"
+    );
+}
+
+/// A filter under a shrinking ancestor spreads by the renderer's
+/// device-pixel kernel, not by its local reach scaled down: a move of its
+/// boundary damages where the kernel lands, even when the shrunk content
+/// itself lies off the surface.
+pub(crate) fn a_filter_under_a_shrinking_ancestor_damages_its_device_kernel() {
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let filtered = writer.mint_node();
+    let version = writer.next_content_version().expect("a version");
+    let mut content = BoundaryContent::builder();
+    content.push_effect(
+        Layer::from(ImageFilterLayer::new(ImageFilter::Dilate { radius: 20.0 })),
+        RenderId::new(1),
+        0,
+    );
+    content.chunk(chunk(1, version, Rect::from_xywh(0.0, 0.0, 100.0, 100.0)));
+    writer.push(publish(filtered, content.finish()));
+    let mut top = BoundaryContent::builder();
+    top.push_effect(
+        Layer::from(TransformLayer::new(
+            Matrix4::translation(-10.0, 100.0, 0.0) * Matrix4::scaling(0.01, 0.01, 1.0),
+        )),
+        RenderId::new(2),
+        0,
+    );
+    top.slot(filtered);
+    writer.push(publish(root, top.finish()));
+    owner
+        .apply(SURFACE)
+        .expect("a dilated boundary under a shrink");
+
+    let mut writer = owner.writer();
+    writer.push(place(filtered, 10.0, 0.0));
+    owner.apply(SURFACE).expect("the boundary moves");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(0.0, 90.0, 8.0, 110.0)),
+        "the kernel's on-surface pixels: {damage:?}"
     );
 }
 

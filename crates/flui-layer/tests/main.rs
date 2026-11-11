@@ -333,6 +333,10 @@ fn scene_patch_damage() {
                 "a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it",
                 d::a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it,
             ),
+            (
+                "a_filter_under_a_shrinking_ancestor_damages_its_device_kernel",
+                d::a_filter_under_a_shrinking_ancestor_damages_its_device_kernel,
+            ),
         ],
     );
 }
