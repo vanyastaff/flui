@@ -1208,21 +1208,21 @@ fn terminal_router_construction_matrix(case: &str) {
         let router =
             Router::<CloneRoute>::from_location("/clone", |_, _| Text::new("page").boxed())
                 .expect("known path");
-        let failure = if case == "router-clone" {
+        if case == "router-clone" {
             let failure =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(router.clone())));
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(router.clone())))
+                    .expect_err("second route clone fails");
             drop(router);
-            failure
+            assert_eq!(
+                flui_foundation::panic::payload_text(failure.as_ref()),
+                Some("first route clone failure")
+            );
         } else {
             // The state's copy of the initial stack is made at the first
-            // build, from the mounted router.
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(mount(router))))
+            // build, from the mounted router; the build failure is contained
+            // and the element replaced.
+            drop(mount(router));
         }
-        .expect_err("second route clone fails");
-        assert_eq!(
-            flui_foundation::panic::payload_text(failure.as_ref()),
-            Some("first route clone failure")
-        );
         assert_eq!(
             COPIES_DROPPED.get(),
             1,
