@@ -12,9 +12,14 @@ name: Android dex
 # `classes.dex.toml` as the `android-dex` artifact; commit both to the branch.
 # `rebuild` runs `--rebuild`, which requires the checked-in dex to reproduce
 # byte for byte with the recorded build tools and platform. PR CI checks only
-# the digests (`cargo xtask checks`), which needs no JDK.
+# the digests (`cargo xtask checks`), which needs no JDK. A pull request that
+# edits this file runs it in `write` mode, so a change to the job is tried
+# before it reaches main.
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/android-dex.yml"
   workflow_dispatch:
     inputs:
       mode:
@@ -38,10 +43,11 @@ env:
   # installed version (and says so) only if that fails.
   BUILD_TOOLS: "35.0.0"
   PLATFORM: "android-36"
+  MODE: ${{ inputs.mode || 'write' }}
 
 jobs:
   dex:
-    name: android-dex (${{ inputs.mode }})
+    name: android-dex (${{ inputs.mode || 'write' }})
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
@@ -66,11 +72,14 @@ jobs:
           fi
           "$java_home/bin/javac" -version
 
-      - name: cargo xtask android-dex --${{ inputs.mode }}
-        run: cargo xtask android-dex "--${{ inputs.mode }}"
+      - name: cargo xtask android-dex --${{ env.MODE }}
+        run: |
+          cargo xtask android-dex "--$MODE"
+          # Whether the written dex differs from the checked-in one.
+          git diff --stat -- crates/flui-native/android/
 
       - name: Upload the dex
-        if: inputs.mode == 'write'
+        if: env.MODE == 'write'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-dex
