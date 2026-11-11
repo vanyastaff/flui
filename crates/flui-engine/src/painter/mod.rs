@@ -206,10 +206,10 @@ impl WgpuPainter {
         // ===== Pipeline collection (all 9 named pipelines + shape cache) =====
         //
         // `PipelineSet::new` creates the viewport bind-group layout internally
-        // and exposes it via `viewport_bind_group_layout()`.  `GpuReplay::new`
-        // below passes `&pipelines` so the viewport bind group it creates is
-        // built against that exact layout object, satisfying the wgpu identity
-        // requirement between bind groups and pipelines.
+        // and exposes it via `viewport_bind_group_layout()`. `GpuReplay::new`
+        // builds the viewport bind group against the first set's layout; the
+        // sets of later target formats have layouts with the same entries, so
+        // it binds under their pipelines too (group equivalence).
         let pipelines = PipelineLibrary::new(&device, surface_format);
 
         // ===== Replay / GPU plumbing (viewport buffer/bind-group, unit quad, sampler) =====

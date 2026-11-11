@@ -104,7 +104,8 @@ pub(crate) fn gradient_stop_rows(stops_bytes: usize, max_rows: u32) -> Option<u3
 ///
 /// Every pipeline in this set was built against the layout returned by
 /// [`Self::viewport_bind_group_layout`]. The painter's `viewport_bind_group`
-/// **must** be created against the same reference — see the module doc.
+/// is created against it, and binds under the pipelines of the library's
+/// other sets because their layouts have the same entries — see the module doc.
 // `wgpu::RenderPipeline` / `wgpu::BindGroup` are opaque GPU handles with no
 // useful `Debug` impl. The `#[allow]` avoids the compiler error while still
 // documenting the reason.
@@ -509,10 +510,9 @@ impl PipelineSet {
     /// Reference to the viewport bind-group layout shared by every pipeline in
     /// this set.
     ///
-    /// **Identity contract:** the `viewport_bind_group` on the painter **must**
-    /// be created against this exact object. Using any other layout — even a
-    /// structurally identical one — produces a wgpu validation error at the
-    /// first bind call.
+    /// The painter's `viewport_bind_group` is created against it. A bind group
+    /// made against a layout with other entries is a wgpu validation error at
+    /// the first bind; one made against an equal layout (another set's) binds.
     pub(crate) fn viewport_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         self.shape_cache.viewport_bind_group_layout()
     }
