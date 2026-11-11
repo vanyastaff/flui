@@ -1,6 +1,6 @@
 ### Added
 
-- `RenderObjectContext::collects_semantics` and `BuildOwner::collects_semantics` say whether the presentation collects its semantics tree; `WidgetsBinding::set_collects_semantics` and `BuildOwner::set_collects_semantics` record it, and a change pushes every render view's configuration again.
+- `RenderObjectContext::collects_semantics` says whether the presentation collects its semantics tree; `WidgetsBinding::set_collects_semantics` and `BuildOwner::set_collects_semantics` record it, and a change pushes every render view's configuration again.
 - `flui_testing::HeadlessHost::disable_semantics` detaches assistive technology from the window, as `enable_semantics` attaches it.
 
 ### Changed

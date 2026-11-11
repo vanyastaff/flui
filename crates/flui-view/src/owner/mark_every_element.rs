@@ -29,13 +29,6 @@ impl BuildOwner {
         );
     }
 
-    /// Whether the presentation collects its semantics tree; see
-    /// [`RenderObjectContext::collects_semantics`](crate::RenderObjectContext::collects_semantics).
-    #[must_use]
-    pub const fn collects_semantics(&self) -> bool {
-        self.collects_semantics
-    }
-
     /// Record whether the presentation collects its semantics tree. A change
     /// marks every live element dirty, so the next
     /// [`build_scope`](Self::build_scope) pushes each render view's
