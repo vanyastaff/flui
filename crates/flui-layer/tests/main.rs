@@ -342,6 +342,18 @@ fn scene_patch_damage() {
                 d::a_follower_at_the_nesting_limit_damages_what_it_draws,
             ),
             (
+                "nested_filters_under_a_shrinking_ancestor_damage_both_kernels",
+                d::nested_filters_under_a_shrinking_ancestor_damage_both_kernels,
+            ),
+            (
+                "a_picture_effect_damages_its_damage_extent",
+                d::a_picture_effect_damages_its_damage_extent,
+            ),
+            (
+                "nested_followers_resolve_below_their_common_ancestor",
+                d::nested_followers_resolve_below_their_common_ancestor,
+            ),
+            (
                 "a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it",
                 d::a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it,
             ),

@@ -481,7 +481,8 @@ impl SceneOwner {
     }
 
     /// Follower resolutions every apply so far ran, in the version before a
-    /// patch and after it (ADR-0304's `followers_resolved`).
+    /// patch and after it, the nested ones a chain resolves included
+    /// (ADR-0304's `followers_resolved`).
     #[cfg(feature = "testing")]
     #[must_use]
     pub fn followers_resolved(&self) -> u64 {

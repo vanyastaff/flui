@@ -492,6 +492,141 @@ pub(crate) fn a_filter_under_a_shrinking_ancestor_damages_its_device_kernel() {
     );
 }
 
+/// Nested filters under a shrinking ancestor spread by both device kernels:
+/// two radius-20 dilates over 10 000..10 100 under a 0.01 scale draw over
+/// 60..141, and moving the boundary damages both edges of that.
+pub(crate) fn nested_filters_under_a_shrinking_ancestor_damage_both_kernels() {
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let filtered = writer.mint_node();
+    let version = writer.next_content_version().expect("a version");
+    let mut content = BoundaryContent::builder();
+    for ordinal in 0..2 {
+        content.push_effect(
+            Layer::from(ImageFilterLayer::new(ImageFilter::Dilate { radius: 20.0 })),
+            RenderId::new(1),
+            ordinal,
+        );
+    }
+    content.chunk(chunk(
+        1,
+        version,
+        Rect::from_ltrb(10_000.0, 10_000.0, 10_100.0, 10_100.0),
+    ));
+    writer.push(publish(filtered, content.finish()));
+    let mut top = BoundaryContent::builder();
+    top.push_effect(
+        Layer::from(TransformLayer::new(Matrix4::scaling(0.01, 0.01, 1.0))),
+        RenderId::new(2),
+        0,
+    );
+    top.slot(filtered);
+    writer.push(publish(root, top.finish()));
+    owner.apply(SURFACE).expect("two dilates under a shrink");
+
+    let mut writer = owner.writer();
+    writer.push(place(filtered, 100.0, 0.0));
+    owner.apply(SURFACE).expect("the boundary moves");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(60.0, 80.0, 61.0, 81.0)),
+        "the old left edge: {damage:?}"
+    );
+    assert!(
+        covered(&damage, covering(141.0, 80.0, 142.0, 81.0)),
+        "the new right edge: {damage:?}"
+    );
+}
+
+/// A picture effect changes what its damage extent covers: one that fills
+/// the canvas and then draws a small rect damages the whole surface when its
+/// fill changes, though its bounds hold only the rect.
+pub(crate) fn a_picture_effect_damages_its_damage_extent() {
+    let filled = |color: Color| {
+        let mut canvas = Canvas::new();
+        canvas.draw_color(color, BlendMode::SrcOver);
+        canvas.draw_rect(
+            Rect::from_xywh(10.0, 10.0, 10.0, 10.0),
+            &Paint::fill(Color::RED),
+        );
+        let mut content = BoundaryContent::builder();
+        content.push_effect(
+            Layer::from(PictureLayer::new(canvas.finish())),
+            RenderId::new(1),
+            0,
+        );
+        content.finish()
+    };
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let painted = writer.mint_node();
+    writer.push(publish(painted, filled(Color::BLUE)));
+    let mut top = BoundaryContent::builder();
+    top.slot(painted);
+    writer.push(publish(root, top.finish()));
+    owner.apply(SURFACE).expect("a filled picture");
+
+    let mut writer = owner.writer();
+    writer.push(publish(painted, filled(Color::GREEN)));
+    owner.apply(SURFACE).expect("the fill changes");
+    let whole = covering(0.0, 0.0, 800.0, 600.0);
+    match owner.patch_damage() {
+        DamageRegion::Full(_) => {}
+        DamageRegion::Region(region) => assert!(covered(region.rects(), whole), "{region:?}"),
+        DamageRegion::Unchanged => panic!("the fill changes pixels"),
+    }
+}
+
+/// Resolving nested followers costs their chains below the lowest common
+/// ancestor: twelve followers, each with its leader beside it inside the one
+/// before, resolve once in each version (24 resolutions), where both chains
+/// taken from the surface resolve every enclosing follower again (531 440).
+pub(crate) fn nested_followers_resolve_below_their_common_ancestor() {
+    const LEVELS: usize = 12;
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let mover = writer.mint_node();
+    let version = writer.next_content_version().expect("a version");
+    writer.push(publish(mover, BoundaryContent::builder().finish()));
+    let mut top = BoundaryContent::builder();
+    top.slot(mover);
+    for level in 0..LEVELS {
+        let link = LayerLink::new();
+        let ordinal = u32::try_from(2 * level).expect("a small level");
+        top.push_effect(
+            Layer::from(LeaderLayer::with_offset(
+                link,
+                Size::new(10.0, 10.0),
+                Offset::new(1.0, 1.0),
+            )),
+            RenderId::new(1),
+            ordinal,
+        );
+        top.pop_effect();
+        top.push_effect(
+            Layer::from(FollowerLayer::new(link)),
+            RenderId::new(1),
+            ordinal + 1,
+        );
+    }
+    top.chunk(chunk(1, version, Rect::from_xywh(0.0, 0.0, 20.0, 20.0)));
+    writer.push(publish(root, top.finish()));
+    owner.apply(SURFACE).expect("twelve nested followers");
+
+    let resolved = owner.followers_resolved();
+    let mut writer = owner.writer();
+    writer.push(place(mover, 5.0, 5.0));
+    owner.apply(SURFACE).expect("an unrelated move");
+    let steps = owner.followers_resolved() - resolved;
+    assert!(
+        steps <= u64::try_from(4 * LEVELS).expect("a small count"),
+        "{steps} resolutions for {LEVELS} levels"
+    );
+}
+
 /// A patch that changes no pixel damages nothing: a content republished
 /// with the same entries, or a change to a node the root does not reach.
 pub(crate) fn a_patch_that_changes_no_pixel_damages_nothing() {

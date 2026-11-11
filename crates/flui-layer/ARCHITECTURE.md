@@ -218,11 +218,14 @@ kept entries outside the longest increasing run of their old order damage both p
 damages the moved subtree at both placements. After the operations every follower is resolved
 again in both versions against its link's last attached leader (a published node no slot
 reaches draws nothing and never shadows it), and one whose transform changed damages its subtree
-under both. The region then closes over the filtered nodes of both versions; a foreground filter
-whose node, an ancestor or a descendant the patch changed seeds it with its whole footprint first, since stored
-bounds spread a filter in the boundary's space and a shrinking ancestor shrinks that below the
-renderer's device-pixel kernel. A follower under `LeaderClip::Hide` is damaged when the patch
-changes a node on its leader's branch. A surface change between applies is
+under both. Both chains of a follower stop at the lowest common ancestor of it and its leader, as
+`resolve_follower_transform` walks them, so nested followers cost their unshared chains. A picture
+or canvas effect changes its display list's damage extent. A subtree carries, beside its local
+bounds, the device-pixel kernel its filters spread by (the renderer takes a kernel in physical
+pixels, which bounds in a boundary's space would shrink under a shrinking ancestor), and a
+footprint adds it once mapped to the surface. The region then closes over the filtered nodes of
+both versions. A follower under `LeaderClip::Hide` is damaged when the patch changes a node on its
+leader's branch. A surface change between applies is
 `Full(SurfaceChanged)`, and `renew` makes the next one `Full(Resync(_))`.
 
 Pinned by `layer_it`: `scene_patch_damage`, `patch_damage_covers_diff_damage` (random patches,

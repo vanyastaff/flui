@@ -236,6 +236,38 @@ fn transform_reach(filter: &ImageFilter, bounds: Rect<f64>, transform: &Matrix4)
         _ => 0.0,
     }
 }
+
+/// How far, in device pixels, what `filter` draws reaches past its input
+/// mapped to the surface, when that input already reaches `inner` past its
+/// own mapped bounds. A kernel adds the renderer's growth, which is physical
+/// pixels whatever the transform above it. A magnifier (a uniform scale)
+/// scales what it takes, half a source pixel of bilinear read included, and
+/// draws a pixel past it. Any other transform filter stretches device
+/// distances by a factor its ancestors set, so what it reaches has no bound
+/// known inside its boundary. Bounds in a boundary's space carry this
+/// separately, since a shrinking ancestor would shrink it with them.
+pub(crate) fn device_spread(filter: &ImageFilter, inner: f64) -> f64 {
+    match filter {
+        ImageFilter::Blur { .. } | ImageFilter::Dilate { .. } | ImageFilter::Erode { .. } => {
+            inner + renderer_growth(filter)
+        }
+        ImageFilter::Transform {
+            transform: map,
+            sampling,
+        } => match map.inverse_coefficients() {
+            [xx, 0.0, 0.0, yy, _, _] if xx == yy && xx > 0.0 => {
+                (inner + sampling.reach()) / xx + 1.0
+            }
+            _ if inner == 0.0 && sampling.reach() == 0.0 => 1.0,
+            _ => f64::INFINITY,
+        },
+        ImageFilter::Compose(filters) => filters
+            .iter()
+            .fold(inner, |inner, filter| device_spread(filter, inner)),
+        _ => inner,
+    }
+}
+
 /// The growth the GPU renderer gives `filter`, in physical pixels.
 fn renderer_growth(filter: &ImageFilter) -> f64 {
     match filter {

@@ -1,6 +1,6 @@
 ### Added
 - `flui_layer::read_closure` and `close_over`: one answer to what an effect reads and writes (`Closure::{None, Bounded, Unbounded}`), and the damage grown over every closure it meets to a fixed point.
-- `SceneOwner::patch_damage`: the damage of the last applied patch, the footprint of its operations under the versions before and after it, with followers resolved again in both.
+- `SceneOwner::patch_damage`: the damage of the last applied patch, the footprint of its operations under the versions before and after it, with followers resolved again in both against their lowest common ancestor with the leader, and filter kernels carried in device pixels.
 - `ImageSampling::reach`: how far past a sample point a read of that sampling reaches, which the renderer and the damage footprints both use.
 
 ### Changed

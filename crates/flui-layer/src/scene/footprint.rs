@@ -2,6 +2,7 @@
 //! the version before and after it, closed over what filters read
 //! (ADR-0304 §4, §6).
 
+use std::cell::Cell;
 use std::cmp::Reverse;
 
 use flui_foundation::geometry::{Matrix4, Rect};
@@ -12,6 +13,7 @@ use super::id::NodeKey;
 use super::owner::SlotMarks;
 use super::table::TableCost;
 use super::version::{Address, VersionInner};
+use crate::damage::closure::device_spread;
 use crate::damage::closure::{Closure, close_over, read_closure};
 use crate::layer::Layer;
 use crate::scene_snapshot::{DamageRect, DamageRegion, FullReason, Region};
@@ -129,63 +131,10 @@ pub(crate) fn patch_damage(
         footprints.add(old.entry_reach(before.node, before.entry));
         footprints.add(new.entry_reach(after.node, after.entry));
     }
-    // A foreground filter whose scope or placement the patch changed seeds
-    // the damage with its whole footprint: a subtree's stored bounds spread
-    // a filter in the boundary's space, which a shrinking ancestor shrinks
-    // below the renderer's device-pixel kernel, and the closure below only
-    // grows a seed that meets it.
-    let mut above_changes: Vec<u64> = Vec::new();
-    for (geometry, version) in [(old, base), (new, &*next)] {
-        let changed = facts
-            .touched
-            .iter()
-            .chain(facts.placed)
-            .copied()
-            .chain(moved.iter().map(|(before, after)| {
-                if std::ptr::eq(version, base) {
-                    before.node
-                } else {
-                    after.node
-                }
-            }));
-        for key in changed {
-            if version.record(key).is_some() {
-                above_changes.extend(geometry.path_up(key).map(NodeKey::table_key));
-            }
-        }
-    }
-    above_changes.sort_unstable();
-    above_changes.dedup();
-    let changed = |key: NodeKey| {
-        facts.touched_marks.contains(key.slot()) || facts.placed_marks.contains(key.slot())
-    };
-    let affected = |geometry: Geometry<'_>, key: NodeKey| {
-        above_changes.binary_search(&key.table_key()).is_ok() || geometry.path_up(key).any(changed)
-    };
-    let mut closures = Vec::new();
-    let mut seeds = Vec::new();
-    closures_of(
-        old,
-        base,
-        &mut closures,
-        &mut |key| affected(old, key),
-        &mut seeds,
-    );
-    closures_of(
-        new,
-        next,
-        &mut closures,
-        &mut |key| affected(new, key),
-        &mut seeds,
-    );
-    for seed in seeds {
-        footprints.add(match seed {
-            Closure::None => Reach::Nothing,
-            Closure::Bounded { reads, writes } => Reach::rect(reads.union(&writes)),
-            Closure::Unbounded => Reach::Unbounded,
-        });
-    }
     let region = footprints.region(surface);
+    let mut closures = Vec::new();
+    closures_of(old, base, &mut closures);
+    closures_of(new, next, &mut closures);
     (close_over(region, closures, surface), cost)
 }
 
@@ -203,7 +152,11 @@ fn moved_followers(
     facts: &PatchFacts<'_>,
     cost: &mut FootprintCost,
 ) -> Vec<(Address, Address)> {
-    let (old, new) = (Geometry::new(base), Geometry::new(next));
+    let resolutions = Cell::new(0_u64);
+    let (old, new) = (
+        Geometry::counting(base, &resolutions),
+        Geometry::counting(next, &resolutions),
+    );
     let changed = |key: NodeKey| {
         facts.touched_marks.contains(key.slot()) || facts.placed_marks.contains(key.slot())
     };
@@ -218,7 +171,6 @@ fn moved_followers(
             let Some(before) = paired_follower(base, next, after) else {
                 continue;
             };
-            cost.followers_resolved += 2;
             let then = old.resolve(before, 0);
             let now = new.resolve(after, 0);
             if then != now || branch_changed(old, before) || branch_changed(new, after) {
@@ -226,6 +178,7 @@ fn moved_followers(
             }
         }
     }
+    cost.followers_resolved = cost.followers_resolved.saturating_add(resolutions.get());
     moved
 }
 
@@ -289,13 +242,16 @@ fn update_bounds(
     exact.sort_unstable_by_key(|(depth, key)| (*depth, key.slot()));
     exact.dedup();
     for &(_, key) in &exact {
-        let bounds = Geometry::new(next).subtree_local(key).bounds();
+        let geometry = Geometry::new(next);
+        let bounds = geometry.subtree_local(key).bounds();
+        let kernel = geometry.subtree_kernel(key);
         let record = next
             .nodes
             .get_mut(key.table_key(), table)
             .expect("BUG: a node whose bounds are recomputed is in the table");
-        if record.subtree() != bounds {
+        if record.subtree() != bounds || record.kernel() != kernel {
             record.set_subtree(bounds);
+            record.set_kernel(kernel);
         }
     }
     let grown = exact
@@ -307,22 +263,24 @@ fn update_bounds(
     }
 }
 
-/// Grows the bounds above `key` to cover its subtree, stopping at the first
-/// ancestor that already does.
+/// Grows the bounds and kernel above `key` to cover its subtree, stopping at
+/// the first ancestor that already does.
 fn grow_ancestors(next: &mut VersionInner, key: NodeKey, table: &mut TableCost) {
     let mut child = key;
-    while let Some((parent, grown)) = growth(next, child) {
-        next.nodes
+    while let Some((parent, grown, kernel)) = growth(next, child) {
+        let record = next
+            .nodes
             .get_mut(parent.table_key(), table)
-            .expect("BUG: a node's parent is in its version")
-            .set_subtree(grown);
+            .expect("BUG: a node's parent is in its version");
+        record.set_subtree(grown);
+        record.set_kernel(kernel);
         child = parent;
     }
 }
 
-/// `child`'s parent and the bounds that cover its subtree too, `None` when
-/// it has no parent or the parent's bounds already cover it.
-fn growth(next: &VersionInner, child: NodeKey) -> Option<(NodeKey, Bounds)> {
+/// `child`'s parent with the bounds and kernel that cover its subtree too,
+/// `None` when it has no parent or the parent's already do.
+fn growth(next: &VersionInner, child: NodeKey) -> Option<(NodeKey, Bounds, f64)> {
     let record = next.record(child)?;
     let parent = record.parent()?;
     let parent_record = next
@@ -340,7 +298,18 @@ fn growth(next: &VersionInner, child: NodeKey) -> Option<(NodeKey, Bounds)> {
     )));
     let reach = map_out(&links, Reach::of(record.subtree()));
     let current = Reach::of(parent_record.subtree());
-    (!current.contains(reach)).then(|| (parent, current.union(reach).bounds()))
+    // The filters over the slot spread the child's kernel as they do in the
+    // parent's own content.
+    let kernel = links
+        .iter()
+        .rev()
+        .fold(record.kernel(), |kernel, link| match link {
+            Link::Filter(filter) => device_spread(filter, kernel),
+            _ => kernel,
+        })
+        .max(parent_record.kernel());
+    (!current.contains(reach) || kernel > parent_record.kernel())
+        .then(|| (parent, current.union(reach).bounds(), kernel))
 }
 
 /// The key a `Publish` pairs an entry by: a chunk and an effect by owner and
@@ -490,15 +459,8 @@ fn out_of_order(order: &[(usize, usize)]) -> Vec<(usize, usize)> {
 }
 
 /// What each entry with a read closure in an attached filtered node of
-/// `version` reads and writes; a foreground filter of a node `affected`
-/// accepts is pushed to `seeds` too.
-fn closures_of(
-    geometry: Geometry<'_>,
-    version: &VersionInner,
-    out: &mut Vec<Closure>,
-    affected: &mut dyn FnMut(NodeKey) -> bool,
-    seeds: &mut Vec<Closure>,
-) {
+/// `version` reads and writes.
+fn closures_of(geometry: Geometry<'_>, version: &VersionInner, out: &mut Vec<Closure>) {
     for (_, &key) in version.filtered.iter() {
         let Some(record) = version.record(key) else {
             continue;
@@ -525,13 +487,7 @@ fn closures_of(
                             continue;
                         };
                         match geometry.filter_input(at) {
-                            Reach::Rect(content) => {
-                                let closure = read_closure(layer, &ctm, content);
-                                if affected(key) {
-                                    seeds.push(closure);
-                                }
-                                out.push(closure);
-                            }
+                            Reach::Rect(content) => out.push(read_closure(layer, &ctm, content)),
                             Reach::Nothing => {}
                             Reach::Unbounded | Reach::NonFinite => out.push(Closure::Unbounded),
                         }

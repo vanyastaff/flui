@@ -4,8 +4,11 @@
 //!
 //! Scene space is the surface's device pixels. Footprints only over-report:
 //! a filter spreads by its reach under the transform relative to the
-//! boundary that holds it, and the read closure (§6), which runs with each
-//! filter's surface transform, takes whatever more it reaches.
+//! boundary that holds it, and by its renderer kernel in device pixels, which
+//! a scope and a subtree carry beside their local bounds (`scope_kernel`) and
+//! add once mapped to the surface, where no ancestor scales it.
+
+use std::cell::Cell;
 
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_painting::DamageExtent;
@@ -15,7 +18,7 @@ use smallvec::SmallVec;
 use super::content::{BoundaryContent, Bounds, Entry, EntryIndex};
 use super::id::NodeKey;
 use super::version::{Address, NodeRecord, VersionInner};
-use crate::damage::closure::footprint;
+use crate::damage::closure::{device_spread, footprint};
 use crate::layer::Layer;
 use crate::link::{MAX_FOLLOWER_NESTING, invert};
 use crate::{LayerLink, LeaderClip};
@@ -61,7 +64,7 @@ impl Reach {
         }
     }
 
-    pub(crate) fn rect(rect: Rect<f64>) -> Self {
+    fn rect(rect: Rect<f64>) -> Self {
         if !rect.is_finite() {
             Self::NonFinite
         } else if rect.width() > 0.0 && rect.height() > 0.0 {
@@ -86,6 +89,17 @@ impl Reach {
             (_, Self::Nothing) | (Self::Unbounded | Self::NonFinite, _) => true,
             (Self::Rect(a), Self::Rect(b)) => a.contains_rect(&b),
             _ => false,
+        }
+    }
+
+    /// `self` grown by `kernel` device pixels, a reach already mapped to
+    /// the surface: an infinite kernel has no bound.
+    pub(crate) fn spread(self, kernel: f64) -> Self {
+        match self {
+            Self::Rect(_) if kernel == 0.0 => self,
+            Self::Rect(_) if !kernel.is_finite() => Self::Unbounded,
+            Self::Rect(rect) => Self::rect(rect.expand(kernel)),
+            other => other,
         }
     }
 
@@ -115,6 +129,13 @@ fn mapped(matrix: &Matrix4, rect: Rect<f64>) -> Reach {
 /// `reach`, in the innermost space of `links` (listed outermost first),
 /// mapped out through each of them into the outermost.
 pub(crate) fn map_out(links: &[Link<'_>], reach: Reach) -> Reach {
+    map_out_spread(links, reach, 0.0)
+}
+
+/// `map_out`, with `reach` grown by `kernel` device pixels once mapped and
+/// before the links' clips and filters: the device-space spread of the
+/// filters inside it, which bounds in a local space cannot hold.
+pub(crate) fn map_out_spread(links: &[Link<'_>], reach: Reach, kernel: f64) -> Reach {
     // The map from each step's space into the outermost.
     let mut ctms: SmallVec<[Matrix4; 16]> = SmallVec::with_capacity(links.len());
     let mut ctm = Matrix4::IDENTITY;
@@ -125,7 +146,7 @@ pub(crate) fn map_out(links: &[Link<'_>], reach: Reach) -> Reach {
         ctms.push(ctm);
     }
     let mut out = match reach {
-        Reach::Rect(rect) => mapped(&ctm, rect),
+        Reach::Rect(rect) => mapped(&ctm, rect).spread(kernel),
         other => other,
     };
     for (link, ctm) in links.iter().zip(&ctms).rev() {
@@ -163,6 +184,15 @@ pub(crate) enum Unresolved {
     TooDeep,
 }
 
+/// One step from an entry toward the surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Up {
+    /// The effect at this address holds the entry below it.
+    Effect(Address),
+    /// The node's placement maps its content into its parent's.
+    Place(NodeKey),
+}
+
 /// The node is not under the root, so nothing of it is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Unattached;
@@ -171,11 +201,24 @@ pub(crate) struct Unattached;
 #[derive(Clone, Copy)]
 pub(crate) struct Geometry<'v> {
     version: &'v VersionInner,
+    /// Counts every follower resolution, nested ones included.
+    resolutions: Option<&'v Cell<u64>>,
 }
 
 impl<'v> Geometry<'v> {
     pub(crate) fn new(version: &'v VersionInner) -> Self {
-        Self { version }
+        Self {
+            version,
+            resolutions: None,
+        }
+    }
+
+    /// A reader that counts its follower resolutions in `resolutions`.
+    pub(crate) fn counting(version: &'v VersionInner, resolutions: &'v Cell<u64>) -> Self {
+        Self {
+            version,
+            resolutions: Some(resolutions),
+        }
     }
 
     fn record(self, key: NodeKey) -> &'v NodeRecord {
@@ -348,12 +391,15 @@ impl<'v> Geometry<'v> {
             | Layer::BackdropFilter(_)
             | Layer::Texture(_)
             | Layer::PlatformView(_)
-            | Layer::PerformanceOverlay(_)
-            | Layer::Picture(_)
-            | Layer::Canvas(_) => match layer.bounds() {
+            | Layer::PerformanceOverlay(_) => match layer.bounds() {
                 Some(bounds) => out.push(Link::Extent(bounds)),
                 None => out.push(Link::Everywhere),
             },
+            // A recording changes what its damage extent covers, which takes
+            // full-canvas fills, strokes, shadows and glyph overflow that its
+            // bounds leave out, as a chunk's bounds do.
+            Layer::Picture(picture) => out.push(extent_link(picture.picture().damage_extent())),
+            Layer::Canvas(canvas) => out.push(extent_link(canvas.display_list().damage_extent())),
             _ => {}
         }
     }
@@ -396,6 +442,38 @@ impl<'v> Geometry<'v> {
         reach
     }
 
+    /// How far, in device pixels, the filters in the scope of `entry` of
+    /// `key` spread what it draws past its local reach mapped to the surface
+    /// (`device_spread`), slotted subtrees included.
+    pub(crate) fn scope_kernel(self, key: NodeKey, entry: EntryIndex) -> f64 {
+        let content = self.record(key).content();
+        match &content.entries()[entry.get()] {
+            Entry::Chunk { .. } => 0.0,
+            Entry::Slot { node, .. } => self.record(node.key()).kernel(),
+            Entry::Effect { layer, .. } => {
+                let inner = children(content, entry)
+                    .map(|child| self.scope_kernel(key, child))
+                    .fold(0.0, f64::max);
+                match layer {
+                    Layer::ImageFilter(filter) => device_spread(filter.filter(), inner),
+                    _ => inner,
+                }
+            }
+        }
+    }
+
+    /// `scope_kernel` over `key`'s whole content.
+    pub(crate) fn subtree_kernel(self, key: NodeKey) -> f64 {
+        let content = self.record(key).content();
+        content
+            .entries()
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.parent().is_none())
+            .map(|(position, _)| self.scope_kernel(key, EntryIndex::at(position)))
+            .fold(0.0, f64::max)
+    }
+
     /// Where `entry` of `key` and its scope land on the surface; nothing when
     /// the node is not attached.
     pub(crate) fn entry_reach(self, key: NodeKey, entry: EntryIndex) -> Reach {
@@ -404,7 +482,11 @@ impl<'v> Geometry<'v> {
             return Reach::Nothing;
         }
         self.content_links(key, entry, &mut links, 0);
-        map_out(&links, self.scope_local(key, entry, 0))
+        map_out_spread(
+            &links,
+            self.scope_local(key, entry, 0),
+            self.scope_kernel(key, entry),
+        )
     }
 
     /// Where `key`'s subtree lands on the surface, from its stored bounds;
@@ -414,7 +496,8 @@ impl<'v> Geometry<'v> {
         if self.node_links(key, &mut links, 0).is_err() {
             return Reach::Nothing;
         }
-        map_out(&links, Reach::of(self.record(key).subtree()))
+        let record = self.record(key);
+        map_out_spread(&links, Reach::of(record.subtree()), record.kernel())
     }
 
     /// The map from the space under the effect at `at` (its own map applied)
@@ -439,23 +522,28 @@ impl<'v> Geometry<'v> {
         };
         let content = self.record(at.node).content();
         let mut inside = Reach::Nothing;
+        let mut kernel: f64 = 0.0;
         for child in children(content, at.entry) {
             inside = inside.union(self.scope_local(at.node, child, 0));
+            kernel = kernel.max(self.scope_kernel(at.node, child));
         }
         match inside {
-            Reach::Rect(rect) => mapped(&ctm, rect),
+            Reach::Rect(rect) => mapped(&ctm, rect).spread(kernel),
             other => other,
         }
     }
 
     /// The transform the follower at `at` applies to its children so their
     /// content lands on its leader: `F⁻¹ · L · translate(linked_offset)`,
-    /// with `F` the surface map of the follower's parent space and `L` the
-    /// leader's, its own offset applied. This is `resolve_follower_transform`'s
-    /// rule (ADR-0276) with both chains taken from the surface; the part they
-    /// share cancels. A leader clip that hides the follower is not consulted:
-    /// a footprint that shows a hidden follower over-reports.
+    /// with `F` the map of the follower's parent space and `L` the leader's,
+    /// its own offset applied, both from their lowest common ancestor. This is
+    /// `resolve_follower_transform`'s rule (ADR-0276), its nesting counted
+    /// the same way. A leader clip that hides the follower is not consulted: a
+    /// footprint that shows a hidden follower over-reports.
     pub(crate) fn resolve(self, at: Address, nesting: usize) -> Result<Matrix4, Unresolved> {
+        if let Some(resolutions) = self.resolutions {
+            resolutions.set(resolutions.get().saturating_add(1));
+        }
         if nesting > MAX_FOLLOWER_NESTING {
             return Err(Unresolved::TooDeep);
         }
@@ -481,7 +569,7 @@ impl<'v> Geometry<'v> {
             return unlinked();
         };
         let Entry::Effect {
-            layer: leader_layer @ Layer::Leader(leader),
+            layer: Layer::Leader(leader),
             ..
         } = &self.record(leader_at.node).content().entries()[leader_at.entry.get()]
         else {
@@ -494,19 +582,23 @@ impl<'v> Geometry<'v> {
             );
             return unlinked();
         }
-        let mut leader_links = Links::new();
-        if self
-            .node_links(leader_at.node, &mut leader_links, chains)
-            .is_err()
-        {
+        // Both chains stop at the lowest common ancestor, as
+        // `resolve_follower_transform` walks them: the shared part would
+        // cancel, and resolving the followers on it again for each chain
+        // multiplies the work by every level of nesting.
+        let Ok(mut leader_up) = self.ancestry(leader_at) else {
             return unlinked();
+        };
+        leader_up.insert(0, Up::Effect(leader_at));
+        let mut follower_up = self.ancestry(at).map_err(|Unattached| Unresolved::Hidden)?;
+        while leader_up.last().is_some() && leader_up.last() == follower_up.last() {
+            leader_up.pop();
+            follower_up.pop();
         }
-        self.content_links(leader_at.node, leader_at.entry, &mut leader_links, chains);
-        self.effect_links(leader_layer, leader_at, &mut leader_links, chains);
+        let mut leader_links = Links::new();
+        self.up_links(&leader_up, &mut leader_links, chains);
         let mut follower_links = Links::new();
-        self.node_links(at.node, &mut follower_links, chains)
-            .map_err(|Unattached| Unresolved::Hidden)?;
-        self.content_links(at.node, at.entry, &mut follower_links, chains);
+        self.up_links(&follower_up, &mut follower_links, chains);
         let leader_ctm = product(&leader_links)?;
         let follower_ctm = product(&follower_links)?;
         let linked = follower.linked_offset(leader.size());
@@ -515,6 +607,55 @@ impl<'v> Geometry<'v> {
             * Matrix4::translation(linked.dx, linked.dy, 0.0);
         invert(&transform).ok_or(Unresolved::Hidden)?;
         finite(transform)
+    }
+
+    /// The steps above the entry at `at` up to the surface, innermost first:
+    /// each effect over it in its node, the node's placement, then the
+    /// effects over the slot that names it, and so on to the root's
+    /// placement.
+    fn ancestry(self, at: Address) -> Result<SmallVec<[Up; 16]>, Unattached> {
+        let mut steps = SmallVec::new();
+        let (mut node, mut entry) = (at.node, at.entry);
+        loop {
+            let content = self.record(node).content();
+            let mut above = content.entries()[entry.get()].parent();
+            while let Some(effect) = above {
+                steps.push(Up::Effect(Address {
+                    node,
+                    entry: effect,
+                }));
+                above = content.entries()[effect.get()].parent();
+            }
+            steps.push(Up::Place(node));
+            match self.version.record(node).and_then(NodeRecord::parent) {
+                Some(parent) => {
+                    entry = self
+                        .record(parent)
+                        .content()
+                        .slot_entry(node)
+                        .expect("BUG: a node's parent names it in a slot");
+                    node = parent;
+                }
+                None if node == self.version.root => return Ok(steps),
+                None => return Err(Unattached),
+            }
+        }
+    }
+
+    /// The links of `steps` (innermost first), outermost first.
+    fn up_links(self, steps: &[Up], out: &mut Links<'v>, nesting: usize) {
+        for step in steps.iter().rev() {
+            match *step {
+                Up::Place(node) => out.push(Link::Matrix(placement(self.record(node)))),
+                Up::Effect(at) => {
+                    if let Entry::Effect { layer, .. } =
+                        &self.record(at.node).content().entries()[at.entry.get()]
+                    {
+                        self.effect_links(layer, at, out, nesting);
+                    }
+                }
+            }
+        }
     }
 
     /// Whether the entry at `inner` lies in the scope of the effect at
@@ -591,4 +732,14 @@ fn in_scope(content: &BoundaryContent, entry: EntryIndex, effect: EntryIndex) ->
         at = content.entries()[parent.get()].parent();
     }
     false
+}
+
+/// The link a recording's damage extent gives: nothing when it draws
+/// nothing, everywhere when its extent has no finite cover.
+fn extent_link<'v>(extent: Option<DamageExtent>) -> Link<'v> {
+    match extent.map(DamageExtent::covering_rect) {
+        None => Link::Extent(Rect::ZERO),
+        Some(Some(rect)) if rect.is_finite() => Link::Extent(rect),
+        Some(_) => Link::Everywhere,
+    }
 }

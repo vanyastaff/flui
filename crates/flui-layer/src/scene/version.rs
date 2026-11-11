@@ -41,6 +41,9 @@ pub(crate) struct NodeRecord {
     /// What the node and its subtree can change, in its own space: exact
     /// when its content is published, grown by union after (ADR-0304 §4).
     subtree: Bounds,
+    /// How far, in device pixels, the filters in the subtree spread past
+    /// `subtree` once it is mapped to the surface; grown with it.
+    kernel: f64,
 }
 
 impl NodeRecord {
@@ -52,6 +55,7 @@ impl NodeRecord {
             placement: Placement::ZERO,
             content,
             subtree: Bounds::Finite(Rect::ZERO),
+            kernel: 0.0,
         }
     }
 
@@ -89,6 +93,14 @@ impl NodeRecord {
 
     pub(crate) fn set_subtree(&mut self, subtree: Bounds) {
         self.subtree = subtree;
+    }
+
+    pub(crate) fn kernel(&self) -> f64 {
+        self.kernel
+    }
+
+    pub(crate) fn set_kernel(&mut self, kernel: f64) {
+        self.kernel = kernel;
     }
 
     pub(crate) fn set_content(&mut self, content: Arc<BoundaryContent>) {
