@@ -67,6 +67,8 @@ impl flui_foundation::inspect::Inspect for FixedSliver {
 }
 
 impl RenderSliver for FixedSliver {
+    const REPORTS_INPUT_REGIONS: bool = true;
+
     type Arity = Leaf;
     type ParentData = SliverParentData;
 

@@ -1,12 +1,15 @@
 //! Collecting a window's input regions from the laid-out tree (see
 //! [`crate::input_regions`] for the mapping rules).
 //!
-//! The walk visits nodes without composing matrices: a node's transform and clip are
-//! composed along its path from the root only when it reported a region, so a tree with
-//! a handful of reporters pays a plain traversal plus `depth` steps per reporter.
+//! The walk starts from the nodes that add regions (`RenderObject::reports_input_regions`,
+//! registered by the render tree as nodes enter and leave it): it follows the paths from
+//! the root to them and walks their subtrees, so a tree with none costs nothing and a tree
+//! with a few costs their paths and subtrees, whatever its size. It visits nodes without
+//! composing matrices: a node's transform and clip are composed along its path from the root
+//! only when it reported a region, `depth` steps per reporter.
 
-use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
+use flui_foundation::{RenderId, SlotSet};
 
 use crate::input_regions::{
     InputRegion, InputRegionKind, InputRegionSink, Presses, UnmappableRegion, map_rect,
@@ -43,12 +46,32 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         else {
             return regions;
         };
+        // Only a node that adds regions, or a node in the subtree of one, can contribute:
+        // anything else only claims or passes presses, which matters inside a move area
+        // alone. The walk follows the paths from the root to those nodes and their
+        // subtrees, so a tree with none costs nothing here.
+        let sources = self.render_tree.input_region_sources();
+        if sources.is_empty() {
+            return regions;
+        }
+        let mut toward_sources = SlotSet::new();
+        for &source in sources {
+            let mut current = Some(source);
+            while let Some(id) = current {
+                if !toward_sources.insert(id) {
+                    break;
+                }
+                current = self.render_tree.parent(id);
+            }
+        }
         let mut walk = RegionWalk {
             path: Vec::new(),
             sink: InputRegionSink::default(),
             window,
             regions: &mut regions,
             scope: MoveScope::Outside,
+            toward_sources,
+            in_source: false,
         };
         self.collect_input_regions(root, &mut walk);
         regions
@@ -84,6 +107,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 .render_object()
                 .describe_input_regions(size, &mut walk.sink),
         }
+        let is_source = node.reports_input_regions();
+        debug_assert!(
+            is_source || walk.sink.is_empty(),
+            "BUG: {} adds input regions but does not declare REPORTS_INPUT_REGIONS, so \
+             they are collected only when the walk happens to pass it",
+            node.debug_name(),
+        );
         // A move area starts cutting out below it. A caption button or a resize border is
         // chrome of its own: the button that draws it takes its presses through the system,
         // so nothing below it is cut out of the move area it lies in. Read before this
@@ -136,6 +166,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
 
         walk.scope = child_scope;
+        let in_source = walk.in_source;
+        walk.in_source = in_source || is_source;
         let generation = node.layout_generation();
         // Children in the order the last paint put them down, so a child painted over a
         // sibling reports its regions after it.
@@ -150,6 +182,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             let Some(child) = self.render_tree.get(child_id) else {
                 continue;
             };
+            // Outside every source's subtree, only a child on a path to one can contribute.
+            if !walk.in_source && !walk.toward_sources.contains(child_id) {
+                continue;
+            }
             if !child.was_placed_by(id, generation) || !visits_child(node, slot, size) {
                 continue;
             }
@@ -158,6 +194,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             walk.path.pop();
         }
         walk.scope = scope;
+        walk.in_source = in_source;
     }
 
     /// Maps the regions `id` just reported into window coordinates.
@@ -266,6 +303,11 @@ struct RegionWalk<'a> {
     regions: &'a mut Vec<InputRegion>,
     /// Whether the node being visited lies in a move area.
     scope: MoveScope,
+    /// The nodes that add regions and every ancestor of one: outside a source's subtree,
+    /// the walk enters only these.
+    toward_sources: SlotSet<RenderId>,
+    /// Whether the node being visited lies in the subtree of a node that adds regions.
+    in_source: bool,
 }
 
 /// `size` is the node's laid-out size, the committed box size or the sliver's

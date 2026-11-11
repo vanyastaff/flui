@@ -30,7 +30,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     rc::Rc,
     sync::Arc,
 };
@@ -56,6 +56,7 @@ use super::recovered_panic::{
 use crate::element::child_manager::{ChildManager, ChildManagerRegistry};
 use crate::view::FrameworkError;
 use flui_foundation::RebuildReasons;
+use rustc_hash::FxHashMap;
 
 /// Borrowed live-tree access carried by [`ElementOwner`] while a
 /// `build_scope` drain runs an element's `build()` (PR-K).
@@ -153,7 +154,7 @@ pub struct ElementOwner<'a> {
     pub(crate) partitioned_dirty_count: usize,
 
     /// Accumulated causes for ids already in `dirty_elements`.
-    pub(crate) dirty_reasons: &'a mut HashMap<ElementId, RebuildReasons>,
+    pub(crate) dirty_reasons: &'a mut FxHashMap<ElementId, RebuildReasons>,
 
     /// Inactive elements queue (deactivated but not yet unmounted).
     /// Drained by `BuildOwner::finalize_tree` at end-of-frame.

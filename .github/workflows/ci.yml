@@ -748,6 +748,52 @@ jobs:
           cargo xtask send-positions --self-test
 
   # ─────────────────────────────────────────────────────────────────────────
+  # perf-gates — what a frame costs, by counts that do not depend on the
+  # runner: `cargo xtask perf --check` compares every perf scenario's frame
+  # counters and allocations with crates/flui-widgets/perf/baseline.toml, and
+  # `--instructions --check` runs each `perf_scaling_` scenario on its small
+  # and large tree under callgrind and fails when the large one costs more
+  # than 5% over the small. The scenarios' own assertions (equal allocations
+  # on both sizes) run on every PR with flui-widgets' suite; callgrind and
+  # the baseline comparison are the slow half, so they run in `full` only.
+  # ─────────────────────────────────────────────────────────────────────────
+  perf-gates:
+    name: perf-gates
+    needs: [checks, plan]
+    if: needs.plan.outputs.lane == 'full'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          cache-on-failure: true
+          shared-key: workspace-perf-v1
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9
+
+      - name: Install valgrind
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends valgrind
+
+      - name: cargo xtask perf --check
+        run: cargo xtask perf --check
+
+      - name: cargo xtask perf --instructions --check
+        run: cargo xtask perf --instructions --check
+
+  # ─────────────────────────────────────────────────────────────────────────
   # deps — `cargo xtask deps`: cargo-deny over every workspace member (bans,
   # licenses and sources against deny.toml, advisories against RustSec) and
   # cargo-shear (a dependency no code uses, a test-only one declared as a
@@ -1147,7 +1193,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, api-contracts, deps, doc-test, miri]
+    needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, api-contracts, perf-gates, deps, doc-test, miri]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -1192,7 +1238,7 @@ jobs:
           HEAVY_JOBS: >-
             clippy wasm-check cross-typecheck test test-nested doc test-features
           FULL_JOBS: >-
-            feature-matrix doc-test miri test-trybuild api-contracts
+            feature-matrix doc-test miri test-trybuild api-contracts perf-gates
           LANE: ${{ needs.plan.outputs.lane }}
           EVENT: ${{ github.event_name }}
         run: cargo xtask ci-verify
