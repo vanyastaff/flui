@@ -487,16 +487,16 @@ fn list_fixture(scope: Option<&Rc<FocusScopeNode>>) -> ListFixture {
                 .expect("attach"),
         );
     }
-    let node = |label: &str, top: f64| {
+    let node = |label: std::borrow::Cow<'static, str>, top: f64| {
         let node = FocusNode::with_debug_label(label);
         node.set_rect(Rect::from_xywh(0.0, top, 100.0, 10.0));
         node
     };
-    let before = node("before", 0.0);
-    let list = node("list", 20.0);
-    let after = node("after", 100.0);
+    let before = node("before".into(), 0.0);
+    let list = node("list".into(), 20.0);
+    let after = node("after".into(), 100.0);
     let rows: Vec<_> = (0..3)
-        .map(|index| node(&format!("row-{index}"), 20.0 + index as f64 * 20.0))
+        .map(|index| node(format!("row-{index}").into(), 20.0 + index as f64 * 20.0))
         .collect();
     attachments.push(parent.attach_node(&before).expect("attach"));
     attachments.push(parent.attach_node(&list).expect("attach"));
