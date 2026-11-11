@@ -219,7 +219,7 @@ impl InteractiveNode {
 
     /// Write the interaction states the node owns to `controller`
     /// (ADR-0322 §3): `Pressed` while a contact its tap tracks is down,
-    /// `Focused` while its focus node holds the primary focus,
+    /// `Focused` while its focus node or a descendant of it holds the focus,
     /// `FocusVisible` while that focus is shown, and `Disabled` while the
     /// switch is off. No other part of the tree writes them for the control.
     /// The node clears them from a controller it stops writing to, by a
@@ -280,11 +280,13 @@ pub(crate) struct InteractiveNodeState {
 }
 
 impl InteractiveNodeState {
-    /// Bring the controller to what the node is now. The focus states come
+    /// Bring the controller to what the node is now. `pressed` says a
+    /// contact was down on the controller this one replaces, and the press
+    /// follows the contact to it. The focus states come
     /// from the focus node, so a controller given to a control that already
     /// holds focus starts right; a control with no tap has no contact, so
     /// nothing of it is pressed.
-    fn write_states(&self) {
+    fn write_states(&self, pressed: bool) {
         let Some(states) = &self.states else {
             return;
         };
@@ -293,13 +295,19 @@ impl InteractiveNodeState {
         if !self.enabled {
             values |= WidgetStates::DISABLED;
         }
-        if node.is_some_and(|node| node.has_primary_focus()) {
+        // What `Focus::on_focus_change` reports, and so what the handler
+        // writes: the focus of the node or of a descendant.
+        if node.is_some_and(|node| node.has_focus()) {
             values |= WidgetStates::FOCUSED;
         }
         if node.is_some_and(|node| node.has_visible_focus()) {
             values |= WidgetStates::FOCUS_VISIBLE;
         }
         let mut mask = WRITTEN.difference(WidgetStates::PRESSED);
+        if pressed && self.tap.is_set() {
+            mask |= WidgetStates::PRESSED;
+            values |= WidgetStates::PRESSED;
+        }
         if !self.tap.is_set() {
             mask |= WidgetStates::PRESSED;
         }
@@ -426,7 +434,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
                 record,
             );
         }
-        self.write_states();
+        self.write_states(false);
     }
 
     fn did_change_dependencies(&mut self, cx: &dyn LifecycleContext) {
@@ -464,12 +472,15 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
                 .as_ref()
                 .is_some_and(|states| states.is_same(old))
         });
+        let pressed = replaced
+            .as_ref()
+            .is_some_and(|old| old.value().contains(WidgetStates::PRESSED));
         if let Some(replaced) = replaced {
             failure.contain(|| replaced.write(WRITTEN, WidgetStates::NONE));
         }
         self.states.clone_from(&new.states);
         self.enabled = new.enabled;
-        failure.contain(|| self.write_states());
+        failure.contain(|| self.write_states(pressed));
         failure.resume();
     }
 

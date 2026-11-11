@@ -716,7 +716,8 @@ impl ViewState<Stated> for StatedState {
 /// (ADR-0322 §3): `Pressed` for a contact that is down, `Focused` and
 /// `FocusVisible` for the focus a key gave it, `Disabled` for the switch;
 /// disabling under a contact leaves `Disabled` alone, and a controller the
-/// button stops writing to, by a swap or by unmounting, keeps nothing.
+/// button stops writing to, by a swap or by unmounting, keeps nothing, and a
+/// press under way follows its contact across the swap.
 ///
 /// Red-check: drop the `states` the button hands its node (every row but
 /// the first fails), or the clearing in the node's `dispose` (the last row).
@@ -799,10 +800,25 @@ pub(crate) fn raw_button_writes_its_states_to_the_controller() {
         "and the one it is given starts at what the button is"
     );
 
+    app.dispatch_pointer_down(20.0, 20.0);
+    app.pump_for(Duration::from_millis(200));
+    assert!(other.value().contains_state(WidgetState::Pressed));
+    first.set(true);
+    app.pump();
+    assert_eq!(other.value(), WidgetStates::NONE);
+    assert_eq!(
+        one.value(),
+        WidgetStates::FOCUSED | WidgetStates::PRESSED,
+        "a press follows its contact to the controller given under it, and a pointer press ends the shown focus"
+    );
+    app.dispatch_pointer_up(20.0, 20.0);
+    app.pump_for(Duration::from_millis(400));
+    assert_eq!(one.value(), WidgetStates::FOCUSED, "and ends there");
+
     shown.set(false);
     app.pump();
     assert_eq!(
-        other.value(),
+        one.value(),
         WidgetStates::NONE,
         "a controller keeps no state of a button that is gone"
     );

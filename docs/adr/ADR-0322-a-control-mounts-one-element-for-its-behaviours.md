@@ -157,7 +157,8 @@ which reads the focus node.
 
 - `Hovered`: a pointer is inside the mouse region;
 - `Pressed`: a contact a recognizer tracks is down and not yet rejected;
-- `Focused`: the node holds focus;
+- `Focused`: the node or a descendant of it holds the primary focus, as `Focus::on_focus_change`
+  reports it;
 - `FocusVisible`: the node holds focus and focus is shown (ADR-0079);
 - `Disabled`: §2.
 
