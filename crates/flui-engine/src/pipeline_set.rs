@@ -35,9 +35,12 @@
 //!
 //! ## Viewport bind-group layout identity (HAZARD — must read)
 //!
-//! wgpu requires that a `BindGroup` and every `RenderPipeline` it is bound to
-//! share the **exact same** `BindGroupLayout` object (identity, not structural
-//! equality). The layout is owned by
+//! A `BindGroup` binds under a `RenderPipeline` only when its layout is
+//! group-equivalent to the pipeline's layout at that index: the same entries
+//! (WebGPU's rule, which wgpu applies). Within a set the layout is one
+//! object; across the sets of a [`PipelineLibrary`](crate::pipeline_set::PipelineLibrary) it is equal by entries,
+//! which is what lets the painter keep its viewport and glyph atlas bind groups
+//! when it changes target format. The layout is owned by
 //! [`crate::pipeline_cache::PipelineCache`] and exposed via
 //! [`PipelineSet::viewport_bind_group_layout`](crate::pipeline_set::PipelineSet::viewport_bind_group_layout),
 //! which delegates to
@@ -45,8 +48,8 @@
 //! All pipelines that bind group 0 (viewport uniform) are constructed in
 //! [`PipelineSet::new`](crate::pipeline_set::PipelineSet::new) against that same
 //! accessor — ensuring a single shared object. The `viewport_bind_group` on the
-//! painter must also be created against this accessor; substituting any other
-//! layout object causes a wgpu validation error at the first draw.
+//! painter must also be created against this accessor; a layout with other
+//! entries causes a wgpu validation error at the first draw.
 //!
 //! ## Borrow-split safety
 //!
@@ -101,7 +104,8 @@ pub(crate) fn gradient_stop_rows(stops_bytes: usize, max_rows: u32) -> Option<u3
 ///
 /// Every pipeline in this set was built against the layout returned by
 /// [`Self::viewport_bind_group_layout`]. The painter's `viewport_bind_group`
-/// **must** be created against the same reference — see the module doc.
+/// is created against it, and binds under the pipelines of the library's
+/// other sets because their layouts have the same entries — see the module doc.
 // `wgpu::RenderPipeline` / `wgpu::BindGroup` are opaque GPU handles with no
 // useful `Debug` impl. The `#[allow]` avoids the compiler error while still
 // documenting the reason.
@@ -506,10 +510,9 @@ impl PipelineSet {
     /// Reference to the viewport bind-group layout shared by every pipeline in
     /// this set.
     ///
-    /// **Identity contract:** the `viewport_bind_group` on the painter **must**
-    /// be created against this exact object. Using any other layout — even a
-    /// structurally identical one — produces a wgpu validation error at the
-    /// first bind call.
+    /// The painter's `viewport_bind_group` is created against it. A bind group
+    /// made against a layout with other entries is a wgpu validation error at
+    /// the first bind; one made against an equal layout (another set's) binds.
     pub(crate) fn viewport_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         self.shape_cache.viewport_bind_group_layout()
     }
@@ -678,6 +681,59 @@ impl PipelineSet {
                     },
                 )
             })
+    }
+}
+
+/// The pipeline sets of one painter, one per target format it has drawn to
+/// (ADR-0305 §1: a pipeline is keyed by its key and the target format).
+///
+/// A set is built the first time its format is selected and kept for the
+/// painter's life, so a painter that serves targets of two formats in turn
+/// builds each set once. Every set's bind-group layouts have the same entries,
+/// so a bind group made against one set's layout binds under another's
+/// pipelines (WebGPU's group equivalence); the painter's viewport and glyph
+/// atlas bind groups rely on that when it changes format.
+pub(crate) struct PipelineLibrary {
+    /// The built sets; never empty, the first is the painter's first format.
+    sets: Vec<(wgpu::TextureFormat, PipelineSet)>,
+    /// Index into `sets` of the set the next frame draws with.
+    current: usize,
+}
+
+impl PipelineLibrary {
+    /// A library holding the set for `format`.
+    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        Self {
+            sets: vec![(format, PipelineSet::new(device, format))],
+            current: 0,
+        }
+    }
+
+    /// Draw with `format`'s set from now on, building it the first time.
+    pub(crate) fn select(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
+        if let Some(index) = self.sets.iter().position(|(built, _)| *built == format) {
+            self.current = index;
+            return;
+        }
+        self.sets.push((format, PipelineSet::new(device, format)));
+        self.current = self.sets.len() - 1;
+    }
+
+    /// The set of the selected format.
+    pub(crate) fn current(&self) -> &PipelineSet {
+        &self.sets[self.current].1
+    }
+
+    /// The set of the selected format, for the pipelines its caches build on
+    /// first use.
+    pub(crate) fn current_mut(&mut self) -> &mut PipelineSet {
+        &mut self.sets[self.current].1
+    }
+
+    /// How many sets this library has built: one per distinct format selected.
+    #[cfg(test)]
+    pub(crate) fn sets_built(&self) -> usize {
+        self.sets.len()
     }
 }
 

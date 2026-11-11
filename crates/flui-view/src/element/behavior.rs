@@ -18,7 +18,11 @@ use flui_rendering::{
     pipeline::PipelineOwner, protocol::Protocol, traits::RenderObject as RenderObjectTrait,
 };
 
-use super::{arity::ElementArity, generic::ElementCore};
+use super::{
+    arity::ElementArity,
+    generic::ElementCore,
+    provided::{Provided, Publication},
+};
 use crate::{
     context::{BuildContext, BuildCtx, LifecycleContext},
     owner::LifecycleHook,
@@ -78,6 +82,50 @@ fn mark_lifecycle_records(owner: &crate::ElementOwner<'_>, start: Option<usize>)
     let mut sink = handle.dep_sink.lock();
     for record in sink.iter_mut().skip(start) {
         record.lifecycle = true;
+    }
+}
+
+/// Run an element's `provide` hook and publish what it wrote (ADR-0322 §5).
+///
+/// The hook is user code. A panic in it, or in a value's
+/// `update_should_notify`, leaves the published values as they were, is
+/// recorded against the element and resumes, like a state's `apply_view`.
+///
+/// The hook is the first part of the element's build: it runs with the
+/// reactive build phase armed, so a signal it reads rebuilds the element and
+/// a signal it writes is refused, as in `build` (ADR-0074). The phase stays
+/// armed for the `build_or_recover_begun` that follows, and is disarmed here
+/// when the hook fails.
+fn publish_provided<V, A>(
+    publication: &mut Publication,
+    core: &ElementCore<V, A>,
+    owner: &mut crate::ElementOwner<'_>,
+    provide: impl FnOnce(&mut Provided<'_>),
+) where
+    V: Clone + 'static,
+    A: ElementArity,
+{
+    super::behavior_commons::begin_reactive_build(core, owner);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a provide hook's panic is recorded and the element recovers"
+    )]
+    let published = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        publication.publish(owner, provide);
+    }));
+    if let Err(payload) = published {
+        if let Some(id) = core.self_id() {
+            owner.reactive.end_element_build(id, false);
+        }
+        owner.record_armed_lifecycle_panic(
+            core.self_id(),
+            core.creation_site(),
+            TypeId::of::<V>(),
+            LifecycleHook::Provide,
+            payload.as_ref(),
+            "publishing the element's values",
+        );
+        std::panic::resume_unwind(payload);
     }
 }
 
@@ -277,6 +325,12 @@ where
         None
     }
 
+    /// Whether the set of types this behavior publishes changed since the
+    /// last call. Only a behavior that runs a `provide` hook answers `true`.
+    fn take_provided_scope_stale(&mut self) -> bool {
+        false
+    }
+
     /// Borrow this behavior's persistent `ViewState` as `&dyn Any` if
     /// this is `StatefulBehavior<V>` (the only behavior that owns user-
     /// visible state).
@@ -472,20 +526,37 @@ where
 /// Behavior for StatelessView elements.
 ///
 /// Calls view.build() to get the child view.
-#[derive(Debug, Clone, Copy)]
-pub struct StatelessBehavior;
+#[derive(Debug, Default)]
+pub struct StatelessBehavior {
+    /// The values the view publishes to its subtree.
+    publication: Publication,
+}
 
 impl StatelessBehavior {
     /// Create a new StatelessBehavior.
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 }
 
-impl Default for StatelessBehavior {
-    fn default() -> Self {
-        Self::new()
-    }
+/// The hooks a behavior that publishes values shares: the access face, the
+/// stale-scope flag and the release at unmount.
+macro_rules! publication_hooks {
+    () => {
+        fn as_inherited_access(&self) -> Option<&dyn crate::element::InheritedElementAccess> {
+            self.publication.access()
+        }
+
+        fn as_inherited_access_mut(
+            &mut self,
+        ) -> Option<&mut dyn crate::element::InheritedElementAccess> {
+            self.publication.access_mut()
+        }
+
+        fn take_provided_scope_stale(&mut self) -> bool {
+            self.publication.take_scope_stale()
+        }
+    };
 }
 
 impl<V, A> ElementBehavior<V, A> for StatelessBehavior
@@ -495,6 +566,12 @@ where
 {
     fn debug_kind(&self) -> &'static str {
         "StatelessElement"
+    }
+
+    publication_hooks!();
+
+    fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+        self.publication.release(core.self_id(), owner);
     }
 
     fn build_into_views(
@@ -511,14 +588,25 @@ where
         // mutable `owner` reborrow for `build_or_recover` is still free.
         let ctx_choice = make_build_ctx(core, owner);
         let ctx = ctx_choice.as_ctx();
+        // One clone of the view serves `provide` and `build`, taken before the
+        // reactive phase is armed: between the two hooks nothing the author
+        // wrote runs (no `Clone`, no `Drop`), so the phase `publish_provided`
+        // arms is always handed to `build_or_recover_begun`. The children
+        // this build returns mount under what is published here.
+        let view = core.view().clone();
+        publish_provided(&mut self.publication, core, owner, |values| {
+            view.provide(ctx, values);
+        });
         // The user `build()` is wrapped in `catch_unwind`: a panicking
         // build is caught and substituted with the registered
         // `ErrorView`. The catch covers ONLY the build expression — the
         // `view` borrow is moved into the closure so nothing of `core`
         // is mutated under the catch.
-        let view = core.view().clone();
-        let child_view =
-            super::behavior_commons::build_or_recover(core, owner, "StatelessElement", move || {
+        let child_view = super::behavior_commons::build_or_recover_begun(
+            core,
+            owner,
+            "StatelessElement",
+            move || {
                 // `view.build(ctx)` returns `impl IntoView` that may
                 // capture closure-local borrows of `view`/`ctx` (Rust 2024
                 // RPITIT default). We consume the opaque value through
@@ -528,7 +616,8 @@ where
                 // escaping borrows for `catch_unwind` to return.
                 let opaque = view.build(ctx);
                 Box::new(IntoView::into_view(opaque)) as Box<dyn View>
-            });
+            },
+        );
         super::behavior_commons::single_child_views(core, child_view, "StatelessBehavior")
     }
 }
@@ -671,6 +760,8 @@ pub struct StatefulBehavior<V: StatefulView> {
     /// The view or the dependencies changed since `ViewState::apply_view`
     /// last ran; the next build calls it first.
     apply_pending: bool,
+    /// The values the state publishes to its subtree.
+    publication: Publication,
 }
 
 impl<V: StatefulView> StatefulBehavior<V> {
@@ -681,6 +772,7 @@ impl<V: StatefulView> StatefulBehavior<V> {
             initialized: false,
             pending_update: None,
             apply_pending: true,
+            publication: Publication::default(),
         }
     }
 
@@ -714,6 +806,8 @@ where
     fn state_as_any(&self) -> Option<&dyn std::any::Any> {
         Some(&self.state as &dyn std::any::Any)
     }
+
+    publication_hooks!();
 
     fn build_into_views(
         &mut self,
@@ -801,22 +895,34 @@ where
             }
             self.apply_pending = false;
         }
+        // One clone of the view serves `provide` and `build`, taken before the
+        // reactive phase is armed: between the two hooks nothing the author
+        // wrote runs (no `Clone`, no `Drop`), so the phase `publish_provided`
+        // arms is always handed to `build_or_recover_begun`. The children
+        // this build returns mount under what is published here.
+        let view = core.view().clone();
+        let state = &self.state;
+        publish_provided(&mut self.publication, core, owner, |values| {
+            state.provide(&view, ctx, values);
+        });
         // The user `ViewState::build` is wrapped in `catch_unwind`: a
         // panicking build is caught and substituted with the registered
         // `ErrorView`. The catch covers ONLY the build expression — the
         // `view` borrow is moved into the closure (cloned) and `state` is
         // captured by reference, independent of `core`.
-        let view = core.view().clone();
-        let state = &self.state;
-        let child_view =
-            super::behavior_commons::build_or_recover(core, owner, "StatefulElement", move || {
+        let child_view = super::behavior_commons::build_or_recover_begun(
+            core,
+            owner,
+            "StatefulElement",
+            move || {
                 // See `StatelessBehavior::build_into_views` for the
                 // RPITIT-capture rationale — consume the opaque
                 // `impl IntoView` inside the closure body to box an owned
                 // `Box<dyn View>` for the `catch_unwind` return.
                 let opaque = state.build(&view, ctx);
                 Box::new(IntoView::into_view(opaque)) as Box<dyn View>
-            });
+            },
+        );
         super::behavior_commons::single_child_views(core, child_view, "StatefulBehavior")
     }
 
@@ -853,6 +959,7 @@ where
     /// `dispose` panicked, rather than leaving every later element in the
     /// finalize pass un-unmounted.
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+        self.publication.release(core.self_id(), owner);
         if !self.initialized {
             return;
         }
@@ -1411,54 +1518,23 @@ where
 // InheritedBehavior
 // ============================================================================
 
-/// One dependent of an `InheritedElement`: its tree depth (for the dirty heap)
-/// and the fields it read (issue #1090; [`FieldSet::ALL`] for a whole-type
-/// dependency).
-///
-/// Only `depth` is public: the recorded field sets are crate-private, so
-/// one provider's set cannot be read out and reused against another.
-///
-/// [`FieldSet::ALL`]: crate::view::FieldSet::ALL
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct DependentEntry {
-    /// Depth captured at `depend_on_inherited` time.
-    pub depth: usize,
-    /// Fields read in the dependent's latest `build` (re-derived per build,
-    /// ADR-0074 §5.5 reset-on-build).
-    pub(crate) mask: crate::view::FieldSet,
-    /// Fields read in `init_state` / `did_change_dependencies`: kept until
-    /// unmount, never reset by a rebuild (a state that acquires a value in a
-    /// lifecycle hook and does not re-read it in `build` stays subscribed).
-    pub(crate) lifecycle_mask: crate::view::FieldSet,
-    /// When this dependent first registered with its provider, relative to
-    /// the provider's other dependents.
-    pub(crate) registered: u64,
-}
-
-impl DependentEntry {
-    /// Every field this dependent is notified for: build reads plus
-    /// lifecycle reads.
-    #[must_use]
-    pub(crate) fn fields(&self) -> crate::view::FieldSet {
-        self.mask | self.lifecycle_mask
-    }
-}
+pub use super::provided::DependentEntry;
+use super::provided::Dependents;
 
 /// Behavior for InheritedView elements.
 ///
-/// Manages dependents tracking and data caching. Similar to ProxyView but with
-/// `update_should_notify` logic to optimize dependent rebuilds.
+/// Publishes the view itself to the subtree and keeps the ledger of the
+/// elements that read it. Similar to ProxyView but with `update_should_notify`
+/// logic to optimize dependent rebuilds.
 ///
-/// # Dependents map
+/// # Dependents
 ///
-/// Stored as `HashMap<ElementId, DependentEntry>` — dependent id mapped to its
-/// depth in the element tree and the provider fields it read
-/// ([`FieldSet`](crate::view::FieldSet), #1090). The depth is captured at
-/// `depend_on_inherited` time and used during `on_view_updated` to call
-/// `ElementOwner::schedule_build_for` with a typed rebuild reason, without an
-/// extra tree traversal (the tree is not in scope at `on_view_updated`
-/// time because we only see `ElementCore<V, A>`).
+/// Each dependent is recorded with its depth in the element tree and the
+/// provider fields it read ([`FieldSet`](crate::view::FieldSet), #1090). The
+/// depth is captured at `depend_on_inherited` time and used during
+/// `on_view_updated` to call `ElementOwner::schedule_build_for` with a typed
+/// rebuild reason, without an extra tree traversal (the tree is not in scope
+/// at `on_view_updated` time because we only see `ElementCore<V, A>`).
 #[derive(Debug)]
 pub struct InheritedBehavior<V: InheritedView> {
     /// Cached data for dependents.
@@ -1474,14 +1550,7 @@ pub struct InheritedBehavior<V: InheritedView> {
     /// here, refreshed on every `on_view_updated`.
     pub view_cache: V,
     /// Elements that depend on this InheritedElement.
-    ///
-    /// Maps each dependent's `ElementId` -> its tree depth (captured at
-    /// the time `depend_on_inherited` was called). The depth is needed
-    /// for `BuildOwner::schedule_build_for(id, depth, reason)` so the rebuild
-    /// heap orders dependents correctly without a separate tree walk.
-    pub dependents: HashMap<ElementId, DependentEntry>,
-    /// The registration stamp the next new dependent receives.
-    next_registration: u64,
+    dependents: Dependents,
     /// Marker for view type.
     _phantom: PhantomData<V>,
 }
@@ -1493,29 +1562,9 @@ impl<V: InheritedView> InheritedBehavior<V> {
         Self {
             data: view.data().clone(),
             view_cache: view.clone(),
-            dependents: HashMap::new(),
-            next_registration: 0,
+            dependents: Dependents::default(),
             _phantom: PhantomData,
         }
-    }
-
-    /// The entry for `element`, registering it behind every existing
-    /// dependent if it is new.
-    fn dependent_entry(&mut self, element: ElementId, depth: usize) -> &mut DependentEntry {
-        let next_registration = &mut self.next_registration;
-        let entry = self.dependents.entry(element).or_insert_with(|| {
-            let registered = *next_registration;
-            // Saturating: past 2^64 registrations the element id orders the tie.
-            *next_registration = registered.saturating_add(1);
-            DependentEntry {
-                depth,
-                mask: crate::view::FieldSet::NONE,
-                lifecycle_mask: crate::view::FieldSet::NONE,
-                registered,
-            }
-        });
-        entry.depth = depth;
-        entry
     }
 
     /// Get the provided data.
@@ -1523,39 +1572,9 @@ impl<V: InheritedView> InheritedBehavior<V> {
         &self.data
     }
 
-    /// Register a dependent element with its tree depth.
-    ///
-    /// Idempotent: re-registering the same `element` overwrites its
-    /// stored depth (depths can change across reconciliation, so the
-    /// latest call wins). HashMap inherently dedups on key.
-    pub(crate) fn add_dependent(
-        &mut self,
-        element: ElementId,
-        depth: usize,
-        mask: crate::view::FieldSet,
-    ) {
-        self.dependent_entry(element, depth).mask |= mask;
-    }
-
-    /// Register a dependent read made in a lifecycle hook: unions into the
-    /// kept-until-unmount `lifecycle_mask`.
-    pub(crate) fn add_lifecycle_dependent(
-        &mut self,
-        element: ElementId,
-        depth: usize,
-        mask: crate::view::FieldSet,
-    ) {
-        self.dependent_entry(element, depth).lifecycle_mask |= mask;
-    }
-
-    /// Remove a dependent element.
-    pub(crate) fn remove_dependent(&mut self, element: ElementId) {
-        self.dependents.remove(&element);
-    }
-
     /// Get all dependent elements (id -> depth + fields read).
     pub fn dependents(&self) -> &HashMap<ElementId, DependentEntry> {
-        &self.dependents
+        self.dependents.map()
     }
 }
 
@@ -1563,15 +1582,21 @@ impl<V> crate::element::InheritedElementAccess for InheritedBehavior<V>
 where
     V: InheritedView,
 {
-    fn dependent_count(&self) -> usize {
-        self.dependents.len()
+    fn provided_types(&self, visit: &mut dyn FnMut(TypeId)) {
+        visit(TypeId::of::<V>());
     }
 
-    fn view_as_any(&self) -> &dyn std::any::Any {
-        // Expose the cached view-clone as `&dyn Any` so the caller's
-        // typed downcast (`.downcast_ref::<V>()`) can succeed inside
-        // `BuildContextExt::depend_on`.
-        &self.view_cache as &dyn std::any::Any
+    fn provided(&self, type_id: TypeId) -> Option<crate::element::ProvidedRef<'_>> {
+        // The cached view-clone is the value: the caller's typed downcast
+        // (`.downcast_ref::<V>()`) succeeds inside `BuildContextExt::depend_on`.
+        (type_id == TypeId::of::<V>()).then_some(crate::element::ProvidedRef {
+            value: &self.view_cache as &dyn std::any::Any,
+            field: None,
+        })
+    }
+
+    fn dependent_count(&self) -> usize {
+        self.dependents.len()
     }
 
     fn record_dependent(
@@ -1581,7 +1606,7 @@ where
         depth: usize,
         mask: crate::view::FieldSet,
     ) {
-        self.add_dependent(dependent, depth, mask);
+        self.dependents.add(dependent, depth, mask);
     }
 
     fn record_lifecycle_dependent(
@@ -1591,13 +1616,11 @@ where
         depth: usize,
         mask: crate::view::FieldSet,
     ) {
-        self.add_lifecycle_dependent(dependent, depth, mask);
+        self.dependents.add_lifecycle(dependent, depth, mask);
     }
 
     fn reset_dependent_mask(&mut self, _token: crate::context::CrateToken, dependent: ElementId) {
-        if let Some(entry) = self.dependents.get_mut(&dependent) {
-            entry.mask = crate::view::FieldSet::NONE;
-        }
+        self.dependents.reset_mask(dependent);
     }
 
     fn prune_unread_dependent(
@@ -1605,17 +1628,11 @@ where
         _token: crate::context::CrateToken,
         dependent: ElementId,
     ) -> bool {
-        match self.dependents.get(&dependent) {
-            Some(entry) if entry.fields().is_empty() => {
-                self.dependents.remove(&dependent);
-                true
-            }
-            _ => false,
-        }
+        self.dependents.prune_unread(dependent)
     }
 
     fn remove_dependent(&mut self, _token: crate::context::CrateToken, dependent: ElementId) {
-        self.remove_dependent(dependent);
+        self.dependents.remove(dependent);
     }
 }
 
@@ -1657,11 +1674,6 @@ where
         self.data = core.view().data().clone();
         self.view_cache = core.view().clone();
 
-        // Compare old vs new view: `changed_fields(old)` says WHICH fields
-        // changed (`ALL`/`NONE` from `update_should_notify` for a
-        // provider that never opted in), and only dependents whose recorded
-        // mask intersects are scheduled.
-        //
         // Field-granular (#1090): the provider reports WHICH fields changed
         // (`ALL` for a provider that never opted in — the
         // `update_should_notify` default), and only dependents whose recorded
@@ -1675,29 +1687,7 @@ where
                 "InheritedBehavior::on_view_updated notifying dependents of {} candidates",
                 self.dependents.len()
             );
-            // The map iterates in its hash order, which changes from map to
-            // map. Scheduling in registration order (the dependents' first
-            // build order) lets the drain rebuild same-depth dependents in
-            // the same order every time.
-            let mut notified: Vec<(u64, ElementId, usize)> = self
-                .dependents
-                .iter()
-                .filter(|(_, entry)| entry.fields().intersects(changed))
-                .map(|(&dep_id, entry)| (entry.registered, dep_id, entry.depth))
-                .collect();
-            notified.sort_unstable();
-            for (_, dep_id, dep_depth) in notified {
-                // Notifying a dependent is split across two phases — the
-                // set-flag part (`note_dependency_change`) here, and the fire part
-                // (`ElementBase::notify_dependency_change`) inside
-                // `BuildOwner::build_scope` right before the dependent's
-                // `perform_build`. The typed
-                // `ViewState::did_change_dependencies` hook fires
-                // exactly once per dependency-change-then-rebuild
-                // cycle, strictly before the build.
-                owner.note_dependency_change(dep_id);
-                owner.schedule_build_for(dep_id, dep_depth, crate::RebuildReason::DependencyChange);
-            }
+            self.dependents.notify(changed, owner);
         }
     }
 
@@ -1707,13 +1697,8 @@ where
         // dependent during its own lifecycle transition; this also covers a
         // provider being torn down independently and keeps the two indexes
         // symmetric.
-        if let Some(provider) = core.self_id() {
-            for dependent in self.dependents.keys().copied() {
-                owner.unregister_inherited_dependency(dependent, provider);
-            }
-        }
         let count = self.dependents.len();
-        self.dependents.clear();
+        self.dependents.release(core.self_id(), owner);
         tracing::debug!("InheritedBehavior::on_unmount cleared {} dependents", count);
     }
 }
@@ -1814,6 +1799,22 @@ where
     /// participate in ancestor-state lookups.
     fn state_as_any(&self) -> Option<&dyn std::any::Any> {
         <StatefulBehavior<V> as ElementBehavior<V, A>>::state_as_any(&self.stateful)
+    }
+
+    fn as_inherited_access(&self) -> Option<&dyn crate::element::InheritedElementAccess> {
+        <StatefulBehavior<V> as ElementBehavior<V, A>>::as_inherited_access(&self.stateful)
+    }
+
+    fn as_inherited_access_mut(
+        &mut self,
+    ) -> Option<&mut dyn crate::element::InheritedElementAccess> {
+        <StatefulBehavior<V> as ElementBehavior<V, A>>::as_inherited_access_mut(&mut self.stateful)
+    }
+
+    fn take_provided_scope_stale(&mut self) -> bool {
+        <StatefulBehavior<V> as ElementBehavior<V, A>>::take_provided_scope_stale(
+            &mut self.stateful,
+        )
     }
 
     fn build_into_views(

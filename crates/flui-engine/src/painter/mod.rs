@@ -16,7 +16,7 @@ use crate::{
     command_ir::{DrawItem, DrawSegment},
     glyph_atlas::{GlyphAtlas, TextAtlas},
     layer_compositor::LayerCompositor,
-    pipeline_set::PipelineSet,
+    pipeline_set::PipelineLibrary,
     replay::GpuReplay,
     resources::GpuResources,
     state_stack::GpuStateStack,
@@ -49,7 +49,7 @@ pub struct WgpuPainter {
     /// All render pipelines used by this painter: nine named instanced/gradient/shadow
     /// pipelines + the on-demand shape pipeline cache. See `PipelineSet` for the full
     /// field map from previous painter fields to sub-fields.
-    pipelines: PipelineSet,
+    pipelines: PipelineLibrary,
 
     // ===== Segment-flush replay / GPU plumbing =====
     /// Owns the five static GPU plumbing fields (`viewport_buffer`,
@@ -72,7 +72,7 @@ pub struct WgpuPainter {
 
     // ===== Text =====
     /// The rasterised-glyph cache paragraphs are recorded against and the
-    /// glyph pipeline samples.
+    /// glyph pipeline samples. One per painter whatever formats it draws to.
     glyph_atlas: TextAtlas,
 
     // ===== GPU Draw-State Stack =====
@@ -206,14 +206,14 @@ impl WgpuPainter {
         // ===== Pipeline collection (all 9 named pipelines + shape cache) =====
         //
         // `PipelineSet::new` creates the viewport bind-group layout internally
-        // and exposes it via `viewport_bind_group_layout()`.  `GpuReplay::new`
-        // below passes `&pipelines` so the viewport bind group it creates is
-        // built against that exact layout object, satisfying the wgpu identity
-        // requirement between bind groups and pipelines.
-        let pipelines = PipelineSet::new(&device, surface_format);
+        // and exposes it via `viewport_bind_group_layout()`. `GpuReplay::new`
+        // builds the viewport bind group against the first set's layout; the
+        // sets of later target formats have layouts with the same entries, so
+        // it binds under their pipelines too (group equivalence).
+        let pipelines = PipelineLibrary::new(&device, surface_format);
 
         // ===== Replay / GPU plumbing (viewport buffer/bind-group, unit quad, sampler) =====
-        let replay = GpuReplay::new(&device, &pipelines, size.0, size.1);
+        let replay = GpuReplay::new(&device, pipelines.current(), size.0, size.1);
 
         // Glyph bitmaps come from swash over the faces each paragraph's
         // runs carry (ADR-0092 §5): the atlas owns its rasterizer and the
@@ -221,7 +221,7 @@ impl WgpuPainter {
         let glyph_atlas = GlyphAtlas::new(
             Arc::clone(&device),
             Arc::clone(&queue),
-            &pipelines.glyph_atlas_bind_group_layout,
+            &pipelines.current().glyph_atlas_bind_group_layout,
             source.rasterizer(),
         );
 
@@ -255,9 +255,30 @@ impl WgpuPainter {
         self.glyph_atlas = GlyphAtlas::new(
             Arc::clone(&self.device),
             Arc::clone(&self.queue),
-            &self.pipelines.glyph_atlas_bind_group_layout,
+            &self.pipelines.current().glyph_atlas_bind_group_layout,
             source.rasterizer(),
         );
+    }
+
+    /// Draw the next frames into targets of `format`.
+    ///
+    /// The pipelines for a format are built the first time it is selected and
+    /// kept, so a painter serving targets of several formats in turn builds
+    /// each format's pipelines once; the glyph atlas, the image and path
+    /// caches and the pooled buffers are format-free and stay as they are.
+    /// Call between frames.
+    pub(crate) fn retarget(&mut self, format: wgpu::TextureFormat) {
+        if format == self.surface_format {
+            return;
+        }
+        self.pipelines.select(&self.device, format);
+        self.surface_format = format;
+    }
+
+    /// How many pipeline sets this painter has built, one per target format.
+    #[cfg(test)]
+    pub(crate) fn pipeline_sets_built(&self) -> usize {
+        self.pipelines.sets_built()
     }
 
     /// Give back GPU memory the next frames can rebuild, for `level`.
@@ -462,7 +483,7 @@ impl WgpuPainter {
             self.surface_format,
             &self.device,
             &self.queue,
-            &mut self.pipelines,
+            self.pipelines.current_mut(),
             &mut self.resources,
             &self.glyph_atlas,
             encoder,

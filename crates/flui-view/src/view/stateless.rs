@@ -72,6 +72,20 @@ pub trait StatelessView: Clone + 'static {
     /// because the opaque value is consumed inside the closure body
     /// — its captured borrows never escape.
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView;
+
+    /// Publish values to the subtree under this view (ADR-0322 §5).
+    ///
+    /// Runs right before each `build`. A descendant reads a value with
+    /// `ctx.depend_on::<T, _>(..)` and rebuilds when a later value's
+    /// [`ProvidedValue::update_should_notify`](crate::ProvidedValue::update_should_notify)
+    /// says so. The default publishes nothing.
+    ///
+    /// A view whose job is to hand a value down is an [`InheritedView`](crate::InheritedView),
+    /// as in Flutter; this hook is for a view that already mounts an element
+    /// for another reason (Flutter's `Element.updateInheritance`).
+    fn provide(&self, ctx: &dyn BuildContext, values: &mut crate::Provided<'_>) {
+        let _ = (ctx, values);
+    }
 }
 
 // The legacy `impl_stateless_view!` declarative macro was deleted
