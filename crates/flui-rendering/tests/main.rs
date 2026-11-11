@@ -53,8 +53,8 @@ mod retained_boundary_layers;
 #[path = "nested_boundary_capture.rs"]
 mod nested_boundary_capture;
 
-#[path = "boundary_content_tokens.rs"]
-mod boundary_content_tokens;
+#[path = "boundary_contents.rs"]
+mod boundary_contents;
 
 #[path = "paint_before_layout.rs"]
 mod paint_before_layout;

@@ -53,7 +53,6 @@ use flui_foundation::UiRuntimeId;
 use flui_foundation::geometry::Size;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::InteractionLane;
-use flui_layer::Scene;
 #[cfg(test)]
 use flui_platform::{PlatformInput, PlatformWindow};
 #[cfg(test)]
@@ -357,15 +356,10 @@ impl std::fmt::Debug for UiRuntime {
 /// failure requests another frame.
 #[derive(Debug)]
 pub(crate) enum FramePaintOutcome {
-    /// A fresh layer tree was painted and turned into a `Scene`. Holds
-    /// `Scene` by value, not `Arc<Scene>`: the sole reader (the frame
-    /// transaction immediately below) MOVES it into the submit sink —
-    /// on the raster-lane path it crosses the raster boundary as an owned
-    /// `SceneSnapshot` (that type's own "never `Arc<Scene>`" contract in
-    /// `scene_snapshot.rs`), on the direct path it is borrowed internally
-    /// and dropped when the render returns. Nothing shares this value, so
-    /// an `Arc` bought nothing here.
-    Painted(Scene),
+    /// The frame's patch was applied: the presentation's current version,
+    /// with the damage since the version the raster side last acknowledged
+    /// (ADR-0304 §7). Moved into the sink, which keeps what it needs of it.
+    Painted(flui_layer::ScenePublication),
     /// Nothing was dirty this frame; no new content to composite.
     Idle,
     /// The complete segment failed: a structured pipeline error, or a panic

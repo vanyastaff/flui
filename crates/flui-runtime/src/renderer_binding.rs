@@ -411,61 +411,49 @@ impl RenderingBinding {
         self.first_frame_sent.store(true, Ordering::Relaxed);
     }
 
-    /// Pump the rendering pipeline once and return the produced layer tree,
-    /// gated by the first-frame deferral counter.
+    /// Pump the rendering pipeline once into the patch `writer` buffers,
+    /// gated by the first-frame deferral counter; whether there is a frame
+    /// to apply and show.
     ///
-    /// Consumes the root [`PipelineOwner`] out of its lock, drives it
-    /// through [`PipelineOwner::run_frame`] (layout, compositing bits,
-    /// paint, semantics), and restores it — the owner is always left
-    /// usable for the next frame, error or not. The layer tree this
-    /// produces is withheld (`None`) while [`Self::send_frames_to_engine`]
-    /// is `false`; the pipeline work itself (the warm-up cost) still runs
-    /// either way, matching the oracle's `drawFrame` split (see the module
-    /// note above `defer_first_frame`).
+    /// Drives the root [`PipelineOwner`] through
+    /// [`PipelineOwner::run_frame`] (layout, compositing bits, paint,
+    /// semantics) in place — the owner is always left usable for the next
+    /// frame, error or not. The frame is withheld (`false`) while
+    /// [`Self::send_frames_to_engine`] is `false`; the pipeline work itself
+    /// (the warm-up cost) still runs either way, matching the oracle's
+    /// `drawFrame` split (see the module note above `defer_first_frame`).
+    /// A caller that drops the patch instead of applying it gets a repaint
+    /// from the root on the next frame.
     ///
     /// This is a convenience for using `RenderingBinding` directly,
     /// without `WidgetsBinding` (see the module doc). The production
     /// frame path (`UiRuntime::render_frame_entered`) does **not** call
-    /// this method — it drives the shared pipeline through
-    /// `WidgetsBinding::run_frame_with_layout_builders` instead (the
-    /// build-during-layout fixpoint this method does not need to settle)
-    /// and consults [`Self::send_frames_to_engine`] /
+    /// this method — it drives the shared pipeline into the presentation's
+    /// own scene and consults [`Self::send_frames_to_engine`] /
     /// [`Self::mark_first_frame_sent`] directly at its own presentation
     /// step.
-    pub fn draw_frame(&self) -> Option<flui_layer::LayerTree> {
-        let layer_tree = match self.root_pipeline_owner().run_frame() {
-            Ok(layer_tree) => layer_tree,
+    pub fn draw_frame(&self, writer: &mut flui_layer::SceneWriter<'_>) -> bool {
+        let painted = match self.root_pipeline_owner().run_frame(writer) {
+            Ok(painted) => painted,
             Err(e) => {
                 tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
-                None
+                false
             }
         };
         // The frame's semantics diagnostics, with the checkout released (a
         // `tracing` subscriber is user code that may reach this pipeline). A
-        // subscriber that panics unwinds out of here; the painted tree goes
-        // back to the pipeline first, with no call out to user code, so a
-        // caller that catches the panic gets the frame from the next draw.
-        let pipeline = self.root_pipeline_owner();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a diagnostics subscriber's panic must not lose the painted tree"
-        )]
-        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            pipeline.report_semantics_diagnostics();
-        })) {
-            if let Some(layer_tree) = layer_tree {
-                pipeline.with_mut(|owner| owner.restore_layer_tree(layer_tree));
-            }
-            std::panic::resume_unwind(payload);
-        }
+        // subscriber that panics unwinds out of here; the patch stays staged
+        // in the pipeline, so a caller that catches the panic and drops it
+        // gets a full frame from the next draw.
+        self.root_pipeline_owner().report_semantics_diagnostics();
 
         if self.send_frames_to_engine() {
             self.mark_first_frame_sent();
-            layer_tree
+            painted
         } else {
             // Deferred-first-frame: pipeline work ran (warm-up), the
             // output is withheld until the deferral count drains.
-            None
+            false
         }
     }
 
@@ -698,10 +686,10 @@ mod tests {
         // Deferred: the pipeline still runs (warm-up) but the output
         // is withheld.
         binding.defer_first_frame();
-        assert!(
-            binding.draw_frame().is_none(),
-            "deferred first frame must withhold the layer tree",
-        );
+        let mut host = flui_rendering::testing::SceneHost::new();
+        let cell = binding.root_pipeline_owner();
+        let (shown, _) = host.drive_cell(cell, |writer| binding.draw_frame(writer));
+        assert!(!shown, "deferred first frame must withhold the layer tree");
         binding.allow_first_frame();
 
         // The deferred pass consumed the dirty work — re-mark so the
@@ -709,9 +697,12 @@ mod tests {
         binding
             .root_pipeline_owner()
             .with_mut(|owner| owner.mark_needs_layout(root_id));
-        let tree = binding
-            .draw_frame()
-            .expect("non-deferred frame with dirty work must return the layer tree");
+        let (shown, tree) = host.drive_cell(cell, |writer| binding.draw_frame(writer));
+        assert!(
+            shown,
+            "non-deferred frame with dirty work must return the layer tree"
+        );
+        let tree = tree.expect("a shown frame carries its layer tree");
         assert!(
             tree.len() > 1,
             "the produced layer tree must carry the painted content under its root",
@@ -779,7 +770,8 @@ mod tests {
     fn draw_frame_reports_semantics_diagnostics() {
         let (owner, binding) = selected_button_binding();
 
-        let _ = binding.draw_frame();
+        let _ = flui_rendering::testing::SceneHost::new()
+            .drive_cell(&owner, |writer| binding.draw_frame(writer));
         assert_ne!(
             owner.with_mut(PipelineOwner::take_unchecked_semantics_diagnostics),
             [],
@@ -825,7 +817,10 @@ mod tests {
             });
         });
         let drawn = tracing::subscriber::with_default(Panicking, || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| binding.draw_frame()))
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                flui_rendering::testing::SceneHost::new()
+                    .drive_cell(&owner, |writer| binding.draw_frame(writer))
+            }))
         });
         assert!(drawn.is_err(), "the subscriber's panic propagates");
         assert_eq!(
@@ -834,7 +829,9 @@ mod tests {
             "keeping the frame calls out to no user code"
         );
         assert!(
-            binding.draw_frame().is_some(),
+            flui_rendering::testing::SceneHost::new()
+                .drive_cell(&owner, |writer| binding.draw_frame(writer))
+                .0,
             "the next draw delivers the frame the panic unwound"
         );
     }

@@ -9,6 +9,7 @@ use flui_painting::display_list::{DisplayList, DrawOp};
 use flui_painting::paint::TextureId;
 use smallvec::SmallVec;
 
+use super::geometry::Reach;
 use super::id::{ContentVersion, NodeKey, SceneNodeId};
 use crate::layer::Layer;
 use crate::link::LayerLink;
@@ -50,7 +51,7 @@ pub struct Chunk {
     owner: RenderId,
     ordinal: u32,
     version: ContentVersion,
-    commands: DisplayList,
+    commands: Arc<DisplayList>,
     bounds: Bounds,
     textures: SmallVec<[TextureId; 1]>,
     reads_destination: bool,
@@ -88,7 +89,7 @@ impl Chunk {
             owner,
             ordinal,
             version,
-            commands,
+            commands: Arc::new(commands),
             bounds,
             textures,
             reads_destination: destination,
@@ -126,6 +127,13 @@ impl Chunk {
         &self.commands
     }
 
+    /// The recorded commands, shared: a picture built from the chunk holds
+    /// them without copying.
+    #[must_use]
+    pub fn shared_commands(&self) -> &Arc<DisplayList> {
+        &self.commands
+    }
+
     /// Every pixel replaying it can change, in the boundary's space.
     #[must_use]
     pub fn bounds(&self) -> Bounds {
@@ -142,13 +150,13 @@ impl Chunk {
 /// One entry of a boundary's paint-order stream (ADR-0253 §1).
 ///
 /// `parent` is the effect the entry sits under, always an earlier entry of
-/// the same content; `None` is the boundary itself.
+/// the same content; `None` is the boundary itself. An effect's layer is
+/// held beside the stream ([`BoundaryContent::effect_layer`]), so replacing
+/// it shares the stream.
 #[derive(Debug, Clone)]
 pub enum Entry {
     /// A layer the boundary's paint pushed, which its children sit under.
     Effect {
-        /// The layer.
-        layer: Layer,
         /// The render object that pushed it.
         owner: RenderId,
         /// Which of its owner's effects in the boundary it is.
@@ -191,23 +199,157 @@ pub(crate) enum LinkRole {
     Follower,
 }
 
+/// What one effect's scope holds that its layers never change.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct EffectScope {
+    /// The position after its scope.
+    pub(crate) end: usize,
+    /// The union of what its direct chunk children draw, in its children's
+    /// space.
+    pub(crate) chunks: Reach,
+}
+
+/// Everything of a content that depends only on its entries, shared by every
+/// content an effect update derives from it.
+#[derive(Debug)]
+struct Stream {
+    entries: Vec<Entry>,
+    /// The entry of each effect, ascending: the effect at `effects[i]` has
+    /// the layer `layers[i]` of the content.
+    effects: Vec<EntryIndex>,
+    /// Each effect's scope, as `effects` orders them.
+    scopes: Vec<EffectScope>,
+    /// Each effect and slot entry, ascending.
+    structural: Vec<EntryIndex>,
+    /// The union of what the top-level chunks draw, in the boundary's space.
+    top_chunks: Reach,
+    /// Each slot's entry, by its node's key.
+    slot_entries: Vec<(SceneNodeId, EntryIndex)>,
+    /// Each chunk that draws an external texture, by texture.
+    chunk_textures: Vec<(TextureId, EntryIndex)>,
+    /// Each chunk that reads the destination, in paint order.
+    chunk_closures: Vec<EntryIndex>,
+}
+
+impl Stream {
+    fn of(entries: Vec<Entry>) -> Self {
+        let mut effects = Vec::new();
+        let mut scopes: Vec<EffectScope> = Vec::new();
+        let mut structural = Vec::new();
+        let mut top_chunks = Reach::Nothing;
+        let mut slots = Vec::new();
+        let mut chunk_textures = Vec::new();
+        let mut chunk_closures = Vec::new();
+        // The effects the current entry sits under, innermost last, as
+        // positions in `effects`.
+        let mut open: SmallVec<[usize; 8]> = SmallVec::new();
+        for (position, entry) in entries.iter().enumerate() {
+            let index = EntryIndex::at(position);
+            let parent = entry.parent();
+            while let Some(&top) = open.last()
+                && Some(effects[top]) != parent
+            {
+                scopes[top].end = position;
+                open.pop();
+            }
+            let held = open.last().copied();
+            debug_assert_eq!(
+                held.map(|top| effects[top]),
+                parent,
+                "BUG: an entry's parent is an open effect"
+            );
+            match entry {
+                Entry::Effect { .. } => {
+                    open.push(effects.len());
+                    effects.push(index);
+                    scopes.push(EffectScope {
+                        end: entries.len(),
+                        chunks: Reach::Nothing,
+                    });
+                    structural.push(index);
+                }
+                Entry::Chunk { chunk, .. } => {
+                    let reach = Reach::of(chunk.bounds());
+                    match held {
+                        Some(top) => scopes[top].chunks = scopes[top].chunks.union(reach),
+                        None => top_chunks = top_chunks.union(reach),
+                    }
+                    chunk_textures.extend(chunk.textures().iter().map(|texture| (*texture, index)));
+                    if chunk.reads_destination() {
+                        chunk_closures.push(index);
+                    }
+                }
+                Entry::Slot { node, .. } => {
+                    slots.push((*node, index));
+                    structural.push(index);
+                }
+            }
+        }
+        slots.sort_unstable_by_key(|(node, _)| node.key().table_key());
+        Self {
+            entries,
+            effects,
+            scopes,
+            structural,
+            top_chunks,
+            slot_entries: slots,
+            chunk_textures,
+            chunk_closures,
+        }
+    }
+}
+
+/// What the layers of a content put into its indexes.
+#[derive(Debug, Default)]
+struct LayerIndexes {
+    /// Each link layer, in paint order.
+    links: Vec<(LayerLink, LinkRole, EntryIndex)>,
+    /// Each texture layer, by texture, in paint order.
+    textures: Vec<(TextureId, EntryIndex)>,
+    /// Each effect that reads pixels other than those it draws, in paint
+    /// order.
+    closures: Vec<EntryIndex>,
+}
+
+impl LayerIndexes {
+    fn of(effects: &[EntryIndex], layers: &[Layer]) -> Self {
+        let mut links = Vec::new();
+        let mut textures = Vec::new();
+        let mut closures = Vec::new();
+        for (&index, layer) in effects.iter().zip(layers) {
+            match layer {
+                Layer::Leader(leader) => links.push((leader.link(), LinkRole::Leader, index)),
+                Layer::Follower(follower) => {
+                    links.push((follower.link(), LinkRole::Follower, index));
+                }
+                Layer::Texture(texture) => textures.push((texture.texture_id(), index)),
+                _ => {}
+            }
+            if layer_has_closure(layer) {
+                closures.push(index);
+            }
+        }
+        Self {
+            links,
+            textures,
+            closures,
+        }
+    }
+}
+
 /// What one boundary paints: one paint-order stream of effects, chunks and
 /// child slots, built by a [`ContentBuilder`] so every entry's parent is an
 /// earlier effect.
+///
+/// The stream and everything that depends only on it are shared; each
+/// effect's layer is held beside it, so a composited-layer update
+/// ([`Self::with_effects`]) copies the layers and shares the stream.
 #[derive(Debug)]
 pub struct BoundaryContent {
-    entries: Box<[Entry]>,
-    /// Each link layer the entries hold.
-    links: Box<[(LayerLink, LinkRole, EntryIndex)]>,
-    /// Each entry that draws an external texture, by texture.
-    textures: Box<[(TextureId, EntryIndex)]>,
-    /// Each slot's entry, by its node's key.
-    slot_entries: Box<[(SceneNodeId, EntryIndex)]>,
-    /// Each entry that reads pixels other than those it draws, in paint
-    /// order: a backdrop or image filter, a colour filter painting
-    /// transparent pixels, a chunk that reads the destination. A node with
-    /// one is filtered, and closing damage visits only these entries.
-    closure_entries: Box<[EntryIndex]>,
+    stream: Arc<Stream>,
+    /// One layer per effect, in paint order.
+    layers: Vec<Layer>,
+    indexes: LayerIndexes,
 }
 
 impl BoundaryContent {
@@ -217,53 +359,170 @@ impl BoundaryContent {
         ContentBuilder::default()
     }
 
+    fn of(stream: Arc<Stream>, layers: Vec<Layer>) -> Self {
+        let indexes = LayerIndexes::of(&stream.effects, &layers);
+        Self {
+            stream,
+            layers,
+            indexes,
+        }
+    }
+
     /// The stream in paint order.
     #[must_use]
     pub fn entries(&self) -> &[Entry] {
-        &self.entries
+        &self.stream.entries
+    }
+
+    /// The layer of the effect at `entry`, `None` when it names no effect.
+    #[must_use]
+    pub fn effect_layer(&self, entry: EntryIndex) -> Option<&Layer> {
+        let at = self.effect_position(entry)?;
+        self.layers.get(at)
+    }
+
+    /// Each effect's entry and layer, in paint order.
+    pub fn effect_layers(&self) -> impl ExactSizeIterator<Item = (EntryIndex, &Layer)> + '_ {
+        self.stream.effects.iter().copied().zip(self.layers.iter())
     }
 
     /// The child boundaries the stream names, in paint order.
     pub fn slots(&self) -> impl Iterator<Item = SceneNodeId> + '_ {
-        self.entries.iter().filter_map(|entry| match entry {
-            Entry::Slot { node, .. } => Some(*node),
-            Entry::Effect { .. } | Entry::Chunk { .. } => None,
-        })
+        self.stream
+            .structural
+            .iter()
+            .filter_map(|index| match &self.stream.entries[index.get()] {
+                Entry::Slot { node, .. } => Some(*node),
+                Entry::Effect { .. } | Entry::Chunk { .. } => None,
+            })
+    }
+
+    /// Where the effect at `entry` stands among the content's effects.
+    pub(crate) fn effect_position(&self, entry: EntryIndex) -> Option<usize> {
+        self.stream.effects.binary_search(&entry).ok()
+    }
+
+    /// The entry of each effect, ascending.
+    pub(crate) fn effects(&self) -> &[EntryIndex] {
+        &self.stream.effects
+    }
+
+    /// Each effect's layer, as [`Self::effects`] orders them.
+    pub(crate) fn layers(&self) -> &[Layer] {
+        &self.layers
+    }
+
+    /// The scope of the effect at `position` among the effects.
+    pub(crate) fn effect_scope(&self, position: usize) -> EffectScope {
+        self.stream.scopes[position]
+    }
+
+    /// Each effect and slot entry, ascending.
+    pub(crate) fn structural(&self) -> &[EntryIndex] {
+        &self.stream.structural
+    }
+
+    /// What the top-level chunks draw, in the boundary's space.
+    pub(crate) fn top_chunks(&self) -> Reach {
+        self.stream.top_chunks
+    }
+
+    /// Whether `other` holds this very stream, its layers aside.
+    pub(crate) fn shares_stream(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.stream, &other.stream)
     }
 
     pub(crate) fn links(&self) -> &[(LayerLink, LinkRole, EntryIndex)] {
-        &self.links
+        &self.indexes.links
     }
 
-    pub(crate) fn textures(&self) -> &[(TextureId, EntryIndex)] {
-        &self.textures
+    /// Each entry that draws an external texture, by texture, in paint
+    /// order.
+    pub(crate) fn textures(&self) -> impl Iterator<Item = (TextureId, EntryIndex)> + '_ {
+        merged(
+            &self.stream.chunk_textures,
+            &self.indexes.textures,
+            |(_, entry)| *entry,
+        )
+        .copied()
     }
 
     /// The slot that names `child`, if one does.
     pub(crate) fn slot_entry(&self, child: NodeKey) -> Option<EntryIndex> {
-        let at = self
-            .slot_entries
+        let slots = &self.stream.slot_entries;
+        let at = slots
             .binary_search_by_key(&child.table_key(), |(node, _)| node.key().table_key())
             .ok()?;
-        let (node, entry) = self.slot_entries[at];
+        let (node, entry) = slots[at];
         (node.key() == child).then_some(entry)
     }
 
-    /// The entries closing damage visits, in paint order.
-    pub(crate) fn closure_entries(&self) -> &[EntryIndex] {
-        &self.closure_entries
+    /// Each entry that reads pixels other than those it draws, in paint
+    /// order: a backdrop or image filter, a colour filter painting
+    /// transparent pixels, a chunk that reads the destination. A node with
+    /// one is filtered, and closing damage visits only these entries.
+    pub(crate) fn closure_entries(&self) -> impl Iterator<Item = EntryIndex> + '_ {
+        merged(
+            &self.stream.chunk_closures,
+            &self.indexes.closures,
+            |entry| *entry,
+        )
+        .copied()
     }
 
     pub(crate) fn is_filtered(&self) -> bool {
-        !self.closure_entries.is_empty()
+        !self.stream.chunk_closures.is_empty() || !self.indexes.closures.is_empty()
+    }
+
+    /// The same stream with the effects at the given entries replaced by
+    /// new layers, the stream shared: how a composited-layer update
+    /// republishes a boundary without repainting it. It costs the content's
+    /// effects, not its chunks.
+    ///
+    /// # Errors
+    ///
+    /// The first index that names no effect; nothing is built.
+    pub fn with_effects(
+        &self,
+        replaced: impl IntoIterator<Item = (EntryIndex, Layer)>,
+    ) -> Result<Self, EntryIndex> {
+        let mut layers = self.layers.clone();
+        for (index, layer) in replaced {
+            let at = self.effect_position(index).ok_or(index)?;
+            layers[at] = layer;
+        }
+        Ok(Self::of(Arc::clone(&self.stream), layers))
     }
 
     /// Whether `other` puts the same entries into the three indexes.
     pub(crate) fn same_indexes(&self, other: &Self) -> bool {
-        self.links == other.links
-            && self.textures == other.textures
+        // Chunk and effect textures are compared apart: equal halves are
+        // equal lists, and halves that differ only reindex.
+        (self.shares_stream(other) || self.stream.chunk_textures == other.stream.chunk_textures)
+            && self.indexes.links == other.indexes.links
+            && self.indexes.textures == other.indexes.textures
             && self.is_filtered() == other.is_filtered()
     }
+}
+
+/// Two lists, each ascending by `key`, as one: no key is in both.
+fn merged<'a, T>(
+    first: &'a [T],
+    second: &'a [T],
+    key: impl Fn(&T) -> EntryIndex,
+) -> impl Iterator<Item = &'a T> {
+    let (mut a, mut b) = (first.iter().peekable(), second.iter().peekable());
+    std::iter::from_fn(move || match (a.peek(), b.peek()) {
+        (Some(x), Some(y)) => {
+            if key(x) <= key(y) {
+                a.next()
+            } else {
+                b.next()
+            }
+        }
+        (Some(_), None) => a.next(),
+        (None, _) => b.next(),
+    })
 }
 
 impl Default for BoundaryContent {
@@ -277,18 +536,19 @@ impl Default for BoundaryContent {
 #[derive(Debug, Default)]
 pub struct ContentBuilder {
     entries: Vec<Entry>,
-    open: Vec<EntryIndex>,
+    layers: Vec<Layer>,
+    open: SmallVec<[EntryIndex; 8]>,
 }
 
 impl ContentBuilder {
     /// Pushes `layer` under the open effect and opens it.
     pub fn push_effect(&mut self, layer: Layer, owner: RenderId, ordinal: u32) -> EntryIndex {
         let index = self.push(|parent| Entry::Effect {
-            layer,
             owner,
             ordinal,
             parent,
         });
+        self.layers.push(layer);
         self.open.push(index);
         index
     }
@@ -311,38 +571,7 @@ impl ContentBuilder {
     /// The content, with every open effect closed.
     #[must_use]
     pub fn finish(self) -> BoundaryContent {
-        let mut links = Vec::new();
-        let mut textures = Vec::new();
-        let mut slots = Vec::new();
-        let mut closure_entries = Vec::new();
-        for (position, entry) in self.entries.iter().enumerate() {
-            let index = EntryIndex::at(position);
-            if entry_has_closure(entry) {
-                closure_entries.push(index);
-            }
-            match entry {
-                Entry::Effect { layer, .. } => match layer {
-                    Layer::Leader(leader) => links.push((leader.link(), LinkRole::Leader, index)),
-                    Layer::Follower(follower) => {
-                        links.push((follower.link(), LinkRole::Follower, index));
-                    }
-                    Layer::Texture(texture) => textures.push((texture.texture_id(), index)),
-                    _ => {}
-                },
-                Entry::Chunk { chunk, .. } => {
-                    textures.extend(chunk.textures().iter().map(|texture| (*texture, index)));
-                }
-                Entry::Slot { node, .. } => slots.push((*node, index)),
-            }
-        }
-        slots.sort_unstable_by_key(|(node, _)| node.key().table_key());
-        BoundaryContent {
-            entries: self.entries.into_boxed_slice(),
-            links: links.into_boxed_slice(),
-            textures: textures.into_boxed_slice(),
-            slot_entries: slots.into_boxed_slice(),
-            closure_entries: closure_entries.into_boxed_slice(),
-        }
+        BoundaryContent::of(Arc::new(Stream::of(self.entries)), self.layers)
     }
 
     fn push(&mut self, entry: impl FnOnce(Option<EntryIndex>) -> Entry) -> EntryIndex {
@@ -394,16 +623,12 @@ fn reads_destination(op: &DrawOp) -> bool {
     }
 }
 
-/// Whether `entry` reads pixels other than those it draws, so damage that
-/// meets it takes its read closure (ADR-0304 §6).
-fn entry_has_closure(entry: &Entry) -> bool {
-    match entry {
-        Entry::Effect { layer, .. } => match layer {
-            Layer::BackdropFilter(_) | Layer::ImageFilter(_) => true,
-            Layer::ColorFilter(filter) => filter.color_filter().modifies_transparent_black(),
-            _ => false,
-        },
-        Entry::Chunk { chunk, .. } => chunk.reads_destination(),
-        Entry::Slot { .. } => false,
+/// Whether an effect of `layer` reads pixels other than those it draws, so
+/// damage that meets it takes its read closure (ADR-0304 §6).
+fn layer_has_closure(layer: &Layer) -> bool {
+    match layer {
+        Layer::BackdropFilter(_) | Layer::ImageFilter(_) => true,
+        Layer::ColorFilter(filter) => filter.color_filter().modifies_transparent_black(),
+        _ => false,
     }
 }

@@ -43,8 +43,9 @@ impl FrameSink for OpacitySceneSink {
         (800, 600)
     }
 
-    fn submit(&mut self, scene: flui_layer::Scene) -> SubmitVerdict {
-        self.alpha = scene.tree().iter().find_map(|(_, node)| {
+    fn submit(&mut self, scene: flui_layer::ScenePublication) -> SubmitVerdict {
+        let tree = scene.scene.flatten();
+        self.alpha = tree.iter().find_map(|(_, node)| {
             if let flui_layer::Layer::Opacity(layer) = node.layer() {
                 Some(layer.alpha())
             } else {
@@ -389,9 +390,10 @@ impl FrameSink for Sink {
     fn surface_size(&mut self) -> (u32, u32) {
         self.size.get()
     }
-    fn submit(&mut self, scene: flui_layer::Scene) -> SubmitVerdict {
+    fn submit(&mut self, scene: flui_layer::ScenePublication) -> SubmitVerdict {
+        let tree = scene.scene.flatten();
         self.paragraphs.clear();
-        for (_, node) in scene.tree().iter() {
+        for (_, node) in tree.iter() {
             if let flui_layer::Layer::Picture(picture) = node.layer() {
                 for command in picture.picture() {
                     if let flui_painting::DrawOp::Paragraph { paragraph, .. } = &command.op {
@@ -2525,7 +2527,7 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
         fn surface_size(&mut self) -> (u32, u32) {
             (40, 40)
         }
-        fn submit(&mut self, _: flui_layer::Scene) -> SubmitVerdict {
+        fn submit(&mut self, _: flui_layer::ScenePublication) -> SubmitVerdict {
             SubmitVerdict::Presented
         }
     }

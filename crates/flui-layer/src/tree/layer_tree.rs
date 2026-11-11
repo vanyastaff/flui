@@ -17,7 +17,9 @@ use std::num::NonZeroU64;
 
 use flui_foundation::{LayerId, RenderId};
 
-use super::stamp::{BoundaryStamp, ContentToken};
+use super::stamp::BoundaryStamp;
+#[cfg(any(test, feature = "testing"))]
+use super::stamp::ContentToken;
 use crate::{LayerLink, layer::Layer};
 
 /// A [`Layer`] plus its position in the tree.
@@ -26,37 +28,50 @@ pub struct LayerNode {
     parent: Option<LayerId>,
     children: Vec<LayerId>,
     layer: Layer,
-    /// The repaint boundary whose paint produced this layer, and the version
-    /// of the content it painted, when a boundary did.
+    /// The render object that pushed this layer (an effect) or painted it (a
+    /// picture), when the tree was flattened from a scene version that
+    /// records it; `None` on the layers a node's placement adds.
+    render: Option<RenderId>,
+    /// The repaint boundary a hand-built test tree stamps on a layer, and the
+    /// version of the content it painted: the input of the tree differ the
+    /// damage readback suites still compare against.
     ///
-    /// This is what lets two consecutive frames be compared: each frame builds
-    /// a fresh tree with fresh ids, so `LayerId` pairs nothing, and damage has
-    /// to come from comparing layer trees rather than from which render
-    /// objects repainted (ADR-0061). The `RenderId` pairs a layer with the
-    /// previous frame's; the [`ContentToken`] says whether its content changed
-    /// (ADR-0087 §3). `None` on every layer no boundary originated —
-    /// structural layers a fragment pushed — so a pairing pass cannot mistake
-    /// one for a boundary. The root carries a stamp only when the root render
-    /// object is itself a repaint boundary (as `RenderView` is); a plain
-    /// `RenderFlex` root, as most test fixtures mount, leaves it `None`.
+    /// Present in every build, `None` outside tests: a field that existed only
+    /// under `testing` would give this type two layouts, and a hot-reload host
+    /// drops trees its plugin built with the other one.
+    #[cfg_attr(
+        not(any(test, feature = "testing")),
+        expect(dead_code, reason = "read only by the testing damage oracle")
+    )]
     boundary: Option<BoundaryStamp>,
 }
 
 impl LayerNode {
-    /// Wraps a layer with no parent, no children, and no boundary stamp.
+    /// Wraps a layer with no parent, no children, and no render link.
     pub fn new(layer: Layer) -> Self {
         Self {
             parent: None,
             children: Vec::new(),
             layer,
+            render: None,
             boundary: None,
         }
     }
 
+    /// Links this node to the render object that pushed or painted its
+    /// layer — see [`Self::render_id`].
+    #[must_use]
+    pub fn with_render(mut self, render_id: RenderId) -> Self {
+        self.render = Some(render_id);
+        self
+    }
+
     /// Stamps this node with the repaint boundary that produced it and the
     /// version of the content it painted — see [`Self::boundary`].
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn with_boundary(mut self, render_id: RenderId, content: ContentToken) -> Self {
+        self.render = Some(render_id);
         self.boundary = Some(BoundaryStamp::new(render_id, content));
         self
     }
@@ -79,17 +94,19 @@ impl LayerNode {
         &self.layer
     }
 
-    /// The repaint boundary this layer came from, with its content version;
-    /// `None` on a layer no boundary originated.
+    /// The boundary stamp of a hand-built test tree; `None` on a layer no
+    /// test stamped.
+    #[cfg(any(test, feature = "testing"))]
     #[inline]
     pub fn boundary(&self) -> Option<&BoundaryStamp> {
         self.boundary.as_ref()
     }
 
-    /// The repaint boundary this layer came from — see [`Self::boundary`].
+    /// The render object that pushed or painted this layer, `None` on a
+    /// layer none did (a node's placement).
     #[inline]
     pub fn render_id(&self) -> Option<RenderId> {
-        self.boundary.as_ref().map(BoundaryStamp::render_id)
+        self.render
     }
 }
 

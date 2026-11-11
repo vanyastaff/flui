@@ -52,28 +52,32 @@
 //! objects:
 //!
 //! ```
+//! use flui_layer::SceneOwner;
 //! use flui_rendering::pipeline::PipelineOwner;
+//! let mut scene = SceneOwner::new();
 //! let owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone()); // <Idle>
 //! let mut owner = owner.into_layout();     // <Layout>
 //! owner.run_layout().unwrap();
 //! let mut owner = owner.into_compositing();// <Compositing>
 //! owner.run_compositing().unwrap();
 //! let mut owner = owner.into_paint();      // <PaintPhase>
-//! owner.run_paint().unwrap();
+//! owner.run_paint(&mut scene.writer()).unwrap();
 //! let mut owner = owner.into_semantics();  // <Semantics>
 //! owner.run_semantics().unwrap();
 //! let _owner = owner.finish();             // back to <Idle>
 //! ```
 //!
-//! And the convenience orchestrator. `run_frame` always returns the
-//! owner at [`Idle`] alongside a [`crate::error::RenderResult`] for
-//! the layer tree:
+//! And the convenience orchestrator. `run_frame` buffers the frame's patch
+//! in the writer it is handed and always returns the owner at [`Idle`]
+//! alongside a [`crate::error::RenderResult`] saying whether it painted:
 //!
 //! ```
+//! use flui_layer::SceneOwner;
 //! use flui_rendering::pipeline::PipelineOwner;
+//! let mut scene = SceneOwner::new();
 //! let owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-//! let (_owner, result) = owner.run_frame();
-//! let _layer_tree = result.unwrap();
+//! let (_owner, result) = owner.run_frame(&mut scene.writer());
+//! let _painted: bool = result.unwrap();
 //! ```
 //!
 //! ## States

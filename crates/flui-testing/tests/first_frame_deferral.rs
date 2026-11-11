@@ -7,6 +7,7 @@ use flui_objects::RenderColoredBox;
 use flui_rendering::binding::RendererBinding;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner, TextContextHandle};
+use flui_rendering::testing::SceneHost;
 use flui_runtime::renderer_binding::RenderingBinding;
 use flui_scheduler::UpdateScheduler;
 
@@ -26,17 +27,17 @@ pub(crate) fn unmatched_first_frame_release_preserves_the_next_deferral() {
         assert!(catch_unwind(AssertUnwindSafe(|| binding.allow_first_frame())).is_err());
     }
     binding.defer_first_frame();
-    assert!(
-        binding.draw_frame().is_none(),
-        "the new deferral withholds paint"
-    );
+    let mut scene = SceneHost::new();
+    let cell = binding.root_pipeline_owner().clone();
+    let (painted, _) = scene.drive_cell(&cell, |writer| binding.draw_frame(writer));
+    assert!(!painted, "the new deferral withholds paint");
     binding.allow_first_frame();
     binding
         .root_pipeline_owner()
         .with_mut(|owner| owner.mark_needs_layout(root));
-    let painted = binding
-        .draw_frame()
-        .expect("the matched release permits paint");
+    let (painted, tree) = scene.drive_cell(&cell, |writer| binding.draw_frame(writer));
+    assert!(painted, "the matched release permits paint");
+    let painted = tree.expect("the painted frame has a layer tree");
     assert!(
         painted.len() > 1,
         "the frame carries the colored render object"

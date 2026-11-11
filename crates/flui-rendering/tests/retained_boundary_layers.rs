@@ -15,7 +15,9 @@ use flui_objects::{RenderColoredBox, RenderFlex, RenderOpacity, RenderRepaintBou
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::PipelineOwner,
-    testing::{TreeNode, box_node, inspect::first_opacity_alpha, tree, update_render_object},
+    testing::{
+        SceneHost, TreeNode, box_node, inspect::first_opacity_alpha, tree, update_render_object,
+    },
 };
 
 /// Root flex row → N boundaries, each wrapping a coloured leaf.
@@ -97,12 +99,13 @@ pub(crate) fn a_retained_frame_matches_what_a_full_repaint_produces() {
     const N: usize = 8;
 
     let (owner, ids) = mount(N);
-    let (mut owner, result) = owner.run_frame();
+    let mut scene = SceneHost::new();
+    let (mut owner, result) = scene.run_frame(owner);
     result.expect("first frame");
 
     // Dirty exactly one boundary; the other seven must be reused.
     owner.mark_needs_paint(ids.first);
-    let (owner, result) = owner.run_frame();
+    let (owner, result) = scene.run_frame(owner);
     let retained_tree = result
         .expect("second frame")
         .expect("second frame produces a layer tree");
@@ -110,7 +113,8 @@ pub(crate) fn a_retained_frame_matches_what_a_full_repaint_produces() {
 
     // Reference: a fresh owner painting the same tree from scratch.
     let (reference_owner, _) = mount(N);
-    let (_, result) = reference_owner.run_frame();
+    let mut reference_scene = SceneHost::new();
+    let (_, result) = reference_scene.run_frame(reference_owner);
     let full_tree = result
         .expect("reference frame")
         .expect("reference frame produces a layer tree");
@@ -199,7 +203,8 @@ pub(crate) fn the_content_of_a_clean_boundary_is_not_repainted() {
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let dirty_id = registry.get("dirty").expect("dirty boundary is labelled");
 
-    let (mut owner, result) = owner.run_frame();
+    let mut scene = SceneHost::new();
+    let (mut owner, result) = scene.run_frame(owner);
     result.expect("first frame");
 
     let clean_after_first = clean_paints.load(Ordering::Relaxed);
@@ -213,7 +218,7 @@ pub(crate) fn the_content_of_a_clean_boundary_is_not_repainted() {
     // Two more frames, each with only the first boundary dirty.
     for _ in 0..2 {
         owner.mark_needs_paint(dirty_id);
-        let (next, result) = owner.run_frame();
+        let (next, result) = scene.run_frame(owner);
         result.expect("frame");
         owner = next;
     }
@@ -350,7 +355,8 @@ fn set_opacity(
 /// full repaint.
 pub(crate) fn an_alpha_change_updates_the_layer_without_repainting_the_subtree() {
     let (owner, opacity_id, _sibling, painted) = mount_opacity_under_boundary(0.5);
-    let (mut owner, result) = owner.run_frame();
+    let mut scene = SceneHost::new();
+    let (mut owner, result) = scene.run_frame(owner);
     result.expect("first frame");
     let before = painted.load(Ordering::Relaxed);
     assert!(
@@ -359,7 +365,7 @@ pub(crate) fn an_alpha_change_updates_the_layer_without_repainting_the_subtree()
     );
 
     set_opacity(&mut owner, opacity_id, 0.25);
-    let (owner, result) = owner.run_frame();
+    let (owner, result) = scene.run_frame(owner);
     let tree = result
         .expect("second frame")
         .expect("second frame produces a layer tree");
@@ -450,21 +456,26 @@ pub(crate) fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
                         .child(box_node(PaintCounter(Arc::clone(&painted))).label("content")),
                 ),
             )
-            .child(box_node(PoisonOnDemand(Arc::clone(&armed)))),
+            .child(box_node(PoisonOnDemand(Arc::clone(&armed))).label("poison")),
     );
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let opacity_id = registry.get("opacity").expect("opacity is labelled");
     let content = registry.get("content").expect("content is labelled");
+    let poison = registry.get("poison").expect("poison is labelled");
 
-    let (mut owner, result) = owner.run_frame();
+    let mut scene = SceneHost::new();
+    let (mut owner, result) = scene.run_frame(owner);
     result.expect("first frame");
 
     // Both reasons at once: a layer property moved AND painted content changed.
     set_opacity(&mut owner, opacity_id, 0.25);
     owner.mark_needs_paint(content);
+    // The poisoning leaf paints in the frame node, which a boundary repainted alone does not
+    // reach: it is queued too, so the pass reaches it after the boundary.
+    owner.mark_needs_paint(poison);
     armed.store(true, Ordering::Relaxed);
-    let (owner, result) = owner.run_frame();
+    let (owner, result) = scene.run_frame(owner);
     assert!(
         result.is_err(),
         "precondition: the armed leaf poisons this pass"
@@ -476,7 +487,7 @@ pub(crate) fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
     let after_error = painted.load(Ordering::Relaxed);
 
     armed.store(false, Ordering::Relaxed);
-    let (owner, result) = owner.run_frame();
+    let (owner, result) = scene.run_frame(owner);
     result.expect("the retry paints cleanly");
     drop(owner);
 

@@ -303,11 +303,16 @@ deterministic: `PaintCx::canvas` state belongs to the current run; `paint_child`
 later drawing starts with a fresh canvas. Effects covering children use the
 `with_clip_*` layer scopes.
 
-The composer brackets each nonempty run with save/restore when merging pictures.
-Raw command concatenation is insufficient: a clip recorded without an explicit
-save remains active during replay and would incorrectly clip the child and the
-parent's next run. The cost is two replay commands per nonempty run, while inline
-children still share one picture. The facade readback test
+A picture holds one render object's output (ADR-0304 §2): the composer seals the
+open run whenever the render object painting the next run changes, so a parent
+that paints before and after an inline child yields three pictures, and a render
+object that repaints changes only its own pictures
+(`a_picture_run_holds_one_render_objects_output`). Two runs of one render object
+still merge, when nothing between them paints (a child that draws nothing). The
+composer brackets each nonempty run with save/restore when merging them. Raw
+command concatenation is insufficient: a clip recorded without an explicit save
+remains active during replay and would incorrectly clip the parent's next run.
+The cost is two replay commands per nonempty run. The facade readback test
 `canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture` checks the parent
 clip, an unclipped child, and the resumed parent run through a real frame and GPU.
 
@@ -440,44 +445,43 @@ was the reachable case and overrides it from `skip_count` — see
 **A skip must drop the cached output too.** `run_paint`'s residue scan clears the dirty flag of
 any node the descent did not reach — it has always done that, with a warning, for multi-root and
 detached subtrees — and this gate makes a third case reach it: a child that received a paint-only
-update while unplaced. Clearing the flag while keeping the node's retained capture is what makes
+update while unplaced. Clearing the flag while keeping the boundary's record is what makes
 that lossy, because a child placed again under unchanged constraints short-circuits its own layout
-and requeues nothing, so the stale capture is grafted and the update is gone for good. The scan
-now evicts the capture alongside the flag, which also closes the pre-existing detached-subtree
-case it had only been warning about.
+and requeues nothing, so the stale content is kept as it is and the update is gone for good. The
+scan now marks the record stale alongside clearing the flag, so the next frame that reaches the
+boundary repaints it into the same scene node; this also closes the detached-subtree case it had
+only been warning about.
 
 **Pinned:** the hit-test gate by
 `harness_placed_generation_gate_excludes_a_dropped_child_from_hits` and the semantics gate by
 `harness_placed_generation_gate_excludes_a_dropped_child_from_semantics`
 (`crates/flui-objects/tests/render_object_harness.rs`). **Unasserted:** the paint gate and the
-capture eviction. A test for any of them needs **two frames**: a child never laid out at all has
+stale mark on the record. A test for any of them needs **two frames**: a child never laid out at all has
 size zero and paints nothing regardless, so a single-frame version passes with the gate removed.
 `FrameRun::run_frame_again` exists for it.
 
-### A composited-layer update patches the enclosing capture; no node is promoted to a boundary
+### A composited-layer update republishes the enclosing boundary's content; no node is promoted to a boundary
 
 **Choice:** giving the render object its own layer to mutate in place would
 require the object to BE a repaint boundary and require ref-counting plus
 explicit disposal to manage that layer's lifetime.
 
-FLUI does neither. `RetainedSubtree` is a flat stream of entries (layers and slots for nested boundaries), so a node's
-own effect layers are addressable by index inside the ENCLOSING boundary's
-capture (`effect_slots`). An alpha change rebuilds those entries through the
-same `own_effect_layers` constructor the paint walk uses, patches them into the
-grafted output, and writes them back into the stored capture — with the node
-still an ordinary non-boundary.
+FLUI does neither. A boundary's `BoundaryContent` is a flat stream of entries
+(effect layers, chunks and slots for nested boundaries), so a node's own
+effect layers are addressable by index inside the ENCLOSING boundary's
+content (`effect_slots` of its `BoundaryRecord`). An alpha change rebuilds
+those entries through the same `own_effect_layers` constructor the paint walk
+uses, at the origin the record holds, and republishes the content at the same
+scene node through `BoundaryContent::with_effects`, sharing the entry stream
+(`refresh_boundary`, `layer_patches_for` in `src/pipeline/owner/paint.rs`) —
+with the node still an ordinary non-boundary and nothing repainted.
 
-**Alternatives:** promoting the node to its own repaint boundary — rejected on two grounds, both
-measured or verified rather than argued. (a) It buys nothing: the enclosing
-boundary's capture is already what gets grafted, so promotion adds an
-`OffsetLayer` and a whole retained capture per node to reach a position already
-reached; and since a graft is O(retained layers), promoting nodes is what makes
-reuse *slower* (`paint/opacity_alpha_change`: 228x on inline content, 1.71x once
-every leaf is its own boundary — measured 2026-09-11 alongside the other four
-`paint_effects` producers; see "the clip family" below for the full
-cross-producer set and the command). (b) It needs `is_repaint_boundary()` to vary at
-runtime, which the storage flag does not support — see the `IS_REPAINT_BOUNDARY`
-note below.
+**Alternatives:** promoting the node to its own repaint boundary — rejected on two grounds. (a) It buys
+nothing: the enclosing boundary's content is already what gets republished,
+so promotion adds a scene node and a whole recorded content per node to reach
+a position already reached. (b) It needs `is_repaint_boundary()` to vary at
+runtime, which the storage flag does not support — see the
+`IS_REPAINT_BOUNDARY` note below.
 
 **Accepted trade-off:** three of them, all narrowing WHEN the fast path applies,
 never whether the frame is correct.
@@ -503,21 +507,21 @@ never whether the frame is correct.
    pushed because `PaintEffects` has no field for either effect yet. Re-run
    the command before trusting this sentence; "Deferred producers" below
    records why each is out for now.
-2. **A nested boundary's update is served from its own capture
+2. **A nested boundary's update is served from its own record
    ([ADR-0253](../../docs/adr/ADR-0253-retained-paint-captures-hold-slots-for-nested-boundaries.md)).**
-   An enclosing capture holds a slot where the nested boundary sits, not a
-   copy of its layers, so a layer update patches the one capture that owns the
-   node and the enclosing boundary is replayed whatever is nested in it. There
+   An enclosing content holds a slot where the nested boundary sits, not a
+   copy of its layers, so a layer update republishes the one content that owns the
+   node and the enclosing boundary keeps its content whatever is nested in it. There
    is no second copy that could stay at the old value.
    **Asserted by:** `retained_frames_match_a_full_repaint_over_random_trees_and_marks`
    (`tests/nested_boundary_capture.rs`), which updates alphas under nested
    boundaries between frames.
-3. **A root that is a repaint boundary is retained like any other; a root
-   that is not one repaints every frame it is dirty.** `run_paint` serves the
-   root through `serve_boundary` when `RenderView`-style roots declare
-   themselves boundaries, so a nested mark replays the root's capture and a
-   layer update under it patches that capture. The next paint after a pixel-ratio change evicts
-   every capture, since the recorded output was made for the old ratio.
+3. **A root that is a repaint boundary is published like any other; a root
+   that is not one repaints every frame it is dirty.** `paint_owed` places the
+   root through `place_boundary` when `RenderView`-style roots declare
+   themselves boundaries, so a nested mark keeps the root's content and a
+   layer update under it republishes that content. The next paint after a pixel-ratio change
+   forgets every record, since the recorded output was made for the old ratio.
    **Asserted by:** `a_root_boundary_is_replayed_when_only_a_nested_boundary_repaints`,
    `a_layer_update_under_the_root_boundary_patches_the_retained_root` and
    `a_pixel_ratio_change_drops_the_retained_output`
@@ -525,10 +529,11 @@ never whether the frame is correct.
 
 **Replacement tests:** `an_alpha_change_updates_the_layer_without_repainting_the_subtree`
 and `a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update`
-(`tests/retained_boundary_layers.rs`), plus pixel equivalence against a forced
+(`tests/retained_boundary_layers.rs`) and `a_layer_update_republishes`
+(`tests/boundary_contents.rs`), plus pixel equivalence against a forced
 repaint in the facade's `tests/composited_layer_update_readback.rs`. The
-write-back into the stored capture (a test for it needs three frames — a
-two-frame version cannot see a missing write-back), the repaint fallback for a
+republished content keeping the patch on the following frame (a test for it needs three frames — a
+two-frame version cannot see a lost patch), the repaint fallback for a
 structural alpha change, and a same-frame repaint winning over a layer update
 outside a failed pass: **Unasserted:** no test pins this.
 
@@ -541,7 +546,7 @@ that only marks paint would cost a full subtree repaint on every alpha tick.
 
 `RenderSliverOpacity::set_opacity` reports `COMPOSITED_LAYER_UPDATE` instead.
 Promoting the node to a boundary is exactly what this design removed: a flat
-capture makes any node's effect layers addressable inside the ENCLOSING
+content makes any node's effect layers addressable inside the ENCLOSING
 boundary, so the sliver needs no boundary of its own to be served.
 
 The structural transitions still repaint (`skip_paint` crossings and
@@ -583,11 +588,10 @@ listener and, unlike `RenderTransform`, gives a moving pure translation a
 layer too (see that crate's `## Mapping decisions`).
 
 FLUI reports `COMPOSITED_LAYER_UPDATE` for a matrix change that stays within the
-layered range, on the same flat-capture argument as the opacity cases: the
-layer is addressable inside the enclosing boundary's capture, so nothing is
-promoted. Measured on the benchmark's two shapes — **226x** at 1000 inline
-nodes, **1.69x** once every leaf is its own boundary (2026-09-11; see "the
-clip family" below for the full cross-producer set and the command).
+layered range, on the same flat-content argument as the opacity cases: the
+layer is addressable inside the enclosing boundary's content, so nothing is
+promoted. The `paint/transform_matrix_change` benchmark compares the update arm with a
+repaint on an inline and a layered shape (see "the clip family" below for the command).
 
 Two things this costs, both deliberate:
 
@@ -610,7 +614,7 @@ Two things this costs, both deliberate:
 **Tests:** pixel equivalence against a forced repaint,
 `the_transform_update_path_and_a_repaint_produce_the_same_pixels`
 (`tests/composited_layer_update_readback.rs`). The layer-tree side — the
-update skipping the subtree repaint, its write-back into the stored capture, a
+update skipping the subtree repaint, its republish of the patched content, a
 patched subtree matching a full repaint at every benchmark size, and the
 same-frame layout invariant the next entry states: **Unasserted:** no test pins
 this.
@@ -632,7 +636,7 @@ that fixed nesting order). A parity change
 the child sees, so the child must be re-laid-out under (un)flipped
 constraints.
 
-**Why the captured origin stays valid.** Two things, not one. First,
+**Why the recorded origin stays valid.** Two things, not one. First,
 `perform_layout`, `compute_dry_layout`, all four intrinsic queries, and
 `compute_dry_baseline` read `quarter_turns` ONLY through `is_vertical()` (its
 parity) — never the exact value. Nothing in `quarter_turns: i32` stops a
@@ -654,13 +658,14 @@ third input, `child_size`, is a field
 it cannot move without a relayout either. Neither size argument is in
 question; only the origin is.
 
-**Cost.** A patch is O(effect-owning nodes in the boundary) + O(captured
-boundary size) — `layer_patches_for` walks every `effect_slots` entry in the
-capture regardless of how many nodes actually asked for an update, and
-`graft` allocates a map and a vec per call — against a full re-execution of
-`paint()` over the boundary for a repaint. That is a constant-factor win at
-the SAME order, not O(1); the benchmark below measures the factor, not the
-order. The `| SEMANTICS` bit costs no more than the pre-existing `LAYOUT`
+**Cost.** A patch is O(effect-owning nodes in the boundary) + O(effects and
+slots of the boundary's content) — `layer_patches_for` walks every `effect_slots`
+entry of the record regardless of how many nodes actually asked for an update,
+`BoundaryContent::with_effects` copies the effect layers and shares the entry
+stream, and the scene's damage and subtree bounds of a content that shares its
+stream fold only effects and slots — against a full re-execution of `paint()`
+over the boundary for a repaint. The chunk count of the boundary does not
+enter it. The `| SEMANTICS` bit costs no more than the pre-existing `LAYOUT`
 baseline already paid: `run_layout` marks semantics once per walk, on the
 walk's dirty root (`pipeline/owner/layout.rs`), and the new route marks the
 rotated box itself, which either IS that root (the setter's own caller
@@ -670,7 +675,7 @@ dirtied it) or sits under it.
 that receives a same-parity-quadrant-change mark still reports
 `COMPOSITED_LAYER_UPDATE`: `layer_patches_for` finds no slot for a target
 with no effect layers of its own and refuses the patch, so the enclosing
-boundary's FULL captured subtree repaints instead — correct, just
+boundary's FULL subtree repaints instead — correct, just
 unaccelerated. Not worth a `has_child` gate on the setter: that would trade
 this well-understood degrade for a live state read whose own staleness would
 need its own argument. (The case is reachable — `RotatedBox::new(n)` seeds an
@@ -683,25 +688,16 @@ setter call before the very first frame is refused outright:
 (`pipeline/scheduler.rs`), not `needs_layout()`, and freshly mounted state
 seeds BOTH `NEEDS_LAYOUT` and `NEEDS_PAINT` — so the mark is dropped and the
 node is served by its already-scheduled first paint, not by a patch against a
-capture that does not exist yet.
+record that does not exist yet.
 
-**Measured:** `paint/rotated_box_turn_change`, mirroring
-`bench_transform_matrix_change`'s two shapes and size list — update/repaint
-ratios at N = 1, 10, 100, 1000: inline **1.53x, 3.9x, 25.8x, 222x**; layered
-**1.30x, 2.1x, 2.3x, 1.71x** (N = 1 and N = 1000 re-measured 2026-09-11
-alongside the other `paint_effects` producers — see "the clip family" below
-for the command; N = 10 and N = 100 are unchanged from their first
-measurement and were not part of that re-run). Same shape as
-`RenderTransform`'s own numbers (226x / 1.69x at N = 1000) for the same
-reason: inline leaves merge into one
-`PictureLayer`, so the update arm stays flat while the repaint arm grows with
-N; layered leaves make the graft itself O(N), narrowing the win to a small
-constant factor. The benches install no `SemanticsOwner`, so these ratios
-measure the paint side only; the `SEMANTICS` bit's cost is the unchanged
-baseline argued above, not something the numbers cover.
+**Benchmark:** `paint/rotated_box_turn_change`, mirroring
+`bench_transform_matrix_change`'s two shapes and size list, with the command and the
+reading of the two shapes in "the clip family" below. The benches install no
+`SemanticsOwner`, so they measure the paint side only; the `SEMANTICS` bit's cost is the
+unchanged baseline argued above, not something they cover.
 
 **Unasserted:** no test pins this. That covers the same-parity
-update patching the layer and writing it back, a parity change relaying out,
+update patching the layer and republishing it, a parity change relaying out,
 the childless fallback above, and the setter's impact table;
 `harness_rotated_box_odd_turns_swaps_axes`
 (`crates/flui-objects/tests/render_object_harness.rs`) pins only the size
@@ -712,9 +708,9 @@ to opacity, transform, or rotated boxes; it applies to any node's own effects:
 
 > Serving a layer-property change without a repaint would normally require a
 > node that IS a repaint boundary, owning its own layer, at the cost of an
-> `OffsetLayer` and a retained capture per node. FLUI reads one
+> `OffsetLayer` and a recorded content per node. FLUI reads one
 > `PaintEffects` value from any node and builds its layers inside the
-> ENCLOSING boundary's flat capture through one constructor with two callers,
+> ENCLOSING boundary's flat content through one constructor with two callers,
 > so every effect expressed through the value is patchable with no promotion,
 > no layer ownership, and no per-class override; the value fixes the nesting
 > (opacity outermost, transform innermost, node-local shapes between), which
@@ -723,7 +719,7 @@ to opacity, transform, or rotated boxes; it applies to any node's own effects:
 
 Concretely, for clips: a border radius, a clip shape, a path
 source token, or `clipBehavior` itself changes as a layer patch inside the
-enclosing boundary's capture, through `RenderClip<S>::paint_effects` /
+enclosing boundary's content, through `RenderClip<S>::paint_effects` /
 `clip_descriptor` (`crates/flui-objects/src/proxy/clip.rs`).
 
 **Per-producer accounting.**
@@ -762,27 +758,16 @@ enclosing boundary's capture, through `RenderClip<S>::paint_effects` /
   the same field it reads for the gate) — and a future reader should not
   "fix" either toward the other.
 
-**Measured** (`cargo bench -p flui-rendering --bench paint -- '_change/(inline|layered)/(update|repaint)/(1|1000)$' --warm-up-time 1 --measurement-time 3`;
-this machine, 32 cores, 2026-09-11): at N = 1000, update/repaint ratios are
-the same class across every `paint_effects` producer — opacity 228x inline /
-1.71x layered, transform 226x / 1.69x, rotated box 222x / 1.71x, **clip
-rrect 220x / 1.71x**, **clip path 192x / 1.69x**. At N = 1 the ratios are
-the per-node floor every producer shares — clip rrect 1.54x inline / 1.29x
-layered, clip path 1.47x / 1.27x (opacity, transform and rotated box:
-1.51–1.55x / 1.30–1.32x). The update arm runs ≈0.9–1.1 µs on the inline
-shape regardless of producer (layered: ≈160 µs, the graft is O(retained
-layers) — every layered leaf is its own repaint boundary, so patching one
-still clones the whole retained capture, unlike inline leaves sharing one
-`PictureLayer`); the repaint arm runs ≈205–210 µs inline, ≈270–275 µs layered —
-the same figures measured when the paint walk switched to reading one
-`PaintEffects` value (a structural ≈4–5% rise on the repaint arm, recorded
-at that switch), so none of this is new overhead from the clip producers
-themselves. The path ratio
-sits below the rest for a stated reason, not a regression: `resolve_path_clip`
-runs the registered clipper exactly once on BOTH arms — once to rebuild the
-one patched layer, once as part of the whole-subtree repaint — adding the
-same ~140 ns to each side of the same division, which compresses the ratio
-toward 1x and cannot push it below 1x.
+**Benchmark** (`cargo bench -p flui-rendering --bench paint -- '_change/(inline|layered)/(update|repaint)'`):
+every `paint_effects` producer has an update arm and a repaint arm on an `inline` shape
+(leaves share the boundary's content) and a `layered` one (every leaf is its own repaint
+boundary), at several sizes. The update arm rebuilds only the producers' effect layers and
+republishes the content; the repaint arm re-executes `paint` over the boundary. The figures
+are not recorded here: run the command.
+The path-clip ratio sits below the rest for a stated reason: `resolve_path_clip`
+runs the registered clipper exactly once on BOTH arms — once to rebuild the one patched
+layer, once as part of the whole-subtree repaint — which compresses the ratio toward 1x and
+cannot push it below 1x.
 
 **Replacement tests:** the pixel oracle,
 `the_clip_update_path_and_a_repaint_produce_the_same_pixels`
@@ -854,20 +839,20 @@ on that cost, not on geometry.
 `RotatedBox(1)` / `RotatedBox(3)` at the cross start, and asserts the dry
 answer by value at all four quadrants.
 
-### A transform patch may reuse a captured origin only because layout forces a repaint
+### A transform patch may reuse a recorded origin only because layout forces a repaint
 
 **Rule:** `layer_patches_for` rebuilds a node's effect layers at the `origin`
-stored *when the capture was taken*, not a live one. An `OpacityLayer` is
+recorded in the boundary's `BoundaryRecord` when its content was painted, not a live one. An `OpacityLayer` is
 position-independent (always `Offset::ZERO`), so an alpha patch is correct
 wherever the node sits. A `TransformLayer` is **conjugated by** that origin, so a
-transform patch is correct only while the captured origin still matches the
+transform patch is correct only while the recorded origin still matches the
 node's live accumulated position.
 
 **Why that holds:** the `mark_needs_layout` flag walk sets `NEEDS_LAYOUT` on
 every ancestor up to the relayout boundary, so a flagged node cannot take the
 constraints-cache short-circuit — the enclosing repaint boundary re-enters
 layout and is recorded as having laid out (`pipeline/owner/layout.rs`), and if
-the relayout boundary sits below the boundary that owns the capture, the
+the relayout boundary sits below the boundary that owns the record, the
 dirty-root mark (a once-per-walk paint mark rather than a per-object one)
 walks up to it too. Either
 route enqueues `Repaint`, which upgrades the `LayerUpdate` entry the setter
@@ -894,10 +879,10 @@ node and panic a second time. So it poisons instead
 (`RenderError::Poisoned { phase: PoisonPhase::LayerUpdate, .. }`), the frame
 is discarded whole, and the queued update survives on the node for the retry.
 
-The captured-origin invariant above holds through a clip patch as well as a
+The recorded-origin invariant above holds through a clip patch as well as a
 transform one. **Unasserted:** no test pins this. The two differ in one
 respect worth being precise about: a
-clip rect is *translated* by the captured origin (`clip_layer`, same file),
+clip rect is *translated* by the recorded origin (`clip_layer`, same file),
 never conjugated by it the way a transform matrix is — but a stale origin is
 exactly as wrong for a translation as for a conjugation, so the same
 same-frame-layout-marks-the-boundary-needing-paint argument covers both. No
@@ -906,7 +891,7 @@ shipped clip producer routes an update-only commit through `paint_effects`'s
 that reports `COMPOSITED_LAYER_UPDATE` for a rect change on purpose, to
 exercise the arm at all.
 
-### A retained capture holds no GPU resource, so device loss cannot strand one
+### A published content holds no GPU resource, so device loss cannot strand one
 
 **Rule:** #536 asks that "detach, reattach, and device-loss paths reject stale
 handles". The detach and reattach halves apply; the device-loss half does not,
@@ -916,51 +901,60 @@ and the reason is worth recording so it is not re-litigated.
 resource, which would need handles, ref-counting and explicit disposal. FLUI's `Layer`
 is a pure value: `TextureLayer` and `PlatformViewLayer` hold plain ids into the
 engine's own registries, and `PictureLayer` holds an `Arc<DisplayList>` whose
-image commands hold `Arc<Vec<u8>>` RGBA bytes. A retained capture is therefore
-CPU data end to end.
+image commands hold `Arc<Vec<u8>>` RGBA bytes. A boundary's `BoundaryContent`
+is therefore CPU data end to end.
 
 A device loss destroys GPU state inside `flui-engine`, which rebuilds it from
-the layer tree the pipeline hands it every frame — and the tree a graft produces
-is the tree a repaint would have produced. There is no handle to reject.
+the scene the runtime publishes — the contents a clean boundary keeps are the
+contents a repaint would have produced. There is no handle to reject.
 
 **Accepted trade-off:** if a layer variant ever comes to own a GPU resource
-directly, this stops holding and captures would need invalidating on device
-loss. The property is not enforced by anything today beyond the layer types
+directly, this stops holding and published contents would need invalidating on
+device loss. The property is not enforced by anything today beyond the layer types
 themselves.
 
-### Paint certifies a boundary's content token
+### A clean boundary keeps its published content and emits no operation
 
-**Rule:** a repaint boundary's stamped layer carries a `flui_layer::ContentToken`
-next to its `RenderId`, and the damage differ (`flui_layer::LayerDiffer`,
-ADR-0087 §3) treats an unchanged token as "this boundary's own pixels did not
-change". Something has to vouch for that.
+**Rule:** a repaint boundary is published as its own scene node with a
+`flui_layer::BoundaryContent`; a boundary that is not queued for paint keeps the
+content its node holds (the same `Arc`) and the patch names it with no
+operation, one that only moved emits `Place`, and a repainted one emits
+`Publish`. The scene owner computes damage at apply time as the footprint of the
+patch's operations (ADR-0304 §7, §8), so something has to vouch that a boundary
+with no operation has unchanged pixels.
 
-**Choice:** the paint walk does, with the same fact the graft already rests on
-(absence from the paint queue means unchanged content). At each boundary child,
-before its layer is pushed, the boundary keeps the token of its retained
-capture when it is absent from the FULL queue (a composited-layer update counts,
-since a patched graft changes pixels) and has a capture; otherwise it mints a
-new token. The capture stores its token (`RetainedSubtree::content`), so every
-eviction path drops the token with it, and a graft that served a layer update
-writes the new token back with its patches. A root that is a repaint boundary is
-captured and replayed like any other (ADR-0253 §4); its token lives in
-`PipelineOwner::root_content` under the same rule. Minted tokens
-commit with the frame; an errored frame drops them, and the retry, still
-queued, mints again. Nested boundaries keep their stamp (token included)
-through an enclosing boundary's graft.
+**Choice:** the paint walk does, on the fact the paint queue already carries
+(absence from the queue means unchanged content). A boundary that has a
+`BoundaryRecord`, is not stale and is absent from the FULL queue is left as its
+record holds it; a composited-layer update republishes its content with the
+node's effects rebuilt, and a repaint paints it afresh into the same node. A
+queued boundary is painted alone only when its immediate parent does not repaint
+this frame (`slotted_by_a_repaint`); otherwise its parent's repaint paints it at
+its slot. A boundary nested in a repainted one that is itself clean keeps its
+content too. A root that is a repaint boundary is published like any other. Paint
+only stages the patch: the caller applies it and reports the applied version with
+`scene_applied`, and a paint that panics applies no patch and leaves the
+presented version alone.
 
-**Why not pointer identity of the pictures:** a boundary re-records its inline
-pictures whenever it repaints, and it can repaint without its content changing
-(its capture was evicted or refused, so the frame descends into it again). Their
-`Arc`s change on such a frame, so `Arc::ptr_eq` would report the boundary
-changed. A boundary replayed because only something nested in it repainted
-keeps both its token and its own pictures
-(`an_outer_boundary_keeps_its_token_and_pictures_when_a_nested_one_repaints`).
+**Why not pointer identity of the pictures:** a boundary re-records its pictures
+whenever it repaints, and it can repaint without its content changing (its record
+was dropped as stale, so the frame descends into it again). Their `Arc`s change
+on such a frame, so `Arc::ptr_eq` would report the boundary changed; the
+operations the patch carries are the claim, not the pictures. A boundary kept
+because only something nested in it repainted keeps its content
+(`an_outer_boundary_keeps_its_content_when_a_nested_one_repaints`).
 
 **Accepted trade-off:** a clean node that paints differently breaks this rule
-exactly as it already breaks grafting. A boundary whose capture was refused
-(it holds a follower) mints every frame and is always damaged.
-Tests: `tests/boundary_content_tokens.rs`.
+exactly as it breaks any retained output. A boundary holding a follower is kept
+like any other (`a_boundary_holding_a_follower_keeps_its_content`).
+
+**Tests:** `tests/boundary_contents.rs` pins `a_clean_boundary_keeps_its_content`,
+`a_clean_boundary_emits_no_operation`, `a_repainted_boundary_republishes`,
+`an_outer_boundary_keeps_its_content_when_a_nested_one_repaints`,
+`a_layer_update_republishes`,
+`root_keeps_its_content_when_only_a_nested_boundary_is_dirty`,
+`pipeline_frames_diff_to_the_changed_boundary_rect` and
+`a_paint_panic_applies_no_patch_and_keeps_the_presented_version`.
 
 ### Paint reports the offset to the nearest paint anchor
 
@@ -983,7 +977,7 @@ composer, not the painter, resolve the gradient, which no layer type expresses
 today and which would split one fill across two recording sites. The walk
 already accumulates exactly this offset for the recorder's origin.
 
-**Accepted trade-off:** a boundary grafted without repainting keeps what its
+**Accepted trade-off:** a boundary kept without repainting keeps what its
 nodes recorded, so an anchor-relative painter is current on the frames it
 repaints. Its users animate (a shimmer repaints its skeletons every tick) and
 paint position-independently when still (a flat fill).
@@ -1121,9 +1115,9 @@ they were removed rather than adapted: they could not fail for a reason a user w
 
 - `RenderEntry::layout` ([`src/storage/entry.rs`](src/storage/entry.rs)) wraps `render_object.perform_layout_raw(...)` and returns `RenderResult<ProtocolGeometry<P>>`. On the panic path, state is left untouched (`NEEDS_LAYOUT` stays set) so the next frame can retry. The retry is not unbounded: the pipeline counts consecutive layout failures per node and poisons nodes that fail structurally or exhaust the budget ([`src/pipeline/owner/poison.rs`](src/pipeline/owner/poison.rs)); a poisoned node is skipped in later walks until `mark_needs_layout` freshly invalidates it. A dirty root that fails ends its pass, not its batch: the relayout roots after it go back to the queue, and so does the root itself while it has budget left, so the retry of the failed frame lays them out and attempts the root again (`a_failed_dirty_root_keeps_the_rest_of_its_batch`). What a reader can tell apart afterwards, and where: a poisoned node that once committed keeps that geometry — `RenderNode::geometry_box()` is `Some(last committed)` — while one that never succeeded reads `None` and is served as `Size::ZERO`; the parent that consumed the stand-in carries `RenderNode::geometry_degraded()`; and the node's own layout-call counter shows the poison skipped the re-attempt. Pinned by `a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero` (`tests/layout_poison.rs`), whose doc states the two mutations that turn it red. The never-committed half (`None`, served as `Size::ZERO`): **Unasserted:** no test pins this.
 - `PipelineOwner::<PaintPhase>::paint_subtree_impl` ([`src/pipeline/owner/paint.rs`](src/pipeline/owner/paint.rs)) wraps `render_node.paint_raw(&mut recorder, ...)` (the fragment recorder) together with the node's own effect-layer build, `own_effect_layers(render_node.paint_effects(), origin)`, in ONE `catch_unwind`. Both run only after the walk's three return gates (`skip_paint`, `needs_layout`, the sliver visibility cull): a gated-out node never builds a `PaintEffects` descriptor it will not use. Building it there matters: reached outside those gates, a node whose `needs_layout` flag is still set carries stale geometry — its last committed size, or `Size::ZERO` if it has never been laid out — so its descriptor would be built against a size this pass never computed. A panic in either half — the node's own `paint_effects`, or the walk's resolution of a `PaintClip::PathTarget` inside `own_effect_layers`'s clip arm — surfaces as `Poisoned { phase: PoisonPhase::Paint, .. }`, one poison point per node rather than two.
-- `PipelineOwner::<PaintPhase>::layer_patches_for` ([`src/pipeline/owner/paint.rs`](src/pipeline/owner/paint.rs)), the composited-layer-update patch arm, wraps the same `own_effect_layers(node.paint_effects(), slots.origin)` rebuild — run once per target being patched into a retained boundary's capture — in its own `catch_unwind`. A panic surfaces as `Poisoned { phase: PoisonPhase::LayerUpdate, .. }` and the function returns `Err` instead of `Ok(None)`: the whole frame is discarded and the queued composited-layer-update request survives on the node for the retry. Falling back to a repaint instead (the way a structural shape mismatch does, via `Ok(None)`) was rejected — the repaint would call the same panicking `paint_effects` on the same node and panic a second time.
+- `PipelineOwner::<PaintPhase>::layer_patches_for` ([`src/pipeline/owner/paint.rs`](src/pipeline/owner/paint.rs)), the composited-layer-update patch arm, wraps the same `own_effect_layers(node.paint_effects(), slots.origin)` rebuild — run once per target being patched into a published boundary's content — in its own `catch_unwind`. A panic surfaces as `Poisoned { phase: PoisonPhase::LayerUpdate, .. }` and the function returns `Err` instead of `Ok(None)`: the whole frame is discarded and the queued composited-layer-update request survives on the node for the retry. Falling back to a repaint instead (the way a structural shape mismatch does, via `Ok(None)`) was rejected — the repaint would call the same panicking `paint_effects` on the same node and panic a second time.
 
-The phase entry points (`run_layout` / `run_compositing` / `run_paint` / `run_semantics`) now return `RenderResult<()>`. `run_frame` returns `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)` -- on an error the owner comes back at Idle with the result. A caller that keeps the owner in a slot runs `run_frame_in_place` (or `PipelineCell::run_frame` / `PipelineCell::run_layout`), which leaves the same owner in the slot on every exit, a panic included; see the next rule.
+The phase entry points (`run_layout` / `run_compositing` / `run_paint` / `run_semantics`) now return `RenderResult<()>`. `run_frame` takes the frame's `SceneWriter` and returns the owner at Idle with a result -- on an error the owner comes back at Idle with the result. A caller that keeps the owner in a slot runs `run_frame_in_place` (or `PipelineCell::run_frame` / `PipelineCell::run_layout`), which leaves the same owner in the slot on every exit, a panic included; see the next rule.
 
 `Poisoned`'s `phase` is a [`PoisonPhase`](src/error.rs) (`Layout` | `Paint` | `LayerUpdate`, rendered `"layout"` / `"paint"` / `"layer-update"` by its `Display` impl) — the enum itself is the authoritative, closed set; nothing today produces a fourth variant.
 
@@ -1241,10 +1235,11 @@ today.
 ### A follower hit-tests at its last composited position
 
 **Rule.** `PipelineOwner` keeps `last_follower_transforms: FxHashMap<RenderId, Matrix4>` and
-`last_hidden_follower_ids`, per-frame byproducts like the retained layer tree and link registry.
-During paint the fragment composer records the `RenderId → LayerId` pair of each
-`Layer::Follower` it pushes. After paint, each follower's transform is resolved with the same
-`flui_layer::resolve_follower_transform` the GPU path uses; a follower that resolves to `None`
+`last_hidden_follower_ids`, per-frame byproducts of the scene the owner last applied.
+Each boundary's `BoundaryRecord` (and the frame node's record) lists the `Layer::Follower`
+effects its content holds with their render ids and the origin they paint at. In
+`scene_applied`, each follower's transform is read from the applied `SceneVersion`
+(`follower_transform`), the same resolution the GPU path uses; a follower that resolves to `None`
 (unlinked with `show_when_unlinked == false`, its leader's anchor clipped out under
 `LeaderClip::Hide`, or a degenerate chain) is recorded as hidden. The hit-test walk, gated on the
 tables being non-empty, pushes the transform's inverse on the result's transform stack and maps
@@ -1257,7 +1252,7 @@ outside it, while the walk has already subtracted `o`; the side table therefore 
 `T(-o)·M·T(o)`, the mapping paint applies
 (`harness_follower_layer_hit_tests_where_its_offset_content_paints`).
 
-**Staleness.** Hit-testing uses the last completed composite, so it is one frame stale. The transform is
+**Staleness.** Hit-testing uses the last applied scene, so it is one frame stale. The transform is
 computed twice (engine for pixels, rendering for hit-test) because a single computation would
 need the downstream engine to write into the upstream owner; the logic lives once in
 `resolve_follower_transform`
@@ -1269,19 +1264,19 @@ need the downstream engine to write into the upstream owner; the logic lives onc
 line) watches it: `PipelineCell::watch_leader(link, lane) -> LeaderWatch`, a `Listenable` with
 `geometry() -> Option<LeaderGeometry>`. The watches live in a registry the cell and the owner
 share, so registering never checks the owner out, and an owner replaced through `with_mut` takes
-the cell's registry. After paint commits a layer tree, the owner compares each live watch with
-`tree.leader(link)` and schedules a delivery into the watch's post-frame lane only when the value
+the cell's registry. After a paint's patch is applied, the owner compares each live watch with
+the applied version's `leader(link)` and schedules a delivery into the watch's post-frame lane only when the value
 changed; the listeners run there, outside every render-tree borrow.
 
-**Why.** The leader's size is already in the committed layer tree, so a watch costs one lookup
+**Why.** The leader's size is already in the applied scene, so a watch costs one lookup
 per live watch per painted frame and nothing while the value holds: a steady layout queues no
 delivery and requests no frame (`leader_watch::a_watch_hears_only_changes`). A per-frame
 post-frame check would request frames itself; a value each render object reports from
 `perform_layout` needs an opt-in per object and a flush hook beside it.
 
-A leader replayed from its boundary's capture is indexed by `LayerTree::push_child` like a
-painted one, so a boundary that moves without repainting still publishes the leader where it now
-stands (`a_boundary_holding_a_leader_is_replayed_where_it_now_stands`).
+A leader in a boundary that is kept without repainting is still found in the applied version, so a
+boundary that moves without repainting still publishes the leader where it now
+stands (`a_boundary_holding_a_leader_is_retained`, `tests/nested_boundary_capture.rs`).
 
 **Lag and coalescing.** A change is known once paint commits, so a follower that rebuilds from it
 shows the new value one frame later; that frame paints the same value and queues nothing. The
@@ -1637,9 +1632,9 @@ The forwarding wrappers left over from the previous lock-based API are deleted; 
 | `layout_roots` | the scheduler's `layout_drained_total` | dirty layout entries drained, including ones skipped as already clean |
 | `layout_mark_steps` | `DirtyTracker::commit_needs_layout`, per node it marks | nodes the layout-invalidation walks marked; a walk stops where an earlier one settled the path, so N sibling marks cost N + depth (`sibling_layout_marks_share_one_ancestor_walk`, `tests/layout_dirty_root.rs`) |
 | `nodes_laid_out` | `SubtreeArena`'s box and sliver record sites, drained in `layout_dirty_root` | nodes past the clean-child short-circuit; a cache hit and an intrinsic query do not count |
-| `nodes_painted` | `FragmentComposer`, next to `paint_raw` | nodes whose `paint_raw` ran; a grafted boundary is not a paint |
-| `layers_produced` | `FragmentComposer::seal_picture`, `push_layer_node`, and `graft`'s patched indices | layers created fresh this pass, including a layer a composited-layer update patches into a grafted boundary |
-| `layers_reused` | `FragmentComposer::graft`'s unpatched indices | layers cloned unchanged from a clean boundary's retained output |
+| `nodes_painted` | `FragmentComposer`, next to `paint_raw` | nodes whose `paint_raw` ran; a boundary kept as it is is not a paint |
+| `layers_produced` | `FragmentComposer::seal_picture`, `push_layer_node`, and `refresh_boundary`'s patched effects | layers created fresh this pass, including a layer a composited-layer update patches into a kept boundary's content |
+| `layers_reused` | `refresh_boundary`'s unpatched entries | entries a composited-layer update shares unchanged with the content it replaces |
 | `semantics_nodes_updated` | `run_semantics`, from `SemanticsOwner::flush`'s return | nodes in the delivered accessibility update; 0 when the diff is empty |
 | `frames_produced` | `run_frame` | frames that committed a layer tree |
 

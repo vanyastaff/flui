@@ -12,7 +12,7 @@ use flui_foundation::sequence::IdMint;
 use super::content::BoundaryContent;
 use super::footprint::{self, FootprintCost};
 use super::id::{ContentVersion, Lineage, NodeKey, SceneNodeId, SceneVersionId};
-use super::pending::PendingLog;
+use super::pending::{Contents, PendingLog};
 use super::table::{Table, TableCost};
 use super::version::{NodeRecord, SceneVersion, VersionInner};
 use crate::scene_snapshot::{DamageRegion, FullReason, NonFinite, ResyncReason};
@@ -135,7 +135,7 @@ pub struct ScenePublication {
 #[derive(Debug, Default)]
 #[expect(dead_code, reason = "the fields are held for their drop, never read")]
 pub struct ReleasedContents {
-    contents: Vec<Arc<BoundaryContent>>,
+    contents: Contents,
     version: Option<SceneVersion>,
 }
 
@@ -305,6 +305,8 @@ struct Scratch {
     placed: Vec<NodeKey>,
     /// Nodes whose new content enters the indexes; drained by every patch.
     added: Vec<(NodeKey, Arc<BoundaryContent>)>,
+    /// The damage pass's working vectors.
+    damage: footprint::DamageScratch,
 }
 
 impl Scratch {
@@ -339,6 +341,9 @@ pub struct SceneOwner {
     current: SceneVersion,
     slots: Slots,
     ops: Vec<SceneOp>,
+    /// Contents a painter gave up through [`SceneWriter::discard`], held
+    /// until the next patch opens.
+    discarded: Vec<Arc<BoundaryContent>>,
     scratch: Scratch,
     /// The surface the last patch was applied for.
     surface: Option<SurfaceKey>,
@@ -348,6 +353,11 @@ pub struct SceneOwner {
     /// for the property test.
     #[cfg(feature = "testing")]
     planted: Option<usize>,
+    /// Whether effect updates are damaged by each version's own scope and
+    /// chain, never by the inside and chain the versions share: the path the
+    /// shared one must equal, for the equivalence test.
+    #[cfg(feature = "testing")]
+    unshared: bool,
     /// Why a publication without a base is full.
     full: FullReason,
     /// The newest version the raster side reported holding.
@@ -394,11 +404,14 @@ impl SceneOwner {
             current,
             slots,
             ops: Vec::new(),
+            discarded: Vec::new(),
             scratch: Scratch::default(),
             surface: None,
             patch_damage: DamageRegion::Full(FullReason::FirstFrame),
             #[cfg(feature = "testing")]
             planted: None,
+            #[cfg(feature = "testing")]
+            unshared: false,
             full: FullReason::FirstFrame,
             acked: None,
             pending: PendingLog::default(),
@@ -446,12 +459,18 @@ impl SceneOwner {
         &self.current
     }
 
-    /// Opens a patch: clears the operation buffer, and spends the ids minted
-    /// for a patch that was never applied.
+    /// Opens a patch: clears the operation buffer, spends the ids minted for
+    /// a patch that was never applied, and drops what the last painter
+    /// discarded.
+    ///
+    /// The contents dropped here hold annotations, whose `Drop` is user code:
+    /// call it while holding no borrow that code may need, as a frame driver
+    /// does before it lends the writer to a pipeline.
     pub fn writer(&mut self) -> SceneWriter<'_> {
         self.slots.release_unused();
         // A patch buffered and never applied drops after the ledger settles.
         self.ops.clear();
+        self.discarded.clear();
         SceneWriter { owner: self }
     }
 
@@ -502,16 +521,22 @@ impl SceneOwner {
     }
 
     /// Starts over under a new lineage: the version holds an empty root, the
-    /// sequence, the slots and the pending log restart, every id of the old
-    /// lineage is refused as [`SceneError::ForeignNode`], and the next
-    /// publication is `Full(Resync(reason))` with no base.
+    /// slots and the pending log restart, every id of the old lineage is
+    /// refused as [`SceneError::ForeignNode`], and the next publication is
+    /// `Full(Resync(reason))` with no base. The version sequence runs on
+    /// unless it is spent, which a renewal is the remedy for.
     ///
     /// Hands back the old lineage's version, its log's contents and the
     /// buffered patch's, to be dropped once the owner is released.
     pub fn renew(&mut self, reason: ResyncReason) -> ReleasedContents {
         let ops = std::mem::take(&mut self.ops);
         self.lineage = fresh_lineage();
-        self.mint = IdMint::new();
+        // The sequence runs on, so a version number, which inspection handles
+        // name a scene by, is never issued twice by one owner; only a spent
+        // sequence starts over, the new lineage telling its numbers apart.
+        if self.mint.is_exhausted() {
+            self.mint = IdMint::new();
+        }
         // The lineage tells the old ids apart, so the slots start empty.
         self.slots = Slots::default();
         let replaced = std::mem::replace(
@@ -527,6 +552,7 @@ impl SceneOwner {
             SceneOp::Publish { content, .. } => Some(content),
             SceneOp::Place { .. } | SceneOp::Retire { .. } => None,
         }));
+        contents.extend(self.discarded.drain(..));
         ReleasedContents {
             contents,
             version: Some(replaced),
@@ -613,6 +639,15 @@ impl SceneOwner {
         self.planted = Some(op);
     }
 
+    /// Makes every later apply damage an effect update by each version's own
+    /// scope and chain, as if the versions shared neither the effect's inside
+    /// nor the chain above it: the path the shared fold must equal, which a
+    /// test runs beside it.
+    #[cfg(feature = "testing")]
+    pub fn force_unshared_effect_updates(&mut self) {
+        self.unshared = true;
+    }
+
     /// Applies the operations the writer buffered, all or nothing, and
     /// returns the new version's id with what the owner let go of: the
     /// version it replaced and the contents a fold of the pending log
@@ -629,6 +664,10 @@ impl SceneOwner {
         let planted = self.planted.take();
         #[cfg(not(feature = "testing"))]
         let planted = None;
+        #[cfg(feature = "testing")]
+        let share = !self.unshared;
+        #[cfg(not(feature = "testing"))]
+        let share = true;
         let mut ops = std::mem::take(&mut self.ops);
         let built = Patch::build(
             &self.current,
@@ -637,6 +676,7 @@ impl SceneOwner {
             &ops,
             surface.size,
             planted,
+            share,
         )
         .and_then(|built| {
             let seq = self
@@ -671,13 +711,19 @@ impl SceneOwner {
             self.slots.state[key.slot() as usize] = SlotState::Free;
             self.slots.free.push(key.slot());
         }
-        for slot in std::mem::take(&mut self.slots.minted) {
-            let state = &mut self.slots.state[slot as usize];
+        let Slots {
+            state: states,
+            free,
+            minted,
+            ..
+        } = &mut self.slots;
+        for slot in minted.drain(..) {
+            let state = &mut states[slot as usize];
             if next.nodes.get(u64::from(slot)).is_some() {
                 *state = SlotState::Live;
             } else if *state == SlotState::Minted {
                 *state = SlotState::Free;
-                self.slots.free.push(slot);
+                free.push(slot);
             }
         }
         self.cost.table.copies += cost.copies;
@@ -746,6 +792,15 @@ impl SceneWriter<'_> {
         self.owner.ops.push(op);
     }
 
+    /// Hands the owner a content the painter recorded for a patch that was
+    /// never applied and now gives up. The owner drops it when the next
+    /// patch opens ([`SceneOwner::writer`]) or the owner renews, outside the
+    /// painter's borrows: its annotations are user values whose `Drop` is
+    /// user code.
+    pub fn discard(&mut self, content: Arc<BoundaryContent>) {
+        self.owner.discarded.push(content);
+    }
+
     /// The version the patch applies to.
     #[must_use]
     pub fn current(&self) -> &SceneVersion {
@@ -760,7 +815,7 @@ struct Built {
     depth_updates: u64,
     damage: DamageRegion,
     footprint: FootprintCost,
-    replaced: Vec<Arc<BoundaryContent>>,
+    replaced: Contents,
 }
 
 /// One patch's application to a copy of the current version; dropped
@@ -783,6 +838,7 @@ impl<'a> Patch<'a> {
         ops: &[SceneOp],
         surface: (u32, u32),
         planted: Option<usize>,
+        share: bool,
     ) -> Result<Built, SceneError> {
         scratch.reset();
         let base = current.inner();
@@ -817,9 +873,11 @@ impl<'a> Patch<'a> {
                     touched_marks: &patch.scratch.touched,
                     placed_marks: &patch.scratch.placed_marks,
                     skip,
+                    share,
                 },
                 surface,
                 &mut patch.cost,
+                &mut patch.scratch.damage,
             )
         });
         let footprint = footprint.map(|footprint| {
@@ -828,7 +886,7 @@ impl<'a> Patch<'a> {
             let replaced = order
                 .iter()
                 .filter_map(|&key| patch.changed(key).and_then(|change| change.before))
-                .collect::<Vec<Arc<BoundaryContent>>>();
+                .collect::<Contents>();
             (footprint, replaced)
         });
         patch.scratch.order = order;
@@ -1170,7 +1228,7 @@ impl<'a> Patch<'a> {
             if let Some(before) = before {
                 self.scratch.unindexed.insert(key.slot());
                 links.extend(before.links().iter().map(|(link, _, _)| link.id()));
-                textures.extend(before.textures().iter().map(|(texture, _)| texture.get()));
+                textures.extend(before.textures().map(|(texture, _)| texture.get()));
                 if before.is_filtered() {
                     self.next.filtered.remove(key.table_key(), &mut self.cost);
                 }

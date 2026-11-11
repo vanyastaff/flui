@@ -27,7 +27,7 @@
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
-    testing::{Probe, RenderTester, box_node},
+    testing::{Probe, RenderTester, SceneHost, box_node},
 };
 
 /// Callback capture retirement can deadlock against the retained node sender,
@@ -374,7 +374,8 @@ fn a_pipeline_cell_runs_frame_after_frame() {
         child
     });
 
-    let first = cell.run_frame().expect("the first frame runs");
+    let mut scene = SceneHost::new();
+    let first = scene.run_cell_frame(&cell).expect("the first frame runs");
     assert!(first.is_some(), "a dirty tree paints a layer tree");
     assert!(
         !cell.with(PipelineOwner::has_dirty_nodes),
@@ -382,6 +383,6 @@ fn a_pipeline_cell_runs_frame_after_frame() {
     );
 
     cell.with_mut(|owner| owner.mark_needs_paint(child));
-    let second = cell.run_frame().expect("the owner was put back");
+    let second = scene.run_cell_frame(&cell).expect("the owner was put back");
     assert!(second.is_some(), "a repaint request paints again");
 }

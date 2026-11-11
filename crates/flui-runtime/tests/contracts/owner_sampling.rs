@@ -1274,7 +1274,7 @@ impl flui_runtime::sink::FrameSink for SamplingSink {
         (800, 600)
     }
 
-    fn submit(&mut self, _: flui_layer::Scene) -> flui_runtime::sink::SubmitVerdict {
+    fn submit(&mut self, _: flui_layer::ScenePublication) -> flui_runtime::sink::SubmitVerdict {
         flui_runtime::sink::SubmitVerdict::Presented
     }
 }
