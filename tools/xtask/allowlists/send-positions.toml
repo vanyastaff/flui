@@ -1,7 +1,8 @@
 # Every place the public API of `flui` and `flui-sdk` names `Send` or `Sync`
-# (ADR-0089 §6, ADR-0136), written by `cargo xtask send-positions --seed`. The list
-# only shrinks: the gate fails on a position it does not cover and on an entry that
-# allows more than the code has.
+# (ADR-0089 §6, ADR-0136 §3), written by `cargo xtask send-positions --seed`. The gate
+# fails on a position it does not cover and on an entry that allows more than the code
+# has. A position is added only for a value that really crosses a thread, by the change
+# that writes it, with its kind in `crosses`; every other entry only goes.
 reason = "a value crosses a thread here: a panic payload, a waker, a worker's result or a handle meant for another thread"
 
 positions = [
@@ -46,10 +47,10 @@ positions = [
     { item = "flui_foundation::observe::TreeObserver", at = "supertrait", marker = "Sync" },
     { item = "flui_foundation::panic::discard_payload", at = "dyn", marker = "Send" },
     { item = "flui_foundation::panic::payload_text", at = "dyn", marker = "Send" },
-    { item = "flui_foundation::testing::CountingWaker::retiring_waker", at = "bound", marker = "Send", count = 2 },
-    { item = "flui_foundation::testing::CountingWaker::retiring_waker", at = "bound", marker = "Sync", count = 2 },
-    { item = "flui_foundation::testing::CountingWaker::retiring_waker", at = "impl-trait", marker = "Send", count = 2 },
-    { item = "flui_foundation::testing::CountingWaker::retiring_waker", at = "impl-trait", marker = "Sync", count = 2 },
+    { item = "flui_foundation::testing::CountingWaker::retiring_waker", at = "bound", marker = "Send", count = 2, crosses = "waker" },
+    { item = "flui_foundation::testing::CountingWaker::retiring_waker", at = "bound", marker = "Sync", count = 2, crosses = "waker" },
+    { item = "flui_foundation::testing::CountingWaker::retiring_waker", at = "impl-trait", marker = "Send", count = 2, crosses = "waker" },
+    { item = "flui_foundation::testing::CountingWaker::retiring_waker", at = "impl-trait", marker = "Sync", count = 2, crosses = "waker" },
     { item = "flui_foundation::wasm::WasmNotSendSync", at = "supertrait", marker = "Send" },
     { item = "flui_foundation::wasm::WasmNotSendSync", at = "supertrait", marker = "Sync" },
     { item = "flui_hot_reload::dispatch::register_request_rebuild", at = "bound", marker = "Send" },
@@ -74,8 +75,8 @@ positions = [
     { item = "flui_platform::storage::Storage", at = "supertrait", marker = "Send" },
     { item = "flui_platform::storage::Storage", at = "supertrait", marker = "Sync" },
     { item = "flui_platform::storage::StorageFuture", at = "dyn", marker = "Send" },
-    { item = "flui_platform::surface_target::DisplayConnection", at = "supertrait", marker = "Send" },
-    { item = "flui_platform::surface_target::DisplayConnection", at = "supertrait", marker = "Sync" },
+    { item = "flui_platform::surface_target::DisplayConnection", at = "supertrait", marker = "Send", crosses = "handle" },
+    { item = "flui_platform::surface_target::DisplayConnection", at = "supertrait", marker = "Sync", crosses = "handle" },
     { item = "flui_platform::surface_target::RedrawRequester", at = "supertrait", marker = "Send" },
     { item = "flui_platform::surface_target::RedrawRequester", at = "supertrait", marker = "Sync" },
     { item = "flui_platform::surface_target::SurfaceTarget", at = "supertrait", marker = "Send" },
@@ -153,13 +154,13 @@ positions = [
     { item = "impl flui_devtools::capture::Capture::on_frame_open", at = "impl-trait", marker = "Send" },
     { item = "impl flui_devtools::capture::Capture::on_frame_open", at = "impl-trait", marker = "Sync" },
     { item = "impl flui_foundation::panic::FirstPanic::fold", at = "dyn", marker = "Send", count = 2 },
-    { item = "impl flui_foundation::panic::FirstPanic::held", at = "dyn", marker = "Send" },
+    { item = "impl flui_foundation::panic::FirstPanic::held", at = "dyn", marker = "Send", crosses = "panic-payload" },
     { item = "impl flui_foundation::panic::FirstPanic::into_payload", at = "dyn", marker = "Send" },
     { item = "impl flui_foundation::panic::FirstPanic::record", at = "dyn", marker = "Send" },
-    { item = "impl flui_foundation::testing::CountingWaker::calling", at = "bound", marker = "Send" },
-    { item = "impl flui_foundation::testing::CountingWaker::calling", at = "bound", marker = "Sync" },
-    { item = "impl flui_foundation::testing::CountingWaker::calling", at = "impl-trait", marker = "Send" },
-    { item = "impl flui_foundation::testing::CountingWaker::calling", at = "impl-trait", marker = "Sync" },
+    { item = "impl flui_foundation::testing::CountingWaker::calling", at = "bound", marker = "Send", crosses = "waker" },
+    { item = "impl flui_foundation::testing::CountingWaker::calling", at = "bound", marker = "Sync", crosses = "waker" },
+    { item = "impl flui_foundation::testing::CountingWaker::calling", at = "impl-trait", marker = "Send", crosses = "waker" },
+    { item = "impl flui_foundation::testing::CountingWaker::calling", at = "impl-trait", marker = "Sync", crosses = "waker" },
     { item = "impl flui_foundation::wasm::WasmNotSendSync for T", at = "bound", marker = "Send" },
     { item = "impl flui_foundation::wasm::WasmNotSendSync for T", at = "bound", marker = "Sync" },
     { item = "impl flui_hot_reload::pipeline::PluginPipeline::mount", at = "bound", marker = "Send" },
@@ -186,10 +187,10 @@ positions = [
     { item = "impl flui_rendering::binding::RendererBinding for flui_runtime::renderer_binding::RenderingBinding::remove_semantics_enabled_listener", at = "dyn", marker = "Sync" },
     { item = "impl flui_rendering::pipeline::owner::PipelineOwner::set_on_need_visual_update", at = "bound", marker = "Send" },
     { item = "impl flui_rendering::pipeline::owner::PipelineOwner::set_on_need_visual_update", at = "bound", marker = "Sync" },
-    { item = "impl flui_runtime::frame_failure::FrameFailureHandlerFactory::new", at = "bound", marker = "Send" },
-    { item = "impl flui_runtime::frame_failure::FrameFailureHandlerFactory::new", at = "bound", marker = "Sync" },
-    { item = "impl flui_runtime::frame_failure::FrameFailureHandlerFactory::new", at = "impl-trait", marker = "Send" },
-    { item = "impl flui_runtime::frame_failure::FrameFailureHandlerFactory::new", at = "impl-trait", marker = "Sync" },
+    { item = "impl flui_runtime::frame_failure::FrameFailureHandlerFactory::new", at = "bound", marker = "Send", crosses = "handle" },
+    { item = "impl flui_runtime::frame_failure::FrameFailureHandlerFactory::new", at = "bound", marker = "Sync", crosses = "handle" },
+    { item = "impl flui_runtime::frame_failure::FrameFailureHandlerFactory::new", at = "impl-trait", marker = "Send", crosses = "handle" },
+    { item = "impl flui_runtime::frame_failure::FrameFailureHandlerFactory::new", at = "impl-trait", marker = "Sync", crosses = "handle" },
     { item = "impl flui_runtime::input_tap::InputTapFactory::new", at = "bound", marker = "Send" },
     { item = "impl flui_runtime::input_tap::InputTapFactory::new", at = "bound", marker = "Sync" },
     { item = "impl flui_runtime::input_tap::InputTapFactory::new", at = "impl-trait", marker = "Send" },
