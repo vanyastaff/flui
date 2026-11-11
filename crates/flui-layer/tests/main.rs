@@ -14,6 +14,8 @@ mod inspect;
 mod region;
 #[path = "scene.rs"]
 mod scene;
+#[path = "scene_damage.rs"]
+mod scene_damage;
 #[path = "texture_registry.rs"]
 mod texture_registry;
 
@@ -296,4 +298,44 @@ fn scene_table_cost() {
             ),
         ],
     );
+}
+
+/// A patch damages the footprint of its operations under the version before
+/// and after it, resolves followers after them and closes over what filters
+/// read (ADR-0304 §4, §6).
+#[test]
+fn scene_patch_damage() {
+    use scene_damage as d;
+    run_rows(
+        "scene_patch_damage",
+        &[
+            (
+                "a_place_damages_the_subtree_under_both_placements",
+                d::a_place_damages_the_subtree_under_both_placements,
+            ),
+            (
+                "an_effect_chain_change_damages_every_slot_under_it",
+                d::an_effect_chain_change_damages_every_slot_under_it,
+            ),
+            (
+                "a_follower_resolves_after_its_leaders_boundary_moves_parents",
+                d::a_follower_resolves_after_its_leaders_boundary_moves_parents,
+            ),
+            (
+                "a_patch_that_changes_no_pixel_damages_nothing",
+                d::a_patch_that_changes_no_pixel_damages_nothing,
+            ),
+            (
+                "damage_under_a_backdrop_takes_what_it_reads",
+                d::damage_under_a_backdrop_takes_what_it_reads,
+            ),
+        ],
+    );
+}
+
+/// The patch damage covers the full diff on 10 000 random cases and misses
+/// it once a patch drops one operation's footprint (ADR-0304 §11).
+#[test]
+fn patch_damage_covers_diff_damage() {
+    scene_damage::patch_damage_covers_diff_damage();
 }

@@ -522,22 +522,21 @@ impl SceneOwner {
         #[cfg(not(feature = "testing"))]
         let planted = None;
         let mut ops = std::mem::take(&mut self.ops);
-        let built =
-            Patch::build(
-                &self.current,
-                &self.slots,
-                &mut self.scratch,
-                &ops,
-                surface.size,
-                planted,
-            )
-            .and_then(|built| {
-                let seq = self
-                    .mint
-                    .next()
-                    .map_err(|_| SceneError::VersionsExhausted)?;
-                Ok((built, seq))
-            });
+        let built = Patch::build(
+            &self.current,
+            &self.slots,
+            &mut self.scratch,
+            &ops,
+            surface.size,
+            planted,
+        )
+        .and_then(|built| {
+            let seq = self
+                .mint
+                .next()
+                .map_err(|_| SceneError::VersionsExhausted)?;
+            Ok((built, seq))
+        });
         let (built, seq) = match built {
             Ok(built) => built,
             Err(error) => {
@@ -687,9 +686,9 @@ impl<'a> Patch<'a> {
         let order = std::mem::take(&mut patch.scratch.order);
         let checked = patch.check(&order);
         let skip = planted.and_then(|index| ops.get(index)).map(|op| match op {
-            SceneOp::Publish { node, .. } | SceneOp::Place { node, .. } | SceneOp::Retire { node } => {
-                node.key()
-            }
+            SceneOp::Publish { node, .. }
+            | SceneOp::Place { node, .. }
+            | SceneOp::Retire { node } => node.key(),
         });
         let footprint = checked.map(|()| {
             footprint::patch_damage(

@@ -140,7 +140,9 @@ pub(crate) fn map_out(links: &[Link<'_>], reach: Reach) -> Reach {
                 (out, _) => out,
             },
             Link::Filter(filter) => match out {
-                Reach::Rect(input) => footprint(filter, input, ctm).map_or(Reach::Unbounded, Reach::rect),
+                Reach::Rect(input) => {
+                    footprint(filter, input, ctm).map_or(Reach::Unbounded, Reach::rect)
+                }
                 other => other,
             },
             Link::Extent(rect) => out.union(mapped(ctm, rect)),
@@ -271,7 +273,9 @@ impl<'v> Geometry<'v> {
             _ => {
                 let offset = layer.local_translation();
                 if offset != Offset::ZERO {
-                    out.push(Link::Matrix(Matrix4::translation(offset.dx, offset.dy, 0.0)));
+                    out.push(Link::Matrix(Matrix4::translation(
+                        offset.dx, offset.dy, 0.0,
+                    )));
                 }
             }
         }
@@ -374,7 +378,9 @@ impl<'v> Geometry<'v> {
         let mut links = Links::new();
         self.node_links(at.node, &mut links, 0).ok()?;
         self.content_links(at.node, at.entry, &mut links, 0);
-        if let Entry::Effect { layer, .. } = &self.record(at.node).content().entries()[at.entry.get()] {
+        if let Entry::Effect { layer, .. } =
+            &self.record(at.node).content().entries()[at.entry.get()]
+        {
             self.effect_links(layer, at, &mut links, 0);
         }
         product(&links).ok()
@@ -518,7 +524,10 @@ fn placement(record: &NodeRecord) -> Matrix4 {
 
 /// The entries whose parent is `effect`: they follow it, before the first
 /// entry outside its scope.
-fn children(content: &BoundaryContent, effect: EntryIndex) -> impl Iterator<Item = EntryIndex> + '_ {
+fn children(
+    content: &BoundaryContent,
+    effect: EntryIndex,
+) -> impl Iterator<Item = EntryIndex> + '_ {
     content.entries()[effect.get() + 1..]
         .iter()
         .enumerate()

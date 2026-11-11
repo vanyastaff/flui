@@ -75,9 +75,7 @@ mod texture_registry;
 mod tree;
 
 pub use compositor::SceneBuilder;
-pub use damage::{
-    Closure, DamageMode, LayerDiffer, MAX_CLOSURE_ROUNDS, close_over, read_closure,
-};
+pub use damage::{Closure, DamageMode, LayerDiffer, MAX_CLOSURE_ROUNDS, close_over, read_closure};
 pub use flui_foundation::LayerId;
 pub use layer::{
     AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, BackdropGroupKey, CanvasLayer,

@@ -99,7 +99,14 @@ pub(crate) fn patch_damage(
         if std::sync::Arc::ptr_eq(before.content(), after.content()) {
             continue;
         }
-        content_damage(key, before.content(), after.content(), old, new, &mut footprints);
+        content_damage(
+            key,
+            before.content(),
+            after.content(),
+            old,
+            new,
+            &mut footprints,
+        );
     }
     for &key in facts.placed {
         if Some(key) == facts.skip {
@@ -256,7 +263,9 @@ fn growth(next: &VersionInner, child: NodeKey) -> Option<(NodeKey, Bounds)> {
     let mut links = Links::new();
     Geometry::new(next).content_links(parent, slot, &mut links, 0);
     let offset = record.placement().offset();
-    links.push(Link::Matrix(Matrix4::translation(offset.dx, offset.dy, 0.0)));
+    links.push(Link::Matrix(Matrix4::translation(
+        offset.dx, offset.dy, 0.0,
+    )));
     let reach = map_out(&links, Reach::of(record.subtree()));
     let current = Reach::of(parent_record.subtree());
     (!current.contains(reach)).then(|| (parent, current.union(reach).bounds()))
@@ -350,18 +359,22 @@ fn content_damage(
             kept[old_index] = true;
         }
     }
-    // Kept entries out of their old order: every one outside a longest run
-    // still in order moved past another.
-    let order: Vec<(usize, usize)> = (0..new_entries.len())
-        .filter(|&index| stable[index])
-        .map(|index| (index, pair[index].expect("BUG: a stable entry is paired")))
+    // Paired entries out of their old order: every one outside a longest run
+    // still in order moved past another, by the rule the differ uses.
+    let order: Vec<(usize, usize)> = pair
+        .iter()
+        .enumerate()
+        .filter_map(|(index, old_index)| old_index.map(|old_index| (index, old_index)))
         .collect();
     for (index, old_index) in out_of_order(&order) {
         stable[index] = false;
         kept[old_index] = false;
     }
     let top = |entries: &[Entry], flags: &[bool], index: usize| {
-        !flags[index] && entries[index].parent().is_none_or(|parent| flags[parent.get()])
+        !flags[index]
+            && entries[index]
+                .parent()
+                .is_none_or(|parent| flags[parent.get()])
     };
     for index in 0..new_entries.len() {
         if top(new_entries, &stable, index) {

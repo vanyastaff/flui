@@ -265,7 +265,11 @@ pub(crate) fn is_projective(transform: &Matrix4) -> bool {
 /// `transform`: spread by a kernel's reach, or moved where a transform
 /// sends it, a texel past for a bilinear read. `None` when that has no
 /// bound, under a projective ancestor.
-pub(crate) fn footprint(filter: &ImageFilter, input: Rect<f64>, transform: &Matrix4) -> Option<Rect<f64>> {
+pub(crate) fn footprint(
+    filter: &ImageFilter,
+    input: Rect<f64>,
+    transform: &Matrix4,
+) -> Option<Rect<f64>> {
     match filter {
         ImageFilter::Transform { transform: map, .. } => {
             if is_projective(transform) {
