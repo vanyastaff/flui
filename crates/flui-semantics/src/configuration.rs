@@ -111,7 +111,9 @@ pub struct SemanticsConfiguration {
 
     /// Drops preceding sibling contributions up to the nearest formed boundary.
     blocks_previous_siblings: bool,
-    collection: Option<(crate::SemanticsCollection, crate::SemanticsCollectionOrigin)>,
+    /// What few nodes declare, kept out of line: a node that declares none
+    /// holds a null pointer for it.
+    rare: Option<Box<RareParts>>,
     index_origin: Option<crate::SemanticsIndexOrigin>,
 
     /// Whether contributing children must form explicit semantics nodes.
@@ -133,13 +135,8 @@ pub struct SemanticsConfiguration {
     descendant_semantics_merge: DescendantSemanticsMerge,
 
     /// Actions that can be performed on this node. Custom actions keep their
-    /// handlers in `custom_handlers` instead, one per action.
+    /// handlers out of line instead, one per action.
     actions: FxHashMap<SemanticsAction, SemanticsActionHandler>,
-
-    /// Each custom action's handler and the id its own configuration gave it,
-    /// in the order of `attributes.rare().custom_actions`, which holds their labels.
-    /// A merge renumbers the published id; the handler still receives this one.
-    custom_handlers: SmallVec<[(CustomActionId, SemanticsActionHandler); 2]>,
 
     /// Told when the assistive technology's cursor enters or leaves the
     /// subtree of the node this configuration forms or merges into. Merging
@@ -148,6 +145,19 @@ pub struct SemanticsConfiguration {
 
     /// What this node publishes (ADR-0206).
     attributes: SemanticsAttributes,
+}
+
+/// The parts of a configuration few nodes declare.
+#[derive(Default, Clone)]
+struct RareParts {
+    /// The collection the node declares and where its membership policy
+    /// comes from.
+    collection: Option<(crate::SemanticsCollection, crate::SemanticsCollectionOrigin)>,
+
+    /// Each custom action's handler and the id its own configuration gave it,
+    /// in the order of `attributes.rare().custom_actions`, which holds their labels.
+    /// A merge renumbers the published id; the handler still receives this one.
+    custom_handlers: SmallVec<[(CustomActionId, SemanticsActionHandler); 2]>,
 }
 
 impl PartialEq for SemanticsConfiguration {
@@ -166,16 +176,16 @@ impl PartialEq for SemanticsConfiguration {
             && self.is_merge_boundary == other.is_merge_boundary
             && self.blocks_user_actions == other.blocks_user_actions
             && self.blocks_previous_siblings == other.blocks_previous_siblings
-            && self.collection == other.collection
+            && self.declared_collection() == other.declared_collection()
             && self.index_origin == other.index_origin
             && self.explicit_child_nodes == other.explicit_child_nodes
             && self.descendant_semantics_merge == other.descendant_semantics_merge
             && actions_are_identical
-            && self.custom_handlers.len() == other.custom_handlers.len()
+            && self.custom_handlers().len() == other.custom_handlers().len()
             && self
-                .custom_handlers
+                .custom_handlers()
                 .iter()
-                .zip(&other.custom_handlers)
+                .zip(other.custom_handlers())
                 .all(|((a_id, a), (b_id, b))| a_id == b_id && Rc::ptr_eq(a, b))
             && self.assistive_focus_handlers.len() == other.assistive_focus_handlers.len()
             && self
@@ -193,6 +203,23 @@ impl SemanticsConfiguration {
         Self::default()
     }
 
+    /// The custom actions' handlers, in the order of their labels.
+    fn custom_handlers(&self) -> &[(CustomActionId, SemanticsActionHandler)] {
+        self.rare
+            .as_deref()
+            .map_or(&[], |rare| rare.custom_handlers.as_slice())
+    }
+
+    fn declared_collection(
+        &self,
+    ) -> Option<(crate::SemanticsCollection, crate::SemanticsCollectionOrigin)> {
+        self.rare.as_deref().and_then(|rare| rare.collection)
+    }
+
+    fn rare_mut(&mut self) -> &mut RareParts {
+        self.rare.get_or_insert_default()
+    }
+
     /// Retires action captures through an enclosing operation's failure custody.
     ///
     /// Each handler is retired independently; attributes and container buffers
@@ -203,7 +230,7 @@ impl SemanticsConfiguration {
     pub fn retire(self, recovery: &mut flui_foundation::panic::RecoveryScope<'_>) {
         let Self {
             actions,
-            custom_handlers,
+            rare,
             assistive_focus_handlers,
             attributes,
             ..
@@ -211,7 +238,7 @@ impl SemanticsConfiguration {
         for handler in actions.into_values() {
             recovery.retire(handler);
         }
-        for (_, handler) in custom_handlers {
+        for (_, handler) in rare.map(|rare| rare.custom_handlers).unwrap_or_default() {
             recovery.retire(handler);
         }
         for handler in assistive_focus_handlers {
@@ -271,7 +298,7 @@ impl SemanticsConfiguration {
             && states == focus_only
             && self.attributes.live.is_none()
             && self.actions.is_empty()
-            && self.custom_handlers.is_empty()
+            && self.custom_handlers().is_empty()
             && self.attributes.role == SemanticsRole::None
             && self.attributes.label.is_none()
             && self.attributes.value.is_none()
@@ -361,7 +388,7 @@ impl SemanticsConfiguration {
         collection: crate::SemanticsCollection,
         origin: crate::SemanticsCollectionOrigin,
     ) {
-        self.collection = Some((collection, origin));
+        self.rare_mut().collection = Some((collection, origin));
         self.set_semantics_boundary(true);
         self.set_explicit_child_nodes(true);
         self.set_role(match collection.kind() {
@@ -379,13 +406,13 @@ impl SemanticsConfiguration {
     /// The collection declared by this node itself, if any.
     #[must_use]
     pub fn collection(&self) -> Option<crate::SemanticsCollection> {
-        self.collection.map(|(collection, _)| collection)
+        self.declared_collection().map(|(collection, _)| collection)
     }
 
     /// The source of this node's collection membership policy.
     #[must_use]
     pub fn collection_origin(&self) -> Option<crate::SemanticsCollectionOrigin> {
-        self.collection.map(|(_, origin)| origin)
+        self.declared_collection().map(|(_, origin)| origin)
     }
 
     /// The declaration responsible for this node's member index.
@@ -955,7 +982,9 @@ impl SemanticsConfiguration {
             if let Some(rare) = self.attributes.rare_if_declared() {
                 rare.custom_actions.clear();
             }
-            self.custom_handlers.clear();
+            if let Some(rare) = &mut self.rare {
+                rare.custom_handlers.clear();
+            }
         }
         self.actions.remove(&action);
         self.mark_annotated();
@@ -965,7 +994,7 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn has_action(&self, action: SemanticsAction) -> bool {
         self.actions.contains_key(&action)
-            || (action == SemanticsAction::CustomAction && !self.custom_handlers.is_empty())
+            || (action == SemanticsAction::CustomAction && !self.custom_handlers().is_empty())
     }
 
     /// Returns the registered action handler for a given action.
@@ -985,7 +1014,7 @@ impl SemanticsConfiguration {
     pub fn registered_action_handlers(&self) -> impl Iterator<Item = &SemanticsActionHandler> {
         self.actions
             .values()
-            .chain(self.custom_handlers.iter().map(|(_, handler)| handler))
+            .chain(self.custom_handlers().iter().map(|(_, handler)| handler))
     }
 
     /// Tell `handler` when the assistive technology's cursor enters or leaves
@@ -1012,7 +1041,7 @@ impl SemanticsConfiguration {
 
     /// Returns a bitmask of registered actions before blocking policy.
     pub fn actions_as_bits(&self) -> u64 {
-        let custom = if self.custom_handlers.is_empty() {
+        let custom = if self.custom_handlers().is_empty() {
             0
         } else {
             SemanticsAction::CustomAction.value()
@@ -1056,9 +1085,9 @@ impl SemanticsConfiguration {
         label: impl Into<SmolStr>,
         handler: SemanticsActionHandler,
     ) -> CustomActionId {
-        let id = CustomActionId::at(self.custom_handlers.len());
+        let id = CustomActionId::at(self.custom_handlers().len());
         self.attributes.rare_mut().custom_actions.push(label.into());
-        self.custom_handlers.push((id, handler));
+        self.rare_mut().custom_handlers.push((id, handler));
         self.mark_annotated();
         id
     }
@@ -1075,7 +1104,7 @@ impl SemanticsConfiguration {
         handler: SemanticsActionHandler,
     ) {
         self.attributes.rare_mut().custom_actions.push(label.into());
-        self.custom_handlers.push((own_id, handler));
+        self.rare_mut().custom_handlers.push((own_id, handler));
         self.mark_annotated();
     }
 
@@ -1104,7 +1133,7 @@ impl SemanticsConfiguration {
             return None;
         }
         let index = id.index();
-        let (own_id, handler) = self.custom_handlers.get(index)?;
+        let (own_id, handler) = self.custom_handlers().get(index)?;
         Some(DeclaredCustomAction {
             label: self.attributes.rare().custom_actions.get(index)?.as_str(),
             handler,
@@ -1118,13 +1147,13 @@ impl SemanticsConfiguration {
         let offered = if self.blocks_user_actions {
             0
         } else {
-            self.custom_handlers.len()
+            self.custom_handlers().len()
         };
         self.attributes
             .rare()
             .custom_actions
             .iter()
-            .zip(&self.custom_handlers)
+            .zip(self.custom_handlers())
             .take(offered)
             .map(|(label, (own_id, handler))| DeclaredCustomAction {
                 label: label.as_str(),
@@ -1769,12 +1798,14 @@ impl SemanticsConfiguration {
                     .custom_actions
                     .extend(theirs.iter().cloned());
             }
-            self.custom_handlers.extend(
-                other
-                    .custom_handlers
-                    .iter()
-                    .map(|(id, handler)| (*id, Rc::clone(handler))),
-            );
+            let handlers = other.custom_handlers();
+            if !handlers.is_empty() {
+                self.rare_mut().custom_handlers.extend(
+                    handlers
+                        .iter()
+                        .map(|(id, handler)| (*id, Rc::clone(handler))),
+                );
+            }
         }
         // The cursor in the contributor's subtree is in the merged node's:
         // every handler goes along, blocked user actions or not.
@@ -1844,7 +1875,7 @@ impl SemanticsConfiguration {
         // container that already knows its size takes a position from a member
         // folded into it. A declared collection's places stay on its own
         // boundary, and a position taken carries the declaration it came from.
-        if other.collection.is_none() {
+        if other.declared_collection().is_none() {
             let had_position = mine.collection.position_in_set.is_some();
             mine.collection.absorb(collection);
             if !had_position && mine.collection.position_in_set.is_some() {

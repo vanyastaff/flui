@@ -47,6 +47,9 @@ several behaviours mount?
 - The entry [An interactive widget costs eighteen elements](../gaps.md#an-interactive-widget-costs-eighteen-elements)
   closes on counted numbers: a button adds to its child at most 2 elements, 1 render node, 40
   allocations and 3 KB.
+- The catalogs do not wait for the last kilobyte. The Material and Cupertino controls move to the
+  node at a migration threshold counted by the same scenario: 2 elements, 1 render node, at most
+  40 allocations and at most 5 KB. The entry's numbers above stay the goal.
 - Nothing a user or a tool observes changes: the accessibility tree, the gesture arena's
   outcomes, focus traversal, action resolution, what locators and `inspect` select.
 - A disabled control is disabled in one place. A control that is disabled for the pointer and
@@ -299,13 +302,14 @@ the node in place of its five wrappers, with the same constructor and methods; t
 `flui-material` and `flui-cupertino` follow, each family in its own change, and none changes its
 public API for it.
 
-### §8 An action route exists while the window collects semantics
+### §8 An action route and a control's description exist while the window collects semantics
 
 A window collects semantics while someone reads them: assistive technology is attached, or an
 agent or a test holds the tree (`flui-runtime`'s `SemanticsHost` counts the holders, and
 `reconcile_semantics_enablement` carries the answer to the pipeline at the start of a frame). The
 view layer follows the same answer. `BuildOwner` holds it, every `RenderObjectContext` carries it,
-and a `Semantics` registers the route of its actions only while it holds:
+a `Semantics` registers the route of its actions only while it holds, and a control's node builds
+its semantics part, the description and the handlers it offers, only while it holds:
 
 ```rust
 impl BuildOwner {
@@ -323,7 +327,8 @@ impl RenderObjectContext<'_> {
   flag. A tree mounted outside a runtime (`BuildOwner::new`, a detached context) has the answer
   `true`, so its semantics are complete without anyone turning them on.
 - A change of the answer costs one full build: every element is marked dirty, each render view's
-  configuration is pushed again, and `Semantics` registers or releases its route in that pass.
+  configuration is pushed again, `Semantics` registers or releases its route in that pass, and a
+  node builds or drops its semantics part, which its render object holds out of line.
   The change is rare, and the alternative, a dependency on an inherited value, was measured: it
   costs every node with an action two allocations and more bytes than the route it saves.
 - The tree a window publishes after semantics are turned on over a mounted tree is the tree of a

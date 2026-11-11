@@ -379,7 +379,15 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
     ) -> RenderUpdateImpact {
         let mut impact =
             RenderView::update_render_object(&self.listener(view), cx, render_object.pointer_mut());
-        match (self.semantics(view), render_object.semantics_mut()) {
+        // Nothing reads a description while the window collects no semantics
+        // (ADR-0322 §8): the part is not built, and neither are the handlers
+        // it would offer. A window that starts collecting marks every
+        // element dirty, so the part is there before the tree is assembled.
+        let semantics = cx
+            .collects_semantics()
+            .then(|| self.semantics(view))
+            .flatten();
+        match (semantics, render_object.semantics_mut()) {
             (Some(semantics), Some(part)) => {
                 impact |= RenderView::update_render_object(&semantics, cx, part);
             }

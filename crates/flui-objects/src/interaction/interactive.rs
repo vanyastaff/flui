@@ -43,7 +43,9 @@ use crate::{RenderSemanticsAnnotations, SubtreeAnchor};
 pub struct RenderInteractive {
     pointer: RenderListener,
     mouse: Option<RenderMouseRegion>,
-    semantics: Option<RenderSemanticsAnnotations>,
+    /// Out of line: a control mounted while its window collects no
+    /// semantics has no part, and holds no room for one.
+    semantics: Option<Box<RenderSemanticsAnnotations>>,
     focus_ring: Option<FocusRingStyle>,
     /// Where the object publishes its identity while mounted.
     anchor: Option<SubtreeAnchor>,
@@ -103,13 +105,16 @@ impl RenderInteractive {
     /// The semantics part.
     #[must_use]
     pub const fn semantics(&self) -> Option<&RenderSemanticsAnnotations> {
-        self.semantics.as_ref()
+        match &self.semantics {
+            Some(part) => Some(&**part),
+            None => None,
+        }
     }
 
     /// The semantics part, to configure as a [`RenderSemanticsAnnotations`]
     /// is. The impact its setters return is the object's.
     pub fn semantics_mut(&mut self) -> Option<&mut RenderSemanticsAnnotations> {
-        self.semantics.as_mut()
+        self.semantics.as_deref_mut()
     }
 
     /// Sets or removes the semantics part, returning the previous one so its
@@ -118,19 +123,19 @@ impl RenderInteractive {
         &mut self,
         semantics: Option<RenderSemanticsAnnotations>,
     ) -> (Option<RenderSemanticsAnnotations>, RenderUpdateImpact) {
-        let mut previous = std::mem::replace(&mut self.semantics, semantics);
+        let mut previous = std::mem::replace(&mut self.semantics, semantics.map(Box::new));
         if let Some(previous) = &mut previous {
-            RenderBox::detach(previous);
+            RenderBox::detach(&mut **previous);
         }
         if let (Some(part), Some(handle)) = (&mut self.semantics, &self.invalidation) {
-            RenderBox::attach(part, handle.clone());
+            RenderBox::attach(&mut **part, handle.clone());
         }
         let impact = if previous.is_none() && self.semantics.is_none() {
             RenderUpdateImpact::NONE
         } else {
             RenderUpdateImpact::SEMANTICS
         };
-        (previous, impact)
+        (previous.map(|previous| *previous), impact)
     }
 
     /// The focus ring painted over the child, while one is shown.
@@ -295,19 +300,19 @@ impl RenderBox for RenderInteractive {
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
         if let Some(semantics) = &self.semantics {
-            RenderBox::describe_semantics_configuration(semantics, config);
+            RenderBox::describe_semantics_configuration(&**semantics, config);
         }
     }
 
     fn excludes_semantics_subtree(&self) -> bool {
         self.semantics
-            .as_ref()
+            .as_deref()
             .is_some_and(RenderBox::excludes_semantics_subtree)
     }
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         if let Some(semantics) = &mut self.semantics {
-            RenderBox::attach(semantics, handle.clone());
+            RenderBox::attach(&mut **semantics, handle.clone());
         }
         if let Some(anchor) = &self.anchor {
             anchor.publish(handle.id());
@@ -321,7 +326,7 @@ impl RenderBox for RenderInteractive {
         }
         self.invalidation = None;
         if let Some(semantics) = &mut self.semantics {
-            RenderBox::detach(semantics);
+            RenderBox::detach(&mut **semantics);
         }
     }
 }

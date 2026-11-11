@@ -137,6 +137,70 @@ pub struct Listener {
     child: Child,
 }
 
+/// The per-kind callbacks of a [`Listener`] that has any, shared with the
+/// handler the interaction lane holds.
+struct RawCallbacks {
+    down: Option<PointerCallback>,
+    up: Option<PointerCallback>,
+    moved: Option<PointerCallback>,
+    hover: Option<PointerCallback>,
+    cancel: Option<PointerCallback>,
+    signal: Option<PointerCallback>,
+    revise: Option<PointerCallback>,
+    pan_zoom_update: Option<PointerPanZoomCallback>,
+}
+
+impl RawCallbacks {
+    /// `listener`'s callbacks, or `None` when it has none.
+    fn of(listener: &Listener) -> Option<Rc<Self>> {
+        let callbacks = Self {
+            down: listener.on_pointer_down.clone(),
+            up: listener.on_pointer_up.clone(),
+            moved: listener.on_pointer_move.clone(),
+            hover: listener.on_pointer_hover.clone(),
+            cancel: listener.on_pointer_cancel.clone(),
+            signal: listener.on_pointer_signal.clone(),
+            revise: listener.on_pointer_revise.clone(),
+            pan_zoom_update: listener.on_pointer_pan_zoom_update.clone(),
+        };
+        let any = callbacks.down.is_some()
+            || callbacks.up.is_some()
+            || callbacks.moved.is_some()
+            || callbacks.hover.is_some()
+            || callbacks.cancel.is_some()
+            || callbacks.signal.is_some()
+            || callbacks.revise.is_some()
+            || callbacks.pan_zoom_update.is_some();
+        any.then(|| Rc::new(callbacks))
+    }
+
+    /// Route `dispatch` to the callback of its kind, inside one write
+    /// `writer` opens.
+    fn deliver(&self, writer: &WriterSource, dispatch: PointerDispatch<'_>) {
+        let callback = match dispatch.local {
+            PointerEvent::Down(_) => &self.down,
+            PointerEvent::Up(_) => &self.up,
+            PointerEvent::Move(update) if update.buttons.is_empty() => &self.hover,
+            PointerEvent::Move(_) | PointerEvent::ButtonChange(_) => &self.moved,
+            PointerEvent::Cancel(_) => &self.cancel,
+            PointerEvent::Scroll(_) | PointerEvent::ScrollInertiaCancel(_) => &self.signal,
+            PointerEvent::Revise(_) => &self.revise,
+            PointerEvent::PanZoom(pan_zoom) => {
+                if let Some(callback) = &self.pan_zoom_update
+                    && matches!(pan_zoom.phase, PanZoomPhase::Update(_))
+                {
+                    writer.write(|cx| callback(cx, pan_zoom));
+                }
+                return;
+            }
+            _ => return,
+        };
+        if let Some(callback) = callback {
+            writer.write(|cx| callback(cx, dispatch));
+        }
+    }
+}
+
 impl Default for Listener {
     fn default() -> Self {
         Self {
@@ -444,14 +508,9 @@ impl Listener {
     /// event — ordinary pointer delivery has no propagation result
     /// (ADR-0027).
     fn handler(&self, writer: WriterSource) -> impl Fn(PointerDispatch<'_>) + 'static {
-        let on_down = self.on_pointer_down.clone();
-        let on_up = self.on_pointer_up.clone();
-        let on_move = self.on_pointer_move.clone();
-        let on_hover = self.on_pointer_hover.clone();
-        let on_cancel = self.on_pointer_cancel.clone();
-        let on_signal = self.on_pointer_signal.clone();
-        let on_revise = self.on_pointer_revise.clone();
-        let on_pan_zoom_update = self.on_pointer_pan_zoom_update.clone();
+        // A listener that only feeds recognizers (every gesture detector and
+        // control) captures no callback slots.
+        let callbacks = RawCallbacks::of(self);
         let recognizers = self.recognizers.clone();
         let recognizer_input = self.recognizer_input;
         // The event KIND is the same in both spaces, so the routing match
@@ -462,26 +521,8 @@ impl Listener {
                 reason = "ADR-0287: a pointer callback's panic must not stop the recognizers"
             )]
             let raw = catch_unwind(AssertUnwindSafe(|| {
-                let callback = match dispatch.local {
-                    PointerEvent::Down(_) => &on_down,
-                    PointerEvent::Up(_) => &on_up,
-                    PointerEvent::Move(update) if update.buttons.is_empty() => &on_hover,
-                    PointerEvent::Move(_) | PointerEvent::ButtonChange(_) => &on_move,
-                    PointerEvent::Cancel(_) => &on_cancel,
-                    PointerEvent::Scroll(_) | PointerEvent::ScrollInertiaCancel(_) => &on_signal,
-                    PointerEvent::Revise(_) => &on_revise,
-                    PointerEvent::PanZoom(pan_zoom) => {
-                        if let Some(callback) = &on_pan_zoom_update
-                            && matches!(pan_zoom.phase, PanZoomPhase::Update(_))
-                        {
-                            writer.write(|cx| callback(cx, pan_zoom));
-                        }
-                        return;
-                    }
-                    _ => return,
-                };
-                if let Some(callback) = callback {
-                    writer.write(|cx| callback(cx, dispatch));
+                if let Some(callbacks) = &callbacks {
+                    callbacks.deliver(&writer, dispatch);
                 }
             }));
             #[expect(
