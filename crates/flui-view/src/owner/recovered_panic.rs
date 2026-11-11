@@ -112,6 +112,10 @@ pub enum LifecycleHook {
     /// "not found" produces) instead of substituting a view, since there is
     /// no single index to substitute at.
     LazyIndexLookup,
+    /// A `provide` hook (`StatelessView::provide`, `ViewState::provide`) or
+    /// the `ProvidedValue::update_should_notify` of a value it published,
+    /// run right before the element's build.
+    Provide,
 }
 
 impl fmt::Display for LifecycleHook {
@@ -132,6 +136,7 @@ impl fmt::Display for LifecycleHook {
             Self::Dispose => "dispose",
             Self::UnmountRenderObject => "did_unmount_render_object",
             Self::LazyIndexLookup => "find_index_by_key",
+            Self::Provide => "provide",
         })
     }
 }

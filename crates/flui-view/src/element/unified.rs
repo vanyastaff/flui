@@ -275,6 +275,10 @@ where
         self.behavior.as_inherited_access_mut()
     }
 
+    fn take_provided_scope_stale(&mut self) -> bool {
+        self.behavior.take_provided_scope_stale()
+    }
+
     // ========================================================================
     // Ancestor-finder protocol
     //

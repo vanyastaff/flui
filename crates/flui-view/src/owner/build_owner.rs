@@ -2036,6 +2036,8 @@ impl BuildOwner {
                 }
             }
 
+            self.refresh_provided_scope(tree, id);
+
             // ── Phase 2: reconcile the returned views against the node's
             // slab-resident children with a fresh `&mut tree`. Newly inserted
             // children are scheduled inside the reconciler so this same drain

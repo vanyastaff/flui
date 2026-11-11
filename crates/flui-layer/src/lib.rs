@@ -84,7 +84,9 @@ pub use layer::{
 };
 pub use link::{LayerLink, leader_origin, resolve_follower_transform};
 pub use scene::Scene;
-pub use scene_snapshot::{DamageRect, DamageRegion, SceneSnapshot};
+pub use scene_snapshot::{
+    DamageRect, DamageRegion, FullReason, NonFinite, Region, ResyncReason, SceneSnapshot,
+};
 pub use texture_registry::{
     TextureIdsExhausted, TextureListener, TextureRegistration, TextureRegistry, TextureUpdates,
 };

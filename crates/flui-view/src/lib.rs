@@ -210,7 +210,7 @@ pub use element::RenderTreeRootElement;
 // Root element
 pub use element::{RootElement, RootElementImpl};
 // Behavior types
-pub use element::{StatefulBehavior, StatelessBehavior};
+pub use element::{Provided, ProvidedRef, ProvidedValue, StatefulBehavior, StatelessBehavior};
 // Re-export from flui-foundation
 pub use flui_foundation::{CreationSite, ElementId, RenderId};
 pub use flui_rendering::RenderUpdateImpact;

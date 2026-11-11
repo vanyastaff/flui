@@ -249,7 +249,7 @@ impl ElementKind {
     {
         Self::Stateless(Box::new(Element::<V, Single, StatelessBehavior>::new(
             view,
-            StatelessBehavior,
+            StatelessBehavior::new(),
         )))
     }
 
@@ -549,6 +549,10 @@ impl ElementBase for ElementKind {
 
     fn as_inherited_mut(&mut self) -> Option<&mut dyn crate::element::InheritedElementAccess> {
         self.element_mut().as_inherited_mut()
+    }
+
+    fn take_provided_scope_stale(&mut self) -> bool {
+        self.element_mut().take_provided_scope_stale()
     }
 
     fn view_as_any(&self) -> Option<&dyn std::any::Any> {

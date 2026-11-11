@@ -114,6 +114,17 @@ pub trait ViewState<V: StatefulView>: 'static {
     /// never fires.
     fn did_change_dependencies(&mut self, _ctx: &dyn LifecycleContext) {}
 
+    /// Publish values to the subtree under this state's element (ADR-0322 §5).
+    ///
+    /// Runs right before each `build`, after `init_state` and `apply_view`. A
+    /// descendant reads a value with `ctx.depend_on::<T, _>(..)` and rebuilds
+    /// when a later value's
+    /// [`ProvidedValue::update_should_notify`](crate::ProvidedValue::update_should_notify)
+    /// says so. The default publishes nothing.
+    fn provide(&self, view: &V, ctx: &dyn BuildContext, values: &mut crate::Provided<'_>) {
+        let _ = (view, ctx, values);
+    }
+
     /// Applies the current view configuration and the ambient dependencies to
     /// the state, right before a build.
     ///

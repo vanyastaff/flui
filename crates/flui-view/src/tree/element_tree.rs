@@ -23,6 +23,9 @@ use crate::view::{ElementBase, View};
 
 use super::containment::ChildHookPanic;
 
+mod inherited_scope;
+use inherited_scope::compute_inherited_scope;
+
 /// The render-parent edge the post-build reorder pass wants for one render
 /// node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,34 +163,6 @@ pub struct ElementNode {
     /// HAMT — provider counts in a UI scope are tiny, so the per-provider
     /// O(k) clone is effectively O(1) and avoids a new dependency.
     pub(crate) inherited: Arc<HashMap<TypeId, ElementId>>,
-}
-
-/// Compute a child node's inherited scope from its parent's.
-///
-/// A non-provider returns the parent map unchanged (`Arc::clone` — refcount
-/// bump, no allocation); a provider returns `parent_map + (view_type_id →
-/// id)`, so the nearest same-type provider shadows. Average/worst case O(k)
-/// where k = providers in scope (only at provider nodes; tiny in practice).
-///
-/// A provider's resolved scope therefore includes ITSELF — so
-/// `depend_on::<P>()` from inside a `P` provider's own build resolves that
-/// provider, where the old strict-ancestor walk skipped self and found the
-/// next `P` up (or `None`). This is an intentional shift; it is currently
-/// unreachable because
-/// `InheritedBehavior::build_into_views` only returns the child and never
-/// self-depends.
-fn compute_inherited_scope(
-    parent_map: &Arc<HashMap<TypeId, ElementId>>,
-    element: &dyn ElementBase,
-    id: ElementId,
-) -> Arc<HashMap<TypeId, ElementId>> {
-    if element.as_inherited().is_some() {
-        let mut map = (**parent_map).clone();
-        map.insert(element.view_type_id(), id);
-        Arc::new(map)
-    } else {
-        Arc::clone(parent_map)
-    }
 }
 
 impl ElementNode {

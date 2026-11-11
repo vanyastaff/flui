@@ -59,6 +59,8 @@ mod lifecycle_tests;
 mod notifications;
 #[path = "presentation_capabilities.rs"]
 mod presentation_capabilities;
+#[path = "provided_values.rs"]
+mod provided_values;
 // Its one test is the debug-only refusal; release builds compile it out.
 #[cfg(debug_assertions)]
 #[path = "orphaned_render_mount.rs"]
@@ -308,6 +310,14 @@ fn element_lifecycle_and_dependency_matrix() {
             ("inherited_dependency::missing_inherited_reads_refresh_lifecycle_and_survive_build_recovery", inherited_dependency::missing_inherited_reads_refresh_lifecycle_and_survive_build_recovery),
             ("inherited_dependency::unmounted_dependent_is_removed_from_provider_before_next_notification", inherited_dependency::unmounted_dependent_is_removed_from_provider_before_next_notification as fn()),
             ("inherited_dependency::a_failing_frame_request_while_a_provider_notifies_keeps_its_subtree", inherited_dependency::a_failing_frame_request_while_a_provider_notifies_keeps_its_subtree),
+            ("provided_values::provided_value_change_notifies_like_inherited_element", provided_values::provided_value_change_notifies_like_inherited_element as fn()),
+            ("provided_values::provided_value_follows_a_moved_subtree", provided_values::provided_value_follows_a_moved_subtree),
+            ("provided_values::provided_value_unmount_releases_dependents", provided_values::provided_value_unmount_releases_dependents),
+            ("provided_values::provided_set_change_rescopes_the_subtree", provided_values::provided_set_change_rescopes_the_subtree),
+            ("provided_values::a_provide_panic_is_recorded_and_keeps_the_frame", provided_values::a_provide_panic_is_recorded_and_keeps_the_frame),
+            ("provided_values::a_replaced_value_that_panics_in_drop_keeps_its_notification", provided_values::a_replaced_value_that_panics_in_drop_keeps_its_notification),
+            ("provided_values::a_signal_read_in_provide_republishes_on_write", provided_values::a_signal_read_in_provide_republishes_on_write),
+            ("provided_values::a_failure_after_provide_ends_the_build_phase", provided_values::a_failure_after_provide_ends_the_build_phase),
             ("build_owner_tests::build_owners_have_isolated_focus_managers", build_owner_tests::build_owners_have_isolated_focus_managers as fn()),
             ("build_owner_tests::test_build_scope_processes_in_depth_order", build_owner_tests::test_build_scope_processes_in_depth_order as fn()),
             ("build_owner_tests::clean_binding_frames_report_no_builds", build_owner_tests::clean_binding_frames_report_no_builds as fn()),
