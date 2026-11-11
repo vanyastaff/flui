@@ -33,7 +33,7 @@ struct Spacer;
 
 impl StatelessView for Spacer {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        self.clone().boxed()
+        crate::global_key_duplication::Leaf.boxed()
     }
 }
 
@@ -86,7 +86,7 @@ impl StatefulView for KeyedCounter {
 
 impl ViewState<KeyedCounter> for KeyedCounterState {
     fn build(&self, _view: &KeyedCounter, _ctx: &dyn BuildContext) -> impl IntoView {
-        Spacer.boxed()
+        crate::global_key_duplication::Leaf.boxed()
     }
 }
 
@@ -227,6 +227,11 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
         &mut owner.borrow_mut().element_owner_mut(),
     );
 
+    // The state is created at the element's first build.
+    owner
+        .borrow_mut()
+        .schedule_build_for(original_id, 2, flui_view::RebuildReason::InitialMount);
+    owner.borrow_mut().build_scope(&mut tree.borrow_mut());
     // Make state mutation observable via sentinel.
     flui_view::test_only_set_global_key_registry(&tree, &owner);
     assert!(set_sentinel(&tree, &key, 0xCAFE_BABE));

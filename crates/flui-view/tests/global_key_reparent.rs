@@ -51,7 +51,7 @@ impl StatefulView for Spacer {
 struct SpacerState;
 impl ViewState<Spacer> for SpacerState {
     fn build(&self, _view: &Spacer, _ctx: &dyn BuildContext) -> impl IntoView {
-        Spacer.boxed()
+        crate::global_key_duplication::Leaf.boxed()
     }
 }
 
@@ -97,7 +97,7 @@ impl StatefulView for KeyedCounter {
 
 impl ViewState<KeyedCounter> for CounterState {
     fn build(&self, _v: &KeyedCounter, _ctx: &dyn BuildContext) -> impl IntoView {
-        Spacer.boxed()
+        crate::global_key_duplication::Leaf.boxed()
     }
 }
 
@@ -166,6 +166,10 @@ pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() 
     let initial_children = direct_children_in_slot_order(&tree.borrow(), parent_a);
     let parent_b = initial_children[0];
     let original_id = initial_children[1];
+    owner
+        .borrow_mut()
+        .schedule_build_for(original_id, 2, flui_view::RebuildReason::InitialMount);
+    owner.borrow_mut().build_scope(&mut tree.borrow_mut());
     assert_eq!(
         key.with_current_state::<i32>(CounterState::count),
         Some(17),
@@ -245,6 +249,9 @@ pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() 
                 ReconcileEventKind::Mount | ReconcileEventKind::Unmount
             )
         })
+        // The keyed child displaces the unkeyed leaf parent B built earlier;
+        // that unmount is B's own child, not the migrated subtree.
+        .filter(|event| event.parent != parent_b.as_u64() || event.child_key == Some(key_hash))
         .count();
     assert_eq!(
         mount_or_unmount, 0,

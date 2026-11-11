@@ -3447,7 +3447,9 @@ mod tests {
             dependency_calls: Arc::clone(&dependency_calls),
         };
         let moved = tree.insert(&keyed, scope_a, 0, &mut owner.element_owner_mut());
-        settle_initial_builds(&mut tree, &mut owner);
+        // Its first build creates the state the dependency change reaches.
+        owner.schedule_build_for(moved, 2, RebuildReason::InitialMount);
+        owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope_a));
         let builds_after_mount = build_calls.load(Ordering::Relaxed);
 
         tree.mark_needs_build(moved);
@@ -3794,6 +3796,8 @@ mod tests {
             },
             &mut owner.element_owner_mut(),
         );
+        // The state `did_change_dependencies` reaches is created by a first build.
+        owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
         settle_initial_builds(&mut tree, &mut owner);
 
         // An otherwise-irrelevant already-mounted element stands in for "the

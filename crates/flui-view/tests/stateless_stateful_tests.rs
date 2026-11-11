@@ -141,9 +141,9 @@ impl View for HookOrderView {
 }
 
 /// A parent can update an element between its mount and its first build,
-/// where `init_state` runs. The state still sees `init_state` first, then one
-/// update from the configuration it was created with to the current one.
-pub(crate) fn an_update_before_the_first_build_follows_init_state() {
+/// where `create_state` and `init_state` run. The state is created from the
+/// newest configuration, so it needs no update for the ones it never saw.
+pub(crate) fn an_update_before_the_first_build_creates_the_state_from_the_newest_view() {
     let log = HookLog::default();
     let view = |config| HookOrderView {
         config,
@@ -155,18 +155,19 @@ pub(crate) fn an_update_before_the_first_build_follows_init_state() {
 
     tree.update(root, &view("b"), &mut owner.element_owner_mut());
     tree.update(root, &view("c"), &mut owner.element_owner_mut());
-    assert_eq!(
-        *log.lock().expect("the hook log is never poisoned"),
-        ["create a"],
-        "no state hook runs before init_state"
+    assert!(
+        log.lock()
+            .expect("the hook log is never poisoned")
+            .is_empty(),
+        "no state exists before the first build"
     );
 
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     assert_eq!(
         *log.lock().expect("the hook log is never poisoned"),
-        ["create a", "init", "update a -> c", "apply_view c"],
-        "the first build initializes the state, delivers the update, then applies the view"
+        ["create c", "init", "apply_view c"],
+        "the first build creates the state from the newest view, initializes it, then applies the view"
     );
 
     tree.update(root, &view("d"), &mut owner.element_owner_mut());

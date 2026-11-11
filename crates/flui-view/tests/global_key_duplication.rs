@@ -64,10 +64,13 @@ impl View for Filler {
     }
 }
 
-struct KeyedState {
-    /// Distinguishes a migrated element from a freshly created one.
-    tag: i32,
+thread_local! {
+    /// The tag of the view that created the last `Keyed` element: an element
+    /// is created once, by the first parent that builds it.
+    static CREATED_BY: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
 }
+
+struct KeyedState;
 
 /// A stateful view carrying a `GlobalKey`.
 #[derive(Clone)]
@@ -80,7 +83,7 @@ impl StatefulView for Keyed {
     type State = KeyedState;
 
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        KeyedState { tag: self.tag }
+        KeyedState
     }
 }
 
@@ -99,7 +102,7 @@ impl ViewState<Keyed> for KeyedState {
 /// moment a real build pass runs: each Filler builds another Filler, forever.
 /// Anything reached through `build_scope` in this file must bottom out here.
 #[derive(Clone)]
-struct Leaf;
+pub(crate) struct Leaf;
 
 impl flui_view::RenderView for Leaf {
     type Protocol = flui_rendering::protocol::BoxProtocol;
@@ -170,6 +173,7 @@ impl View for SlotHost {
 
 impl View for Keyed {
     fn create_element(&self) -> flui_view::element::ElementKind {
+        CREATED_BY.set(Some(self.tag));
         flui_view::element::ElementKind::stateful(self)
     }
 
@@ -348,6 +352,7 @@ impl View for KeyedParent {
 #[serial_test::serial(global_key_registry)]
 pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
     let (tree, owner) = fresh_tree();
+    CREATED_BY.set(None);
     flui_view::test_only_set_global_key_registry(&tree, &owner);
     let key = GlobalKey::<KeyedState>::new();
 
@@ -396,9 +401,9 @@ pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
     );
 
     // That count alone would also hold if only ONE parent had ever built, so
-    // it cannot be the whole proof. The state settles it: `create_state` runs
-    // once, at the first mount, so the surviving state carries the tag of the
-    // parent that built FIRST, while the parent now holding the child is the
+    // it cannot be the whole proof. The creation settles it: the element is
+    // created once, by the parent that built FIRST, which records its tag,
+    // while the parent now holding the child is the
     // one that built LAST. Different values mean both parents ran and the
     // second took the element from the first — which is the duplicate.
     //
@@ -406,9 +411,13 @@ pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
     // orders the dirty heap by depth alone, so two siblings at the same depth
     // have no defined build order. Pinning one would be pinning heap
     // incidentals.
-    let creator_tag = key
-        .with_current_state(|state: &KeyedState| state.tag)
-        .expect("the surviving element still carries state");
+    assert!(
+        key.with_current_state(|_: &KeyedState| ()).is_some(),
+        "the surviving element still carries state"
+    );
+    let creator_tag = CREATED_BY
+        .get()
+        .expect("a parent created the keyed element");
     let holder_tag = if a_children.is_empty() { 2 } else { 1 };
     assert_ne!(
         creator_tag, holder_tag,
