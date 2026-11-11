@@ -95,8 +95,9 @@ conversation:
   edit `CHANGELOG.md`. A platform-support change updates `crates/flui-native/platform-parity.toml`
   and restates `docs/platform-parity.md` from it (✅ only
   after a run on that platform) and `docs/gaps.md`.
-- Commits are `area: what changed`. CI executes Linux and wasm32 only; native and GPU changes are
-  run locally.
+- Commits are `area: what changed`. Pull-request CI executes Linux and wasm32 only; Windows,
+  macOS, the iOS Simulator and an Android emulator run nightly on main
+  (`nightly-platforms.yml`), so native and GPU changes are run locally before the PR.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
@@ -243,6 +244,6 @@ by, with the better shape. What this repository keeps getting wrong:
 - a document that records a change by appending to a record instead of rewriting its rule, or a
   reversal that leaves other records teaching the old rule.
 
-Not a finding: a native or GPU path not yet run on its platform. CI runs Linux and wasm32 only;
+Not a finding: a native or GPU path not yet run on its platform. PR CI runs Linux and wasm32 only;
 the PR body names the platforms the change still needs a run on, and the owner runs them from a
 device list.

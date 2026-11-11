@@ -19,6 +19,9 @@ const SOURCE: &str = include_str!("../../platform-parity.toml");
 /// The committed render.
 const DOCUMENT: &str = include_str!("../../../../docs/platform-parity.md");
 
+/// The mark after ✅ on a cell a nightly runner passes.
+const NIGHTLY: &str = "ᴺ";
+
 /// The parsed `platform-parity.toml`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -113,6 +116,11 @@ struct Host {
     environment: String,
     /// The host that runs there.
     runner: String,
+    /// The hosted runner the nightly platform workflow
+    /// (`.github/workflows/nightly-platforms.yml`) runs this environment on,
+    /// where it does.
+    #[serde(default)]
+    nightly: Option<String>,
     /// The test double: no user runs there, so it has no readiness and no
     /// share of the overall score.
     #[serde(default)]
@@ -157,6 +165,10 @@ struct Row {
     /// The run evidence under the section's table.
     #[serde(default)]
     evidence: Option<String>,
+    /// The test or scenario each nightly runner passes for this row, by the
+    /// host's id: the cell is ✅ and the run repeats every night.
+    #[serde(default)]
+    nightly: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -266,6 +278,27 @@ impl Parity {
                     row.id
                 ));
             }
+            for (column, run) in &row.nightly {
+                let host = self.host.iter().find(|host| host.id == *column);
+                if host.is_none_or(|host| host.nightly.is_none()) {
+                    return Err(format!(
+                        "row `{}` names a nightly run on `{column}`, which no nightly runner runs",
+                        row.id
+                    ));
+                }
+                if run.trim().is_empty() {
+                    return Err(format!(
+                        "row `{}` names an empty nightly run on `{column}`",
+                        row.id
+                    ));
+                }
+                if row.status.get(column) != Some(&Mark::Yes) {
+                    return Err(format!(
+                        "row `{}` passes a nightly run on `{column}` and is not ✅ there",
+                        row.id
+                    ));
+                }
+            }
             if let Some(earlier) = ids.insert(row.id.as_str(), row.feature.as_str()) {
                 return Err(format!(
                     "row `{}` ({}) reuses the id of `{earlier}`",
@@ -295,6 +328,48 @@ impl Parity {
         tally
     }
 
+    /// How many rows a nightly runner passes on `host`.
+    fn nightly_rows(&self, host: &Host) -> usize {
+        self.rows()
+            .filter(|(_, row)| row.nightly.contains_key(&host.id))
+            .count()
+    }
+
+    /// `row`'s cell on `host`: its mark, with [`NIGHTLY`] where a nightly
+    /// runner passes it.
+    fn cell(row: &Row, host: &Host) -> String {
+        let glyph = Self::mark(row, host).glyph();
+        if row.nightly.contains_key(&host.id) {
+            format!("{glyph}{NIGHTLY}")
+        } else {
+            glyph.to_owned()
+        }
+    }
+
+    /// `row`'s run evidence, then each nightly run that passes it, in the
+    /// table's column order; `None` when it has neither.
+    fn evidence(&self, row: &Row) -> Option<String> {
+        let nightly: Vec<String> = self
+            .host
+            .iter()
+            .filter_map(|host| {
+                let run = row.nightly.get(&host.id)?;
+                let runner = host
+                    .nightly
+                    .as_deref()
+                    .expect("BUG: check_shape proved a nightly run names a nightly host");
+                Some(format!("{} on `{runner}`: `{run}`", host.environment))
+            })
+            .collect();
+        let nightly =
+            (!nightly.is_empty()).then(|| format!("Nightly{NIGHTLY}: {}.", nightly.join("; ")));
+        match (row.evidence.as_deref().map(str::trim_end), nightly) {
+            (Some(text), Some(nightly)) => Some(format!("{text} {nightly}")),
+            (Some(text), None) => Some(text.to_owned()),
+            (None, nightly) => nightly,
+        }
+    }
+
     /// The document `docs/platform-parity.md` is kept equal to.
     fn render(&self) -> String {
         let mut out = String::new();
@@ -317,6 +392,14 @@ impl Parity {
                 format_args!("| {} | {} |", entry.mark.glyph(), entry.meaning),
             );
         }
+        line(
+            out,
+            format_args!(
+                "\n{NIGHTLY} after ✅: the row passed on that environment's hosted runner and runs \
+                 there every night ([`nightly-platforms.yml`](../.github/workflows/nightly-platforms.yml)); \
+                 its run evidence names the test."
+            ),
+        );
         let users: Vec<&Host> = self.host.iter().filter(|host| !host.test_double).collect();
         let (halves, applicable) = users
             .iter()
@@ -339,8 +422,8 @@ impl Parity {
             out,
             format_args!("## Summary\n\n{}\n", self.summary.trim_end()),
         );
-        out.push_str("| Environment | Host | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |\n");
-        out.push_str("|:--|:--|--:|--:|--:|--:|--:|--:|:-:|\n");
+        out.push_str("| Environment | Host | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready | Nightly runner | Nightly ✅ |\n");
+        out.push_str("|:--|:--|--:|--:|--:|--:|--:|--:|:-:|:--|--:|\n");
         for host in &self.host {
             let tally = self.tally(host, false);
             let (halves, applicable) = tally.halves_and_applicable();
@@ -355,7 +438,7 @@ impl Parity {
             line(
                 out,
                 format_args!(
-                    "| {} | {} | {} | {} | {} | {} | {} | {}% | {ready} |",
+                    "| {} | {} | {} | {} | {} | {} | {} | {}% | {ready} | {} | {} |",
                     host.environment,
                     host.runner,
                     tally.get(Mark::Yes),
@@ -364,6 +447,8 @@ impl Parity {
                     tally.get(Mark::Na),
                     tally.get(Mark::Unaudited),
                     percent(halves, applicable),
+                    host.nightly.as_deref().unwrap_or("—"),
+                    self.nightly_rows(host),
                 ),
             );
         }
@@ -414,20 +499,20 @@ impl Parity {
             for row in &section.row {
                 let _ = write!(out, "| {} |", row.feature);
                 for host in &self.host {
-                    let _ = write!(out, " {} |", Self::mark(row, host).glyph());
+                    let _ = write!(out, " {} |", Self::cell(row, host));
                 }
                 line(out, format_args!(" {} |", row.note));
             }
             out.push('\n');
-            let evidence: Vec<(&str, &str)> = section
+            let evidence: Vec<(&str, String)> = section
                 .row
                 .iter()
-                .filter_map(|row| Some((row.feature.as_str(), row.evidence.as_deref()?)))
+                .filter_map(|row| Some((row.feature.as_str(), self.evidence(row)?)))
                 .collect();
             if !evidence.is_empty() {
                 out.push_str("<details>\n<summary>Run evidence</summary>\n\n");
                 for (feature, text) in evidence {
-                    line(out, format_args!("- **{feature}** — {}", text.trim_end()));
+                    line(out, format_args!("- **{feature}** — {text}"));
                 }
                 out.push_str("\n</details>\n\n");
             }
@@ -697,4 +782,31 @@ fn the_source_checks_catch_their_violations() {
     let stray =
         Parity::parse(&synthetic("drag", "yes", ", web = \"yes\"")).expect("the source parses");
     assert!(stray.check_shape().is_err());
+    // a nightly run needs a host with a nightly runner, and a ✅ cell there
+    let nightly = |mark: &str, runner: &str| {
+        let source = synthetic("drag", mark, "")
+            .replace(
+                "test_double = true",
+                &format!("test_double = true\n{runner}"),
+            )
+            .replace(
+                "position = \"drag\"",
+                "position = \"drag\"\nnightly = { headless = \"a_test\" }",
+            );
+        Parity::parse(&source).expect("the source parses")
+    };
+    let passed = nightly("yes", "nightly = \"ubuntu-latest\"");
+    assert_eq!(passed.check_shape(), Ok(()));
+    assert!(passed.render().contains(&format!("✅{NIGHTLY}")));
+    assert!(
+        passed
+            .render()
+            .contains("Headless on `ubuntu-latest`: `a_test`")
+    );
+    assert!(
+        nightly("partial", "nightly = \"ubuntu-latest\"")
+            .check_shape()
+            .is_err()
+    );
+    assert!(nightly("yes", "").check_shape().is_err());
 }

@@ -1026,10 +1026,11 @@ runs `checks`, `plan` and the `ci` aggregator:
   you changed one command at a time (AGENTS.md, "Checking a change"), and
   their dependents' clippy when you changed a public API. CI runs the rest
   — the dependents' tests, the feature matrix, wasm32, cross-typecheck,
-  rustdoc, doctests, trybuild — and is the proof. `flui-native`'s suite
-  runs only on Linux, so a Windows or macOS backend change still needs
-  `cargo nextest run -p flui-native` by hand; CI only type-checks those
-  backends.
+  rustdoc, doctests, trybuild — and is the proof. On a pull request
+  `flui-native`'s suite runs only on Linux and the Windows and macOS
+  backends are only type-checked; the nightly platform runs reach them
+  after the merge, so a Windows or macOS backend change still needs
+  `cargo nextest run -p flui-native` by hand before it.
 - **Tooling lane**: nothing in the workspace compiles; `checks` and `deps`
   cover the change.
 - **Full lane**: main, the merge queue and manual runs add the remaining
@@ -1085,9 +1086,9 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 The `Native xtask` checks are independent of the `ci` lane aggregator. The
 other workflows (`weekly.yml`, `release.yml`, `docs.yml`) are scheduled or
 event-driven, not per-PR gates. Release workflows build platform artifacts;
-they do not run native validation jobs. The native runtime suites remain
-available locally through `cargo xtask platform-test`, `cli-test` and
-`device`. No `full-ci` label or hosted device-check workflow can enable them.
+they do not run native validation jobs. The native runtime suites run every
+night on main in `nightly-platforms.yml` (below) and locally through
+`cargo xtask platform-test` and `cli-test`; no pull request waits for them.
 The GPU readback suites run in `test` on Mesa's software rasterizers, once on
 Vulkan and once on GL, and locally on the host's adapter through `gpu-test`.
 
@@ -1102,19 +1103,31 @@ A change cannot be merged if any of these fail. If you encounter a flaky test, f
 
 ### Runtime and native compilation coverage
 
-CI runtime validation runs on Linux, including manual dispatch.
-The Windows/macOS runtime and hosted GPU jobs, the native device-check workflow and
-the full-ci label workflow are removed. `cargo xtask affected` accepts no
-full-ci label flag, and plan does not read PR labels. Native runtime checks
-remain local commands. `cargo xtask gpu-test` sets `FLUI_REQUIRE_GPU=1` for
+Pull-request CI validates at run time on Linux only; `cargo xtask affected`
+accepts no full-ci label flag, and plan does not read PR labels. The other
+environments run every night on main, on GitHub's hosted runners, in
+`nightly-platforms.yml`: on `windows-latest` and `macos-latest`,
+`cargo xtask platform-test` (Win32, AppKit) and `cargo xtask gpu-test` on
+Direct3D 12 (WARP, the runner has no GPU) and on Metal; on those two, on a
+booted iOS Simulator and on an x86_64 Android emulator under KVM, the counter
+scenario `an_agent_presses_the_counter_on_a_live_device` (`flui-cli`'s
+`tests/cli_live_agent.rs`), which `FLUI_CLI_LIVE_DEVICE` points at a device
+and which fails as the device's `docs/gaps.md` entry where FLUI cannot drive
+it yet. A pull request runs it only when it edits the workflow or the
+scenario. It saves no cache, so ci.yml's entries keep the repository's 10 GB,
+and a red run on main keeps the "Nightly platforms are red on main" issue
+open. A parity row these runs pass names its run in its `nightly` table
+(`crates/flui-native/platform-parity.toml`), rendered as ✅ᴺ.
+Interactive checks no runner can make (a real IME, a pen, two monitors, a
+store) remain local runs on a device. `cargo xtask gpu-test` sets `FLUI_REQUIRE_GPU=1` for
 both the engine and facade readback suites; a missing adapter or device fails
 the gate instead of producing successful skips. `--backend vulkan|gl|metal|dx12`
 sets `WGPU_BACKEND`, which every engine test instance reads; `test` runs it
 with `vulkan` (lavapipe) and `gl` (llvmpipe through EGL), the Linux renderer's
 preferred backend and its fallback (ADR-0244 §1). Native compilation uses Linux
 cross tools for Windows and Android, and macOS runners with Xcode's genuine
-SDKs for macOS and iOS. These legs run clippy, not native tests or applications;
-OS runtime regressions need local platform evidence.
+SDKs for macOS and iOS. These pull-request legs run clippy, not native tests or applications;
+the nightly runs above run them.
 
 The aggregator requires each lane's planned jobs to pass and every other job
 to skip. The two nested jobs keep their own cache entries, saved on main

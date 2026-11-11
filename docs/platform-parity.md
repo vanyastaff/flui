@@ -62,6 +62,8 @@ the ❌ cells of the new column.
 | — | Not applicable: the environment has no such concept |
 | ❔ | Not audited yet |
 
+ᴺ after ✅: the row passed on that environment's hosted runner and runs there every night ([`nightly-platforms.yml`](../.github/workflows/nightly-platforms.yml)); its run evidence names the test.
+
 **Overall: ~37% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments).**
 
 This document is rendered from
@@ -85,16 +87,16 @@ the documented flaws of other platform layers, are kept outside the repository.
 Counted over every row of the core, system-service and distribution sections; the quality bar has no
 columns and is listed after them.
 
-| Environment | Host | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
-|:--|:--|--:|--:|--:|--:|--:|--:|:-:|
-| Windows | Win32 (native) | 11 | 53 | 33 | 19 | 10 | 39% | no |
-| macOS | AppKit (native) | 10 | 42 | 44 | 20 | 10 | 32% | no |
-| Wayland | Wayland (native) | 11 | 50 | 30 | 28 | 7 | 40% | no |
-| X11 | X11 (native) | 12 | 45 | 33 | 29 | 7 | 38% | no |
-| iOS | UIKit (native) | 7 | 37 | 41 | 33 | 8 | 30% | no |
-| Android | android-activity (native) | 18 | 40 | 33 | 29 | 6 | 42% | no |
-| Web | wasm canvas (native) | 7 | 40 | 30 | 42 | 7 | 35% | no |
-| Headless | test double | 53 | 2 | 50 | 19 | 2 | 51% | — |
+| Environment | Host | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready | Nightly runner | Nightly ✅ |
+|:--|:--|--:|--:|--:|--:|--:|--:|:-:|:--|--:|
+| Windows | Win32 (native) | 11 | 53 | 33 | 19 | 10 | 39% | no | windows-latest | 0 |
+| macOS | AppKit (native) | 10 | 42 | 44 | 20 | 10 | 32% | no | macos-latest | 0 |
+| Wayland | Wayland (native) | 11 | 50 | 30 | 28 | 7 | 40% | no | — | 0 |
+| X11 | X11 (native) | 12 | 45 | 33 | 29 | 7 | 38% | no | — | 0 |
+| iOS | UIKit (native) | 7 | 37 | 41 | 33 | 8 | 30% | no | macos-latest, iOS Simulator | 0 |
+| Android | android-activity (native) | 18 | 40 | 33 | 29 | 6 | 42% | no | ubuntu-24.04, Android emulator | 0 |
+| Web | wasm canvas (native) | 7 | 40 | 30 | 42 | 7 | 35% | no | — | 0 |
+| Headless | test double | 53 | 2 | 50 | 19 | 2 | 51% | — | — | 0 |
 
 Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partly; 3 not met (power and thermal behaviour, assistive technology conformance, the first frame matching the OS splash); 2 not audited (timestamps across a counter wrap or a clock-base change, platform-edge diagnostics free of secrets).
 
