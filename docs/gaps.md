@@ -465,11 +465,11 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The shape that removes the cost is [ADR-0322](adr/ADR-0322-a-control-mounts-one-element-for-its-behaviours.md): one element and one render object per control.
 - The entry closes when a `RawButton` adds to its child at most 2 elements, 1 render node, 40 allocations and 3 KB (today 15, 7, 316 and 37 KB over the `Text` it holds), held by a counted scenario of `crates/flui-widgets/tests/perf.rs`. The `Text` itself, 105 allocations for one short line, is measured by the same scenario and is not this entry's condition. Until then no new widget family starts on the wrappers (`AGENTS.md`, "Working here").
 
-### A label change allocates about 150 times a frame
+### A label change allocates over a hundred times a frame
 
 > **Environments:** all · **Who it hurts:** Every app that updates text while it animates or scrolls · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
-- `perf_scaling_a_label_change_costs_the_same_on_any_tree_size` (`crates/flui-widgets/tests/perf.rs`) changes one label over 500 and 5 000 buttons. The cost no longer grows with the tree: its allocations are equal at both sizes, and `perf --instructions` holds the instruction counts within 5%. Each frame still allocates about 150 times. The `label_change_*` rows of `crates/flui-widgets/perf/baseline.toml` hold the count, four frames per row.
+- `perf_scaling_a_label_change_costs_the_same_on_any_tree_size` (`crates/flui-widgets/tests/perf.rs`) changes one label over 500 and 5 000 buttons. The cost no longer grows with the tree: its allocations are equal at both sizes, and `perf --instructions` holds the instruction counts within 5%. Each frame still allocates more than a hundred times. The `label_change_*` rows of `crates/flui-widgets/perf/baseline.toml` hold the count, four frames per row.
 - From a backtrace per allocation of that scenario, where each part goes:
   - **Text** (shaping and the shaped paragraph, about half): Parley builds a fresh `Layout` per shaping, and FLUI copies the spans' text, styles and run colours around it. This lane is `flui-painting`'s `TextContext` and `TextPainter`, and it outlives the retained scene.
   - **Paint and layers** (about a third): fragment op vectors, display-list commands, and the `LayerTree` and `FragmentComposer` rebuilt every frame. This lane is the retained scene, `docs/plans/specs/render-scaling/` (RS4, RS8).
