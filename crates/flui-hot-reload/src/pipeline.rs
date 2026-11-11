@@ -183,6 +183,7 @@ impl PluginPipeline {
             // repaints from the root into the new lineage. It drops after the
             // pipeline's borrow ends: an annotation's `Drop` is user code.
             let mut scene = flui_rendering::layer::SceneOwner::new();
+            let mut released: Option<flui_rendering::layer::SceneVersion> = None;
             let layer_tree = pipeline_owner.with_mut(|guard| {
                 if let Some(root_id) = guard.root_id() {
                     guard.mark_needs_paint(root_id);
@@ -229,11 +230,13 @@ impl PluginPipeline {
                     ));
                     return None;
                 }
-                guard.scene_applied(scene.current());
+                released = guard.scene_applied(scene.current());
                 guard
                     .scene_frame_node()
                     .and_then(|node| scene.current().flatten_node(node))
             });
+            // The version the pipeline replaced drops here, outside its borrow.
+            drop(released);
 
             // Phase 3: freeze the LayerTree into a Scene (an empty one when
             // the pipeline produced nothing).

@@ -21,7 +21,6 @@ const SURFACE: SurfaceKey = SurfaceKey {
     generation: SurfaceGeneration::ZERO,
 };
 
-
 /// A row of the table, run under each damage path.
 pub(crate) type Row = fn(&mut Run);
 /// How a row's owners damage an effect update, and what they published.

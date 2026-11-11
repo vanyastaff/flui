@@ -165,7 +165,7 @@ impl SceneHost {
         if let Err(error) = self.owner.apply(self.surface) {
             panic!("BUG: the pipeline's patch was refused: {error}");
         }
-        pipeline.scene_applied(self.owner.current());
+        drop(pipeline.scene_applied(self.owner.current()));
         (answer, true)
     }
 
@@ -245,7 +245,7 @@ impl SceneHost {
         if let Err(error) = self.owner.apply(self.surface) {
             panic!("BUG: the pipeline's patch was refused: {error}");
         }
-        pipeline.scene_applied(self.owner.current());
+        drop(pipeline.scene_applied(self.owner.current()));
         let tree = self.frame_tree(pipeline);
         (answer, tree)
     }

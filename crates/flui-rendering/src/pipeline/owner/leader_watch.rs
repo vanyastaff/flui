@@ -125,7 +125,8 @@ impl LeaderWatches {
     /// Reads the leaders of `version`, the scene a frame's paint was just
     /// applied as, and queues a delivery for each live watch whose geometry
     /// changed. Runs no user code: listeners run in the post-frame lane.
-    pub(crate) fn check(&self, version: &SceneVersion) {
+    #[must_use = "the replaced version drops its annotations, user code"]
+    pub(crate) fn check(&self, version: &SceneVersion) -> Option<SceneVersion> {
         let live: Vec<Rc<WatchEntry>> = {
             let mut entries = self.entries.borrow_mut();
             entries.retain(|entry| entry.strong_count() > 0);
@@ -156,10 +157,9 @@ impl LeaderWatches {
                 );
             }
         }
-        // The version replaced drops once the cell is free: an annotation's
-        // `Drop` is user code.
-        let replaced = self.committed.replace(Some(version.clone()));
-        drop(replaced);
+        // The version replaced goes back to the caller, which drops it once
+        // no pipeline borrow is held: an annotation's `Drop` is user code.
+        self.committed.replace(Some(version.clone()))
     }
 }
 

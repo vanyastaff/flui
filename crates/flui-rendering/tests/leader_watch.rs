@@ -149,7 +149,7 @@ fn a_watch_without_a_leader_reads_none() {
     let scene = Scene::new(20.0);
     let watch = scene.watch(LayerLink::new());
     let (heard, _listening) = counted(&watch);
-    for _ in 0..2 {
+    for _ in 0..4 {
         scene.paint();
         scene.complete();
     }
@@ -256,4 +256,83 @@ fn a_moved_leader_is_heard() {
     assert_eq!(heard.get(), 2, "the move is heard");
     assert_eq!(origin(&watch).map(|point| point.x), Some(30.0));
     assert_eq!(height(&watch), Some(20.0), "the size stays");
+}
+
+thread_local! {
+    /// The pipeline whose borrow a dropped annotation looks at, and whether
+    /// each drop found it free.
+    static WATCHED: RefCell<(Option<flui_rendering::pipeline::WeakPipelineCell>, Vec<bool>)> =
+        const { RefCell::new((None, Vec::new())) };
+}
+
+/// An annotation whose `Drop` records whether the pipeline was free.
+#[derive(Debug)]
+struct DropProbe;
+
+impl Drop for DropProbe {
+    fn drop(&mut self) {
+        WATCHED.with(|watched| {
+            let mut watched = watched.borrow_mut();
+            let free = watched
+                .0
+                .as_ref()
+                .and_then(flui_rendering::pipeline::WeakPipelineCell::upgrade)
+                .map(|cell| cell.is_free());
+            if let Some(free) = free {
+                watched.1.push(free);
+            }
+        });
+    }
+}
+
+/// The version a newly applied one replaces drops once the pipeline is free:
+/// an annotation it held last runs its `Drop`, user code, with no borrow of
+/// the pipeline live.
+///
+/// Red-check: drop the replaced version inside the `with_mut` that reports
+/// the applied scene (the drop finds the pipeline borrowed).
+#[test]
+fn a_replaced_version_drops_outside_the_pipeline_borrow() {
+    use flui_objects::RenderAnnotatedRegion;
+    use std::sync::Arc;
+
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let (root, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderAnnotatedRegion::new(Arc::new(DropProbe)))
+            .label("region")
+            .child(box_node(RenderSizedBox::fixed(10.0, 10.0))),
+    );
+    owner.set_root_id(Some(root));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(50.0, 50.0))));
+    let region = registry.get("region").expect("labelled");
+    let cell = PipelineCell::new(owner);
+    let mut host = SceneHost::new();
+    WATCHED.with(|watched| *watched.borrow_mut() = (Some(cell.downgrade()), Vec::new()));
+
+    let frame = |host: &mut SceneHost| {
+        let (painted, _) = host.drive_cell(&cell, |writer| cell.run_frame(writer));
+        painted.expect("the frame runs");
+    };
+    frame(&mut host);
+    // A renewed scene keeps nothing of the last version, so the version the
+    // watches hold is the last holder of the first annotation.
+    drop(
+        host.owner_mut()
+            .renew(flui_layer::ResyncReason::RasterReset),
+    );
+    cell.with_mut(|owner| {
+        update_render_object::<RenderAnnotatedRegion, _>(owner, region, |region| {
+            region.set_value(Arc::new(DropProbe))
+        });
+    });
+    frame(&mut host);
+
+    let drops = WATCHED.with(|watched| std::mem::take(&mut watched.borrow_mut().1));
+    WATCHED.with(|watched| watched.borrow_mut().0 = None);
+    assert!(!drops.is_empty(), "a replaced annotation dropped");
+    assert!(
+        drops.iter().all(|free| *free),
+        "each annotation dropped with the pipeline free: {drops:?}"
+    );
 }

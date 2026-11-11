@@ -248,7 +248,10 @@ impl PipelineCell {
     /// As [`Self::with_mut`]: when a `with`/`with_mut` borrow from this cell
     /// is live.
     pub fn scene_applied(&self, version: &flui_layer::SceneVersion) {
-        self.with_mut(|owner| owner.scene_applied(version));
+        // The version replaced drops once the owner is back in its slot: its
+        // annotations are user values.
+        let replaced = self.with_mut(|owner| owner.scene_applied(version));
+        drop(replaced);
     }
 
     /// The node the owner publishes its frame at

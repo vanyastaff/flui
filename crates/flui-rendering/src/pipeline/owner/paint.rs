@@ -1190,10 +1190,16 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
     /// A patch never applied is never reported: the next paint finds it
     /// staged still, drops every record, and repaints from the root, as it
     /// does after a refused patch renews the owner's lineage (ADR-0304 §10).
-    pub fn scene_applied(&mut self, version: &flui_layer::SceneVersion) {
-        let Some(staged) = self.staged_scene.take() else {
-            return;
-        };
+    ///
+    /// Returns the version the watches held before, which the caller drops
+    /// once it holds no borrow of this owner: its annotations are user
+    /// values whose `Drop` is user code.
+    #[must_use = "the version this one replaces drops its annotations, user code: drop it once no pipeline borrow is held"]
+    pub fn scene_applied(
+        &mut self,
+        version: &flui_layer::SceneVersion,
+    ) -> Option<flui_layer::SceneVersion> {
+        let staged = self.staged_scene.take()?;
         let StagedScene {
             mut records,
             mut placed,
@@ -1272,7 +1278,7 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             }
         }
         // Queued, not run: listeners run in the post-frame lane.
-        self.leader_watches.check(version);
+        self.leader_watches.check(version)
     }
 
     /// The node this owner publishes its frame at, which the scene's root
@@ -1362,7 +1368,7 @@ struct AnchorFrame {
     size: Size,
     /// `true` while the anchor is a node of the repaint-boundary region being
     /// painted, `false` when the region inherited it from outside. A capture
-    /// stores the frame only in the first case — see [`NestedSlot::anchor`].
+    /// stores the frame only in the first case.
     local: bool,
 }
 
