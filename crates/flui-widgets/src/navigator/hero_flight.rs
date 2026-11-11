@@ -1403,7 +1403,7 @@ impl AnimatedView for Shuttle {
 impl StatefulView for Shuttle {
     type State = ShuttleState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ShuttleState
     }
 }

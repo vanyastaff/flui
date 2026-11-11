@@ -89,7 +89,7 @@ now, which serves an item that is keep-worthy from the start.
 `keep_alive_handle()` returns the capability itself, so holds can be taken and
 released whenever the answer changes — an editor that becomes dirty, a video
 that starts playing. Without it the common false→true transition is
-unreachable: `init_state` is the only guaranteed hook that receives a context,
+unreachable: `create_state` and `init_state` are the only guaranteed hooks that receive a context,
 `did_update_view` and `activate` receive none, `did_change_dependencies` is not
 guaranteed to run, and acquiring from `build` is forbidden. Same shape, and the
 same reason, as `RebuildHandle`.
@@ -97,7 +97,7 @@ same reason, as `RebuildHandle`.
 It follows that a lease is issued **unconditionally**, including to an element not
 currently inside a lazy sliver: it simply holds nothing there, and begins holding
 if the element is later grafted into a list. Refusing would make that refusal
-permanent, because `init_state` is the only guaranteed acquisition point —
+permanent, because the first build (`create_state`, `init_state`) is the only guaranteed acquisition point —
 `activate` and `did_update_view` receive no context, and acquiring from `build` is
 forbidden — so a `GlobalKey` state mounted outside a list and later moved into one
 would have no supported way to ask.

@@ -201,7 +201,7 @@ pub fn derive_inherited_data(input: TokenStream) -> TokenStream {
 ///
 /// impl StatefulView for Counter {
 ///     type State = CounterState;
-///     fn create_state(&self) -> CounterState {
+///     fn create_state(&self, _ctx: &dyn LifecycleContext) -> CounterState {
 ///         CounterState { count: self.initial }
 ///     }
 /// }

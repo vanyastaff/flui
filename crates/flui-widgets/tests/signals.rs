@@ -40,7 +40,7 @@ struct ReaderState {
 
 impl StatefulView for Reader {
     type State = ReaderState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ReaderState {
             sig: self.sig,
             builds: Arc::clone(&self.builds),
@@ -69,7 +69,7 @@ struct TolerantReaderState {
 
 impl StatefulView for TolerantReader {
     type State = TolerantReaderState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         TolerantReaderState { view: self.clone() }
     }
 }
@@ -101,7 +101,7 @@ struct WriterInBuildState {
 
 impl StatefulView for WriterInBuild {
     type State = WriterInBuildState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         WriterInBuildState {
             view: self.clone(),
             writer: None,

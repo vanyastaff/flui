@@ -41,35 +41,33 @@ struct Counter {
     seen: Seen,
 }
 
-#[derive(Default)]
 struct CounterState {
     count: Signal<u32>,
     released: Signal<u32>,
-    writer: Option<WriterSource>,
+    writer: WriterSource,
 }
 
 impl StatefulView for Counter {
     type State = CounterState;
 
-    fn create_state(&self) -> Self::State {
-        CounterState::default()
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        // A handle kept past its slot: released on a graph no presentation owns.
+        let gone = flui_view::Reactive::new();
+        let released = gone.signal(0);
+        gone.release(released.slot());
+        CounterState {
+            count: ctx.signal(0),
+            released,
+            writer: ctx.writer_source(),
+        }
     }
 }
 
 impl ViewState<Counter> for CounterState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.count = ctx.signal(0);
-        // A handle kept past its slot: released on a graph no presentation owns.
-        let gone = flui_view::Reactive::new();
-        self.released = gone.signal(0);
-        gone.release(self.released.slot());
-        self.writer = Some(ctx.writer_source());
-    }
-
     fn build(&self, view: &Counter, ctx: &dyn BuildContext) -> impl IntoView {
         view.seen
             .borrow_mut()
-            .get_or_insert_with(|| (self.count, self.writer.clone().expect("init_state ran")));
+            .get_or_insert_with(|| (self.count, self.writer.clone()));
         let count = self.count;
         let released = self.released;
         let button = RawButton::new(Text::new("Press"));
@@ -540,7 +538,7 @@ impl IntentAction<ActivateIntent> for Outer {
 
 impl StatefulView for Switched {
     type State = SwitchedState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _cx: &dyn flui_view::LifecycleContext) -> Self::State {
         SwitchedState {
             enabled: self.enabled.clone(),
         }
@@ -681,7 +679,7 @@ struct StatedState {
 
 impl StatefulView for Stated {
     type State = StatedState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _cx: &dyn flui_view::LifecycleContext) -> Self::State {
         StatedState {
             enabled: self.enabled.clone(),
             shown: self.shown.clone(),

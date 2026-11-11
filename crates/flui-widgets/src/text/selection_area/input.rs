@@ -938,7 +938,7 @@ impl View for SelectionGestures {
 impl StatefulView for SelectionGestures {
     type State = SelectionGesturesState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SelectionGesturesState {
             model: Rc::clone(&self.model),
             built_for: None,

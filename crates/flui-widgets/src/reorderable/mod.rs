@@ -1474,7 +1474,7 @@ impl View for ReorderableList {
 impl StatefulView for ReorderableList {
     type State = ReorderableListState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ReorderableListState {
             shared: Shared::new(&self.config),
         }
@@ -1522,7 +1522,7 @@ impl View for ReorderableGrid {
 impl StatefulView for ReorderableGrid {
     type State = ReorderableGridState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ReorderableGridState {
             shared: Shared::new(&self.config),
         }

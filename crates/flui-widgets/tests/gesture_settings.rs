@@ -26,7 +26,7 @@ pub(crate) struct SettingsScopeState {
 impl StatefulView for SettingsScope {
     type State = SettingsScopeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SettingsScopeState { arena: None }
     }
 }

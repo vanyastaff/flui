@@ -291,7 +291,7 @@ impl fmt::Debug for ParticleEmitterState {
 impl StatefulView for ParticleEmitter {
     type State = ParticleEmitterState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let clock = AnimationController::builder(std::time::Duration::from_secs(1))
             .unbounded()
             .debug_label("ParticleEmitter.clock")

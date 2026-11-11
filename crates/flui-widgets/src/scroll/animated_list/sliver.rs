@@ -276,7 +276,7 @@ where
 {
     type State = SliverAnimatedListState<T, K>;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let count = self.items.len();
         let staggered = self.motion.entrance.is_some();
         let roster = self

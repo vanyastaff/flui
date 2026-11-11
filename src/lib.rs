@@ -30,7 +30,7 @@
 //!
 //! The root passed to [`run_app`] implements [`view::StatelessView`]; compose
 //! stateful children beneath it when the screen owns changing state. Create
-//! signals in [`view::ViewState::init_state`] with a [`view::LifecycleContext`],
+//! signals in [`view::StatefulView::create_state`] with a [`view::LifecycleContext`],
 //! read them during `build`, and write them from event callbacks. The
 //! [`view::BuildContext`] deliberately does not provide lifecycle capabilities.
 //!

@@ -128,7 +128,7 @@ impl<T> std::fmt::Debug for ValueListenableBuilder<T> {
 impl<T: 'static> StatefulView for ValueListenableBuilder<T> {
     type State = ValueListenableBuilderState<T>;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // `ViewState::init_state` is handed a `BuildContext` but NOT the view,
         // so the listenable the first subscription needs is copied here.
         ValueListenableBuilderState {

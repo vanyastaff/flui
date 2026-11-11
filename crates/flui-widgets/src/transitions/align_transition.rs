@@ -1,6 +1,7 @@
 //! [`AlignTransition`] — moves its child's alignment from an
 //! [`Animation<Alignment>`].
 
+use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_animation::Animation;
@@ -98,7 +99,7 @@ impl ViewState<AlignTransition> for AlignTransitionState {
 impl StatefulView for AlignTransition {
     type State = AlignTransitionState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AlignTransitionState {
             alignment: ProxySlot::new(&self.alignment),
         }

@@ -68,7 +68,7 @@ struct SigReaderState;
 
 impl StatefulView for SigReader {
     type State = SigReaderState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SigReaderState
     }
 }
@@ -93,7 +93,7 @@ struct BystanderState;
 
 impl StatefulView for Bystander {
     type State = BystanderState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         BystanderState
     }
 }

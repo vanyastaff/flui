@@ -45,7 +45,7 @@ struct ProbeItemState {
 
 impl StatefulView for ProbeItem {
     type State = ProbeItemState;
-    fn create_state(&self) -> ProbeItemState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> ProbeItemState {
         ProbeItemState {
             index: self.index,
             log: Arc::clone(&self.log),
@@ -369,7 +369,7 @@ struct KeyedRowState {
 
 impl StatefulView for KeyedRow {
     type State = KeyedRowState;
-    fn create_state(&self) -> KeyedRowState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> KeyedRowState {
         KeyedRowState {
             born_as: self.id,
             log: Arc::clone(&self.inits),
@@ -505,7 +505,7 @@ struct PinnedRowState {
 
 impl StatefulView for PinnedRow {
     type State = PinnedRowState;
-    fn create_state(&self) -> PinnedRowState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> PinnedRowState {
         PinnedRowState {
             lease: Rc::clone(&self.lease),
             disposed: Rc::clone(&self.disposed),

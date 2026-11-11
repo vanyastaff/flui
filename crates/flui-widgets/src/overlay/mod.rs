@@ -590,7 +590,7 @@ impl View for Overlay {
 impl StatefulView for Overlay {
     type State = OverlayState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         OverlayState {
             shared: crate::support::retirement::Terminal::new(Arc::clone(&self.handle.shared)),
             rebuild: None,
@@ -774,7 +774,7 @@ impl View for OverlayEntryView {
 impl StatefulView for OverlayEntryView {
     type State = OverlayEntryViewState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         OverlayEntryViewState {
             entry: self.entry.clone(),
             element: None,

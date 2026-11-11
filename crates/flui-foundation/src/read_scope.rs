@@ -54,10 +54,10 @@ pub struct SignalSlot {
 }
 
 impl SignalSlot {
-    /// The graph id of an unbound handle ([`Signal::default`]). A graph never
-    /// takes it as its id, so a slot naming it is refused as
-    /// [`SignalError::Unbound`] by every read and write.
-    pub const UNBOUND_GRAPH: u32 = 0;
+    /// The graph id no graph is given: graph ids start past it, and the
+    /// counter parks at it once the id space is spent, so no live graph
+    /// accepts a slot that names it.
+    pub const NO_GRAPH: u32 = 0;
 
     /// A slot handle. Minted by the graph that owns the arena; a handle built
     /// any other way is checked like every handle and refused unless it names
@@ -79,12 +79,6 @@ impl SignalSlot {
     #[must_use]
     pub const fn graph(self) -> u32 {
         self.graph
-    }
-
-    /// Whether this slot names no graph ([`SignalSlot::UNBOUND_GRAPH`]).
-    #[must_use]
-    pub const fn is_unbound(self) -> bool {
-        self.graph == Self::UNBOUND_GRAPH
     }
 
     /// The arena index of the slot.
@@ -141,7 +135,7 @@ pub enum SignalError {
         element: ElementId,
     },
     /// A slot was created while an element was building: one slot per
-    /// rebuild is a leak. Create in `init_state` and hold the handle.
+    /// rebuild is a leak. Create in `StatefulView::create_state` and hold the handle.
     CreatedDuringBuild {
         /// The element whose build was running.
         element: ElementId,
@@ -152,9 +146,6 @@ pub enum SignalError {
         /// Arena index of the slot.
         index: u32,
     },
-    /// The handle was never bound to a graph: it is a [`Signal::default`]
-    /// placeholder that `init_state` did not replace with a created signal.
-    Unbound,
 }
 
 impl fmt::Display for SignalError {
@@ -185,9 +176,6 @@ impl fmt::Display for SignalError {
                 f,
                 "signal slot {index} accessed re-entrantly from its own read/write closure"
             ),
-            Self::Unbound => {
-                f.write_str("signal handle was never bound to a graph (create it in init_state)")
-            }
         }
     }
 }
@@ -325,36 +313,18 @@ impl<T: 'static> fmt::Debug for Signal<T> {
     }
 }
 
-/// An unbound placeholder, so a `ViewState` can hold `Signal<T>` rather than
-/// `Option<Signal<T>>` between `create_state` and `init_state`, where the
-/// real handle is created (`self.count = cx.signal(0)`).
-///
-/// It names graph id 0, which no graph mints (graph ids start at 1 and skip 0
-/// on wrap), so every read and every write through it is
-/// [`SignalError::Unbound`], never a read of another slot.
-impl<T: 'static> Default for Signal<T> {
-    fn default() -> Self {
-        Self::from_slot(SignalSlot::new(SignalSlot::UNBOUND_GRAPH, 0, 0))
-    }
-}
-
 /// Lend `slot` to a typed closure through an erased graph.
 ///
 /// The downcast is checked: a slot holding another type is
 /// [`SignalError::TypeMismatch`]. A graph that returns `Ok` without calling
 /// the reader breaks [`ReadGraph::read_erased`]'s contract and is refused as
-/// [`SignalError::Released`]; a second call of the reader does nothing. An
-/// unbound handle ([`Signal::default`]) is [`SignalError::Unbound`] before any
-/// graph is asked.
+/// [`SignalError::Released`]; a second call of the reader does nothing.
 fn read_typed<T: 'static, R>(
     graph: &dyn ReadGraph,
     sink: Option<&dyn ReaderSink>,
     slot: SignalSlot,
     mut f: impl FnMut(&T) -> R,
 ) -> Result<R, SignalError> {
-    if slot.is_unbound() {
-        return Err(SignalError::Unbound);
-    }
     let (out, graph_outcome) = invoke_reader(graph, slot, &mut f);
     // Keep the reader outside its caught invocation. Consuming an owned
     // `FnOnce` there would destroy its captures while a reader panic is still

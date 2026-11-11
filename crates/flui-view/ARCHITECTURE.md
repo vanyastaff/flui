@@ -104,9 +104,9 @@ E0624 for depth minting and E0308 for raw-integer stamping, alongside an
 opaque-depth forwarding caller.
 
 Element-local state is a `Signal<T>` created with `ctx.signal(value)` in
-`init_state`; "Writes open through a WriterSource" and "Signal mutation is
-commit-on-unwind, not transactional" state its write admission and panic
-containment.
+`StatefulView::create_state`, so the state field is the handle itself;
+"Writes open through a WriterSource" and "Signal mutation is commit-on-unwind,
+not transactional" state its write admission and panic containment.
 
 ### Clean widget frames report no builds
 
@@ -398,7 +398,7 @@ methods vanish with them, as intended.
 are also exported by `flui-view`, and therefore by `flui::view`. This includes
 `TaskToken`, `BoxedTask`, local scheduling errors, and the timing value types
 used by post-frame callbacks, including the cross-platform `Instant`. Widget
-authors can store explicitly typed capabilities acquired in `init_state` without
+authors can store explicitly typed capabilities acquired in `create_state` or `init_state` without
 adding scheduler dependencies. These are reexports of the existing types, not
 new wrappers or duplicated scheduler state: task-token cancellation and weak
 post-frame ownership keep their existing contracts.
@@ -450,7 +450,7 @@ a live tree without re-locking the tree the drain already holds.
 
 **Scope.** The context is only reachable inside build/lifecycle calls, so it cannot be
 stashed and used after its element is defunct. Capability acquisition is split out by type (ADR-0078:
-`LifecycleContext` in `init_state`/`did_change_dependencies`, `BuildContext` in `build`).
+`LifecycleContext` in `create_state`/`init_state`/`did_change_dependencies`, `BuildContext` in `build`).
 
 ### Inherited reads are O(1) and field-precise; reading is depending
 
@@ -568,8 +568,8 @@ cross-thread `UiCommand::SignalWrite` to the presentation that minted the slot),
 itself (`BuildOwner::signal_graph`, which no build context reaches), for minting test signals
 and inspecting the reader registry; writing still needs a source. An event callback may
 return `()` or a write's `Result`; `EventOutcome::report` logs a refused write on
-`flui.signals` rather than dropping it silently. A `Signal::default()` handle names graph 0,
-which `Reactive::new` never mints, and is refused with `Unbound`.
+`flui.signals` rather than dropping it silently. A state creates its signals in
+`StatefulView::create_state`, so no handle exists before its graph slot does.
 
 The borrowed `Writer` and `EventCx` also implement pure `ReadGraph`: an event's
 `peek` observes current values without creating a build subscription. Owner-bound

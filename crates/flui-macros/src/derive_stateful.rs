@@ -13,7 +13,7 @@
 //!
 //! impl StatefulView for Counter {
 //!     type State = CounterState;
-//!     fn create_state(&self) -> CounterState {
+//!     fn create_state(&self, _ctx: &dyn LifecycleContext) -> CounterState {
 //!         CounterState { count: self.initial }
 //!     }
 //! }
@@ -27,7 +27,7 @@
 //!
 //! No `impl View for Counter` block, no `impl_stateful_view!`
 //! invocation. The state-handle machinery is wired by the framework
-//! through the typed `StatefulBehavior::new(view)` constructor the
+//! through the typed `StatefulBehavior::new()` constructor the
 //! generated body calls.
 //!
 //! See [`crate::derive_stateless`] for the cross-crate path strategy

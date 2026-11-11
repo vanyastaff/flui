@@ -39,7 +39,7 @@ struct AnimationProbeState {
 impl StatefulView for AnimationProbe {
     type State = AnimationProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AnimationProbeState {
             observer: self.observer.clone(),
             found_ambient: Arc::clone(&self.found_ambient),

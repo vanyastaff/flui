@@ -58,7 +58,7 @@ pub struct FocusTraversalGroupState {
 
 impl StatefulView for FocusTraversalGroup {
     type State = FocusTraversalGroupState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let node = FocusNode::with_debug_label("FocusTraversalGroup");
         node.set_can_request_focus(false);
         node.set_skip_traversal(true);

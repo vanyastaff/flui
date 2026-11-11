@@ -20,7 +20,7 @@ struct AnnouncingState(Slot);
 impl StatefulView for Announcing {
     type State = AnnouncingState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AnnouncingState(Arc::clone(&self.slot))
     }
 }

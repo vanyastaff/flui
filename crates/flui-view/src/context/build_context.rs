@@ -338,6 +338,7 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
 /// running (an unbounded rebuild loop, or a mutation after `build_scope`).
 ///
 /// So the capabilities are reachable only from
+/// [`StatefulView::create_state`](crate::StatefulView::create_state),
 /// [`ViewState::init_state`](crate::ViewState::init_state) and
 /// [`ViewState::did_change_dependencies`](crate::ViewState::did_change_dependencies),
 /// which receive `&dyn LifecycleContext`. `build` receives `&dyn BuildContext`,
@@ -368,7 +369,7 @@ pub trait LifecycleContext: BuildContext {
     /// An owned, `'static` handle that schedules **this** element for rebuild on
     /// the next frame.
     ///
-    /// Capture it in `ViewState::init_state` (or `did_change_dependencies`) and
+    /// Capture it in `StatefulView::create_state` (or a later lifecycle hook) and
     /// call [`RebuildHandle::schedule`](crate::RebuildHandle::schedule) from a
     /// completion callback on any thread. `schedule()` only writes to
     /// `BuildOwner`'s shared inbox and requests a frame; the rebuild itself runs
@@ -451,7 +452,7 @@ pub trait LifecycleContext: BuildContext {
     /// The binding's frame-driven async task driver, if a binding
     /// installed one.
     ///
-    /// Spawn subscriptions from `ViewState::init_state` / `did_change_dependencies`
+    /// Spawn subscriptions from `create_state` / `init_state` / `did_change_dependencies`
     /// and hold the returned [`crate::TaskToken`] in the state — dropping it cancels.
     ///
     /// `None` when the tree is not bound to a binding (a bare `ElementTree` in a
@@ -477,7 +478,7 @@ pub trait LifecycleContext: BuildContext {
     /// frame's committed layout. The callback receives [`crate::FrameTiming`].
     ///
     /// `None` when no binding installed one. Acquire it in a lifecycle hook
-    /// (`init_state` / `did_change_dependencies`), never in `build`/layout/paint —
+    /// (`create_state` / `init_state` / `did_change_dependencies`), never in `build`/layout/paint —
     /// the same rule `rebuild_handle` follows.
     fn post_frame_handle(&self) -> Option<crate::PostFrameHandle>;
 
@@ -491,7 +492,7 @@ pub trait LifecycleContext: BuildContext {
     /// selecting an ambient "current" presentation.
     ///
     /// `None` when no binding installed one (a bare `ElementTree` in a unit
-    /// test). Acquire it in a lifecycle hook (`init_state` /
+    /// test). Acquire it in a lifecycle hook (`create_state`, `init_state` or
     /// `did_change_dependencies`), the same rule `post_frame_handle` follows.
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle>;
 
@@ -517,7 +518,7 @@ pub trait LifecycleContext: BuildContext {
     /// announce what has no node of its own. The handle is `Send`, so a
     /// completion on another thread can announce. `None` on a bare owner (an
     /// `ElementTree` in a unit test). Acquire it in a lifecycle hook
-    /// (`init_state` / `did_change_dependencies`), the same rule
+    /// (`create_state` / `init_state` / `did_change_dependencies`), the same rule
     /// `text_input_handle` follows.
     fn announcer(&self) -> Option<flui_rendering::semantics::Announcer>;
 
@@ -536,7 +537,7 @@ pub trait LifecycleContext: BuildContext {
     /// handle suppresses every request; acquiring it depends on the enclosing
     /// mode, so `did_change_dependencies` runs when the mode changes and is
     /// where to re-acquire it. `None` only on a bare owner (an `ElementTree`
-    /// in a unit test). Acquire it in a lifecycle hook (`init_state` /
+    /// in a unit test). Acquire it in a lifecycle hook (`create_state`, `init_state` or
     /// `did_change_dependencies`), the same rule `text_input_handle` follows.
     fn haptics(&self) -> Option<flui_interaction::HapticsHandle>;
 
@@ -546,7 +547,7 @@ pub trait LifecycleContext: BuildContext {
     ///
     /// Bound to this element's presentation and owner thread, and held weakly.
     /// `None` only on a bare owner (an `ElementTree` in a unit test). Acquire it
-    /// in a lifecycle hook (`init_state` / `did_change_dependencies`), the same
+    /// in a lifecycle hook (`create_state` / `init_state` / `did_change_dependencies`), the same
     /// rule `haptics` follows.
     fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop>;
 
@@ -561,7 +562,7 @@ pub trait LifecycleContext: BuildContext {
     /// that must not be lost finishes.
     ///
     /// `None` on a bare owner in a unit test, and until a host installs a
-    /// guard. Acquire it in a lifecycle hook (`init_state` /
+    /// guard. Acquire it in a lifecycle hook (`create_state`, `init_state` or
     /// `did_change_dependencies`), the same rule `text_input_handle` follows.
     fn close_guard(&self) -> Option<crate::CloseGuard> {
         None
@@ -597,7 +598,7 @@ pub trait LifecycleContext: BuildContext {
     ///
     /// `None` when no binding installed an interaction lane (a bare
     /// `ElementTree` in a unit test). Acquire it in a lifecycle hook
-    /// (`init_state` / `did_change_dependencies`), never in
+    /// (`create_state` / `init_state` / `did_change_dependencies`), never in
     /// `build`/layout/paint. Mid-frame the answer
     /// would describe a tree the asking phase is still mutating.
     fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle>;
@@ -619,7 +620,7 @@ pub trait LifecycleContext: BuildContext {
     /// lease in your `ViewState`". Several descendants may each hold
     /// independently; the child survives while any of them does.
     ///
-    /// Acquire it in a lifecycle hook (`init_state` /
+    /// Acquire it in a lifecycle hook (`create_state`, `init_state` or
     /// `did_change_dependencies`), never inside `build`, `perform_layout` or
     /// `paint` — the same rule `post_frame_handle` and `text_input_handle`
     /// follow. A hold taken during a frame phase would be re-taken on every
@@ -637,7 +638,7 @@ pub trait LifecycleContext: BuildContext {
     /// it whenever the answer changes. Same shape, and same reason, as
     /// [`rebuild_handle`](Self::rebuild_handle).
     ///
-    /// Acquire it in `init_state` / `did_change_dependencies`, never inside a
+    /// Acquire it in `create_state` / `init_state` / `did_change_dependencies`, never inside a
     /// frame phase.
     fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle;
 
@@ -765,7 +766,7 @@ pub trait LifecycleContextExt: LifecycleContext {
     /// The handle of capability `C`, made by this UI runtime's provider for
     /// this widget's presentation.
     ///
-    /// Acquire it in `init_state` or `did_change_dependencies` and keep it in
+    /// Acquire it in `create_state`, `init_state` or `did_change_dependencies` and keep it in
     /// the state; the provider runs on every acquisition, and a handle that
     /// holds an operating-system subscription ends it when its last clone
     /// drops.
@@ -791,8 +792,8 @@ impl<T: LifecycleContext + ?Sized> LifecycleContextExt for T {}
 /// Extension trait for typed InheritedView lookups.
 pub trait BuildContextExt: BuildContext {
     /// Create a signal owned by **this element** (ADR-0074): released when the
-    /// element unmounts. Call it from `ViewState::init_state` (or
-    /// `did_change_dependencies`) and hold the `Copy` handle in the state;
+    /// element unmounts. Call it from `StatefulView::create_state` (or
+    /// `init_state`) and hold the `Copy` handle in the state;
     /// read it in `build` with `Signal::get`/`with`.
     ///
     /// # Panics

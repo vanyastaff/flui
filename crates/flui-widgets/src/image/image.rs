@@ -333,7 +333,7 @@ impl Image {
 impl StatefulView for Image {
     type State = ImageState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // `ViewState::init_state` is handed a `BuildContext` but NOT the view,
         // so the provider the first resolve needs is copied here. Later
         // rebuilds reach the fresh view through `did_update_view` / `build`.

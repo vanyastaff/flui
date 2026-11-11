@@ -18,8 +18,9 @@ UI. Two flavors:
 
 - `StatelessView` (`crates/flui-view/src/view/stateless.rs`) — `fn build(&self, ctx: &dyn
   BuildContext) -> impl IntoView`, no persistent state.
-- `StatefulView` + `ViewState<V>` (`crates/flui-view/src/view/stateful.rs`) — `create_state()`
-  produces a `ViewState` that owns mutable data and rebuilds independently of its parent.
+- `StatefulView` + `ViewState<V>` (`crates/flui-view/src/view/stateful.rs`) —
+  `create_state(&self, ctx)` produces, at the first build, a `ViewState` that owns mutable data
+  and rebuilds independently of its parent.
 
 Both are usually written via `#[derive(StatelessView)]` / the `StatefulView`+`ViewState` pair
 rather than by hand — see `examples/counter.rs` for the shape.

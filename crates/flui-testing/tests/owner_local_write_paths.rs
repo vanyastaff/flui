@@ -5,6 +5,7 @@
 //! not a transaction with the outer one, and a panic inside it reaches the
 //! outer callback with the writes before it still applied.
 
+use flui_view::LifecycleContext;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use flui_view::{BuildOwner, SignalWriteExt};
@@ -101,7 +102,7 @@ struct WriteReaderState {
 impl flui_view::StatefulView for WriteReader {
     type State = WriteReaderState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         WriteReaderState {
             view: self.clone(),
             written: None,

@@ -1,3 +1,4 @@
+use flui_view::LifecycleContext;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -35,7 +36,7 @@ struct MotionProbeState {
 impl flui_view::StatefulView for MotionProbe {
     type State = MotionProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         MotionProbeState {
             owner: flui_animation::AnimationController::builder(std::time::Duration::from_secs(1))
                 .build_on(None),
@@ -511,7 +512,7 @@ struct DisposeProbeState {
 impl flui_view::StatefulView for DisposeProbe {
     type State = DisposeProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DisposeProbeState {
             disposed: Rc::clone(&self.disposed),
         }

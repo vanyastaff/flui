@@ -437,7 +437,7 @@ impl std::fmt::Debug for InputDecoratorState {
 impl StatefulView for InputDecorator {
     type State = InputDecoratorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         InputDecoratorState {
             hover: WidgetStatesController::default(),
             hover_listener: None,

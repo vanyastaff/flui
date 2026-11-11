@@ -90,18 +90,23 @@ struct HookOrderView {
 }
 
 struct HookOrderState {
+    config: &'static str,
     log: HookLog,
+    /// A slot the element owns, so a failed initialization has one to release.
+    _created: flui_view::Signal<u32>,
 }
 
 impl StatefulView for HookOrderView {
     type State = HookOrderState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         self.log
             .lock()
             .expect("the hook log is never poisoned")
             .push(format!("create {}", self.config));
         HookOrderState {
+            config: self.config,
+            _created: flui_view::BuildContextExt::signal(ctx, 0u32),
             log: Arc::clone(&self.log),
         }
     }
@@ -113,6 +118,10 @@ impl ViewState<HookOrderView> for HookOrderState {
             .lock()
             .expect("the hook log is never poisoned")
             .push("init".to_owned());
+        assert_ne!(
+            self.config, "fails",
+            "the fixture's init_state fails for this view"
+        );
     }
 
     fn apply_view(&mut self, view: &HookOrderView, _ctx: &dyn BuildContext) {
@@ -141,9 +150,9 @@ impl View for HookOrderView {
 }
 
 /// A parent can update an element between its mount and its first build,
-/// where `init_state` runs. The state still sees `init_state` first, then one
-/// update from the configuration it was created with to the current one.
-pub(crate) fn an_update_before_the_first_build_follows_init_state() {
+/// where `create_state` and `init_state` run. The state is created from the
+/// newest configuration, so it needs no update for the ones it never saw.
+pub(crate) fn an_update_before_the_first_build_creates_the_state_from_the_newest_view() {
     let log = HookLog::default();
     let view = |config| HookOrderView {
         config,
@@ -155,18 +164,19 @@ pub(crate) fn an_update_before_the_first_build_follows_init_state() {
 
     tree.update(root, &view("b"), &mut owner.element_owner_mut());
     tree.update(root, &view("c"), &mut owner.element_owner_mut());
-    assert_eq!(
-        *log.lock().expect("the hook log is never poisoned"),
-        ["create a"],
-        "no state hook runs before init_state"
+    assert!(
+        log.lock()
+            .expect("the hook log is never poisoned")
+            .is_empty(),
+        "no state exists before the first build"
     );
 
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     assert_eq!(
         *log.lock().expect("the hook log is never poisoned"),
-        ["create a", "init", "update a -> c", "apply_view c"],
-        "the first build initializes the state, delivers the update, then applies the view"
+        ["create c", "init", "apply_view c"],
+        "the first build creates the state from the newest view, initializes it, then applies the view"
     );
 
     tree.update(root, &view("d"), &mut owner.element_owner_mut());
@@ -177,6 +187,52 @@ pub(crate) fn an_update_before_the_first_build_follows_init_state() {
             .map(String::as_str),
         Some("update c -> d"),
         "an initialized state is updated at once"
+    );
+}
+
+/// A panic in `init_state` leaves the element without a state. An update that
+/// arrives before the retry is not lost: the retry creates the state from the
+/// newest view, as the first build would have.
+pub(crate) fn a_retry_after_a_failed_init_state_creates_the_state_from_the_newest_view() {
+    let log = HookLog::default();
+    let view = |config| HookOrderView {
+        config,
+        log: Arc::clone(&log),
+    };
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+    let root = tree.mount_root(&view("fails"), &mut owner.element_owner_mut());
+
+    owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
+    let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owner.build_scope(&mut tree);
+    }));
+    if let Err(payload) = first {
+        flui_foundation::panic::discard_payload(payload);
+    }
+    assert_eq!(
+        *log.lock().expect("the hook log is never poisoned"),
+        ["create fails", "init"],
+        "the first build created the state and its init_state failed"
+    );
+    assert_eq!(
+        owner.signal_graph().live_slot_count(),
+        0,
+        "the dropped state's signal is released with it"
+    );
+
+    tree.update(root, &view("b"), &mut owner.element_owner_mut());
+    owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
+    assert_eq!(
+        *log.lock().expect("the hook log is never poisoned"),
+        ["create fails", "init", "create b", "init", "apply_view b"],
+        "the retry creates the state from the newest view instead of reusing the failed one"
+    );
+    assert_eq!(
+        owner.signal_graph().live_slot_count(),
+        1,
+        "the failed state's signal is released; only the retry's is live"
     );
 }
 
@@ -236,7 +292,7 @@ struct LifecycleCallbackState {
 impl StatefulView for LifecycleCallbackView {
     type State = LifecycleCallbackState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         LifecycleCallbackState {
             init_called: Arc::new(AtomicUsize::new(0)),
             dispose_called: Arc::new(AtomicUsize::new(0)),
@@ -278,27 +334,21 @@ impl View for LifecycleCallbackView {
 
 pub(crate) fn stateful_activate_and_deactivate_require_completed_init_state() {
     let view = LifecycleCallbackView;
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
+    let mut element = StatefulElement::new(&view, StatefulBehavior::new());
     let mut owner = BuildOwner::new();
     element.mount(None, 0, &mut owner.element_owner_mut());
 
-    let deactivate_count = element.state().deactivate_called.clone();
-    let activate_count = element.state().activate_called.clone();
-    assert_eq!(deactivate_count.load(Ordering::SeqCst), 0);
-    assert_eq!(activate_count.load(Ordering::SeqCst), 0);
+    assert!(
+        element.state().is_none(),
+        "the state is created at the first build, not at mount"
+    );
 
     element.deactivate(&mut owner.element_owner_mut());
     element.activate(&mut owner.element_owner_mut());
 
-    assert_eq!(
-        deactivate_count.load(Ordering::SeqCst),
-        0,
-        "deactivate must not run before init_state completes"
-    );
-    assert_eq!(
-        activate_count.load(Ordering::SeqCst),
-        0,
-        "activate must not run before init_state completes"
+    assert!(
+        element.state().is_none(),
+        "deactivate and activate before the first build neither create the state nor reach it"
     );
 }
 

@@ -266,7 +266,7 @@ impl std::fmt::Debug for FloatingActionButtonState {
 impl StatefulView for FloatingActionButton {
     type State = FloatingActionButtonState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FloatingActionButtonState {
             states: WidgetStatesController::default(),
             states_listener: None,

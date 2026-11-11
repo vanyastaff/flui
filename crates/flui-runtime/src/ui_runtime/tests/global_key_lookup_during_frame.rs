@@ -52,7 +52,7 @@ impl ToggleState {
 impl flui_view::StatefulView for Toggle {
     type State = ToggleState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ToggleState {
             open: Cell::new(self.initially_open),
         }

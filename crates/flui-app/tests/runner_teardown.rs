@@ -448,7 +448,7 @@ struct ComposingFieldState {
 impl flui_view::StatefulView for ComposingField {
     type State = ComposingFieldState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         ComposingFieldState {
             field: self.clone(),
             token: None,
@@ -600,7 +600,7 @@ struct GuardedViewState(GuardedView);
 impl flui_view::StatefulView for GuardedView {
     type State = GuardedViewState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         GuardedViewState(self.clone())
     }
 }
@@ -1086,7 +1086,7 @@ struct SlowDetachedState {
 impl flui_view::StatefulView for SlowDetached {
     type State = SlowDetachedState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         SlowDetachedState {
             root: self.clone(),
             subscription: None,
@@ -1328,7 +1328,7 @@ impl Drop for TornDownState {
 impl flui_view::StatefulView for TornDown {
     type State = TornDownState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         TornDownState {
             root: self.clone(),
             notices: None,
@@ -1417,7 +1417,7 @@ struct PanickingSubscriberState {
 impl flui_view::StatefulView for PanickingSubscriber {
     type State = PanickingSubscriberState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         PanickingSubscriberState {
             panics_on: self.panics_on,
             notices: None,
@@ -1542,7 +1542,7 @@ struct FailingNoteState {
 impl flui_view::StatefulView for FailingNote {
     type State = FailingNoteState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         FailingNoteState {
             note: self.clone(),
             subscription: None,
@@ -1769,7 +1769,7 @@ struct PostFramePanicsState {
 impl flui_view::StatefulView for PostFramePanics {
     type State = PostFramePanicsState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         PostFramePanicsState { view: self.clone() }
     }
 }
@@ -2086,7 +2086,7 @@ struct NoteViewState(NoteView);
 impl flui_view::StatefulView for NoteView {
     type State = NoteViewState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         NoteViewState(self.clone())
     }
 }

@@ -131,7 +131,7 @@ pub struct AnimatedPositionedState {
 impl StatefulView for AnimatedPositioned {
     type State = AnimatedPositionedState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let notifications = Rc::new(ChangeNotifier::new());
         // A placement with any non-finite value is refused as a whole, as an
         // update would be: the child starts unplaced (aligned by the stack).
