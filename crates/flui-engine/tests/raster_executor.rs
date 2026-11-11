@@ -449,6 +449,61 @@ fn a_stopped_executor_settles_every_pending_frame_failed() {
     );
 }
 
+/// A lifecycle command sent while the stop runs (here from the host's wake,
+/// which the stop calls for its settlements) comes back `Gone` with its
+/// command, and its slot id is the owner's again: no command is accepted into
+/// a queue the stop has already drained (ADR-0305 §9).
+#[test]
+fn a_command_sent_during_the_stop_comes_back_gone() {
+    let owner: std::rc::Rc<std::cell::OnceCell<RasterSender>> = std::rc::Rc::default();
+    let answers: std::rc::Rc<RefCell<Vec<Result<SendReceipt, RasterSendError>>>> =
+        std::rc::Rc::default();
+    let (mut executor, sender) = RasterExecutor::new(ScriptedSlots::new(), {
+        let owner = std::rc::Rc::clone(&owner);
+        let answers = std::rc::Rc::clone(&answers);
+        move || {
+            let sender = owner.get().expect("the owner's sender is set");
+            let slot = sender.mint_slot().expect("a slot id is left");
+            answers
+                .borrow_mut()
+                .push(sender.send(attach_command(slot, address(9))));
+        }
+    });
+    let queued = sender.mint_slot().expect("a slot id is left");
+    let SendReceipt::Configured(generation) = sender
+        .send(attach_command(queued, address(1)))
+        .expect("accepted")
+    else {
+        panic!("a positive size configures the slot");
+    };
+    let _ = sender
+        .send(frame(
+            Attached {
+                slot: queued,
+                address: address(1),
+                generation,
+            },
+            1,
+        ))
+        .expect("accepted");
+    assert!(owner.set(sender).is_ok());
+
+    executor.shut_down();
+    let answers = answers.borrow();
+    assert_eq!(answers.len(), 1, "the stop woke the host once");
+    assert!(
+        matches!(&answers[0], Err(RasterSendError::Gone(command)) if matches!(**command, RasterCommand::Attach { .. })),
+        "{:?}",
+        answers[0]
+    );
+    let sender = owner.get().expect("set above");
+    assert_eq!(
+        sender.record(queued).map(|record| record.phase),
+        Some(SlotPhase::Detached),
+        "the attach queued before the stop is answered"
+    );
+}
+
 /// A later frame supersedes a pending one: one render, of the survivor, with
 /// the superseded frame's damage folded in, and one settlement naming it.
 #[test]

@@ -193,8 +193,28 @@ impl WgpuPainter {
         size: (u32, u32),
         source: crate::frame_protocol::FontSource,
     ) -> Self {
+        // `PipelineSet::new` creates the viewport bind-group layout internally
+        // and exposes it via `viewport_bind_group_layout()`.
+        let pipelines = PipelineLibrary::new(domain.device(), surface_format);
+        Self::with_pipelines(domain, pipelines, size, source)
+    }
+
+    /// A painter over `pipelines`, a library an earlier painter on the same
+    /// device built, drawing into targets of the library's selected format.
+    /// Everything else (the glyph atlas, the image and path caches, the
+    /// scratch pools) starts empty.
+    ///
+    /// A library is never torn: an entry is inserted only once its pipeline
+    /// is built, so one taken from a painter whose frame unwound is whole.
+    pub(crate) fn with_pipelines(
+        domain: Arc<crate::device_domain::DeviceDomain>,
+        pipelines: PipelineLibrary,
+        size: (u32, u32),
+        source: crate::frame_protocol::FontSource,
+    ) -> Self {
         let device = Arc::clone(domain.device());
         let queue = Arc::clone(domain.queue());
+        let surface_format = pipelines.current_format();
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::new: format={:?}, size=({}, {})",
@@ -203,16 +223,10 @@ impl WgpuPainter {
             size.1
         );
 
-        // ===== Pipeline collection (all 9 named pipelines + shape cache) =====
-        //
-        // `PipelineSet::new` creates the viewport bind-group layout internally
-        // and exposes it via `viewport_bind_group_layout()`. `GpuReplay::new`
-        // builds the viewport bind group against the first set's layout; the
-        // sets of later target formats have layouts with the same entries, so
-        // it binds under their pipelines too (group equivalence).
-        let pipelines = PipelineLibrary::new(&device, surface_format);
-
         // ===== Replay / GPU plumbing (viewport buffer/bind-group, unit quad, sampler) =====
+        // `GpuReplay::new` builds the viewport bind group against the selected
+        // set's layout; the library's other sets have layouts with the same
+        // entries, so it binds under their pipelines too (group equivalence).
         let replay = GpuReplay::new(&device, pipelines.current(), size.0, size.1);
 
         // Glyph bitmaps come from swash over the faces each paragraph's
@@ -273,6 +287,12 @@ impl WgpuPainter {
         }
         self.pipelines.select(&self.device, format);
         self.surface_format = format;
+    }
+
+    /// The painter's pipeline library, for a painter built after this one
+    /// on the same device; the rest of the painter is dropped.
+    pub(crate) fn into_pipelines(self) -> PipelineLibrary {
+        self.pipelines
     }
 
     /// How many pipeline sets this painter has built, one per target format.

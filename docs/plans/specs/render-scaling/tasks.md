@@ -1,7 +1,7 @@
 # render-scaling: задачи
 
-- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS3, RS5, RS6, RS7, RS14, RS15a, RS15c1; RS15c2 в ревью. Следующие: RS8 с RS4 и RS16, затем RS15b (RS8 и RS16 не
-  зависят друг от друга); RS4 сливается в одной серии с RS8.
+- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS3, RS5, RS6, RS7, RS14, RS15a, RS15c1, RS15c2; RS19a в ревью. Следующие: RS19b; RS8 с RS4, затем RS9, затем RS16 и после него RS15b;
+  RS4 сливается в одной серии с RS8.
 - **Design:** [design.md](design.md); требования и ворота G1–G7: [requirements.md](requirements.md)
 - **База:** `main` @ `da69efa`. Пути и строки в ADR даны на `e5ba8fe8f`; перед правкой сверить.
 
@@ -293,19 +293,31 @@
 
 ### RS19. Паника на команду, пересборка устройства, остановка, замер доли растра
 
-- **Что:** ADR-0305 §7–§9: паника сдерживается на команду и стоит общих кэшей, но не пайплайнов;
-  потерянное устройство пересобирается с сохранением поверхностей; остановка ограничена по времени;
-  ось `GpuResourceGeneration` удаляется (§6), раз пересборка у контекста.
-  `shut_down` закрывает очередь жизненного цикла (`Receiver` в `Option`), чтобы
-  `Attach`, прошедший проверку health до остановки, получил `Gone`, а не остался `Attaching`.
-  Плюс замер: доля растра в кадре на сцене-сетке, записанная в теле PR, как вход для решения о
-  потоке растра по ADR-0305 §10.
-- **Тесты:** `a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines`,
-  `a_device_rebuild_keeps_the_surfaces_and_redraws_every_slot_in_full`; тесты ADR-0267 и ADR-0244
-  переписаны на слот.
+Три части: (a) и (b) живут в `gpu_context.rs` и `raster_executor/`, ничего в `flui-app`, и
+проверяются inline на потоке владельца так, чтобы тот же код был верен после переезда исполнителя
+на поток растра; (c) ждёт RS16.
+
+- **(a) Что:** ADR-0305 §7 и §9 в движке. Паника кадра сдерживается на команду и стоит общих
+  кэшей (атлас глифов, кэши изображений и путей, пулы), но не пайплайнов: библиотека пайплайнов и
+  пайплайны blit переживают раскрутку. `shut_down` дожидается каждой отправки, увидевшей
+  исполнитель работающим, затем осушает очередь жизненного цикла и роняет её (`Receiver` в
+  `Option`): принятый `Attach` получает ответ, а не остаётся `Attaching`, поздний получает `Gone`.
+- **(a) Тесты:** `a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines` (две
+  паники в одном ходу, у каждого слота своя, следующий ход рисует оба слота),
+  `a_send_racing_the_stop_is_drained_or_handed_back`, `a_command_sent_during_the_stop_comes_back_gone`.
+- **(b) Что:** ADR-0305 §8 в движке: `DeviceHealth` контекста с отсрочкой и потолком ADR-0267,
+  пересборка устройства на том же instance с сохранением поверхностей, перенастройка каждого
+  оконного слота; кадр, проштампованный до пересборки, отклоняется по поколению, как после
+  restore; размер в ожидании или отклонённый держит барьер через пересборку; неудачная пересборка
+  оставляет типизированную ошибку, которую видит владелец, а не цикл повторов; `RetryDevice`.
+- **(b) Тесты:** `a_device_rebuild_keeps_the_surfaces_and_redraws_every_slot_in_full`; тесты
+  ADR-0267 и ADR-0244 переписаны на слот.
+- **(c) Что:** ось `GpuResourceGeneration` удаляется (§6), раз пересборка у контекста; остановка
+  ограничена по времени (`DETACH_DEADLINE`) вместе с потоком растра; замер доли растра в кадре на
+  сцене-сетке, записанный в теле PR, как вход для решения о потоке растра по ADR-0305 §10.
 - **Ворота:** пункт ADR-0305 в `docs/gaps.md` сведён к строкам «поток растра на платформе X ждёт
   прогона».
-- **Зависит:** RS15. **Размер:** L.
+- **Зависит:** (a), (b) от RS15a и RS15c; (c) от RS16. **Размер:** L.
 
 ## Состояние
 
@@ -319,5 +331,6 @@
 | RS7 | #2401 | готова | `layer_it pending_log_contract`: пять строк ADR (`a_full_log_folds_its_two_oldest_entries`, `damage_from_an_older_base_covers_the_newer_one`, `a_base_from_another_lineage_renders_full`, `a_lost_completion_over_reports_and_never_under_reports`, `a_surface_change_in_the_log_publishes_full`) и пробы повторного входа `a_released_content_drops_after_the_owner_is_released`, `a_fold_releases_its_contents_after_the_owner_is_released` (40 кадров без подтверждения: журнал не больше 16 записей, свёрнутая запись сохраняет `Full(SurfaceChanged)`); каждая строка падает без своей проверки (линия, «только вперёд», сворачивание, отпускание после заимствования, сброс записей по подтверждению); счётчик `pending_log_folds`; `apply` (в `Applied::released`), `completed` и `renew` возвращают `ReleasedContents` для `Outbox` (ADR-0287), включая заменённую версию и содержимое, отпущенное сворачиванием; память журнала ограничена 16 записями |
 | RS15a | #2396 | готова (ревью принято) | `engine_it` 17 тестов; без фикса падают `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released` (взаимоблокировка), `a_full_settlement_ring_holds_the_next_frame`, `a_stopped_executor_settles_every_pending_frame_failed`, `a_failed_resize_is_held_in_the_record_and_retried_next_turn`, `a_panicking_subscriber_cannot_strand_a_refused_slot`, `an_untaken_panic_payload_is_dropped_outside_the_slot_table`, `a_refusal_whose_error_panics_when_formatted_still_commits`, `a_surface_loss_keeps_the_barrier_of_a_pending_resize` |
 | RS15c1 | #2407 | готова | `a_surface_targets_display_equals_the_platforms_connection`: X11 под `Xvfb` (`x11_window`), Wayland под `weston` (`platform_it`), `the_headless_display_connection_answers_no_display`; проверка типов Windows, macOS, iOS, Android, wasm32 |
-| RS15c2 | | в ревью | `engine_it`: `window_slots::a_window_slot_attaches_unconfigured_and_its_first_size_configures_it`, `…a_frame_stamped_before_a_restore_is_refused_on_its_generation` (падает, если restore не поднимает поколение), `…a_windows_colour_and_latency_reach_the_backend_once_a_turn`, `…a_dropped_surface_is_asked_of_the_owner_and_a_restore_answers_it`, `…a_restore_keeps_the_barrier_of_a_refused_size`, `…a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation`, `raster_executor::a_size_the_backend_always_refuses_is_not_retried_and_warns_once` (падает и при повторе всякого отказа, и при warn на каждый ход), `a_surface_loss_keeps_the_barrier_of_a_refused_size`, `a_failed_resize_is_held_in_the_record_and_retried_next_turn` (строки Timeout и Panic); lib: `surface_factory::tests::a_surface_on_a_foreign_display_is_refused_before_wgpu_sees_it` (три чужих дисплея без сравнения доходят до wgpu), `gpu_context::tests::a_window_its_adapter_cannot_present_to_is_refused_at_attach`, `…a_failed_window_frame_keeps_the_shared_caches` (без фикса второй кадр строит второй атлас), `…a_lost_window_surface_is_left_for_its_owner_to_replace` (исполнитель не создаёт поверхность, владелец получает `SurfaceReplacementNeeded`), `…a_resize_whose_configure_panics_leaves_the_old_size`, `…a_latency_change_repaints_the_next_frame`; compile-fail `surface_factory_is_owner_local`, `surface_factory_rejects_borrowed_window`; поверхности окон без GPU с no-op бэкенда wgpu (`testing::noop_surface_factory`); присутствие на реальном окне проверяет RS16 |
-| RS2, RS4, RS8–RS13, RS15b, RS16–RS19 | | не начата | |
+| RS15c2 | #2441 | готова (ревью принято) | `engine_it`: `window_slots::a_window_slot_attaches_unconfigured_and_its_first_size_configures_it`, `…a_frame_stamped_before_a_restore_is_refused_on_its_generation` (падает, если restore не поднимает поколение), `…a_windows_colour_and_latency_reach_the_backend_once_a_turn`, `…a_dropped_surface_is_asked_of_the_owner_and_a_restore_answers_it`, `…a_restore_keeps_the_barrier_of_a_refused_size`, `…a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation`, `raster_executor::a_size_the_backend_always_refuses_is_not_retried_and_warns_once` (падает и при повторе всякого отказа, и при warn на каждый ход), `a_surface_loss_keeps_the_barrier_of_a_refused_size`, `a_failed_resize_is_held_in_the_record_and_retried_next_turn` (строки Timeout и Panic); lib: `surface_factory::tests::a_surface_on_a_foreign_display_is_refused_before_wgpu_sees_it` (три чужих дисплея без сравнения доходят до wgpu), `gpu_context::tests::a_window_its_adapter_cannot_present_to_is_refused_at_attach`, `…a_failed_window_frame_keeps_the_shared_caches` (без фикса второй кадр строит второй атлас), `…a_lost_window_surface_is_left_for_its_owner_to_replace` (исполнитель не создаёт поверхность, владелец получает `SurfaceReplacementNeeded`), `…a_resize_whose_configure_panics_leaves_the_old_size`, `…a_latency_change_repaints_the_next_frame`; compile-fail `surface_factory_is_owner_local`, `surface_factory_rejects_borrowed_window`; поверхности окон без GPU с no-op бэкенда wgpu (`testing::noop_surface_factory`); присутствие на реальном окне проверяет RS16 |
+| RS19a | | в ревью | `gpu_context::tests::a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines` (lavapipe; без сохранения библиотеки после паники наборов пайплайнов 3 вместо 1), `headless::…an_unwound_capture_leaves_the_next_capture_drawing` (наборы пайплайнов не растут), `raster_executor::sender::tests::a_send_racing_the_stop_is_drained_or_handed_back` (без ожидания отправок остановка возвращается раньше отправки), `engine_it raster_executor::a_command_sent_during_the_stop_comes_back_gone` |
+| RS2, RS4, RS8–RS13, RS15b, RS16–RS18, RS19b, RS19c | | не начата | |

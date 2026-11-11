@@ -6,7 +6,7 @@ use std::{
     rc::Rc,
     sync::{
         Arc,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicU8, AtomicUsize, Ordering},
     },
 };
 
@@ -77,8 +77,11 @@ impl Lifecycle {
 /// trim and the executor's health. No lock: the queue is a
 /// bounded channel and the rest are atomics.
 pub(crate) struct Shared {
-    pub(crate) lifecycle: Sender<Lifecycle>,
+    lifecycle: Sender<Lifecycle>,
     health: AtomicU8,
+    /// Lifecycle sends under way: each saw the executor running, and its
+    /// message is queued once it leaves.
+    sending: AtomicUsize,
     /// The strongest trim asked for since the last turn: 0 for none.
     trim: AtomicU8,
 }
@@ -91,6 +94,7 @@ impl Shared {
         Self {
             lifecycle,
             health: AtomicU8::new(RUNNING),
+            sending: AtomicUsize::new(0),
             trim: AtomicU8::new(0),
         }
     }
@@ -102,8 +106,39 @@ impl Shared {
         }
     }
 
+    /// Stop taking lifecycle commands. Returns once every send that saw the
+    /// executor running has queued its message, so the queue the stop then
+    /// drains holds every command a send accepted, and every later send
+    /// answers `Gone` (ADR-0305 §9). A send runs no user code, so the wait
+    /// ends whatever thread the sends are on.
     pub(crate) fn shut_down(&self) {
-        self.health.store(SHUT_DOWN, Ordering::Release);
+        // Sequentially consistent with the send's increment and health read:
+        // either the send sees the stop, or the stop sees the send.
+        self.health.store(SHUT_DOWN, Ordering::SeqCst);
+        while self.sending.load(Ordering::SeqCst) != 0 {
+            std::hint::spin_loop();
+        }
+    }
+
+    /// Queue `message` while the executor runs, or hand its command back:
+    /// `Full` while the queue is full, `Gone` once the executor stopped.
+    pub(crate) fn send_lifecycle(&self, message: Lifecycle) -> Result<(), RasterSendError> {
+        self.sending.fetch_add(1, Ordering::SeqCst);
+        let sent = if self.health.load(Ordering::SeqCst) == RUNNING {
+            self.lifecycle.try_send(message)
+        } else {
+            Err(TrySendError::Disconnected(message))
+        };
+        self.sending.fetch_sub(1, Ordering::SeqCst);
+        sent.map_err(|refused| {
+            let full = matches!(refused, TrySendError::Full(_));
+            let command = refused.into_inner().into_command();
+            if full {
+                RasterSendError::full(command)
+            } else {
+                RasterSendError::gone(command)
+            }
+        })
     }
 
     fn ask_trim(&self, level: MemoryPressureLevel) {
@@ -338,27 +373,19 @@ impl RasterSender {
             generation,
             inbox,
         };
-        match self.shared.lifecycle.try_send(message) {
-            Ok(()) => Ok(receipt),
-            Err(refused) => {
-                let full = matches!(refused, TrySendError::Full(_));
-                let command = refused.into_inner().into_command();
-                // The slot was never sent: the owner holds its id again.
-                if let Some(entry) = self
-                    .slots
-                    .borrow_mut()
-                    .entries
-                    .get_mut(slot.index() as usize)
-                {
-                    *entry = None;
-                }
-                Err(if full {
-                    RasterSendError::full(command)
-                } else {
-                    RasterSendError::gone(command)
-                })
+        let sent = self.shared.send_lifecycle(message);
+        if sent.is_err() {
+            // The slot was never sent: the owner holds its id again.
+            if let Some(entry) = self
+                .slots
+                .borrow_mut()
+                .entries
+                .get_mut(slot.index() as usize)
+            {
+                *entry = None;
             }
         }
+        sent.map(|()| receipt)
     }
 
     fn release(&self, slot: SlotId) -> Result<SendReceipt, RasterSendError> {
@@ -368,7 +395,8 @@ impl RasterSender {
         if !inbox.lock().phase.takes_commands() {
             return Err(self.refusal(RasterCommand::Release { slot }));
         }
-        self.send_lifecycle(Lifecycle::Release { slot })
+        self.shared
+            .send_lifecycle(Lifecycle::Release { slot })
             .map(|()| SendReceipt::Accepted)
     }
 
@@ -397,7 +425,7 @@ impl RasterSender {
             }
             (previous, state.generation)
         };
-        let sent = self.send_lifecycle(Lifecycle::Restore {
+        let sent = self.shared.send_lifecycle(Lifecycle::Restore {
             slot,
             surface,
             generation,
@@ -413,20 +441,6 @@ impl RasterSender {
                 Err(error)
             }
         }
-    }
-
-    /// Queue `message`, or hand its command back: `Full` while the queue is
-    /// full, `Gone` once the executor stopped.
-    fn send_lifecycle(&self, message: Lifecycle) -> Result<(), RasterSendError> {
-        self.shared.lifecycle.try_send(message).map_err(|refused| {
-            let full = matches!(refused, TrySendError::Full(_));
-            let command = refused.into_inner().into_command();
-            if full {
-                RasterSendError::full(command)
-            } else {
-                RasterSendError::gone(command)
-            }
-        })
     }
 
     /// The refusal of a command to a slot that takes none: refused or
@@ -448,25 +462,15 @@ impl RasterSender {
             owned.detaching = true;
             Arc::clone(&owned.inbox)
         };
-        match self
+        let sent = self
             .shared
-            .lifecycle
-            .try_send(Lifecycle::Detach { slot, inbox })
+            .send_lifecycle(Lifecycle::Detach { slot, inbox });
+        if sent.is_err()
+            && let Some(owned) = self.slots.borrow_mut().live_mut(slot)
         {
-            Ok(()) => Ok(SendReceipt::Accepted),
-            Err(refused) => {
-                let full = matches!(refused, TrySendError::Full(_));
-                if let Some(owned) = self.slots.borrow_mut().live_mut(slot) {
-                    owned.detaching = false;
-                }
-                let command = refused.into_inner().into_command();
-                Err(if full {
-                    RasterSendError::full(command)
-                } else {
-                    RasterSendError::gone(command)
-                })
-            }
+            owned.detaching = false;
         }
+        sent.map(|()| SendReceipt::Accepted)
     }
 
     fn frame(
@@ -556,4 +560,71 @@ impl RasterSender {
 /// Whether both sides of `size` are positive.
 fn has_area(size: DeviceSize) -> bool {
     size.width > 0 && size.height > 0
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use crossbeam_channel::bounded;
+
+    use super::{Lifecycle, Shared};
+    use crate::raster_executor::{LIFECYCLE_CAPACITY, SlotMint};
+
+    /// A stop that races a lifecycle send on another thread answers it: a
+    /// send that saw the executor running has its command in the queue
+    /// before the stop drains it, and a send after the stop gets its command
+    /// back as `Gone`. None lands in a queue nobody drains, where an attach
+    /// would wait `Attaching` for good (ADR-0305 §9).
+    ///
+    /// Red-check: drop the wait for sends under way from `Shared::shut_down`
+    /// and the stop returns while the send is still between its health read
+    /// and its queueing.
+    #[test]
+    fn a_send_racing_the_stop_is_drained_or_handed_back() {
+        let slot = SlotMint::default().mint().expect("an index is left");
+        let (queue, drain) = bounded(LIFECYCLE_CAPACITY);
+        let shared = Arc::new(Shared::new(queue));
+        // A send on another thread has read the health as running and not
+        // queued its command yet.
+        shared.sending.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(shared.health.load(Ordering::SeqCst), super::RUNNING);
+        let stopped = Arc::new(AtomicBool::new(false));
+        let stop = {
+            let shared = Arc::clone(&shared);
+            let stopped = Arc::clone(&stopped);
+            std::thread::spawn(move || {
+                shared.shut_down();
+                stopped.store(true, Ordering::SeqCst);
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            !stopped.load(Ordering::SeqCst),
+            "the stop waits for the send under way"
+        );
+        assert!(
+            shared
+                .lifecycle
+                .try_send(Lifecycle::Release { slot })
+                .is_ok()
+        );
+        shared.sending.fetch_sub(1, Ordering::SeqCst);
+        stop.join().expect("the stop does not panic");
+        assert_eq!(
+            drain.try_iter().count(),
+            1,
+            "the accepted command is in the queue the stop drains"
+        );
+        assert!(
+            matches!(
+                shared.send_lifecycle(Lifecycle::Release { slot }),
+                Err(crate::raster_executor::RasterSendError::Gone(_))
+            ),
+            "a send after the stop gets its command back"
+        );
+    }
 }

@@ -17,7 +17,7 @@
 
 use std::{cell::Cell, marker::PhantomData, sync::Arc};
 
-use flui_foundation::{geometry::DeviceSize, memory::MemoryPressureLevel};
+use flui_foundation::{geometry::DeviceSize, memory::MemoryPressureLevel, panic::FirstPanic};
 use flui_layer::{DamageRegion, LayerTree, Scene};
 use flui_platform::{DisplayColor, DisplayConnection, SurfaceTarget};
 
@@ -29,6 +29,7 @@ use crate::{
     layer_dispatcher::LayerDispatcher,
     offscreen::OffscreenRenderer,
     painter::WgpuPainter,
+    pipeline_set::PipelineLibrary,
     raster::PresentDisposition,
     raster_executor::{SlotBackend, SlotConfig, SlotId, SlotTarget},
     surface_factory::{SurfaceFactory, UnconfiguredSurface, checked_target, instance_descriptor},
@@ -139,10 +140,14 @@ pub struct GpuContext {
     /// The painter every slot records and replays with: its pipelines per
     /// target format, the glyph atlas and the image and path caches.
     ///
-    /// Taken for the length of a frame, so a frame that fails or unwinds
-    /// discards it and the next frame builds a fresh one; only a complete
-    /// frame puts it back.
+    /// Taken for the length of a frame. A frame that unwinds tears what it
+    /// was recording, so the painter is dropped then and only its pipeline
+    /// library is kept, in `pipelines` (ADR-0305 §7).
     painter: Option<WgpuPainter>,
+    /// The pipelines of a painter a frame unwound with, for the next painter
+    /// to build on: a panic costs the caches every slot shares, not the
+    /// pipelines.
+    pipelines: Option<PipelineLibrary>,
     /// The presentation blit of window slots whose frames render into a
     /// retained target, one pipeline per surface format; built at the first
     /// window frame.
@@ -150,9 +155,9 @@ pub struct GpuContext {
     slots: SlotTable,
     #[cfg(test)]
     builds: ContextBuilds,
-    /// When set, the next frame panics after taking the painter.
+    /// How many of the next frames panic in the middle of their recording.
     #[cfg(test)]
-    panic_mid_frame: bool,
+    panics_ahead: u32,
     _one_mutator: PhantomData<Cell<()>>,
 }
 
@@ -371,6 +376,7 @@ impl GpuContext {
             adapter,
             domain,
             painter: None,
+            pipelines: None,
             blit: None,
             slots: SlotTable::default(),
             #[cfg(test)]
@@ -380,7 +386,7 @@ impl GpuContext {
                 pipeline_sets: 0,
             },
             #[cfg(test)]
-            panic_mid_frame: false,
+            panics_ahead: 0,
             _one_mutator: PhantomData,
         }
     }
@@ -505,6 +511,10 @@ impl GpuContext {
     /// [`EngineError::InvalidRenderTarget`] for a slot that is not an
     /// attached offscreen slot, or the frame's own render and submission
     /// errors.
+    ///
+    /// # Panics
+    /// A panic of the frame is resumed once the painter's pipelines are kept
+    /// for the next frame (ADR-0305 §7).
     pub(crate) fn render_slot(&mut self, slot: SlotId, tree: &LayerTree) -> EngineResult<()> {
         let (texture, format, size) = {
             let entry = self.offscreen_slot(slot)?;
@@ -513,29 +523,47 @@ impl GpuContext {
         let _submission_scope = self.domain.begin_frame_scope()?;
         let mut painter = self.take_painter(format, size);
         #[cfg(test)]
-        assert!(
-            !std::mem::take(&mut self.panic_mid_frame),
-            "injected panic in the middle of a slot's frame"
-        );
-        painter.begin_frame_in_scope();
-        painter.resize(size.0, size.1);
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        crate::headless::clear_to_background(&self.domain, &view)?;
-        {
-            let mut backend = LayerDispatcher::new(&mut painter);
-            crate::layer_walk::record_layer_tree(tree, tree.root(), &mut backend)?;
+        let panics = self.injected_panic();
+        let domain = &self.domain;
+        let mut caught = FirstPanic::new();
+        let drawn = caught.contain(|| {
+            #[cfg(test)]
+            assert!(!panics, "injected panic in the middle of a slot's frame");
+            painter.begin_frame_in_scope();
+            painter.resize(size.0, size.1);
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            crate::headless::clear_to_background(domain, &view)?;
+            {
+                let mut backend = LayerDispatcher::new(&mut painter);
+                crate::layer_walk::record_layer_tree(tree, tree.root(), &mut backend)?;
+            }
+            let mut encoder =
+                domain
+                    .device()
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("FLUI Slot Render Encoder"),
+                    });
+            painter.render_to_texture(&texture, &mut encoder)?;
+            painter.submit_encoder(encoder)?;
+            painter.finish_frame();
+            Ok(())
+        });
+        match drawn {
+            Some(Ok(())) => {
+                self.painter = Some(painter);
+                Ok(())
+            }
+            // A recording that failed part way is torn as an unwound one is.
+            Some(Err(error)) => {
+                self.keep_pipelines(painter);
+                Err(error)
+            }
+            None => {
+                self.keep_pipelines(painter);
+                caught.resume();
+                unreachable!("BUG: a contained call that did not return holds its panic")
+            }
         }
-        let mut encoder =
-            self.domain
-                .device()
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("FLUI Slot Render Encoder"),
-                });
-        painter.render_to_texture(&texture, &mut encoder)?;
-        painter.submit_encoder(encoder)?;
-        painter.finish_frame();
-        self.painter = Some(painter);
-        Ok(())
     }
 
     /// Render `scene` into window `slot` and present it, repainting at least
@@ -544,6 +572,10 @@ impl GpuContext {
     /// # Errors
     /// [`EngineError::DeviceLost`] once the device is lost; the frame's
     /// acquire, render and submission errors.
+    ///
+    /// # Panics
+    /// A panic of the frame is resumed once the painter's pipelines and the
+    /// blit pipelines are kept for the next frame (ADR-0305 §7).
     fn render_window(
         &mut self,
         slot: SlotId,
@@ -563,10 +595,14 @@ impl GpuContext {
         };
         let mut painter = self.take_painter(format, size);
         painter.resize(size.0, size.1);
+        // The blit's pipelines, like the library's, are inserted only once
+        // built, so an unwound frame leaves them whole.
         let mut blit = self
             .blit
             .take()
             .unwrap_or_else(|| OffscreenRenderer::with_domain(Arc::clone(&self.domain)));
+        #[cfg(test)]
+        let panics = self.injected_panic();
         let Self {
             adapter,
             domain,
@@ -576,20 +612,36 @@ impl GpuContext {
         let Some(SurfaceSlot::Window(window)) = slots.get_mut(slot) else {
             unreachable!("BUG: the window slot was found above and nothing removed it");
         };
-        let rendered = window.render(
-            &gpu_of(adapter, domain),
-            &mut painter,
-            &mut blit,
-            scene,
-            damage,
-        );
+        let mut caught = FirstPanic::new();
+        let rendered = caught.contain(|| {
+            #[cfg(test)]
+            assert!(!panics, "injected panic in the middle of a window's frame");
+            window.render(
+                &gpu_of(adapter, domain),
+                &mut painter,
+                &mut blit,
+                scene,
+                damage,
+            )
+        });
         self.blit = Some(blit);
+        let Some(rendered) = rendered else {
+            self.keep_pipelines(painter);
+            caught.resume();
+            unreachable!("BUG: a contained call that did not return holds its panic")
+        };
         // An error leaves the painter as a renderer keeps its own after one:
         // acquire errors come before it records, and a recording error is
-        // closed by the frame protocol's cleanup. Only an unwind, which never
-        // reaches here, rebuilds the shared caches.
+        // closed by the frame protocol's cleanup.
         self.painter = Some(painter);
         rendered
+    }
+
+    /// Drop `painter`, whose frame unwound or failed part way, and keep its
+    /// pipelines for the next painter: its glyph atlas, image and path caches
+    /// and scratch pools can be torn, and every slot shares them.
+    fn keep_pipelines(&mut self, painter: WgpuPainter) {
+        self.pipelines = Some(painter.into_pipelines());
     }
 
     /// The pixels offscreen `slot` holds, tightly packed, top row first,
@@ -609,22 +661,36 @@ impl GpuContext {
         self.builds
     }
 
-    /// Make the next frame panic after it took the painter.
+    /// Make the next frame panic in the middle of its recording.
     #[cfg(test)]
     pub(crate) fn panic_in_next_frame(&mut self) {
-        self.panic_mid_frame = true;
+        self.panic_in_next_frames(1);
+    }
+
+    /// Make each of the next `frames` frames panic in the middle of its
+    /// recording, whichever slots they are of.
+    #[cfg(test)]
+    pub(crate) fn panic_in_next_frames(&mut self, frames: u32) {
+        self.panics_ahead = frames;
+    }
+
+    /// Whether this frame panics, counting it off.
+    #[cfg(test)]
+    fn injected_panic(&mut self) -> bool {
+        let panics = self.panics_ahead > 0;
+        self.panics_ahead = self.panics_ahead.saturating_sub(1);
+        panics
     }
 
     /// The shared painter, retargeted to `format` and sized for `size`; built
-    /// first when no complete frame left one.
+    /// first when no complete frame left one, over the pipelines an unwound
+    /// frame's painter left.
     fn take_painter(&mut self, format: wgpu::TextureFormat, size: (u32, u32)) -> WgpuPainter {
-        let Some(mut painter) = self.painter.take() else {
-            #[cfg(test)]
-            {
-                self.builds.glyph_atlases += 1;
-                self.builds.pipeline_sets += 1;
-            }
-            return WgpuPainter::with_domain(Arc::clone(&self.domain), format, size);
+        let taken = self.painter.take();
+        let mut painter = if let Some(painter) = taken {
+            painter
+        } else {
+            self.built_painter(format, size)
         };
         #[cfg(test)]
         let sets_before = painter.pipeline_sets_built();
@@ -634,6 +700,28 @@ impl GpuContext {
             self.builds.pipeline_sets += painter.pipeline_sets_built() - sets_before;
         }
         painter
+    }
+
+    /// A painter with empty caches, over the pipelines an unwound frame's
+    /// painter left, or over a library built for `format`.
+    fn built_painter(&mut self, format: wgpu::TextureFormat, size: (u32, u32)) -> WgpuPainter {
+        #[cfg(test)]
+        {
+            self.builds.glyph_atlases += 1;
+        }
+        let pipelines = self.pipelines.take().unwrap_or_else(|| {
+            #[cfg(test)]
+            {
+                self.builds.pipeline_sets += 1;
+            }
+            PipelineLibrary::new(self.domain.device(), format)
+        });
+        WgpuPainter::with_pipelines(
+            Arc::clone(&self.domain),
+            pipelines,
+            size,
+            crate::frame_protocol::FontSource::Ordinary,
+        )
     }
 
     fn gpu(&self) -> Gpu<'_> {
@@ -1025,6 +1113,118 @@ mod tests {
             context.read_slot(sender.mint_slot().expect("a slot id is left")),
             Err(EngineError::InvalidRenderTarget { .. })
         ));
+    }
+
+    /// A frame that panics costs the caches every slot shares, not the
+    /// pipelines: two slots whose frames both panic in one turn each settle
+    /// `Retry` and each keep their own payload, the slot that did not draw
+    /// keeps its committed image, and the next turn draws every slot over a
+    /// fresh glyph atlas with no pipeline built again (ADR-0305 §7).
+    ///
+    /// Red-check: drop the pipelines with the painter in
+    /// `GpuContext::keep_pipelines` and the next painter builds its pipeline
+    /// set again.
+    #[test]
+    fn a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines() {
+        use crate::raster_executor::SlotFailure;
+
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let (mut executor, sender) = RasterExecutor::new(context, || {});
+        let slots = [(); 2].map(|()| {
+            let slot = sender.mint_slot().expect("a slot id is left");
+            let address = PresentationAddress {
+                ui_runtime_id: UiRuntimeId::new(1),
+                presentation_id: PresentationId::new(slot.index() as usize + 1),
+            };
+            let receipt = sender
+                .send(RasterCommand::Attach {
+                    slot,
+                    address,
+                    target: SlotTarget::Offscreen {
+                        size: DeviceSize::new(32, 16),
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                    },
+                    config: SlotConfig::new(),
+                })
+                .expect("the attach is accepted");
+            let SendReceipt::Configured(generation) = receipt else {
+                panic!("an attach of a positive size configures the slot: {receipt:?}");
+            };
+            (slot, address, generation)
+        });
+        let draw = |executor: &mut RasterExecutor<GpuContext>, tree: fn() -> LayerTree| {
+            for (slot, address, generation) in slots {
+                sender
+                    .send(frame(slot, address, generation, tree()))
+                    .expect("the frame is accepted");
+            }
+            let _ = executor.turn();
+            slots.map(|(slot, ..)| {
+                let mut settled = Vec::new();
+                sender.drain_settlements(slot, &mut settled);
+                assert_eq!(settled.len(), 1, "each frame settles once");
+                settled[0].verdict
+            })
+        };
+        let [(first_slot, ..), (second_slot, ..)] = slots;
+
+        assert_eq!(
+            draw(&mut executor, square_and_glyph),
+            [RasterVerdict::Presented; 2]
+        );
+        let built = executor.backend().builds();
+        let committed = executor
+            .backend()
+            .read_slot(second_slot)
+            .expect("the slot reads back");
+
+        executor.backend_mut().panic_in_next_frames(2);
+        assert_eq!(
+            draw(&mut executor, LayerTree::default),
+            [RasterVerdict::Retry; 2],
+            "both panicking frames settle Retry"
+        );
+        for slot in [first_slot, second_slot] {
+            assert!(
+                matches!(sender.take_failure(slot), Some(SlotFailure::Panicked(_))),
+                "each slot's record holds its own panic"
+            );
+        }
+        assert_eq!(
+            executor
+                .backend()
+                .read_slot(second_slot)
+                .expect("the slot reads back"),
+            committed,
+            "a slot whose frame did not draw keeps its committed image"
+        );
+
+        assert_eq!(
+            draw(&mut executor, square_and_glyph),
+            [RasterVerdict::Presented; 2],
+            "the turn after the panics draws every slot"
+        );
+        let after = executor.backend().builds();
+        assert_eq!(
+            after.pipeline_sets, built.pipeline_sets,
+            "no pipeline is built again"
+        );
+        assert!(
+            after.glyph_atlases > built.glyph_atlases,
+            "the shared caches are rebuilt"
+        );
+        for slot in [first_slot, second_slot] {
+            assert_eq!(
+                executor
+                    .backend()
+                    .read_slot(slot)
+                    .expect("the slot reads back"),
+                committed,
+                "the rebuilt caches draw the same frame"
+            );
+        }
     }
 
     /// A window whose surface the context's adapter cannot present to is
