@@ -340,7 +340,7 @@ pub(crate) fn a_replaced_owner_never_reports_unchanged() {
 
     drop(second.renew(ResyncReason::Rebuilt));
     let renewed = second.writer().next_content_version().expect("fresh");
-    assert_eq!(renewed.seq(), new.seq());
+    assert!(renewed.seq() > new.seq(), "a renewal runs the sequence on");
     assert_ne!(renewed, new);
 }
 
@@ -395,6 +395,29 @@ pub(crate) fn an_exhausted_mint_renews_the_lineage_and_publishes_full() {
     writer.push(publish(new_root, slots(&[child])));
     owner.apply(SURFACE).expect("the renewed lineage applies");
     assert_eq!(owner.current().len(), 2);
+}
+
+/// A renewal runs the version sequence on, so a layer tree flattened after it
+/// is numbered apart from every one before: an inspection handle kept from
+/// the old lineage names no layer of the new one.
+pub(crate) fn a_renewed_owner_numbers_its_scenes_apart() {
+    let mut owner = SceneOwner::new();
+    let root = owner.current().root();
+    let mut writer = owner.writer();
+    let child = writer.mint_node();
+    writer.push(publish(child, empty()));
+    writer.push(publish(root, slots(&[child])));
+    owner.apply(SURFACE).expect("the first patch applies");
+    let before = owner.current().flatten().scene();
+
+    drop(owner.renew(ResyncReason::Rebuilt));
+    let root = owner.current().root();
+    let mut writer = owner.writer();
+    let child = writer.mint_node();
+    writer.push(publish(child, empty()));
+    writer.push(publish(root, slots(&[child])));
+    owner.apply(SURFACE).expect("the renewed lineage applies");
+    assert_ne!(owner.current().flatten().scene(), before);
 }
 
 // scene_indexes

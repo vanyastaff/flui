@@ -213,7 +213,8 @@ marks the owner keeps across patches, so an apply hashes nothing; a republished 
 only the children it gains or loses, and leaves the indexes when its link, texture and filter
 entries are the old ones. `ContentVersion` and `SceneVersionId` draw from one `IdMint` per owner
 under a `Lineage` from a process `AtomicIdMint`, so a replaced or renewed owner never repeats one;
-a spent sequence refuses with `VersionsExhausted` and `renew` starts a new lineage, with empty
+a spent sequence refuses with `VersionsExhausted`; `renew` starts a new lineage, runs the
+sequence on unless it is spent, and starts with empty
 slots, whose next publication is `Full(Resync(_))`. `SceneVersion::flatten` is the layer tree the
 raster lane hands the engine until the engine walks the version itself, and the oracle a retained
 frame is compared against (ADR-0304 §11).

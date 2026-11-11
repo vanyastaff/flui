@@ -257,8 +257,9 @@ fn scene_apply_contract() {
     );
 }
 
-/// Content versions never repeat across owners or lineages, and a spent
-/// sequence renews the lineage instead of wrapping (ADR-0304 §2, §10).
+/// Content versions and scene numbers never repeat across owners or
+/// renewals, and a spent sequence renews the lineage instead of wrapping
+/// (ADR-0304 §2, §10).
 #[test]
 fn content_version_contract() {
     use scene as s;
@@ -272,6 +273,10 @@ fn content_version_contract() {
             (
                 "an_exhausted_mint_renews_the_lineage_and_publishes_full",
                 s::an_exhausted_mint_renews_the_lineage_and_publishes_full,
+            ),
+            (
+                "a_renewed_owner_numbers_its_scenes_apart",
+                s::a_renewed_owner_numbers_its_scenes_apart,
             ),
         ],
     );

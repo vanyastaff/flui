@@ -511,16 +511,22 @@ impl SceneOwner {
     }
 
     /// Starts over under a new lineage: the version holds an empty root, the
-    /// sequence, the slots and the pending log restart, every id of the old
-    /// lineage is refused as [`SceneError::ForeignNode`], and the next
-    /// publication is `Full(Resync(reason))` with no base.
+    /// slots and the pending log restart, every id of the old lineage is
+    /// refused as [`SceneError::ForeignNode`], and the next publication is
+    /// `Full(Resync(reason))` with no base. The version sequence runs on
+    /// unless it is spent, which a renewal is the remedy for.
     ///
     /// Hands back the old lineage's version, its log's contents and the
     /// buffered patch's, to be dropped once the owner is released.
     pub fn renew(&mut self, reason: ResyncReason) -> ReleasedContents {
         let ops = std::mem::take(&mut self.ops);
         self.lineage = fresh_lineage();
-        self.mint = IdMint::new();
+        // The sequence runs on, so a version number, which inspection handles
+        // name a scene by, is never issued twice by one owner; only a spent
+        // sequence starts over, the new lineage telling its numbers apart.
+        if self.mint.is_exhausted() {
+            self.mint = IdMint::new();
+        }
         // The lineage tells the old ids apart, so the slots start empty.
         self.slots = Slots::default();
         let replaced = std::mem::replace(

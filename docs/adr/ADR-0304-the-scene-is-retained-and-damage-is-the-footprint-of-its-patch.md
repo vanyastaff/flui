@@ -180,7 +180,8 @@ boundary's content with the new effect and the same chunks. `seq` comes from the
 refuses with `IdExhausted` once spent, and is a `counter` grant in the `globals` of `flui-layer`.
 A new scene owner takes a new lineage, so a restarted `seq` never equals an old one, which is what
 `ContentToken` was an allocation for (`stamp.rs:23-30`); `ContentToken` and `BoundaryStamp` are
-deleted.
+deleted. `renew` keeps the owner's mint running, so within one owner a `seq`, which an inspection
+handle names its scene by, is issued once; only a spent mint starts over, under the new lineage.
 
 §3. **Paint writes a patch of typed operations, applied all or nothing.**
 
@@ -490,7 +491,7 @@ list and the performance overlay are versioned content, and no longer damaged ev
 |-------|---------------------|
 | A panic in one boundary's paint | The pass commits nothing (ADR-0062): no patch is applied, the version and log are unchanged, the paint queue keeps the boundary, and the next publication's damage still starts at `acked`. Ids and content versions minted for the failed pass stay spent and are never reissued. |
 | A refused patch (`SceneError`) | A defect in the producer: a debug build panics with `BUG:`. A release build calls `renew(Rebuilt)`, the pipeline owner drops its boundary records and marks the root for a full paint, the frame is not presented, and a frame is requested; that frame publishes `Full(Resync(Rebuilt))`. A second refusal in a row is a defect the rebuild did not cure: that frame fails without asking for a retry, and the next frame waits for a change (`a_second_refusal_in_a_row_asks_for_no_retry`). |
-| `seq` exhausted | `IdMint` refuses with `IdExhausted` (it never wraps), `apply` returns `VersionsExhausted`, and the refused-patch path renews the lineage, so `seq` starts over where no old version can equal a new one. |
+| `seq` exhausted | `IdMint` refuses with `IdExhausted` (it never wraps), `apply` returns `VersionsExhausted`, and the refused-patch path renews the lineage, so `seq` starts over where no old version can equal a new one; a renewal with sequence left runs it on. |
 | Owner retirement | Published versions stay valid on the raster side until the presentation's slot detaches; a new owner has a new lineage, so its first publication is `Full(FirstFrame)` and no recording of the old lineage is replayed for it. |
 | A hot reload (`DevReloadHook`) | Code changed under the recordings and content versions, so the reload calls `renew(Rebuilt)` on every presentation's scene owner: the next frame is `Full(Resync(Rebuilt))` and no recording made by the old code is replayed. |
 | A raster-side panic or device loss | The raster side holds no version for that presentation and drops its recordings; the next frame is `Full(Resync(RasterReset))`. The owner's `acked` does not move, so nothing it owes is dropped. ADR-0305 says where the panic is contained. |
