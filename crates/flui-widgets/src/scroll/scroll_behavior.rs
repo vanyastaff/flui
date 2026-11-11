@@ -66,9 +66,13 @@ pub trait ScrollBehavior: std::fmt::Debug {
     }
 
     /// The pointer kinds whose drags and presses a scroll view that names no
-    /// devices admits: all of them.
+    /// devices admits: every kind but the mouse, which scrolls by its wheel
+    /// and the scrollbar and leaves a drag to selection.
     fn drag_devices(&self, _details: &ScrollBehaviorDetails) -> PointerKindSet {
-        PointerKindSet::all()
+        PointerKindSet::TOUCH
+            | PointerKindSet::PEN
+            | PointerKindSet::TRACKPAD
+            | PointerKindSet::VIRTUAL
     }
 }
 

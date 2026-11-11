@@ -338,10 +338,10 @@ pub(crate) fn swipe_actions_unmounted_mid_swipe_perform_nothing() {
         ..Options::default()
     };
     let mut laid = mount(scene(options, &log), &vsync);
-    laid.dispatch_pointer_down(290.0, 30.0);
+    laid.dispatch_pointer_down(270.0, 30.0);
     for step in 1..=10 {
         laid.dispatch_pointer_move_after(
-            290.0 - f64::from(step) * 25.0,
+            270.0 - f64::from(step) * 25.0,
             30.0,
             Duration::from_millis(16),
         );

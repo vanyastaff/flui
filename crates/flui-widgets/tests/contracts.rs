@@ -1065,6 +1065,10 @@ fn scroll_physics_and_activity() {
                 crate::scroll::a_scroll_configuration_answers_what_a_scroll_view_leaves_open,
             ),
             (
+                "scroll::the_default_scroll_behavior_leaves_a_mouse_drag_to_selection",
+                crate::scroll::the_default_scroll_behavior_leaves_a_mouse_drag_to_selection,
+            ),
+            (
                 "scroll::the_default_scroll_behavior_follows_the_platform_convention",
                 crate::scroll::the_default_scroll_behavior_follows_the_platform_convention,
             ),

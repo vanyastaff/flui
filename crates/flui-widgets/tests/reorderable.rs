@@ -314,7 +314,7 @@ fn settle(laid: &mut LaidOut) {
 
 /// Press with the mouse at `from`, move past the slop, then to `to`.
 fn mouse_drag(laid: &LaidOut, from: (f64, f64), to: (f64, f64)) {
-    laid.dispatch_pointer_down(from.0, from.1);
+    laid.dispatch_pointer_down_with_kind(from.0, from.1, PointerKind::Mouse);
     laid.dispatch_pointer_move(from.0, from.1 + 15.0);
     laid.dispatch_pointer_move(to.0, to.1);
 }

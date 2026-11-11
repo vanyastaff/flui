@@ -3840,7 +3840,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
             let _ = host.pump(Duration::ZERO);
             let pointer = PointerInfo::new(
                 PointerId::try_from(id).expect("nonzero contact"),
-                PointerKind::Mouse,
+                PointerKind::Touch,
             );
             let sample = |y: f64| {
                 PointerSample::new(
@@ -3849,7 +3849,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
                             .expect("fixture clock fits event time"),
                     ),
                     PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, y))
-                        .expect("finite authored mouse position"),
+                        .expect("finite authored touch position"),
                 )
             };
             host.dispatch(PlatformInput::Pointer(PointerEvent::Down(
@@ -5224,12 +5224,58 @@ impl flui_widgets::ScrollPhysics for PinnedPhysics {
 /// Drag a 300 px viewport over 800 px of `view`'s content up by 50 px and
 /// return the offset it lands on.
 fn dragged_offset(view: impl Fn(&ScrollController) -> flui_view::BoxedView) -> f64 {
+    dragged_offset_with(flui_interaction::PointerKind::Touch, view)
+}
+
+fn dragged_offset_with(
+    kind: flui_interaction::PointerKind,
+    view: impl Fn(&ScrollController) -> flui_view::BoxedView,
+) -> f64 {
     let controller = ScrollController::new();
     let scoped = lay_out(view(&controller), tight(300.0, 300.0));
-    scoped.dispatch_pointer_down(150.0, 200.0);
+    scoped.dispatch_pointer_down_with_kind(150.0, 200.0, kind);
     scoped.dispatch_pointer_move(150.0, 150.0);
     scoped.dispatch_pointer_up(150.0, 150.0);
     controller.pixels()
+}
+
+/// With no configuration, a scroll view drags with a finger, a pen, a
+/// trackpad and a virtual pointer, and leaves a mouse drag to selection: the
+/// mouse scrolls it by its wheel and the scrollbar.
+pub(crate) fn the_default_scroll_behavior_leaves_a_mouse_drag_to_selection() {
+    let list = |controller: &ScrollController| {
+        SingleChildScrollView::new()
+            .controller(controller.clone())
+            .child(SizedBox::new(300.0, 800.0))
+            .boxed()
+    };
+    let pen = flui_interaction::PointerKind::Pen {
+        tool: flui_interaction::PenTool::Tip,
+    };
+    for kind in [
+        flui_interaction::PointerKind::Touch,
+        pen,
+        flui_interaction::PointerKind::Virtual,
+    ] {
+        assert_eq!(dragged_offset_with(kind, list), 50.0, "{kind:?} drags");
+    }
+    assert_eq!(
+        dragged_offset_with(flui_interaction::PointerKind::Mouse, list),
+        0.0,
+        "the mouse leaves the drag"
+    );
+    let every = |controller: &ScrollController| {
+        SingleChildScrollView::new()
+            .controller(controller.clone())
+            .allowed_devices(flui_interaction::PointerKindSet::all())
+            .child(SizedBox::new(300.0, 800.0))
+            .boxed()
+    };
+    assert_eq!(
+        dragged_offset_with(flui_interaction::PointerKind::Mouse, every),
+        50.0,
+        "a view that names every device takes the mouse"
+    );
 }
 
 /// A scroll view asks the nearest `ScrollConfiguration` for what it leaves
@@ -5257,14 +5303,14 @@ pub(crate) fn a_scroll_configuration_answers_what_a_scroll_view_leaves_open() {
         ),
         (
             "the behavior's devices",
-            CountingBehavior::new(clamping(), PointerKindSet::TOUCH),
+            CountingBehavior::new(clamping(), PointerKindSet::MOUSE),
             false,
             false,
             0.0,
         ),
         (
             "the view's devices win",
-            CountingBehavior::new(clamping(), PointerKindSet::TOUCH),
+            CountingBehavior::new(clamping(), PointerKindSet::MOUSE),
             false,
             true,
             50.0,
