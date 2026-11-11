@@ -159,6 +159,8 @@ mod routable_derive;
 mod router;
 #[path = "scroll.rs"]
 mod scroll;
+#[path = "scrollbar.rs"]
+mod scrollbar;
 #[path = "selection_area.rs"]
 mod selection_area;
 #[path = "selection_area_controller.rs"]

@@ -57,6 +57,12 @@ impl ScrollPositionScope {
     pub(crate) fn controller_of(ctx: &dyn BuildContext) -> Option<ScrollController> {
         ctx.depend_on::<Self, _>(|scope| scope.controller.clone())
     }
+
+    /// The position of the nearest enclosing scope, registering a
+    /// dependency on it: the scroll view `ctx` sits in.
+    pub(crate) fn position_of(ctx: &dyn BuildContext) -> Option<ScrollPosition> {
+        ctx.depend_on::<Self, _>(|scope| scope.position.clone())
+    }
 }
 
 impl std::fmt::Debug for ScrollPositionScope {

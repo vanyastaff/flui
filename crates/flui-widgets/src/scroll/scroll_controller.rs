@@ -75,8 +75,43 @@ use std::time::Duration;
 use flui_animation::{Animation, AnimationController, AnimationRunFuture, MotionSpec, SharedCurve};
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{Listenable, MutatedDuringBuild};
+use flui_interaction::pointer::EventPropagation;
+use flui_platform::pointer::ScrollEvent;
 use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition, ViewportOffset};
 
+/// A scrollable's handler for a wheel or trackpad tick.
+pub(crate) type WheelHandler = Rc<dyn Fn(&ScrollEvent) -> EventPropagation>;
+
+/// A scroll view's wheel handling, reachable from a bar over it. The scroll
+/// view keeps one port for its life and puts its current handler in it on
+/// each build.
+#[derive(Default)]
+pub(crate) struct WheelPort {
+    handler: RefCell<Option<WheelHandler>>,
+}
+
+impl std::fmt::Debug for WheelPort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WheelPort")
+            .field("open", &self.handler.borrow().is_some())
+            .finish()
+    }
+}
+
+impl WheelPort {
+    /// Put `handler` in the port, or close it with `None`.
+    pub(crate) fn set(&self, handler: Option<WheelHandler>) {
+        let replaced = self.handler.replace(handler);
+        // The replaced handler's captures drop with nothing borrowed.
+        drop(replaced);
+    }
+
+    /// Hand `event` to the scroll view; a closed port lets it go on.
+    pub(crate) fn claim(&self, event: &ScrollEvent) -> EventPropagation {
+        let handler = self.handler.borrow().clone();
+        handler.map_or(EventPropagation::Continue, |handler| handler(event))
+    }
+}
 /// What the mounted `Scrollable` a controller serves lends it, installed and
 /// removed together; the installer is recognised by the `Rc` it installed.
 pub(crate) struct ScrollableHooks {
@@ -94,6 +129,9 @@ pub(crate) struct ScrollableHooks {
     /// The build phase of the UI runtime the scrollable builds in: while it
     /// builds, `jump_to` and `animate_to` refuse (ADR-0086 §7).
     pub(crate) build_phase: flui_foundation::BuildPhase,
+    /// The scrollable's wheel handling, for a scrollbar the wheel reaches
+    /// instead of the content.
+    pub(crate) wheel: Rc<WheelPort>,
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +277,12 @@ impl ScrollController {
     /// re-enter the controller and replace them.
     fn hooks(&self) -> Option<Rc<ScrollableHooks>> {
         self.hooks.borrow().clone()
+    }
+
+    /// The wheel handling of the scrollable this controller is attached to:
+    /// where a wheel tick over a scrollbar of it goes.
+    pub(crate) fn wheel_port(&self) -> Option<Rc<WheelPort>> {
+        self.hooks().map(|hooks| Rc::clone(&hooks.wheel))
     }
 
     /// Refuse a mutation while the attached scrollable's UI runtime builds.
@@ -702,51 +746,6 @@ impl ScrollController {
     pub fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
         self.position.listenable()
     }
-
-    // -- Scrollbar helpers ---------------------------------------------------
-
-    /// The fraction of the viewport covered by the scrollbar thumb.
-    ///
-    /// `thumb_fraction = viewport / (viewport + scroll_extent)` — the standard
-    /// proportional-scrollbar formula. Returns `1.0` when there is nothing to
-    /// scroll (content fits in the viewport), and `0.0` when the viewport
-    /// dimension is unknown (before the first layout).
-    #[must_use]
-    pub fn thumb_fraction(&self) -> f64 {
-        let viewport = self.viewport_dimension_pixels();
-        let content_length = viewport + self.scroll_extent();
-        if content_length <= 0.0 {
-            return 1.0;
-        }
-        (viewport / content_length).clamp(0.0, 1.0)
-    }
-
-    /// The offset fraction of the scrollbar thumb along the *available*
-    /// track (the track length minus the thumb's own extent) — the fraction
-    /// into `[0, 1]` (where 0 = top, 1 = bottom) at which the top of the
-    /// thumb sits.
-    ///
-    /// `thumb_offset_fraction = (pixels - min_scroll_extent) / scroll_extent`.
-    /// Multiplying this by `available_track` (`viewport_dimension_pixels -
-    /// thumb_height`, using the ACTUAL, already-min-clamped thumb height)
-    /// gives the thumb's pixel offset: flush
-    /// with the track's start at `pixels == min_scroll_extent` and flush with
-    /// its end at `pixels == max_scroll_extent`, in both the unclamped and
-    /// min-thumb-length-clamped cases.
-    ///
-    /// This does NOT itself fold in `(1 - thumb_fraction)` — a caller must
-    /// not multiply by the raw `viewport_dimension_pixels` (which does, for
-    /// an unclamped thumb, equal `available_track / (1 - thumb_fraction)`,
-    /// silently double-applying the factor and stopping short of the
-    /// track's end).
-    #[must_use]
-    pub fn thumb_offset_fraction(&self) -> f64 {
-        let scroll_extent = self.scroll_extent();
-        if scroll_extent <= 0.0 {
-            return 0.0;
-        }
-        (self.pixels() - self.min_scroll_extent()) / scroll_extent
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -829,6 +828,7 @@ mod tests {
                 jump: Box::new(|_| false),
                 in_pass: Box::new(|| false),
                 build_phase: flui_foundation::BuildPhase::new(),
+                wheel: Rc::default(),
             }));
 
             controller.jump_to(100.0).expect("no build is running");

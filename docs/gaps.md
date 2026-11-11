@@ -510,6 +510,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - **ADR-0313 §3.** The render slab keeps its hand-rolled slot generations (`crates/flui-rendering/src/storage/node_slab.rs`, its `RETIRED` sentinel) instead of the ledger; the adoption lands with #2241.
 - **ADR-0322 §1–§3, §6, §7.** Built: §4 (`StatefulRenderView`, `RenderViewState`), which no widget uses yet, §5 (`ProvidedValue`, `Provided`, `provide`), with `Focus`, `FocusScope` and `Actions` publishing from their own elements, and of §1 the `FocusHost` that `Focus` runs on. Not built: the private node and `RenderInteractive`; `WidgetStates` is a `u8` without `FocusVisible` (`crates/flui-widgets/src/widget_state.rs`), and `InkWell` rebuilds on every state change (`packages/flui-material/src/ink_well.rs`). The order is the hosts and §1–§3 with `RawButton`, then the control families; the numbers that close it are in [An interactive widget costs eighteen elements](#an-interactive-widget-costs-eighteen-elements).
 
+### No scroll notifications
+
+> **Environments:** all · **Who it hurts:** Widgets that react to a scroll view below them (a pull-down header, an infinite-scroll loader, a scroll-linked fade) · **Parity:** none yet (scrolling widgets have no row)
+
+- Flutter's `ScrollNotification`, `ScrollMetricsNotification` and `NotificationListener` have no FLUI counterpart. An ancestor reaches the scroll view nearest below it only through the crate-private scroll observer scope (`crates/flui-widgets/src/scroll/scroll_observer.rs`), whose one user is `Scrollbar`; other code shares a `ScrollController` by hand.
+- The likely shape is a public listener that installs the observer scope and reads the attached position, so a scroll frame costs one listener call and nothing bubbles through the tree.
+- The entry closes when a public listener reports a scroll start, update, end and a change of extents for the scroll view at depth zero below it, with headless tests over a nested list.
+
 ### No widget hot reload on Android and the Web
 
 > **Environments:** Android, Web · **Who it hurts:** Developers who iterate on widget code on a phone or in a browser · **Parity:** none yet (hot reload has no row)
