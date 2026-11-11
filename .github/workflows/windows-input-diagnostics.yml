@@ -1,0 +1,56 @@
+name: Windows input diagnostics (temporary)
+
+# Temporary: the three Win32 input rows the first nightly run failed, with
+# their pointer messages printed. Removed before the pull request merges.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-input-diagnostics.yml"
+      - "crates/flui-native/**"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  RUST_BACKTRACE: 1
+  RUSTUP_HOME: ${{ github.workspace }}/../flui-diag-rustup
+
+jobs:
+  rows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+      - name: Build
+        run: cargo test -p flui-native --locked --no-run --lib --test platform_it
+      - name: TSF rows
+        if: ${{ !cancelled() }}
+        run: cargo test -p flui-native --locked --lib -- --exact text::windows::tsf::tests::the_text_services_answer_a_completion_for_its_store --nocapture
+      - name: Window rows
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          for row in two_injected_touches_arrive_as_one_pointer_frame a_pointer_routed_mouse_hovers_the_window a_leave_callback_that_hovers_again_keeps_the_hover; do
+            echo "::group::$row"
+            FLUI_NATIVE_WINDOW_CONTRACT_CHILD=$row cargo test -p flui-native --locked --test platform_it -- --exact contract::test_window_lifecycle_contract --nocapture 2>&1 || status=1
+            echo "::endgroup::"
+          done
+          exit $status
