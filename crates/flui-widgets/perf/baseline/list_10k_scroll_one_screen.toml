@@ -1,0 +1,17 @@
+# Written by `cargo xtask perf --bless`; counts, not timings.
+# One scenario of crates/flui-widgets/tests/perf.rs.
+
+[list_10k_scroll_one_screen]
+allocated_bytes = 1378278
+allocations = 3866
+builds_run = 126
+elements_rebuilt = 126
+frames_produced = 1
+layers_produced = 111
+layers_reused = 25
+layout_passes = 2
+layout_roots = 128
+nodes_laid_out = 132
+nodes_painted = 134
+reallocations = 142
+semantics_nodes_updated = 81

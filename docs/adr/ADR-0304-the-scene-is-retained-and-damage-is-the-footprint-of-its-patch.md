@@ -571,7 +571,7 @@ consecutive versions. The patch damage must cover the diff damage.
   `a_frame_not_shown_is_retried_from_the_held_version` (the retry records no chunk and paints no
   boundary) and `a_hot_reload_renews_every_scene_lineage`.
 - `cargo xtask perf` gains the scenario `caret_blink_in_10k_list` (to be added to
-  `crates/flui-widgets/tests/perf.rs`, counts in `crates/flui-widgets/perf/baseline.toml`), whose
+  `crates/flui-widgets/tests/perf.rs`, counts in `crates/flui-widgets/perf/baseline/`), whose
   `nodes_painted`, `scene_ops` and `chunks_recorded` per blink are equal at 1,000 and 10,000
   items.
 

@@ -46,7 +46,7 @@
 ## Числовые ворота программы
 
 Замер ведётся гейтами `main`: счётчики кадра `cargo xtask perf --check`
-(`crates/flui-widgets/tests/perf.rs`, `crates/flui-widgets/perf/baseline.toml`), счётчик аллокаций
+(`crates/flui-widgets/tests/perf.rs`, `crates/flui-widgets/perf/baseline/`), счётчик аллокаций
 на кадр и равенство числа инструкций на двух размерах дерева. Время по часам воротами программы
 не служит. Одно исключение: условие слияния RS4 вместе с RS8 (задача RS4 в [tasks.md](tasks.md)),
 update и repaint `paint/rotated_box_turn_change/inline` по criterion не хуже main в пределах шума,

@@ -750,7 +750,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # perf-gates — what a frame costs, by counts that do not depend on the
   # runner: `cargo xtask perf --check` compares every perf scenario's frame
-  # counters and allocations with crates/flui-widgets/perf/baseline.toml, and
+  # counters and allocations with crates/flui-widgets/perf/baseline/, and
   # `--instructions --check` runs each `perf_scaling_` scenario on its small
   # and large tree under callgrind and fails when the large one costs more
   # than 5% over the small. The scenarios' own assertions (equal allocations
