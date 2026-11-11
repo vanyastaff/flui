@@ -26,15 +26,13 @@ use crate::{
 /// region), or kept with a different token or placement (both), or kept but
 /// painted in a different order relative to the other kept boundaries (both:
 /// every kept boundary outside the longest run still in its old order).
-/// Content that
-/// cannot be vouched for by a token — textures (a texture layer or a picture's
-/// texture draw), platform views, live canvases, performance overlays and
-/// anything under a follower — is damaged on every frame at its old and new
-/// positions. A backdrop filter whose (blur-reach
-/// widened) bounds meet the damage joins it, repeatedly, until nothing more
-/// joins; so does a foreground image filter's footprint, and the whole
-/// surface when a colour or image filter that paints transparent pixels is
-/// present.
+/// Content that cannot be vouched for by a token — textures (a texture layer
+/// or a picture's texture draw), platform views, live canvases, performance
+/// overlays and anything under a follower — is damaged on every frame at its
+/// old and new positions. The damage then closes over the [`read_closure`]
+/// of every effect in both frames with [`close_over`]: a filter whose reads
+/// or writes meet it takes both, to a fixed point, and one without a bound
+/// makes the frame `Full(Unbounded)`.
 ///
 /// The answer is [`DamageRegion::Full`] when the frames cannot be paired,
 /// with its [`FullReason`]: the first frame, a surface size change, a root

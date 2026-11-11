@@ -153,13 +153,15 @@ their previous order), an added or removed boundary its one region; textures (a 
 `DisplayList::volatile_extent`), platform views, canvases, overlays and anything under a follower
 are damaged every frame; a shader mask or backdrop filter's bounds are not clipped by the clips
 above it (the engine composites the offscreen unscissored), and an opacity layer whose blend
-changes pixels under a transparent source, or a colour filter that paints transparent black,
-damages the whole surface; damage that meets a foreground image filter's footprint (its
-children's extents grown by the filter's reach: the larger of its local reach scaled by the
-transform and the renderer's physical-pixel kernel growth, `ceil(sqrt(3) x sigma)` for a blur)
-joins that footprint, since the engine re-renders
-the filter from children recorded under the damage scissor; a backdrop filter whose blur-widened bounds meet the damage
-joins it until nothing more does. The result is `Full` for an unpairable frame (first frame,
+changes pixels under a transparent source damages the whole surface. The damage then closes
+over every effect's `read_closure` (`src/damage/closure.rs`, ADR-0304 §6) with `close_over`: a
+backdrop filter reads its bounds grown by the kernel's reach (the larger of its local reach scaled
+by the transform and the renderer's physical-pixel growth, `ceil(sqrt(3) x sigma)` for a blur) and
+writes its bounds; a foreground image filter reads and writes its children's extents moved or
+grown the same way, since the engine composites its whole output; a colour or image filter that
+paints transparent black has no bound and makes the frame `Full(Unbounded)`. Damage that meets a
+closure takes all of it, to a fixed point of at most 64 rounds. The engine's backdrop planning
+calls the same two functions. The result is `Full` for an unpairable frame (first frame,
 surface size change, unstamped root, root boundary or placement change, a boundary stamped
 twice) or above `DamageMode::On::full_above`, `Unchanged` for nothing, and otherwise one
 `DamageRect` in whole pixels, rounded outward with a 1 px anti-aliasing margin. `DamageMode::Off`
@@ -206,7 +208,21 @@ a spent sequence refuses with `VersionsExhausted` and `renew` starts a new linea
 slots, whose next publication is `Full(Resync(_))`. `SceneVersion::flatten` (feature `testing`) is
 the layer-tree oracle a retained frame is compared against.
 
-Pinned by `layer_it`: `scene_apply_contract`, `content_version_contract` and `scene_table_cost`
+An apply's damage is the footprint of its operations (ADR-0304 §4, `src/scene/footprint.rs`),
+read under the version before and the version after. A node record keeps its subtree bounds in
+its own space: `Publish` recomputes them exactly, deepest node first, and every other change
+grows its ancestors' bounds by union, so a footprint over-reports and never under-reports. A
+republished content pairs its entries by key (a chunk and an effect by owner and ordinal, a slot
+by its node); a changed chunk or effect, or an unpaired entry, damages its old and new scope, and
+kept entries outside the longest increasing run of their old order damage both positions. `Place`
+damages the moved subtree at both placements. After the operations every follower is resolved
+again in both versions, and one whose transform changed damages its subtree under both. The
+region then closes over the filtered nodes of both versions. A surface change between applies is
+`Full(SurfaceChanged)`, and `renew` makes the next one `Full(Resync(_))`.
+
+Pinned by `layer_it`: `scene_patch_damage`, `patch_damage_covers_diff_damage` (random patches,
+whose damage must cover what `LayerDiffer` finds between the flattened versions),
+`scene_apply_contract`, `content_version_contract` and `scene_table_cost`
 (an apply's copies are at most its operations times the table height, equal at 1 100 and 30 000
 nodes, and a republished parent copies as much at 40 children as at 1 000); the table's model
 test against `BTreeMap` is `scene::table::tests`.

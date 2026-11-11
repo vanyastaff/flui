@@ -516,7 +516,7 @@ fn mutate(rng: &mut Rng, owner: &mut SceneOwner, model: &mut Model, plant: bool)
     let mut ops = Vec::new();
     let mut republish = Vec::new();
     let count = model.ids.len();
-    for _ in 0..1 + rng.below(3) {
+    for _ in 0..=rng.below(3) {
         let node = rng.below(count);
         match rng.below(6) {
             0 => {
@@ -778,12 +778,11 @@ fn covers(patch: DamageRegion, diff: DamageRegion, closures: &[Closure]) -> bool
 /// What each backdrop of `tree` reads and writes.
 fn backdrops(tree: &LayerTree, id: LayerId, parent: Matrix4, out: &mut Vec<Closure>) {
     let layer = tree.get_layer(id).expect("a node of the tree");
-    let ctm = match layer {
-        Layer::Transform(transform) => parent * *transform.transform(),
-        _ => {
-            let offset = layer.local_translation();
-            parent * Matrix4::translation(offset.dx, offset.dy, 0.0)
-        }
+    let ctm = if let Layer::Transform(transform) = layer {
+        parent * *transform.transform()
+    } else {
+        let offset = layer.local_translation();
+        parent * Matrix4::translation(offset.dx, offset.dy, 0.0)
     };
     if let Layer::BackdropFilter(_) = layer {
         out.push(read_closure(layer, &ctm, Rect::ZERO));
