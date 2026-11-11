@@ -138,11 +138,12 @@ The node's `enabled` is the only switch. While it is `false`:
 | states | `WidgetState::Disabled` is set; `Hovered` and `Pressed` are cleared |
 
 The semantics part has no `enabled` of its own, and the focus part's `can_request_focus` and
-`Action::is_enabled` are conjoined with the node's switch, never a second source. An action whose
-enablement follows state outside the tree keeps `Action::enablement_changes`: the node listens to
-each bound action's notifier and describes its semantics again on the signal, without a rebuild,
-as the gesture alternatives do today. A control is enabled for an intent when the node is enabled
-and the action is.
+`Action::is_enabled` are conjoined with the node's switch, never a second source: a control is
+enabled for an intent when the node is enabled and the action is. The node's own description
+reads no bound action (its click is its tap's, its focus its focus node's), so it listens to no
+`Action::enablement_changes`. A description that does offer a command through a bound action names
+that action's notifier as a refresh source, as `Semantics::refresh_on` and the gesture alternatives
+do today, and is described again on the signal without a rebuild.
 
 Disabling a control during a contact cancels its recognizers (`cancel_all`), then clears the
 states, then runs the cancel callbacks.
@@ -393,7 +394,7 @@ render object or already owns the element the value comes from.
   long press, cancel) gives the same winner, the same callbacks and the same order as the
   wrappers.
 - `disabled_raw_button_is_disabled_in_every_part`: one switch, the six rows of §2, including a
-  disable during a contact and an action notifier that fires with no rebuild. The pointer and
+  disable during a contact. The pointer and
   action rows of a control that keeps its callback while disabled are the node's `switch_tests`
   (`crates/flui-widgets/src/interaction/node.rs`).
 - `hover_repaints_without_rebuilding`: a hover over a control whose child reads the controller at
