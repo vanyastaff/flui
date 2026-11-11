@@ -91,7 +91,7 @@ fn display_adapters() -> Vec<DisplayAdapter> {
                 desktop_outputs: u32::try_from(desktop_outputs).unwrap_or(u32::MAX),
             })
         })
-        .collect()
+        .collect::<Vec<DisplayAdapter>>()
 }
 
 impl WindowSet {
