@@ -2,6 +2,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    num::NonZeroU64,
     sync::{
         Arc, Weak,
         atomic::{AtomicBool, Ordering},
@@ -9,6 +10,7 @@ use std::{
 };
 
 use flui_foundation::panic::FirstPanic;
+use flui_foundation::sequence::{IdExhausted, IdMint};
 use flui_foundation::{ElementId, RebuildReasons};
 use parking_lot::Mutex;
 
@@ -18,34 +20,36 @@ struct WakeState {
     reentrant_threads: HashSet<std::thread::ThreadId>,
 }
 
-/// One frame request a wake answers. Tickets are compared under the ledger's
-/// lock, so a wake that began before a newer request never acknowledges it.
+/// The frame request a wake answers: the ticket the ledger's mint issued for
+/// it, or a request made after the mint was exhausted, which no wake
+/// acknowledges, so every later wake retries it. Claims are compared under
+/// the ledger's lock, so a wake that began before a newer request never
+/// acknowledges it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct WakeTicket(u64);
+enum WakeClaim {
+    Ticket(NonZeroU64),
+    Unnumbered,
+}
 
 /// The frame request still owed, if any.
 #[derive(Debug, Default)]
 struct WakeLedger {
-    issued: u64,
-    owed: Option<WakeTicket>,
-    /// Set once `issued` cannot advance: tickets would repeat, so from then on
-    /// no wake acknowledges a request and each later one retries it.
-    exhausted: bool,
+    mint: IdMint<NonZeroU64>,
+    owed: Option<WakeClaim>,
 }
 
 impl WakeLedger {
-    fn request(&mut self) -> WakeTicket {
-        match self.issued.checked_add(1) {
-            Some(next) => self.issued = next,
-            None => self.exhausted = true,
-        }
-        let ticket = WakeTicket(self.issued);
-        self.owed = Some(ticket);
-        ticket
+    fn request(&mut self) -> WakeClaim {
+        let claim = match self.mint.next() {
+            Ok(ticket) => WakeClaim::Ticket(ticket),
+            Err(IdExhausted) => WakeClaim::Unnumbered,
+        };
+        self.owed = Some(claim);
+        claim
     }
 
-    fn acknowledge(&mut self, ticket: WakeTicket) {
-        if !self.exhausted && self.owed == Some(ticket) {
+    fn acknowledge(&mut self, claim: WakeClaim) {
+        if matches!(claim, WakeClaim::Ticket(_)) && self.owed == Some(claim) {
             self.owed = None;
         }
     }
@@ -238,7 +242,7 @@ impl ExternalBuildInbox {
         newly_queued
     }
 
-    fn request_ticket(&self) -> WakeTicket {
+    fn request_claim(&self) -> WakeClaim {
         self.current_wake.lock().request()
     }
 
@@ -247,11 +251,11 @@ impl ExternalBuildInbox {
     /// it, as it retries a wake that panicked.
     pub(crate) fn owe_frame(&self, has_fresh_work: bool) {
         if has_fresh_work && !self.is_closed() {
-            let _owed = self.request_ticket();
+            let _owed = self.request_claim();
         }
     }
 
-    fn pending_ticket(&self) -> Option<WakeTicket> {
+    fn pending_claim(&self) -> Option<WakeClaim> {
         self.current_wake.lock().owed
     }
 
@@ -303,8 +307,8 @@ impl ExternalBuildInbox {
         let Some(request_frame) = request_frame else {
             return;
         };
-        let requested = has_fresh_work.then(|| self.request_ticket());
-        let Some(mut ticket) = requested.or_else(|| self.pending_ticket()) else {
+        let requested = has_fresh_work.then(|| self.request_claim());
+        let Some(mut claim) = requested.or_else(|| self.pending_claim()) else {
             return;
         };
 
@@ -328,15 +332,15 @@ impl ExternalBuildInbox {
             };
 
             if woke {
-                self.current_wake.lock().acknowledge(ticket);
+                self.current_wake.lock().acknowledge(claim);
             }
 
             let compensation = (reentered && may_compensate)
-                .then(|| self.pending_ticket())
+                .then(|| self.pending_claim())
                 .flatten();
-            if let Some(pending_ticket) = compensation {
+            if let Some(pending) = compensation {
                 may_compensate = false;
-                ticket = pending_ticket;
+                claim = pending;
                 continue;
             }
 
@@ -352,7 +356,7 @@ impl ExternalBuildInbox {
 
 #[cfg(test)]
 mod tests {
-    use super::{BuildStamp, ExternalBuildInbox, WakeLedger};
+    use super::{BuildStamp, ExternalBuildInbox, WakeClaim, WakeLedger};
     use flui_foundation::{ElementId, RebuildReason, RebuildReasons};
     use std::sync::Arc;
 
@@ -404,18 +408,26 @@ mod tests {
 
     #[test]
     fn an_exhausted_ledger_keeps_every_request_owed() {
-        let mut ledger = WakeLedger {
-            issued: u64::MAX - 1,
-            ..WakeLedger::default()
-        };
+        let mut ledger = WakeLedger::default();
+        ledger.mint.reserve_through(u64::MAX - 1);
         let last = ledger.request();
-        let repeated = ledger.request();
-        assert_eq!(last, repeated, "the ticket counter stops at its end");
+        let unnumbered = ledger.request();
+        assert_eq!(
+            unnumbered,
+            WakeClaim::Unnumbered,
+            "the mint refuses at its end"
+        );
         ledger.acknowledge(last);
         assert_eq!(
             ledger.owed,
-            Some(repeated),
-            "a repeated ticket must not let an older wake acknowledge a newer request"
+            Some(WakeClaim::Unnumbered),
+            "the wake of the last ticket cleared a request made after it"
+        );
+        ledger.acknowledge(unnumbered);
+        assert_eq!(
+            ledger.owed,
+            Some(WakeClaim::Unnumbered),
+            "an unnumbered request is acknowledged by no wake"
         );
     }
 }
