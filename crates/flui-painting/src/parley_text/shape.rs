@@ -1063,6 +1063,14 @@ fn validate_layout(paragraph: &ParagraphLayout) -> Result<(), TextLayoutError> {
 }
 
 impl TextContext {
+    /// Keeps `dropped`'s buffers for the next shaping to build into. A
+    /// context keeps one; a second is dropped.
+    pub(crate) fn recycle(&mut self, dropped: ParagraphLayout) {
+        if self.spare_layout.is_none() {
+            self.spare_layout = Some(dropped.layout);
+        }
+    }
+
     /// Shapes and line-breaks `paragraph` on this context's fonts.
     pub fn shape(
         &mut self,
@@ -1298,6 +1306,9 @@ impl TextContext {
             })
             .collect();
 
+        // A dropped layout's buffers, when one was handed back: building into
+        // them clears what they held and allocates only past their capacity.
+        let mut layout = self.spare_layout.take().unwrap_or_default();
         // Unquantized: the layout is in logical pixels, and Parley's
         // quantization would round ascent, descent and the leading halves to
         // whole logical pixels, which at a device scale other than 1 is not
@@ -1336,7 +1347,7 @@ impl TextContext {
                 builder.push(property, range.clone());
             }
         }
-        let mut layout = builder.build(&breaks);
+        builder.build_into(&mut layout, &breaks);
         // Reject overflow before the line breaker consumes derived advances.
         let widths = layout.calculate_content_widths();
         if !widths.min.is_finite() || !widths.max.is_finite() {

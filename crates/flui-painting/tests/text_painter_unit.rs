@@ -507,6 +507,46 @@ fn text_cx() -> flui_painting::TextContext {
     flui_painting::TextContext::new(&flui_painting::FontCollection::new())
 }
 
+/// A painter whose text changes shapes the new text into the buffers of its
+/// previous layout, and lays it out exactly as a painter that never held the
+/// longer text does: a paragraph wrapped over several lines, then replaced
+/// by one short word, keeps no line, glyph or span of the first.
+pub(crate) fn a_reshaped_painter_keeps_nothing_of_its_previous_text() {
+    let fonts = FontCollection::new();
+    let mut context = TextContext::new(&fonts);
+    let mut reused = TextPainter::new()
+        .with_text(TextSpan::new("seven eight nine ten eleven twelve"))
+        .with_text_direction(TextDirection::Ltr);
+    reused
+        .layout(&mut context, 0.0, 60.0)
+        .expect("valid fixture lays out");
+    assert!(
+        painted_style_paragraph(&reused).line_count() > 1,
+        "precondition: the first text wraps"
+    );
+    reused.set_text(Some(TextSpan::new("hi").into()));
+    reused
+        .layout(&mut context, 0.0, 60.0)
+        .expect("valid fixture lays out");
+
+    let mut fresh = TextPainter::new()
+        .with_text(TextSpan::new("hi"))
+        .with_text_direction(TextDirection::Ltr);
+    fresh
+        .layout(&mut TextContext::new(&fonts), 0.0, 60.0)
+        .expect("valid fixture lays out");
+
+    let (reused, fresh) = (
+        painted_style_paragraph(&reused),
+        painted_style_paragraph(&fresh),
+    );
+    assert_eq!(reused.text(), fresh.text());
+    assert_eq!(reused.size(), fresh.size());
+    assert_eq!(reused.line_count(), fresh.line_count());
+    assert_eq!(reused.describe_spans(), fresh.describe_spans());
+    assert_eq!(reused.runs().len(), fresh.runs().len());
+}
+
 /// The intrinsic widths a layout caches are those of the text as authored,
 /// whatever width and line count it was laid out under: a paragraph wrapped
 /// narrow and cut to one line without an ellipsis answers what a painter
