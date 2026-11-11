@@ -9,10 +9,12 @@
 //! writes `<dir>/<scenario>.toml` **before** asserting, so a broken budget still
 //! reports its numbers.
 //!
-//! Every record also carries `allocations`: the heap allocations the scenario's
-//! measured frames made on the test thread, counted by this target's
-//! `#[global_allocator]`. Like the frame counters it is a function of the tree
-//! and the change, not of the host, so it ratchets the same way.
+//! Every record also carries what the scenario's measured frames asked of the
+//! heap on the test thread, counted by this target's `#[global_allocator]`:
+//! `allocations` (a `realloc` included), `reallocations` (the buffers among
+//! them that outgrew their capacity) and `allocated_bytes`. Like the frame
+//! counters they are a function of the tree and the change, not of the host,
+//! so they ratchet the same way.
 //!
 //! A `perf_scaling_` scenario runs the same change on a small and a large tree
 //! and asserts that the two cost the same: equal allocations here, and equal
@@ -56,12 +58,51 @@ use flui_widgets::{
 // thread a host starts add nothing to a scenario's count.
 thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
+    static REALLOCATIONS: Cell<u64> = const { Cell::new(0) };
+    static ALLOCATED_BYTES: Cell<u64> = const { Cell::new(0) };
     static LIVE_BYTES: Cell<u64> = const { Cell::new(0) };
 }
 
-/// This thread's allocations so far; `0` once its TLS is gone.
-fn allocations() -> u64 {
-    ALLOCATIONS.try_with(Cell::get).unwrap_or(0)
+/// What this thread has asked of the heap so far; zeros once its TLS is gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HeapCounts {
+    /// Allocations, a growth or shrink by `realloc` included.
+    allocations: u64,
+    /// The `realloc`s among them: a buffer that outgrew its capacity.
+    reallocations: u64,
+    /// The bytes those allocations asked for.
+    allocated_bytes: u64,
+}
+
+impl HeapCounts {
+    fn now() -> Self {
+        let read = |counter: &'static std::thread::LocalKey<Cell<u64>>| {
+            counter.try_with(Cell::get).unwrap_or(0)
+        };
+        Self {
+            allocations: read(&ALLOCATIONS),
+            reallocations: read(&REALLOCATIONS),
+            allocated_bytes: read(&ALLOCATED_BYTES),
+        }
+    }
+
+    /// What happened between `earlier` and `self`.
+    fn since(self, earlier: Self) -> Self {
+        Self {
+            allocations: self.allocations - earlier.allocations,
+            reallocations: self.reallocations - earlier.reallocations,
+            allocated_bytes: self.allocated_bytes - earlier.allocated_bytes,
+        }
+    }
+
+    /// The counters a scenario records, under their baseline names.
+    fn counts(self) -> [(&'static str, u64); 3] {
+        [
+            ("allocations", self.allocations),
+            ("reallocations", self.reallocations),
+            ("allocated_bytes", self.allocated_bytes),
+        ]
+    }
 }
 
 /// This thread's live heap bytes: allocated minus freed, wrapping, so only a
@@ -73,14 +114,17 @@ fn live_bytes() -> u64 {
 struct CountingAllocator;
 
 // SAFETY: `alloc`/`dealloc` forward unchanged to `System`, so every pointer
-// is freed by the allocator that produced it. `realloc`/`alloc_zeroed` keep
-// `GlobalAlloc`'s defaults, which go through `self.alloc` + copy +
-// `self.dealloc`: still `System`, and a growth counts as one allocation.
+// is freed by the allocator that produced it. `realloc` is `GlobalAlloc`'s
+// default spelled out so it can be counted: `self.alloc` + copy +
+// `self.dealloc`, still `System`, and a growth counts as one allocation and
+// one reallocation. `alloc_zeroed` keeps the default, through `self.alloc`.
 #[expect(unsafe_code, reason = "a counting global allocator forwards to System")]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let _ = ALLOCATIONS.try_with(|count| count.set(count.get().saturating_add(1)));
-        let _ = LIVE_BYTES.try_with(|live| live.set(live.get().wrapping_add(layout.size() as u64)));
+        let size = layout.size() as u64;
+        let _ = ALLOCATED_BYTES.try_with(|bytes| bytes.set(bytes.get().saturating_add(size)));
+        let _ = LIVE_BYTES.try_with(|live| live.set(live.get().wrapping_add(size)));
         // SAFETY: `layout` is the caller's own, forwarded unchanged.
         unsafe { System.alloc(layout) }
     }
@@ -90,22 +134,41 @@ unsafe impl GlobalAlloc for CountingAllocator {
         // SAFETY: `ptr`/`layout` are the caller's own, forwarded unchanged.
         unsafe { System.dealloc(ptr, layout) }
     }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let _ = REALLOCATIONS.try_with(|count| count.set(count.get().saturating_add(1)));
+        // SAFETY: `realloc`'s contract makes `new_size` with `layout.align()`
+        // a valid layout (non-zero, not overflowing `isize` once rounded).
+        let new_layout = unsafe { Layout::from_size_align_unchecked(new_size, layout.align()) };
+        // SAFETY: `new_layout` is valid, as above.
+        let new_ptr = unsafe { self.alloc(new_layout) };
+        if !new_ptr.is_null() {
+            // SAFETY: both blocks are live and distinct, each at least
+            // `min(old, new)` bytes long; `ptr` was allocated here with
+            // `layout`, as `realloc`'s contract requires.
+            unsafe {
+                std::ptr::copy_nonoverlapping(ptr, new_ptr, layout.size().min(new_size));
+                self.dealloc(ptr, layout);
+            }
+        }
+        new_ptr
+    }
 }
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-/// Runs a scenario's measured frames and returns their result with the
-/// allocations they made.
+/// Runs a scenario's measured frames and returns their result with what
+/// they asked of the heap.
 ///
 /// The one window `cargo xtask perf --instructions` counts: it collects
 /// instructions only while this function runs (callgrind's `--toggle-collect`
 /// on its name), so it must stay out of line and keep its name.
 #[inline(never)]
-fn perf_measured<R>(frames: impl FnOnce() -> R) -> (R, u64) {
-    let before = allocations();
+fn perf_measured<R>(frames: impl FnOnce() -> R) -> (R, HeapCounts) {
+    let before = HeapCounts::now();
     let result = frames();
-    (result, allocations() - before)
+    (result, HeapCounts::now().since(before))
 }
 
 /// One 60 Hz frame of virtual time.
@@ -224,12 +287,12 @@ fn mount() -> Mounted {
     Mounted { binding, writer }
 }
 
-/// Writes `report` and the measured frames' `allocations` for `xtask perf`
+/// Writes `report` and what the measured frames asked of the heap for `xtask perf`
 /// when `FLUI_PERF_OUT` is set. Called before a scenario asserts, so a failing
 /// budget still reports its numbers.
-fn record(scenario: &str, report: &FrameReport, allocations: u64) {
+fn record(scenario: &str, report: &FrameReport, heap: HeapCounts) {
     let mut counts: Vec<(&str, u64)> = report.counters().into_iter().collect();
-    counts.push(("allocations", allocations));
+    counts.extend(heap.counts());
     record_counts(scenario, &counts);
 }
 
@@ -413,8 +476,8 @@ impl StatelessView for ButtonColumn {
 }
 
 /// Mounts [`ButtonColumn`] on a headless host, settles it, and returns the
-/// allocations of [`SCALING_FRAMES`] label changes.
-fn label_change_allocations(buttons: usize) -> u64 {
+/// heap counts of [`SCALING_FRAMES`] label changes.
+fn label_change_heap(buttons: usize) -> HeapCounts {
     let label = SharedSignal::new(String::from("label 0"));
     let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
     host.attach(&ButtonColumn {
@@ -428,17 +491,17 @@ fn label_change_allocations(buttons: usize) -> u64 {
     let texts: Vec<String> = (0..SCALING_FRAMES)
         .map(|frame| format!("label {}", frame % 2 + 1))
         .collect();
-    let ((), allocations) = perf_measured(|| {
+    let ((), heap) = perf_measured(|| {
         for text in texts {
             label.set(text);
             let _ = host.pump(FRAME);
         }
     });
-    allocations
+    heap
 }
 
-/// A label change costs the same over 500 rows as over 5 000: equal
-/// allocations here, and equal instructions within a tolerance under
+/// A label change costs the same over 500 rows as over 5 000: equal heap
+/// counts here, and equal instructions within a tolerance under
 /// `cargo xtask perf --instructions`. A frame that clears a table the mount
 /// grew, or walks the tree to collect something only a few nodes report,
 /// fails the second while every counter of its work stays put.
@@ -450,12 +513,9 @@ fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
         if only.as_deref().is_some_and(|selected| selected != name) {
             continue;
         }
-        let allocations = label_change_allocations(buttons);
-        record_counts(
-            &format!("label_change_{name}"),
-            &[("allocations", allocations)],
-        );
-        measured.push((buttons, allocations));
+        let heap = label_change_heap(buttons);
+        record_counts(&format!("label_change_{name}"), &heap.counts());
+        measured.push((buttons, heap));
     }
     assert!(
         !measured.is_empty(),
@@ -464,8 +524,8 @@ fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
     if let [(small_rows, small), (large_rows, large)] = measured[..] {
         assert_eq!(
             small, large,
-            "{SCALING_FRAMES} label changes allocated {small} times over {small_rows} rows \
-             and {large} times over {large_rows}"
+            "{SCALING_FRAMES} label changes asked {small:?} of the heap over {small_rows} rows \
+             and {large:?} over {large_rows}"
         );
     }
 }
@@ -478,7 +538,7 @@ const MOUNT_ROWS: usize = 1_000;
 struct MountCost {
     elements: usize,
     render_nodes: usize,
-    allocations: u64,
+    heap: HeapCounts,
     live_bytes: u64,
 }
 
@@ -507,7 +567,7 @@ fn mount_cost(row: fn(usize) -> BoxedView) -> MountCost {
         );
         (laid.element_node_count(), laid.render_node_count())
     };
-    let (live_before, allocations_before) = (live_bytes(), allocations());
+    let (live_before, heap_before) = (live_bytes(), HeapCounts::now());
     let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
     host.attach(&Rows { row })
         .expect("a fresh host takes a root");
@@ -515,7 +575,7 @@ fn mount_cost(row: fn(usize) -> BoxedView) -> MountCost {
     let cost = MountCost {
         elements,
         render_nodes,
-        allocations: allocations() - allocations_before,
+        heap: HeapCounts::now().since(heap_before),
         live_bytes: live_bytes().wrapping_sub(live_before),
     };
     drop(host);
@@ -541,7 +601,8 @@ fn perf_raw_button_over_text() {
     let per_row = |with: u64, without: u64| with.saturating_sub(without).div_ceil(rows);
     let elements = per_row(button.elements as u64, text.elements as u64);
     let render_nodes = per_row(button.render_nodes as u64, text.render_nodes as u64);
-    let allocations = per_row(button.allocations, text.allocations);
+    let allocations = per_row(button.heap.allocations, text.heap.allocations);
+    let reallocations = per_row(button.heap.reallocations, text.heap.reallocations);
     let bytes = per_row(button.live_bytes, text.live_bytes);
     record_counts(
         "raw_button_over_text",
@@ -549,8 +610,10 @@ fn perf_raw_button_over_text() {
             ("elements", elements),
             ("render_nodes", render_nodes),
             ("allocations", allocations),
+            ("reallocations", reallocations),
             ("bytes", bytes),
-            ("text_allocations", text.allocations / rows),
+            ("text_allocations", text.heap.allocations / rows),
+            ("text_reallocations", text.heap.reallocations / rows),
             ("text_bytes", text.live_bytes / rows),
         ],
     );
@@ -597,7 +660,11 @@ fn perf_semantics_action_over_text() {
             ),
             (
                 "allocations",
-                per_row(annotated.allocations, text.allocations),
+                per_row(annotated.heap.allocations, text.heap.allocations),
+            ),
+            (
+                "reallocations",
+                per_row(annotated.heap.reallocations, text.heap.reallocations),
             ),
             ("bytes", per_row(annotated.live_bytes, text.live_bytes)),
         ],

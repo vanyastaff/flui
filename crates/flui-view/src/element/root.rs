@@ -209,11 +209,11 @@ impl crate::view::ElementBase for RootElementImpl {
     fn build_into_views(
         &mut self,
         _owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn crate::view::View>> {
+    ) -> crate::view::ChildViews {
         self.needs_build = false;
         // This root has no *view* child to reconcile — its child is wired
         // by id (`set_child`). E3: child traversal is via the slab
         // `child_ids`, so there are no owned child views to return.
-        Vec::new()
+        crate::view::ChildViews::none()
     }
 }

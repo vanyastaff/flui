@@ -502,12 +502,10 @@ where
 
     /// Update this element with a new View of the same type.
     ///
-    /// FR-021: dispatch routes through
-    /// `crate::element::dispatch::dispatch_view_update` (`pub(crate)`)
-    /// which discriminates on `TypeId` and extracts the typed inner
-    /// via `Downcast::into_any` + `Box::downcast::<V>` — the literal
-    /// `downcast_ref::<V>()` view-type smuggling is gone from this
-    /// path entirely. On type mismatch
+    /// Dispatch routes through
+    /// `crate::element::dispatch::dispatch_view_update` (`pub(crate)`),
+    /// which discriminates on the concrete `TypeId` and only then
+    /// downcasts by reference and clones the typed view. On type mismatch
     /// the dispatch returns [`ViewUpdate::Mismatch`] without `tracing::warn!`; the
     /// caller (reconciler) replaces the element rather than
     /// continuing with stale state.
@@ -558,7 +556,7 @@ where
 
     /// Replace the stored view. Used by
     /// [`crate::element::dispatch::dispatch_view_update`] after the
-    /// `TypeId`-keyed `Box::downcast::<V>` succeeds.
+    /// `TypeId`-guarded downcast matches `V`.
     pub(crate) fn replace_view_for_dispatch(&mut self, view: V) -> V {
         std::mem::replace(&mut self.view, view)
     }

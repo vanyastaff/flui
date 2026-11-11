@@ -2,7 +2,8 @@
 # One table per scenario of crates/flui-widgets/tests/perf.rs.
 
 [full_reassemble]
-allocations = 2874
+allocated_bytes = 805359
+allocations = 2356
 builds_run = 273
 elements_rebuilt = 147
 frames_produced = 1
@@ -12,16 +13,22 @@ layout_passes = 2
 layout_roots = 135
 nodes_laid_out = 137
 nodes_painted = 134
+reallocations = 92
 semantics_nodes_updated = 42
 
 [label_change_large]
-allocations = 498
+allocated_bytes = 111400
+allocations = 462
+reallocations = 20
 
 [label_change_small]
-allocations = 498
+allocated_bytes = 111400
+allocations = 462
+reallocations = 20
 
 [list_10k_scroll_one_screen]
-allocations = 4300
+allocated_bytes = 1389590
+allocations = 4132
 builds_run = 126
 elements_rebuilt = 126
 frames_produced = 1
@@ -31,23 +38,28 @@ layout_passes = 2
 layout_roots = 128
 nodes_laid_out = 132
 nodes_painted = 134
+reallocations = 142
 semantics_nodes_updated = 81
 
 [raw_button_over_text]
-allocations = 54
+allocations = 50
 bytes = 7610
 elements = 2
+reallocations = 2
 render_nodes = 1
-text_allocations = 66
-text_bytes = 9393
+text_allocations = 61
+text_bytes = 9390
+text_reallocations = 2
 
 [semantics_action_over_text]
-allocations = 19
+allocations = 17
 bytes = 2699
 elements = 1
+reallocations = 1
 render_nodes = 1
 
 [slide_transition_tick]
+allocated_bytes = 49352
 allocations = 78
 builds_run = 0
 elements_rebuilt = 0
@@ -58,4 +70,5 @@ layout_passes = 0
 layout_roots = 0
 nodes_laid_out = 0
 nodes_painted = 0
+reallocations = 1
 semantics_nodes_updated = 0

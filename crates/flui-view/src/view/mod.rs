@@ -48,7 +48,7 @@ pub use root::{RootRenderElement, RootRenderView};
 pub use stateful::{StatefulView, ViewState};
 pub use stateful_render::{RenderViewState, StatefulRenderView};
 pub use stateless::StatelessView;
-pub use view::{ElementBase, ElementDepth, View};
+pub use view::{ChildViews, ElementBase, ElementDepth, View};
 
 // Re-export unified element types from element module
 pub use crate::element::{

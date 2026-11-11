@@ -535,8 +535,10 @@ run) for the last pump.
 10 000-row list — through a one-screen scroll and a full reassemble, a
 `SlideTransition` tick over a painted panel, and a label change over an eager
 column of 500 and of 5 000 buttons, and asserts budgets on those reports. Each
-record also carries `allocations`, the heap allocations of the measured frames
-on the test thread, counted by the target's `#[global_allocator]`.
+record also carries what the measured frames asked of the heap on the test
+thread, counted by the target's `#[global_allocator]`: `allocations` (a
+`realloc` included), `reallocations` (buffers that outgrew their capacity) and
+`allocated_bytes`.
 `cargo xtask perf` runs that target with `FLUI_PERF_OUT` set and compares every
 count with `crates/flui-widgets/perf/baseline.toml`:
 
@@ -560,7 +562,7 @@ fixed hasher, never `std`'s `RandomState`, whose tombstones decide when a table
 reallocates.
 
 A `perf_scaling_` scenario runs one change on a `small` and a `large` tree
-(`FLUI_PERF_SIZE` selects one) and asserts equal allocations on both.
+(`FLUI_PERF_SIZE` selects one) and asserts equal heap counts on both.
 `--instructions` runs each size alone under `valgrind --tool=callgrind`,
 counting only inside the target's `perf_measured`, and fails when the large
 tree costs more than 5% over the small one: a frame that clears a table the

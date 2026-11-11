@@ -286,7 +286,7 @@ where
         &mut self,
         core: &mut ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>>;
+    ) -> crate::view::ChildViews;
 
     /// Called after mount to perform behavior-specific setup.
     ///
@@ -638,9 +638,9 @@ where
         &mut self,
         core: &mut ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>> {
+    ) -> crate::view::ChildViews {
         if !super::behavior_commons::should_build_with_trace(core, "StatelessBehavior") {
-            return Vec::new();
+            return crate::view::ChildViews::none();
         }
         // Live tree-backed context inside a `build_scope` drain (PR-K). Held
         // in a local so the `&dyn BuildContext` outlives the `catch_unwind`
@@ -718,7 +718,7 @@ where
         &mut self,
         core: &mut ElementCore<V, A>,
         _owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>> {
+    ) -> crate::view::ChildViews {
         super::behavior_commons::proxy_style_views(core, "ProxyBehavior", V::child)
     }
 }
@@ -751,7 +751,7 @@ where
         &mut self,
         core: &mut ElementCore<V, A>,
         _owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>> {
+    ) -> crate::view::ChildViews {
         super::behavior_commons::proxy_style_views(core, "ParentDataBehavior", V::child)
     }
 
@@ -874,7 +874,7 @@ where
         &mut self,
         core: &mut ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>> {
+    ) -> crate::view::ChildViews {
         // Live tree-backed context inside a `build_scope` drain (PR-K). One
         // context serves both the first-build `init_state` and the `build`
         // below; it borrows the tree/sink, not `owner`/`self`, so the later
@@ -908,7 +908,7 @@ where
         }
 
         if !super::behavior_commons::should_build_with_trace(core, "StatefulBehavior") {
-            return Vec::new();
+            return crate::view::ChildViews::none();
         }
         if self.apply_pending {
             let state = &mut self.state;
@@ -1208,13 +1208,13 @@ where
         &mut self,
         core: &mut ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>> {
+    ) -> crate::view::ChildViews {
         if !core.should_build() {
             tracing::trace!(
                 "RenderBehavior::build_into_views skipped render_id={:?}",
                 self.render_id
             );
-            return Vec::new();
+            return crate::view::ChildViews::none();
         }
 
         tracing::info!(
@@ -1227,10 +1227,10 @@ where
         // (they touch the pipeline owner / render tree, not the element
         // slab); here we only surface the element-child views for the
         // slab id-reconciler to reconcile in `build_scope`.
-        let mut child_views: Vec<Box<dyn View>> = Vec::new();
+        let mut child_views = crate::view::ChildViews::none();
         if core.view().has_children() {
             core.view().visit_child_views(&mut |child_view| {
-                child_views.push(dyn_clone::clone_box(child_view));
+                child_views.push_copy_of(child_view);
             });
         }
 
@@ -1431,7 +1431,7 @@ where
         &mut self,
         core: &mut ElementCore<V, A>,
         _owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>> {
+    ) -> crate::view::ChildViews {
         // Like ProxyView, InheritedView just returns the child directly.
         super::behavior_commons::proxy_style_views(core, "InheritedBehavior", V::child)
     }
@@ -1593,7 +1593,7 @@ where
         &mut self,
         core: &mut ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>> {
+    ) -> crate::view::ChildViews {
         // Delegate to StatefulBehavior
         self.stateful.build_into_views(core, owner)
     }
