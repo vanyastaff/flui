@@ -166,7 +166,7 @@ flui-driver на лейне Windows.
 - **R16.** Паника `on_press` или слушателя фокуса не ломает менеджер, следующий Tab работает.
   Тест: `keyboard_continues_after_callback_panic` — **сделано**.
 - **R17.** Фокус, выставленный указателем, не показывает индикатор; клавиша и assistive
-  technology показывают; Material не включает overlay `Focused` после клика. Тест:
+  technology показывают; Material не включает overlay фокуса (`FocusVisible`) после клика. Тест:
   `focus_indicator_follows_input_modality` — **сделано** для `FocusRing` и `RawButton`; строки
   Material — с R4.
 

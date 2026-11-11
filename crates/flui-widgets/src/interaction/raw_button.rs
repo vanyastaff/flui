@@ -13,6 +13,7 @@ use super::focus_host::FocusConfig;
 use super::node::InteractiveNode;
 use crate::Semantics;
 use crate::support::event_callback;
+use crate::widget_state::WidgetStatesController;
 
 /// A press callback, already adapted to report its outcome.
 type PressCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
@@ -48,6 +49,7 @@ type PressCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 pub struct RawButton {
     on_press: Option<PressCallback>,
     identifier: Option<std::sync::Arc<str>>,
+    states: Option<WidgetStatesController>,
     child: BoxedView,
 }
 
@@ -67,6 +69,7 @@ impl RawButton {
         Self {
             on_press: None,
             identifier: None,
+            states: None,
             child: child.into_view().boxed(),
         }
     }
@@ -88,6 +91,19 @@ impl RawButton {
     #[must_use]
     pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
         self.identifier = Some(identifier.into());
+        self
+    }
+
+    /// Write the button's interaction states to `controller`: `Hovered`
+    /// while a pointer is inside it, `Pressed`
+    /// while a contact is down on it, `Focused` while it holds focus,
+    /// `FocusVisible` while that focus is shown, and `Disabled` without an
+    /// [`on_press`](Self::on_press). A design system draws its pressed and
+    /// focused looks from the controller; the button clears what it wrote
+    /// when it unmounts or is given another one.
+    #[must_use]
+    pub fn states_controller(mut self, controller: WidgetStatesController) -> Self {
+        self.states = Some(controller);
         self
     }
 }
@@ -160,6 +176,9 @@ impl StatelessView for RawButton {
         // takes effect on the next press.
         if let Some(handler) = self.on_press.clone() {
             node = node.on_tap(handler);
+        }
+        if let Some(states) = self.states.clone() {
+            node = node.states(states);
         }
         node.semantics(semantics)
     }

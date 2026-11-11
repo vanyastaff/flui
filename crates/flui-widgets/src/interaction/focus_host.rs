@@ -20,6 +20,7 @@ use std::{
 };
 
 use flui_foundation::Subscription;
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::focus::{
     FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration,
     FocusTraversalOverrides, KeyEventHandler, KeyEventResult, RectProvider,
@@ -385,6 +386,10 @@ impl FocusHost {
             let now_focused = node.has_focus();
             let now_shown = node.has_visible_focus();
             drop(node);
+            // The two edges and the reveal each finish whatever the one
+            // before it did: a handler is user code, and one that panics
+            // must not leave the shown focus unreported (ADR-0281).
+            let mut failure = FirstPanic::new();
             if shared.was_focused.replace(now_focused) != now_focused {
                 // FocusNode clones its listener list before dispatch, so
                 // user code may synchronously move focus. Clone the
@@ -392,7 +397,7 @@ impl FocusHost {
                 // same re-entrancy reason.
                 let handler = shared.on_focus_change.borrow().clone();
                 if let Some(handler) = handler {
-                    writer.write(|cx| handler(cx, now_focused));
+                    failure.contain(|| writer.write(|cx| handler(cx, now_focused)));
                 }
             }
             // Recorded before user code runs, so a notification it causes
@@ -401,15 +406,16 @@ impl FocusHost {
             if was_shown != now_shown {
                 let handler = shared.on_visible_focus_change.borrow().clone();
                 if let Some(handler) = handler {
-                    writer.write(|cx| handler(cx, now_shown));
+                    failure.contain(|| writer.write(|cx| handler(cx, now_shown)));
                 }
             }
             // Shown focus is never left where the user cannot see it
             // (WCAG 2.4.11): on the edge into it, the scopes above bring the
             // node into view.
             if now_shown && !was_shown {
-                shared.reveal.reveal();
+                failure.contain(|| shared.reveal.reveal());
             }
+            failure.resume();
         })
     }
 

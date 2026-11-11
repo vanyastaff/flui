@@ -7,7 +7,7 @@
 
 use std::{
     borrow::Cow,
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     collections::VecDeque,
     num::NonZeroU64,
     rc::{Rc, Weak},
@@ -445,24 +445,29 @@ impl FocusNodeRegistration {
                         FocusNodeRegistrationKind::KeyHandler => {
                             node.on_key_event.is_current(self.generation)
                         }
-                        FocusNodeRegistrationKind::KeyCancelHandler => {
-                            node.on_key_cancel.is_current(self.generation)
-                        }
+                        FocusNodeRegistrationKind::KeyCancelHandler => node
+                            .rare
+                            .get()
+                            .is_some_and(|rare| rare.on_key_cancel.is_current(self.generation)),
                         FocusNodeRegistrationKind::RectProvider => {
                             node.rect_provider.is_current(self.generation)
                         }
                         FocusNodeRegistrationKind::Context => {
                             node.context.is_current(self.generation)
                         }
-                        FocusNodeRegistrationKind::TraversalGroup => {
-                            node.traversal_group.is_current(self.generation)
-                        }
+                        FocusNodeRegistrationKind::TraversalGroup => node
+                            .rare
+                            .get()
+                            .is_some_and(|rare| rare.traversal_group.is_current(self.generation)),
                         FocusNodeRegistrationKind::TraversalOverrides => {
-                            node.traversal_overrides_generation.get() == self.generation
+                            node.rare.get().is_some_and(|rare| {
+                                rare.traversal_overrides_generation.get() == self.generation
+                            })
                         }
-                        FocusNodeRegistrationKind::TraversalEntry => {
-                            node.traversal_entry.is_current(self.generation)
-                        }
+                        FocusNodeRegistrationKind::TraversalEntry => node
+                            .rare
+                            .get()
+                            .is_some_and(|rare| rare.traversal_entry.is_current(self.generation)),
                     }
             })
     }
@@ -489,7 +494,9 @@ impl FocusNodeRegistration {
                 node.on_key_event.clear(self.generation, &node);
             }
             FocusNodeRegistrationKind::KeyCancelHandler => {
-                node.on_key_cancel.clear(self.generation, &node);
+                if let Some(rare) = node.rare.get() {
+                    rare.on_key_cancel.clear(self.generation, &node);
+                }
             }
             FocusNodeRegistrationKind::RectProvider => {
                 node.rect_provider.clear(self.generation, &node);
@@ -498,15 +505,21 @@ impl FocusNodeRegistration {
                 node.context.clear(self.generation, &node);
             }
             FocusNodeRegistrationKind::TraversalGroup => {
-                node.traversal_group.clear(self.generation, &node);
+                if let Some(rare) = node.rare.get() {
+                    rare.traversal_group.clear(self.generation, &node);
+                }
             }
             FocusNodeRegistrationKind::TraversalOverrides => {
-                if node.traversal_overrides_generation.get() == self.generation {
-                    *node.traversal_overrides.borrow_mut() = FocusTraversalOverrides::default();
+                if let Some(rare) = node.rare.get()
+                    && rare.traversal_overrides_generation.get() == self.generation
+                {
+                    *rare.traversal_overrides.borrow_mut() = FocusTraversalOverrides::default();
                 }
             }
             FocusNodeRegistrationKind::TraversalEntry => {
-                node.traversal_entry.clear(self.generation, &node);
+                if let Some(rare) = node.rare.get() {
+                    rare.traversal_entry.clear(self.generation, &node);
+                }
             }
         }
     }
@@ -528,6 +541,28 @@ impl std::fmt::Debug for FocusNodeRegistration {
             .finish_non_exhaustive()
     }
 }
+/// What few focus nodes register. A node makes room for these with the
+/// first registration of one and keeps it: a registration's generation
+/// lives here, and outlives the value it names.
+struct RareRegistrations {
+    on_key_cancel: Registered<KeyCancelHandler>,
+    traversal_entry: Registered<TraversalEntry>,
+    traversal_group: Registered<GroupConfig>,
+    traversal_overrides: RefCell<FocusTraversalOverrides>,
+    traversal_overrides_generation: Cell<u64>,
+}
+
+impl RareRegistrations {
+    fn new() -> Self {
+        Self {
+            on_key_cancel: Registered::new(),
+            traversal_entry: Registered::new(),
+            traversal_group: Registered::new(),
+            traversal_overrides: RefCell::new(FocusTraversalOverrides::default()),
+            traversal_overrides_generation: Cell::new(0),
+        }
+    }
+}
 
 /// A node in the owner-local focus tree.
 pub struct FocusNode {
@@ -540,7 +575,6 @@ pub struct FocusNode {
     descendants_are_focusable: Cell<bool>,
     scope_owner: RefCell<Option<Weak<FocusScopeNode>>>,
     on_key_event: Registered<KeyEventHandler>,
-    on_key_cancel: Registered<KeyCancelHandler>,
     listeners: ChangeNotifier,
     rect: Cell<Rect<f64>>,
     rect_provider: Registered<RectProvider>,
@@ -553,11 +587,8 @@ pub struct FocusNode {
     widget_owned: Cell<bool>,
     /// A widget-owned node its widget let go: requests answer `Stale`.
     retired: Cell<bool>,
-    traversal_entry: Registered<TraversalEntry>,
     attachment_generation: Cell<u64>,
-    traversal_group: Registered<GroupConfig>,
-    traversal_overrides: RefCell<FocusTraversalOverrides>,
-    traversal_overrides_generation: Cell<u64>,
+    rare: OnceCell<Box<RareRegistrations>>,
 }
 
 /// A node property that registrations install: the value, and the generation
@@ -705,7 +736,6 @@ impl FocusNode {
             descendants_are_focusable: Cell::new(true),
             scope_owner: RefCell::new(scope_owner),
             on_key_event: Registered::new(),
-            on_key_cancel: Registered::new(),
             listeners: ChangeNotifier::new(),
             rect: Cell::new(Rect::ZERO),
             rect_provider: Registered::new(),
@@ -715,11 +745,8 @@ impl FocusNode {
             pending_focus_request: Cell::new(None),
             widget_owned: Cell::new(false),
             retired: Cell::new(false),
-            traversal_entry: Registered::new(),
             attachment_generation: Cell::new(1),
-            traversal_group: Registered::new(),
-            traversal_overrides: RefCell::new(FocusTraversalOverrides::default()),
-            traversal_overrides_generation: Cell::new(0),
+            rare: OnceCell::new(),
         })
     }
 
@@ -929,12 +956,17 @@ impl FocusNode {
         self: &Rc<Self>,
         handler: KeyCancelHandler,
     ) -> FocusNodeRegistration {
-        let generation = self.on_key_cancel.write(Some(handler), self);
+        let generation = self.rare().on_key_cancel.write(Some(handler), self);
         FocusNodeRegistration::new(
             self,
             generation,
             FocusNodeRegistrationKind::KeyCancelHandler,
         )
+    }
+
+    /// The rarely used registrations, made on first use.
+    fn rare(&self) -> &RareRegistrations {
+        self.rare.get_or_init(|| Box::new(RareRegistrations::new()))
     }
 
     fn next_property_generation(generation: &Cell<u64>) -> u64 {
@@ -951,9 +983,10 @@ impl FocusNode {
         self: &Rc<Self>,
         overrides: FocusTraversalOverrides,
     ) -> FocusNodeRegistration {
-        let generation = Self::next_property_generation(&self.traversal_overrides_generation);
+        let rare = self.rare();
+        let generation = Self::next_property_generation(&rare.traversal_overrides_generation);
         if !self.is_closed() {
-            *self.traversal_overrides.borrow_mut() = overrides;
+            *rare.traversal_overrides.borrow_mut() = overrides;
         }
         FocusNodeRegistration::new(
             self,
@@ -974,15 +1007,17 @@ impl FocusNode {
             direction,
             edge,
         };
-        let generation = self.traversal_group.write(Some(group), self);
+        let generation = self.rare().traversal_group.write(Some(group), self);
         FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::TraversalGroup)
     }
 
     pub(super) fn traversal_group_snapshot(&self) -> Option<GroupConfig> {
-        self.traversal_group.get()
+        self.rare.get()?.traversal_group.get()
     }
     pub(super) fn traversal_group_edge(&self) -> Option<TraversalEdgeBehavior> {
-        self.traversal_group
+        self.rare
+            .get()?
+            .traversal_group
             .value
             .borrow()
             .as_ref()
@@ -992,7 +1027,11 @@ impl FocusNode {
         &self,
         direction: TraversalDirection,
     ) -> Option<Rc<FocusNode>> {
-        self.traversal_overrides.borrow().target(direction)
+        self.rare
+            .get()?
+            .traversal_overrides
+            .borrow()
+            .target(direction)
     }
     pub(super) fn traversal_close_mode(&self) -> CloseMode {
         self.close_mode()
@@ -1218,12 +1257,14 @@ impl FocusNode {
         self: &Rc<Self>,
         entry: TraversalEntry,
     ) -> FocusNodeRegistration {
-        let generation = self.traversal_entry.write(Some(entry), self);
+        let generation = self.rare().traversal_entry.write(Some(entry), self);
         FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::TraversalEntry)
     }
 
     pub(super) fn is_traversal_unit(&self) -> bool {
-        self.traversal_entry.value.borrow().is_some()
+        self.rare
+            .get()
+            .is_some_and(|rare| rare.traversal_entry.value.borrow().is_some())
     }
 
     /// The outermost traversal unit containing this node (itself included)
@@ -1246,7 +1287,7 @@ impl FocusNode {
     /// otherwise this node. The entry is user code: it runs with no borrow
     /// held, and a panic in it lands on this node before propagating.
     pub(crate) fn entry_target(self: &Rc<Self>, failure: &mut FocusClosePanic) -> Rc<FocusNode> {
-        let entry = self.traversal_entry.get();
+        let entry = self.rare.get().and_then(|rare| rare.traversal_entry.get());
         let Some(entry) = entry else {
             return Rc::clone(self);
         };
@@ -1316,7 +1357,7 @@ impl FocusNode {
     /// Tell this node's [`KeyCancelHandler`] that the key `press` took was
     /// cancelled. A panic propagates after the handler is retired.
     pub(super) fn handle_key_cancel(&self, press: &KeyEvent) {
-        let handler = self.on_key_cancel.get();
+        let handler = self.rare.get().and_then(|rare| rare.on_key_cancel.get());
         let Some(handler) = handler else {
             return;
         };
@@ -1725,12 +1766,17 @@ impl FocusNode {
             // terminal state and outgoing ownership have been committed.
             node.children.borrow_mut().clear();
             let key_handler = node.on_key_event.take();
-            let key_cancel = node.on_key_cancel.take();
+            let rare = node.rare.get();
+            let key_cancel = rare.and_then(|rare| rare.on_key_cancel.take());
             let rect_provider = node.rect_provider.take();
             let context = node.context.take();
-            let group_policy = node.traversal_group.take().map(|group| group.policy);
-            *node.traversal_overrides.borrow_mut() = FocusTraversalOverrides::default();
-            let entry = node.traversal_entry.take();
+            let group_policy = rare
+                .and_then(|rare| rare.traversal_group.take())
+                .map(|group| group.policy);
+            if let Some(rare) = rare {
+                *rare.traversal_overrides.borrow_mut() = FocusTraversalOverrides::default();
+            }
+            let entry = rare.and_then(|rare| rare.traversal_entry.take());
             let policy = node.as_scope().map(|scope| {
                 scope.pending_first_focus.set(false);
                 scope.focus_history.borrow_mut().clear();

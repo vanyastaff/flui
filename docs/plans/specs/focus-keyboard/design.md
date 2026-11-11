@@ -80,10 +80,11 @@
 
 - `ThemeData::focus_ring` (из `ColorScheme`), `Theme` ставит `DefaultFocusRingStyle` из него, и
   `RawButton` под темой получает её цвета без зависимости от Material.
-- `InkWell` ставит `Focused` = **видимый** фокус (`FocusNode::has_visible_focus`): после клика
-  нет ни overlay, ни гало ни у одного потребителя.
+- `InkWell` ставит `Focused`, пока держит фокус, и `FocusVisible`, пока фокус **видимый**
+  (`FocusNode::has_visible_focus`); overlay и гало читают `FocusVisible` (ADR-0322 §3): после
+  клика нет ни overlay, ни гало ни у одного потребителя.
 - Индикатор ровно один: кнопки (Text/Elevated/Filled/Outlined/Icon/FAB), Tabs, NavigationBar —
-  `FocusRing`, уровень `Focused` убирается из их overlay-рамп; Checkbox/Switch/Radio оставляют
+  `FocusRing`, уровень фокуса убирается из их overlay-рамп; Checkbox/Switch/Radio оставляют
   M3-гало и строят `InkWell` без кольца (`pub(crate)`). `InputDecorator` не меняется: поле
   показывает фокус всегда.
 - Отвергнуто: флаг на каждом виджете (N копий одного правила); overlay как индикатор (D2:
@@ -119,7 +120,7 @@ Cmd+[, конфликта нет. Строка «Alt+Left из поля» доб
 the focusable list»** — закреплённый ребёнок меряется вне полосы, в геометрию и якорь не входит,
 виден семантике, явно пропущен paint и hit-test; граница — полоса + cache + число аренд `Pin`;
 список — одна остановка Tab через единицу обхода. `Superseded-by` в ADR-0056 (в части `Pin`).
-Правило видимого `Focused` в Material дописывается в поправку ADR-0079 тем же PR, что его
+Правило видимого фокуса в Material (`FocusVisible`) дописывается в поправку ADR-0079 тем же PR, что его
 вводит.
 
 ## Работы
