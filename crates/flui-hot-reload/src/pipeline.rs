@@ -196,7 +196,8 @@ impl PluginPipeline {
                 // unmeasured tree; constraints set once at mount would keep the
                 // first size after a resize.
                 guard.set_root_constraints(Some(BoxConstraints::tight(Size::new(width, height))));
-                let painted = match guard.run_frame_in_place(&mut scene.writer()) {
+                let mut writer = scene.writer();
+                let painted = match guard.run_frame_in_place(&mut writer) {
                     Ok(painted) => painted,
                     Err(e) => {
                         log(&format!("draw_frame: pipeline failed: {e:?}"));
@@ -205,6 +206,18 @@ impl PluginPipeline {
                 };
                 if !painted {
                     return None;
+                }
+                // The scene's root slots the frame, as a presentation's does: a
+                // node no slot reaches is unattached, and its leaders are
+                // invisible to followers and to the pipeline's leader watches.
+                if let Some(frame) = guard.scene_frame_node() {
+                    let mut root = flui_rendering::layer::BoundaryContent::builder();
+                    root.slot(frame);
+                    let node = writer.current().root();
+                    writer.push(flui_rendering::layer::SceneOp::Publish {
+                        node,
+                        content: std::sync::Arc::new(root.finish()),
+                    });
                 }
                 // The key only tells a resize apart: whole pixels, clamped to
                 // the range `u32` holds, a non-finite size as zero.
@@ -338,6 +351,46 @@ mod tests {
             key.current_element(),
             KeyLookup::NoActiveRuntime,
             "plugin scope must not leak"
+        );
+    }
+
+    /// The plugin's scene root slots the frame, so a leader the frame
+    /// publishes is attached: the pipeline's leader watches see it.
+    ///
+    /// Red-check: apply the patch without republishing the root (the watch
+    /// reads no leader).
+    #[test]
+    fn a_plugin_frame_publishes_its_leaders_attached() {
+        use flui_objects::{RenderLeaderLayer, RenderSizedBox};
+        use flui_rendering::layer::LayerLink;
+        use flui_rendering::testing::{box_node, tree};
+
+        let root = ProbeRoot {
+            key: GlobalKey::<()>::new(),
+        };
+        let mut pipeline =
+            PluginPipeline::mount(root, 100.0, 100.0, TextContextHandle::standalone());
+        let _built = pipeline.draw_frame(100.0, 100.0);
+        let link = LayerLink::new();
+        pipeline.pipeline_owner.with_mut(|owner| {
+            let (leader, _) = tree::mount(
+                owner,
+                box_node(RenderLeaderLayer::new(link))
+                    .child(box_node(RenderSizedBox::fixed(10.0, 20.0))),
+            );
+            owner.set_root_id(Some(leader));
+        });
+        let scheduler = flui_scheduler::UpdateScheduler::new();
+        let frame = flui_scheduler::OwnerFrame::try_new(&scheduler)
+            .expect("the scheduler has no live owner frame");
+        let watch = pipeline
+            .pipeline_owner
+            .watch_leader(link, frame.post_frame_handle());
+
+        let _scene = pipeline.draw_frame(100.0, 100.0);
+        assert!(
+            watch.geometry().is_some(),
+            "the leader the plugin frame painted is attached"
         );
     }
 }

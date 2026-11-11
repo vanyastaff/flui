@@ -156,7 +156,17 @@ impl PipelineOwner<PaintPhase> {
             reason = "an unchanged ratio is bit-identical, not approximately equal"
         )]
         let ratio_changed = self.retained_pixel_ratio != self.device_pixel_ratio;
-        let unapplied = self.staged_scene.take().is_some();
+        // A patch never reported applied holds the only copies of the contents
+        // it recorded: the scene dropped its buffered operations when this
+        // patch opened. They go to the writer, which drops them outside this
+        // owner's borrow: their annotations are user values.
+        let unapplied = match self.staged_scene.take() {
+            Some(staged) => {
+                self.discard_staged(staged, writer);
+                true
+            }
+            None => false,
+        };
         let renewed = self
             .scene_frame
             .as_ref()
@@ -1343,6 +1353,23 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
         }
         // Queued, not run: listeners run in the post-frame lane.
         self.leader_watches.check(version)
+    }
+
+    /// Gives up a patch that was never applied: its contents go to `writer`,
+    /// its collections back to the scratch.
+    fn discard_staged(&mut self, staged: StagedScene, writer: &mut SceneWriter<'_>) {
+        let StagedScene {
+            mut records,
+            placed,
+            stale,
+            ..
+        } = staged;
+        for record in records.drain().filter_map(|(_, record)| record) {
+            writer.discard(record.content);
+        }
+        if let Some(scratch) = self.paint_scratch.as_mut() {
+            scratch.recycle_staged(records, placed, stale);
+        }
     }
 
     /// The node this owner publishes its frame at, which the scene's root

@@ -341,6 +341,9 @@ pub struct SceneOwner {
     current: SceneVersion,
     slots: Slots,
     ops: Vec<SceneOp>,
+    /// Contents a painter gave up through [`SceneWriter::discard`], held
+    /// until the next patch opens.
+    discarded: Vec<Arc<BoundaryContent>>,
     scratch: Scratch,
     /// The surface the last patch was applied for.
     surface: Option<SurfaceKey>,
@@ -401,6 +404,7 @@ impl SceneOwner {
             current,
             slots,
             ops: Vec::new(),
+            discarded: Vec::new(),
             scratch: Scratch::default(),
             surface: None,
             patch_damage: DamageRegion::Full(FullReason::FirstFrame),
@@ -455,12 +459,18 @@ impl SceneOwner {
         &self.current
     }
 
-    /// Opens a patch: clears the operation buffer, and spends the ids minted
-    /// for a patch that was never applied.
+    /// Opens a patch: clears the operation buffer, spends the ids minted for
+    /// a patch that was never applied, and drops what the last painter
+    /// discarded.
+    ///
+    /// The contents dropped here hold annotations, whose `Drop` is user code:
+    /// call it while holding no borrow that code may need, as a frame driver
+    /// does before it lends the writer to a pipeline.
     pub fn writer(&mut self) -> SceneWriter<'_> {
         self.slots.release_unused();
         // A patch buffered and never applied drops after the ledger settles.
         self.ops.clear();
+        self.discarded.clear();
         SceneWriter { owner: self }
     }
 
@@ -542,6 +552,7 @@ impl SceneOwner {
             SceneOp::Publish { content, .. } => Some(content),
             SceneOp::Place { .. } | SceneOp::Retire { .. } => None,
         }));
+        contents.extend(self.discarded.drain(..));
         ReleasedContents {
             contents,
             version: Some(replaced),
@@ -779,6 +790,15 @@ impl SceneWriter<'_> {
     /// patch is applied.
     pub fn push(&mut self, op: SceneOp) {
         self.owner.ops.push(op);
+    }
+
+    /// Hands the owner a content the painter recorded for a patch that was
+    /// never applied and now gives up. The owner drops it when the next
+    /// patch opens ([`SceneOwner::writer`]) or the owner renews, outside the
+    /// painter's borrows: its annotations are user values whose `Drop` is
+    /// user code.
+    pub fn discard(&mut self, content: Arc<BoundaryContent>) {
+        self.owner.discarded.push(content);
     }
 
     /// The version the patch applies to.

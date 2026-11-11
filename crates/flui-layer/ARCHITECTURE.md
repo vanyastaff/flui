@@ -257,7 +257,9 @@ buffers. An acknowledgement moves forward only and ignores another lineage or a 
 applied. `apply` (in `Applied::released`), `completed` and `renew` return what they release as
 `ReleasedContents`, the version an apply replaced and the contents a fold let go of included, which a caller
 holding the owner in a `RefCell` passes to an `Outbox`: a released annotation value's destructor is
-user code and finds the owner free.
+user code and finds the owner free. A painter that gives up contents it recorded for a patch never
+applied hands them to `SceneWriter::discard`; the owner drops them when `writer` opens the next
+patch or `renew` returns them, both outside the painter's borrows.
 
 Pinned by `layer_it`: `pending_log_contract`, `scene_patch_damage`, `patch_damage_covers_diff_damage` (random patches,
 whose damage must cover what `LayerDiffer` finds between the flattened versions),

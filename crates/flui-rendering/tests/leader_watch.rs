@@ -336,3 +336,64 @@ fn a_replaced_version_drops_outside_the_pipeline_borrow() {
         "each annotation dropped with the pipeline free: {drops:?}"
     );
 }
+
+/// A patch painted and never reported applied holds the only copy of what it
+/// recorded once the annotation it read is replaced. The next paint gives it
+/// up; the annotation drops when the next patch opens, with the pipeline
+/// free.
+///
+/// Red-check: drop the unapplied patch's records inside the paint pass (the
+/// drop finds the pipeline borrowed).
+#[test]
+fn an_unapplied_patch_drops_outside_the_pipeline_borrow() {
+    use flui_objects::{RenderAnnotatedRegion, RenderRepaintBoundary};
+    use std::sync::Arc;
+
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    // Under a boundary of its own, so its content is a record the patch keeps.
+    let (root, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(RenderAnnotatedRegion::new(Arc::new(DropProbe)))
+                .label("region")
+                .child(box_node(RenderSizedBox::fixed(10.0, 10.0))),
+        ),
+    );
+    owner.set_root_id(Some(root));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(50.0, 50.0))));
+    let region = registry.get("region").expect("labelled");
+    let cell = PipelineCell::new(owner);
+    let mut host = SceneHost::new();
+    WATCHED.with(|watched| *watched.borrow_mut() = (Some(cell.downgrade()), Vec::new()));
+    let replace = || {
+        cell.with_mut(|owner| {
+            update_render_object::<RenderAnnotatedRegion, _>(owner, region, |region| {
+                region.set_value(Arc::new(DropProbe))
+            });
+        });
+    };
+
+    let (painted, _) = host.drive_cell(&cell, |writer| cell.run_frame(writer));
+    painted.expect("the frame runs");
+    // Painted and never applied: the patch alone holds this annotation once
+    // the region reads another.
+    replace();
+    cell.run_frame(&mut host.owner_mut().writer())
+        .expect("the frame runs");
+    replace();
+    cell.run_frame(&mut host.owner_mut().writer())
+        .expect("the frame runs");
+    // Opening the next patch drops what the last painter discarded.
+    host.owner_mut().writer();
+
+    let drops = WATCHED.with(|watched| std::mem::take(&mut watched.borrow_mut().1));
+    WATCHED.with(|watched| watched.borrow_mut().0 = None);
+    assert!(
+        !drops.is_empty(),
+        "the unapplied patch's annotation dropped"
+    );
+    assert!(
+        drops.iter().all(|free| *free),
+        "each annotation dropped with the pipeline free: {drops:?}"
+    );
+}
