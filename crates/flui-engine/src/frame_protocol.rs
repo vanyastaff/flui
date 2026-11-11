@@ -217,86 +217,60 @@ impl FrameProtocol {
         scene: &flui_layer::Scene,
         size: (u32, u32),
     ) {
-        let Some(mut damage) = self.damage.damage_rect() else {
+        use flui_foundation::geometry::Matrix4;
+        use flui_layer::{DamageRect, DamageRegion, Layer, Region};
+
+        let Some(damage) = self.damage.damage_rect() else {
             return;
         };
-        let viewport = Rect::from_xywh(0.0, 0.0, f64::from(size.0), f64::from(size.1));
+        let region = match DamageRect::try_covering(damage, size) {
+            Ok(Some(rect)) => DamageRegion::Region(Region::new(rect)),
+            Ok(None) => return,
+            Err(_) => {
+                self.damage.mark_full_repaint();
+                return;
+            }
+        };
         let tree = scene.tree();
-        let mut stack = vec![(scene.root(), glam::DMat4::IDENTITY)];
-        let mut footprints = Vec::new();
+        let mut stack = vec![(scene.root(), Matrix4::IDENTITY)];
+        let mut closures = Vec::new();
         while let Some((id, parent)) = stack.pop() {
             let Some(node) = tree.get(id) else {
                 continue;
             };
             let layer = node.layer();
             let transform = match layer {
-                flui_layer::Layer::Transform(layer) => {
-                    parent * glam::DMat4::from_cols_array(&layer.transform().m)
-                }
-                flui_layer::Layer::Follower(_) => {
+                Layer::Transform(layer) => parent * *layer.transform(),
+                Layer::Follower(_) => {
                     let Some(follower) = flui_layer::resolve_follower_transform(tree, id) else {
                         continue;
                     };
-                    parent * glam::DMat4::from_cols_array(&follower.m)
+                    parent * follower
                 }
                 _ => {
                     let offset = layer.local_translation();
-                    parent
-                        * glam::DMat4::from_translation(glam::DVec3::new(offset.dx, offset.dy, 0.0))
+                    parent * Matrix4::translation(offset.dx, offset.dy, 0.0)
                 }
             };
-            if let flui_layer::Layer::BackdropFilter(layer) = layer {
-                let Ok(affine) = crate::clip_geometry::ValidatedAffine::try_new(transform) else {
-                    self.damage.mark_full_repaint();
-                    return;
-                };
-                let Ok(output) = affine.map_bounds(layer.bounds()) else {
-                    self.damage.mark_full_repaint();
-                    return;
-                };
-                if let Some(output) = output.and_then(|bounds| bounds.intersect(&viewport)) {
-                    let flui_painting::paint::ImageFilter::Blur { sigma_x, sigma_y } =
-                        layer.filter()
-                    else {
-                        self.damage.mark_full_repaint();
-                        return;
-                    };
-                    // Frobenius norm bounds each transformed axis. Twice sigma
-                    // bounds the implemented ceil(sqrt(3)*sigma) kernel, with
-                    // another pixel for f32 conversion and outward rounding.
-                    // Ignore clips/isolation here: extra repaint is safe, missing
-                    // input is not. Replay still admits its exact read footprint.
-                    let scale = transform.x_axis.truncate().length_squared()
-                        + transform.y_axis.truncate().length_squared();
-                    let radius = (2.0 * sigma_x.max(*sigma_y) * scale.sqrt()).ceil() + 1.0;
-                    if !radius.is_finite() || *sigma_x < 0.0 || *sigma_y < 0.0 {
-                        self.damage.mark_full_repaint();
-                        return;
-                    }
-                    if let Some(input) = output.expand(radius).intersect(&viewport) {
-                        footprints.push((output, input));
-                    }
-                }
+            // Clips and isolation are ignored: extra repaint is safe, a missing
+            // input is not. Replay still admits its exact read footprint.
+            if let Layer::BackdropFilter(_) = layer {
+                closures.push(flui_layer::read_closure(layer, &transform, Rect::ZERO));
             }
             stack.extend(node.children().iter().map(|&child| (child, transform)));
         }
-        // Growing one read region can expose a second filter. Reach a fixed
-        // point before the partial clear and any recording, not next frame.
-        for _ in 0..64 {
-            let before = damage;
-            for (output, input) in &footprints {
-                if output.intersects(&damage) || input.intersects(&damage) {
-                    damage = damage.union(input);
-                }
+        // Growing one read region can expose a second filter: the fixed point
+        // is reached before the partial clear and any recording, not next
+        // frame (ADR-0304 §6).
+        // The damage keeps its own rect when no closure joined it: the
+        // covering rect's outward rounding is not damage.
+        match flui_layer::close_over(region, closures, size) {
+            DamageRegion::Region(closed) if DamageRegion::Region(closed) != region => {
+                self.damage.mark_dirty(closed.bounds().to_rect());
             }
-            if damage == before {
-                self.damage.mark_dirty(damage);
-                return;
-            }
+            DamageRegion::Region(_) | DamageRegion::Unchanged => {}
+            DamageRegion::Full(_) => self.damage.mark_full_repaint(),
         }
-        // An adversarial chain must not turn planning into quadratic work.
-        // A full repaint reconstructs every dependency without further scans.
-        self.damage.mark_full_repaint();
     }
 
     /// Runs `plan` (not [`FramePlan::Skip`]) against `surface`, whose texture
