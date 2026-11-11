@@ -245,8 +245,9 @@ pub use view::{
     ErrorView, ErrorViewBuilder, FieldMask, FieldSet, FrameworkError, InheritedData,
     InheritedElement, InheritedView, IntoElement, IntoView, Memo, ParentDataConfig,
     ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement, RenderObjectContext,
-    RenderObjectContextError, RenderView, RootRenderElement, RootRenderView, StatefulElement,
-    StatefulView, StatelessElement, StatelessView, View, ViewExt, ViewState,
+    RenderObjectContextError, RenderView, RenderViewState, RootRenderElement, RootRenderView,
+    StatefulElement, StatefulRenderView, StatefulView, StatelessElement, StatelessView, View,
+    ViewExt, ViewState,
 };
 
 // ============================================================================

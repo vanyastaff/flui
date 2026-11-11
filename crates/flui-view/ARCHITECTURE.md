@@ -27,6 +27,7 @@ The behavior families, each at one arity:
 | `AnimatedBehavior<V>` | `Single` | composes `StatefulBehavior<V>` |
 | `ParentDataBehavior` | `Single` | proxy-shaped parent-data tag |
 | `RenderBehavior<V>` | `Variable` | owns the render object |
+| `StatefulRenderBehavior<V>` | `Variable` | owns `V::State` and the render object the view creates; the state configures the object, publishes and builds the one child (ADR-0322 §4) |
 
 `Leaf` and `Optional` are render-object arity (`flui_foundation::Arity`), not
 element arity: no element instantiates them. The type aliases in `element/mod.rs`
@@ -39,6 +40,7 @@ pub type StatefulElement<V>  = Element<V, Single, StatefulBehavior<V>>;
 pub type InheritedElement<V> = Element<V, Single, InheritedBehavior<V>>;
 pub type AnimatedElement<V>  = Element<V, Single, AnimatedBehavior<V>>;
 pub type RenderElement<V>    = Element<V, Variable, RenderBehavior<V>>;
+pub type StatefulRenderElement<V> = Element<V, Variable, StatefulRenderBehavior<V>>;
 ```
 
 The reconciler stores each element as an `ElementKind` closed union —
@@ -358,7 +360,8 @@ mapped every consumer family of such a seam, including the hard cases
 **The live paths, family by family:**
 
 - *Adopt/insert* — the freshly mounted element adopts itself:
-  `RenderBehavior::on_mount` reads the `parent_render_id` propagated
+  the behavior's `on_mount` (`render_custody::mount`, shared by `RenderBehavior` and
+  `StatefulRenderBehavior`) reads the `parent_render_id` propagated
   BEFORE mount (`ElementTree::insert` reads the parent's
   `child_render_id()` off the node and hands it to the child via
   `set_parent_render_id` before `mount` runs; the pass-through that
@@ -368,7 +371,7 @@ mapped every consumer family of such a seam, including the hard cases
   `PipelineOwner::adopt_render_child`, which writes both link directions
   in one call. The sliver-slot half of adoption rides the
   same propagation and is stamped at adoption time.
-- *Remove* — `RenderBehavior::on_unmount` → `remove_render_object_from_tree`
+- *Remove* — `render_custody::unmount` → `remove_render_object_from_tree`
   (the dispose cascade), with keyed soft-remove relocation tokens for
   children that are merely leaving view rather than dying.
 - *Move/reorder* — no per-child mutation at all: a post-build batch pass,
@@ -380,7 +383,7 @@ mapped every consumer family of such a seam, including the hard cases
   carried through the inactive-element record).
 
 **Replacement guarantee:** the loud half-state gate on the LIVE adoption
-path — `RenderBehavior::on_mount`'s diagnostic when an element-tree parent
+path — `render_custody::mount`'s diagnostic when an element-tree parent
 with an active `PipelineOwner` leaves the chain with no render ancestor,
 plus its debug-build refusal test
 (`crates/flui-view/tests/orphaned_render_mount.rs`).
