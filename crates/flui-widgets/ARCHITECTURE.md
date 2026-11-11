@@ -2650,7 +2650,7 @@ of `R` itself; the parser and delegate are the route type. The page per value
 is a `PageRoute<()>` named with the value's path, on a `Navigator` the router
 builds, so transitions, heroes and `PopScope` are unchanged.
 `Router::<R>::handle` takes `&dyn LifecycleContext` (ADR-0078), so a handle
-is acquired in `init_state`/`did_change_dependencies` and resolves the
+is acquired in `create_state`/`init_state`/`did_change_dependencies` and resolves the
 **nearest** `Router<R>`, as `Navigator`'s handle does. The page builder
 and transitions are shared with every page, so a parent rebuild reaches the
 pages already on the stack; a transition duration is fixed when a page is

@@ -37,18 +37,14 @@ struct CounterState {
 impl StatefulView for Counter {
     type State = CounterState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         CounterState {
-            count: Signal::default(),
+            count: ctx.signal(0),
         }
     }
 }
 
 impl ViewState<Counter> for CounterState {
-    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
-        self.count = ctx.signal(0);
-    }
-
     fn build(&self, view: &Counter, ctx: &dyn flui_view::BuildContext) -> impl IntoView {
         let count = self.count;
         let value = count.get(ctx);

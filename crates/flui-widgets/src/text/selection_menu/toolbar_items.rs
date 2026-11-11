@@ -202,7 +202,7 @@ impl View for ToolbarItems {
 impl StatefulView for ToolbarItems {
     type State = ToolbarItemsState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // `init_state` is not handed the view, so the controller it listens
         // to is copied here.
         ToolbarItemsState {

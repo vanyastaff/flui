@@ -3,6 +3,7 @@
 //! presentation-owned arena through the hit-test + binding dispatch path. The
 //! binding alone closes and sweeps the shared arena.
 
+use flui_view::LifecycleContext;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -479,7 +480,7 @@ struct SwitchingScopeState {
 
 impl flui_view::StatefulView for SwitchingScope {
     type State = SwitchingScopeState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SwitchingScopeState {
             claimed: self.claimed.clone(),
             handles: None,
@@ -707,7 +708,7 @@ struct RebuildingState {
 
 impl flui_view::StatefulView for Rebuilding {
     type State = RebuildingState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         RebuildingState {
             revision: self.revision.clone(),
         }
@@ -827,7 +828,7 @@ struct ComposedDetectorState {
 
 impl flui_view::StatefulView for ComposedDetector {
     type State = ComposedDetectorState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ComposedDetectorState { branch: None }
     }
 }
@@ -899,7 +900,7 @@ struct ConfiguredGestureState {
 impl flui_view::StatefulView for ConfiguredGesture {
     type State = ConfiguredGestureState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ConfiguredGestureState { arena: None }
     }
 }
@@ -2032,7 +2033,7 @@ struct CountsMountsState;
 
 impl flui_view::StatefulView for CountsMounts {
     type State = CountsMountsState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.0.fetch_add(1, Ordering::SeqCst);
         CountsMountsState
     }

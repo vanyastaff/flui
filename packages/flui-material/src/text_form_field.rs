@@ -198,7 +198,7 @@ pub struct TextFormFieldState {
 impl StatefulView for TextFormField {
     type State = TextFormFieldState;
 
-    fn create_state(&self) -> TextFormFieldState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> TextFormFieldState {
         TextFormFieldState {
             core: TextFormFieldCore::new(&self.config),
         }

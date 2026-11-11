@@ -65,7 +65,7 @@ struct PopulationState {
 impl StatefulView for Population {
     type State = PopulationState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         PopulationState {
             target: self.target.clone(),
         }

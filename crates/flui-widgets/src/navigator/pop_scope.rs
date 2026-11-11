@@ -251,7 +251,7 @@ impl View for PopScope {
 impl StatefulView for PopScope {
     type State = PopScopeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         PopScopeState {
             entry: crate::navigator::lifecycle::Terminal::new(Arc::new(PopEntry {
                 can_pop: AtomicBool::new(self.can_pop),

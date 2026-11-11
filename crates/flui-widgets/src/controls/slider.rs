@@ -212,7 +212,7 @@ impl std::fmt::Debug for SliderState {
 }
 impl StatefulView for Slider {
     type State = SliderState;
-    fn create_state(&self) -> SliderState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> SliderState {
         let callback = Terminal::new(self.on_changed.as_ref().map(Rc::clone));
         SliderState {
             live: Terminal::new(Rc::new(Live {

@@ -102,7 +102,7 @@ impl StatefulRenderView for Fade {
     type RenderObject = RenderOpacity;
     type State = FadeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _cx: &dyn flui_view::LifecycleContext) -> Self::State {
         FadeState {
             wires: self.wires.clone(),
             fail: self.fail,

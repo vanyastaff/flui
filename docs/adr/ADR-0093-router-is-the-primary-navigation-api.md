@@ -61,7 +61,7 @@ is not in a page's subtree navigate?
   replacement that leaves the replaced form alive);
 - every page on the stack has a path, so deep links, restoration and web history are one
   mechanism;
-- capabilities are acquired in `init_state`/`did_change_dependencies`, never looked up from
+- capabilities are acquired in `create_state`/`init_state`/`did_change_dependencies`, never looked up from
   `build` (ADR-0078);
 - owner-thread state is `Rc`/`RefCell`, a `Send` bound appears only where a value leaves the
   thread ("Current forms");
@@ -163,18 +163,18 @@ link rebuilds. There is no other place the current page is recorded.
 The owner adopted this rule on 2026-09-25: every push is URL-addressable, and dialogs and
 overlays are excluded.
 
-### §3. The handle is acquired in `init_state` and targets the nearest ancestor
+### §3. The handle is acquired in a lifecycle hook and targets the nearest ancestor
 
 ```rust
-fn init_state(&mut self, cx: &dyn LifecycleContext) {
-    self.router = Router::<AppRoute>::handle(cx).ok();
+fn create_state(&self, cx: &dyn LifecycleContext) -> NotesState {
+    NotesState { router: Router::<AppRoute>::handle(cx).ok() }
 }
 // later, in a callback the state built:
 router.push(AppRoute::Note { id: NoteId(1) })?;
 ```
 
-`Router::<R>::handle` takes `&dyn LifecycleContext`, so it is reachable only from `init_state`
-and `did_change_dependencies` (ADR-0078). It resolves the **nearest ancestor** `Router<R>` and
+`Router::<R>::handle` takes `&dyn LifecycleContext`, so it is reachable only from `create_state`,
+`init_state` and `did_change_dependencies` (ADR-0078). It resolves the **nearest ancestor** `Router<R>` and
 returns an owned, `!Send` `RouterHandle<R>` that shares the router's state, so no `GlobalKey` is
 involved. With no `Router<R>` above, it returns `Err(RouterError::NoRouter)`. `push`, `replace`,
 `pop` and `go` on the handle edit the stack; they take no event context, because the handle

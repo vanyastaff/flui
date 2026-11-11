@@ -536,6 +536,13 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The likely shape is a public listener that installs the observer scope and reads the attached position, so a scroll frame costs one listener call and nothing bubbles through the tree.
 - The entry closes when a public listener reports a scroll start, update, end and a change of extents for the scroll view at depth zero below it, with headless tests over a nested list.
 
+### Widget states still fill their handles in `init_state`
+
+> **Environments:** all · **Who it hurts:** Contributors copying a catalog widget's state · **Parity:** none (API shape)
+
+- `StatefulView::create_state` receives the `LifecycleContext`, so a state can be built with its signals and capability handles bound; `Signal::default()` is gone. Production states still hold an `Option` (a `WriterSource`, a focus or text-input handle, a rebuild handle) that `init_state` fills with `self.field = Some(ctx.…)` and that `build` unwraps: `rg 'self\.[a-z_]+ = Some\((ctx|cx)\.' crates packages` lists them.
+- The check is that search finding no production state, each field a plain handle made in `create_state`.
+
 ### No widget hot reload on Android and the Web
 
 > **Environments:** Android, Web · **Who it hurts:** Developers who iterate on widget code on a phone or in a browser · **Parity:** none yet (hot reload has no row)

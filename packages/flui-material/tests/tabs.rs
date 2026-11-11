@@ -7,6 +7,7 @@
 //! `TabBar`.
 
 use crate::common;
+use flui_sdk::view::LifecycleContext;
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -668,7 +669,7 @@ struct TabsInBuildState;
 
 impl flui_sdk::view::StatefulView for TabsInBuild {
     type State = TabsInBuildState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         TabsInBuildState
     }
 }
@@ -751,7 +752,7 @@ struct SelectionReaderState {
 
 impl flui_sdk::view::StatefulView for SelectionReader {
     type State = SelectionReaderState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SelectionReaderState {
             selected: None,
             controller: self.controller.clone(),

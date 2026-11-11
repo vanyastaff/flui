@@ -542,7 +542,7 @@ impl std::fmt::Debug for AnimatedSwitcherState {
 impl StatefulView for AnimatedSwitcher {
     type State = AnimatedSwitcherState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // The initial entry is added without animating. FLUI splits controller
         // construction (here, no `BuildContext` yet) from vsync/listener
         // registration (`init_state`, below) — see `ChildEntry::new`'s doc.

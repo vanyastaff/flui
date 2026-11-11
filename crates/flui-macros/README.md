@@ -61,7 +61,7 @@ struct CounterState {
 impl StatefulView for Counter {
     type State = CounterState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         CounterState { count: self.initial }
     }
 }

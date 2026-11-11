@@ -835,7 +835,7 @@ struct VerticalDragAreaState {
 impl StatefulView for VerticalDragArea {
     type State = VerticalDragAreaState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         VerticalDragAreaState::default()
     }
 }

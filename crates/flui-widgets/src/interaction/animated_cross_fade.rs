@@ -116,7 +116,7 @@ pub struct AnimatedCrossFadeState {
 impl StatefulView for AnimatedCrossFade {
     type State = AnimatedCrossFadeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let progress = ImplicitMotion::new(
             "AnimatedCrossFade",
             Self::progress(self.shown),

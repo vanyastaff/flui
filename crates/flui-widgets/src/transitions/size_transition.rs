@@ -1,6 +1,7 @@
 //! [`SizeTransition`] — grows or shrinks its child's extent along one axis
 //! from an [`Animation<f64>`], clipping what falls outside.
 
+use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_animation::Animation;
@@ -137,7 +138,7 @@ impl ViewState<SizeTransition> for SizeTransitionState {
 impl StatefulView for SizeTransition {
     type State = SizeTransitionState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SizeTransitionState {
             size_factor: ProxySlot::new(&self.size_factor),
         }

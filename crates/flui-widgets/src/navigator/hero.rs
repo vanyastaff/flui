@@ -1198,7 +1198,7 @@ impl View for Hero {
 impl StatefulView for Hero {
     type State = HeroState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         HeroState {
             handle: Terminal::new(HeroHandle::new(self)),
             registry: None,

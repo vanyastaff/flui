@@ -408,7 +408,7 @@ impl StatefulRenderView for InteractiveNode {
     type RenderObject = RenderInteractive;
     type State = InteractiveNodeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _cx: &dyn flui_view::LifecycleContext) -> Self::State {
         let tap = TapSlot::new(self.live_tap(), self.states.as_ref());
         InteractiveNodeState {
             recognizers: RecognizerHost::new(tap.factory().as_slice()),

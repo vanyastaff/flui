@@ -102,7 +102,7 @@ struct InitPanicState {
 impl StatefulView for InitPanicView {
     type State = InitPanicState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         InitPanicState {
             failed_ids: std::sync::Arc::clone(&self.failed_ids),
         }

@@ -355,7 +355,7 @@ impl fmt::Debug for SwipeActionsState {
 impl StatefulView for SwipeActions {
     type State = SwipeActionsState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let anchors = self.anchors();
         SwipeActionsState {
             controller: AnchoredDragController::try_new(anchors.build(None), Stop::Closed)

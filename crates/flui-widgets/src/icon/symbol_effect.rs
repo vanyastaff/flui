@@ -547,7 +547,7 @@ impl fmt::Debug for SymbolEffectHostState {
 impl StatefulView for SymbolEffectHost {
     type State = SymbolEffectHostState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SymbolEffectHostState {
             controller: AnimationController::builder(self.effect.base_duration())
                 .debug_label("SymbolEffect")

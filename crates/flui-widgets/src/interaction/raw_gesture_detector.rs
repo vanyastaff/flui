@@ -413,7 +413,7 @@ impl std::fmt::Debug for RawGestureDetectorState {
 impl StatefulView for RawGestureDetector {
     type State = RawGestureDetectorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         RawGestureDetectorState {
             host: RecognizerHost::new(&self.factories),
         }

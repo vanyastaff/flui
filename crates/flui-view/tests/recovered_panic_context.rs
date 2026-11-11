@@ -81,7 +81,7 @@ struct PanicsInInitStateState;
 impl StatefulView for PanicsInInitState {
     type State = PanicsInInitStateState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         PanicsInInitStateState
     }
 }

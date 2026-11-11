@@ -177,7 +177,7 @@ impl ReadGraph for EventCx<'_> {
 
 /// An owned, `'static`, `!Send` capability that opens an [`EventCx`].
 ///
-/// Acquire it in `init_state` with
+/// Acquire it in `create_state` (or `init_state`) with
 /// [`LifecycleContext::writer_source`](crate::LifecycleContext::writer_source)
 /// and keep it in the state. A widget wraps a recognizer callback with it
 /// (`source.write(|cx| user_callback(cx))`), and so does code that receives

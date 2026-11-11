@@ -1,6 +1,7 @@
 //! [`PositionedTransition`] — moves a [`Stack`](crate::Stack) child's
 //! rectangle from an [`Animation<RelativeRect>`].
 
+use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_animation::{Animation, ProxyAnimation};
@@ -106,7 +107,7 @@ impl ViewState<PositionedTransition> for PositionedTransitionState {
 impl StatefulView for PositionedTransition {
     type State = PositionedTransitionState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         PositionedTransitionState {
             rect: ProxySlot::new(&self.rect),
         }

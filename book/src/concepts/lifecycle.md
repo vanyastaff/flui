@@ -16,7 +16,7 @@ Initial → Active ⇄ Inactive → Defunct
 
 Platform/lifecycle-scoped capabilities — `rebuild_handle()`, `post_frame_handle()`,
 `text_input_handle()`, `focus_manager()` — are acquired only while an `Element` is transitioning
-through `init_state`/`did_change_dependencies`, never from inside `build`/`perform_layout`/`paint`.
-They live on `LifecycleContext: BuildContext`, which only those two hooks receive, so acquiring
+through `create_state`/`init_state`/`did_change_dependencies`, never from inside `build`/`perform_layout`/`paint`.
+They live on `LifecycleContext: BuildContext`, which only those three hooks receive, so acquiring
 one in `build` is a compile error (ADR-0078). See
 [View, Element, RenderObject](view-element-render.md) for `BuildContext` itself.

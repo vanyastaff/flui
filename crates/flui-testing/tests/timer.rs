@@ -35,7 +35,7 @@ impl Drop for SetOnDrop {
 impl StatefulView for Sleeper {
     type State = SleeperState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SleeperState {
             view: self.clone(),
             task: None,

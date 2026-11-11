@@ -471,7 +471,7 @@ impl std::fmt::Debug for CupertinoButtonState {
 impl StatefulView for CupertinoButton {
     type State = CupertinoButtonState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         CupertinoButtonState {
             controller: None,
             rebuild: None,

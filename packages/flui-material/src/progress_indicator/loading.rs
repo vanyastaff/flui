@@ -360,7 +360,7 @@ macro_rules! loading_state {
         impl StatefulView for $view {
             type State = $state;
 
-            fn create_state(&self) -> Self::State {
+            fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
                 $state {
                     loading: Loading::new(self.value),
                 }

@@ -116,7 +116,7 @@ impl std::fmt::Debug for CupertinoActivityIndicatorState {
 impl StatefulView for CupertinoActivityIndicator {
     type State = CupertinoActivityIndicatorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         CupertinoActivityIndicatorState {
             controller: AnimationController::builder(CYCLE)
                 .debug_label("CupertinoActivityIndicator")
