@@ -15,6 +15,8 @@ fn input_regions() {
             ("system_gesture_exclusion::a_transformed_region_reports_its_bounding_box", crate::system_gesture_exclusion::a_transformed_region_reports_its_bounding_box),
             ("system_gesture_exclusion::a_clipped_region_reports_the_intersection", crate::system_gesture_exclusion::a_clipped_region_reports_the_intersection),
             ("system_gesture_exclusion::a_region_beyond_the_window_is_clamped_to_it", crate::system_gesture_exclusion::a_region_beyond_the_window_is_clamped_to_it),
+            ("system_gesture_exclusion::regions_in_separate_branches_come_out_in_paint_order", crate::system_gesture_exclusion::regions_in_separate_branches_come_out_in_paint_order),
+            ("system_gesture_exclusion::a_tree_without_a_region_reports_none", crate::system_gesture_exclusion::a_tree_without_a_region_reports_none),
             ("system_gesture_exclusion::a_region_in_a_scrolled_list_item_reports_the_scrolled_rect", crate::system_gesture_exclusion::a_region_in_a_scrolled_list_item_reports_the_scrolled_rect),
             ("system_gesture_exclusion::a_scale_change_resends_unchanged_logical_regions", crate::system_gesture_exclusion::a_scale_change_resends_unchanged_logical_regions),
             ("system_gesture_exclusion::a_display_change_at_equal_scale_resends_regions", crate::system_gesture_exclusion::a_display_change_at_equal_scale_resends_regions),
@@ -1063,6 +1065,10 @@ fn scroll_physics_and_activity() {
             (
                 "scroll::a_scroll_configuration_answers_what_a_scroll_view_leaves_open",
                 crate::scroll::a_scroll_configuration_answers_what_a_scroll_view_leaves_open,
+            ),
+            (
+                "scroll::the_default_scroll_behavior_leaves_a_mouse_drag_to_selection",
+                crate::scroll::the_default_scroll_behavior_leaves_a_mouse_drag_to_selection,
             ),
             (
                 "scroll::the_default_scroll_behavior_follows_the_platform_convention",

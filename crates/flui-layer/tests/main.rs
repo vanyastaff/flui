@@ -12,6 +12,8 @@ mod follower;
 mod inspect;
 #[path = "region.rs"]
 mod region;
+#[path = "scene.rs"]
+mod scene;
 #[path = "texture_registry.rs"]
 mod texture_registry;
 
@@ -192,6 +194,105 @@ fn region_contract() {
             (
                 "full_keeps_its_first_reason",
                 r::full_keeps_its_first_reason,
+            ),
+        ],
+    );
+}
+
+/// A patch applies all or nothing: a cycle, a stale or unknown id, a node
+/// named twice or a retired node still named refuses it and leaves the
+/// version as it was (ADR-0304 §3).
+#[test]
+fn scene_apply_contract() {
+    use scene as s;
+    run_rows(
+        "scene_apply_contract",
+        &[
+            (
+                "a_slot_naming_its_own_ancestor_is_refused",
+                s::a_slot_naming_its_own_ancestor_is_refused,
+            ),
+            (
+                "a_stale_generation_is_refused",
+                s::a_stale_generation_is_refused,
+            ),
+            (
+                "a_node_named_by_two_slots_is_refused",
+                s::a_node_named_by_two_slots_is_refused,
+            ),
+            (
+                "a_refused_patch_leaves_the_version_and_log_unchanged",
+                s::a_refused_patch_leaves_the_version_and_log_unchanged,
+            ),
+            (
+                "an_id_never_published_is_unknown",
+                s::an_id_never_published_is_unknown,
+            ),
+            (
+                "a_node_of_another_owner_is_refused",
+                s::a_node_of_another_owner_is_refused,
+            ),
+            (
+                "the_root_stays_and_placements_are_finite",
+                s::the_root_stays_and_placements_are_finite,
+            ),
+            (
+                "the_indexes_follow_publish_and_retire",
+                s::the_indexes_follow_publish_and_retire,
+            ),
+            (
+                "a_version_flattens_to_the_tree_it_paints",
+                s::a_version_flattens_to_the_tree_it_paints,
+            ),
+            ("a_version_is_send_and_sync", s::a_version_is_send_and_sync),
+        ],
+    );
+}
+
+/// Content versions never repeat across owners or lineages, and a spent
+/// sequence renews the lineage instead of wrapping (ADR-0304 §2, §10).
+#[test]
+fn content_version_contract() {
+    use scene as s;
+    run_rows(
+        "content_version_contract",
+        &[
+            (
+                "a_replaced_owner_never_reports_unchanged",
+                s::a_replaced_owner_never_reports_unchanged,
+            ),
+            (
+                "an_exhausted_mint_renews_the_lineage_and_publishes_full",
+                s::an_exhausted_mint_renews_the_lineage_and_publishes_full,
+            ),
+        ],
+    );
+}
+
+/// An apply copies table nodes in proportion to its patch and the table's
+/// height, not to the scene, and rewrites only the depths and indexes the
+/// patch changes (ADR-0304 §1).
+#[test]
+fn scene_table_cost() {
+    use scene as s;
+    run_rows(
+        "scene_table_cost",
+        &[
+            (
+                "an_apply_copies_the_patch_not_the_scene",
+                s::an_apply_copies_the_patch_not_the_scene,
+            ),
+            (
+                "a_republished_parent_costs_its_change_not_its_slots",
+                s::a_republished_parent_costs_its_change_not_its_slots,
+            ),
+            (
+                "a_repaint_with_the_same_links_leaves_the_indexes",
+                s::a_repaint_with_the_same_links_leaves_the_indexes,
+            ),
+            (
+                "wrapping_a_subtree_rewrites_its_depths",
+                s::wrapping_a_subtree_rewrites_its_depths,
             ),
         ],
     );

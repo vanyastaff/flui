@@ -815,7 +815,7 @@ graph LR
   `arm`, `retire`). winit — `WinitHost::{clipboard, drag}` с `FileDrops` (шесть методов
   транспорта, `DragTransport` — супертрейт, позиция отдаёт upcast). Android —
   `AndroidHost::{clipboard, transfer}` (в трейте рядом с `input_method` LY30, `displays` LY31 и `preferences`, `notices`, `activity` LY33), `transfer(view)`
-  делает транспорт `ViewTransfer` (`drag`, `drop_clip`, `set_own`, `take_local_drop`) для
+  делает транспорт `ViewTransfer` (`drag`, `hover_key`, `take_drop`, `set_own`, `take_local_drop`) для
   `FluiView`. Циклы берут хост: `WebLoop::new::<Web>()`, `WinitLoop::new::<Winit>()`,
   `AndroidLoop::new::<Android>(app)` (форма LY31). headless держит состояние drag
   симулированной системы, как остальную систему: `owner::headless::OsDrags` (открытые

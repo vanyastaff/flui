@@ -18,7 +18,7 @@ use flui_sdk::widgets::{
 };
 use flui_testing::a11y::{Action, ActionData, ActionRequest, Role, TreeId};
 use flui_testing::log_capture::capture;
-use flui_testing::replay::MouseScript;
+use flui_testing::replay::TouchScript;
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 
 const SIZE: f64 = 400.0;
@@ -64,17 +64,17 @@ fn selection(controller: &TabController) -> (usize, i64) {
 /// A swipe toward the reading start, slow enough to rest on the page it
 /// reaches: it performs "Previous tab".
 fn swipe_back() -> flui_testing::replay::PointerScript {
-    let mut swipe = MouseScript::new("swipe back").press(Offset::new(60.0, 250.0));
+    let mut swipe = TouchScript::new("swipe back").down(0, Offset::new(60.0, 250.0));
     for step in 1..=10 {
         swipe = swipe
             .wait(Duration::from_millis(16))
-            .move_to(Offset::new(60.0 + 30.0 * f64::from(step), 250.0));
+            .move_to(0, Offset::new(60.0 + 30.0 * f64::from(step), 250.0));
     }
     swipe
         .wait(Duration::from_millis(300))
-        .release()
+        .up(0)
         .build()
-        .expect("one whole press")
+        .expect("one whole contact")
 }
 
 fn check(with_bar: bool) -> GestureAlternativesCheck<(usize, i64)> {

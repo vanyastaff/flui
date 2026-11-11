@@ -20,7 +20,8 @@ Citations below name symbols, not line numbers.
 | `LayerLink`, `LeaderLayer`, `FollowerLayer`, `LeaderClip` | [`src/link.rs`](src/link.rs) `LayerLink` + `resolve_follower_transform`; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
 | `AnnotatedRegionLayer` | `annotated_region.rs` | Carries an `AnnotationValue`; written by `RenderAnnotatedRegion`, read by `LayerTree::find_annotations` (`src/tree/annotations.rs`); see [Producers](#producers). |
 | `SceneBuilder` push/pop | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is built through the tree (decision 5). |
-| `Scene` | [`src/scene.rs`](src/scene.rs) `Scene` | A frozen `LayerTree` (decision 6). |
+| `Scene` | [`src/scene/mod.rs`](src/scene/mod.rs) `Scene` | A frozen `LayerTree` (decision 6). |
+| Retained scene | [`src/scene/`](src/scene/) `SceneOwner`, `SceneVersion`, `BoundaryContent`, `SceneOp` | A persistent version changed by typed patches (decision 9); no producer yet, see the ADR-0304 item of [`docs/gaps.md`](../../docs/gaps.md). |
 | Retained layers across frames | none | The engine rebuilds every frame from the tree. Cross-frame reuse of painted output is `flui-rendering`'s (`FragmentComposer::capture`/`graft`, keyed on the boundary's `RenderId`); cross-frame damage is `LayerDiffer`'s comparison of boundary stamps (`RenderId` plus `ContentToken`, decision 8), not a retained engine layer. |
 | Composition callbacks | none | They would fire after a scene-add step this architecture does not have. |
 | `Layer::Canvas(CanvasLayer)` | `Layer::Canvas(CanvasLayer)` | A live recorder inside the tree; see [Producers](#producers). |
@@ -173,6 +174,43 @@ the granularity is one boundary's own region, not a layer. `damage_diff` bench: 
 1,000 boundaries, 4 ns with the mode off. Tests: `src/damage/tests.rs`,
 `scene_snapshot.rs`'s `union_table` and `bounds_round_outward_with_aa_margin`.
 
+### 9. The retained scene is a persistent value — [ADR-0304 §1–§3](../../docs/adr/ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
+
+A `SceneVersion` is an `Arc` over its nodes, kept in a path-copying table of fanout 32
+(`src/scene/table.rs`) written here rather than taken from a persistent-collection crate: the
+scene needs lookup, insert, remove and an ordered walk. A write copies its path from the root to
+its leaf and shares every other subtree with the version before it; writes into one leaf share
+that path; the height grows by one new root per level when a slot passes the capacity, so a
+lookup walks two to four levels at scene sizes FLUI meets. Beside the nodes, three tables of the
+same shape index link layers (leaders and followers by `LayerLink`), texture users (by
+`TextureId`) and nodes whose content holds a backdrop or image filter.
+
+A node is a `SceneNodeId`: its owner's `Lineage` and a generational slot key the `SceneOwner`
+mints through `GenSlots`. Minting advances the slot's generation, so an id of a patch never
+applied, or of a retired node, never resolves again; the lineage keeps two owners' ids apart,
+though both mint the same slot keys, so a cache keyed by a `SceneNodeId` serves one scene. Inside
+a version every reference is the bare slot key, and the public id is assembled from the version's
+lineage. A boundary's content is one paint-order stream of `Entry::{Effect, Chunk, Slot}` built by
+`ContentBuilder`, which makes every entry's parent an earlier effect by construction. A chunk is
+one render object's run; its bounds and textures are read from its `DisplayList`.
+
+`SceneOwner::apply` builds the patch on a copy of the version and keeps it only when every
+operation is valid: an id of another lineage, an unknown or stale id, a retired node a slot still
+names, a node named twice, a slot naming its own ancestor or the root, and a depth past `u32`
+refuse the whole patch, and the version stays the one before. Its working sets are slot-indexed
+marks the owner keeps across patches, so an apply hashes nothing; a republished content writes
+only the children it gains or loses, and leaves the indexes when its link, texture and filter
+entries are the old ones. `ContentVersion` and `SceneVersionId` draw from one `IdMint` per owner
+under a `Lineage` from a process `AtomicIdMint`, so a replaced or renewed owner never repeats one;
+a spent sequence refuses with `VersionsExhausted` and `renew` starts a new lineage, with empty
+slots, whose next publication is `Full(Resync(_))`. `SceneVersion::flatten` (feature `testing`) is
+the layer-tree oracle a retained frame is compared against.
+
+Pinned by `layer_it`: `scene_apply_contract`, `content_version_contract` and `scene_table_cost`
+(an apply's copies are at most its operations times the table height, equal at 1 100 and 30 000
+nodes, and a republished parent copies as much at 40 children as at 1 000); the table's model
+test against `BTreeMap` is `scene::table::tests`.
+
 ### Deleted, with the reason
 
 `LayerHandle<T>` (no engine-layer lifecycle exists here); `LayerBounds` trait
@@ -228,6 +266,9 @@ which no production path calls yet. Whether each unproduced variant is "not wire
 | `LayerTree::leaders` | `HashMap<LayerLink, LayerId>` | Owned, filled during the build |
 | `Scene`, `SceneSnapshot` | by value | Moved across the raster boundary; `Send + Sync` plain data, pinned by `static_assertions` in `scene_snapshot.rs` |
 | `LayerLink::new` | `static AtomicU64`, `Relaxed` | Identity only; the RMW is atomic under every ordering and publishes nothing else |
+| `Lineage::fresh` | `static AtomicIdMint<NonZeroU64>` (`counter` grant) | Identity only; minted from every UI thread, never wraps, refuses with `IdExhausted` |
+| `SceneVersion` | `Arc` over persistent tables of `Arc` nodes | Immutable once applied; `Send + Sync` by its auto traits (`a_version_is_send_and_sync`), shared by the owner and the raster side |
+| `SceneOwner` | owned ledger and `IdMint` | Single owner (the UI runtime); `Send`, not `Sync` |
 | `ContentToken` | `Arc<()>`, compared by `Arc::ptr_eq` | Identity only; no data behind the pointer, no `static` |
 | `LayerDiffer` | owned records of one frame | Single owner (the host's raster lane); no lock |
 | `TextureRegistry` | `Arc` of a `parking_lot::Mutex` over the registry state, plus `Arc<dyn Fn() + Send + Sync>` wake and listeners | Shared by one presentation with frame producers on any thread (`src/texture_registry.rs`) |

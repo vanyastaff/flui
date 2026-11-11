@@ -4,7 +4,7 @@
 //! objects.
 
 use super::node_slab::{NodeSlab, TreeLease};
-use flui_foundation::RenderId;
+use flui_foundation::{RenderId, SlotSet};
 
 use super::node::RenderNode;
 use crate::protocol::{BoxProtocol, RenderObject, SliverProtocol};
@@ -43,6 +43,11 @@ pub struct RenderTree {
     /// removed node's ids go stale, and a slot that runs out of generations
     /// retires instead of reissuing one.
     nodes: NodeSlab,
+
+    /// The nodes whose render object adds input regions
+    /// ([`RenderNode::reports_input_regions`]), registered as they enter and leave the
+    /// slab, so collecting a window's regions starts from them instead of walking the tree.
+    input_region_sources: SlotSet<RenderId>,
 
     /// Root node ID (None if tree is empty).
     root: Option<RenderId>,
@@ -129,6 +134,7 @@ impl RenderTree {
     pub fn new() -> Self {
         Self {
             nodes: NodeSlab::new(),
+            input_region_sources: SlotSet::new(),
             root: None,
         }
     }
@@ -137,6 +143,7 @@ impl RenderTree {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             nodes: NodeSlab::with_capacity(capacity),
+            input_region_sources: SlotSet::new(),
             root: None,
         }
     }
@@ -265,7 +272,24 @@ impl RenderTree {
     /// Inserts `node` without a parent and returns its id; the caller links it and
     /// sets the root.
     pub fn insert(&mut self, node: RenderNode) -> RenderId {
-        self.nodes.insert(node)
+        self.insert_node(node)
+    }
+
+    /// The one way a node enters the slab: registers it as an input-region source when
+    /// its render object adds regions.
+    fn insert_node(&mut self, node: RenderNode) -> RenderId {
+        let reports_input_regions = node.reports_input_regions();
+        let id = self.nodes.insert(node);
+        if reports_input_regions {
+            self.input_region_sources.insert(id);
+        }
+        id
+    }
+
+    /// The nodes whose render object adds input regions, in no particular order.
+    #[inline]
+    pub(crate) fn input_region_sources(&self) -> &[RenderId] {
+        self.input_region_sources.as_slice()
     }
 
     /// Inserts a Box protocol render object into the tree (no parent).
@@ -300,7 +324,7 @@ impl RenderTree {
         // tree accepts it directly because the sliver layout bridge
         // handles the cross-protocol dispatch.
         let child_node = RenderNode::new_box_at_depth(render_object, child_depth);
-        let child_id = self.nodes.insert(child_node);
+        let child_id = self.insert_node(child_node);
         self.nodes.set_parent(child_id, Some(parent_id));
 
         if let Some(parent) = self.get_mut(parent_id) {
@@ -322,7 +346,7 @@ impl RenderTree {
         let child_depth = child_depth(self.get(parent_id)?.depth());
 
         let child_node = RenderNode::new_sliver_at_depth(render_object, child_depth);
-        let child_id = self.nodes.insert(child_node);
+        let child_id = self.insert_node(child_node);
         self.nodes.set_parent(child_id, Some(parent_id));
 
         if let Some(parent) = self.get_mut(parent_id) {
@@ -600,6 +624,7 @@ impl RenderTree {
 
         // Every id of the removed node goes stale: the slot advances its
         // generation, or retires when none is left.
+        self.input_region_sources.remove(id);
         self.nodes.remove(id)
     }
 
@@ -653,6 +678,7 @@ impl RenderTree {
     /// destructor runs.
     pub fn clear(&mut self) {
         self.root = None;
+        self.input_region_sources.clear();
         let nodes = self.nodes.take_all();
         drop(nodes);
     }

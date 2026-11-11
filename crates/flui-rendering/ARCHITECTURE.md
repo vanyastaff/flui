@@ -1337,16 +1337,26 @@ applies with no rebuild. Covered by the `hit_slop::` rows of the widgets'
 **Rule.** `PipelineOwner::input_regions` walks from the root with paint's own gates — a
 child its parent did not lay out this pass, a child the parent does not present
 (`visits_child_for_semantics`), a node that skips paint, a node still needing layout, a
-sliver that is not visible — and asks each node for `describe_input_regions`. A node that
-reported regions has its transform and clip composed along its path from the root, through
+sliver that is not visible — and asks each node for `describe_input_regions`. It enters only
+the nodes that add regions (`RenderObject::reports_input_regions`, answered by the type's
+`RenderBox::REPORTS_INPUT_REGIONS` / `RenderSliver::REPORTS_INPUT_REGIONS`), their
+ancestors and their subtrees: the render tree registers those nodes as they enter and leave
+it, and a tree with none returns no regions without walking. A node that reported regions
+has its transform and clip composed along its path from the root, through
 `RenderNode::apply_paint_transform` (the same mapping semantics and coordinate queries use)
 and each ancestor's `describe_approximate_paint_clip`, starting from the root's box as the
 window (ADR-0217 §5).
 
-**Why per reporter, not per node.** Regions are rare and the walk runs on every composited
-frame. Composing a matrix at every node would cost a 4×4 product per node for a feature
-most trees never use; composing only along a reporter's path costs a plain traversal plus
-`depth` steps per reporter.
+**Why only toward sources.** The collection runs on every composited frame. A node that
+only claims or passes presses contributes nothing outside a move area, and a move area is
+a source's region, so a subtree with no source and no source above it adds nothing; walking
+it cost the whole tree per frame (95% of a label-change frame over 2 000 buttons). A type
+that adds regions without declaring it is a defect a debug assertion names when the walk
+passes it; the regions of an undeclared node off every path are never collected.
+
+**Why per reporter, not per node.** Composing a matrix at every node would cost a 4×4
+product per node for a feature most trees never use; composing only along a reporter's
+path costs `depth` steps per reporter.
 
 **Drops.** A region whose corners (or whose composed transform) are not finite is dropped
 with a `flui_rendering::input_regions` warning, never clamped from infinity; so is one
