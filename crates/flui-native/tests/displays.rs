@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_native::{
-    DisplayChange, DisplayChangeError, DisplaySpec, HeadlessPlatform, MockWindow, Platform as _,
+    DisplayChange, DisplayChangeError, DisplaySpec, HeadlessHostWindow, HeadlessPlatform,
+    Platform as _,
 };
 use flui_platform::WindowOptions;
 
@@ -125,7 +126,7 @@ fn window_move_names_the_new_display_and_hints_once() {
     let window: Rc<dyn flui_native::HostWindow> = window;
     let mock = window
         .as_any()
-        .downcast_ref::<MockWindow>()
+        .downcast_ref::<HeadlessHostWindow>()
         .expect("headless window")
         .clone();
     assert_eq!(
@@ -162,7 +163,7 @@ fn a_move_to_a_display_the_platform_does_not_hold_is_refused() {
     let window: Rc<dyn flui_native::HostWindow> = window;
     let mock = window
         .as_any()
-        .downcast_ref::<MockWindow>()
+        .downcast_ref::<HeadlessHostWindow>()
         .expect("headless window")
         .clone();
     let before = window.state().display;

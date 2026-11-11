@@ -8,18 +8,23 @@
 //!   `DrawOp::Paragraph` carries.
 
 use std::ops::Index;
+use std::sync::Arc;
 
-use flui_foundation::geometry::Rect;
+use flui_foundation::geometry::{Matrix4, Rect};
 use flui_foundation::inspect::{Fields, Inspect, Unit};
 
 mod blur;
 pub mod command;
 pub mod command_ops;
+mod finite;
 pub mod paragraph;
 
 pub use blur::BlurSigma;
 pub use command::{DrawCommand, DrawOp};
 pub use command_ops::DamageExtent;
+pub use finite::NonFiniteOps;
+pub(crate) use finite::paint_finite;
+use finite::{NonFinite, Refused, matrix_finite};
 pub use paragraph::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph, ShapedRun};
 // The paint vocabulary the commands carry; defined in `crate::paint`.
 pub(crate) use crate::paint::{
@@ -65,6 +70,10 @@ pub struct DisplayList {
     /// list, or `None` while no such command was recorded — see
     /// [`Self::volatile_extent`].
     pub(crate) volatile: Option<DamageExtent>,
+
+    /// The ops refused at record because they were not finite — see
+    /// [`Self::non_finite`].
+    pub(crate) non_finite: NonFiniteOps,
 }
 
 /// Folds one command's bounds into an accumulating union: the one place that
@@ -94,6 +103,11 @@ impl Inspect for DisplayList {
     fn inspect(&self, out: &mut Fields<'_>) {
         out.field("commands", &self.commands.len());
         out.field("bounds", &self.bounds).unit(Unit::LogicalPx);
+        // Printed only when something was refused, so a clean list reads as before.
+        if !self.non_finite.is_empty() {
+            out.field("non_finite_transform", &self.non_finite.transform);
+            out.field("non_finite_geometry", &self.non_finite.geometry);
+        }
     }
 }
 
@@ -105,7 +119,20 @@ impl DisplayList {
             bounds: None,
             damage: None,
             volatile: None,
+            non_finite: NonFiniteOps::default(),
         }
+    }
+
+    /// The ops refused at record because they were not finite, by reason
+    /// (ADR-0306 §4).
+    ///
+    /// A refused draw is absent from the list, a refused clip clips
+    /// everything, a refused save-layer opens unbounded, and the list's
+    /// [`bounds`](Self::bounds) and [`damage_extent`](Self::damage_extent)
+    /// hold only finite values. [`Self::append`] sums the counts.
+    #[must_use]
+    pub fn non_finite(&self) -> NonFiniteOps {
+        self.non_finite
     }
 
     /// The commands, in recording order.
@@ -169,7 +196,46 @@ impl DisplayList {
         self.volatile
     }
 
-    pub(crate) fn push(&mut self, command: DrawCommand) {
+    /// Records `op` under `ctm`: the canvas's one way in.
+    ///
+    /// An op under a non-finite `ctm`, or holding a non-finite value, is
+    /// refused by its kind and counted in [`Self::non_finite`] (ADR-0306 §4);
+    /// `paint_finite` answers for the op's paint. Nothing here runs user code.
+    pub(crate) fn record(
+        &mut self,
+        ctm: &Matrix4,
+        op: DrawOp,
+        paint_finite: impl Fn(&Arc<Paint>) -> bool,
+    ) {
+        let reason = if !matrix_finite(ctm) {
+            NonFinite::Transform
+        } else if !op.is_finite(paint_finite) {
+            NonFinite::Geometry
+        } else {
+            self.push(DrawCommand {
+                transform: *ctm,
+                op,
+            });
+            return;
+        };
+        // A replacement keeps a finite CTM; under a non-finite one it is
+        // recorded under the identity, which only the replaced op's own
+        // geometry would have needed.
+        let transform = match reason {
+            NonFinite::Transform => Matrix4::IDENTITY,
+            NonFinite::Geometry => *ctm,
+        };
+        match finite::refusal(op) {
+            Refused::Omitted => self.non_finite.count(reason),
+            Refused::Replaced(op) => {
+                self.non_finite.count(reason);
+                self.push(DrawCommand { transform, op });
+            }
+            Refused::Marker(op) => self.push(DrawCommand { transform, op }),
+        }
+    }
+
+    fn push(&mut self, command: DrawCommand) {
         if let Some(cmd_bounds) = command.bounds() {
             accumulate_bounds(&mut self.bounds, cmd_bounds);
         }
@@ -182,21 +248,16 @@ impl DisplayList {
         self.commands.push(command);
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.commands.clear();
-        self.bounds = None;
-        self.damage = None;
-        self.volatile = None;
-    }
-
     /// Moves every command of `other` onto the end of this list, unioning
-    /// the cached bounds.
+    /// the cached bounds and summing the [`non_finite`](Self::non_finite)
+    /// counts.
     ///
     /// Concatenates replay state too: a root clip in this list affects `other`,
     /// even when both lists have balanced save/restore pairs. Use
     /// [`Self::append_isolated`] for each independently recorded paint run
     /// when building an accumulator.
     pub fn append(&mut self, mut other: DisplayList) {
+        self.non_finite = self.non_finite.saturating_add(other.non_finite);
         if self.commands.is_empty() {
             std::mem::swap(&mut self.commands, &mut other.commands);
             self.bounds = other.bounds;
@@ -219,10 +280,13 @@ impl DisplayList {
     /// Appends a balanced paint run inside its own save/restore scope.
     ///
     /// The run inherits the caller's clip state, but its clips do not affect
-    /// subsequent commands. An empty run records nothing. The caller must
-    /// provide balanced save/restore commands within the run.
+    /// subsequent commands. An empty run records no command but still adds
+    /// its [`non_finite`](Self::non_finite) counts: a run whose every op was
+    /// refused is empty. The caller must provide balanced save/restore
+    /// commands within the run.
     pub fn append_isolated(&mut self, other: DisplayList) {
         if other.is_empty() {
+            self.non_finite = self.non_finite.saturating_add(other.non_finite);
             return;
         }
         self.push(DrawCommand::untransformed(DrawOp::Save));

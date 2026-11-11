@@ -728,14 +728,17 @@ fn inline_picture_replay_owns_its_root_clips() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
-    for (name, translation, nested, empty, origin) in [
-        ("plain", 0.0, false, false, 0),
-        ("transformed", 10.0, false, false, 10),
-        ("nested", 10.0, true, false, 15),
-        ("empty", 0.0, false, true, 0),
+    // The composer splices each inline run with `append_isolated`: the run
+    // inherits the clip before it, and its own root clip ends with it.
+    for (name, nested, empty, origin) in [
+        ("plain", false, false, 0),
+        ("transformed", false, false, 10),
+        ("nested", true, false, 15),
+        ("empty", false, true, 0),
     ] {
         let mut source = Canvas::new();
         if !empty {
+            source.translate(f64::from(origin), f64::from(origin));
             source.clip_rect(Rect::from_xywh(0.0, 0.0, 20.0, 20.0));
             source.draw_rect(
                 Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
@@ -744,28 +747,29 @@ fn inline_picture_replay_owns_its_root_clips() {
         }
         let mut picture = source.finish();
         if nested {
-            let mut wrapper = Canvas::new();
-            wrapper.translate(5.0, 5.0);
-            wrapper.draw_picture(&picture);
-            picture = wrapper.finish();
+            let mut wrapper = flui_painting::DisplayList::new();
+            wrapper.append_isolated(picture);
+            picture = wrapper;
         }
 
-        let mut canvas = Canvas::new();
-        canvas.clip_rect(Rect::from_xywh(0.0, 0.0, 48.0, 48.0));
-        canvas.translate(translation, translation);
-        canvas.draw_picture(&picture);
-        // Undo only the CTM: an enclosing save/restore would hide a leaked clip.
-        canvas.translate(-translation, -translation);
-        canvas.draw_rect(
+        let mut ambient = Canvas::new();
+        ambient.clip_rect(Rect::from_xywh(0.0, 0.0, 48.0, 48.0));
+        let mut frame = ambient.finish();
+        frame.append_isolated(picture);
+        // A plain append after the run: no enclosing save/restore that would
+        // hide a clip the run leaked.
+        let mut after = Canvas::new();
+        after.draw_rect(
             Rect::from_xywh(40.0, 40.0, 8.0, 8.0),
             &Paint::fill(Color::GREEN),
         );
-        canvas.draw_rect(
+        after.draw_rect(
             Rect::from_xywh(52.0, 52.0, 8.0, 8.0),
             &Paint::fill(Color::BLUE),
         );
+        frame.append(after.finish());
         let mut builder = SceneBuilder::new();
-        builder.add_picture(canvas.finish());
+        builder.add_picture(frame);
         let pixels = renderer
             .render_layer_tree(&builder.build(), (SIDE, SIDE))
             .expect("inline picture clip capture");
@@ -1052,21 +1056,36 @@ fn clip_failures_and_singular_membership_recover() {
         return;
     };
     type InvalidClip = fn(&mut Canvas);
-    let invalid: [InvalidClip; 5] = [
+    // A non-finite clip never reaches the engine: the canvas records it as an
+    // empty clip (ADR-0306 §4), so the frame draws and the clip clips everything.
+    let non_finite: [InvalidClip; 3] = [
         |c| c.clip_rect(Rect::from_xywh(f64::NAN, 0.0, 32.0, 32.0)),
         |c| c.clip_rect(Rect::from_xywh(0.0, f64::INFINITY, 32.0, 32.0)),
+        |c| {
+            c.clip_rrect(RRect::from_rect_elliptical(
+                Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+                f64::NAN,
+                4.0,
+            ));
+        },
+    ];
+    for clip in non_finite {
+        let tree = canvas_clip_tree(|c| {
+            clip(c);
+            full_surface(c, Color::BLUE);
+        });
+        let frame = renderer
+            .render_layer_tree(&tree, (SIDE, SIDE))
+            .expect("a non-finite clip is refused at record, not by the frame");
+        assert_eq!(sample(&frame, 32, 32), [255, 255, 255, 255]);
+    }
+    // Finite but invalid geometry is the engine's typed refusal.
+    let invalid: [InvalidClip; 2] = [
         |c| c.clip_rect(Rect::from_xywh(8.0, 8.0, -4.0, 32.0)),
         |c| {
             c.clip_rrect(RRect::from_rect_elliptical(
                 Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
                 -2.0,
-                4.0,
-            ));
-        },
-        |c| {
-            c.clip_rrect(RRect::from_rect_elliptical(
-                Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
-                f64::NAN,
                 4.0,
             ));
         },
@@ -1620,4 +1639,37 @@ fn lazy_pipeline_admission_recovers() {
         drop(resources);
         drop(blocker);
     }
+}
+
+/// A list holding a NaN rectangle beside a finite one draws the finite one:
+/// the canvas omits the non-finite op at record (ADR-0306 §4), so one bad
+/// value costs that op and not the frame.
+#[test]
+fn a_non_finite_op_is_omitted_and_the_frame_draws() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let tree = canvas_clip_tree(|c| {
+        c.draw_rect(
+            Rect::from_xywh(f64::NAN, 0.0, 32.0, 32.0),
+            &Paint::fill(Color::RED),
+        );
+        c.draw_rect(
+            Rect::from_xywh(32.0, 32.0, 32.0, 32.0),
+            &Paint::fill(Color::GREEN),
+        );
+    });
+    let frame = renderer
+        .render_layer_tree(&tree, (SIDE, SIDE))
+        .expect("a non-finite op does not fail the frame");
+    assert_eq!(
+        sample(&frame, 48, 48),
+        [0, 255, 0, 255],
+        "the finite op draws"
+    );
+    assert_eq!(
+        sample(&frame, 16, 16),
+        [255, 255, 255, 255],
+        "the NaN op is absent"
+    );
 }

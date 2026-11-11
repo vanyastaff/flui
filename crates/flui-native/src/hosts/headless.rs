@@ -21,7 +21,7 @@ use crate::owner::notices::NoticeChannel;
 use crate::platform::HostPlatform;
 use crate::preferences::headless::HeadlessPreferences;
 use crate::text::headless::FakeTextInput;
-use crate::window::headless::{FakeSystemChrome, HeadlessWindows, MockWindow};
+use crate::window::headless::{HeadlessHostWindow, HeadlessSystemChrome, HeadlessWindows};
 
 /// The headless host's table.
 #[derive(Debug)]
@@ -31,7 +31,7 @@ impl Host for Headless {
     const NAME: &'static str = "Headless";
 
     type Loop = HeadlessLoop;
-    type Window = MockWindow;
+    type Window = HeadlessHostWindow;
     type Displays = HeadlessLoop;
     type Input = HeadlessInputDevices;
     type Text = FakeTextInput;
@@ -42,7 +42,7 @@ impl Host for Headless {
     type Haptics = HeadlessHaptics;
     type Preferences = HeadlessPreferences;
     type Lifecycle = HeadlessHostEvents;
-    type Chrome = FakeSystemChrome;
+    type Chrome = HeadlessSystemChrome;
     type Storage = crate::storage::HeadlessData;
 }
 

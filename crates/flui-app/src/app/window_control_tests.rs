@@ -161,7 +161,7 @@ fn a_material_goes_through_the_window_queue() {
     let rig_all = rig(&window, 21);
     let mock = host
         .as_any()
-        .downcast_ref::<flui_native::MockWindow>()
+        .downcast_ref::<flui_native::HeadlessHostWindow>()
         .expect("headless window");
     rig_all
         .handle
@@ -205,7 +205,7 @@ fn a_command_superseded_in_the_queue_is_admitted_again() {
     let mut revised = WindowCapabilities::ALL;
     revised.maximizes = flui_platform::Availability::Unavailable;
     host.as_any()
-        .downcast_ref::<flui_native::MockWindow>()
+        .downcast_ref::<flui_native::HeadlessHostWindow>()
         .expect("headless window")
         .simulate_capabilities(revised);
     let before = window.state();
@@ -539,7 +539,7 @@ fn subscribers_hear_a_new_state_in_order_and_what_they_ask_waits() {
 
     let native = host
         .as_any()
-        .downcast_ref::<flui_native::MockWindow>()
+        .downcast_ref::<flui_native::HeadlessHostWindow>()
         .expect("headless window");
     native.simulate_move(Point::new(5.0, 6.0));
     rig.source.publish_current();

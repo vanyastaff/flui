@@ -26,7 +26,7 @@
   debounce or the fullscreen monitor; `WindowsPlatform::new()` and `MacOSPlatform::new()` open
   windows with F11 as the fullscreen key, as the default configuration did.
 - **`flui-native`**: `FakeAccessibility::{published, request_action}`, which named AccessKit types,
-  and the root names nothing outside the crate used: `FakeSystemChrome`, `IOSExecutor` and
+  and the root names nothing outside the crate used: `HeadlessSystemChrome`, `IOSExecutor` and
   `FakeHaptics`, which is `flui_platform::haptics::FakeHaptics`.
 
 ### Changed

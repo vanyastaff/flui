@@ -1,6 +1,6 @@
 # render-scaling: задачи
 
-- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS14. Следующие: RS1, RS3, RS4, RS5,
+- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS14. Следующие: RS3, RS4, RS5,
   RS15 (не зависят друг от друга).
 - **Design:** [design.md](design.md); требования и ворота G1–G7: [requirements.md](requirements.md)
 - **База:** `main` @ `da69efa`. Пути и строки в ADR даны на `e5ba8fe8f`; перед правкой сверить.
@@ -272,5 +272,6 @@
 
 | Задача | PR | Состояние | Доказательство |
 |---|---|---|---|
-| RS14 | #2382 | сделана; `RasterExecutor` переходит в RS15 вместе с командами, его единственный API это ход по ним | `every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format` (lavapipe): 3 слота в двух форматах дают 1 instance, 1 device, 1 атлас, 2 набора пайплайнов, 0 сборок на перерисовке; до: 3/3/3/3 |
-| RS1–RS13, RS15–RS19 | | не начата | |
+| RS1 | #2384 | готова | `painting_it recording_contract::a_non_finite_op_is_refused_by_kind`, `…a_destructor_that_panics_during_reset_leaves_the_canvas_empty` (падает без порядка `reset`); `a_non_finite_op_is_omitted_and_the_frame_draws`, `inline_picture_replay_owns_its_root_clips` на lavapipe; `.snap` не тронуты; `rg draw_picture crates packages` пуст |
+| RS14 | #2382 | готова; `RasterExecutor` переходит в RS15 вместе с командами, его единственный API это ход по ним | `every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format` (lavapipe): 3 слота в двух форматах дают 1 instance, 1 device, 1 атлас, 2 набора пайплайнов, 0 сборок на перерисовке; до: 3/3/3/3 |
+| RS2–RS13, RS15–RS19 | | не начата | |

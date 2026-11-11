@@ -45,18 +45,38 @@ the crate can add, remove, or edit a command, so its cached `bounds()` is
 always the union the recorder computed (`op.local_bounds()` through the
 command's transform), and `Option<Rect>` because a list of only clips or
 `Paint`s has no extent (which is not an empty rect at the origin).
-`draw_picture` replays a list as `ctm * command.transform` per command,
-inside a save/restore scope: the picture inherits the caller's clip, and its
-own root clips end with it. An empty picture records nothing. The engine's
+`DisplayList::append_isolated` splices a recorded run inside a save/restore
+scope: the run inherits the caller's clip, and its own root clips end with it.
+An empty run records nothing. The engine's
 `inline_picture_replay_owns_its_root_clips` pins this through readback.
+
+Non-finite input is refused at record, by the op's kind
+([ADR-0306](../../docs/adr/ADR-0306-display-list-commands-hold-local-geometry-under-interned-transforms.md)
+§4): `DrawOp::is_finite` checks every value an op holds, its path's points
+(through a flag `Path`'s edits keep current) and its paint's values (checked
+once, when the canvas interns the paint). A refused draw is left out, a clip
+becomes an intersection with an empty rectangle, a save-layer opens
+unbounded, and a scope marker under a non-finite transform is kept under the
+identity, so every scope stays balanced and the list's extents stay finite.
+`DisplayList::non_finite` counts the refusals, `append` sums them and
+`Canvas::finish` warns once when one is not zero. The canvas has no
+finiteness `debug_assert!`, so a release build and the dev profile do the
+same thing; a finite value too large for the engine's `f32` payload stays the
+engine's refusal.
+
+`Canvas::reset` takes the recorded ops and the paint pool out and resets
+every field before it drops them: an op's destructor can run user code (a
+paragraph's font bytes are a caller's `Arc<dyn AsRef<[u8]>>`), and one that
+panics leaves an empty canvas (ADR-0306 §7).
+
 The wire carries no serde ([ADR-0066](../../docs/adr/ADR-0066-display-list-command-representation.md)).
 
-`Paint` is interned per canvas: each `draw_*` scans a small `Vec<Arc<Paint>>`
+`Paint` is interned per canvas: each `draw_*` scans a small pool of `Arc<Paint>`s
 for an equal paint and shares the `Arc` (`Canvas::intern_paint`,
-`src/canvas/mod.rs:88`). `Path` is copy-on-write over `Arc<kurbo::BezPath>`
+`src/canvas/mod.rs:101`). `Path` is copy-on-write over `Arc<kurbo::BezPath>`
 (`src/paint/path.rs:75`): a path inside a `DrawOp` (`ClipPath`, `Path`,
 `Shadow`) holds that `Arc` plus an inline shape hint (at most an `RRect`), a
-fill type and a cached bounds, and recording a caller's path copies no
+fill type, a cached bounds and a finiteness flag, and recording a caller's path copies no
 geometry. `PathCommand` (`src/paint/path.rs:24`) is the element
 `Path::commands` yields (`src/paint/path.rs:600`), not the storage.
 `DrawCommand.transform` is a full `Matrix4`, sixteen `f64` (128 bytes), so every

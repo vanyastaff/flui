@@ -847,7 +847,8 @@ mod twin_readback_tests {
         let picture = |size: u32, invalid: bool, clipped: bool| {
             let mut canvas = Canvas::new();
             if invalid {
-                canvas.clip_rect(Rect::from_xywh(f64::NAN, 0.0, 1.0, 1.0));
+                // Finite but inverted: the engine refuses it at the frame.
+                canvas.clip_rect(Rect::from_xywh(1.0, 0.0, -1.0, 1.0));
             } else if clipped {
                 canvas.clip_rect(Rect::from_xywh(
                     0.0,

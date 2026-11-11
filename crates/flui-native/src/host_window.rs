@@ -156,7 +156,7 @@ pub trait HostWindow: sealed::Sealed + PlatformWindow {
     /// It is the host's, not the window contract's: the framework programs
     /// against [`PlatformWindow`], which offers no downcast. The native hosts'
     /// window types are not public, so outside this crate only the headless
-    /// host's window can be named and downcast to (`MockWindow`, its test
+    /// host's window can be named and downcast to (`HeadlessHostWindow`, its test
     /// controls). Every window gets this one body, through the seal.
     fn as_any(&self) -> &dyn Any {
         sealed::Sealed::any(self)
