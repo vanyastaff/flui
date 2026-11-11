@@ -36,9 +36,9 @@ use flui_interaction::focus::{
 };
 use flui_platform::TargetPlatform;
 use flui_view::element::ElementKind;
-use flui_view::impl_inherited_view;
+
 use flui_view::prelude::*;
-use flui_view::{EventCx, EventOutcome};
+use flui_view::{EventCx, EventOutcome, Provided, ProvidedValue};
 
 use crate::support::{RefCallback, ref_callback};
 
@@ -340,11 +340,15 @@ impl StatelessView for Actions {
     /// falling back to whatever the enclosing chain already had. If `own`
     /// binds the same type twice, the later call wins, same as a duplicate
     /// key in a map literal.
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        ActionChainProvider {
-            chain: layered_chain(ambient_action_chain(ctx), &self.own),
-            child: self.child.clone(),
-        }
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.child.clone()
+    }
+
+    fn provide(&self, ctx: &dyn BuildContext, values: &mut Provided<'_>) {
+        values.value(EnclosingActions(layered_chain(
+            ambient_action_chain(ctx),
+            &self.own,
+        )));
     }
 }
 
@@ -429,21 +433,48 @@ pub(crate) fn platform_at(node: &FocusNode) -> Option<TargetPlatform> {
 /// they re-read — which is why `Focus` records the chain with a dependency and
 /// `Shortcuts` reads the primary focus's record at key time (ADR-0079).
 pub(crate) fn ambient_action_chain(ctx: &dyn BuildContext) -> Option<ActionChain> {
-    ctx.get::<ActionChainProvider, _>(|provider| Rc::clone(&provider.chain))
+    ctx.get::<EnclosingActions, _>(|enclosing| Rc::clone(&enclosing.0))
 }
 
-/// The inherited carrier of the layered [`ActionChain`]. Private: `Actions`
-/// is the public surface.
+/// The layered [`ActionChain`] as an element publishes it to its subtree
+/// (ADR-0322 §5). Private: `Actions` is the public surface.
 #[derive(Clone)]
-pub(crate) struct ActionChainProvider {
+pub(crate) struct EnclosingActions(ActionChain);
+
+impl EnclosingActions {
+    /// The chain in force at `ctx`, registering a dependency: the reader
+    /// rebuilds when an enclosing scope layers another chain.
+    pub(crate) fn depend_on(ctx: &dyn BuildContext) -> Option<ActionChain> {
+        ctx.depend_on::<Self, _>(|enclosing| Rc::clone(&enclosing.0))
+    }
+}
+
+impl std::fmt::Debug for EnclosingActions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EnclosingActions")
+            .field("intent_types", &self.0.len())
+            .finish()
+    }
+}
+
+impl ProvidedValue for EnclosingActions {
+    /// Rebuilding an `Actions` mints a fresh chain, so dependents (a
+    /// `Shortcuts` that captured the chain into its key handler) re-capture.
+    fn update_should_notify(&self, old: &Self) -> bool {
+        !Rc::ptr_eq(&self.0, &old.0)
+    }
+}
+
+/// Publishes `chain` to `child`: a widget that keeps its own layered chain
+/// (a selection area, whose menu items perform through it) provides it as an
+/// `Actions` would.
+#[derive(Clone)]
+pub(crate) struct ActionScope {
     chain: ActionChain,
     child: BoxedView,
 }
 
-impl ActionChainProvider {
-    /// `chain` for `child`: a widget that keeps its own layered chain (a
-    /// selection area, whose menu items perform through it) provides it
-    /// as an `Actions` would.
+impl ActionScope {
     pub(crate) fn new(chain: ActionChain, child: impl IntoView) -> Self {
         Self {
             chain,
@@ -452,33 +483,29 @@ impl ActionChainProvider {
     }
 }
 
-impl std::fmt::Debug for ActionChainProvider {
+impl std::fmt::Debug for ActionScope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ActionChainProvider")
+        f.debug_struct("ActionScope")
             .field("intent_types", &self.chain.len())
             .finish_non_exhaustive()
     }
 }
 
-impl InheritedView for ActionChainProvider {
-    type Data = ActionChain;
-
-    fn data(&self) -> &Self::Data {
-        &self.chain
-    }
-
-    fn child(&self) -> &dyn View {
-        &self.child
-    }
-
-    /// Rebuilding an `Actions` mints a fresh chain `Arc`, so dependents (a
-    /// `Shortcuts` that captured the chain into its key handler) re-capture.
-    fn update_should_notify(&self, old: &Self) -> bool {
-        !Rc::ptr_eq(&self.chain, &old.chain)
+impl View for ActionScope {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
     }
 }
 
-impl_inherited_view!(ActionChainProvider);
+impl StatelessView for ActionScope {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.child.clone()
+    }
+
+    fn provide(&self, _ctx: &dyn BuildContext, values: &mut Provided<'_>) {
+        values.value(EnclosingActions(Rc::clone(&self.chain)));
+    }
+}
 // ============================================================================
 // Activation intents (ADR-0079)
 // ============================================================================

@@ -156,7 +156,7 @@ pub(crate) fn stamp_sliver_slot(
 /// hand-rolled element that bypassed `ElementTree::insert`; test fixtures
 /// only), there is no slab id to attach the record to, so the push is
 /// skipped and a `tracing::error!` is the only signal.
-pub(crate) fn build_or_recover<V, A, F>(
+pub(crate) fn build_or_recover_begun<V, A, F>(
     core: &mut ElementCore<V, A>,
     owner: &mut crate::ElementOwner<'_>,
     behavior_name: &'static str,
@@ -179,11 +179,9 @@ where
     // ADR-0074: every element kind builds through this one function, so this
     // is where "an element is building" is armed for the ui_runtime's reactive
     // graph — reads re-derive the reader set, writes and slot creations are
-    // refused. Disarmed on both exits (the panic path below included).
+    // refused. The caller armed it (`begin_reactive_build`); it is disarmed
+    // here on both exits (the panic path below included).
     let building = core.self_id();
-    if let Some(id) = building {
-        owner.reactive.begin_element_build(id);
-    }
     #[expect(
         clippy::disallowed_methods,
         reason = "ADR-0287: a view's build panic is replaced by an ErrorView, not unwound"
@@ -250,6 +248,37 @@ where
             error_view
         }
     }
+}
+
+/// Arm the reactive build phase for `core`'s element (ADR-0074): from here
+/// its signal reads are recorded as this build's and writes are refused.
+///
+/// [`build_or_recover_begun`] disarms it. A caller that runs a hook between
+/// the two disarms it itself when that hook fails.
+pub(crate) fn begin_reactive_build<V, A>(core: &ElementCore<V, A>, owner: &crate::ElementOwner<'_>)
+where
+    V: Clone + 'static,
+    A: ElementArity,
+{
+    if let Some(id) = core.self_id() {
+        owner.reactive.begin_element_build(id);
+    }
+}
+
+/// [`build_or_recover_begun`] for a build with no hook before it.
+pub(crate) fn build_or_recover<V, A, F>(
+    core: &mut ElementCore<V, A>,
+    owner: &mut crate::ElementOwner<'_>,
+    behavior_name: &'static str,
+    build: F,
+) -> Box<dyn View>
+where
+    V: Clone + 'static,
+    A: ElementArity,
+    F: FnOnce() -> Box<dyn View>,
+{
+    begin_reactive_build(core, owner);
+    build_or_recover_begun(core, owner, behavior_name, build)
 }
 
 /// Shared tail for any behavior whose build half produces exactly one
