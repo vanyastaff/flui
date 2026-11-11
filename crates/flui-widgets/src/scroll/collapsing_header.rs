@@ -150,13 +150,13 @@ pub enum HeaderOrder {
 /// without one it jumps to where a settle would rest.
 ///
 /// ```rust
-/// use flui_widgets::{CollapsingHeader, HeaderExtents, Scrollable, SizedBox};
+/// use flui_widgets::{CollapsingHeader, HeaderExtents, SingleChildScrollView, SizedBox};
 ///
 /// let extents = HeaderExtents::try_new(56.0, 200.0).expect("ordered, finite extents");
 /// let view = CollapsingHeader::new(
 ///     extents,
 ///     SizedBox::new(400.0, 200.0),
-///     Scrollable::new().child(SizedBox::new(400.0, 2000.0)),
+///     SingleChildScrollView::new().child(SizedBox::new(400.0, 2000.0)),
 /// )
 /// .semantic_label("Inbox");
 /// ```

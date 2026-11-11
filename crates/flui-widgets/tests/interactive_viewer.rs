@@ -17,19 +17,19 @@ use flui_platform::pointer::{
 };
 use flui_platform::{EventTime, keyboard::Modifiers};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, TreeId};
-use flui_testing::{MouseScript, PointerScript, TouchScript, TrackpadScript};
+use flui_testing::{MouseScript, PenScript, PointerScript, TouchScript, TrackpadScript};
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, Signal, SignalWriteExt, View, ViewExt};
 use flui_widgets::{
     ColoredBox, Directionality, InteractiveViewer, NestedScroll, PageController, PageView,
-    ScrollCause, ScrollController, ScrollEndReason, Scrollable, SizedBox, Transform,
-    TransformationController, WheelScaleGate,
+    ScrollCause, ScrollController, ScrollEndReason, ScrollView, SingleChildScrollView, SizedBox,
+    Transform, TransformationController, WheelScaleGate,
 };
 
 use crate::common::{LaidOut, lay_out, tight, viewer_alternatives};
 use crate::nested_scroll::{
-    DEVICES, Device, Probe, Seen, at, drag, line, mounted, replay_contained, settle, slow,
+    ALL_DEVICES, Device, Probe, Seen, at, drag, line, mounted, replay_contained, settle, slow,
 };
 
 const PAGE: f64 = 300.0;
@@ -168,7 +168,7 @@ pub(crate) fn a_turned_photo_at_its_edge_frees_the_axis_it_cannot_pan() {
 /// when the contact is cancelled. Under the default remainder rule a photo
 /// that moved first keeps the whole contact, even at its edge.
 pub(crate) fn photo_in_pager_hands_pan_remainder_to_pager() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         // Unzoomed, at 0°, 30° and 50°: the pager takes the horizontal share
         // and lands on the next page; the photo does not move.
         for (degrees, from, to) in [
@@ -317,7 +317,7 @@ pub(crate) fn photo_in_pager_hands_pan_remainder_to_pager() {
 /// In a right-to-left pager the next page is to the left: the photo's
 /// remainder moves the pager toward the reading end.
 pub(crate) fn photo_in_rtl_pager_turns_toward_the_reading_end() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         let (pager, transform, vsync) = (
             PageController::new(),
             TransformationController::new(),
@@ -349,7 +349,7 @@ pub(crate) fn photo_in_rtl_pager_turns_toward_the_reading_end() {
 /// sees the contact's user steps, then side-effect steps under the same
 /// sequence, and the sequence end once, after the run rests at the boundary.
 pub(crate) fn viewer_inertia_is_a_side_effect_of_the_releasing_sequence() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         let (transform, probe, vsync) =
             (TransformationController::new(), Probe::new(), Vsync::new());
         let viewer = photo(&transform).boundary_margin(EdgeInsets::all(400.0));
@@ -414,7 +414,7 @@ pub(crate) fn viewer_inertia_is_a_side_effect_of_the_releasing_sequence() {
 /// viewer's inertia still runs as the sequence's motion, the sequence ends
 /// once for every participant, and the failure resumes once.
 pub(crate) fn viewer_release_failure_still_ends_the_sequence() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         let (transform, near, far, vsync) = (
             TransformationController::new(),
             Probe::new(),
@@ -496,7 +496,7 @@ pub(crate) fn plain_wheel_pans_the_viewer_then_leaves_its_edge_to_the_list() {
         .boundary_margin(EdgeInsets::all(60.0))
         .child(SizedBox::new(300.0, 300.0));
     let mut laid = lay_out(
-        Scrollable::new()
+        SingleChildScrollView::new()
             .controller(list.clone())
             .child(SizedBox::new(300.0, 1000.0).child(viewer)),
         tight(300.0, 300.0),
@@ -554,7 +554,7 @@ fn focus_viewer(laid: &mut LaidOut) {
 pub(crate) fn viewer_keys_pan_and_zoom_from_the_focused_row() {
     let (transform, list) = (TransformationController::new(), ScrollController::new());
     let mut laid = lay_out(
-        Scrollable::new()
+        SingleChildScrollView::new()
             .controller(list.clone())
             .child(flui_widgets::Column::new(vec![
                 SizedBox::new(300.0, 300.0)
@@ -750,6 +750,15 @@ fn double_tap(device: Device, point: Offset<f64>) -> PointerScript {
             .wait(tap)
             .up(2)
             .build(),
+        Device::Pen => PenScript::new("double tap")
+            .down(point, 0.5)
+            .wait(tap)
+            .up()
+            .wait(gap)
+            .down(point, 0.5)
+            .wait(tap)
+            .up()
+            .build(),
         Device::Mouse => MouseScript::new("double click")
             .move_to(point)
             .press(point)
@@ -773,7 +782,7 @@ pub(crate) fn viewer_double_tap_zooms_about_the_tap_and_back_out_at_the_maximum(
         .smart_zoom()
         .build()
         .expect("one discrete event");
-    let gestures = DEVICES
+    let gestures = ALL_DEVICES
         .into_iter()
         .map(|device| (format!("{device:?}"), double_tap(device, tapped)))
         .chain([("trackpad smart zoom".to_owned(), smart_zoom)]);
@@ -947,7 +956,7 @@ impl flui_view::StatelessView for Rebuilding {
 /// the gesture: the pan reaches its full distance under one sequence, and
 /// each rebuilt configuration applies to the next move.
 pub(crate) fn viewer_rebuild_from_its_update_callback_keeps_the_gesture() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         let (transform, probe, vsync) =
             (TransformationController::new(), Probe::new(), Vsync::new());
         let mut laid = mounted(SizedBox::shrink().boxed(), vsync);
@@ -989,7 +998,7 @@ pub(crate) fn viewer_rebuild_from_its_update_callback_keeps_the_gesture() {
 /// less far than the contact moves — without handing the pager anything,
 /// and comes back to the edge after it lifts.
 pub(crate) fn viewer_pan_past_its_boundary_stretches_and_snaps_back() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         let (pager, transform, vsync) = (
             PageController::new(),
             TransformationController::new(),
@@ -1135,7 +1144,7 @@ pub(crate) fn viewer_touch_twist_rotates_only_when_rotation_is_enabled() {
 /// A fling the boundary stops overshoots past it and settles on it, as the
 /// last motion of the releasing sequence.
 pub(crate) fn viewer_fling_into_its_boundary_overshoots_and_settles() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         let (transform, probe, vsync) =
             (TransformationController::new(), Probe::new(), Vsync::new());
         let viewer = photo(&transform).boundary_margin(EdgeInsets::all(100.0));
@@ -1223,7 +1232,7 @@ pub(crate) fn viewer_key_sequence_ends_when_focus_moves_before_the_release() {
 /// A contact on the viewer gives it the keys: an arrow pans it next,
 /// without moving focus there first.
 pub(crate) fn viewer_contact_gives_it_the_keys() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         let transform = TransformationController::new();
         let mut laid = lay_out(
             InteractiveViewer::new(viewer_alternatives())

@@ -13,8 +13,8 @@ use flui_native::journal::codec::{
 };
 use flui_native::testing::app::{AppCall, AppLog, run_keeping_owner};
 use flui_native::{
-    HeadlessDisplayControls, HeadlessHostEvents, HeadlessPlatform, HeadlessPreferences, MockWindow,
-    OwnerPlatform,
+    HeadlessDisplayControls, HeadlessHostEvents, HeadlessHostWindow, HeadlessPlatform,
+    HeadlessPreferences, OwnerPlatform,
 };
 use flui_platform::{
     CapabilityAbsence, DisplayId, DisplayKey, DisplayParts, DisplayRegistry, Headroom, ImeEvent,
@@ -64,7 +64,7 @@ impl ReplayTarget for HostEventsTarget {
 }
 
 /// Replays a window stream into a headless window.
-pub(super) struct WindowTarget(pub(super) MockWindow);
+pub(super) struct WindowTarget(pub(super) HeadlessHostWindow);
 
 impl ReplayTarget for WindowTarget {
     fn ime(&mut self, event: &ImeEvent) -> Result<(), Unsupported> {
@@ -210,13 +210,13 @@ impl ReplayTarget for PlatformTarget<'_> {
 /// published as the window system's report, on the display the replay
 /// issued for its label, and what the window published is kept.
 pub(super) struct WindowStateTarget<'a> {
-    window: MockWindow,
+    window: HeadlessHostWindow,
     labels: &'a Labels,
     pub(super) published: Vec<WindowState>,
 }
 
 impl<'a> WindowStateTarget<'a> {
-    pub(super) fn new(window: MockWindow, labels: &'a Labels) -> Self {
+    pub(super) fn new(window: HeadlessHostWindow, labels: &'a Labels) -> Self {
         Self {
             window,
             labels,
@@ -320,7 +320,7 @@ fn recorded_states(recording: &NativeRecording) -> Vec<(Option<u64>, WindowState
 /// A headless window, opened on `owner` with a recording handler.
 pub(super) fn headless_window(
     owner: &flui_native::OwnerPlatform,
-) -> (MockWindow, std::rc::Rc<RecordingWindowHandler>) {
+) -> (HeadlessHostWindow, std::rc::Rc<RecordingWindowHandler>) {
     let handler = RecordingWindowHandler::new();
     let window = owner
         .open_window(WindowOptions::default(), handler.clone())
@@ -329,7 +329,7 @@ pub(super) fn headless_window(
         .expect("at once");
     let mock = window
         .as_any()
-        .downcast_ref::<MockWindow>()
+        .downcast_ref::<HeadlessHostWindow>()
         .expect("a headless window")
         .clone();
     (mock, handler)

@@ -531,16 +531,20 @@ counters"). `HeadlessBinding::last_frame_report()` pairs that difference with
 run) for the last pump.
 
 `crates/flui-widgets/tests/perf.rs` drives a fixed app — a label over a lazy
-10 000-row list — through an idle 10 s, a one-screen scroll, a one-label change
-and a full reassemble, and asserts budgets on those reports. `cargo xtask perf`
-runs that target with `FLUI_PERF_OUT` set and compares every count with
-`crates/flui-widgets/perf/baseline.toml`:
+10 000-row list — through a one-screen scroll and a full reassemble, a
+`SlideTransition` tick over a painted panel, and a label change over an eager
+column of 500 and of 5 000 buttons, and asserts budgets on those reports. Each
+record also carries `allocations`, the heap allocations of the measured frames
+on the test thread, counted by the target's `#[global_allocator]`.
+`cargo xtask perf` runs that target with `FLUI_PERF_OUT` set and compares every
+count with `crates/flui-widgets/perf/baseline.toml`:
 
 ```bash
 cargo nextest run -p flui-widgets --test perf   # the budget assertions alone
 cargo xtask perf                                # advisory: prints differences, exits 0
 cargo xtask perf --check                        # any difference fails
 cargo xtask perf --bless                        # rewrite the baseline from this run
+cargo xtask perf --instructions --check         # each perf_scaling_ scenario under callgrind (needs valgrind)
 cargo xtask perf --self-test                    # the comparison on planted fixtures (part of `cargo test -p xtask`)
 ```
 
@@ -548,10 +552,21 @@ The comparison is exact: a count that rose is a regression, and one that fell
 is a finding too, until `--bless` locks the improvement in — otherwise a later
 regression back up to the old value would pass. Commit a re-blessed baseline
 with the change that moved it and say why in the PR. The run writes the merged
-counts to `<target>/perf/current.toml`. The checked-in baseline was blessed on
-Windows. An advisory `perf` job belongs in the `wide` and `full` lanes; it is
-not in the workflows yet, so only `perf --self-test` and the budget assertions
-are on the merge path.
+counts to `<target>/perf/current.toml`. A count is a function of the tree and
+the change, so it must not depend on a random seed: a per-frame table keyed by
+ids is slot-indexed (`flui_foundation::SlotIndex`, `SlotSet`) or hashed with a
+fixed hasher, never `std`'s `RandomState`, whose tombstones decide when a table
+reallocates.
+
+A `perf_scaling_` scenario runs one change on a `small` and a `large` tree
+(`FLUI_PERF_SIZE` selects one) and asserts equal allocations on both.
+`--instructions` runs each size alone under `valgrind --tool=callgrind`,
+counting only inside the target's `perf_measured`, and fails when the large
+tree costs more than 5% over the small one: a frame that clears a table the
+mount grew or walks the whole tree for what a few nodes report is caught there,
+while every counter of its work stays put. The budget assertions run with
+flui-widgets' suite on every PR; the `perf-gates` job runs `perf --check` and
+`perf --instructions --check` in the `full` lane.
 
 ## Linting
 
@@ -739,6 +754,27 @@ Two behaviours worth knowing before you write an assertion:
 - **A contact's route is captured on its Down** and reused for that contact's
   remaining events, so a harness hit-test hook fires once per contact, not once
   per event. Give each contact its own `PointerId`.
+
+### Motion a person would notice
+
+`flui_testing::motion` records what the window shows each frame and fails on motion a person
+would notice: something that pops in or out, jumps, snaps its opacity, flickers, overshoots,
+never settles, or keeps the window asking for frames after it ends
+([ADR-0321](adr/ADR-0321-a-motion-gate-reads-what-the-window-shows-each-frame.md)). Drive the
+change through a `MotionRun` over a `LaidOut`, then gate the recording:
+
+```rust,ignore
+let mut run = MotionRun::new(&mut laid);
+run.act(|laid| laid.pump_widget(tree(true)));
+run.play(Duration::from_secs(1), Duration::from_millis(16));
+assert_smooth(&run.finish(), &[
+    Allow::new(Rule::Jump, "RenderPadding", "the inset changes at once by design"),
+]);
+```
+
+An `Allow` row names a part of a node's locator and a reason; a row that matches nothing fails
+the gate, so the list shrinks as the motion it excused is fixed. The thresholds are
+`MotionConfig`. Examples of every rule: `crates/flui-testing/tests/motion_gate.rs`.
 
 ### Scripted gestures
 

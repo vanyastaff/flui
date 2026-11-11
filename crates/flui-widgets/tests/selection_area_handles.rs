@@ -994,7 +994,7 @@ pub(crate) fn failing_wakes_as_the_focus_leaves_are_reported_not_raised() {
 /// Red-check: let the handles escape their ends' clips (the drag above the
 /// viewport moves the end).
 pub(crate) fn a_handle_scrolled_out_of_view_takes_no_touch() {
-    use flui_widgets::{ScrollController, Scrollable};
+    use flui_widgets::{ScrollController, ScrollView, SingleChildScrollView};
 
     const ABOVE: f64 = 150.0;
     const SCROLLED: f64 = 100.0;
@@ -1015,8 +1015,11 @@ pub(crate) fn a_handle_scrolled_out_of_view_takes_no_touch() {
         });
     let app = WidgetsApp::new(Column::new((
         SizedBox::new(400.0, ABOVE),
-        SizedBox::new(400.0, 60.0)
-            .child(Scrollable::new().controller(controller.clone()).child(area)),
+        SizedBox::new(400.0, 60.0).child(
+            SingleChildScrollView::new()
+                .controller(controller.clone())
+                .child(area),
+        ),
     )));
     let mut scene = Scene::laid_out(app, heard);
     scene.long_press(scene.along(width_of("alpha be")));

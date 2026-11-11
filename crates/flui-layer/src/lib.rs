@@ -27,6 +27,9 @@
 //! - [`SceneBuilder`]: push/pop construction for hand-authored scenes.
 //! - [`Scene`] and [`SceneSnapshot`] / [`DamageRegion`]: the frozen tree and
 //!   the per-frame package that crosses the raster boundary.
+//! - [`SceneOwner`] and [`SceneVersion`]: the retained scene (ADR-0304), a
+//!   persistent version changed by [`SceneOp`] patches applied all or
+//!   nothing; paint does not produce one yet.
 //! - `testing::inspect` (feature `testing`): structural walkers for tests.
 //!
 //! ## Design
@@ -83,8 +86,14 @@ pub use layer::{
     TextureLayer, TransformLayer,
 };
 pub use link::{LayerLink, leader_origin, resolve_follower_transform};
-pub use scene::Scene;
-pub use scene_snapshot::{DamageRect, DamageRegion, SceneSnapshot};
+pub use scene::{
+    BoundaryContent, Bounds, Chunk, ContentBuilder, ContentVersion, Entry, EntryAddress,
+    EntryIndex, Lineage, Placement, Scene, SceneError, SceneNode, SceneNodeId, SceneNodeMarker,
+    SceneOp, SceneOwner, ScenePublication, SceneVersion, SceneVersionId, SceneWriter, SurfaceKey,
+};
+pub use scene_snapshot::{
+    DamageRect, DamageRegion, FullReason, NonFinite, Region, ResyncReason, SceneSnapshot,
+};
 pub use texture_registry::{
     TextureIdsExhausted, TextureListener, TextureRegistration, TextureRegistry, TextureUpdates,
 };

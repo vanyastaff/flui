@@ -4,7 +4,7 @@
 //! # Composition
 //!
 //! `PageView` composes a [`Scrollable`] with a [`PageSnap`] policy and a
-//! [`PageController`], `viewport_builder`-ing a [`Viewport`] over a single
+//! [`PageController`] over a [`Viewport`] of a single
 //! [`SliverFillViewport`]: one sliver whose children each fill a
 //! `viewport_fraction`-sized page, over a plain eager child list (see
 //! [`PageView`]'s own docs). A drag along the axis, a press on a moving
@@ -78,6 +78,7 @@ use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
     axis_direction_from_axis_reverse_and_directionality,
 };
+use crate::scroll::ScrollView;
 use crate::scroll::scroll_owner::SharedSnapPolicy;
 use crate::scroll::{
     PageSnap, ScrollController, ScrollMetrics, Scrollable, SliverFillViewport, Viewport,
@@ -425,7 +426,7 @@ pub struct PageView {
     scroll_direction: Axis,
     on_page_changed: Option<OnPageChanged>,
     cache_extent: Option<(f64, CacheExtentStyle)>,
-    allowed_devices: PointerKindSet,
+    allowed_devices: Option<PointerKindSet>,
     autofocus: bool,
     children: Vec<BoxedView>,
     alternatives: GestureAlternatives,
@@ -443,7 +444,7 @@ impl PageView {
             scroll_direction: Axis::Horizontal,
             on_page_changed: None,
             cache_extent: Some((0.0, CacheExtentStyle::Viewport)),
-            allowed_devices: PointerKindSet::all(),
+            allowed_devices: None,
             autofocus: false,
             children: super::sliver_list::wrap_in_repaint_boundaries(children.into_boxed_vec()),
         }
@@ -492,11 +493,12 @@ impl PageView {
         self
     }
 
-    /// Admit only drags and presses of these pointer kinds (default: all).
+    /// Admit only drags and presses of these pointer kinds (default: what
+    /// the [`ScrollBehavior`](crate::ScrollBehavior) answers).
     /// See [`Scrollable::allowed_devices`].
     #[must_use]
     pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
-        self.allowed_devices = devices;
+        self.allowed_devices = Some(devices);
         self
     }
 
@@ -781,12 +783,21 @@ impl ViewState<PageView> for PageViewState {
         let cache_extent = view.cache_extent;
         let page_count = view.children.len();
         self.page_count.set(page_count);
-        let mut scrollable = Scrollable::new()
-            .controller(controller.scroll_controller())
-            .snap_policy(Rc::clone(&self.snap))
-            .allowed_devices(view.allowed_devices)
-            .autofocus(view.autofocus)
-            .scroll_direction(scroll_direction);
+        let mut scrollable = Scrollable::new(move |position: ScrollPosition| {
+            let sliver = SliverFillViewport::new(viewport_fraction, children.clone());
+            let mut viewport = Viewport::new(position, (sliver,)).axis_direction(axis_direction);
+            if let Some((extent, style)) = cache_extent {
+                viewport = viewport.cache_extent(extent, style);
+            }
+            viewport.boxed()
+        })
+        .controller(controller.scroll_controller())
+        .snap_policy(Rc::clone(&self.snap))
+        .autofocus(view.autofocus)
+        .scroll_direction(scroll_direction);
+        if let Some(devices) = view.allowed_devices {
+            scrollable = scrollable.allowed_devices(devices);
+        }
         if page_count > 0 {
             let page = usize::try_from(self.last_reported_page.get())
                 .unwrap_or(0)
@@ -797,34 +808,10 @@ impl ViewState<PageView> for PageViewState {
             };
             scrollable = scrollable.semantic_label(label);
         }
-        let scrollable = scrollable
-            // The inner `Viewport` below is built with this SAME
-            // `axis_direction`. Handing it to `Scrollable` explicitly (rather
-            // than relying on `Scrollable`'s own ambient-`Directionality`
-            // fallback, which currently resolves to the identical value here
-            // — same helper, same `ctx`-visible `Directionality` ancestor,
-            // same `reverse: false`, verified by deleting this line: every
-            // test still passes) keeps this composition correct BY
-            // CONSTRUCTION rather than by that coincidence: `PageView`'s own
-            // module docs list `reverse` as a deferred feature, and once
-            // added, this explicit value (not the fallback's hardcoded
-            // `reverse: false`) is what must reach `Scrollable`'s gesture
-            // code. `Scrollable::axis_direction`'s docs cover the general
-            // case: any `.viewport_builder` composing content whose
-            // `AxisDirection` doesn't reduce to "ambient `Directionality` +
-            // this `scroll_direction` + `reverse: false`" needs this to stay
-            // correct.
-            .axis_direction(axis_direction)
-            .viewport_builder(Rc::new(move |position: ScrollPosition| {
-                let sliver = SliverFillViewport::new(viewport_fraction, children.clone());
-                let mut viewport = Viewport::new((sliver,))
-                    .axis_direction(axis_direction)
-                    .position(position);
-                if let Some((extent, style)) = cache_extent {
-                    viewport = viewport.cache_extent(extent, style);
-                }
-                viewport.boxed()
-            }));
+        // The viewport above is built with this SAME `axis_direction`;
+        // handing it to `Scrollable` keeps gesture orientation equal to what
+        // the viewport paints by construction.
+        let scrollable = scrollable.axis_direction(axis_direction);
         Actions::new(view.alternatives.clone().child(scrollable))
             .action(PageAction {
                 controller,

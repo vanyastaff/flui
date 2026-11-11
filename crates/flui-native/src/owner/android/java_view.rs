@@ -49,7 +49,7 @@ use crate::owner::android::activity::with_activity;
 const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
 
 /// The host's drag-and-drop transport as the view's drag callbacks reach it:
-/// `nativeDrag` and `nativeDrop` run on the Java main thread and must be
+/// `nativeDrag`, `nativeDropOffer` and `nativeDrop` run on the Java main thread and must be
 /// answered at once, from what the owner published earlier (ADR-0211,
 /// ADR-0247). The transport is the host's one [`DragTransport`].
 ///
@@ -69,18 +69,14 @@ pub(crate) trait ViewTransfer: flui_platform::data_transfer::DragTransport {
         result: bool,
     ) -> bool;
 
-    /// The drop at `position`, whose clip carried `text`, `html` and `uris`:
-    /// the key of the offer the drop holds, which the view hands back, or 0
-    /// when the drop is refused.
-    fn drop_clip(
-        &self,
-        view: &JavaView,
-        position: (f64, f64),
-        local: bool,
-        text: Option<String>,
-        html: Option<String>,
-        uris: Vec<String>,
-    ) -> i64;
+    /// The key of the offer over the view, under which the view holds the
+    /// clip of a drop before it asks [`Self::take_drop`]; 0 when none is.
+    fn hover_key(&self) -> i64;
+
+    /// The drop at `position` of the clip the view holds under `key`: whether
+    /// it is taken. The view lets go of the clip at once when it is not, and
+    /// when the target concludes it otherwise.
+    fn take_drop(&self, view: &JavaView, key: i64, position: (f64, f64), local: bool) -> bool;
 
     /// FLUI's own drag, which the view runs, advertises `allowed` to a target
     /// of this activity, or has ended (`None`).
@@ -657,8 +653,13 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
                 native_drag as *mut std::ffi::c_void,
             ),
             NativeMethod::from_raw_parts(
+                jni_str!("nativeDropOffer"),
+                jni_str!("(J)J"),
+                native_drop_offer as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
                 jni_str!("nativeDrop"),
-                jni_str!("(JFFZLjava/lang/String;Ljava/lang/String;[Ljava/lang/String;)J"),
+                jni_str!("(JJFFZ)Z"),
                 native_drop as *mut std::ffi::c_void,
             ),
             NativeMethod::from_raw_parts(
@@ -797,41 +798,35 @@ extern "system" fn native_drag<'local>(
     })
 }
 
-extern "system" fn native_drop<'local>(
-    mut env: EnvUnowned<'local>,
+extern "system" fn native_drop_offer<'local>(
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
     handle: jlong,
+) -> jlong {
+    jni_native("nativeDropOffer", || {
+        bridge(handle).map_or(0, |view| view.transfer.hover_key())
+    })
+}
+
+extern "system" fn native_drop<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    offer: jlong,
     x: jfloat,
     y: jfloat,
     local: jboolean,
-    text: JString<'local>,
-    html: JString<'local>,
-    uris: JObjectArray<'local>,
-) -> jlong {
+) -> jboolean {
     jni_native("nativeDrop", || {
         let Some(view) = bridge(handle) else {
-            return 0;
-        };
-        let read = env
-            .with_env(|env| -> jni::errors::Result<_> {
-                Ok((
-                    string(env, &text)?,
-                    string(env, &html)?,
-                    strings(env, &uris)?,
-                ))
-            })
-            .into_outcome();
-        let jni::Outcome::Ok((text, html, uris)) = read else {
-            return 0;
+            return false;
         };
         let scale = view.scale();
-        view.transfer.drop_clip(
+        view.transfer.take_drop(
             &view,
+            offer,
             (f64::from(x) / scale, f64::from(y) / scale),
             local,
-            text,
-            html,
-            uris,
         )
     })
 }

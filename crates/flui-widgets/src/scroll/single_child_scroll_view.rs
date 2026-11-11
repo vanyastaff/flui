@@ -1,98 +1,49 @@
 //! [`SingleChildScrollView`] — makes a single child scrollable along one axis.
 
-use flui_foundation::geometry::Axis;
+use std::rc::Rc;
+
 use flui_rendering::view::ScrollPosition;
 use flui_view::prelude::StatelessView;
-use flui_view::{BuildContext, Child, IntoView};
+use flui_view::{BuildContext, Child, IntoView, ViewExt};
 
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
-use crate::scroll::{SliverToBoxAdapter, Viewport};
-
-/// Where the composed [`Viewport`] gets its scroll offset from — mirrors
-/// [`Viewport`]'s own `OffsetSource`, since this widget is a thin
-/// pixels-or-position passthrough onto it.
-#[derive(Clone, Debug)]
-enum OffsetSource {
-    Fixed(f64),
-    Position(ScrollPosition),
-}
+use crate::scroll::{ScrollView, ScrollViewConfig, Scrollable, SliverToBoxAdapter, Viewport};
 
 /// A box that lets its single child be larger than the available space along
-/// `scroll_direction`, showing a scrollable window into it.
+/// its scroll axis, and scrolls it.
 ///
-/// Composes a [`Viewport`] over a
-/// [`SliverToBoxAdapter`]: the child is laid out
-/// unbounded on the scroll axis and the viewport clips the overflow.
+/// Composes a [`Scrollable`] over a [`Viewport`] over a
+/// [`SliverToBoxAdapter`]: the child is laid out unbounded on the scroll axis
+/// and the viewport clips the overflow. Drag, fling, wheel, keys and
+/// assistive scroll actions move it; its controller, axis, `reverse` and
+/// gesture policy are the [`ScrollView`] builders.
 ///
-/// `scroll_direction` defaults to [`Axis::Vertical`]. `offset` is a programmatic
-/// scroll position; gesture-driven scrolling arrives with the
-/// `Scrollable`/`ScrollController` layer. `reverse` flips which edge scroll
-/// position `0.0` anchors to. `AxisDirection` is resolved as follows: a horizontal `scroll_direction` reads the ambient
-/// [`Directionality`](crate::Directionality) (`RightToLeft` under an RTL
-/// ancestor, defaulting to `LeftToRight` with no ancestor), and `reverse`
-/// flips whichever base direction that resolves to — including the vertical
-/// axis, which never consults `Directionality` itself.
-#[derive(Clone, Debug, StatelessView)]
+/// `AxisDirection` is resolved as follows: a horizontal axis reads the
+/// ambient [`Directionality`](crate::Directionality) (`RightToLeft` under an
+/// RTL ancestor, defaulting to `LeftToRight` with no ancestor), and
+/// [`ScrollView::reverse`] flips whichever base direction that resolves to —
+/// including the vertical axis, which never consults `Directionality` itself.
+///
+/// # Example
+///
+/// ```rust
+/// use flui_widgets::{ScrollController, ScrollView, SingleChildScrollView, SizedBox};
+///
+/// let controller = ScrollController::new();
+/// let view = SingleChildScrollView::new()
+///     .controller(controller)
+///     .child(SizedBox::new(300.0, 1400.0));
+/// ```
+#[derive(Clone, Debug, Default, StatelessView)]
 pub struct SingleChildScrollView {
-    scroll_direction: Axis,
-    reverse: bool,
-    offset_source: OffsetSource,
+    config: ScrollViewConfig,
     child: Child,
-}
-
-impl Default for SingleChildScrollView {
-    fn default() -> Self {
-        Self {
-            scroll_direction: Axis::Vertical,
-            reverse: false,
-            offset_source: OffsetSource::Fixed(0.0),
-            child: Child::empty(),
-        }
-    }
 }
 
 impl SingleChildScrollView {
     /// A vertical scroll view with no child yet.
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Set the scroll axis (default [`Axis::Vertical`]).
-    #[must_use]
-    pub fn scroll_direction(mut self, scroll_direction: Axis) -> Self {
-        self.scroll_direction = scroll_direction;
-        self
-    }
-
-    /// Reverse which edge scroll position `0.0` anchors to: the content grows
-    /// from the trailing edge (bottom for vertical, right for horizontal)
-    /// instead of the leading edge. Default `false`.
-    #[must_use]
-    pub fn reverse(mut self, reverse: bool) -> Self {
-        self.reverse = reverse;
-        self
-    }
-
-    /// Set the programmatic scroll offset in logical pixels.
-    ///
-    /// Fixed mode: the composed [`Viewport`] owns a private `ScrollPosition`
-    /// and this value is pushed into it on every rebuild. Mutually exclusive
-    /// with [`SingleChildScrollView::position`] — whichever is called last
-    /// wins.
-    #[must_use]
-    pub fn offset(mut self, offset: f64) -> Self {
-        self.offset_source = OffsetSource::Fixed(offset);
-        self
-    }
-
-    /// Inject a shared [`ScrollPosition`] as the composed [`Viewport`]'s
-    /// offset — see [`Viewport::position`] for the full contract. Mutually
-    /// exclusive with [`SingleChildScrollView::offset`] — whichever is
-    /// called last wins.
-    #[must_use]
-    pub fn position(mut self, position: ScrollPosition) -> Self {
-        self.offset_source = OffsetSource::Position(position);
-        self
     }
 
     /// Set the scrollable child.
@@ -103,21 +54,31 @@ impl SingleChildScrollView {
     }
 }
 
+impl ScrollView for SingleChildScrollView {
+    fn scroll_config_mut(&mut self) -> &mut ScrollViewConfig {
+        &mut self.config
+    }
+}
+
 impl StatelessView for SingleChildScrollView {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let axis_direction = axis_direction_from_axis_reverse_and_directionality(
             ctx,
-            self.scroll_direction,
-            self.reverse,
+            self.config.scroll_direction,
+            self.config.reverse,
         );
-        let adapter = match self.child.clone().into_inner() {
-            Some(boxed) => SliverToBoxAdapter::new().child(boxed),
-            None => SliverToBoxAdapter::new(),
-        };
-        let viewport = Viewport::new((adapter,)).axis_direction(axis_direction);
-        match &self.offset_source {
-            OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
-            OffsetSource::Position(position) => viewport.position(position.clone()),
-        }
+        let child = self.child.clone();
+        Scrollable::with_config(
+            self.config.clone(),
+            Rc::new(move |position: ScrollPosition| {
+                let adapter = match child.clone().into_inner() {
+                    Some(boxed) => SliverToBoxAdapter::new().child(boxed),
+                    None => SliverToBoxAdapter::new(),
+                };
+                Viewport::new(position, (adapter,))
+                    .axis_direction(axis_direction)
+                    .boxed()
+            }),
+        )
     }
 }

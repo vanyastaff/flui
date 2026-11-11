@@ -47,6 +47,12 @@ impl FieldSet {
         self.0 == 0
     }
 
+    /// The set with exactly the bits of `bits`.
+    #[must_use]
+    pub(crate) const fn from_bits(bits: u64) -> Self {
+        Self(bits)
+    }
+
     /// The raw bits (diagnostics).
     #[must_use]
     pub const fn bits(self) -> u64 {

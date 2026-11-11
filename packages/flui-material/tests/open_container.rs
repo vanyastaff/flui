@@ -25,8 +25,8 @@ use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     ColoredBox, Column, CrossAxisAlignment, MainAxisSize, NavigatorHandle, Padding, PageRoute,
-    Routable, RouteParseError, RoutePath, RouteResultError, Router, ScrollController, Semantics,
-    SingleChildScrollView, SizedBox, Transform, WidgetsApp,
+    Routable, RouteParseError, RoutePath, RouteResultError, Router, ScrollController, ScrollView,
+    Semantics, SingleChildScrollView, SizedBox, Transform, WidgetsApp,
 };
 use flui_testing::{Action, ActionRequest, TreeId};
 
@@ -194,7 +194,7 @@ fn rig_with(setup: Setup) -> Rig {
     };
 
     let home = SingleChildScrollView::new()
-        .position(scroll.position())
+        .controller(scroll.clone())
         .child(
             Column::new(vec![
                 Padding::new(EdgeInsets::new(CLOSED_TOP, 0.0, 0.0, CLOSED_LEFT))

@@ -16,7 +16,7 @@ use flui_platform::{
     },
 };
 use flui_view::ViewExt;
-use flui_widgets::{Listener, ScrollController, Scrollable, SingleChildScrollView, SizedBox};
+use flui_widgets::{Listener, ScrollController, ScrollView, SingleChildScrollView, SizedBox};
 
 fn viewer(
     controller: flui_widgets::TransformationController,
@@ -1049,14 +1049,9 @@ pub(crate) fn page_scroll_resolves_against_the_actual_viewport() {
     for height in [100.0, 275.0] {
         let controller = ScrollController::new();
         let laid = lay_out(
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(controller.clone())
-                .viewport_builder(Rc::new(|position| {
-                    SingleChildScrollView::new()
-                        .position(position)
-                        .child(SizedBox::new(100.0, 1000.0))
-                        .boxed()
-                })),
+                .child(SizedBox::new(100.0, 1000.0)),
             tight(100.0, height),
         );
         assert_eq!(
@@ -1093,14 +1088,9 @@ pub(crate) fn page_scroll_resolves_against_the_actual_viewport() {
             let controller = ScrollController::new();
             let laid = lay_out(
                 Transform::new(transform).child(
-                    Scrollable::new()
+                    SingleChildScrollView::new()
                         .controller(controller.clone())
-                        .viewport_builder(Rc::new(|position| {
-                            SingleChildScrollView::new()
-                                .position(position)
-                                .child(SizedBox::new(100.0, 1000.0))
-                                .boxed()
-                        })),
+                        .child(SizedBox::new(100.0, 1000.0)),
                 ),
                 tight(100.0, 275.0),
             );
@@ -1152,9 +1142,11 @@ pub(crate) fn viewer_raw_detents_zoom_without_stealing_plain_scrolls() {
             let scroll = ScrollController::new();
             let scales = Rc::new(RefCell::new(Vec::new()));
             let updates = scales.clone();
-            let content = Scrollable::new().controller(scroll.clone()).child(
-                SizedBox::new(300.0, 1000.0).child(
-                    InteractiveViewer::new(crate::common::viewer_alternatives())
+            let content = SingleChildScrollView::new()
+                .controller(scroll.clone())
+                .child(
+                    SizedBox::new(300.0, 1000.0).child(
+                        InteractiveViewer::new(crate::common::viewer_alternatives())
                         .controller(transform.clone())
                         .wheel_scale_gate(WheelScaleGate::CtrlWheel)
                         // A plain tick pans a viewer that can move; this
@@ -1166,8 +1158,8 @@ pub(crate) fn viewer_raw_detents_zoom_without_stealing_plain_scrolls() {
                             updates.borrow_mut().push(details.scale);
                         })
                         .child(SizedBox::new(300.0, 1000.0)),
-                ),
-            );
+                    ),
+                );
             let mut laid = lay_out(
                 ZoomWheelPreferences {
                     child: content.boxed(),

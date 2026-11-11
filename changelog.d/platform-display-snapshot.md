@@ -26,7 +26,7 @@
   feeds it.
 - **Injectable displays in the headless platform** (`flui-native`): `HeadlessPlatform::with_displays`
   takes `DisplaySpec`s, `HeadlessDisplayControls::simulate_display_change` switches a display's mode,
-  and `MockWindow::simulate_move_to` moves a window between displays.
+  and `HeadlessHostWindow::simulate_move_to` moves a window between displays.
 
 ### Changed
 

@@ -10,7 +10,7 @@ use flui_interaction::PointerKindSet;
 use flui_interaction::events::{Code, Key, KeyState, Modifiers, NamedKey};
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
-use flui_testing::{MouseScript, PointerScript, TouchScript};
+use flui_testing::{MouseScript, PenScript, PointerScript, TouchScript};
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
@@ -56,6 +56,7 @@ fn at(x: f64, y: f64) -> Offset<f64> {
 #[derive(Clone, Copy, Debug)]
 enum Device {
     Touch,
+    Pen,
     Mouse,
 }
 
@@ -79,6 +80,13 @@ fn slow_drag(device: Device, from: Offset<f64>, to: Offset<f64>) -> PointerScrip
                 script = script.wait(sample).move_to(1, *point);
             }
             script.wait(hold).up(1).build().expect("one whole contact")
+        }
+        Device::Pen => {
+            let mut script = PenScript::new("drag").down(points[0], 0.5);
+            for point in &points[1..] {
+                script = script.wait(sample).move_to(*point, 0.5);
+            }
+            script.wait(hold).up().build().expect("one whole stroke")
         }
         Device::Mouse => {
             let mut script = MouseScript::new("drag").move_to(points[0]).press(points[0]);
@@ -123,7 +131,7 @@ fn near(pixels: f64, target: f64) -> bool {
 
 #[test]
 fn a_release_settles_on_a_page() {
-    for device in [Device::Touch, Device::Mouse] {
+    for device in [Device::Touch, Device::Pen] {
         let rests = |from: f64, to: f64| {
             let controller = PageController::new();
             let (mut laid, _vsync) =
@@ -151,7 +159,7 @@ fn a_release_settles_on_a_page() {
 fn a_drag_across_the_axis_does_not_turn_the_page() {
     let horizontal = (at(280.0, 150.0), at(80.0, 150.0));
     let vertical = (at(150.0, 280.0), at(150.0, 80.0));
-    for device in [Device::Touch, Device::Mouse] {
+    for device in [Device::Touch, Device::Pen] {
         for (axis, along, across) in [
             (Axis::Horizontal, horizontal, vertical),
             (Axis::Vertical, vertical, horizontal),
@@ -194,7 +202,7 @@ fn a_page_view_settles_onto_its_page_through_the_channel() {
 
     use crate::nested_scroll::{Probe, Seen};
 
-    for device in [Device::Touch, Device::Mouse] {
+    for device in [Device::Touch, Device::Pen] {
         let controller = PageController::new();
         let probe = Probe::new();
         let connection = probe.connection();
@@ -390,8 +398,44 @@ fn allowed_devices_name_who_may_turn_the_page() {
     );
     assert_eq!(
         drag_page(PageView::new(pages(3), pager_alternatives()), Device::Mouse),
+        Some(0.0),
+        "the default leaves a mouse drag to selection"
+    );
+    assert_eq!(
+        drag_page(
+            PageView::new(pages(3), pager_alternatives()).allowed_devices(PointerKindSet::all()),
+            Device::Mouse
+        ),
         Some(1.0),
-        "every device by default"
+        "a page view that names every device takes the mouse"
+    );
+
+    // A page view that names no devices asks the subtree's behavior.
+    use std::rc::Rc;
+    #[derive(Debug)]
+    struct EveryDevice;
+    impl flui_widgets::ScrollBehavior for EveryDevice {
+        fn drag_devices(&self, _details: &flui_widgets::ScrollBehaviorDetails) -> PointerKindSet {
+            PointerKindSet::all()
+        }
+    }
+    let behavior: Rc<dyn flui_widgets::ScrollBehavior> = Rc::new(EveryDevice);
+    let configured = |device: Device| {
+        let controller = PageController::new();
+        let view = PageView::new(pages(3), pager_alternatives()).controller(controller.clone());
+        let behavior = Rc::clone(&behavior);
+        let (mut laid, _vsync) = mount_tree(move |vsync| {
+            flui_widgets::ScrollConfiguration::new(behavior, VsyncScope::new(vsync, view)).boxed()
+        });
+        laid.replay(&slow_drag(device, at(280.0, 150.0), at(80.0, 150.0)));
+        settle(&mut laid);
+        controller.page()
+    };
+    assert_eq!(configured(Device::Touch), Some(1.0));
+    assert_eq!(
+        configured(Device::Mouse),
+        Some(1.0),
+        "the behavior admits a mouse drag"
     );
 }
 
@@ -422,7 +466,9 @@ fn a_refused_device_does_not_stop_a_pager_in_motion() {
         controller.page()
     };
     assert_eq!(
-        rests_at(PageView::new(pages(3), pager_alternatives())),
+        rests_at(
+            PageView::new(pages(3), pager_alternatives()).allowed_devices(PointerKindSet::all())
+        ),
         Some(0.0),
         "a press on the moving pager holds it, and it settles back"
     );

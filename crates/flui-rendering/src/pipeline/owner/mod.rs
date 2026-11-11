@@ -20,6 +20,8 @@ mod layout;
 mod leader_watch;
 mod paint;
 mod poison;
+#[cfg(any(test, feature = "testing"))]
+mod presented;
 mod query;
 mod reassemble;
 mod relocation;
@@ -30,6 +32,8 @@ pub use cell::{PipelineCell, WeakPipelineCell};
 pub use counters::PipelineCounters;
 pub(crate) use leader_watch::LeaderWatches;
 pub use leader_watch::{LeaderGeometry, LeaderWatch};
+#[cfg(any(test, feature = "testing"))]
+pub use presented::{PresentedKind, PresentedNode};
 pub use relocation::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
     DetachedRenderSubtrees, ReleaseDetachedRenderSubtreesError,
@@ -267,10 +271,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// composite, one frame stale by design.
     last_follower_transforms: FxHashMap<RenderId, Matrix4>,
 
-    /// The order each parent that does not paint its children first to last painted
-    /// them in, as of the last paint that reached it: a viewport whose first sliver is on
-    /// top, a group whose pinned header covers its content. The input-region walk visits
-    /// children in this order, so a region painted over another is reported after it.
+    /// The children each parent painted, in the order it painted them, for a parent that
+    /// does not paint every child first to last, as of the last paint that reached it: a
+    /// viewport whose first sliver is on top, a group whose pinned header covers its content,
+    /// an overlay that leaves the entries below an opaque one out. The input-region and
+    /// presented walks visit children in this order, so a region painted over another is
+    /// reported after it and a child left out is not reported.
     last_child_paint_orders: FxHashMap<RenderId, paint::ChildPaintOrder>,
 
     /// The live [`LeaderWatch`]es of this pipeline, checked against each

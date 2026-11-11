@@ -210,7 +210,7 @@ pub use element::RenderTreeRootElement;
 // Root element
 pub use element::{RootElement, RootElementImpl};
 // Behavior types
-pub use element::{StatefulBehavior, StatelessBehavior};
+pub use element::{Provided, ProvidedRef, ProvidedValue, StatefulBehavior, StatelessBehavior};
 // Re-export from flui-foundation
 pub use flui_foundation::{CreationSite, ElementId, RenderId};
 pub use flui_rendering::RenderUpdateImpact;
@@ -245,8 +245,9 @@ pub use view::{
     ErrorView, ErrorViewBuilder, FieldMask, FieldSet, FrameworkError, InheritedData,
     InheritedElement, InheritedView, IntoElement, IntoView, Memo, ParentDataConfig,
     ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement, RenderObjectContext,
-    RenderObjectContextError, RenderView, RootRenderElement, RootRenderView, StatefulElement,
-    StatefulView, StatelessElement, StatelessView, View, ViewExt, ViewState,
+    RenderObjectContextError, RenderView, RenderViewState, RootRenderElement, RootRenderView,
+    StatefulElement, StatefulRenderView, StatefulView, StatelessElement, StatelessView, View,
+    ViewExt, ViewState,
 };
 
 // ============================================================================

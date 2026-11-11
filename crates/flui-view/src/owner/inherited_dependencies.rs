@@ -100,4 +100,38 @@ impl InheritedDependencies {
     pub(crate) fn activate(&mut self, dependent: ElementId) -> bool {
         self.inactive_with_dependencies.remove(&dependent)
     }
+
+    /// Whether `dependent` read an inherited value, found or not: its
+    /// lookups depend on what its ancestors publish.
+    pub(crate) fn reads_inherited(&self, dependent: ElementId) -> bool {
+        self.active.contains_key(&dependent)
+            || self.lifecycle_misses.contains(&dependent)
+            || self.build_misses.contains(&dependent)
+    }
+}
+
+impl super::BuildOwner {
+    /// After `id`'s build: if it published another set of types than the one
+    /// its node's scope names (ADR-0322 §5), re-derive the scope there and
+    /// down the subtree, and wake every descendant that read an inherited
+    /// value, since the provider it resolves may have moved. A first build
+    /// publishes before any child exists, so that one touches one node.
+    pub(super) fn refresh_provided_scope(
+        &mut self,
+        tree: &mut crate::tree::ElementTree,
+        id: ElementId,
+    ) {
+        let scope_stale = tree
+            .get_mut(id)
+            .is_some_and(|node| node.element_mut().take_provided_scope_stale());
+        if !scope_stale {
+            return;
+        }
+        for (descendant, depth) in tree.refresh_provided_scope(id, &self.child_manager_registry) {
+            if self.inherited_dependencies.reads_inherited(descendant) {
+                self.pending_dependency_changes.insert(descendant);
+                self.schedule_build_for(descendant, depth, crate::RebuildReason::DependencyChange);
+            }
+        }
+    }
 }

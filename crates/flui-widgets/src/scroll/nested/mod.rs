@@ -349,7 +349,7 @@ pub trait NestedScrollConnection {
 /// use std::rc::Rc;
 ///
 /// use flui_foundation::geometry::Vec2;
-/// use flui_widgets::{NestedScroll, NestedScrollConnection, Scrollable, ScrollStep, SizedBox};
+/// use flui_widgets::{NestedScroll, NestedScrollConnection, ScrollStep, SingleChildScrollView, SizedBox};
 ///
 /// /// Takes the vertical remainder a list leaves at its edge, and counts it.
 /// #[derive(Default)]
@@ -365,7 +365,7 @@ pub trait NestedScrollConnection {
 /// let overscroll = Rc::new(Overscroll::default());
 /// let view = NestedScroll::new(
 ///     overscroll.clone(),
-///     Scrollable::new().child(SizedBox::new(300.0, 1400.0)),
+///     SingleChildScrollView::new().child(SizedBox::new(300.0, 1400.0)),
 /// );
 /// ```
 #[derive(Clone, StatefulView)]

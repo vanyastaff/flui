@@ -51,9 +51,13 @@ colors — stays in the design crate that owns it.
 `Directionality` live in `flui-widgets`, matching Flutter 3.44's own downward moves.
 
 **Platform-adaptive behavior is a capability seam, not a branch.** Where behavior varies by
-platform convention (scroll physics, selection handles, default cursor), a design system or
-platform layer implements and injects a trait; a core widget never branches on
-`cfg!(target_os)` or `theme.platform`.
+platform convention (scroll physics, selection handles, default cursor, word-jump and command
+chords, page transitions), a core widget reads the platform from the one inherited value
+`flui_view::environment::PlatformConvention`, which the runtime installs above every root from
+the platform its runner names, and a design system or platform layer implements and injects a
+trait over it. A core widget never branches on `cfg!(target_os)`, `TargetPlatform::current()`
+or a theme field: `TargetPlatform::current()` is a clippy `disallowed-methods` entry outside the
+app runner, and no design system's theme carries a platform.
 
 **Raw primitives.** When a component's behavior is design-agnostic but Flutter only ships it
 fused to a design system's paint, the behavior lands in `flui-widgets` as an unstyled "raw"

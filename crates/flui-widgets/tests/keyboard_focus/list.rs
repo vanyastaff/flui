@@ -11,7 +11,7 @@ use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
 use flui_view::ViewExt;
 use flui_widgets::{
     Column, CustomScrollView, Expanded, Focus, FocusableSliver, GridView, ListView, RawButton,
-    ScrollController, Scrollable, SizedBox, SliverList, SliverToBoxAdapter, Text,
+    ScrollController, ScrollView, SizedBox, SliverList, SliverToBoxAdapter, Text,
 };
 
 use super::{press, tab};
@@ -36,17 +36,12 @@ fn list_app(
 ) -> (LaidOut, Rc<Cell<usize>>) {
     let outer = Rc::new(Cell::new(0));
     let arrows = Rc::clone(&outer);
-    let list = Scrollable::new()
-        .controller(scroll.clone())
-        .viewport_builder(Rc::new(move |position| {
-            ListView::builder(count, ROW, move |index| {
-                (index < count).then(|| button(format!("row{index}")))
-            })
-            .position(position)
-            .focusable(focusable)
-            .semantics_label("Notes")
-            .boxed()
-        }));
+    let list = ListView::builder(count, ROW, move |index| {
+        (index < count).then(|| button(format!("row{index}")))
+    })
+    .controller(scroll.clone())
+    .focusable(focusable)
+    .semantics_label("Notes");
     let parent = Focus::new(list)
         .can_request_focus(false)
         .on_key_event(move |_cx, event| {
@@ -255,17 +250,12 @@ pub(crate) fn reaching_an_unbuilt_row_scrolls_through_the_nested_scroll_chain() 
 
     let scroll = ScrollController::new();
     let probe = Probe::new();
-    let list = Scrollable::new()
-        .controller(scroll.clone())
-        .viewport_builder(Rc::new(|position| {
-            ListView::builder(10_000, ROW, |index| {
-                (index < 10_000).then(|| button(format!("row{index}")))
-            })
-            .position(position)
-            .focusable(true)
-            .semantics_label("Notes")
-            .boxed()
-        }));
+    let list = ListView::builder(10_000, ROW, |index| {
+        (index < 10_000).then(|| button(format!("row{index}")))
+    })
+    .controller(scroll.clone())
+    .focusable(true)
+    .semantics_label("Notes");
     let mut app = lay_out(
         Column::new(vec![
             SizedBox::new(300.0, 200.0)
@@ -311,16 +301,11 @@ pub(crate) fn reaching_an_unbuilt_row_scrolls_through_the_nested_scroll_chain() 
 /// The `before` and `after` buttons around an empty focusable list.
 fn empty_app() -> LaidOut {
     let scroll = ScrollController::new();
-    let list = Scrollable::new()
+    let list = ListView::builder(0, ROW, |_| None)
         .controller(scroll)
-        .viewport_builder(Rc::new(move |position| {
-            ListView::builder(0, ROW, |_| None)
-                .position(position)
-                .focusable(true)
-                .semantics_label("Notes")
-                .empty_label("No notes")
-                .boxed()
-        }));
+        .focusable(true)
+        .semantics_label("Notes")
+        .empty_label("No notes");
     let mut app = lay_out(
         Column::new(vec![
             button("before".to_owned()),
@@ -386,21 +371,16 @@ pub(crate) fn the_list_node_carries_the_list_name() {
 fn sliver_app(count: usize, scroll: &ScrollController) -> (LaidOut, Rc<Cell<usize>>) {
     let outer = Rc::new(Cell::new(0));
     let arrows = Rc::clone(&outer);
-    let view = Scrollable::new()
-        .controller(scroll.clone())
-        .viewport_builder(Rc::new(move |position| {
-            let rows = SliverList::new(
-                count,
-                ROW,
-                Rc::new(move |index| (index < count).then(|| button(format!("row{index}")))),
-            );
-            CustomScrollView::new((
-                SliverToBoxAdapter::new().child(button("header".to_owned())),
-                FocusableSliver::new(rows),
-            ))
-            .position(position)
-            .boxed()
-        }));
+    let rows = SliverList::new(
+        count,
+        ROW,
+        Rc::new(move |index| (index < count).then(|| button(format!("row{index}")))),
+    );
+    let view = CustomScrollView::new((
+        SliverToBoxAdapter::new().child(button("header".to_owned())),
+        FocusableSliver::new(rows),
+    ))
+    .controller(scroll.clone());
     let parent = Focus::new(view)
         .can_request_focus(false)
         .on_key_event(move |_cx, event| {
@@ -509,18 +489,13 @@ fn tile(label: String) -> flui_view::BoxedView {
 /// A focusable three-column grid of `count` tiles in a 270 px scrollable
 /// after a `before` button.
 fn grid_app(count: usize) -> LaidOut {
-    let grid = Scrollable::new()
-        .controller(ScrollController::new())
-        .viewport_builder(Rc::new(move |position| {
-            GridView::builder(
-                SliverGridDelegateWithFixedCrossAxisCount::new(3),
-                count,
-                move |index| (index < count).then(|| tile(format!("tile{index}"))),
-            )
-            .position(position)
-            .focusable(true)
-            .boxed()
-        }));
+    let grid = GridView::builder(
+        SliverGridDelegateWithFixedCrossAxisCount::new(3),
+        count,
+        move |index| (index < count).then(|| tile(format!("tile{index}"))),
+    )
+    .controller(ScrollController::new())
+    .focusable(true);
     let mut app = lay_out(
         Column::new(vec![
             button("before".to_owned()),

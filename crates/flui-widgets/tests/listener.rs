@@ -3,6 +3,7 @@
 //! `HitTestBehavior` contract — `DeferToChild` (the default) fires only when a
 //! descendant is hit, `Opaque` fires for any pointer within bounds.
 
+use flui_widgets::ScrollView;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -166,7 +167,9 @@ pub(crate) fn a_press_on_a_list_row_reaches_the_listeners_above_the_list() {
         let laid = lay_out(
             Listener::new()
                 .on_pointer_down(on_outer)
-                .child(list.offset(60.0)),
+                .child(list.controller(
+                    flui_widgets::ScrollController::with_initial_scroll_offset(60.0),
+                )),
             tight(200.0, 200.0),
         );
         // 125 below the top of a list scrolled by 60 is 185 into the

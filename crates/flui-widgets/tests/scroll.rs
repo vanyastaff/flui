@@ -19,8 +19,8 @@ use flui_rendering::view::ScrollDirection;
 use flui_view::environment::VsyncScope;
 use flui_view::{IntoView, SignalWriteExt, ViewExt};
 use flui_widgets::{
-    BouncingScrollPhysics, ClampingScrollPhysics, ScrollController, Scrollable, Scrollbar,
-    SemanticsRole, SharedScrollPhysics, SizedBox,
+    BouncingScrollPhysics, ClampingScrollPhysics, ScrollController, ScrollView, Scrollbar,
+    SemanticsRole, SharedScrollPhysics, SingleChildScrollView, SizedBox,
 };
 
 #[derive(Clone, flui_view::prelude::StatelessView)]
@@ -58,7 +58,7 @@ pub(crate) fn hover_holds_while_a_touch_scroll_is_latched() {
         })
         .collect();
     let mut laid = lay_out(
-        Scrollable::new().child(Column::new(rows)),
+        SingleChildScrollView::new().child(Column::new(rows)),
         tight(300.0, 300.0),
     );
     laid.dispatch_pointer_hover(150.0, 50.0);
@@ -103,17 +103,20 @@ pub(crate) fn cross_axis_sliver_tracks_reconcile_weights_and_publish_child_seman
         )
     };
     let content = |weight, limit| {
-        Viewport::new((SliverCrossAxisGroup::new((
-            SliverCrossAxisItem::content(
-                SliverConstrainedCrossAxis::try_new(limit, child("fixed", 30.0))
-                    .expect("valid limit"),
-            ),
-            child("one share", 60.0),
-            SliverCrossAxisItem::flex(
-                std::num::NonZeroU32::new(weight).expect("positive weight"),
-                child("weighted", 90.0),
-            ),
-        )),))
+        Viewport::new(
+            flui_rendering::view::ScrollPosition::fixed(0.0),
+            (SliverCrossAxisGroup::new((
+                SliverCrossAxisItem::content(
+                    SliverConstrainedCrossAxis::try_new(limit, child("fixed", 30.0))
+                        .expect("valid limit"),
+                ),
+                child("one share", 60.0),
+                SliverCrossAxisItem::flex(
+                    std::num::NonZeroU32::new(weight).expect("positive weight"),
+                    child("weighted", 90.0),
+                ),
+            )),),
+        )
     };
     let mut laid = lay_out(content(2, 40.0), tight(160.0, 100.0));
     laid.enable_semantics();
@@ -158,11 +161,14 @@ pub(crate) fn cross_axis_sliver_tracks_reconcile_weights_and_publish_child_seman
 pub(crate) fn constrained_sliver_updates_layout_without_replacing_the_child() {
     use flui_widgets::{SliverConstrainedCrossAxis, SliverToBoxAdapter, Viewport};
     let content = |extent| {
-        Viewport::new((SliverConstrainedCrossAxis::try_new(
-            extent,
-            SliverToBoxAdapter::new().child(SizedBox::new(200.0, 30.0)),
+        Viewport::new(
+            flui_rendering::view::ScrollPosition::fixed(0.0),
+            (SliverConstrainedCrossAxis::try_new(
+                extent,
+                SliverToBoxAdapter::new().child(SizedBox::new(200.0, 30.0)),
+            )
+            .expect("valid extent"),),
         )
-        .expect("valid extent"),))
     };
     let mut laid = lay_out(content(40.0), tight(100.0, 100.0));
     let limit = laid.find_by_render_type("RenderSliverConstrainedCrossAxis");
@@ -185,7 +191,7 @@ pub(crate) fn scrollable_accessibility_ranges_follow_the_actual_axis() {
     for axis in [Axis::Vertical, Axis::Horizontal] {
         let controller = ScrollController::new();
         let mut laid = lay_out(
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .scroll_direction(axis)
                 .controller(controller.clone())
                 .child(SizedBox::new(1000.0, 1000.0)),
@@ -258,7 +264,7 @@ pub(crate) fn scrollable_accessibility_ranges_follow_the_actual_axis() {
 /// scrollable growing up or to the left publishes its pixels mirrored inside
 /// its extent, and a platform's offset in that order is mirrored back.
 pub(crate) fn scroll_offsets_reach_platforms_from_the_top_or_left_edge() {
-    use flui_foundation::geometry::{Axis, AxisDirection};
+    use flui_foundation::geometry::Axis;
     use flui_testing::a11y::{A11yPoint as Point, Action, ActionData, ActionRequest, Role, TreeId};
 
     for (axis, reverse) in [
@@ -269,23 +275,11 @@ pub(crate) fn scroll_offsets_reach_platforms_from_the_top_or_left_edge() {
     ] {
         let case = format!("{axis:?}, reversed {reverse}");
         let controller = ScrollController::new();
-        let mut scrollable = Scrollable::new()
+        let scrollable = SingleChildScrollView::new()
             .scroll_direction(axis)
-            .controller(controller.clone());
-        if reverse {
-            scrollable = scrollable
-                .axis_direction(AxisDirection::from_axis(axis, true))
-                .viewport_builder(Rc::new(move |position| {
-                    flui_widgets::SingleChildScrollView::new()
-                        .scroll_direction(axis)
-                        .reverse(true)
-                        .position(position)
-                        .child(SizedBox::new(1000.0, 1000.0))
-                        .boxed()
-                }));
-        } else {
-            scrollable = scrollable.child(SizedBox::new(1000.0, 1000.0));
-        }
+            .reverse(reverse)
+            .controller(controller.clone())
+            .child(SizedBox::new(1000.0, 1000.0));
         let mut laid = lay_out(scrollable, tight(200.0, 200.0));
         laid.enable_semantics();
         laid.tick();
@@ -336,7 +330,7 @@ pub(crate) fn terminal_scroll_motion_uses_the_admitted_fling_profile() {
     controller
         .update_dimensions(300.0, 0.0, 4700.0)
         .expect("ordered extents");
-    let child = Scrollable::new()
+    let child = SingleChildScrollView::new()
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 5000.0))
         .boxed();
@@ -414,6 +408,127 @@ pub(crate) fn terminal_scroll_motion_uses_the_admitted_fling_profile() {
 // Scrollable — drag gesture integration
 // ============================================================================
 
+/// Every standard scroll view scrolls itself: a drag and a wheel tick move
+/// the controller it is given with no `Scrollable` around it, and `reverse`
+/// turns which way a drag moves it.
+pub(crate) fn standard_scroll_views_scroll_themselves() {
+    use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
+    use flui_view::BoxedView;
+    use flui_widgets::{AnimatedList, CustomScrollView, GridView, ListView, SliverFixedExtentList};
+
+    fn row(index: usize) -> BoxedView {
+        SizedBox::new(300.0, 50.0)
+            .child(flui_widgets::Text::new(format!("row {index}")))
+            .boxed()
+    }
+    fn rows() -> Vec<BoxedView> {
+        (0..40).map(row).collect()
+    }
+    type Case = (
+        &'static str,
+        Box<dyn Fn(&ScrollController, bool) -> BoxedView>,
+    );
+    let cases: Vec<Case> = vec![
+        (
+            "ListView::builder",
+            Box::new(|c, reverse| {
+                ListView::builder(40, 50.0, |i| (i < 40).then(|| row(i)))
+                    .controller(c.clone())
+                    .reverse(reverse)
+                    .boxed()
+            }),
+        ),
+        (
+            "ListView::new",
+            Box::new(|c, reverse| {
+                ListView::new(50.0, rows())
+                    .controller(c.clone())
+                    .reverse(reverse)
+                    .boxed()
+            }),
+        ),
+        (
+            "GridView::builder",
+            Box::new(|c, reverse| {
+                GridView::builder(SliverGridDelegateWithFixedCrossAxisCount::new(1), 40, |i| {
+                    (i < 40).then(|| row(i))
+                })
+                .controller(c.clone())
+                .reverse(reverse)
+                .boxed()
+            }),
+        ),
+        (
+            "CustomScrollView",
+            Box::new(|c, reverse| {
+                CustomScrollView::new((SliverFixedExtentList::new(50.0, rows()),))
+                    .controller(c.clone())
+                    .reverse(reverse)
+                    .boxed()
+            }),
+        ),
+        (
+            "SingleChildScrollView",
+            Box::new(|c, reverse| {
+                SingleChildScrollView::new()
+                    .controller(c.clone())
+                    .reverse(reverse)
+                    .child(SizedBox::new(300.0, 2000.0))
+                    .boxed()
+            }),
+        ),
+        (
+            "AnimatedList",
+            Box::new(|c, reverse| {
+                AnimatedList::new(
+                    0..40_usize,
+                    |i| *i,
+                    |i| {
+                        SizedBox::new(300.0, 50.0)
+                            .child(flui_widgets::Text::new(format!("row {i}")))
+                    },
+                )
+                .item_extent_estimate(50.0)
+                .controller(c.clone())
+                .reverse(reverse)
+                .boxed()
+            }),
+        ),
+    ];
+    for (name, build) in &cases {
+        for reverse in [false, true] {
+            let controller = ScrollController::new();
+            let mut laid = lay_out(build(&controller, reverse), tight(300.0, 300.0));
+            laid.tick();
+            assert!(
+                controller.max_scroll_extent() > 0.0,
+                "{name}, reverse {reverse}: the view's viewport reports its extent"
+            );
+            // A reversed view grows from the bottom, so a finger moving
+            // down reveals more of it.
+            let (from, to) = if reverse {
+                (100.0, 150.0)
+            } else {
+                (200.0, 150.0)
+            };
+            laid.dispatch_pointer_down(150.0, from);
+            laid.dispatch_pointer_move(150.0, to);
+            laid.dispatch_pointer_up(150.0, to);
+            assert_eq!(
+                controller.pixels(),
+                50.0,
+                "{name}, reverse {reverse}: a 50 px drag scrolls the view 50 px"
+            );
+            laid.dispatch_scroll(150.0, 150.0, 0.0, if reverse { -53.0 } else { 53.0 });
+            assert_eq!(
+                controller.pixels(),
+                103.0,
+                "{name}, reverse {reverse}: a wheel line scrolls the view"
+            );
+        }
+    }
+}
+
 /// A drag upward (finger moves toward smaller y-values, delta.dy < 0) must
 /// increase the scroll offset because upward drag reveals content below the
 /// current viewport position. This test FAILS if the pan callback is not
@@ -426,7 +541,7 @@ pub(crate) fn scrollable_drag_up_increases_scroll_offset() {
         .expect("ordered extents");
 
     let physics: SharedScrollPhysics = Rc::new(ClampingScrollPhysics::default());
-    let widget = Scrollable::new()
+    let widget = SingleChildScrollView::new()
         .controller(controller.clone())
         .physics(physics)
         .child(SizedBox::new(300.0, 800.0));
@@ -463,7 +578,7 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
     controller
         .update_dimensions(300.0, 0.0, 4700.0)
         .expect("ordered extents");
-    let widget = Scrollable::new()
+    let widget = SingleChildScrollView::new()
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 5000.0));
     let mut scoped = fling_scoped(widget, Vsync::new(), tight(300.0, 300.0));
@@ -561,7 +676,11 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
 /// register the fling controller, then lay it out under `constraints` with a
 /// gesture arena. Adopts the same vsync in the tree binding so
 /// [`LaidOut::pump_for`] ticks the fling animation deterministically.
-fn fling_scoped(widget: Scrollable, vsync: Vsync, constraints: BoxConstraints) -> LaidOut {
+fn fling_scoped(
+    widget: impl flui_view::View,
+    vsync: Vsync,
+    constraints: BoxConstraints,
+) -> LaidOut {
     let wrapped = VsyncScope::new(vsync.clone(), widget);
     let mut scoped = lay_out(wrapped, constraints);
     scoped.adopt_vsync(vsync).expect("clock admission");
@@ -589,7 +708,7 @@ fn exercise_fling_registry(migrate: bool) {
         .expect("ordered extents");
 
     let vsync = Vsync::new();
-    let widget = Scrollable::new()
+    let widget = SingleChildScrollView::new()
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 5000.0));
 
@@ -669,7 +788,7 @@ pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
 
     let physics: SharedScrollPhysics = Rc::new(BouncingScrollPhysics::new());
     let vsync = Vsync::new();
-    let widget = Scrollable::new()
+    let widget = SingleChildScrollView::new()
         .controller(controller.clone())
         .physics(physics)
         .child(SizedBox::new(300.0, 800.0));
@@ -720,7 +839,7 @@ pub(crate) fn scrollable_retarget_at_the_current_position_brakes_continuously() 
 fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
     let controller = ScrollController::new();
     let registry = Vsync::new();
-    let widget = Scrollable::new()
+    let widget = SingleChildScrollView::new()
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 5000.0));
     let mut laid = fling_scoped(widget, registry, tight(300.0, 300.0));
@@ -768,7 +887,7 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
         .expect("ordered extents");
 
     let vsync = Vsync::new();
-    let widget = Scrollable::new()
+    let widget = SingleChildScrollView::new()
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 5000.0));
 
@@ -938,7 +1057,7 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
             }
             listener.detach();
             let mut laid = fling_scoped(
-                Scrollable::new()
+                SingleChildScrollView::new()
                     .controller(controller.clone())
                     .child(SizedBox::new(300.0, 5000.0)),
                 Vsync::new(),
@@ -975,7 +1094,7 @@ pub(crate) fn stopping_scroll_motion_preserves_commands_admitted_by_activity_obs
     for newer_jumps in [false, true] {
         let controller = ScrollController::new();
         let mut laid = fling_scoped(
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(controller.clone())
                 .child(SizedBox::new(300.0, 5000.0)),
             Vsync::new(),
@@ -1079,7 +1198,7 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
                     .expect("ordered extents");
                 let drops = Arc::new(AtomicUsize::new(0));
                 let content = || {
-                    Scrollable::new()
+                    SingleChildScrollView::new()
                         .controller(controller.clone())
                         .child(SizedBox::new(300.0, 5000.0))
                 };
@@ -1214,7 +1333,7 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
         VsyncScope::new(
             vsync.clone(),
             Scrollbar::new().controller(scroll.clone()).child(
-                Scrollable::new()
+                SingleChildScrollView::new()
                     .controller(scroll.clone())
                     .child(SizedBox::new(300.0, 5000.0)),
             ),
@@ -1312,7 +1431,7 @@ pub(crate) fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
     let position = controller.position();
 
     let vsync = Vsync::new();
-    let widget = Scrollable::new()
+    let widget = SingleChildScrollView::new()
         .controller(controller)
         .child(SizedBox::new(300.0, 5000.0));
     let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
@@ -1374,19 +1493,18 @@ fn nested_scrollables(outer: &ScrollController, inner: &ScrollController, vsync:
         .update_dimensions(200.0, 0.0, 800.0)
         .expect("ordered extents");
 
-    let inner_scrollable = Scrollable::new()
+    let inner_scrollable = SingleChildScrollView::new()
         .controller(inner.clone())
         .child(SizedBox::new(300.0, 1000.0));
-    let outer_scrollable =
-        Scrollable::new()
-            .controller(outer.clone())
-            .child(flui_widgets::Column::new(vec![
-                SizedBox::new(300.0, 200.0)
-                    .child(inner_scrollable)
-                    .into_view()
-                    .boxed(),
-                SizedBox::new(300.0, 4800.0).into_view().boxed(),
-            ]));
+    let outer_scrollable = SingleChildScrollView::new()
+        .controller(outer.clone())
+        .child(flui_widgets::Column::new(vec![
+            SizedBox::new(300.0, 200.0)
+                .child(inner_scrollable)
+                .into_view()
+                .boxed(),
+            SizedBox::new(300.0, 4800.0).into_view().boxed(),
+        ]));
 
     let wrapped = VsyncScope::new(vsync.clone(), outer_scrollable);
     let mut scoped = lay_out(wrapped, tight(300.0, 300.0));
@@ -1572,7 +1690,7 @@ pub(crate) fn shift_wheel_scrolls_the_horizontal_axis() {
             .update_dimensions(300.0, 0.0, 700.0)
             .expect("ordered extents");
         lay_out(
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .scroll_direction(axis)
                 .controller(scroll.clone())
                 .child(SizedBox::new(1000.0, 1000.0)),
@@ -1678,7 +1796,7 @@ pub(crate) fn bouncing_inward_motion_and_crossing_respect_the_new_edge() {
 fn animated_scroll_content(scroll: &ScrollController, vsync: &Vsync) -> impl flui_view::View {
     VsyncScope::new(
         vsync.clone(),
-        Scrollable::new()
+        SingleChildScrollView::new()
             .controller(scroll.clone())
             .child(SizedBox::new(300.0, 5000.0)),
     )
@@ -1703,7 +1821,7 @@ pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
         let scroll = ScrollController::new();
         let transform = TransformationController::new();
         let child = match family {
-            "scrollable" => Scrollable::new()
+            "scrollable" => SingleChildScrollView::new()
                 .controller(scroll.clone())
                 .child(SizedBox::new(300.0, 5000.0))
                 .boxed(),
@@ -1880,7 +1998,7 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
         let content = |controller: &ScrollController| {
             VsyncScope::new(
                 vsync.clone(),
-                Scrollable::new()
+                SingleChildScrollView::new()
                     .controller(controller.clone())
                     .child(SizedBox::new(300.0, 5000.0)),
             )
@@ -1981,7 +2099,7 @@ struct AuthoredWheelContent {
 impl flui_view::StatelessView for AuthoredWheelContent {
     fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl IntoView {
         let arena = flui_view::environment::GestureArenaScope::of(ctx);
-        let scroll = Scrollable::new()
+        let scroll = SingleChildScrollView::new()
             .scroll_direction(self.axis)
             .controller(self.controller.clone())
             .wheel_distances(self.distances)
@@ -2331,12 +2449,14 @@ pub(crate) fn a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it
     let mut laid = crate::common::lay_out_animated(
         VsyncScope::new(
             vsync.clone(),
-            Scrollable::new().controller(scroll.clone()).child(
-                GestureDetector::new()
-                    .behavior(flui_widgets::HitTestBehavior::Opaque)
-                    .on_tap(move |_| tapped.set(tapped.get() + 1))
-                    .child(SizedBox::new(300.0, 5000.0)),
-            ),
+            SingleChildScrollView::new()
+                .controller(scroll.clone())
+                .child(
+                    GestureDetector::new()
+                        .behavior(flui_widgets::HitTestBehavior::Opaque)
+                        .on_tap(move |_| tapped.set(tapped.get() + 1))
+                        .child(SizedBox::new(300.0, 5000.0)),
+                ),
         ),
         tight(300.0, 300.0),
         vsync,
@@ -2696,7 +2816,7 @@ pub(crate) fn a_same_position_scrollable_rebuild_preserves_motion() {
     let own_position = |vsync: &Vsync| {
         VsyncScope::new(
             vsync.clone(),
-            Scrollable::new().child(flui_widgets::Column::new(vec![
+            SingleChildScrollView::new().child(flui_widgets::Column::new(vec![
                 flui_widgets::Focus::new(SizedBox::new(300.0, 10.0))
                     .focus_node(Rc::clone(&top))
                     .boxed(),
@@ -2822,7 +2942,7 @@ pub(crate) fn cancelling_bouncing_overscroll_settles_without_release_velocity() 
     let mut laid = crate::common::lay_out_animated(
         VsyncScope::new(
             vsync.clone(),
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(scroll.clone())
                 .physics(Rc::new(BouncingScrollPhysics::new()))
                 .child(SizedBox::new(300.0, 800.0)),
@@ -2898,7 +3018,7 @@ pub(crate) fn scroll_fling_rest_scales_with_device_pixel_ratio() {
         .expect("ordered extents");
     let recording = Rc::new(RecordingPhysics::default());
     let physics: SharedScrollPhysics = recording.clone();
-    let widget = Scrollable::new()
+    let widget = SingleChildScrollView::new()
         .controller(controller)
         .physics(physics)
         .child(SizedBox::new(300.0, 5000.0));
@@ -3050,7 +3170,7 @@ pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
         .update_dimensions(300.0, 0.0, max_extent)
         .expect("ordered extents");
     let physics: SharedScrollPhysics = Rc::new(BouncingScrollPhysics::new());
-    let widget = Scrollable::new()
+    let widget = SingleChildScrollView::new()
         .controller(controller.clone())
         .physics(physics)
         .child(SizedBox::new(300.0, 800.0));
@@ -3086,7 +3206,7 @@ pub(crate) fn clamping_fling_into_the_edge_rests_on_it() {
         .update_dimensions(300.0, 0.0, max_extent)
         .expect("ordered extents");
     let mut laid = fling_scoped(
-        Scrollable::new()
+        SingleChildScrollView::new()
             .controller(controller.clone())
             .child(SizedBox::new(300.0, 800.0)),
         Vsync::new(),
@@ -3120,19 +3240,13 @@ pub(crate) fn a_fling_rests_on_the_end_the_measured_rows_give() {
     ];
     for (physics, bounces) in physics {
         let controller = ScrollController::new();
-        let list = Scrollable::new()
-            .controller(controller.clone())
-            .physics(physics.clone())
-            .viewport_builder(Rc::new(|position| {
-                // 20 rows of 120 and 40 of 40: 4000 px over a 300 px viewport.
-                flui_widgets::ListView::builder(60, 50.0, |index| {
-                    (index < 60).then(|| {
-                        SizedBox::new(300.0, if index < 20 { 120.0 } else { 40.0 }).boxed()
-                    })
-                })
-                .position(position)
-                .boxed()
-            }));
+        // 20 rows of 120 and 40 of 40: 4000 px over a 300 px viewport.
+        let list = flui_widgets::ListView::builder(60, 50.0, |index| {
+            (index < 60)
+                .then(|| SizedBox::new(300.0, if index < 20 { 120.0 } else { 40.0 }).boxed())
+        })
+        .controller(controller.clone())
+        .physics(physics.clone());
         let mut laid = fling_scoped(list, Vsync::new(), tight(300.0, 300.0));
         laid.pump_for(Duration::from_millis(16));
         let estimated = controller.max_scroll_extent();
@@ -3195,13 +3309,13 @@ fn resizable_list(
     height: &Rc<Cell<f64>>,
     resized: &Rc<flui_foundation::ChangeNotifier>,
     vsync: &Vsync,
-    configure: impl FnOnce(Scrollable) -> Scrollable,
+    configure: impl FnOnce(SingleChildScrollView) -> SingleChildScrollView,
 ) -> impl flui_view::View {
     let height = Rc::clone(height);
     let listenable = Rc::clone(resized) as Rc<dyn flui_foundation::Listenable>;
     let content =
         flui_widgets::AnimatedBuilder::new(listenable, move || SizedBox::new(300.0, height.get()));
-    let list = Scrollable::new()
+    let list = SingleChildScrollView::new()
         .controller(controller.clone())
         .child(content);
     VsyncScope::new(vsync.clone(), configure(list))
@@ -3491,7 +3605,7 @@ pub(crate) fn a_fresh_physics_each_build_keeps_the_fling_and_its_bounce() {
         let physics: SharedScrollPhysics = Rc::new(BouncingScrollPhysics::new());
         VsyncScope::new(
             vsync.clone(),
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(controller.clone())
                 .physics(physics)
                 .child(
@@ -3549,31 +3663,14 @@ fn nested_fling_content(
     bouncing: bool,
 ) -> impl flui_view::View {
     use flui_foundation::geometry::Axis;
-    let mut child = Scrollable::new()
+    let mut child = SingleChildScrollView::new()
         .controller(inner.clone())
         .scroll_direction(inner_axis)
+        .reverse(inner_reversed)
         .child(match inner_axis {
             Axis::Vertical => SizedBox::new(300.0, 1000.0),
             Axis::Horizontal => SizedBox::new(1000.0, 300.0),
         });
-    if inner_reversed {
-        child = child
-            .axis_direction(match inner_axis {
-                Axis::Vertical => flui_rendering::constraints::AxisDirection::BottomToTop,
-                Axis::Horizontal => flui_rendering::constraints::AxisDirection::RightToLeft,
-            })
-            .viewport_builder(Rc::new(move |position| {
-                flui_widgets::SingleChildScrollView::new()
-                    .scroll_direction(inner_axis)
-                    .reverse(true)
-                    .position(position)
-                    .child(match inner_axis {
-                        Axis::Vertical => SizedBox::new(300.0, 1000.0),
-                        Axis::Horizontal => SizedBox::new(1000.0, 300.0),
-                    })
-                    .boxed()
-            }));
-    }
     if bouncing {
         child = child.physics(Rc::new(BouncingScrollPhysics::new()));
     }
@@ -3595,7 +3692,7 @@ fn nested_fling_content(
     };
     VsyncScope::new(
         vsync.clone(),
-        Scrollable::new()
+        SingleChildScrollView::new()
             .controller(outer.clone())
             .scroll_direction(outer_axis)
             .child(content),
@@ -3713,7 +3810,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
         } else {
             Rc::new(ClampingScrollPhysics::new())
         };
-        let parent = Scrollable::new()
+        let parent = SingleChildScrollView::new()
             .controller(outer.clone())
             .physics(physics)
             .child(flui_widgets::Column::new(vec![
@@ -3722,7 +3819,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
                     .child(
                         flui_widgets::Align::new(flui_painting::Alignment::TOP_LEFT).child(
                             SizedBox::new(200.0, 200.0).child(
-                                Scrollable::new()
+                                SingleChildScrollView::new()
                                     .controller(inner.clone())
                                     .child(SizedBox::new(300.0, 1000.0)),
                             ),
@@ -3743,7 +3840,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
             let _ = host.pump(Duration::ZERO);
             let pointer = PointerInfo::new(
                 PointerId::try_from(id).expect("nonzero contact"),
-                PointerKind::Mouse,
+                PointerKind::Touch,
             );
             let sample = |y: f64| {
                 PointerSample::new(
@@ -3752,7 +3849,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
                             .expect("fixture clock fits event time"),
                     ),
                     PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, y))
-                        .expect("finite authored mouse position"),
+                        .expect("finite authored touch position"),
                 )
             };
             host.dispatch(PlatformInput::Pointer(PointerEvent::Down(
@@ -4132,17 +4229,16 @@ pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_tra
         ScrollController::new(),
         Vsync::new(),
     );
-    let leaf = Scrollable::new()
+    let leaf = SingleChildScrollView::new()
         .controller(inner.clone())
         .child(SizedBox::new(200.0, 1000.0));
-    let middle_view =
-        Scrollable::new()
-            .controller(middle.clone())
-            .child(flui_widgets::Column::new(vec![
-                SizedBox::new(200.0, 800.0).boxed(),
-                SizedBox::new(200.0, 200.0).child(leaf).boxed(),
-            ]));
-    let outer_view = Scrollable::new()
+    let middle_view = SingleChildScrollView::new()
+        .controller(middle.clone())
+        .child(flui_widgets::Column::new(vec![
+            SizedBox::new(200.0, 800.0).boxed(),
+            SizedBox::new(200.0, 200.0).child(leaf).boxed(),
+        ]));
+    let outer_view = SingleChildScrollView::new()
         .controller(outer.clone())
         .child(flui_widgets::Column::new(vec![
             SizedBox::new(200.0, 600.0).boxed(),
@@ -4234,17 +4330,17 @@ pub(crate) fn nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent(
         ScrollController::new(),
         Vsync::new(),
     );
-    let leaf = Scrollable::new()
+    let leaf = SingleChildScrollView::new()
         .controller(inner.clone())
         .child(SizedBox::new(200.0, 1000.0));
-    let middle_view = Scrollable::new()
+    let middle_view = SingleChildScrollView::new()
         .controller(middle.clone())
         .physics(Rc::new(BouncingScrollPhysics::new()))
         .child(flui_widgets::Column::new(vec![
             SizedBox::new(200.0, 800.0).boxed(),
             SizedBox::new(200.0, 200.0).child(leaf).boxed(),
         ]));
-    let outer_view = Scrollable::new()
+    let outer_view = SingleChildScrollView::new()
         .controller(outer.clone())
         .child(flui_widgets::Column::new(vec![
             SizedBox::new(200.0, 600.0).boxed(),
@@ -4364,7 +4460,7 @@ fn request_reveal_target(laid: &LaidOut) {
 
 fn assert_reveal_label_fixture_is_visible(axis: flui_foundation::geometry::Axis) {
     let mut visible = lay_out(
-        Scrollable::new()
+        SingleChildScrollView::new()
             .scroll_direction(axis)
             .child(reveal_target_content_at(axis, 0.0)),
         tight(200.0, 200.0),
@@ -4393,25 +4489,11 @@ pub(crate) fn show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse(
         assert_reveal_label_fixture_is_visible(axis);
         for reversed in [false, true] {
             let scroll = ScrollController::new();
-            let mut view = Scrollable::new()
+            let view = SingleChildScrollView::new()
                 .controller(scroll.clone())
                 .scroll_direction(axis)
+                .reverse(reversed)
                 .child(reveal_target_content(axis));
-            if reversed {
-                view = view
-                    .axis_direction(match axis {
-                        Vertical => flui_rendering::constraints::AxisDirection::BottomToTop,
-                        Horizontal => flui_rendering::constraints::AxisDirection::RightToLeft,
-                    })
-                    .viewport_builder(Rc::new(move |position| {
-                        flui_widgets::SingleChildScrollView::new()
-                            .scroll_direction(axis)
-                            .reverse(true)
-                            .position(position)
-                            .child(reveal_target_content(axis))
-                            .boxed()
-                    }));
-            }
             let mut laid = lay_out(view, tight(200.0, 200.0));
             laid.enable_semantics();
             laid.tick();
@@ -4459,13 +4541,13 @@ pub(crate) fn show_on_screen_walks_nested_axes_and_replacement_uses_current_geom
             ScrollController::new(),
         );
         let content = |controller: &ScrollController| {
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(outer.clone())
                 .child(flui_widgets::Column::new(vec![
                     SizedBox::new(200.0, 600.0).boxed(),
                     SizedBox::new(200.0, 200.0)
                         .child(
-                            Scrollable::new()
+                            SingleChildScrollView::new()
                                 .controller(controller.clone())
                                 .scroll_direction(inner_axis)
                                 .child(reveal_target_content(inner_axis)),
@@ -4509,14 +4591,17 @@ pub(crate) fn show_on_screen_walks_nested_axes_and_replacement_uses_current_geom
     }
 }
 
-fn nested_reveal_content(outer: &ScrollController, inner: &ScrollController) -> Scrollable {
-    Scrollable::new()
+fn nested_reveal_content(
+    outer: &ScrollController,
+    inner: &ScrollController,
+) -> SingleChildScrollView {
+    SingleChildScrollView::new()
         .controller(outer.clone())
         .child(flui_widgets::Column::new(vec![
             SizedBox::new(200.0, 600.0).boxed(),
             SizedBox::new(200.0, 200.0)
                 .child(
-                    Scrollable::new()
+                    SingleChildScrollView::new()
                         .controller(inner.clone())
                         .child(reveal_target_content(
                             flui_foundation::geometry::Axis::Vertical,
@@ -4700,7 +4785,7 @@ pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_
                 .child(SizedBox::new(40.0, 40.0))
                 .boxed()
         };
-        Scrollable::new()
+        SingleChildScrollView::new()
             .controller(controller.clone())
             .child(flui_widgets::Column::new(vec![
                 SizedBox::new(200.0, before).boxed(),
@@ -4887,7 +4972,7 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
         );
         let fail_boundary = Arc::new(AtomicBool::new(boundary_fault));
         let fail_drop = Arc::new(AtomicBool::new(retirement_fault));
-        let parent = Scrollable::new()
+        let parent = SingleChildScrollView::new()
             .controller(outer.clone())
             .physics(Rc::new(FaultPhysics {
                 fail_boundary: Arc::clone(&fail_boundary),
@@ -4897,7 +4982,7 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
                 SizedBox::new(200.0, 600.0).boxed(),
                 SizedBox::new(200.0, 200.0)
                     .child(
-                        Scrollable::new()
+                        SingleChildScrollView::new()
                             .controller(inner.clone())
                             .child(SizedBox::new(200.0, 1000.0)),
                     )
@@ -5003,7 +5088,7 @@ pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
 
     laid.pump_widget(VsyncScope::new(
         vsync,
-        Scrollable::new()
+        SingleChildScrollView::new()
             .controller(controller)
             .child(SizedBox::new(300.0, 800.0)),
     ));
@@ -5079,4 +5164,269 @@ pub(crate) fn controller_mutation_during_build_is_refused() {
     };
     assert_eq!(*outcome.borrow(), vec![Err(refused), Err(refused)]);
     assert_eq!(scroll.pixels(), 10.0, "a refused mutation moves nothing");
+}
+
+/// A behavior that answers every question the same way and counts how often
+/// it is asked for physics.
+#[derive(Debug)]
+struct CountingBehavior {
+    physics: SharedScrollPhysics,
+    devices: flui_interaction::PointerKindSet,
+    asked: Cell<usize>,
+}
+
+impl CountingBehavior {
+    fn new(physics: SharedScrollPhysics, devices: flui_interaction::PointerKindSet) -> Rc<Self> {
+        Rc::new(Self {
+            physics,
+            devices,
+            asked: Cell::new(0),
+        })
+    }
+}
+
+impl flui_widgets::ScrollBehavior for CountingBehavior {
+    fn physics(&self, _details: &flui_widgets::ScrollBehaviorDetails) -> SharedScrollPhysics {
+        self.asked.set(self.asked.get() + 1);
+        Rc::clone(&self.physics)
+    }
+
+    fn drag_devices(
+        &self,
+        _details: &flui_widgets::ScrollBehaviorDetails,
+    ) -> flui_interaction::PointerKindSet {
+        self.devices
+    }
+}
+
+/// Physics that accepts no motion: every proposed offset stays where it is.
+#[derive(Debug)]
+struct PinnedPhysics;
+
+impl flui_widgets::ScrollPhysics for PinnedPhysics {
+    fn apply_boundary_conditions(
+        &self,
+        metrics: &flui_widgets::ScrollMetrics,
+        _proposed: f64,
+    ) -> f64 {
+        metrics.pixels
+    }
+
+    fn create_ballistic_simulation(
+        &self,
+        _metrics: &flui_widgets::ScrollMetrics,
+        _velocity_px_per_sec: f64,
+    ) -> Option<Box<dyn flui_animation::simulation::Simulation>> {
+        None
+    }
+}
+
+/// Drag a 300 px viewport over 800 px of `view`'s content up by 50 px and
+/// return the offset it lands on.
+fn dragged_offset(view: impl Fn(&ScrollController) -> flui_view::BoxedView) -> f64 {
+    dragged_offset_with(flui_interaction::PointerKind::Touch, view)
+}
+
+fn dragged_offset_with(
+    kind: flui_interaction::PointerKind,
+    view: impl Fn(&ScrollController) -> flui_view::BoxedView,
+) -> f64 {
+    let controller = ScrollController::new();
+    let scoped = lay_out(view(&controller), tight(300.0, 300.0));
+    scoped.dispatch_pointer_down_with_kind(150.0, 200.0, kind);
+    scoped.dispatch_pointer_move(150.0, 150.0);
+    scoped.dispatch_pointer_up(150.0, 150.0);
+    controller.pixels()
+}
+
+/// With no configuration, a scroll view drags with a finger, a pen, a
+/// trackpad and a virtual pointer, and leaves a mouse drag to selection: the
+/// mouse scrolls it by its wheel and the scrollbar.
+pub(crate) fn the_default_scroll_behavior_leaves_a_mouse_drag_to_selection() {
+    let list = |controller: &ScrollController| {
+        SingleChildScrollView::new()
+            .controller(controller.clone())
+            .child(SizedBox::new(300.0, 800.0))
+            .boxed()
+    };
+    let pen = flui_interaction::PointerKind::Pen {
+        tool: flui_interaction::PenTool::Tip,
+    };
+    for kind in [
+        flui_interaction::PointerKind::Touch,
+        pen,
+        flui_interaction::PointerKind::Virtual,
+    ] {
+        assert_eq!(dragged_offset_with(kind, list), 50.0, "{kind:?} drags");
+    }
+    assert_eq!(
+        dragged_offset_with(flui_interaction::PointerKind::Mouse, list),
+        0.0,
+        "the mouse leaves the drag"
+    );
+    let every = |controller: &ScrollController| {
+        SingleChildScrollView::new()
+            .controller(controller.clone())
+            .allowed_devices(flui_interaction::PointerKindSet::all())
+            .child(SizedBox::new(300.0, 800.0))
+            .boxed()
+    };
+    assert_eq!(
+        dragged_offset_with(flui_interaction::PointerKind::Mouse, every),
+        50.0,
+        "a view that names every device takes the mouse"
+    );
+}
+
+/// A scroll view asks the nearest `ScrollConfiguration` for what it leaves
+/// open, and what it names itself wins.
+pub(crate) fn a_scroll_configuration_answers_what_a_scroll_view_leaves_open() {
+    use flui_interaction::PointerKindSet;
+    use flui_widgets::{ScrollBehavior, ScrollConfiguration};
+
+    let clamping = || -> SharedScrollPhysics { Rc::new(ClampingScrollPhysics::new()) };
+    type Row = (&'static str, Rc<dyn ScrollBehavior>, bool, bool, f64);
+    let rows: [Row; 4] = [
+        (
+            "the behavior's physics",
+            CountingBehavior::new(Rc::new(PinnedPhysics), PointerKindSet::all()),
+            false,
+            false,
+            0.0,
+        ),
+        (
+            "the view's physics wins",
+            CountingBehavior::new(Rc::new(PinnedPhysics), PointerKindSet::all()),
+            true,
+            false,
+            50.0,
+        ),
+        (
+            "the behavior's devices",
+            CountingBehavior::new(clamping(), PointerKindSet::MOUSE),
+            false,
+            false,
+            0.0,
+        ),
+        (
+            "the view's devices win",
+            CountingBehavior::new(clamping(), PointerKindSet::MOUSE),
+            false,
+            true,
+            50.0,
+        ),
+    ];
+    for (row, behavior, view_physics, view_devices, expected) in rows {
+        let offset = dragged_offset(|controller| {
+            let mut view = SingleChildScrollView::new()
+                .controller(controller.clone())
+                .child(SizedBox::new(300.0, 800.0));
+            if view_physics {
+                view = view.physics(clamping());
+            }
+            if view_devices {
+                view = view.allowed_devices(PointerKindSet::all());
+            }
+            ScrollConfiguration::new(Rc::clone(&behavior), view).boxed()
+        });
+        assert_eq!(offset, expected, "{row}");
+    }
+}
+
+/// Without a configuration, a scroll view follows its platform: an Apple
+/// convention overscrolls a pull past the top, any other clamps it.
+pub(crate) fn the_default_scroll_behavior_follows_the_platform_convention() {
+    use flui_platform::TargetPlatform;
+    use flui_view::environment::PlatformConvention;
+
+    for (platform, overscrolls) in [
+        (TargetPlatform::MacOS, true),
+        (TargetPlatform::iOS, true),
+        (TargetPlatform::Linux, false),
+        (TargetPlatform::Unknown, false),
+    ] {
+        let controller = ScrollController::new();
+        let view = PlatformConvention::new(
+            platform,
+            SingleChildScrollView::new()
+                .controller(controller.clone())
+                .child(SizedBox::new(300.0, 800.0)),
+        );
+        let scoped = lay_out(view, tight(300.0, 300.0));
+        // A pull down at the top proposes a negative offset.
+        scoped.dispatch_pointer_down(150.0, 100.0);
+        scoped.dispatch_pointer_move(150.0, 150.0);
+        assert_eq!(
+            controller.pixels() < 0.0,
+            overscrolls,
+            "{platform:?}: offset {}",
+            controller.pixels()
+        );
+        scoped.dispatch_pointer_up(150.0, 150.0);
+    }
+}
+
+/// A rebuild under the same behavior keeps the physics it answered; another
+/// behavior is asked again.
+pub(crate) fn a_scroll_view_asks_its_behavior_again_only_when_it_changes() {
+    use flui_interaction::PointerKindSet;
+    use flui_widgets::ScrollConfiguration;
+
+    let controller = ScrollController::new();
+    let content = |behavior: &Rc<CountingBehavior>| {
+        ScrollConfiguration::new(
+            Rc::clone(behavior) as Rc<dyn flui_widgets::ScrollBehavior>,
+            SingleChildScrollView::new()
+                .controller(controller.clone())
+                .child(SizedBox::new(300.0, 800.0)),
+        )
+    };
+    let first = CountingBehavior::new(Rc::new(ClampingScrollPhysics::new()), PointerKindSet::all());
+    let mut laid = lay_out(content(&first), tight(300.0, 300.0));
+    assert_eq!(first.asked.get(), 1, "mounting asks once");
+    laid.pump_widget(content(&first));
+    assert_eq!(first.asked.get(), 1, "the same behavior is not asked again");
+    let second =
+        CountingBehavior::new(Rc::new(ClampingScrollPhysics::new()), PointerKindSet::all());
+    laid.pump_widget(content(&second));
+    assert_eq!(second.asked.get(), 1, "another behavior is asked");
+    assert_eq!(first.asked.get(), 1);
+}
+
+/// Physics constructors refuse coefficients outside the open unit range.
+pub(crate) fn scroll_physics_refuse_coefficients_outside_the_unit_range() {
+    use flui_widgets::{ScrollPhysicsError, ScrollPhysicsParameter};
+
+    let spring = BouncingScrollPhysics::new().spring();
+    for value in [f64::NAN, -0.1, 0.0, 1.0, 2.0, f64::INFINITY] {
+        let refused = |result: Result<(), ScrollPhysicsError>| match result {
+            Err(ScrollPhysicsError::OutOfRange {
+                parameter,
+                value: given,
+            }) if given.to_bits() == value.to_bits() => Some(parameter),
+            _ => None,
+        };
+        let drag = Some(ScrollPhysicsParameter::FlingDragCoefficient);
+        let resistance = Some(ScrollPhysicsParameter::OverscrollSpringCoefficient);
+        assert_eq!(
+            refused(ClampingScrollPhysics::try_new(value).map(drop)),
+            drag,
+            "clamping drag {value}"
+        );
+        assert_eq!(
+            refused(BouncingScrollPhysics::try_new(value, spring, 0.135).map(drop)),
+            resistance,
+            "bouncing resistance {value}"
+        );
+        assert_eq!(
+            refused(BouncingScrollPhysics::try_new(0.52, spring, value).map(drop)),
+            drag,
+            "bouncing drag {value}"
+        );
+    }
+    let accepted = ClampingScrollPhysics::try_new(0.2).expect("0.2 is in range");
+    assert_eq!(accepted.fling_drag_coefficient(), 0.2);
+    let bouncing = BouncingScrollPhysics::try_new(0.3, spring, 0.2).expect("in range");
+    assert_eq!(bouncing.overscroll_spring_coefficient(), 0.3);
+    assert_eq!(bouncing.fling_drag_coefficient(), 0.2);
 }

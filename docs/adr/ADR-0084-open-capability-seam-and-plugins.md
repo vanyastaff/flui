@@ -451,6 +451,6 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
 | `a_plugin_over_a_built_in_is_a_conflict`, `an_application_override_resolves_a_conflict`, `a_later_override_replaces_an_earlier_one`, `conflicts_are_reported_in_installation_order` | The rules of §4; the last one is deterministic across runs | No registry |
 | `every_ui_runtime_the_runner_builds_resolves_the_clipboard` (through `Application` and the runner, main and secondary windows) | An `Ok` handle, never `NotRegistered` | No seam; the prototype's runner path was untested |
 | `not_registered_is_reported_before_no_window`, `a_closed_window_answers_no_window` | The lookup order of §3 | No seam |
-| Haptics: `NotOnThisPlatform` on a window without haptics; `FakeHaptics` on `MockWindow` observes the call; `NotRegistered` without the plugin | ADR-0031's degradation contract | No seam |
+| Haptics: `NotOnThisPlatform` on a window without haptics; `FakeHaptics` on `HeadlessHostWindow` observes the call; `NotRegistered` without the plugin | ADR-0031's degradation contract | No seam |
 | `compile_fail` with a compiling twin: a `PlatformWindow` without `text_input`, and a backend extension impl without `accessibility`, do not compile | The core obligation of §5 | The defaults exist |
 | `cargo xtask cross-typecheck` for macOS with default features **and** with `a11y`, shown in the PR | The inert macOS path compiles | The prototype broke it (E0046) |

@@ -623,17 +623,17 @@ pub(crate) fn page_view_with_page_controls() {
             model.page().map(|page| (page * 1000.0).round() as i64)
         })
     };
-    let mut swipe = MouseScript::new("swipe back").press(Offset::new(60.0, 150.0));
+    let mut swipe = TouchScript::new("swipe back").down(0, Offset::new(60.0, 150.0));
     for step in 1..=10 {
         swipe = swipe
             .wait(Duration::from_millis(16))
-            .move_to(Offset::new(60.0 + 30.0 * f64::from(step), 150.0));
+            .move_to(0, Offset::new(60.0 + 30.0 * f64::from(step), 150.0));
     }
     let swipe = swipe
         .wait(Duration::from_millis(300))
-        .release()
+        .up(0)
         .build()
-        .expect("one whole press");
+        .expect("one whole contact");
     assert_gesture_alternatives(&GestureAlternativesCheck::new(
         "PageView / page controls",
         tight(500.0, 300.0),
@@ -1060,7 +1060,7 @@ pub(crate) fn reserved_keys_are_not_bound() {
         .key(SingleActivator::named(NamedKey::Escape))
         .key(SingleActivator::character("x"))
         .key(SingleActivator::named(NamedKey::F2));
-    let bound: Vec<_> = command.keys(TargetPlatform::current()).cloned().collect();
+    let bound: Vec<_> = command.keys(TargetPlatform::Unknown).collect();
     assert_eq!(
         bound,
         [SingleActivator::named(NamedKey::F2)],
@@ -1553,17 +1553,17 @@ pub(crate) fn page_view_with_buttons_beside_it() {
             move || model.page().map(|page| (page * 1000.0).round() as i64),
         )
     };
-    let mut swipe = MouseScript::new("swipe back").press(Offset::new(60.0, 200.0));
+    let mut swipe = TouchScript::new("swipe back").down(0, Offset::new(60.0, 200.0));
     for step in 1..=10 {
         swipe = swipe
             .wait(Duration::from_millis(16))
-            .move_to(Offset::new(60.0 + 30.0 * f64::from(step), 200.0));
+            .move_to(0, Offset::new(60.0 + 30.0 * f64::from(step), 200.0));
     }
     let swipe = swipe
         .wait(Duration::from_millis(300))
-        .release()
+        .up(0)
         .build()
-        .expect("one whole press");
+        .expect("one whole contact");
     assert_gesture_alternatives(&GestureAlternativesCheck::new(
         "PageView / buttons beside it",
         tight(500.0, 300.0),

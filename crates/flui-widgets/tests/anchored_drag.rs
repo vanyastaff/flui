@@ -16,12 +16,12 @@ use flui_view::{BoxedView, IntoView, ViewExt};
 use flui_widgets::{
     Alternative, AnchorIntent, AnchoredDrag, AnchoredDragController, AnchorsError, ColoredBox,
     ControlPlacement, ControlSpec, Directionality, DraggableAnchors, GestureAlternatives,
-    GestureCommand, NestedScroll, ScrollCause, ScrollController, ScrollDevice, Scrollable,
-    SizedBox,
+    GestureCommand, NestedScroll, ScrollCause, ScrollController, ScrollDevice, ScrollView,
+    SingleChildScrollView, SizedBox,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};
-use crate::nested_scroll::{DEVICES, Device, Keys, Probe, at, fling, settle, slow};
+use crate::nested_scroll::{ALL_DEVICES, DEVICES, Device, Keys, Probe, at, fling, settle, slow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stop {
@@ -169,7 +169,7 @@ fn near(value: f64, target: f64) -> bool {
 /// direction; the child follows the offset and the drag clamps to the
 /// extreme anchors (ADR-0209 §9, W3).
 pub(crate) fn anchored_drag_settles_on_anchors_by_release_and_fling() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         let vsync = Vsync::new();
         let anchors = controller(three());
         let mut laid = mount(drag_view(&anchors, Axis::Horizontal), &vsync);
@@ -217,7 +217,7 @@ pub(crate) fn anchored_drag_settles_on_anchors_by_release_and_fling() {
 /// Offsets run toward the reading end: under right-to-left text a drag to
 /// the left opens the row and the child moves left (A5).
 pub(crate) fn anchored_drag_reads_offsets_toward_the_reading_end() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         for direction in [TextDirection::Ltr, TextDirection::Rtl] {
             let vsync = Vsync::new();
             let anchors = controller(three());
@@ -339,7 +339,7 @@ pub(crate) fn anchored_drag_refuses_degenerate_anchor_sets() {
         let paged = |page: BoxedView| {
             let (vsync, pager) = (Vsync::new(), ScrollController::new());
             let pages = flui_widgets::Row::new(vec![page, SizedBox::new(300.0, 300.0).boxed()]);
-            let view = Scrollable::new()
+            let view = SingleChildScrollView::new()
                 .controller(pager.clone())
                 .scroll_direction(Axis::Horizontal)
                 .child(pages);
@@ -352,7 +352,7 @@ pub(crate) fn anchored_drag_refuses_degenerate_anchor_sets() {
         let moved = paged(drag_view(&held, Axis::Horizontal).boxed());
         // A scrollable with no room is the reference: the drag goes up the
         // chain from where the inner contact won it.
-        let full = Scrollable::new()
+        let full = SingleChildScrollView::new()
             .scroll_direction(Axis::Horizontal)
             .child(SizedBox::new(300.0, 300.0));
         let reference = paged(SizedBox::new(300.0, 300.0).child(full).boxed());
@@ -368,7 +368,7 @@ pub(crate) fn anchored_drag_refuses_degenerate_anchor_sets() {
 /// the settle, is honoured at once: the drag goes on within the new
 /// extents and settles on the new anchors.
 pub(crate) fn anchored_drag_follows_anchors_replaced_mid_drag() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         let vsync = Vsync::new();
         let anchors = controller(stops(&[(Stop::Closed, 0.0), (Stop::Open, 120.0)]));
         let replaced = Rc::new(Cell::new(0));
@@ -594,7 +594,7 @@ pub(crate) fn anchored_drag_assistive_and_key_steps_move_between_anchors() {
 /// selection haptic with the frame that shows it; settling back where a
 /// drag already arrived and programmatic moves play none (ADR-0210).
 pub(crate) fn anchored_drag_plays_a_haptic_on_each_new_anchor() {
-    for device in DEVICES {
+    for device in ALL_DEVICES {
         let vsync = Vsync::new();
         let anchors = controller(three());
         let mut laid = mount(drag_view(&anchors, Axis::Horizontal), &vsync);
@@ -689,7 +689,9 @@ pub(crate) fn anchored_drag_is_a_bounded_leaf_and_a_participant() {
                 .boxed(),
             SizedBox::new(300.0, 1000.0).boxed(),
         ]);
-        let view = Scrollable::new().controller(list.clone()).child(rows);
+        let view = SingleChildScrollView::new()
+            .controller(list.clone())
+            .child(rows);
         let mut laid = mount(view, &vsync);
         laid.replay(&slow(device, at(100.0, 50.0), at(200.0, 50.0)));
         settle(&mut laid);
@@ -711,7 +713,7 @@ pub(crate) fn anchored_drag_is_a_bounded_leaf_and_a_participant() {
         let vsync = Vsync::new();
         let sheet = controller(stops(&[(Stop::Closed, 0.0), (Stop::Open, 200.0)]));
         let list = ScrollController::new();
-        let content = Scrollable::new()
+        let content = SingleChildScrollView::new()
             .controller(list.clone())
             .child(SizedBox::new(300.0, 1000.0));
         let view = AnchoredDrag::new(
@@ -775,7 +777,9 @@ pub(crate) fn anchored_drag_is_a_bounded_leaf_and_a_participant() {
         SizedBox::new(300.0, 1000.0).boxed(),
     ]);
     let mut laid = mount(
-        Scrollable::new().controller(outer.clone()).child(content),
+        SingleChildScrollView::new()
+            .controller(outer.clone())
+            .child(content),
         &vsync,
     );
     outer.jump_to(100.0).expect("no build is running");
@@ -978,4 +982,40 @@ pub(crate) fn anchored_drag_offset_listenable_follows_every_move() {
     );
     anchors.jump_to(Stop::Far).expect("an anchor");
     assert_eq!(heard.get(), before + 1, "a jump that moves nothing is not");
+}
+
+/// A drag past the outermost anchor stays on it under every platform
+/// convention: the leaf's bounds are its own, not the subtree's
+/// `ScrollBehavior`'s, which bounces on Apple platforms.
+pub(crate) fn anchored_drag_stays_bounded_under_every_platform_convention() {
+    use flui_platform::TargetPlatform;
+    use flui_view::environment::PlatformConvention;
+
+    for platform in [
+        TargetPlatform::MacOS,
+        TargetPlatform::iOS,
+        TargetPlatform::Linux,
+    ] {
+        let vsync = Vsync::new();
+        let anchors = controller(stops(&[(Stop::Closed, 0.0), (Stop::Open, 120.0)]));
+        let view = PlatformConvention::new(platform, drag_view(&anchors, Axis::Horizontal));
+        let mut laid = mount(view, &vsync);
+        laid.dispatch_pointer_down(10.0, 150.0);
+        let mut farthest = 0.0_f64;
+        for step in 1..=10 {
+            laid.dispatch_pointer_move_after(
+                10.0 + f64::from(step) * 25.0,
+                150.0,
+                Duration::from_millis(16),
+            );
+            farthest = farthest.max(anchors.offset());
+        }
+        assert_eq!(
+            farthest, 120.0,
+            "{platform:?}: the drag stops at the outer anchor"
+        );
+        laid.dispatch_pointer_up(260.0, 150.0);
+        settle(&mut laid);
+        assert_eq!(anchors.offset(), 120.0, "{platform:?}");
+    }
 }

@@ -34,6 +34,8 @@ pub use owner::{
     PipelineCounters, PipelineOwner, ReleaseDetachedRenderSubtreesError,
     ReleaseDetachedRenderSubtreesFailure, WeakPipelineCell,
 };
+#[cfg(any(test, feature = "testing"))]
+pub use owner::{PresentedKind, PresentedNode};
 pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics};
 pub(crate) use text_context::lend as lend_text;
 pub use text_context::{TextContextHandle, TextCx, TextSource};

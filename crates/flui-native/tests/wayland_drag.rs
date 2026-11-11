@@ -461,7 +461,7 @@ mod cases {
             transfer.request(id, RepresentationIndex(1), TransferLimits::default()),
         );
         assert!(
-            matches!(silent, Err(TransferError::SourceGone)),
+            matches!(silent, Err(TransferError::TimedOut)),
             "a source that never writes: {silent:?}"
         );
         assert!(

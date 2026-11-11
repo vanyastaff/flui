@@ -16,6 +16,7 @@
 //! Floating snap tests exercise gesture release, registry migration and
 //! withdrawal during an active run through the mounted widget.
 
+use flui_widgets::ScrollView;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -73,7 +74,9 @@ fn trailing_content() -> BoxedView {
 }
 
 fn scroll_view_at(offset: f64, header: SliverPersistentHeader) -> CustomScrollView {
-    CustomScrollView::new((header, trailing_content())).offset(offset)
+    CustomScrollView::new((header, trailing_content())).controller(
+        flui_widgets::ScrollController::with_initial_scroll_offset(offset),
+    )
 }
 
 /// A delegate swap that SHRINKS `max_extent` while scrolled beyond it. The
@@ -189,27 +192,28 @@ fn exercise_floating_snap(pinned: bool, migrate_and_unmount: bool) {
 
     use flui_animation::Vsync;
     use flui_view::environment::VsyncScope;
-    use flui_widgets::{ScrollController, Scrollable, Viewport};
+    use flui_widgets::{ScrollController, ScrollView, Scrollable, Viewport};
 
     let builds = Rc::new(RefCell::new(Vec::new()));
     let builds_for_delegate = Rc::clone(&builds);
     let controller = ScrollController::new();
     let vsync = Vsync::new();
 
-    let scrollable = Scrollable::new()
-        .controller(controller.clone())
-        .viewport_builder(Rc::new(move |position| {
-            Viewport::new((
+    let scrollable = Scrollable::new(move |position| {
+        Viewport::new(
+            position,
+            (
                 SliverPersistentHeader::new(SnappingDelegate {
                     builds: Rc::clone(&builds_for_delegate),
                 })
                 .pinned(pinned)
                 .floating(true),
                 trailing_content(),
-            ))
-            .position(position)
-            .boxed()
-        }));
+            ),
+        )
+        .boxed()
+    })
+    .controller(controller.clone());
 
     let mut laid = lay_out(
         VsyncScope::new(vsync.clone(), scrollable.clone()),

@@ -85,6 +85,7 @@ pub struct HeadlessWindow {
     text_input: Option<Arc<RecordingTextInput>>,
     text_store_host: bool,
     gesture_preset: flui_interaction::GestureProfiles,
+    platform: flui_platform::TargetPlatform,
     display: Mutex<Option<DisplayId>>,
     /// What covers the window, as the test last reported it.
     insets: Mutex<flui_platform::WindowInsets>,
@@ -223,6 +224,7 @@ impl HeadlessWindow {
             text_input: None,
             text_store_host: false,
             gesture_preset: flui_interaction::GestureSettings::default().into(),
+            platform: flui_platform::TargetPlatform::Unknown,
             display: Mutex::new(None),
             insets: Mutex::new(flui_platform::WindowInsets::ZERO),
             revision: Mutex::new(flui_platform::WindowRevision::ZERO),
@@ -259,6 +261,18 @@ impl HeadlessWindow {
         preset: impl Into<flui_interaction::GestureProfiles>,
     ) -> Self {
         self.gesture_preset = preset.into();
+        self
+    }
+
+    /// Follow `platform`'s conventions: the runtime publishes it above the
+    /// root as a [`PlatformConvention`](flui_view::environment::PlatformConvention),
+    /// so word-jump chords, refresh keys, scroll physics and the rest are
+    /// that platform's. Without one, [`TargetPlatform::Unknown`](flui_platform::TargetPlatform::Unknown)'s
+    /// platform-neutral conventions: a headless test never takes them from
+    /// the machine that runs it.
+    #[must_use]
+    pub fn with_platform(mut self, platform: flui_platform::TargetPlatform) -> Self {
+        self.platform = platform;
         self
     }
 
@@ -909,6 +923,7 @@ impl HeadlessHost {
         let surface = (window.size.width as u32, window.size.height as u32);
         let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
         let gesture_preset = window.gesture_preset.clone();
+        let platform = window.platform;
         let window_ids = WindowIdMint::new();
         window.id = window_ids
             .next()
@@ -989,7 +1004,8 @@ impl HeadlessHost {
                     .clone()
                     .map(|host| host as Rc<dyn TextStoreHost>),
             )
-            .with_gesture_profiles(gesture_preset),
+            .with_gesture_profiles(gesture_preset)
+            .with_platform(platform),
             1.0,
             host,
         )
@@ -1487,6 +1503,7 @@ impl HeadlessHost {
             .expect("BUG: a test opens far fewer than u64::MAX windows");
         let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
         let gesture_preset = window.gesture_preset.clone();
+        let platform = window.platform;
         let window = Rc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
         let presentation = self.ui_runtime.assemble_presentation(
@@ -1499,7 +1516,8 @@ impl HeadlessHost {
                     .clone()
                     .map(|host| host as Rc<dyn TextStoreHost>),
             )
-            .with_gesture_profiles(gesture_preset),
+            .with_gesture_profiles(gesture_preset)
+            .with_platform(platform),
         );
         let id = self.ui_runtime.install_presentation(presentation);
         install_window_control(&self.ui_runtime, id, &window);

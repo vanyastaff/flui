@@ -529,6 +529,22 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
         PaintEffects::NONE
     }
 
+    /// The transform this node's own drawing is placed under, in its local space: where the
+    /// window shows the node's box, before any ancestor's transform.
+    ///
+    /// Default: [`Self::paint_effects`]'s transform, the layer the pipeline pushes around the
+    /// node. Override when `paint` moves its own drawing without a layer, as a translation
+    /// painted as a plain offset does. Pure in `(self, size)` like `paint_effects`. Read by
+    /// `PipelineOwner::presented_nodes` (feature `testing`).
+    ///
+    /// Override on [`RenderBox`](crate::traits::RenderBox); slivers take the default.
+    fn drawn_transform(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
+        self.paint_effects(size).transform
+    }
+
     /// Composes onto `transform` the mapping from child `child`'s local
     /// coordinate space into **this** object's local coordinate space.
     ///
@@ -727,6 +743,21 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ) -> Option<MouseTrackerAnnotation> {
         let _ = id;
         None
+    }
+
+    /// Whether this render object adds input regions
+    /// ([`InputRegionSink::add`](crate::input_regions::InputRegionSink::add)) in
+    /// [`Self::describe_input_regions`].
+    ///
+    /// Read once, when the node enters the tree: the collection walks only the paths to
+    /// the nodes that answer `true` and their subtrees, because a node that only claims or
+    /// passes presses contributes nothing outside a move area such a node reported. A
+    /// region added by a node that answers `false` is never collected. Typed render
+    /// objects answer through `RenderBox::REPORTS_INPUT_REGIONS` /
+    /// `RenderSliver::REPORTS_INPUT_REGIONS`, so the answer is a property of the type.
+    /// Default: `false`.
+    fn reports_input_regions(&self) -> bool {
+        false
     }
 
     /// Writes the input regions this node claims, in its own local coordinates at its

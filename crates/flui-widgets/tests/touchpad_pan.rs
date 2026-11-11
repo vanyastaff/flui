@@ -13,7 +13,9 @@ use flui_platform::{
         ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
     },
 };
-use flui_widgets::{DragSlot, GestureDetector, ScrollController, Scrollable, SizedBox};
+use flui_widgets::{
+    DragSlot, GestureDetector, ScrollController, ScrollView, SingleChildScrollView, SizedBox,
+};
 
 fn packet(phase: ScrollPhase, dx: f64, dy: f64, nanos: u64) -> PointerEvent {
     let pointer = PointerInfo::new(
@@ -44,8 +46,8 @@ fn pan(laid: &LaidOut, steps: &[(f64, f64)]) {
     laid.dispatch_pointer_event(&packet(ScrollPhase::Ended, 0.0, 0.0, nanos + 8_000_000));
 }
 
-fn list(controller: &ScrollController, height: f64) -> Scrollable {
-    Scrollable::new()
+fn list(controller: &ScrollController, height: f64) -> SingleChildScrollView {
+    SingleChildScrollView::new()
         .controller(controller.clone())
         .child(SizedBox::new(300.0, height))
 }

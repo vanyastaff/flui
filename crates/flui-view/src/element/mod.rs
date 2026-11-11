@@ -14,11 +14,14 @@ mod inherited_access;
 pub(crate) mod layout_builder;
 mod lifecycle;
 mod notification;
+mod provided;
+mod render_custody;
 mod render_object_element;
 mod root;
 pub(crate) mod sliver_adaptor;
 pub(crate) mod sliver_persistent_header;
 pub(crate) mod sparse_children;
+mod stateful_render;
 pub(crate) mod stream_builder;
 
 // New generic infrastructure
@@ -52,7 +55,7 @@ pub use behavior::{
 };
 pub use future_builder::{BoxedResultFuture, FutureBuilder, FutureBuilderState, FutureFactory};
 pub use generic::ElementCore;
-pub use inherited_access::InheritedElementAccess;
+pub use inherited_access::{InheritedElementAccess, ProvidedRef};
 pub use kind::{
     ElementKind, InheritedElementBase, NotificationElementBase, ProxyElementBase,
     RenderElementBase, StatefulElementBase, StatelessElementBase,
@@ -64,6 +67,7 @@ pub use notification::{
     LayoutChangedNotification, NotifiableElement, Notification, ScrollNotification,
     SizeChangedNotification,
 };
+pub use provided::{Provided, ProvidedValue};
 pub use render_object_element::RenderTreeRootElement;
 pub use root::{RootElement, RootElementImpl};
 // The lazy multi-box adaptor and its extension point: a render object that
@@ -81,6 +85,7 @@ pub use sliver_persistent_header::{
     PinnedPersistentHeaderView, ScrollingPersistentHeaderView, SharedHeaderDelegate,
     SliverPersistentHeaderDelegate,
 };
+pub use stateful_render::StatefulRenderBehavior;
 pub use stream_builder::{BoxedResultStream, StreamBuilder, StreamBuilderState, StreamFactory};
 pub use unified::Element;
 
@@ -133,6 +138,12 @@ pub type StatefulElement<V> = Element<V, Single, StatefulBehavior<V>>;
 ///
 /// This is the element type created for views implementing `RenderView`.
 pub type RenderElement<V> = Element<V, Variable, RenderBehavior<V>>;
+
+/// Render element with one built child, a RenderObject and persistent state.
+///
+/// This is the element type created for views implementing
+/// `StatefulRenderView`.
+pub type StatefulRenderElement<V> = Element<V, Variable, StatefulRenderBehavior<V>>;
 
 /// Inherited element with single child and dependent tracking.
 ///

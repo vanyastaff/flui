@@ -39,7 +39,7 @@ use flui::view::element::ElementKind;
 use flui::view::persist::{DecodeError, Document, PersistError, Persisted, Revision, SaveStatus};
 use flui::view::{AsyncDriver, CloseGuard, StaleClose, TaskToken, View};
 use flui::widgets::{
-    AnimatedBuilder, BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea, Scrollable,
+    AnimatedBuilder, BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea,
     WidgetStateProperty, column,
 };
 use serde::{Deserialize, Serialize};
@@ -1159,36 +1159,30 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
     let rows = {
         let shared = shared.clone();
         let router = router.clone();
-        Scrollable::new()
-            .controller(shared.scroll.clone())
-            .viewport_builder(Rc::new(move |position| {
-                let built = Rc::clone(&notes);
-                let found = Rc::clone(&notes);
-                let shared = shared.clone();
-                let router = router.clone();
-                ListView::builder(notes.len(), extent, move |index| {
-                    let note = built.get(index)?;
-                    Some(
-                        NoteRow {
-                            key: ValueKey::new(note.id),
-                            title: note.title.clone(),
-                            extent,
-                            shared: shared.clone(),
-                            router: router.clone(),
-                        }
-                        .boxed(),
-                    )
-                })
-                .find_index_by_key(move |key| {
-                    let id = key.as_any().downcast_ref::<ValueKey<NoteId>>()?.value();
-                    found.iter().position(|note| note.id == *id)
-                })
-                .position(position)
-                .focusable(true)
-                .semantics_label("Notes")
-                .empty_label("No notes")
-                .boxed()
-            }))
+        let scroll = shared.scroll.clone();
+        let built = Rc::clone(&notes);
+        let found = Rc::clone(&notes);
+        ListView::builder(notes.len(), extent, move |index| {
+            let note = built.get(index)?;
+            Some(
+                NoteRow {
+                    key: ValueKey::new(note.id),
+                    title: note.title.clone(),
+                    extent,
+                    shared: shared.clone(),
+                    router: router.clone(),
+                }
+                .boxed(),
+            )
+        })
+        .find_index_by_key(move |key| {
+            let id = key.as_any().downcast_ref::<ValueKey<NoteId>>()?.value();
+            found.iter().position(|note| note.id == *id)
+        })
+        .controller(scroll)
+        .focusable(true)
+        .semantics_label("Notes")
+        .empty_label("No notes")
     };
     let toggle = shared.clone();
     let add = shared.clone();

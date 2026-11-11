@@ -18,7 +18,7 @@ use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Alternative, ControlSpec, Directionality, GestureAlternatives, RefreshController,
-    RefreshIndicator, RefreshIntent, ScrollController, Scrollable, SizedBox,
+    RefreshIndicator, RefreshIntent, ScrollController, ScrollView, SingleChildScrollView, SizedBox,
 };
 use flui_testing::a11y::Role;
 
@@ -491,7 +491,7 @@ pub fn material_app_refresh_shows_the_circular_indicator() {
             vsync.clone(),
             MaterialApp::new(
                 RefreshIndicator::new(
-                    Scrollable::new()
+                    SingleChildScrollView::new()
                         .controller(ScrollController::new())
                         .child(SizedBox::new(300.0, 5000.0)),
                     alternatives,
@@ -837,7 +837,7 @@ pub fn expressive_material_app_refresh_shows_the_loading_indicator() {
             vsync.clone(),
             MaterialApp::new(
                 RefreshIndicator::new(
-                    Scrollable::new()
+                    SingleChildScrollView::new()
                         .controller(ScrollController::new())
                         .child(SizedBox::new(300.0, 5000.0)),
                     alternatives,

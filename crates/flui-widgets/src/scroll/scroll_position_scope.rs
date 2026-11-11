@@ -10,8 +10,8 @@ use super::ScrollController;
 /// Provides the enclosing [`Scrollable`](super::Scrollable)'s shared
 /// [`ScrollPosition`] to descendant widgets.
 ///
-/// `Scrollable` installs this around the product of its
-/// [`viewport_builder`](super::Scrollable::viewport_builder), so anything
+/// `Scrollable` installs this around the viewport its
+/// [`new`](super::Scrollable::new) closure builds, so anything
 /// living inside the scrolled content — a floating header's snap trigger, a
 /// scrollbar, an "is the user scrolling" fade — can reach the SAME position
 /// the gestures drive, without threading it through every intermediate

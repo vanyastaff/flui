@@ -103,7 +103,7 @@
 //!
 //! ### What Headless Mode Provides
 //!
-//! - **Mock Windows**: `open_window()` returns mock windows (no OS windows
+//! - **Headless windows**: `open_window()` returns [`HeadlessHostWindow`]s (no OS windows
 //!   created)
 //! - **In-Memory Clipboard**: a clipboard that reads back what the application wrote
 //! - **Mock Displays**: Single virtual display at 1920x1080
@@ -294,7 +294,8 @@ pub use owner::headless::{
 pub use preferences::headless::HeadlessPreferences;
 pub use text::headless::FakeTextInput;
 pub use window::headless::{
-    HeadlessOpenWindows, HeadlessWindowPolicy, HeadlessWindowSystem, MockWindow, UnknownDisplay,
+    HeadlessHostWindow, HeadlessOpenWindows, HeadlessWindowPolicy, HeadlessWindowSystem,
+    UnknownDisplay,
 };
 // What a UIKit scene tells the composition root.
 #[cfg(target_os = "ios")]

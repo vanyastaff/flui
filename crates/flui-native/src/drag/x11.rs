@@ -1832,7 +1832,12 @@ impl LoopDrag for X11Drag {
             state.fetches = live;
             if !ended.is_empty() {
                 for fetch in ended {
-                    after.end(&self.wire(), fetch, Err(TransferError::SourceGone));
+                    let error = if fetch.deadline <= now {
+                        TransferError::TimedOut
+                    } else {
+                        TransferError::SourceGone
+                    };
+                    after.end(&self.wire(), fetch, Err(error));
                 }
                 state.start_waiting(&self.wire(), &mut after);
             }

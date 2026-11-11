@@ -827,6 +827,9 @@ impl PipelineOwner<PaintPhase> {
         }
 
         let mut painted_children = ChildPaintOrder::new();
+        // The group opacity of each scope the fragment has open, so a child painted inside
+        // one (a flow delegate's `paint_child_with_opacity`) records what it is drawn at.
+        let mut scope_opacity: SmallVec<[f64; 4]> = SmallVec::new();
         for op in fragment.ops {
             match op {
                 FragmentOp::Run(list) => composer.append_run(list),
@@ -837,22 +840,33 @@ impl PipelineOwner<PaintPhase> {
                     // this fragment-op replay loop, and `push_layer` hands
                     // back the freshly-minted LayerId.
                     let is_follower = matches!(*scope, FragmentScope::Follower(_));
+                    scope_opacity.push(match &*scope {
+                        FragmentScope::Opacity(opacity) => opacity.alpha(),
+                        _ => 1.0,
+                    });
                     let layer_id = composer.push_layer(scope_layer(*scope, origin));
                     if is_follower {
                         composer.record_follower_correlation(node_id, layer_id, origin);
                     }
                 }
                 FragmentOp::PushTransform(matrix) => {
+                    scope_opacity.push(1.0);
                     composer.push_layer(Layer::Transform(TransformLayer::new(conjugate(
                         *matrix, origin,
                     ))));
                 }
-                FragmentOp::Pop => composer.pop_layer(),
+                FragmentOp::Pop => {
+                    scope_opacity.pop();
+                    composer.pop_layer();
+                }
                 FragmentOp::Child {
                     index,
                     offset_override,
                 } => {
-                    painted_children.push(index);
+                    painted_children.push(PaintedChild {
+                        slot: index,
+                        opacity: scope_opacity.iter().product(),
+                    });
                     let Some(&child_id) = child_ids.get(index) else {
                         debug_assert!(
                             false,
@@ -914,14 +928,19 @@ impl PipelineOwner<PaintPhase> {
             }
         }
 
-        // The order children went down in is the order they lie over each other: what
-        // the input-region walk follows. Most parents paint first to last; only the rest
-        // keep their order.
-        if child_ids.len() > 1 {
-            let in_order = painted_children.windows(2).all(|pair| pair[0] < pair[1]);
+        // The children that went down, in the order they lie over each other and at the
+        // opacity of the scopes around them: what the input-region and presented walks
+        // follow. Most parents paint every child first to last outside any scope; only the
+        // rest keep their list, a parent that leaves children out included.
+        if !child_ids.is_empty() {
+            let plain = painted_children.len() == child_ids.len()
+                && painted_children
+                    .iter()
+                    .enumerate()
+                    .all(|(position, child)| child.slot == position && child.opacity == 1.0);
             composer
                 .child_paint_orders
-                .push((node_id, (!in_order).then_some(painted_children)));
+                .push((node_id, (!plain).then_some(painted_children)));
         }
 
         for _ in 0..effect_layers {
@@ -1420,9 +1439,9 @@ struct FragmentComposer {
     /// `flui_layer::resolve_follower_transform` into `PipelineOwner
     /// ::last_follower_transforms` / `::last_hidden_follower_ids`.
     follower_correlations: Vec<(RenderId, LayerId, Offset)>,
-    /// For each node painted this pass that has more than one child, the order it
-    /// painted them in when that is not first to last (`None` when it is), applied by
-    /// `run_paint` to `PipelineOwner::last_child_paint_orders`.
+    /// For each node painted this pass that has children, the children it painted in the
+    /// order it painted them when that is not every child first to last (`None` when it
+    /// is), applied by `run_paint` to `PipelineOwner::last_child_paint_orders`.
     child_paint_orders: Vec<(RenderId, Option<ChildPaintOrder>)>,
     /// Retention decisions taken during the walk, applied by `run_paint` once
     /// the walk's `&self` borrow ends.
@@ -1929,8 +1948,16 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
     }
 }
 
-/// The slots a parent painted its children from, in the order it painted them.
-pub(super) type ChildPaintOrder = SmallVec<[usize; 4]>;
+/// The children a parent painted, in the order it painted them.
+pub(super) type ChildPaintOrder = SmallVec<[PaintedChild; 4]>;
+
+/// One child a parent painted: its slot, and the product of the group opacities of the
+/// fragment scopes the parent had open around it (`1.0` outside any).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct PaintedChild {
+    pub(super) slot: usize,
+    pub(super) opacity: f64,
+}
 
 /// Whether [`capture`](FragmentComposer::capture) refuses a region that holds
 /// `layer`.

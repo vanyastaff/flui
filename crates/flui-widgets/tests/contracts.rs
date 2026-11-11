@@ -15,6 +15,8 @@ fn input_regions() {
             ("system_gesture_exclusion::a_transformed_region_reports_its_bounding_box", crate::system_gesture_exclusion::a_transformed_region_reports_its_bounding_box),
             ("system_gesture_exclusion::a_clipped_region_reports_the_intersection", crate::system_gesture_exclusion::a_clipped_region_reports_the_intersection),
             ("system_gesture_exclusion::a_region_beyond_the_window_is_clamped_to_it", crate::system_gesture_exclusion::a_region_beyond_the_window_is_clamped_to_it),
+            ("system_gesture_exclusion::regions_in_separate_branches_come_out_in_paint_order", crate::system_gesture_exclusion::regions_in_separate_branches_come_out_in_paint_order),
+            ("system_gesture_exclusion::a_tree_without_a_region_reports_none", crate::system_gesture_exclusion::a_tree_without_a_region_reports_none),
             ("system_gesture_exclusion::a_region_in_a_scrolled_list_item_reports_the_scrolled_rect", crate::system_gesture_exclusion::a_region_in_a_scrolled_list_item_reports_the_scrolled_rect),
             ("system_gesture_exclusion::a_scale_change_resends_unchanged_logical_regions", crate::system_gesture_exclusion::a_scale_change_resends_unchanged_logical_regions),
             ("system_gesture_exclusion::a_display_change_at_equal_scale_resends_regions", crate::system_gesture_exclusion::a_display_change_at_equal_scale_resends_regions),
@@ -336,6 +338,7 @@ fn text_editing() {
             ("editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed", crate::editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed),
             ("editable_text_clipboard::paste_rechecks_focus_after_committing_composition", crate::editable_text_clipboard::paste_rechecks_focus_after_committing_composition),
             ("editable_text_clipboard::copy_then_paste_round_trips_text_in_an_editable_text", crate::editable_text_clipboard::copy_then_paste_round_trips_text_in_an_editable_text),
+            ("editable_text_clipboard::a_field_follows_the_platform_convention_it_is_built_under", crate::editable_text_clipboard::a_field_follows_the_platform_convention_it_is_built_under),
             ("editable_text_clipboard::a_field_selection_is_offered_lazily_as_the_primary_selection", crate::editable_text_clipboard::a_field_selection_is_offered_lazily_as_the_primary_selection),
             ("editable_text_clipboard::a_middle_press_pastes_the_primary_selection_where_it_lands", crate::editable_text_clipboard::a_middle_press_pastes_the_primary_selection_where_it_lands),
             ("editable_text_clipboard::a_selection_held_before_mounting_is_offered", crate::editable_text_clipboard::a_selection_held_before_mounting_is_offered),
@@ -1056,6 +1059,30 @@ fn scroll_physics_and_activity() {
                 crate::scroll::a_command_queued_before_mount_is_serviced_outside_build,
             ),
             (
+                "scroll::standard_scroll_views_scroll_themselves",
+                crate::scroll::standard_scroll_views_scroll_themselves,
+            ),
+            (
+                "scroll::a_scroll_configuration_answers_what_a_scroll_view_leaves_open",
+                crate::scroll::a_scroll_configuration_answers_what_a_scroll_view_leaves_open,
+            ),
+            (
+                "scroll::the_default_scroll_behavior_leaves_a_mouse_drag_to_selection",
+                crate::scroll::the_default_scroll_behavior_leaves_a_mouse_drag_to_selection,
+            ),
+            (
+                "scroll::the_default_scroll_behavior_follows_the_platform_convention",
+                crate::scroll::the_default_scroll_behavior_follows_the_platform_convention,
+            ),
+            (
+                "scroll::a_scroll_view_asks_its_behavior_again_only_when_it_changes",
+                crate::scroll::a_scroll_view_asks_its_behavior_again_only_when_it_changes,
+            ),
+            (
+                "scroll::scroll_physics_refuse_coefficients_outside_the_unit_range",
+                crate::scroll::scroll_physics_refuse_coefficients_outside_the_unit_range,
+            ),
+            (
                 "scroll::scrollable_drag_up_increases_scroll_offset",
                 crate::scroll::scrollable_drag_up_increases_scroll_offset,
             ),
@@ -1717,6 +1744,7 @@ fn nested_scroll_channel() {
             ("anchored_drag::anchored_drag_is_no_drop_autoscroll_target", crate::anchored_drag::anchored_drag_is_no_drop_autoscroll_target),
             ("anchored_drag::anchored_drag_is_a_tab_stop_and_a_named_slider", crate::anchored_drag::anchored_drag_is_a_tab_stop_and_a_named_slider),
             ("anchored_drag::anchored_drag_offset_listenable_follows_every_move", crate::anchored_drag::anchored_drag_offset_listenable_follows_every_move),
+            ("anchored_drag::anchored_drag_stays_bounded_under_every_platform_convention", crate::anchored_drag::anchored_drag_stays_bounded_under_every_platform_convention),
             ("swipe_actions::swipe_actions_reveal_settle_and_perform_a_tapped_action", crate::swipe_actions::swipe_actions_reveal_settle_and_perform_a_tapped_action),
             ("swipe_actions::swipe_actions_full_swipe_performs_the_first_action_on_release", crate::swipe_actions::swipe_actions_full_swipe_performs_the_first_action_on_release),
             ("swipe_actions::swipe_actions_mirror_right_to_left", crate::swipe_actions::swipe_actions_mirror_right_to_left),

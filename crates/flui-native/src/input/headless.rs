@@ -1,7 +1,7 @@
 //! The headless host's input: the availability a test makes the backend
 //! report, the simulated devices it attaches and removes, and the keyboard
 //! layout the loop keeps. A test injects pointer and key input already
-//! assembled, through a window's callbacks (`MockWindow`).
+//! assembled, through a window's callbacks (`HeadlessHostWindow`).
 
 use std::num::NonZeroU64;
 use std::sync::{Arc, Weak};

@@ -13,7 +13,8 @@
 //! press or a vertical drag on a pager still settling, which the hold on Down
 //! (ADR-0208 rule 4) stops without the press becoming a tap. The anchored
 //! leaf rows mount a `SwipeActions` row in a vertical list, on a pager's page
-//! and alone.
+//! and alone. Their scroll views name every device, so a mouse contact
+//! exercises the same arena as a finger whatever the scroll behavior admits.
 
 use std::{
     any::Any,
@@ -39,7 +40,8 @@ use flui_view::{BoxedView, LifecycleContext, ViewState};
 use flui_widgets::{
     Alternative, ColoredBox, Column, GestureAlternatives, GestureCommand, GestureDetector,
     InteractiveViewer, Listener, MenuSpec, PageController, PageIntent, PageView, ScrollController,
-    Scrollable, SizedBox, SwipeAction, SwipeActions, SwipeAlternative, ZoomIntent,
+    ScrollView, SingleChildScrollView, SizedBox, SwipeAction, SwipeActions, SwipeAlternative,
+    ZoomIntent,
 };
 
 use crate::{
@@ -709,7 +711,10 @@ fn anchored_leaf_in_orthogonal_ancestor(device: PointerKind) {
         let list = ScrollController::new();
         let content = Column::new(vec![swipe_row(), SizedBox::new(300.0, 1000.0).boxed()]);
         let mut laid = lay_out(
-            Scrollable::new().controller(list.clone()).child(content),
+            SingleChildScrollView::new()
+                .controller(list.clone())
+                .allowed_devices(PointerKindSet::all())
+                .child(content),
             tight(PAGE, PAGE),
         );
         assert_eq!(
@@ -871,7 +876,9 @@ const PAGE: f64 = 300.0;
 fn pager(controller: &PageController, page: impl Fn() -> BoxedView) -> LaidOut {
     let pages: Vec<BoxedView> = (0..3).map(|_| page()).collect();
     lay_out(
-        PageView::new(pages, pager_alternatives()).controller(controller.clone()),
+        PageView::new(pages, pager_alternatives())
+            .controller(controller.clone())
+            .allowed_devices(PointerKindSet::all()),
         tight(PAGE, PAGE),
     )
 }

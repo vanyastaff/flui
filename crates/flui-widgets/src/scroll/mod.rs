@@ -6,9 +6,10 @@
 //! path; [`SingleChildScrollView`] and [`ListView`] are the common user-facing
 //! widgets.
 //!
-//! For gesture-driven interactive scrolling use [`Scrollable`] + a
-//! [`ScrollController`], and optionally wrap them in a [`Scrollbar`] for a
-//! visual position indicator.
+//! The user-facing views scroll themselves (see [`ScrollView`]): give one a
+//! [`ScrollController`] to read or move its offset, and wrap it in a
+//! [`Scrollbar`] for a visual position indicator. [`Scrollable`] puts the
+//! scroll gestures over a viewport of your own.
 
 mod anchored_drag;
 mod carousel;
@@ -17,9 +18,11 @@ pub(crate) use anchored_drag::anchor_keys;
 #[cfg(test)]
 pub(crate) use interactive_viewer::zoom_keys;
 #[cfg(test)]
+#[cfg(test)]
 pub(crate) use refresh_indicator::refresh_keys;
 mod animated_list;
 mod collapsing_header;
+mod config;
 mod custom_scroll_view;
 mod drag_autoscroll;
 mod focusable_sliver;
@@ -31,6 +34,7 @@ pub mod nested;
 mod page_indicator;
 mod page_view;
 mod refresh_indicator;
+mod scroll_behavior;
 mod scroll_controller;
 mod scroll_owner;
 mod scroll_physics;
@@ -67,6 +71,7 @@ pub use carousel::{
 pub use collapsing_header::{
     CollapsingHeader, CollapsingHeaderState, HeaderExtents, HeaderExtentsError, HeaderOrder,
 };
+pub use config::{ScrollView, ScrollViewConfig};
 pub use custom_scroll_view::CustomScrollView;
 pub use flui_objects::InvalidSliverCrossAxisExtent;
 pub use focusable_sliver::{FocusableSliver, FocusableSliverParts, IntoFocusableSliver};
@@ -89,10 +94,14 @@ pub use refresh_indicator::{
     RefreshController, RefreshIndicator, RefreshIndicatorPhase, RefreshIndicatorState,
     RefreshIndicatorStyle, RefreshIntent,
 };
+pub use scroll_behavior::{
+    DefaultScrollBehavior, ScrollBehavior, ScrollBehaviorDetails, ScrollConfiguration,
+};
 pub use scroll_controller::{InvalidExtents, ScrollController};
 pub use scroll_owner::SharedSnapPolicy;
 pub use scroll_physics::{
-    BouncingScrollPhysics, ClampingScrollPhysics, ScrollMetrics, ScrollPhysics, SharedScrollPhysics,
+    BouncingScrollPhysics, ClampingScrollPhysics, ScrollMetrics, ScrollPhysics, ScrollPhysicsError,
+    ScrollPhysicsParameter, SharedScrollPhysics,
 };
 pub use scroll_position_scope::ScrollPositionScope;
 use scrollable::wheel_axis_delta;

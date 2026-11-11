@@ -100,6 +100,8 @@ pub struct LaidOut {
     unconstrained_wrap: UnconstrainedWrap,
     /// Per-contact pointer identity for the synthetic dispatch helpers.
     contacts: PointerContacts,
+    /// The kind of the in-flight contact, shared by its Move/Up/Cancel.
+    contact_kind: Cell<PointerKind>,
 }
 
 impl std::fmt::Debug for LaidOut {
@@ -424,6 +426,7 @@ fn mount_laid_out(
         reapply_constraints,
         unconstrained_wrap,
         contacts: PointerContacts::new(),
+        contact_kind: Cell::new(PointerKind::Touch),
     }
 }
 
@@ -1045,6 +1048,24 @@ impl LaidOut {
     /// queued (issue #1180) — and re-runs layout/paint. No root dirtying.
     pub fn pump_for(&mut self, dt: Duration) {
         self.host.pump(dt);
+    }
+
+    /// Every node the last frame drew, with the geometry and opacity the window shows it at
+    /// (ADR-0321 §1): what [`crate::motion::MotionRun`] samples each frame.
+    pub(crate) fn presented_nodes(&self) -> Vec<flui_rendering::pipeline::PresentedNode> {
+        self.pipeline_owner
+            .with(flui_rendering::pipeline::PipelineOwner::presented_nodes)
+    }
+
+    /// Virtual time since this harness mounted.
+    pub(crate) fn elapsed(&self) -> Duration {
+        self.host.clock().elapsed()
+    }
+
+    /// Whether the host's loop would run another frame at once: an animation, a scheduled
+    /// frame or pending work asks for one.
+    pub(crate) fn wants_frame(&self) -> bool {
+        self.host.ui_runtime().time_to_next_frame() == Some(Duration::ZERO)
     }
 
     /// Run `f` over the tree's `BuildOwner`, for a test that needs to reach a
@@ -1837,15 +1858,25 @@ impl LaidOut {
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down
-    /// event there — the headless analogue of a platform pointer-down reaching
-    /// the framework (`UiRuntime::handle_input_addressed` → hit_test → dispatch). Used by
-    /// the `Listener` test to assert its callback fires.
+    /// event there: a finger touches, as a platform pointer-down reaching the
+    /// framework (`UiRuntime::handle_input_addressed` → hit_test → dispatch).
+    /// The contact's moves, release and cancel stay a touch;
+    /// [`dispatch_pointer_down_with_kind`](Self::dispatch_pointer_down_with_kind)
+    /// presses with another device.
     ///
     /// See [`hit_test_pointer`](Self::hit_test_pointer) for why hit-testing runs inside
     /// the lane scope alongside dispatch. Spends no virtual clock time — see
     /// `advance_pointer_clock`.
     pub fn dispatch_pointer_down(&self, x: f64, y: f64) {
-        let event = make_down_event_for_id(self.begin_contact(), offset(x, y), PointerKind::Mouse)
+        self.dispatch_pointer_down_with_kind(x, y, PointerKind::Touch);
+    }
+
+    /// As [`dispatch_pointer_down`](Self::dispatch_pointer_down), with a
+    /// caller-chosen device kind (e.g. `PointerKind::Mouse` for a cursor or a
+    /// selection drag). The contact's moves, release and cancel keep `kind`.
+    pub fn dispatch_pointer_down_with_kind(&self, x: f64, y: f64, kind: PointerKind) {
+        self.contact_kind.set(kind);
+        let event = make_down_event_for_id(self.begin_contact(), offset(x, y), kind)
             .expect("headless pointer positions must be finite");
         dispatch_synthetic_pointer(&self.host, event);
     }
@@ -1853,8 +1884,12 @@ impl LaidOut {
     /// As [`dispatch_pointer_down`](Self::dispatch_pointer_down), but a
     /// pointer-up — to assert `on_pointer_up` routing.
     pub fn dispatch_pointer_up(&self, x: f64, y: f64) {
-        let event = make_up_event_for_id(self.current_contact(), offset(x, y), PointerKind::Mouse)
-            .expect("headless pointer positions must be finite");
+        let event = make_up_event_for_id(
+            self.current_contact(),
+            offset(x, y),
+            self.contact_kind.get(),
+        )
+        .expect("headless pointer positions must be finite");
         dispatch_synthetic_pointer(&self.host, event);
         self.contacts.end();
     }
@@ -1874,9 +1909,12 @@ impl LaidOut {
     /// stamped with an explicit timestamp rather than the wall clock).
     pub fn dispatch_pointer_move_after(&self, x: f64, y: f64, dt: Duration) {
         self.advance_pointer_clock(dt);
-        let event =
-            make_move_event_for_id(self.current_contact(), offset(x, y), PointerKind::Mouse)
-                .expect("headless pointer positions must be finite");
+        let event = make_move_event_for_id(
+            self.current_contact(),
+            offset(x, y),
+            self.contact_kind.get(),
+        )
+        .expect("headless pointer positions must be finite");
         dispatch_synthetic_pointer(&self.host, event);
     }
 
@@ -1937,7 +1975,7 @@ impl LaidOut {
 
     /// Cancel the in-flight contact on its cached Down route.
     pub fn dispatch_pointer_cancel(&self) {
-        let event = make_cancel_event_for_id(self.current_contact(), PointerKind::Mouse);
+        let event = make_cancel_event_for_id(self.current_contact(), self.contact_kind.get());
         dispatch_synthetic_pointer(&self.host, event);
         self.contacts.end();
     }
@@ -1950,6 +1988,7 @@ impl LaidOut {
     pub fn dispatch_secondary_down(&self, x: f64, y: f64) {
         use flui_interaction::events::pointer::PointerButton;
 
+        self.contact_kind.set(PointerKind::Mouse);
         let event = make_down_event_for_id_with_button(
             self.begin_contact(),
             offset(x, y),

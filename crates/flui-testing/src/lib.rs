@@ -127,6 +127,7 @@ pub mod clipboard;
 pub mod drop_ledger;
 pub mod gesture_alternatives;
 pub mod host;
+pub mod motion;
 // The log capture lives in its subscriber's crate (`flui_log::testing`); this
 // path keeps its name for the kit's consumers.
 pub use flui_log::testing as log_capture;

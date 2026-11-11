@@ -92,7 +92,7 @@ impl HeadlessHostEvents {
     /// ([`AppHandler::session_end`](crate::AppHandler::session_end)) and its
     /// answer returned; [`SessionEndAnswer::Proceed`] when no handler can be
     /// asked or the platform is gone. Like
-    /// [`MockWindow::simulate_close`](crate::MockWindow::simulate_close), it
+    /// [`HeadlessHostWindow::simulate_close`](crate::HeadlessHostWindow::simulate_close), it
     /// may be called from inside another method, as a session end arriving in
     /// a nested native loop is.
     pub fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {

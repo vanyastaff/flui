@@ -151,7 +151,7 @@ impl<'b> BuildCtx<'b> {
     /// ancestor chain. For a non-provider that scope is its parent's set, so
     /// the result is the nearest strict-ancestor provider.
     fn find_inherited_provider(&self, type_id: TypeId) -> Option<ElementId> {
-        self.tree.get(self.element_id)?.inherited_provider(type_id)
+        self.tree.enclosing_provider(self.element_id, type_id)
     }
 }
 
@@ -207,6 +207,25 @@ impl BuildContext for BuildCtx<'_> {
         callback: &mut dyn FnMut(&dyn Any),
     ) -> bool {
         let provider_id = self.find_inherited_provider(type_id);
+        let provided = provider_id.and_then(|provider_id| {
+            self.tree
+                .get(provider_id)
+                .and_then(super::super::tree::ElementNode::element_opt)
+                .and_then(crate::view::ElementBase::as_inherited)
+                .and_then(|accessor| accessor.provided(type_id))
+        });
+        // An element that publishes several values keeps one field per type:
+        // the dependent records that field, whatever the caller named.
+        let mask = provided.and_then(|provided| provided.field).unwrap_or(mask);
+        // Buffer the dependent BEFORE invoking the user callback. The tree is
+        // read-only here, so the write itself is deferred to the `build_scope`
+        // drain (see [`DependentRecord`]) — but it is *recorded* first:
+        // registration precedes returning the provider's value. This matters on the error path: if the user
+        // `build()` panics after this `depend_on` (caught by `build_or_recover`,
+        // which substitutes an `ErrorView`), the element stays registered as a
+        // dependent, so a later inherited change reschedules it and it recovers.
+        // Recording only after the callback would drop the registration on that
+        // panic and strand the element on the `ErrorView`.
         self.dep_sink.lock().push(DependentRecord {
             provider: provider_id,
             dependent: self.element_id,
@@ -214,27 +233,10 @@ impl BuildContext for BuildCtx<'_> {
             mask,
             lifecycle: false,
         });
-        let Some(provider_id) = provider_id else {
+        let Some(provided) = provided else {
             return false;
         };
-        let Some(accessor) = self
-            .tree
-            .get(provider_id)
-            .and_then(super::super::tree::ElementNode::element_opt)
-            .and_then(crate::view::ElementBase::as_inherited)
-        else {
-            return false;
-        };
-        // Buffer the dependent BEFORE invoking the user callback. The tree is
-        // read-only here, so the write itself is deferred to the `build_scope`
-        // drain (see [`DependentRecord`]) — but it is *recorded* first:
-        // registration precedes returning the provider's view. This matters on the error path: if the user
-        // `build()` panics after this `depend_on` (caught by `build_or_recover`,
-        // which substitutes an `ErrorView`), the element stays registered as a
-        // dependent, so a later inherited change reschedules it and it recovers.
-        // Recording only after the callback would drop the registration on that
-        // panic and strand the element on the `ErrorView`.
-        callback(accessor.view_as_any());
+        callback(provided.value);
         true
     }
 
@@ -242,15 +244,16 @@ impl BuildContext for BuildCtx<'_> {
         let Some(provider_id) = self.find_inherited_provider(type_id) else {
             return false;
         };
-        let Some(accessor) = self
+        let Some(provided) = self
             .tree
             .get(provider_id)
             .and_then(super::super::tree::ElementNode::element_opt)
             .and_then(crate::view::ElementBase::as_inherited)
+            .and_then(|accessor| accessor.provided(type_id))
         else {
             return false;
         };
-        callback(accessor.view_as_any());
+        callback(provided.value);
         true
     }
 

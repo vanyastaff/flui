@@ -22,8 +22,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 use flui_native::{
-    HeadlessExitReevaluation, HeadlessHostEvents, HeadlessOpenWindows, HeadlessOwnerTurns,
-    HeadlessPlatform, MockWindow,
+    HeadlessExitReevaluation, HeadlessHostEvents, HeadlessHostWindow, HeadlessOpenWindows,
+    HeadlessOwnerTurns, HeadlessPlatform,
 };
 use flui_platform::{SessionEndAnswer, SessionEndPhase};
 use flui_view::View;
@@ -155,16 +155,16 @@ impl HeadlessRunHandle {
 
     /// Every window the application holds open, in the order it opened: a
     /// test closes one as the user does with
-    /// [`MockWindow::simulate_close`].
+    /// [`HeadlessHostWindow::simulate_close`].
     #[must_use]
-    pub fn open_windows(&self) -> Vec<MockWindow> {
+    pub fn open_windows(&self) -> Vec<HeadlessHostWindow> {
         self.windows.all()
     }
 
     /// The renderer `window` presents with, while the run lasts and after:
     /// `None` for a window that opened without one.
     #[must_use]
-    pub fn renderer(&self, window: &MockWindow) -> Option<StandInRenderer> {
+    pub fn renderer(&self, window: &HeadlessHostWindow) -> Option<StandInRenderer> {
         self.renderers.of(flui_platform::PlatformWindow::id(window))
     }
 

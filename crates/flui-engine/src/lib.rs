@@ -294,6 +294,7 @@ pub(crate) mod gamma;
 /// Which GPU backend the renderer draws with and the order it tries them in
 /// (ADR-0244 §1).
 mod gpu_backend;
+mod gpu_context;
 /// Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
 /// read the pixels back (golden-image / screenshot tooling).
 pub mod headless;

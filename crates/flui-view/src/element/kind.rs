@@ -37,11 +37,12 @@ use super::{
         AnimatedBehavior, ElementBehavior, InheritedBehavior, ParentDataBehavior, ProxyBehavior,
         RenderBehavior, StatefulBehavior, StatelessBehavior,
     },
+    stateful_render::StatefulRenderBehavior,
     unified::Element,
 };
 use crate::view::{
-    AnimatedView, ElementBase, InheritedView, ParentDataView, ProxyView, RenderView, StatefulView,
-    StatelessView,
+    AnimatedView, ElementBase, InheritedView, ParentDataView, ProxyView, RenderView,
+    StatefulRenderView, StatefulView, StatelessView,
 };
 
 // ============================================================================
@@ -157,6 +158,16 @@ where
 {
 }
 
+// A `StatefulRenderView` element owns a render object, so the reconciler
+// routes it as a render element.
+impl<V> RenderElementBase for Element<V, Variable, StatefulRenderBehavior<V>>
+where
+    V: StatefulRenderView + Clone + 'static,
+    StatefulRenderBehavior<V>: super::behavior::ElementBehavior<V, Variable>,
+    Element<V, Variable, StatefulRenderBehavior<V>>: ElementBase,
+{
+}
+
 // Animated + ParentData wiring: these two families map onto the existing
 // `ElementKind` variants. `AnimatedView: StatefulView` and
 // `AnimatedBehavior` composes the stateful body, so an `AnimatedElement` routes
@@ -249,7 +260,7 @@ impl ElementKind {
     {
         Self::Stateless(Box::new(Element::<V, Single, StatelessBehavior>::new(
             view,
-            StatelessBehavior,
+            StatelessBehavior::new(),
         )))
     }
 
@@ -303,6 +314,21 @@ impl ElementKind {
             view,
             RenderBehavior::new(),
         )))
+    }
+
+    /// Create the element kind of a render view with state.
+    pub fn stateful_render<V>(view: &V) -> Self
+    where
+        V: StatefulRenderView + crate::view::View + Clone + 'static,
+        StatefulRenderBehavior<V>: ElementBehavior<V, Variable>,
+        Element<V, Variable, StatefulRenderBehavior<V>>: ElementBase,
+    {
+        Self::RenderVariable(Box::new(
+            Element::<V, Variable, StatefulRenderBehavior<V>>::new(
+                view,
+                StatefulRenderBehavior::new(view),
+            ),
+        ))
     }
 
     /// Create an animated stateful-family element kind.
@@ -549,6 +575,10 @@ impl ElementBase for ElementKind {
 
     fn as_inherited_mut(&mut self) -> Option<&mut dyn crate::element::InheritedElementAccess> {
         self.element_mut().as_inherited_mut()
+    }
+
+    fn take_provided_scope_stale(&mut self) -> bool {
+        self.element_mut().take_provided_scope_stale()
     }
 
     fn view_as_any(&self) -> Option<&dyn std::any::Any> {

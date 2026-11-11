@@ -341,7 +341,7 @@ fn lift_alice_to(laid: &LaidOut, (x, y): (f64, f64)) {
 fn chord(letter: &str) -> SingleActivator {
     let activator = SingleActivator::character(letter);
     if matches!(
-        TargetPlatform::current(),
+        TargetPlatform::Unknown,
         TargetPlatform::MacOS | TargetPlatform::iOS
     ) {
         activator.meta()
@@ -826,7 +826,7 @@ pub(crate) fn the_cursor_shows_what_a_drop_would_do() {
     let mut laid = mount(&shared);
     laid.dispatch_pointer_hover(100.0, 30.0);
     assert_eq!(laid.cursor(), CursorIcon::Grab);
-    laid.dispatch_pointer_down(100.0, 30.0);
+    laid.dispatch_pointer_down_with_kind(100.0, 30.0, PointerKind::Mouse);
     laid.dispatch_pointer_move(100.0, 45.0);
     laid.dispatch_pointer_move(300.0, 120.0);
     assert_eq!(laid.cursor(), CursorIcon::Grabbing, "over nothing");
@@ -1429,15 +1429,11 @@ fn autoscroll_through(fixed_extent: bool) {
         }
     };
     let row = Rc::new(row);
-    let list = flui_widgets::Scrollable::new().viewport_builder(Rc::new(move |position| {
-        let list = if fixed_extent {
-            flui_widgets::ListView::new(50.0, (0..10).map(|index| row(index)).collect::<Vec<_>>())
-        } else {
-            let row = Rc::clone(&row);
-            flui_widgets::ListView::builder(10, 50.0, move |index| (index < 10).then(|| row(index)))
-        };
-        list.position(position).into_view().boxed()
-    }));
+    let list = if fixed_extent {
+        flui_widgets::ListView::new(50.0, (0..10).map(|index| row(index)).collect::<Vec<_>>())
+    } else {
+        flui_widgets::ListView::builder(10, 50.0, move |index| (index < 10).then(|| row(index)))
+    };
     let card = Draggable::try_new(
         quiet_commands(),
         || vec![DragItem::new().with_value("Alice")],
@@ -1537,13 +1533,7 @@ pub(crate) fn a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag() {
         }
     };
     let row = Rc::new(row);
-    let list = flui_widgets::Scrollable::new().viewport_builder(Rc::new(move |position| {
-        let row = Rc::clone(&row);
-        flui_widgets::ListView::builder(200, 50.0, move |index| row(index))
-            .position(position)
-            .into_view()
-            .boxed()
-    }));
+    let list = flui_widgets::ListView::builder(200, 50.0, move |index| row(index));
     let target = DropTarget::try_new(
         DropCommands::new(CommandAppearance::new("Paste", Text::new("v"))),
         |drag| drag.value::<&'static str>().map(|_| TransferActions::MOVE),

@@ -24,8 +24,8 @@ use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_widgets::{
     Alternative, ControlSpec, GestureAlternatives, RefreshController, RefreshIndicator,
-    RefreshIndicatorPhase, RefreshIndicatorStyle, RefreshIntent, Row, ScrollController, Scrollable,
-    SingleActivator, SizedBox,
+    RefreshIndicatorPhase, RefreshIndicatorStyle, RefreshIntent, Row, ScrollController, ScrollView,
+    SingleActivator, SingleChildScrollView, SizedBox,
 };
 
 use crate::common::{LaidOut, tight};
@@ -152,7 +152,7 @@ impl Inbox {
     fn view(&self, axis: Axis) -> RefreshIndicator {
         let refreshes = Rc::clone(&self.refreshes);
         RefreshIndicator::new(
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(self.list.clone())
                 .scroll_direction(axis)
                 .child(Counted {
@@ -212,7 +212,7 @@ impl Inbox {
             SizedBox::new(300.0, 300.0).boxed(),
             SizedBox::new(300.0, 300.0).boxed(),
         ]);
-        let pager = Scrollable::new()
+        let pager = SingleChildScrollView::new()
             .controller(self.pager.clone())
             .scroll_direction(Axis::Horizontal)
             .child(pages);
@@ -574,7 +574,7 @@ pub(crate) fn refresh_completion_arrives_on_the_next_frame() {
     assert!(!inbox.refresh.is_refreshing(), "the next frame delivers it");
     assert_eq!(inbox.refreshes.dropped.get(), 0);
 
-    laid.replay(&pull(Device::Mouse, 180.0));
+    laid.replay(&pull(Device::Pen, 180.0));
     laid.pump_for(FRAME);
     assert_eq!(inbox.started(), 2, "the next pull refreshes");
 }
@@ -760,7 +760,7 @@ pub(crate) fn a_first_command_without_the_refresh_intent_is_reported() {
     let ((), log) = flui_testing::log_capture::capture(|| {
         let _laid = crate::common::lay_out(
             RefreshIndicator::new(
-                Scrollable::new().child(SizedBox::new(200.0, 1000.0)),
+                SingleChildScrollView::new().child(SizedBox::new(200.0, 1000.0)),
                 alternatives,
             ),
             tight(300.0, 300.0),

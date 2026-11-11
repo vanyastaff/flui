@@ -14,14 +14,16 @@ use flui_interaction::{
     RemainderHandoff,
 };
 use flui_platform::{EventTime, TargetPlatform};
-use flui_testing::{MouseScript, PointerScript, ScriptStep, TouchScript, TrackpadScript};
+use flui_testing::{
+    MouseScript, PenScript, PointerScript, ScriptStep, TouchScript, TrackpadScript,
+};
 use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
     AnchorSnap, AnchorSnapError, Column, FlingHandoff, FlingStep, ListView, NestedScroll,
     NestedScrollConnection, OverscrollBehavior, PageSnap, Row, ScrollCause, ScrollController,
-    ScrollDevice, ScrollEndReason, ScrollMetrics, ScrollStep, Scrollable, SizedBox, SnapPolicy,
-    Transform, ViewportFraction,
+    ScrollDevice, ScrollEndReason, ScrollMetrics, ScrollStep, ScrollView, SingleChildScrollView,
+    SizedBox, SnapPolicy, Transform, ViewportFraction,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};
@@ -210,10 +212,17 @@ impl NestedScrollConnection for Probe {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Device {
     Touch,
+    Pen,
     Mouse,
 }
 
-pub(crate) const DEVICES: [Device; 2] = [Device::Touch, Device::Mouse];
+/// The devices a scroll view drags with by default: the mouse scrolls by its
+/// wheel and leaves a drag to selection.
+pub(crate) const DEVICES: [Device; 2] = [Device::Touch, Device::Pen];
+
+/// Every device: what a widget with its own drag takes, an anchored drag, a
+/// sheet, a swipe row or an interactive viewer.
+pub(crate) const ALL_DEVICES: [Device; 3] = [Device::Touch, Device::Pen, Device::Mouse];
 
 const SAMPLE: Duration = Duration::from_millis(16);
 
@@ -250,6 +259,13 @@ pub(crate) fn drag(
                 script = script.wait(sample).move_to(1, *point);
             }
             script.wait(hold).up(1).build().expect("one whole contact")
+        }
+        Device::Pen => {
+            let mut script = PenScript::new("drag").down(*first, 0.5);
+            for point in rest {
+                script = script.wait(sample).move_to(*point, 0.5);
+            }
+            script.wait(hold).up().build().expect("one whole stroke")
         }
         Device::Mouse => {
             let mut script = MouseScript::new("drag").move_to(*first).press(*first);
@@ -294,6 +310,12 @@ pub(crate) fn press(device: Device, point: Offset<f64>) -> PointerScript {
             .up(2)
             .build()
             .expect("one whole contact"),
+        Device::Pen => PenScript::new("press")
+            .down(point, 0.5)
+            .wait(Duration::from_millis(50))
+            .up()
+            .build()
+            .expect("one whole stroke"),
         Device::Mouse => MouseScript::new("press")
             .move_to(point)
             .press(point)
@@ -339,8 +361,8 @@ pub(crate) fn settle(laid: &mut LaidOut) {
 // Layouts
 // ---------------------------------------------------------------------------
 
-fn list(controller: &ScrollController) -> Scrollable {
-    Scrollable::new()
+fn list(controller: &ScrollController) -> SingleChildScrollView {
+    SingleChildScrollView::new()
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 1000.0))
 }
@@ -364,7 +386,7 @@ fn list_in_pager(
         vsync.clone(),
         NestedScroll::new(
             probe.connection(),
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(pager.clone())
                 .scroll_direction(Axis::Horizontal)
                 .child(pages),
@@ -393,7 +415,9 @@ fn list_in_list(
     ]);
     let tree = NestedScroll::new(
         top.connection(),
-        Scrollable::new().controller(outer.clone()).child(content),
+        SingleChildScrollView::new()
+            .controller(outer.clone())
+            .child(content),
     )
     .boxed();
     let tree = match presets {
@@ -1135,7 +1159,7 @@ pub(crate) fn fling_handoff_inherits_sequence_across_three_levels() {
         );
         let middle_view = NestedScroll::new(
             between.connection(),
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(middle.clone())
                 .child(Column::new(vec![
                     SizedBox::new(200.0, 800.0).boxed(),
@@ -1146,7 +1170,7 @@ pub(crate) fn fling_handoff_inherits_sequence_across_three_levels() {
             vsync.clone(),
             NestedScroll::new(
                 top.connection(),
-                Scrollable::new()
+                SingleChildScrollView::new()
                     .controller(outer.clone())
                     .child(Column::new(vec![
                         SizedBox::new(200.0, 600.0).boxed(),
@@ -1408,7 +1432,7 @@ pub(crate) fn new_wheel_or_assistive_scroll_preempts_handed_off_fling() {
         laid.enable_semantics();
         laid.tick();
         top.take();
-        laid.replay(&fling(Device::Mouse, at(150.0, 150.0), at(150.0, 60.0)));
+        laid.replay(&fling(Device::Pen, at(150.0, 150.0), at(150.0, 60.0)));
         let released = top.started()[0];
         for _ in 0..30 {
             if outer.pixels() > 610.0 {
@@ -1536,7 +1560,7 @@ pub(crate) fn a_run_short_of_the_edge_of_a_long_list_hands_nothing_on() {
             vsync.clone(),
             NestedScroll::new(
                 probe.connection(),
-                Scrollable::new()
+                SingleChildScrollView::new()
                     .controller(controller.clone())
                     .physics(Rc::new(GlideShort { short_by }))
                     .child(SizedBox::new(300.0, 5.0e7)),
@@ -2293,7 +2317,7 @@ pub(crate) fn a_contact_that_ends_without_release_names_why() {
             vsync.clone(),
             NestedScroll::new(
                 top.connection(),
-                Scrollable::new()
+                SingleChildScrollView::new()
                     .controller(pager.clone())
                     .scroll_direction(Axis::Horizontal)
                     .child(pages),
@@ -2376,7 +2400,7 @@ pub(crate) fn a_release_taken_over_by_reentrant_code_still_ends_its_sequence() {
             vsync.clone(),
             NestedScroll::new(
                 probe.connection(),
-                Scrollable::new()
+                SingleChildScrollView::new()
                     .controller(controller.clone())
                     .snap_policy(Rc::new(PageSnap::new(ViewportFraction::FULL)))
                     .child(SizedBox::new(300.0, 3000.0)),
@@ -2525,26 +2549,20 @@ pub(crate) fn anchor_correction_bypasses_the_channel() {
             Rc::clone(&grown),
             Rc::clone(&grow) as Rc<dyn flui_foundation::Listenable>,
         );
-        let list_view = Scrollable::new()
-            .controller(controller.clone())
-            .viewport_builder(Rc::new(move |position| {
-                let (height, listenable) = (Rc::clone(&height), Rc::clone(&listenable));
-                ListView::builder(200, 100.0, move |index| {
-                    (index < 200).then(|| {
-                        if index == 98 {
-                            let height = Rc::clone(&height);
-                            flui_widgets::AnimatedBuilder::new(Rc::clone(&listenable), move || {
-                                SizedBox::new(300.0, height.get())
-                            })
-                            .boxed()
-                        } else {
-                            SizedBox::new(300.0, 100.0).boxed()
-                        }
+        let list_view = ListView::builder(200, 100.0, move |index| {
+            (index < 200).then(|| {
+                if index == 98 {
+                    let height = Rc::clone(&height);
+                    flui_widgets::AnimatedBuilder::new(Rc::clone(&listenable), move || {
+                        SizedBox::new(300.0, height.get())
                     })
-                })
-                .position(position)
-                .boxed()
-            }));
+                    .boxed()
+                } else {
+                    SizedBox::new(300.0, 100.0).boxed()
+                }
+            })
+        })
+        .controller(controller.clone());
         let tree = VsyncScope::new(
             vsync.clone(),
             NestedScroll::new(probe.connection(), list_view),
@@ -2643,7 +2661,7 @@ pub(crate) fn snap_policy_targets() {
             ]);
             let tree = VsyncScope::new(
                 vsync.clone(),
-                Scrollable::new()
+                SingleChildScrollView::new()
                     .controller(controller.clone())
                     .scroll_direction(Axis::Horizontal)
                     .snap_policy(policy)
@@ -2826,7 +2844,9 @@ pub(crate) fn contained_scrollable_keeps_its_remainder() {
             vsync.clone(),
             NestedScroll::new(
                 top.connection(),
-                Scrollable::new().controller(outer.clone()).child(content),
+                SingleChildScrollView::new()
+                    .controller(outer.clone())
+                    .child(content),
             ),
         )
         .boxed();
@@ -2870,7 +2890,7 @@ fn list_at_the_top_of_a_bouncing_list(
     ]);
     VsyncScope::new(
         vsync.clone(),
-        Scrollable::new()
+        SingleChildScrollView::new()
             .controller(outer.clone())
             .physics(Rc::new(flui_widgets::BouncingScrollPhysics::new()))
             .child(content),
@@ -2956,7 +2976,7 @@ pub(crate) fn reveal_and_assistive_scroll_go_through_the_chain() {
         vsync.clone(),
         NestedScroll::new(
             probe.connection(),
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(controller.clone())
                 .child(content),
         ),
@@ -3044,7 +3064,7 @@ pub(crate) fn a_nested_reveal_moves_each_ancestor_in_a_sequence_of_its_own() {
         .role(flui_widgets::SemanticsRole::Button)
         .label("nested target")
         .child(SizedBox::new(300.0, 40.0));
-    let inner_list = Scrollable::new()
+    let inner_list = SingleChildScrollView::new()
         .controller(inner.clone())
         .child(Column::new(vec![
             SizedBox::new(300.0, 400.0).boxed(),
@@ -3062,7 +3082,9 @@ pub(crate) fn a_nested_reveal_moves_each_ancestor_in_a_sequence_of_its_own() {
         vsync.clone(),
         NestedScroll::new(
             top.connection(),
-            Scrollable::new().controller(outer.clone()).child(content),
+            SingleChildScrollView::new()
+                .controller(outer.clone())
+                .child(content),
         ),
     )
     .boxed();
@@ -3353,7 +3375,7 @@ pub(crate) fn keyboard_scrolls_through_the_channel_as_its_own_sequence() {
         vsync.clone(),
         NestedScroll::new(
             probe.connection(),
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(controller.clone())
                 .autofocus(true)
                 .child(SizedBox::new(300.0, 1000.0)),
@@ -3469,7 +3491,7 @@ pub(crate) fn a_held_scroll_key_ends_its_sequence_when_its_release_goes_elsewher
             SizedBox::new(300.0, 200.0)
                 .child(NestedScroll::new(
                     probe.connection(),
-                    Scrollable::new()
+                    SingleChildScrollView::new()
                         .autofocus(true)
                         .child(SizedBox::new(300.0, 1000.0)),
                 ))
@@ -3539,7 +3561,9 @@ pub(crate) fn keyboard_bubbles_to_the_enclosing_scrollable_and_follows_the_axis(
         vsync.clone(),
         NestedScroll::new(
             top.connection(),
-            Scrollable::new().controller(outer.clone()).child(content),
+            SingleChildScrollView::new()
+                .controller(outer.clone())
+                .child(content),
         ),
     )
     .boxed();
@@ -3570,7 +3594,7 @@ pub(crate) fn keyboard_bubbles_to_the_enclosing_scrollable_and_follows_the_axis(
             vsync.clone(),
             flui_widgets::Directionality::new(
                 direction,
-                Scrollable::new()
+                SingleChildScrollView::new()
                     .controller(controller.clone())
                     .scroll_direction(Axis::Horizontal)
                     .autofocus(true)

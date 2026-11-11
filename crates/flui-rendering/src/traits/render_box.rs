@@ -432,6 +432,17 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
         PaintEffects::NONE
     }
 
+    /// The transform this box's own drawing is placed under, in its local space.
+    ///
+    /// Default: [`Self::paint_effects`]'s transform. See [`RenderObject::drawn_transform`]:
+    /// override when `paint` moves the box's own drawing as a plain offset instead of a layer.
+    fn drawn_transform(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
+        <Self as RenderBox>::paint_effects(self, size).transform
+    }
+
     /// Composes onto `transform` the mapping from child `child`'s local space
     /// into this box's local space.
     ///
@@ -477,6 +488,11 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
         let _ = (size, kind);
         None
     }
+
+    /// Whether this type adds input regions in [`Self::describe_input_regions`]; a type
+    /// that calls `InputRegionSink::add` sets it, and a region from a type that does not
+    /// is never collected. See [`RenderObject::reports_input_regions`]. Default: `false`.
+    const REPORTS_INPUT_REGIONS: bool = false;
 
     /// The input regions this box claims, in local coordinates.
     ///
@@ -871,6 +887,13 @@ where
         <T as RenderBox>::paint_effects(self, size)
     }
 
+    fn drawn_transform(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
+        <T as RenderBox>::drawn_transform(self, size)
+    }
+
     fn apply_paint_transform(
         &self,
         child: usize,
@@ -894,6 +917,10 @@ where
         kind: flui_interaction::events::PointerKind,
     ) -> Option<flui_foundation::geometry::Rect> {
         <T as RenderBox>::hit_slop_area(self, size, kind)
+    }
+
+    fn reports_input_regions(&self) -> bool {
+        <T as RenderBox>::REPORTS_INPUT_REGIONS
     }
 
     fn describe_input_regions(

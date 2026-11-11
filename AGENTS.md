@@ -52,6 +52,7 @@ and edits its row.
 | A new identity | `IdMint<I>` and `IdExhausted` (`flui_foundation::sequence`), its `AtomicIdMint` where two threads mint one id domain, or a generational key whose slot generations `GenSlots` carries (ADR-0313) | `wrapping_add`, a `pub` integer field, an ID derived from an OS handle or pointer |
 | A test that drives an application's frames | `flui_testing::HeadlessHost` over `UiRuntime::pump` and its manual clock | `HeadlessBinding::pump_frame`, which ADR-0083 removes |
 | Which crate may depend on which | `tier`, `order` and `reach` (ADR-0081) | reasoning from `layer = N`, which ADR-0081 removed |
+| The platform whose conventions a widget follows (chords, handles, menus, transitions) | `flui_view::environment::PlatformConvention::of`, installed by the runtime above every root; a test names its platform with `HeadlessWindow::with_platform` or a `PlatformConvention` wrapper (ADR-0028) | `TargetPlatform::current()` outside the app runner, a theme's platform field, a `Default` that reads the build host |
 | A platform's status, a version floor, an open gap | `crates/flui-native/platform-parity.toml` (rendered into `docs/platform-parity.md`), `platform-support.toml`, `docs/gaps.md` | a status line in an ADR, a spec or an `ARCHITECTURE.md`; a hand edit of `docs/platform-parity.md` |
 
 ## Codebase map
@@ -77,6 +78,16 @@ conversation:
   feature is on `main`, its spec is deleted.
 - A decision that outlives the task goes into an ADR or the crate's `ARCHITECTURE.md`. Plans,
   roadmaps, research, reviews and session notes stay out of the public repository.
+- **Build what is accepted before designing further.** `docs/gaps.md` lists the accepted ADR
+  sections the code does not follow yet
+  ([Accepted ADR sections not built yet](docs/gaps.md#accepted-adr-sections-not-built-yet)).
+  While ADR-0304, ADR-0305 or ADR-0306 has a bullet there, a change to `flui-layer`,
+  `flui-rendering`, `flui-painting` or `flui-engine` builds a task of
+  `docs/plans/specs/render-scaling/` or fixes a
+  defect, and it writes a new ADR for that pipeline only when the step it builds cannot be built
+  without one. While `docs/gaps.md` has
+  [An interactive widget costs eighteen elements](docs/gaps.md#an-interactive-widget-costs-eighteen-elements),
+  no new widget family starts; a family under way is finished.
 - **A replacement finishes in its own change.** A PR that brings a form to replace another (a
   primitive, an API, a rule, an ADR decision) moves every user of the old form and deletes it, or
   marks it `#[deprecated(note = "use …")]` and adds a `docs/gaps.md` entry for what is left.

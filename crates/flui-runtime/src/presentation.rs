@@ -153,6 +153,7 @@ pub struct PresentationWindow {
     text_store_host: Option<Rc<dyn TextStoreHost>>,
     pointer_resampling: PointerResampling,
     gesture_profiles: flui_interaction::GestureProfiles,
+    platform: flui_platform::TargetPlatform,
 }
 
 impl std::fmt::Debug for PresentationWindow {
@@ -163,6 +164,7 @@ impl std::fmt::Debug for PresentationWindow {
             .field("accessibility", &self.accessibility.is_some())
             .field("text_store_host", &self.text_store_host.is_some())
             .field("gesture_profiles", &self.gesture_profiles)
+            .field("platform", &self.platform)
             .finish()
     }
 }
@@ -181,7 +183,20 @@ impl PresentationWindow {
             gesture_profiles: flui_interaction::GestureProfiles::preset(
                 flui_platform::TargetPlatform::Unknown,
             ),
+            platform: flui_platform::TargetPlatform::Unknown,
         }
+    }
+
+    /// The platform whose conventions this presentation's tree follows: the
+    /// runtime publishes it above the root as a
+    /// [`PlatformConvention`](flui_view::environment::PlatformConvention).
+    /// Without one, [`TargetPlatform::Unknown`](flui_platform::TargetPlatform::Unknown)
+    /// and its platform-neutral conventions: a runner names the platform its
+    /// host reports, and a headless test the one it models.
+    #[must_use]
+    pub fn with_platform(mut self, platform: flui_platform::TargetPlatform) -> Self {
+        self.platform = platform;
+        self
     }
 
     /// Choose this presentation's initial input policy; disabled by default.
@@ -241,7 +256,7 @@ impl PresentationWindow {
 
 /// A test-only conversion that bypasses any accessibility bridge the
 /// concrete window has: the presentation is built with none, even when the
-/// window is a headless `MockWindow` carrying a `FakeAccessibility`. A test
+/// window is a headless `HeadlessHostWindow` carrying a `FakeAccessibility`. A test
 /// that needs the bridge wired names it in [`PresentationWindow::new`]
 /// instead.
 #[cfg(any(test, feature = "testing"))]
@@ -350,6 +365,8 @@ pub(crate) struct FailureRetry {
 pub struct PresentationState {
     id: PresentationId,
     pub(super) media_query: Rc<crate::media_query_root::MediaQuerySource>,
+    /// The platform whose conventions this presentation's tree follows.
+    pub(super) platform: flui_platform::TargetPlatform,
     /// Presentation-local projection of the host's accepted interaction policy.
     /// Recognizers read it at admission; active sequences keep owned snapshots.
     pub(super) gesture_settings: flui_interaction::GestureSettingsSource,
@@ -841,6 +858,7 @@ impl PresentationState {
             text_store_host,
             pointer_resampling,
             gesture_profiles,
+            platform,
         } = window.into();
         let pipeline = PipelineCell::new(PipelineOwner::new(capabilities.text));
         pipeline.withdraw_layout();
@@ -1032,6 +1050,7 @@ impl PresentationState {
         let snapshot = window.state();
         let state = Self {
             id,
+            platform,
             gesture_geometry: RefCell::new(
                 crate::ui_runtime::preferences::GeometryProjection::default(),
             ),
@@ -1165,6 +1184,7 @@ impl PresentationState {
         let snapshot = window.state();
         let state = Self {
             id,
+            platform: flui_platform::TargetPlatform::Unknown,
             gesture_geometry: RefCell::new(
                 crate::ui_runtime::preferences::GeometryProjection::default(),
             ),

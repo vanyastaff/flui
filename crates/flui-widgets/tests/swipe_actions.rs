@@ -15,8 +15,8 @@ use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, IntoView, ViewExt};
 use flui_widgets::{
     Actions, CallbackAction, ColoredBox, Column, Directionality, GestureCommand, Intent,
-    ScrollController, Scrollable, SizedBox, SwipeAction, SwipeActions, SwipeActionsError,
-    SwipeAlternative, SwipeEdge, Text,
+    ScrollController, ScrollView, SingleChildScrollView, SizedBox, SwipeAction, SwipeActions,
+    SwipeActionsError, SwipeAlternative, SwipeEdge, Text,
 };
 
 use crate::anchored_drag::painted_at;
@@ -252,7 +252,9 @@ pub(crate) fn swipe_rows_in_a_vertical_list_share_contacts_by_axis() {
             SizedBox::new(300.0, 1000.0).boxed(),
         ]);
         let mut laid = mount(
-            Scrollable::new().controller(list.clone()).child(rows),
+            SingleChildScrollView::new()
+                .controller(list.clone())
+                .child(rows),
             &vsync,
         );
         laid.replay(&slow(device, at(250.0, 90.0), at(120.0, 90.0)));
@@ -336,10 +338,10 @@ pub(crate) fn swipe_actions_unmounted_mid_swipe_perform_nothing() {
         ..Options::default()
     };
     let mut laid = mount(scene(options, &log), &vsync);
-    laid.dispatch_pointer_down(290.0, 30.0);
+    laid.dispatch_pointer_down(270.0, 30.0);
     for step in 1..=10 {
         laid.dispatch_pointer_move_after(
-            290.0 - f64::from(step) * 25.0,
+            270.0 - f64::from(step) * 25.0,
             30.0,
             Duration::from_millis(16),
         );

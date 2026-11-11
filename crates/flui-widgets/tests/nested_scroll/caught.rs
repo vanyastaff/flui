@@ -13,8 +13,8 @@ use flui_testing::TouchScript;
 use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
-    Column, NestedScroll, PageSnap, ScrollCause, ScrollController, ScrollEndReason, Scrollable,
-    SizedBox, ViewportFraction,
+    Column, NestedScroll, PageSnap, ScrollCause, ScrollController, ScrollEndReason, ScrollView,
+    SingleChildScrollView, SizedBox, ViewportFraction,
 };
 
 use crate::common::LaidOut;
@@ -44,7 +44,7 @@ fn list_at_the_top_of_a_springing_list(
         provider: GestureSettingsSource::new(remainder_preset(handoff)).provider(),
         child: NestedScroll::new(
             top.connection(),
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(outer.clone())
                 .physics(std::rc::Rc::new(flui_widgets::BouncingScrollPhysics::new()))
                 .child(content),
@@ -261,7 +261,7 @@ fn pager_over(
         vsync.clone(),
         NestedScroll::new(
             top.connection(),
-            Scrollable::new()
+            SingleChildScrollView::new()
                 .controller(pager.clone())
                 .snap_policy(Rc::new(PageSnap::new(ViewportFraction::FULL)))
                 .child(pages),

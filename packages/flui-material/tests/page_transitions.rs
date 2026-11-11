@@ -23,7 +23,7 @@ use flui_sdk::geometry::Point;
 use flui_sdk::painting::{Color, DrawOp};
 use flui_sdk::platform::TargetPlatform;
 use flui_sdk::view::BuildContext;
-use flui_sdk::view::environment::VsyncScope;
+use flui_sdk::view::environment::{PlatformConvention, VsyncScope};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     ColoredBox, FadeTransition, NavigatorHandle, PageRoute, PageTransitionBuilder, RouteAnimation,
@@ -132,31 +132,36 @@ pub(crate) fn ms(millis: u64) -> Duration {
     Duration::from_millis(millis)
 }
 
-fn themed(platform: TargetPlatform, transitions: PageTransitionsTheme) -> ThemeData {
+/// A light theme with `transitions`, mounted under `platform`'s conventions.
+type Themed = (TargetPlatform, ThemeData);
+
+fn themed(platform: TargetPlatform, transitions: PageTransitionsTheme) -> Themed {
     let mut theme = ThemeData::light();
-    theme.platform = platform;
     theme.page_transitions_theme = transitions;
-    theme
+    (platform, theme)
 }
 
-/// A theme whose current platform runs `transition`.
-fn running(transition: PageTransition) -> ThemeData {
-    let platform = TargetPlatform::current();
+/// A theme whose platform runs `transition`.
+fn running(transition: PageTransition) -> Themed {
+    let platform = TargetPlatform::Linux;
     themed(
         platform,
         PageTransitionsTheme::default().with(platform, transition),
     )
 }
 
-fn mount(theme: ThemeData) -> (NavigatorHandle, LaidOut, Vsync) {
+fn mount((platform, theme): Themed) -> (NavigatorHandle, LaidOut, Vsync) {
     let registry = Vsync::new();
     let navigator = NavigatorHandle::new();
     let app = lay_out_animated(
         VsyncScope::new(
             registry.clone(),
-            MaterialApp::new(SizedBox::shrink())
-                .navigator(navigator.clone())
-                .theme(theme),
+            PlatformConvention::new(
+                platform,
+                MaterialApp::new(SizedBox::shrink())
+                    .navigator(navigator.clone())
+                    .theme(theme),
+            ),
         ),
         tight(WIDTH, HEIGHT),
         registry.clone(),
@@ -175,7 +180,7 @@ fn page_route() -> PageRoute<()> {
 
 /// Mount under `theme`, push a page route with no transitions of its own and
 /// anchor its clock.
-fn pushed(theme: ThemeData) -> (NavigatorHandle, LaidOut, Vsync) {
+fn pushed(theme: Themed) -> (NavigatorHandle, LaidOut, Vsync) {
     let (navigator, mut app, registry) = mount(theme);
     let _result = navigator.push(page_route());
     app.pump_for(Duration::ZERO);
@@ -535,7 +540,7 @@ pub fn page_transitions_by_platform_and_variant() {
 /// `show_dialog` under a `MaterialApp` fades in over 150 ms along
 /// `EASE_OUT`: part-way at 75 ms, opaque at 150 ms.
 pub fn a_material_dialog_fades_in_over_150_ms() {
-    let (navigator, mut app, registry) = mount(ThemeData::light());
+    let (navigator, mut app, registry) = mount((TargetPlatform::Unknown, ThemeData::light()));
     let _result = show_dialog::<(), _, _>(&navigator, |_ctx| {
         ColoredBox::new(PAGE).child(SizedBox::new(100.0, 100.0))
     });

@@ -17,7 +17,9 @@ use flui_sdk::view::BoxedView;
 use flui_sdk::view::IntoView;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::view::ViewExt;
-use flui_sdk::widgets::{ColoredBox, CustomScrollView, SizedBox, SliverToBoxAdapter, Text};
+use flui_sdk::widgets::{
+    ColoredBox, CustomScrollView, ScrollController, ScrollView, SizedBox, SliverToBoxAdapter, Text,
+};
 
 fn trailing_content() -> BoxedView {
     SliverToBoxAdapter::new()
@@ -39,7 +41,8 @@ fn bar_at(offset: f64) -> Theme {
         ThemeData::light(),
         MediaQuery::new(
             MediaQueryData::default(),
-            CustomScrollView::new((bar, trailing_content())).offset(offset),
+            CustomScrollView::new((bar, trailing_content()))
+                .controller(ScrollController::with_initial_scroll_offset(offset)),
         ),
     )
 }
