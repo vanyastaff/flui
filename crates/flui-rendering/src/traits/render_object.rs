@@ -745,6 +745,21 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
         None
     }
 
+    /// Whether this render object adds input regions
+    /// ([`InputRegionSink::add`](crate::input_regions::InputRegionSink::add)) in
+    /// [`Self::describe_input_regions`].
+    ///
+    /// Read once, when the node enters the tree: the collection walks only the paths to
+    /// the nodes that answer `true` and their subtrees, because a node that only claims or
+    /// passes presses contributes nothing outside a move area such a node reported. A
+    /// region added by a node that answers `false` is never collected. Typed render
+    /// objects answer through `RenderBox::REPORTS_INPUT_REGIONS` /
+    /// `RenderSliver::REPORTS_INPUT_REGIONS`, so the answer is a property of the type.
+    /// Default: `false`.
+    fn reports_input_regions(&self) -> bool {
+        false
+    }
+
     /// Writes the input regions this node claims, in its own local coordinates at its
     /// laid-out `size`, into `regions`.
     ///

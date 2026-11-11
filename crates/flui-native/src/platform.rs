@@ -403,6 +403,15 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// frame it has measured so far and AppKit the one its window style gives.
     fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64>;
 
+    /// The host's connection to its window system, for the life of the host
+    /// (ADR-0305 §2): what the application's one GPU instance is made on, so
+    /// every window's surface is made on the display its target answers.
+    ///
+    /// The X11 and Wayland connections answer the display handle every target
+    /// of the host answers; the other hosts answer their pointerless display
+    /// handle, and headless answers none.
+    fn display_connection(&self) -> Arc<dyn flui_platform::DisplayConnection>;
+
     // ==================== Platform Info ====================
 
     /// Get the platform's name for debugging/logging
@@ -686,6 +695,10 @@ impl<H: Host> Platform for HostPlatform<H> {
 
     fn window_frame_inset(&self, scale_factor: f64) -> Size<f64> {
         H::Window::frame_inset(&self.owner, &self.window_shared, scale_factor)
+    }
+
+    fn display_connection(&self) -> Arc<dyn flui_platform::DisplayConnection> {
+        H::Window::display_connection(&self.owner, &self.window_shared)
     }
 
     fn name(&self) -> &'static str {

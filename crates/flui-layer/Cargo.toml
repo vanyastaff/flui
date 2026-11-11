@@ -35,12 +35,19 @@ flui-painting = { workspace = true }
 bitflags = { workspace = true }
 # The external-texture registry is fed from producer threads.
 parking_lot = { workspace = true }
+# A chunk names the one texture it usually draws inline (ADR-0304 §2).
+smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 # The `damage_diff` bench.
 criterion = { workspace = true }
+# Checkout-only test edge: versionless, so Cargo drops it from the published
+# manifest. `tests/` reach `SceneVersion::flatten` and the owner's table cost.
+flui-layer = { path = ".", features = ["testing"] }
+# The persistent table's model test against `BTreeMap`.
+proptest = { workspace = true }
 
 # The damage producer's per-frame cost over 1,000 boundaries.
 [[test]]
@@ -58,3 +65,7 @@ workspace = true
 tier = "R"
 tier-kind = "internal"
 order = 1
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "scene::id::NEXT_LINEAGE", grant = "ADR-0097", class = "counter", reason = "Scene lineages, minted from every UI thread by AtomicIdMint with permanent typed exhaustion refusal" },
+]

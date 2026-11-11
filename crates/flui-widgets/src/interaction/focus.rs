@@ -27,10 +27,7 @@
 //!   accepts a scope node: [`FocusScope::of`] already covers "give me the
 //!   nearest scope".
 
-use std::{
-    cell::{Cell, OnceCell, RefCell},
-    rc::Rc,
-};
+use std::{cell::Cell, rc::Rc};
 
 use crate::anchored_box::{AnchoredBox, AnchoredSliver};
 use crate::localization::Directionality;
@@ -39,8 +36,8 @@ use crate::support::value_callback;
 use flui_foundation::Subscription;
 use flui_foundation::geometry::{Axis, Rect};
 use flui_interaction::focus::{
-    FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration, FocusScopeNode,
-    FocusTraversalOverrides, KeyEventHandler, KeyEventResult, RectProvider, TraversalEdgeBehavior,
+    FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, FocusScopeNode,
+    FocusTraversalOverrides, KeyEventResult, RectProvider, TraversalEdgeBehavior,
 };
 use flui_objects::SubtreeAnchor;
 use flui_platform::keyboard::KeyEvent;
@@ -51,34 +48,11 @@ use flui_view::prelude::*;
 use flui_view::{Provided, ProvidedValue, RebuildHandle};
 
 use super::actions::{EnclosingActions, FocusRecord};
-use super::focus_reveal::{FocusRevealScope, SharedRevealTarget};
+use super::focus_host::{FocusConfig, FocusHost, FocusNodeOwnership};
 
 /// Reports whether this widget's node gained or lost the primary focus, with
 /// the dispatch's [`EventCx`] (ADR-0086).
 pub type FocusChangeHandler = Rc<dyn Fn(&mut EventCx<'_>, bool)>;
-
-/// A key handler as [`Focus::on_key_event`] stores it: it decides the event's
-/// routing, and may write signals through the `cx` it receives.
-type FocusKeyHandler = Rc<dyn Fn(&mut EventCx<'_>, &KeyEvent) -> KeyEventResult>;
-
-/// The writer source a [`FocusState`] acquires in `init_state`, shared with
-/// the key handler `create_state` already registered on the node. A key event
-/// cannot reach the node before `init_state` attaches it, so the cell is set
-/// by then.
-type WriterSlot = Rc<OnceCell<WriterSource>>;
-
-/// Wrap a key handler into the node's shape, opening its write from `writer`.
-fn key_handler(handler: &FocusKeyHandler, writer: &WriterSlot) -> KeyEventHandler {
-    let handler = Rc::clone(handler);
-    let writer = Rc::clone(writer);
-    Rc::new(move |event| {
-        let Some(writer) = writer.get() else {
-            tracing::warn!("Focus: a key event reached a node whose widget has not initialized");
-            return KeyEventResult::Ignored;
-        };
-        writer.write(|cx| handler(cx, event))
-    })
-}
 
 // ============================================================================
 // The ambient scope
@@ -94,9 +68,9 @@ fn key_handler(handler: &FocusKeyHandler, writer: &WriterSlot) -> KeyEventHandle
 /// `Shortcuts`-style non-scope `Focus` above a field is a node **ancestor**
 /// of the field, so keys the field ignores bubble through it.
 #[derive(Clone)]
-struct FocusParent {
-    parent: Rc<FocusNode>,
-    revision: u64,
+pub(super) struct FocusParent {
+    pub(super) parent: Rc<FocusNode>,
+    pub(super) revision: u64,
 }
 
 impl std::fmt::Debug for FocusParent {
@@ -160,40 +134,14 @@ fn nearest_focus_node(ctx: &dyn BuildContext) -> Option<Rc<FocusNode>> {
 // Focus
 // ============================================================================
 
-/// Which side is authoritative for the configuration stored on a focus node.
-///
-/// An external node is always *hosted* by [`Focus`] â€” attached, reparented,
-/// and detached with the widget â€” but it can follow either configuration
-/// policy. The regular [`Focus::focus_node`] path lets the widget manage
-/// explicitly supplied attributes. [`Focus::with_external_node`] leaves every
-/// node attribute under the caller's control.
-#[derive(Clone)]
-enum FocusNodeOwnership {
-    Internal,
-    ManagedExternal(Rc<FocusNode>),
-    ExternalSource(Rc<FocusNode>),
-}
-
 /// Makes its subtree focusable: owns a [`FocusNode`] (or adopts an external
 /// one), attaches it under the nearest enclosing [`FocusScope`] on mount, and
 /// detaches it on dispose.
 #[derive(Clone)]
-// Property names (`autofocus`, `can_request_focus`) end with the widget's
-// own name; keeping the familiar names beats a lint-driven rename.
-#[expect(clippy::struct_field_names)]
 pub struct Focus {
     child: BoxedView,
-    node_ownership: FocusNodeOwnership,
-    autofocus: bool,
-    can_request_focus: Option<bool>,
-    skip_traversal: Option<bool>,
-    descendants_are_focusable: Option<bool>,
-    on_focus_change: Option<FocusChangeHandler>,
-    on_visible_focus_change: Option<FocusChangeHandler>,
-    on_key_event: Option<FocusKeyHandler>,
-    debug_label: Option<&'static str>,
+    config: FocusConfig,
     include_semantics: bool,
-    traversal_overrides: Option<FocusTraversalOverrides>,
     rect_provider: Option<RectProvider>,
     sliver: bool,
 }
@@ -203,17 +151,8 @@ impl Focus {
     pub fn new(child: impl IntoView) -> Self {
         Self {
             child: BoxedView::new(child.into_view()),
-            node_ownership: FocusNodeOwnership::Internal,
-            autofocus: false,
-            can_request_focus: None,
-            skip_traversal: None,
-            descendants_are_focusable: None,
-            on_focus_change: None,
-            on_visible_focus_change: None,
-            on_key_event: None,
-            debug_label: None,
+            config: FocusConfig::new(),
             include_semantics: true,
-            traversal_overrides: None,
             rect_provider: None,
             sliver: false,
         }
@@ -241,25 +180,8 @@ impl Focus {
     /// Install weak explicit links; unavailable targets fall back to traversal policy.
     #[must_use]
     pub fn traversal_overrides(mut self, overrides: FocusTraversalOverrides) -> Self {
-        self.traversal_overrides = Some(overrides);
+        self.config.traversal_overrides = Some(overrides);
         self
-    }
-
-    fn sync_traversal_overrides(
-        &self,
-        node: &Rc<FocusNode>,
-        registration: &mut Option<FocusNodeRegistration>,
-    ) {
-        if matches!(self.node_ownership, FocusNodeOwnership::ExternalSource(_)) {
-            if let Some(previous) = registration.take() {
-                previous.relinquish();
-            }
-        } else {
-            *registration = self
-                .traversal_overrides
-                .as_ref()
-                .map(|overrides| node.register_traversal_overrides(overrides.clone()));
-        }
     }
 
     /// Whether the subtree tells assistive technology it is focusable and
@@ -282,7 +204,7 @@ impl Focus {
     /// the source of truth for all of its attributes.
     #[must_use]
     pub fn focus_node(mut self, node: Rc<FocusNode>) -> Self {
-        self.node_ownership = FocusNodeOwnership::ManagedExternal(node);
+        self.config.node_ownership = FocusNodeOwnership::ManagedExternal(node);
         self
     }
 
@@ -295,24 +217,23 @@ impl Focus {
     /// values are intentionally ignored in this mode.
     #[must_use]
     pub fn with_external_node(node: Rc<FocusNode>, child: impl IntoView) -> Self {
-        Self {
-            node_ownership: FocusNodeOwnership::ExternalSource(node),
-            ..Self::new(child)
-        }
+        let mut focus = Self::new(child);
+        focus.config.node_ownership = FocusNodeOwnership::ExternalSource(node);
+        focus
     }
 
     /// Request focus on mount if the enclosing scope has no focused child;
     /// at most one child of a scope should set it.
     #[must_use]
     pub fn autofocus(mut self, autofocus: bool) -> Self {
-        self.autofocus = autofocus;
+        self.config.autofocus = autofocus;
         self
     }
 
     /// Whether the node may receive focus at all (`:284-296`).
     #[must_use]
     pub fn can_request_focus(mut self, can: bool) -> Self {
-        self.can_request_focus = Some(can);
+        self.config.can_request_focus = Some(can);
         self
     }
 
@@ -320,14 +241,14 @@ impl Focus {
     /// request (`:270-282`).
     #[must_use]
     pub fn skip_traversal(mut self, skip: bool) -> Self {
-        self.skip_traversal = Some(skip);
+        self.config.skip_traversal = Some(skip);
         self
     }
 
     /// Whether descendants of this node may receive focus (`:298-318`).
     #[must_use]
     pub fn descendants_are_focusable(mut self, focusable: bool) -> Self {
-        self.descendants_are_focusable = Some(focusable);
+        self.config.descendants_are_focusable = Some(focusable);
         self
     }
 
@@ -346,7 +267,7 @@ impl Focus {
         F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_focus_change = Some(value_callback(handler));
+        self.config.on_focus_change = Some(value_callback(handler));
         self
     }
 
@@ -363,7 +284,7 @@ impl Focus {
         F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_visible_focus_change = Some(value_callback(handler));
+        self.config.on_visible_focus_change = Some(value_callback(handler));
         self
     }
 
@@ -385,14 +306,14 @@ impl Focus {
     where
         F: Fn(&mut EventCx<'_>, &KeyEvent) -> KeyEventResult + 'static,
     {
-        self.on_key_event = Some(Rc::new(handler));
+        self.config.on_key_event = Some(Rc::new(handler));
         self
     }
 
     /// A label for debug output (`:334`).
     #[must_use]
     pub fn debug_label(mut self, label: &'static str) -> Self {
-        self.debug_label = Some(label);
+        self.config.debug_label = Some(label);
         self
     }
 
@@ -427,82 +348,13 @@ impl Focus {
     pub fn maybe_of(ctx: &dyn BuildContext) -> Option<Rc<FocusNode>> {
         nearest_focus_node(ctx).filter(|node| !node.is_scope())
     }
-
-    /// The node this widget will drive: the external one, or a fresh one.
-    ///
-    /// A fresh node is this widget's alone: once the widget lets it go, a
-    /// request a stale callback still makes on it answers
-    /// [`Stale`](flui_interaction::FocusRequestOutcome::Stale) rather than
-    /// waiting for an attachment that will never come.
-    fn make_node(&self) -> Rc<FocusNode> {
-        match &self.node_ownership {
-            FocusNodeOwnership::Internal => {
-                let node = FocusNode::with_debug_label(self.debug_label.unwrap_or("Focus"));
-                flui_interaction::__runtime::mark_widget_owned(&node);
-                node
-            }
-            FocusNodeOwnership::ManagedExternal(node)
-            | FocusNodeOwnership::ExternalSource(node) => Rc::clone(node),
-        }
-    }
-
-    /// Apply this view's node-attribute policy.
-    ///
-    /// Internal nodes receive a complete configuration, including defaults.
-    /// A regular external node receives only explicit overrides, preserving
-    /// caller state for omitted properties. A source-of-truth external node
-    /// is never mutated. The generation-checked registration carries
-    /// ownership across a managed-external rebuild that drops an override:
-    /// the handler remains installed by design, but cleanup cannot erase a
-    /// value written later by the external owner.
-    fn configure(
-        &self,
-        node: &Rc<FocusNode>,
-        key_handler_registration: &mut Option<FocusNodeRegistration>,
-        writer: &WriterSlot,
-    ) {
-        match &self.node_ownership {
-            FocusNodeOwnership::Internal => {
-                node.set_can_request_focus(self.can_request_focus.unwrap_or(true));
-                node.set_skip_traversal(self.skip_traversal.unwrap_or(false));
-                node.set_descendants_are_focusable(self.descendants_are_focusable.unwrap_or(true));
-                if let Some(handler) = &self.on_key_event {
-                    *key_handler_registration =
-                        Some(node.register_on_key_event(key_handler(handler, writer)));
-                } else {
-                    key_handler_registration.take();
-                    node.clear_on_key_event();
-                }
-            }
-            FocusNodeOwnership::ManagedExternal(_) => {
-                if let Some(can_request_focus) = self.can_request_focus {
-                    node.set_can_request_focus(can_request_focus);
-                }
-                if let Some(skip_traversal) = self.skip_traversal {
-                    node.set_skip_traversal(skip_traversal);
-                }
-                if let Some(descendants_are_focusable) = self.descendants_are_focusable {
-                    node.set_descendants_are_focusable(descendants_are_focusable);
-                }
-                if let Some(handler) = &self.on_key_event {
-                    *key_handler_registration =
-                        Some(node.register_on_key_event(key_handler(handler, writer)));
-                }
-            }
-            FocusNodeOwnership::ExternalSource(_) => {
-                if let Some(registration) = key_handler_registration.take() {
-                    registration.relinquish();
-                }
-            }
-        }
-    }
 }
 
 impl std::fmt::Debug for Focus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Focus")
-            .field("autofocus", &self.autofocus)
-            .field("debug_label", &self.debug_label)
+            .field("autofocus", &self.config.autofocus)
+            .field("debug_label", &self.config.debug_label)
             .finish_non_exhaustive()
     }
 }
@@ -517,266 +369,38 @@ impl StatefulView for Focus {
     type State = FocusState;
 
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        // The node is configured here â€” `init_state` has no view reference,
-        // and `did_update_view` re-syncs later configurations.
-        let node = self.make_node();
-        let writer = WriterSlot::default();
-        let mut key_handler_registration = None;
-        self.configure(&node, &mut key_handler_registration, &writer);
-        let mut traversal_registration = None;
-        self.sync_traversal_overrides(&node, &mut traversal_registration);
         FocusState {
-            writer,
-            observed_node: Rc::new(RefCell::new(Rc::clone(&node))),
-            observed_was_focused: Rc::new(Cell::new(false)),
-            node_revision: Rc::new(Cell::new(0)),
-            node,
-            owns_node: matches!(self.node_ownership, FocusNodeOwnership::Internal),
-            key_handler_registration,
-            traversal_registration,
-            focus_manager: None,
-            attachment: None,
-            parent: None,
+            host: FocusHost::new(&self.config),
             anchor: SubtreeAnchor::new(),
             rect_provider: self.rect_provider.clone(),
             sliver: self.sliver,
-            rect_provider_registration: None,
-            action_chain: None,
-            context_registration: None,
-            rebuild_handle: None,
-            focus_subscription: None,
-            autofocus: self.autofocus,
-            did_autofocus: false,
-            on_focus_change: Rc::new(RefCell::new(self.on_focus_change.clone())),
-            on_visible_focus_change: Rc::new(RefCell::new(self.on_visible_focus_change.clone())),
-            reveal: Rc::default(),
-        }
-    }
-}
-
-/// What a shown focus on a [`Focus`]'s node is revealed through: the nearest
-/// reveal scope above the widget and the node's live geometry, both acquired
-/// in lifecycle hooks, and whether the node showed the primary focus at the
-/// last notification.
-#[derive(Default)]
-struct RevealSlot {
-    target: RefCell<Option<SharedRevealTarget>>,
-    rect: RefCell<Option<RectProvider>>,
-    shown: Cell<bool>,
-}
-
-impl RevealSlot {
-    /// The node took the shown primary focus: hand its measured rectangle to
-    /// the scope above. Nothing to reveal before the node's first layout.
-    /// Neither cell stays borrowed while the scope runs.
-    fn reveal(&self) {
-        let target = self.target.borrow().clone();
-        let provider = self.rect.borrow().clone();
-        let (Some(target), Some(provider)) = (target, provider) else {
-            return;
-        };
-        if let Some(rect) = provider() {
-            target.reveal(rect);
         }
     }
 }
 
 /// The state behind [`Focus`]. `pub` because `StatefulView::State`
 /// requires it, and re-exported like every other widget's state in this crate
-/// (`GestureDetectorState`, `AnimatedAlignState`, â€¦) so a caller can name it.
+/// (`GestureDetectorState`, `AnimatedAlignState`, …) so a caller can name it.
 pub struct FocusState {
-    traversal_registration: Option<FocusNodeRegistration>,
-    /// Set first in `init_state`; the focus-edge listener and the key handler
-    /// open their writes from it (ADR-0086).
-    writer: WriterSlot,
-    node: Rc<FocusNode>,
-    /// Whether `node` is the one this widget made for itself. A refused
-    /// replacement leaves the hosted node behind the view, so a rebuild
-    /// compares the view with this, not with the previous view.
-    owns_node: bool,
-    /// Generation-checked ownership of the key handler this host installed.
-    ///
-    /// External source-of-truth nodes keep caller-owned handlers intact.
-    /// Managed external nodes may retain an explicitly installed handler when
-    /// a later view omits the override, so ownership is stateful rather than
-    /// inferred from only the latest view.
-    key_handler_registration: Option<FocusNodeRegistration>,
-    /// Shared identity read by the node listener across a live external
-    /// node replacement.
-    observed_node: Rc<RefCell<Rc<FocusNode>>>,
-    /// Last `has_focus` value for the currently observed node.
-    observed_was_focused: Rc<Cell<bool>>,
-    /// Inherited-provider revision advanced by node notifications.
-    node_revision: Rc<Cell<u64>>,
-    /// The exact presentation-local manager acquired from the mounting build
-    /// owner. Listener removal must go back to this same instance.
-    focus_manager: Option<Rc<FocusManager>>,
-    /// Generation-checked ownership of this widget's attachment. Holding the
-    /// token prevents stale lifecycle callbacks from detaching a newer host.
-    /// Shared so the assistive focus handler can tell whether this widget
-    /// still owns the node before it requests focus.
-    attachment: Option<Rc<FocusAttachment>>,
-    /// The node this one currently hangs under; `did_change_dependencies`
-    /// moves it when the provider changes.
-    parent: Option<Rc<FocusNode>>,
+    /// The node and its place in the focus tree (`focus_host.rs`).
+    host: FocusHost,
     /// Publishes the child's `RenderId` while mounted, so the node's
-    /// [`RectProvider`] can measure it â€”
+    /// [`RectProvider`] can measure it —
     /// reading-order traversal sorts by this geometry (ADR-0026).
     anchor: SubtreeAnchor,
-    /// The live geometry source, retained so a replacement node receives the
-    /// same mounted anchor without reacquiring build-only context. Before
-    /// `init_state`, the view's own provider if it named one.
+    /// The view's own geometry source, if it named one. Taken in
+    /// `init_state`, where the host receives it or the anchor's.
     rect_provider: Option<RectProvider>,
     /// The child is a sliver: anchored and annotated with the sliver
     /// protocol, measured from its committed sliver geometry.
     sliver: bool,
-    /// Generation-checked ownership of the geometry source installed on the
-    /// current node.
-    rect_provider_registration: Option<FocusNodeRegistration>,
-    /// The `Actions` chain visible at this widget, recorded on the node so a
-    /// `Shortcuts` above resolves intents from here (ADR-0079).
-    action_chain: Option<FocusRecord>,
-    /// Generation-checked ownership of that record on the current node.
-    context_registration: Option<FocusNodeRegistration>,
-    /// Lifecycle-acquired rebuild capability used by the node subscription.
-    rebuild_handle: Option<RebuildHandle>,
-    /// Listener installed on the current node. It drives both inherited
-    /// dependents and the optional focus-edge callback.
-    focus_subscription: Option<Subscription>,
-    /// Captured at `create_state`: `init_state` has no view reference.
-    autofocus: bool,
-    /// One-shot latch: whether this widget has already attempted its
-    /// autofocus request.
-    /// Set the moment the attempt is made, win or lose (an already-focused
-    /// sibling can still make the attempt lose), so a later rebuild that
-    /// merely re-asserts the same `autofocus` value does not re-request.
-    did_autofocus: bool,
-    /// The current `on_focus_change` handler, behind a shared cell so the installed
-    /// listener reads the *latest* one. `did_update_view` writes here rather than
-    /// reinstalling the listener â€” a captured-by-value closure would keep firing the
-    /// handler from the build that mounted it.
-    on_focus_change: Rc<RefCell<Option<FocusChangeHandler>>>,
-    /// The current `on_visible_focus_change` handler, shared the same way.
-    on_visible_focus_change: Rc<RefCell<Option<FocusChangeHandler>>>,
-    /// Where the node's shown focus is revealed (`focus_reveal.rs`).
-    reveal: Rc<RevealSlot>,
 }
 
 impl std::fmt::Debug for FocusState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FocusState")
-            .field("node_id", &self.node.id())
+            .field("node_id", &self.host.node().id())
             .finish_non_exhaustive()
-    }
-}
-
-impl FocusState {
-    fn manager(&self) -> &Rc<FocusManager> {
-        self.focus_manager
-            .as_ref()
-            .expect("BUG: Focus lifecycle used before init_state installed its focus manager")
-    }
-
-    /// The rebuild-on-focus-change listener: descendants that read the node's state during
-    /// build stay current, and `on_focus_change` fires on the edges.
-    fn add_focus_listener(&self, node: &Rc<FocusNode>) -> Subscription {
-        let rebuild = self
-            .rebuild_handle
-            .as_ref()
-            .expect("BUG: Focus listener installed before init_state captured its rebuild handle")
-            .clone();
-        let observed_node = Rc::clone(&self.observed_node);
-        let was_focused_for_listener = Rc::clone(&self.observed_was_focused);
-        let node_revision = Rc::clone(&self.node_revision);
-        let on_focus_change = Rc::clone(&self.on_focus_change);
-        let on_visible_focus_change = Rc::clone(&self.on_visible_focus_change);
-        let reveal = Rc::clone(&self.reveal);
-        let writer = self
-            .writer
-            .get()
-            .expect("BUG: Focus listener installed before init_state acquired its writer source")
-            .clone();
-        node.subscribe(move || {
-            let next_revision = node_revision
-                .get()
-                .checked_add(1)
-                .expect("BUG: Focus inherited revision exhausted");
-            node_revision.set(next_revision);
-            rebuild.schedule(flui_view::RebuildReason::StateChange);
-
-            let node = observed_node.borrow();
-            let now_focused = node.has_focus();
-            let now_shown = node.has_visible_focus();
-            drop(node);
-            if was_focused_for_listener.replace(now_focused) != now_focused {
-                // FocusNode clones its listener list before dispatch, so
-                // user code may synchronously move focus. Clone the
-                // callback out of the RefCell before invoking it for the
-                // same re-entrancy reason.
-                let handler = on_focus_change.borrow().clone();
-                if let Some(handler) = handler {
-                    writer.write(|cx| handler(cx, now_focused));
-                }
-            }
-            // Recorded before user code runs, so a notification it causes
-            // compares against this one's value.
-            let was_shown = reveal.shown.replace(now_shown);
-            if was_shown != now_shown {
-                let handler = on_visible_focus_change.borrow().clone();
-                if let Some(handler) = handler {
-                    writer.write(|cx| handler(cx, now_shown));
-                }
-            }
-            // Shown focus is never left where the user cannot see it
-            // (WCAG 2.4.11): on the edge into it, the scopes above bring the
-            // node into view.
-            if now_shown && !was_shown {
-                reveal.reveal();
-            }
-        })
-    }
-
-    fn record_action_chain(&mut self, ctx: &dyn BuildContext) {
-        record_action_chain(
-            ctx,
-            &self.node,
-            &mut self.action_chain,
-            &mut self.context_registration,
-        );
-    }
-
-    fn install_focus_listener(&mut self) {
-        if self.focus_subscription.is_some() {
-            return;
-        }
-        self.observed_was_focused.set(self.node.has_focus());
-        self.reveal.shown.set(self.node.has_visible_focus());
-        self.focus_subscription = Some(self.add_focus_listener(&self.node));
-    }
-
-    fn remove_focus_listener(&mut self) {
-        drop(self.focus_subscription.take());
-    }
-
-    /// A one-shot autofocus
-    /// attempt, made the first time `autofocus` is (or becomes) `true` and
-    /// never repeated â€”
-    /// [`FocusState::did_autofocus`] latches regardless of whether the
-    /// attempt actually won the focus (an already-focused sibling can still
-    /// make it lose). Only when the enclosing scope has nothing focused yet
-    /// does the request land; either way the attempt is marked made.
-    /// Synchronous â€” FLUI has no end-of-frame focus batch (module docs).
-    ///
-    /// Derives the nearest scope from [`FocusState::parent`] (kept current by
-    /// `init_state`/`did_change_dependencies`) rather than an ambient
-    /// `BuildContext` lookup, so it can run from
-    /// [`ViewState::did_update_view`] too â€” that hook gets no `BuildContext`.
-    fn try_autofocus(&mut self) {
-        if self.did_autofocus || !self.autofocus {
-            return;
-        }
-        self.did_autofocus = true;
-        request_autofocus(self.parent.as_ref(), self.manager(), &self.node);
     }
 }
 
@@ -802,7 +426,7 @@ pub(crate) fn request_autofocus(
 /// one is recorded again (ADR-0079). Shared by `Focus` and `FocusScope`:
 /// either widget's node can hold the primary focus, and a `Shortcuts` above
 /// resolves its intent from that node's record.
-fn record_action_chain(
+pub(super) fn record_action_chain(
     ctx: &dyn BuildContext,
     node: &Rc<FocusNode>,
     held: &mut Option<FocusRecord>,
@@ -828,209 +452,25 @@ fn record_action_chain(
 }
 
 impl ViewState<Focus> for FocusState {
-    /// Listen, attach, autofocus â€” in that order, so a focus request queued on
-    /// an external node before mount is observed when attach fulfills it
-    /// (`did_change_dependencies` repeats the lookup).
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.writer
-            .set(ctx.writer_source())
-            .expect("BUG: Focus init_state runs once per state");
-        self.focus_manager = Some(ctx.focus_manager());
-        self.rebuild_handle = Some(ctx.rebuild_handle());
-        let parent = enclosing_focus_parent(ctx);
-        self.install_focus_listener();
-        let (rect_provider, rect_provider_registration) = match self.rect_provider.take() {
-            Some(provider) => {
-                let registration = self.node.register_rect_provider(Rc::clone(&provider));
-                (provider, registration)
-            }
-            None if self.sliver => install_sliver_rect_provider(&self.node, &self.anchor, ctx),
-            None => install_rect_provider(&self.node, &self.anchor, ctx),
+        let rect_provider = match self.rect_provider.take() {
+            Some(provider) => provider,
+            None if self.sliver => sliver_rect_provider(&self.anchor, ctx),
+            None => box_rect_provider(&self.anchor, ctx),
         };
-        *self.reveal.rect.borrow_mut() = Some(Rc::clone(&rect_provider));
-        *self.reveal.target.borrow_mut() = FocusRevealScope::of(ctx);
-        self.rect_provider = Some(rect_provider);
-        self.rect_provider_registration = Some(rect_provider_registration);
-        self.attachment =
-            Some(Rc::new(parent.attach_node(&self.node).expect(
-                "BUG: Focus could not attach its node to the enclosing focus tree",
-            )));
-        self.parent = Some(parent);
-        self.record_action_chain(ctx);
-
-        self.try_autofocus();
+        self.host.init(ctx, rect_provider);
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        // The provider changed: move the node â€” with focus â€” under the new
-        // parent, via ADR-0026's adopt.
-        let parent = enclosing_focus_parent(ctx);
-        if self
-            .parent
-            .as_ref()
-            .is_none_or(|held| !Rc::ptr_eq(held, &parent))
-        {
-            self.attachment
-                .as_ref()
-                .expect("BUG: a mounted Focus must retain its FocusAttachment")
-                .reparent(&parent)
-                .expect("BUG: Focus could not reparent within its presentation focus tree");
-            self.parent = Some(parent);
-        }
-        self.record_action_chain(ctx);
-        *self.reveal.target.borrow_mut() = FocusRevealScope::of(ctx);
+        self.host.dependencies_changed(ctx);
     }
 
     fn did_update_view(&mut self, _old_view: &Focus, new_view: &Focus) {
-        // Install the current callback before any node replacement can emit a
-        // focus edge. The node subscription always reads this cell.
-        self.on_focus_change
-            .borrow_mut()
-            .clone_from(&new_view.on_focus_change);
-        self.on_visible_focus_change
-            .borrow_mut()
-            .clone_from(&new_view.on_visible_focus_change);
-
-        // Against the hosted node, not the previous view: a replacement
-        // refused earlier left the node behind the view it was asked for.
-        let node_changed = match &new_view.node_ownership {
-            FocusNodeOwnership::Internal => !self.owns_node,
-            FocusNodeOwnership::ManagedExternal(node)
-            | FocusNodeOwnership::ExternalSource(node) => !Rc::ptr_eq(node, &self.node),
-        };
-
-        if node_changed {
-            let replacement = new_view.make_node();
-            let mut replacement_key_handler_registration = None;
-            let mut replacement_traversal_registration = None;
-            new_view
-                .sync_traversal_overrides(&replacement, &mut replacement_traversal_registration);
-            new_view.configure(
-                &replacement,
-                &mut replacement_key_handler_registration,
-                &self.writer,
-            );
-            let replacement_rect_provider_registration = self
-                .rect_provider
-                .as_ref()
-                .map(|provider| replacement.register_rect_provider(Rc::clone(provider)));
-            let replacement_context_registration = self
-                .action_chain
-                .as_ref()
-                .map(|record| record.register_on(&replacement));
-            let replacement_focus_subscription = self.add_focus_listener(&replacement);
-
-            // Observe the replacement before the core transaction delivers
-            // its stable-tree notification. Keep the previous `has_focus`
-            // bit: when a focused descendant moves with the subtree, both old
-            // and replacement nodes have focus and no synthetic edge fires.
-            let previous = std::mem::replace(
-                &mut *self.observed_node.borrow_mut(),
-                Rc::clone(&replacement),
-            );
-            let attachment = self
-                .attachment
-                .take()
-                .expect("BUG: a mounted Focus must retain its FocusAttachment");
-            let replacement_attachment = match attachment.replace_node(&replacement) {
-                Ok(replacement_attachment) => replacement_attachment,
-                Err(error) => {
-                    // Refused before anything changed â€” a focus listener is
-                    // running. Keep hosting the current node; the next update
-                    // compares against it and tries the replacement again.
-                    // Dropping the replacement's registrations clears only
-                    // what this host installed on it.
-                    tracing::warn!(
-                        %error,
-                        "Focus kept its node: the replacement was refused during a focus \
-                         notification"
-                    );
-                    *self.observed_node.borrow_mut() = previous;
-                    self.attachment = Some(attachment);
-                    drop((
-                        replacement_focus_subscription,
-                        replacement_key_handler_registration,
-                        replacement_traversal_registration,
-                        replacement_rect_provider_registration,
-                        replacement_context_registration,
-                    ));
-                    self.autofocus = new_view.autofocus;
-                    self.try_autofocus();
-                    return;
-                }
-            };
-
-            // The completed transaction made the old token stale and retired
-            // the old node, so ancillary state can now be removed without
-            // touching a newer host.
-            self.key_handler_registration.take();
-            self.traversal_registration.take();
-            self.rect_provider_registration.take();
-            self.context_registration.take();
-            let previous_subscription = self
-                .focus_subscription
-                .replace(replacement_focus_subscription);
-            self.node = replacement;
-            self.owns_node = matches!(new_view.node_ownership, FocusNodeOwnership::Internal);
-            self.key_handler_registration = replacement_key_handler_registration;
-            self.traversal_registration = replacement_traversal_registration;
-            self.rect_provider_registration = replacement_rect_provider_registration;
-            self.context_registration = replacement_context_registration;
-            self.attachment = Some(Rc::new(replacement_attachment));
-            drop(previous_subscription);
-        } else {
-            // Re-sync flags and handlers from the latest configuration.
-            new_view.sync_traversal_overrides(&self.node, &mut self.traversal_registration);
-            new_view.configure(&self.node, &mut self.key_handler_registration, &self.writer);
-        }
-
-        self.autofocus = new_view.autofocus;
-        // A changed-`autofocus` guard is folded into `try_autofocus`'s
-        // own `did_autofocus` latch: a rebuild that flips `autofocus` from
-        // `false` to `true` makes the one still-unattempted autofocus
-        // request; one that merely repeats an already-`true` value is a
-        // no-op either way.
-        self.try_autofocus();
+        self.host.update(&new_view.config);
     }
 
     fn dispose(&mut self) {
-        // An external node outlives this widget: it must not keep measuring a
-        // dead anchor or a widget-owned key handler. Only the current
-        // generation owns those registrations: a stale host must not erase
-        // state installed by a newer host of the same external node.
-        let owns_attachment = self
-            .attachment
-            .as_ref()
-            .is_some_and(|attachment| attachment.is_attached());
-        if owns_attachment {
-            self.key_handler_registration.take();
-            self.traversal_registration.take();
-            self.rect_provider_registration.take();
-            self.context_registration.take();
-        } else if let Some(registration) = self.key_handler_registration.take() {
-            // A superseded attachment has no authority to mutate this node.
-            registration.relinquish();
-        }
-        if !owns_attachment && let Some(registration) = self.rect_provider_registration.take() {
-            registration.relinquish();
-        }
-        if !owns_attachment && let Some(registration) = self.traversal_registration.take() {
-            registration.relinquish();
-        }
-        if !owns_attachment && let Some(registration) = self.context_registration.take() {
-            registration.relinquish();
-        }
-        self.remove_focus_listener();
-        self.reveal.target.borrow_mut().take();
-        self.reveal.rect.borrow_mut().take();
-        // The generation-checked attachment is the sole detach authority:
-        // an old widget host cannot detach a node that a newer host adopted.
-        if let Some(attachment) = self.attachment.take() {
-            let _ = attachment.detach();
-        }
-        self.parent = None;
-        self.rebuild_handle = None;
-        self.focus_manager = None;
+        self.host.dispose();
     }
 
     /// Anchors the child so the node's rect provider has a render node to
@@ -1054,9 +494,9 @@ impl ViewState<Focus> for FocusState {
             // A sliver annotation publishes the flags; assistive focus on a
             // sliver lands on its rows, which carry their own `Focus`.
             let mut configuration = SemanticsConfiguration::default();
-            if view.include_semantics && self.node.can_request_focus() {
+            if view.include_semantics && self.host.node().can_request_focus() {
                 configuration.set_focusable(true);
-                configuration.set_focused(self.node.has_primary_focus());
+                configuration.set_focused(self.host.node().has_primary_focus());
             }
             let child = SliverSemantics::from_configuration(configuration)
                 .child(view.child.clone())
@@ -1064,25 +504,13 @@ impl ViewState<Focus> for FocusState {
                 .boxed();
             return BoxedView::new(AnchoredSliver::new(self.anchor.clone(), child).into_view());
         }
-        let semantics = if view.include_semantics && self.node.can_request_focus() {
+        let semantics = if view.include_semantics && self.host.node().can_request_focus() {
             let semantics = Semantics::new()
                 .focusable(true)
-                .focused(self.node.has_primary_focus());
-            // Only the current attachment may focus the node: once another
-            // owner adopts it, this element neither advertises nor performs
-            // an assistive focus request on the adopter's behalf.
-            match self.attachment.as_ref().filter(|a| a.is_attached()) {
-                Some(attachment) => {
-                    let node = Rc::clone(&self.node);
-                    let attachment = Rc::downgrade(attachment);
-                    // Assistive technology moving focus is keyboard-like
-                    // focus: the indicator shows, as it does after Tab.
-                    semantics.on_focus(move |_cx| {
-                        if attachment.upgrade().is_some_and(|a| a.is_attached()) {
-                            let _ = node.request_focus_with(FocusCause::Assistive);
-                        }
-                    })
-                }
+                .focused(self.host.node().has_primary_focus());
+            // Absent once another owner adopted the node (`FocusHost`).
+            match self.host.assistive_focus_request() {
+                Some(request) => semantics.on_focus(move |_cx| request()),
                 None => semantics,
             }
         } else {
@@ -1094,25 +522,18 @@ impl ViewState<Focus> for FocusState {
 
     /// Every `Focus` is the parent of the focus nodes under it.
     fn provide(&self, _view: &Focus, _ctx: &dyn BuildContext, values: &mut Provided<'_>) {
-        values.value(FocusParent {
-            parent: Rc::clone(&self.node),
-            revision: self.node_revision.get(),
-        });
+        self.host.provide(values);
     }
 }
 
-/// Wire `node`'s rect to `anchor`'s render node: measured lazily at traversal
-/// time against committed layout â€” `box_size` + `transform_to` the render
-/// root, the `HeroHandle::bounding_box_in` shape. `None` (fall back to the
-/// stored rect) while unmounted, checked out, or awaiting complete layout.
-pub fn install_rect_provider(
-    node: &Rc<FocusNode>,
-    anchor: &SubtreeAnchor,
-    ctx: &dyn LifecycleContext,
-) -> (RectProvider, FocusNodeRegistration) {
+/// The rect of `anchor`'s render node: measured lazily at traversal time
+/// against committed layout — `box_size` + `transform_to` the render root,
+/// the `HeroHandle::bounding_box_in` shape. `None` (fall back to the stored
+/// rect) while unmounted, checked out, or awaiting complete layout.
+fn box_rect_provider(anchor: &SubtreeAnchor, ctx: &dyn LifecycleContext) -> RectProvider {
     let anchor = anchor.clone();
     let owner = ctx.pipeline_owner();
-    let provider: flui_interaction::RectProvider = Rc::new(move || {
+    Rc::new(move || {
         let render_id = anchor.get()?;
         let owner = owner.as_ref()?;
         owner
@@ -1123,22 +544,28 @@ pub fn install_rect_provider(
                 Some(transform.transform_rect(&Rect::from_ltwh(0.0, 0.0, size.width, size.height)))
             })
             .flatten()
-    });
-    let registration = node.register_rect_provider(Rc::clone(&provider));
-    (provider, registration)
+    })
 }
 
-/// [`install_rect_provider`] for a sliver anchor: the sliver's painted
-/// region, `paint_extent` along its axis by its cross-axis extent, mapped to
-/// the render root. `None` while unmounted or not laid out.
-pub(crate) fn install_sliver_rect_provider(
+/// Wire `node`'s rect to `anchor`'s render node, for a widget that hosts its
+/// node without a [`Focus`].
+pub fn install_rect_provider(
     node: &Rc<FocusNode>,
     anchor: &SubtreeAnchor,
     ctx: &dyn LifecycleContext,
 ) -> (RectProvider, FocusNodeRegistration) {
+    let provider = box_rect_provider(anchor, ctx);
+    let registration = node.register_rect_provider(Rc::clone(&provider));
+    (provider, registration)
+}
+
+/// The rect of a sliver anchor: the sliver's painted region, `paint_extent`
+/// along its axis by its cross-axis extent, mapped to the render root. `None`
+/// while unmounted or not laid out.
+fn sliver_rect_provider(anchor: &SubtreeAnchor, ctx: &dyn LifecycleContext) -> RectProvider {
     let anchor = anchor.clone();
     let owner = ctx.pipeline_owner();
-    let provider: flui_interaction::RectProvider = Rc::new(move || {
+    Rc::new(move || {
         let render_id = anchor.get()?;
         let owner = owner.as_ref()?;
         owner
@@ -1153,9 +580,7 @@ pub(crate) fn install_sliver_rect_provider(
                 Some(transform.transform_rect(&Rect::from_ltwh(0.0, 0.0, width, height)))
             })
             .flatten()
-    });
-    let registration = node.register_rect_provider(Rc::clone(&provider));
-    (provider, registration)
+    })
 }
 
 // ============================================================================

@@ -14,7 +14,9 @@ use flui_interaction::{
     RemainderHandoff,
 };
 use flui_platform::{EventTime, TargetPlatform};
-use flui_testing::{MouseScript, PointerScript, ScriptStep, TouchScript, TrackpadScript};
+use flui_testing::{
+    MouseScript, PenScript, PointerScript, ScriptStep, TouchScript, TrackpadScript,
+};
 use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
@@ -210,10 +212,17 @@ impl NestedScrollConnection for Probe {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Device {
     Touch,
+    Pen,
     Mouse,
 }
 
-pub(crate) const DEVICES: [Device; 2] = [Device::Touch, Device::Mouse];
+/// The devices a scroll view drags with by default: the mouse scrolls by its
+/// wheel and leaves a drag to selection.
+pub(crate) const DEVICES: [Device; 2] = [Device::Touch, Device::Pen];
+
+/// Every device: what a widget with its own drag takes, an anchored drag, a
+/// sheet, a swipe row or an interactive viewer.
+pub(crate) const ALL_DEVICES: [Device; 3] = [Device::Touch, Device::Pen, Device::Mouse];
 
 const SAMPLE: Duration = Duration::from_millis(16);
 
@@ -250,6 +259,13 @@ pub(crate) fn drag(
                 script = script.wait(sample).move_to(1, *point);
             }
             script.wait(hold).up(1).build().expect("one whole contact")
+        }
+        Device::Pen => {
+            let mut script = PenScript::new("drag").down(*first, 0.5);
+            for point in rest {
+                script = script.wait(sample).move_to(*point, 0.5);
+            }
+            script.wait(hold).up().build().expect("one whole stroke")
         }
         Device::Mouse => {
             let mut script = MouseScript::new("drag").move_to(*first).press(*first);
@@ -294,6 +310,12 @@ pub(crate) fn press(device: Device, point: Offset<f64>) -> PointerScript {
             .up(2)
             .build()
             .expect("one whole contact"),
+        Device::Pen => PenScript::new("press")
+            .down(point, 0.5)
+            .wait(Duration::from_millis(50))
+            .up()
+            .build()
+            .expect("one whole stroke"),
         Device::Mouse => MouseScript::new("press")
             .move_to(point)
             .press(point)
@@ -1410,7 +1432,7 @@ pub(crate) fn new_wheel_or_assistive_scroll_preempts_handed_off_fling() {
         laid.enable_semantics();
         laid.tick();
         top.take();
-        laid.replay(&fling(Device::Mouse, at(150.0, 150.0), at(150.0, 60.0)));
+        laid.replay(&fling(Device::Pen, at(150.0, 150.0), at(150.0, 60.0)));
         let released = top.started()[0];
         for _ in 0..30 {
             if outer.pixels() > 610.0 {

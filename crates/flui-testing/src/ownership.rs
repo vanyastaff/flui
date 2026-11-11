@@ -13,7 +13,8 @@
 //! press or a vertical drag on a pager still settling, which the hold on Down
 //! (ADR-0208 rule 4) stops without the press becoming a tap. The anchored
 //! leaf rows mount a `SwipeActions` row in a vertical list, on a pager's page
-//! and alone.
+//! and alone. Their scroll views name every device, so a mouse contact
+//! exercises the same arena as a finger whatever the scroll behavior admits.
 
 use std::{
     any::Any,
@@ -712,6 +713,7 @@ fn anchored_leaf_in_orthogonal_ancestor(device: PointerKind) {
         let mut laid = lay_out(
             SingleChildScrollView::new()
                 .controller(list.clone())
+                .allowed_devices(PointerKindSet::all())
                 .child(content),
             tight(PAGE, PAGE),
         );
@@ -874,7 +876,9 @@ const PAGE: f64 = 300.0;
 fn pager(controller: &PageController, page: impl Fn() -> BoxedView) -> LaidOut {
     let pages: Vec<BoxedView> = (0..3).map(|_| page()).collect();
     lay_out(
-        PageView::new(pages, pager_alternatives()).controller(controller.clone()),
+        PageView::new(pages, pager_alternatives())
+            .controller(controller.clone())
+            .allowed_devices(PointerKindSet::all()),
         tight(PAGE, PAGE),
     )
 }

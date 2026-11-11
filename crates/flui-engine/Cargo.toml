@@ -12,6 +12,9 @@ documentation = "https://docs.rs/flui-engine"
 readme = "README.md"
 keywords = ["rendering", "gpu", "wgpu", "ui", "graphics"]
 categories = ["rendering::engine", "graphics", "gui"]
+# Integration suites are listed below: `engine_it` is one binary whose files
+# are its modules, so they must not be discovered as binaries of their own.
+autotests = false
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
@@ -157,6 +160,20 @@ trybuild = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "=0.3.77"
 
+[[test]]
+name = "compile_fail"
+path = "tests/compile_fail.rs"
+
+[[test]]
+name = "raster_backpressure_allocation"
+path = "tests/raster_backpressure_allocation.rs"
+
+[[test]]
+name = "engine_it"
+path = "tests/main.rs"
+# The raster executor's protocol suite drives the `testing` kit's backend.
+required-features = ["testing"]
+
 [[bench]]
 name = "render_throughput"
 harness = false
@@ -173,6 +190,7 @@ harness = false
 name = "offscreen_resource_cache"
 harness = false
 required-features = ["testing"]
+
 
 [[bench]]
 name = "raster_backpressure"

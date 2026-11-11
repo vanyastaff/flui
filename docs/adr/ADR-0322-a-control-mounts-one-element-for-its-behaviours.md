@@ -108,11 +108,12 @@ focus ring as a foreground. A part that is absent allocates nothing and register
 element's state holds what the wrappers' states hold today: the `FocusNode` and its attachment,
 the recognizers, the action chain, the states controller.
 
-The focus logic (`FocusState` in `crates/flui-widgets/src/interaction/focus.rs`: node, attachment,
-reparenting, autofocus, the rule that only the current attachment may focus the node from
-assistive technology) moves into one `FocusHost` that `Focus` and the node both own an instance
-of. Recognizer mounting does the same with the body of `RawGestureDetector`. One implementation,
-two hosts.
+The focus logic (node, configuration, attachment, reparenting, replacement, autofocus, the rule
+that only the current attachment may focus the node from assistive technology) is one
+`FocusHost` (`crates/flui-widgets/src/interaction/focus_host.rs`) that `Focus` and the node both
+own an instance of. Its owner forwards the lifecycle hooks and says how the node is measured: an
+anchor over the child for `Focus`, the render object itself for the node. Recognizer mounting
+does the same with the body of `RawGestureDetector`. One implementation, two hosts.
 
 ### §2 Enablement has one source
 
@@ -176,27 +177,41 @@ pub trait StatefulRenderView: Clone + 'static + Sized {
     type RenderObject: RenderObject<Self::Protocol> + 'static;
     type State: RenderViewState<Self>;
     fn create_state(&self /* the arguments `StatefulView::create_state` takes */) -> Self::State;
+    fn create_render_object(&self, cx: &RenderObjectContext<'_>) -> Self::RenderObject;
 }
 
 pub trait RenderViewState<V: StatefulRenderView>: 'static {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {}
     fn did_change_dependencies(&mut self, cx: &dyn LifecycleContext) {}
     fn did_update_view(&mut self, old: &V, new: &V) {}
-    fn create_render_object(&self, view: &V, cx: &RenderObjectContext<'_>) -> V::RenderObject;
-    fn update_render_object(&self, view: &V, cx: &RenderObjectContext<'_>, object: &mut V::RenderObject);
-    fn children(&self, view: &V, cx: &dyn BuildContext) -> impl IntoViews;
+    fn update_render_object(&self, view: &V, cx: &RenderObjectContext<'_>, object: &mut V::RenderObject) -> RenderUpdateImpact;
     fn provide(&self, view: &V, cx: &dyn BuildContext, values: &mut Provided<'_>) {}   // §5
+    fn child(&self, view: &V, cx: &dyn BuildContext) -> impl IntoView;
+    fn deactivate(&mut self) {}
+    fn activate(&mut self) {}
     fn dispose(&mut self) {}
 }
 ```
 
 It is an element kind, `Element<V, Variable, StatefulRenderBehavior<V>>`, with the lifecycle
-of a stateful element and the render-object custody of a render element. Presentation
-capabilities are acquired in `init_state` and `did_change_dependencies` only (ADR-0078). A state
-change that affects the render object schedules the element; the element then runs
-`update_render_object` and `provide`, and reconciles `children` only when the view changed or a
-dependency of `children` did. A change that only repaints goes to the render object through its
-invalidation handle and schedules no element.
+of a stateful element and the render-object custody of a render element; the two behaviours
+share that custody (`flui_view::element::render_custody`) and the containment of a state's
+hooks. Presentation capabilities are acquired in `init_state` and `did_change_dependencies`
+only (ADR-0078).
+
+The view creates the render object, not the state: the object is created and adopted at mount,
+and `init_state` runs at the element's first build, so at mount the state holds nothing it
+acquires there. Putting the constructor on the view makes that order a signature instead of a
+rule to remember. The first build runs `init_state` and then `update_render_object` in the
+same frame, before layout, so the object never lays out without its state's configuration.
+
+A build runs `update_render_object`, `provide` and `child`, in that order, so the child mounts
+under what is published and next to an object that is already configured. A state change that
+affects the render object schedules the element through its rebuild handle; the reconciler skips
+a child whose view is equal to the one it holds. A change that only repaints goes to the render
+object through a handle the state gave it in `update_render_object`, and schedules no element.
+The state builds one child: the node of §1 is a single-child box, and a second user that needs
+several brings the change with it.
 
 ### §5 An element publishes values to its subtree
 
@@ -328,6 +343,15 @@ render object or already owns the element the value comes from.
   `a_replaced_value_that_panics_in_drop_keeps_its_notification` and
   `a_signal_read_in_provide_republishes_on_write` run over the
   two that publish.
+- `crates/flui-view/tests/stateful_render_view.rs`:
+  `a_stateful_render_view_is_one_element_with_its_state_and_render_object`,
+  `a_scheduled_state_change_updates_the_render_object`,
+  `a_new_view_reaches_the_state_before_the_render_object`,
+  `unmount_disposes_the_state_and_removes_the_render_object`,
+  `a_dispose_panic_still_removes_the_render_object`,
+  `a_state_that_failed_to_initialize_is_not_disposed`,
+  `an_update_panic_replaces_the_element_and_the_next_frame_runs` and
+  `a_state_hook_failure_is_recorded_against_its_hook`.
 - The node's module is absent from the facade and from every prelude: the facade's public-API
   snapshot.
 - The `render_object_harness` row of `RenderInteractive`.

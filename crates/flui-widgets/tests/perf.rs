@@ -9,13 +9,28 @@
 //! writes `<dir>/<scenario>.toml` **before** asserting, so a broken budget still
 //! reports its numbers.
 //!
+//! Every record also carries `allocations`: the heap allocations the scenario's
+//! measured frames made on the test thread, counted by this target's
+//! `#[global_allocator]`. Like the frame counters it is a function of the tree
+//! and the change, not of the host, so it ratchets the same way.
+//!
+//! A `perf_scaling_` scenario runs the same change on a small and a large tree
+//! and asserts that the two cost the same: equal allocations here, and equal
+//! instruction counts within a tolerance under `cargo xtask perf --instructions`,
+//! which runs each size alone under callgrind (`FLUI_PERF_SIZE`) and counts
+//! only what runs inside [`perf_measured`]. A frame whose cost grows with nodes
+//! it does not touch fails there, though no counter of its work moves.
+//!
 //! A target of its own, not a module of `tests/main.rs`: it pins the
-//! process-global font system and reads the environment. It lives here rather
+//! process-global font system, reads the environment and installs a counting
+//! global allocator. It lives here rather
 //! than in `flui-testing`, which owns the frame driver, because the app is a
 //! widget tree: a `flui-testing` → `flui-widgets` dev edge would make every
 //! crate that dev-depends on `flui-testing` a dependent of the widget catalog,
 //! widening every change's CI scope.
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::fmt::Write as _;
 use std::time::Duration;
 
@@ -23,12 +38,64 @@ use flui_painting::styling::Color;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition};
 use flui_testing::widgets::SharedSignal;
-use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners};
+use flui_testing::{
+    FrameReport, HeadlessBinding, HeadlessHost, HeadlessWindow, MountOptions, MountOwners,
+};
 use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    ColoredBox, Column, Expanded, RepaintBoundary, SizedBox, SliverList, Text, Viewport, app_root,
+    ColoredBox, Column, Expanded, RawButton, RepaintBoundary, SingleChildScrollView, SizedBox,
+    SliverList, Text, Viewport, app_root,
 };
+
+// `Cell<u64>` in a const-initialised thread-local has no drop glue and no
+// lazy init, so the allocator reading it cannot itself allocate or run during
+// TLS teardown. Per thread, so libtest's harness thread and any background
+// thread a host starts add nothing to a scenario's count.
+thread_local! {
+    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// This thread's allocations so far; `0` once its TLS is gone.
+fn allocations() -> u64 {
+    ALLOCATIONS.try_with(Cell::get).unwrap_or(0)
+}
+
+struct CountingAllocator;
+
+// SAFETY: `alloc`/`dealloc` forward unchanged to `System`, so every pointer
+// is freed by the allocator that produced it. `realloc`/`alloc_zeroed` keep
+// `GlobalAlloc`'s defaults, which go through `self.alloc` + copy +
+// `self.dealloc`: still `System`, and a growth counts as one allocation.
+#[expect(unsafe_code, reason = "a counting global allocator forwards to System")]
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let _ = ALLOCATIONS.try_with(|count| count.set(count.get().saturating_add(1)));
+        // SAFETY: `layout` is the caller's own, forwarded unchanged.
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: `ptr`/`layout` are the caller's own, forwarded unchanged.
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+/// Runs a scenario's measured frames and returns their result with the
+/// allocations they made.
+///
+/// The one window `cargo xtask perf --instructions` counts: it collects
+/// instructions only while this function runs (callgrind's `--toggle-collect`
+/// on its name), so it must stay out of line and keep its name.
+#[inline(never)]
+fn perf_measured<R>(frames: impl FnOnce() -> R) -> (R, u64) {
+    let before = allocations();
+    let result = frames();
+    (result, allocations() - before)
+}
 
 /// One 60 Hz frame of virtual time.
 const FRAME: Duration = Duration::from_nanos(16_666_667);
@@ -146,16 +213,24 @@ fn mount() -> Mounted {
     Mounted { binding, writer }
 }
 
-/// Writes `report` for `xtask perf` when `FLUI_PERF_OUT` is set. Called
-/// before a scenario asserts, so a failing budget still reports its numbers.
-fn record(scenario: &str, report: &FrameReport) {
+/// Writes `report` and the measured frames' `allocations` for `xtask perf`
+/// when `FLUI_PERF_OUT` is set. Called before a scenario asserts, so a failing
+/// budget still reports its numbers.
+fn record(scenario: &str, report: &FrameReport, allocations: u64) {
+    let mut counts: Vec<(&str, u64)> = report.counters().into_iter().collect();
+    counts.push(("allocations", allocations));
+    record_counts(scenario, &counts);
+}
+
+/// Writes `counts` as `<FLUI_PERF_OUT>/<scenario>.toml` when that variable is set.
+fn record_counts(scenario: &str, counts: &[(&str, u64)]) {
     let Some(dir) = std::env::var_os("FLUI_PERF_OUT") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);
     std::fs::create_dir_all(&dir).expect("create FLUI_PERF_OUT");
     let mut body = format!("[{scenario}]\n");
-    for (name, value) in report.counters() {
+    for (name, value) in counts {
         writeln!(body, "{name} = {value}").expect("writing to a String cannot fail");
     }
     std::fs::write(dir.join(format!("{scenario}.toml")), body).expect("write perf record");
@@ -179,8 +254,8 @@ fn perf_counters_are_live_on_a_full_reassemble() {
     let mut app = mount();
     app.binding.perform_reassemble();
     app.binding.reassemble_render_tree();
-    let report = app.binding.pump_frame_report(FRAME);
-    record("full_reassemble", &report);
+    let (report, allocations) = perf_measured(|| app.binding.pump_frame_report(FRAME));
+    record("full_reassemble", &report, allocations);
 
     for (name, value) in report.counters() {
         if name == "layers_reused" {
@@ -205,8 +280,8 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
         .set_pixels(HEIGHT, OffsetWriteCause::Programmatic);
     // Two frames: a lazy band that first appears is built after that frame's
     // paint and lands on the next (the ListView first-frame divergence).
-    let report = app.pump_many(2);
-    record("list_10k_scroll_one_screen", &report);
+    let (report, allocations) = perf_measured(|| app.pump_many(2));
+    record("list_10k_scroll_one_screen", &report, allocations);
 
     assert!(
         band < 400,
@@ -271,10 +346,12 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
     controller.set_value(0.25).expect("no build is running");
     binding.pump_frame(FRAME);
 
-    controller.set_value(0.5).expect("no build is running");
-    binding.pump_frame(FRAME);
+    let ((), allocations) = perf_measured(|| {
+        controller.set_value(0.5).expect("no build is running");
+        binding.pump_frame(FRAME);
+    });
     let report = binding.last_frame_report().clone();
-    record("slide_transition_tick", &report);
+    record("slide_transition_tick", &report, allocations);
 
     assert_eq!(report.build.elements_built, 0, "{report:#?}");
     assert!(
@@ -282,4 +359,102 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
         "a tick must not repaint the panel's rows: {report:#?}"
     );
     assert_eq!(report.pipeline.nodes_laid_out, 0, "{report:#?}");
+}
+
+/// The two tree sizes a `perf_scaling_` scenario compares, by the name
+/// `FLUI_PERF_SIZE` selects one with. Ten times apart, so a cost that follows
+/// the tree shows up as a multiple rather than as noise.
+const SCALING_SIZES: [(&str, usize); 2] = [("small", 500), ("large", 5_000)];
+
+/// The frames a scaling scenario measures.
+const SCALING_FRAMES: usize = 4;
+
+/// A fixed-height label over `buttons` pressable rows in one eager column:
+/// every row is mounted, laid out and painted once, so a frame that changes
+/// only the label has the whole tree to pay for if it walks it.
+#[derive(Clone, StatelessView)]
+struct ButtonColumn {
+    label: SharedSignal<String>,
+    buttons: usize,
+}
+
+impl StatelessView for ButtonColumn {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        let rows: Vec<_> = (0..self.buttons)
+            .map(|row| {
+                RawButton::new(Text::new(format!("Row {row}")))
+                    .on_press(|_cx| {})
+                    .boxed()
+            })
+            .collect();
+        Column::new(vec![
+            SizedBox::height(LABEL_HEIGHT)
+                .child(Label {
+                    text: self.label.clone(),
+                })
+                .boxed(),
+            Expanded::new(
+                SingleChildScrollView::new().child(RepaintBoundary::new().child(Column::new(rows))),
+            )
+            .boxed(),
+        ])
+    }
+}
+
+/// Mounts [`ButtonColumn`] on a headless host, settles it, and returns the
+/// allocations of [`SCALING_FRAMES`] label changes.
+fn label_change_allocations(buttons: usize) -> u64 {
+    let label = SharedSignal::new(String::from("label 0"));
+    let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
+    host.attach(&ButtonColumn {
+        label: label.clone(),
+        buttons,
+    })
+    .expect("a fresh host takes a root");
+    for _ in 0..3 {
+        let _ = host.pump(FRAME);
+    }
+    let texts: Vec<String> = (0..SCALING_FRAMES)
+        .map(|frame| format!("label {}", frame % 2 + 1))
+        .collect();
+    let ((), allocations) = perf_measured(|| {
+        for text in texts {
+            label.set(text);
+            let _ = host.pump(FRAME);
+        }
+    });
+    allocations
+}
+
+/// A label change costs the same over 500 rows as over 5 000: equal
+/// allocations here, and equal instructions within a tolerance under
+/// `cargo xtask perf --instructions`. A frame that clears a table the mount
+/// grew, or walks the tree to collect something only a few nodes report,
+/// fails the second while every counter of its work stays put.
+#[test]
+fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
+    let only = std::env::var("FLUI_PERF_SIZE").ok();
+    let mut measured = Vec::new();
+    for (name, buttons) in SCALING_SIZES {
+        if only.as_deref().is_some_and(|selected| selected != name) {
+            continue;
+        }
+        let allocations = label_change_allocations(buttons);
+        record_counts(
+            &format!("label_change_{name}"),
+            &[("allocations", allocations)],
+        );
+        measured.push((buttons, allocations));
+    }
+    assert!(
+        !measured.is_empty(),
+        "FLUI_PERF_SIZE names no size of {SCALING_SIZES:?}"
+    );
+    if let [(small_rows, small), (large_rows, large)] = measured[..] {
+        assert_eq!(
+            small, large,
+            "{SCALING_FRAMES} label changes allocated {small} times over {small_rows} rows \
+             and {large} times over {large_rows}"
+        );
+    }
 }

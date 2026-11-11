@@ -70,7 +70,6 @@
 // Every `expect` on a shipped path names its invariant.
 #![warn(clippy::expect_used)]
 #![warn(clippy::panic)]
-#![expect(clippy::uninlined_format_args)]
 #![expect(clippy::match_same_arms)]
 
 pub mod alignment;

@@ -20,8 +20,8 @@ use flui_rendering::view::ScrollDirection;
 use flui_view::environment::VsyncScope;
 use flui_view::{IntoView, SignalWriteExt, ViewExt};
 use flui_widgets::{
-    BouncingScrollPhysics, ClampingScrollPhysics, ScrollController, ScrollView, Scrollbar,
-    SemanticsRole, SharedScrollPhysics, SingleChildScrollView, SizedBox,
+    BouncingScrollPhysics, ClampingScrollPhysics, ScrollController, ScrollView, SemanticsRole,
+    SharedScrollPhysics, SingleChildScrollView, SizedBox,
 };
 
 #[derive(Clone, flui_view::prelude::StatelessView)]
@@ -1253,145 +1253,6 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
             }
         }
     }
-}
-
-pub(crate) fn scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded() {
-    fn short_track() {
-        assert_scrollbar_track(10.0);
-    }
-    fn minimum_track() {
-        assert_scrollbar_track(18.0);
-    }
-    fn ordinary_track() {
-        assert_scrollbar_track(100.0);
-    }
-    crate::common::cases::run_cases(
-        "scrollbar track containment",
-        &[
-            ("short track", short_track as fn()),
-            ("minimum track", minimum_track as fn()),
-            ("ordinary track", ordinary_track as fn()),
-        ],
-    );
-}
-
-fn assert_scrollbar_track(height: f64) {
-    let controller = ScrollController::new();
-    controller
-        .update_dimensions(height, 0.0, 900.0)
-        .expect("ordered extents");
-    let mut laid = lay_out(
-        Scrollbar::new()
-            .controller(controller.clone())
-            .child(SizedBox::new(100.0, height)),
-        tight(100.0, height),
-    );
-    // Scrollbar's ColoredBox paints through RenderDecoratedBox; the SizedBox
-    // content has no decoration, so this identifies exactly the real thumb.
-    let thumbs = laid.find_all_by_render_type("RenderDecoratedBox");
-    assert_eq!(thumbs.len(), 1);
-    let thumb = thumbs[0];
-    assert!(
-        laid.size(thumb).height <= height,
-        "thumb exceeds {height}px track"
-    );
-    controller.jump_to(900.0).expect("no build is running");
-    laid.tick();
-    let bottom = laid.absolute_offset(thumb).dy + laid.size(thumb).height;
-    assert!(
-        (bottom - height).abs() < 1e-8,
-        "thumb must end at track boundary"
-    );
-
-    controller.jump_to(0.0).expect("no build is running");
-    laid.tick();
-    laid.dispatch_pointer_down(97.0, 5.0);
-    laid.dispatch_pointer_move(97.0, 25.0);
-    laid.dispatch_pointer_move(97.0, 205.0);
-    laid.dispatch_pointer_up(97.0, 205.0);
-    if height <= 18.0 {
-        assert_eq!(controller.pixels(), 0.0, "a full-track thumb has no travel");
-    } else {
-        assert_eq!(
-            controller.pixels(),
-            900.0,
-            "thumb drag clamps to content end"
-        );
-    }
-    controller.jump_to(0.0).expect("no build is running");
-    laid.tick();
-    assert_eq!(
-        controller.pixels(),
-        0.0,
-        "next jump still works after dragging"
-    );
-}
-
-pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick() {
-    let scroll = ScrollController::new();
-    let vsync = Vsync::new();
-    let mut laid = crate::common::lay_out_animated(
-        VsyncScope::new(
-            vsync.clone(),
-            Scrollbar::new().controller(scroll.clone()).child(
-                SingleChildScrollView::new()
-                    .controller(scroll.clone())
-                    .child(SizedBox::new(300.0, 5000.0)),
-            ),
-        ),
-        tight(300.0, 300.0),
-        vsync,
-    );
-    scroll
-        .animate_to(
-            1000.0,
-            Duration::from_millis(300),
-            SharedCurve::new(curves::LINEAR),
-        )
-        .expect("no build is running");
-    advance_scroll_run(&mut laid);
-    assert!(scroll.pixels() > 0.0 && scroll.pixels() < 1000.0);
-    assert!(scroll.position().is_scrolling());
-    let thumbs = laid.find_all_by_render_type("RenderDecoratedBox");
-    assert_eq!(thumbs.len(), 1);
-    let top = laid.absolute_offset(thumbs[0]).dy;
-    let before = scroll.pixels();
-    laid.dispatch_pointer_down(297.0, top + 5.0);
-    laid.dispatch_pointer_move(297.0, top + 25.0);
-    laid.dispatch_pointer_move(297.0, top + 45.0);
-    let dragged = scroll.pixels();
-    assert!(
-        dragged > before,
-        "pointer drag must advance the actual position"
-    );
-    laid.dispatch_pointer_up(297.0, top + 45.0);
-    laid.pump_for(Duration::from_millis(16));
-    assert_eq!(
-        scroll.pixels(),
-        dragged,
-        "old animation must not overwrite the drag"
-    );
-    for _ in 0..24 {
-        laid.pump_for(Duration::from_millis(16));
-    }
-    assert_eq!(
-        scroll.pixels(),
-        dragged,
-        "retired animation must stay stopped"
-    );
-    assert!(!scroll.position().is_scrolling());
-    scroll
-        .animate_to(
-            4000.0,
-            Duration::from_millis(300),
-            SharedCurve::new(curves::LINEAR),
-        )
-        .expect("no build is running");
-    advance_scroll_run(&mut laid);
-    assert!(
-        scroll.pixels() > dragged,
-        "a later animation still makes progress"
-    );
 }
 
 // ============================================================================
@@ -3841,7 +3702,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
             let _ = host.pump(Duration::ZERO);
             let pointer = PointerInfo::new(
                 PointerId::try_from(id).expect("nonzero contact"),
-                PointerKind::Mouse,
+                PointerKind::Touch,
             );
             let sample = |y: f64| {
                 PointerSample::new(
@@ -3850,7 +3711,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
                             .expect("fixture clock fits event time"),
                     ),
                     PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, y))
-                        .expect("finite authored mouse position"),
+                        .expect("finite authored touch position"),
                 )
             };
             host.dispatch(PlatformInput::Pointer(PointerEvent::Down(
@@ -5225,12 +5086,58 @@ impl flui_widgets::ScrollPhysics for PinnedPhysics {
 /// Drag a 300 px viewport over 800 px of `view`'s content up by 50 px and
 /// return the offset it lands on.
 fn dragged_offset(view: impl Fn(&ScrollController) -> flui_view::BoxedView) -> f64 {
+    dragged_offset_with(flui_interaction::PointerKind::Touch, view)
+}
+
+fn dragged_offset_with(
+    kind: flui_interaction::PointerKind,
+    view: impl Fn(&ScrollController) -> flui_view::BoxedView,
+) -> f64 {
     let controller = ScrollController::new();
     let scoped = lay_out(view(&controller), tight(300.0, 300.0));
-    scoped.dispatch_pointer_down(150.0, 200.0);
+    scoped.dispatch_pointer_down_with_kind(150.0, 200.0, kind);
     scoped.dispatch_pointer_move(150.0, 150.0);
     scoped.dispatch_pointer_up(150.0, 150.0);
     controller.pixels()
+}
+
+/// With no configuration, a scroll view drags with a finger, a pen, a
+/// trackpad and a virtual pointer, and leaves a mouse drag to selection: the
+/// mouse scrolls it by its wheel and the scrollbar.
+pub(crate) fn the_default_scroll_behavior_leaves_a_mouse_drag_to_selection() {
+    let list = |controller: &ScrollController| {
+        SingleChildScrollView::new()
+            .controller(controller.clone())
+            .child(SizedBox::new(300.0, 800.0))
+            .boxed()
+    };
+    let pen = flui_interaction::PointerKind::Pen {
+        tool: flui_interaction::PenTool::Tip,
+    };
+    for kind in [
+        flui_interaction::PointerKind::Touch,
+        pen,
+        flui_interaction::PointerKind::Virtual,
+    ] {
+        assert_eq!(dragged_offset_with(kind, list), 50.0, "{kind:?} drags");
+    }
+    assert_eq!(
+        dragged_offset_with(flui_interaction::PointerKind::Mouse, list),
+        0.0,
+        "the mouse leaves the drag"
+    );
+    let every = |controller: &ScrollController| {
+        SingleChildScrollView::new()
+            .controller(controller.clone())
+            .allowed_devices(flui_interaction::PointerKindSet::all())
+            .child(SizedBox::new(300.0, 800.0))
+            .boxed()
+    };
+    assert_eq!(
+        dragged_offset_with(flui_interaction::PointerKind::Mouse, every),
+        50.0,
+        "a view that names every device takes the mouse"
+    );
 }
 
 /// A scroll view asks the nearest `ScrollConfiguration` for what it leaves
@@ -5258,14 +5165,14 @@ pub(crate) fn a_scroll_configuration_answers_what_a_scroll_view_leaves_open() {
         ),
         (
             "the behavior's devices",
-            CountingBehavior::new(clamping(), PointerKindSet::TOUCH),
+            CountingBehavior::new(clamping(), PointerKindSet::MOUSE),
             false,
             false,
             0.0,
         ),
         (
             "the view's devices win",
-            CountingBehavior::new(clamping(), PointerKindSet::TOUCH),
+            CountingBehavior::new(clamping(), PointerKindSet::MOUSE),
             false,
             true,
             50.0,

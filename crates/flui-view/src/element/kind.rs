@@ -37,11 +37,12 @@ use super::{
         AnimatedBehavior, ElementBehavior, InheritedBehavior, ParentDataBehavior, ProxyBehavior,
         RenderBehavior, StatefulBehavior, StatelessBehavior,
     },
+    stateful_render::StatefulRenderBehavior,
     unified::Element,
 };
 use crate::view::{
-    AnimatedView, ElementBase, InheritedView, ParentDataView, ProxyView, RenderView, StatefulView,
-    StatelessView,
+    AnimatedView, ElementBase, InheritedView, ParentDataView, ProxyView, RenderView,
+    StatefulRenderView, StatefulView, StatelessView,
 };
 
 // ============================================================================
@@ -154,6 +155,16 @@ where
     V: RenderView + Clone + 'static,
     RenderBehavior<V>: super::behavior::ElementBehavior<V, Variable>,
     Element<V, Variable, RenderBehavior<V>>: ElementBase,
+{
+}
+
+// A `StatefulRenderView` element owns a render object, so the reconciler
+// routes it as a render element.
+impl<V> RenderElementBase for Element<V, Variable, StatefulRenderBehavior<V>>
+where
+    V: StatefulRenderView + Clone + 'static,
+    StatefulRenderBehavior<V>: super::behavior::ElementBehavior<V, Variable>,
+    Element<V, Variable, StatefulRenderBehavior<V>>: ElementBase,
 {
 }
 
@@ -303,6 +314,21 @@ impl ElementKind {
             view,
             RenderBehavior::new(),
         )))
+    }
+
+    /// Create the element kind of a render view with state.
+    pub fn stateful_render<V>(view: &V) -> Self
+    where
+        V: StatefulRenderView + crate::view::View + Clone + 'static,
+        StatefulRenderBehavior<V>: ElementBehavior<V, Variable>,
+        Element<V, Variable, StatefulRenderBehavior<V>>: ElementBase,
+    {
+        Self::RenderVariable(Box::new(
+            Element::<V, Variable, StatefulRenderBehavior<V>>::new(
+                view,
+                StatefulRenderBehavior::new(),
+            ),
+        ))
     }
 
     /// Create an animated stateful-family element kind.

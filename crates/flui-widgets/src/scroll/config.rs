@@ -76,7 +76,7 @@ pub trait ScrollView: Sized {
 
     /// Share the position with a [`ScrollController`] the application holds,
     /// to read the offset, jump or animate it, or drive a
-    /// [`Scrollbar`](crate::Scrollbar) from it. Clones of one controller
+    /// [`Scrollbar`](crate::Scrollbar) beside the scroll view from it. Clones of one controller
     /// share one position. Without one, the scrollable keeps a position of
     /// its own for as long as it is mounted.
     #[must_use]

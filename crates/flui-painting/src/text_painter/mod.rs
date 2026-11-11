@@ -100,6 +100,10 @@ pub struct TextPainter {
 
     /// Cached layout result.
     pub(super) layout_cache: Option<TextLayoutCache>,
+
+    /// The buffers of the layout an invalidation dropped, handed to the next
+    /// shaping to build into instead of allocating its own.
+    pub(super) spare_layout: Option<ParagraphLayout>,
 }
 
 /// Cached layout information.
@@ -173,6 +177,7 @@ impl TextPainter {
             max_lines: None,
             ellipsis: None,
             layout_cache: None,
+            spare_layout: None,
         }
     }
 
@@ -435,7 +440,13 @@ impl TextPainter {
     // ===== Lifecycle =====
 
     /// Invalidates the layout cache.
+    ///
+    /// The dropped layout's buffers are kept for the next layout to build
+    /// into, so a painter whose text changes reshapes without reallocating
+    /// them.
     pub fn mark_needs_layout(&mut self) {
-        self.layout_cache = None;
+        if let Some(cache) = self.layout_cache.take() {
+            self.spare_layout = Some(cache.layout);
+        }
     }
 }

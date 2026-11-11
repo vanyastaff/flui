@@ -1,6 +1,6 @@
 # render-scaling: задачи
 
-- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS3, RS14. Следующие: RS5, RS15 (не
+- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS3, RS5, RS14. Следующие: RS6, RS15 (не
   зависят друг от друга); RS4 сливается в одной серии с RS8.
 - **Design:** [design.md](design.md); требования и ворота G1–G7: [requirements.md](requirements.md)
 - **База:** `main` @ `da69efa`. Пути и строки в ADR даны на `e5ba8fe8f`; перед правкой сверить.
@@ -91,21 +91,35 @@
   `SceneVersion`, `SceneNodeId`, `BoundaryContent`, `Entry`, `Chunk`, `ContentVersion`, `Lineage`,
   `Placement::try_new`, `SceneOp`, `SceneWriter`, `SceneOwner::apply` с проверкой «всё или ничего»
   и `SceneError`; три индекса (ссылки, пользователи текстур, узлы с фильтрами);
-  `SceneVersion::flatten()` за фичей `testing`. Damage в этой задаче всегда `Full(FirstFrame)`.
-- **Где:** новые модули `crates/flui-layer/src/scene/`; `Cargo.toml` (`globals` для `Lineage`).
+  `SceneVersion::flatten()` за фичей `testing`. Damage в этой задаче всегда `Full(FirstFrame)`, после
+  `renew` `Full(Resync(_))`. Корень сцены владелец создаёт сам, `Retire` корня отказывает.
+  Границы (`BoundaryContent::bounds`, `subtree_bounds`), `filters` и `Chunk::reads_destination`
+  нужны только следу и `read_closure` и приходят с RS6.
+- **Где:** новые модули `crates/flui-layer/src/scene/`; `Lineage` минтит `AtomicIdMint` со строкой
+  `counter` в `globals` манифеста `flui-layer`.
 - **Тесты:** модельная проверка таблицы против `BTreeMap` и разделение поддеревьев по
   `Arc::ptr_eq`; из `scene_apply_contract`: `a_slot_naming_its_own_ancestor_is_refused`,
   `a_stale_generation_is_refused`, `a_node_named_by_two_slots_is_refused`,
-  `a_refused_patch_leaves_the_version_and_log_unchanged`; из `content_version_contract`:
+  `a_refused_patch_leaves_the_version_and_log_unchanged`, `a_node_of_another_owner_is_refused`; из
+  `content_version_contract`:
   `a_replaced_owner_never_reports_unchanged`,
   `an_exhausted_mint_renews_the_lineage_and_publishes_full`.
-- **Ворота:** `apply` патча из k операций на версии из 100 и из 100 000 узлов копирует одинаковое
-  число узлов таблицы (счётчик в тесте); `cargo xtask globals` и `send-impls` без новых строк.
+- **Ворота:** стоимость `apply` зависит от патча, а не от размера сцены (`scene_table_cost`, счётчик
+  копий в тесте): (1) патч из k операций копирует не больше k × высота узлов таблицы, где высота
+  равна ceil(log32(ёмкость)), на 100, 1 100, 30 000 и 100 000 узлах; (2) на одной высоте те же
+  операции копируют одно и то же число узлов при любом числе узлов (1 100 против 30 000,
+  равенство); (3) k операций в одном листе копируют один путь, то есть высоту узлов; (4) высота не
+  фиксируется, рост на границе ёмкости (1 024 → 1 025 слотов) добавляет по одному новому узлу на
+  уровень и ничего не копирует; (5) `Publish` родителя с теми же слотами и одним новым копирует
+  одно и то же число узлов при 40 и 1 000 детях; (6) перерисовка с теми же ссылками и текстурами не
+  пишет индексы; (7) новая граница над поддеревом из n узлов обновляет n + 1 глубину
+  (`depth_updates`). `send-impls` без новых строк.
 - **Зависит:** нет. **Размер:** L. **Ревью сильной модели.**
 
 ### RS6. Damage как след патча, `read_closure`, последователи
 
-- **Что:** ADR-0304 §4 и §6: след `Publish`, `Place`, `Retire`; `subtree_bounds` с ростом вверх;
+- **Что:** ADR-0304 §4 и §6: след `Publish`, `Place`, `Retire`; `BoundaryContent::bounds`,
+  `subtree_bounds` с ростом вверх, `filters` и `Chunk::reads_destination`;
   разрешение последователей после операций; одна функция `read_closure` с замыканием до
   неподвижной точки; правила `differ.rs:480-507` и `frame_protocol.rs:215-300` удаляются, оба
   места зовут `read_closure`.
@@ -152,7 +166,11 @@
   `a_hot_reload_renews_every_scene_lineage`, `a_base_mismatch_renders_full`;
   `retained_frames_match_a_full_repaint_over_random_trees_and_marks` сравнивает `flatten()`.
 - **Ворота:** сценарий `caret_blink_in_10k_list`: `nodes_painted` и `scene_ops` равны на 1 000 и
-  10 000 элементов; `damage_rects`, `damage_full`, `scene_nodes_visited` введены; readback-наборы
+  10 000 элементов; `damage_rects`, `damage_full`, `scene_nodes_visited` введены;
+  `scene_depth_updates` показан на кадре, где начало opacity или slide вставляет границу над
+  большим поддеревом (заметный скачок возвращает вопрос о хранении глубины автору спеки); счётчик
+  аллокаций кадра показывает, что `apply` с N записями на одну текстуру или одну ссылку аллоцирует
+  столько же, сколько с одной (корзина индекса расширяется на месте); readback-наборы
   без правки ожиданий.
 - **Зависит:** RS4 (в той же серии), RS7. **Размер:** XL. **Ревью сильной модели.** Если PR выходит за 3 000 строк
   диффа, первым отдельным PR уходит `FrameSink::submit(ScenePublication)` с публикацией
@@ -208,7 +226,7 @@
 - **Что:** ADR-0304 §8 (конец) и §9 (конец): кадр текстуры повреждает только своих пользователей;
   display list canvas-слоя и оверлей производительности версионируются; input regions, наблюдение
   за лидерами и hit-test последователей читают применённую версию; ссылка инспектора называет узел
-  парой `(Lineage, SceneNodeId)`.
+  его `SceneNodeId`, в котором уже есть lineage.
 - **Тесты:** `a_texture_frame_damages_only_its_users`; строка сценария: оверлей без изменения чисел
   даёт `damage_rects = 0`.
 - **Ворота:** пункт ADR-0304 в `docs/gaps.md` пуст и удалён.
@@ -227,27 +245,37 @@
 
 ### RS15. Фабрика поверхностей, команды слота, расчёт по штампу
 
-- **Что:** ADR-0305 §2–§6: `SurfaceFactory` (`!Send`), закрытые команды слота, расчёт кадра по
-  штампу, темп и `SurfaceGeneration` на слот.
-- **Тесты:** compile-fail `surface_factory_is_owner_local`, `surface_factory_rejects_borrowed_window`;
+- **Что:** ADR-0305 §2–§6 без удаления оси ресурсов (она в RS19): `SurfaceFactory` (`!Send`),
+  закрытые команды слота, расчёт кадра по штампу, темп и `SurfaceGeneration` на слот. PR идут в
+  порядке (a), (c1), (c2), затем RS16, затем (b): (a) исполнитель, команды и кольцо расчётов в
+  `flui-engine`; (c1) `DisplayConnection` каждого хоста и `OwnerPlatform::display_connection`;
+  (c2) `SurfaceFactory`, `bootstrap` и оконные слоты, где отказ resize повторяется только после
+  паники или переходной ошибки, а размер, который backend отклоняет всегда, пишет warn один раз;
+  (b) `Queued`, `settle_frame` и выпуск `FrameEpoch` в `flui-runtime`. (b) идёт после RS16,
+  потому что до потока растра `Queued` некому отвечать: RS16 сдаёт inline-вердикт тем же типом
+  результата и через тот же один вход рантайма, которым (b) примет `Queued`, а эпоху, которую пока
+  штампует дорожка `flui-app`, читает в одном месте, и (b) переносит это место в рантайм.
+- **Тесты:** `a_surface_targets_display_equals_the_platforms_connection` (c1: X11 под `Xvfb`, Wayland
+  под `weston`, headless); compile-fail `surface_factory_is_owner_local`,
+  `surface_factory_rejects_borrowed_window`;
   `a_full_lifecycle_queue_returns_the_command`, `a_stale_slot_id_is_refused_after_detach`,
   `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released`,
   `a_full_settlement_ring_holds_the_next_frame`,
   `a_stopped_executor_settles_every_pending_frame_failed`;
   `a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored` (`flui-runtime`);
   протокольные тесты `raster_owner` переписаны на слот (список в ADR-0305, Confirmation).
-- **Ворота:** все перечисленные тесты; ни одного `Mutex` в типах слота и исполнителя.
-- **Зависит:** RS14. **Размер:** L. **Ревью сильной модели.**
+- **Ворота:** все перечисленные тесты; в `RasterExecutor`, слоте и `RasterHost` нет `Mutex`;
+  единственный замок у inbox слота, держится только на обмен значений.
+- **Зависит:** RS14; (b) ещё и RS16. **Размер:** L. **Ревью сильной модели.**
 
 ### RS16. Настольные раннеры на слотах
 
 - **Что:** Win32, AppKit, Wayland и X11 раннеры `flui-app` работают через слоты; удаляются
   `with_backend`, `Arc<Mutex<RasterLane>>` и замыкание-хук; у окна нет своего `Renderer`.
-- **Тесты:** `a_surface_targets_display_equals_the_platforms_connection` (строки Wayland под
-  `weston`, X11 под `Xvfb`, headless); `a_hidden_slot_is_not_acquired_and_settles_not_shown`.
+- **Тесты:** `a_hidden_slot_is_not_acquired_and_settles_not_shown`.
 - **Ворота:** `rg 'Arc<Mutex<RasterLane>>|with_backend' crates` пуст; два окна примера делят один
   device (G5 через оконный путь на Linux CI).
-- **Зависит:** RS15, RS9. **Размер:** L. Windows и macOS: проверка типов и ночной раннер.
+- **Зависит:** RS15a, RS15c, RS9. **Размер:** L. Windows и macOS: проверка типов и ночной раннер.
 
 ### RS17. Android и iOS на слотах
 
@@ -266,7 +294,10 @@
 ### RS19. Паника на команду, пересборка устройства, остановка, замер доли растра
 
 - **Что:** ADR-0305 §7–§9: паника сдерживается на команду и стоит общих кэшей, но не пайплайнов;
-  потерянное устройство пересобирается с сохранением поверхностей; остановка ограничена по времени.
+  потерянное устройство пересобирается с сохранением поверхностей; остановка ограничена по времени;
+  ось `GpuResourceGeneration` удаляется (§6), раз пересборка у контекста.
+  `shut_down` закрывает очередь жизненного цикла (`Receiver` в `Option`), чтобы
+  `Attach`, прошедший проверку health до остановки, получил `Gone`, а не остался `Attaching`.
   Плюс замер: доля растра в кадре на сцене-сетке, записанная в теле PR, как вход для решения о
   потоке растра по ADR-0305 §10.
 - **Тесты:** `a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines`,
@@ -282,5 +313,8 @@
 |---|---|---|---|
 | RS1 | #2384 | готова | `painting_it recording_contract::a_non_finite_op_is_refused_by_kind`, `…a_destructor_that_panics_during_reset_leaves_the_canvas_empty` (падает без порядка `reset`); `a_non_finite_op_is_omitted_and_the_frame_draws`, `inline_picture_replay_owns_its_root_clips` на lavapipe; `.snap` не тронуты; `rg draw_picture crates packages` пуст |
 | RS3 | #2383 | готова | `layer_it region_contract` (четыре строки), `union_table`, `bounds_round_outward_with_aa_margin`; `damage_readback_tests` на lavapipe без правки ожиданий; `_ =>` над `DamageRegion`, `FullReason`, `ResyncReason` нет |
+| RS5 | #2392 | готова | `layer_it scene_apply_contract` (десять строк), `content_version_contract` (две), `scene_table_cost` (четыре): копий 4 / 5 / 5 / 6 на 100 / 1 100 / 30 000 / 100 000 узлах при одних слотах, k = 8 операций в одном листе копируют 2 / 3 / 3 / 4 узла; `scene::table::tests` (модель против `BTreeMap`, `Arc::ptr_eq`, рост 1 024 → 1 025 создаёт 3 узла и 0 копий); `Publish` корня с теми же слотами копирует 3 узла при 40 и при 1 000 детях (до разности слотов 3 и 33); новая граница над 10 и 100 узлами даёт 11 и 101 `depth_updates`; `xtask globals` со строкой `scene::id::NEXT_LINEAGE`, `send-impls` без строк |
 | RS14 | #2382 | готова; `RasterExecutor` переходит в RS15 вместе с командами, его единственный API это ход по ним | `every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format` (lavapipe): 3 слота в двух форматах дают 1 instance, 1 device, 1 атлас, 2 набора пайплайнов, 0 сборок на перерисовке; до: 3/3/3/3 |
-| RS2, RS4–RS13, RS15–RS19 | | не начата | |
+| RS15a | #2396 | готова (ревью принято) | `engine_it` 17 тестов; без фикса падают `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released` (взаимоблокировка), `a_full_settlement_ring_holds_the_next_frame`, `a_stopped_executor_settles_every_pending_frame_failed`, `a_failed_resize_is_held_in_the_record_and_retried_next_turn`, `a_panicking_subscriber_cannot_strand_a_refused_slot`, `an_untaken_panic_payload_is_dropped_outside_the_slot_table`, `a_refusal_whose_error_panics_when_formatted_still_commits`, `a_surface_loss_keeps_the_barrier_of_a_pending_resize` |
+| RS15c1 | #2407 | в ревью | `a_surface_targets_display_equals_the_platforms_connection`: X11 под `Xvfb` (`x11_window`), Wayland под `weston` (`platform_it`), `the_headless_display_connection_answers_no_display`; проверка типов Windows, macOS, iOS, Android, wasm32 |
+| RS2, RS4, RS6–RS13, RS15b, RS15c2, RS16–RS19 | | не начата | |

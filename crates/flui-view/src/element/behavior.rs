@@ -6,17 +6,10 @@
 
 use flui_rendering::parent_data::SliverSlot;
 use std::{
-    any::{Any, TypeId},
-    collections::HashMap,
-    marker::PhantomData,
-    panic::AssertUnwindSafe,
-    rc::Rc,
+    any::TypeId, collections::HashMap, marker::PhantomData, panic::AssertUnwindSafe, rc::Rc,
 };
 
 use flui_foundation::{ElementId, Listenable, RenderId};
-use flui_rendering::{
-    pipeline::PipelineOwner, protocol::Protocol, traits::RenderObject as RenderObjectTrait,
-};
 
 use super::{
     arity::ElementArity,
@@ -85,6 +78,124 @@ fn mark_lifecycle_records(owner: &crate::ElementOwner<'_>, start: Option<usize>)
     }
 }
 
+/// Runs a state's hook that its element cannot go on without (`init_state`,
+/// `did_update_view`, `apply_view`, `did_change_dependencies`, `activate`).
+///
+/// The hook is user code. Dependency records it pushes are tagged as
+/// lifecycle reads. A panic is staged against the element through the armed
+/// lifecycle handoff, so the seam that called in substitutes the element
+/// (ADR-0287), and then resumes.
+pub(super) fn armed_state_hook<V, A>(
+    core: &ElementCore<V, A>,
+    owner: &mut crate::ElementOwner<'_>,
+    hook: LifecycleHook,
+    context: &'static str,
+    run: impl FnOnce(),
+) where
+    V: Clone + 'static,
+    A: ElementArity,
+{
+    let sink_start = lifecycle_sink_len(owner);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a state hook's panic is recorded against its element, then resumed"
+    )]
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(run));
+    mark_lifecycle_records(owner, sink_start);
+    if let Err(payload) = outcome {
+        owner.record_armed_lifecycle_panic(
+            core.self_id(),
+            core.creation_site(),
+            TypeId::of::<V>(),
+            hook,
+            payload.as_ref(),
+            context,
+        );
+        std::panic::resume_unwind(payload);
+    }
+}
+
+/// Creates and initializes a state at its element's first build:
+/// `create_and_init` runs `create_state` and then `init_state`.
+///
+/// A panic in either is recorded as an `init_state` panic and resumed. The
+/// half-made state unwinds out of `create_and_init` and is dropped there, and
+/// the signals it created are released: before a state exists its element
+/// owns no other slot, so a retry starts from nothing.
+pub(super) fn first_state<V, A, S>(
+    core: &ElementCore<V, A>,
+    owner: &mut crate::ElementOwner<'_>,
+    context: &'static str,
+    create_and_init: impl FnOnce() -> S,
+) -> S
+where
+    V: Clone + 'static,
+    A: ElementArity,
+{
+    let sink_start = lifecycle_sink_len(owner);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a state's create_state or init_state panic is recorded and the element recovers"
+    )]
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(create_and_init));
+    mark_lifecycle_records(owner, sink_start);
+    match outcome {
+        Ok(state) => state,
+        Err(payload) => {
+            owner.record_armed_lifecycle_panic(
+                core.self_id(),
+                core.creation_site(),
+                TypeId::of::<V>(),
+                LifecycleHook::InitState,
+                payload.as_ref(),
+                context,
+            );
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a released value's destructor panic must not replace the initialization panic"
+            )]
+            if let Some(element) = core.self_id()
+                && let Err(release) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    owner.release_reactive(element);
+                }))
+            {
+                flui_foundation::panic::discard_payload(release);
+            }
+            std::panic::resume_unwind(payload)
+        }
+    }
+}
+
+/// Runs a state's hook on the way out (`deactivate`, `dispose`): a panic is
+/// recorded against the one element and goes no further, so the elements
+/// after it in the pass still leave.
+pub(super) fn contained_state_hook<V, A>(
+    core: &ElementCore<V, A>,
+    owner: &mut crate::ElementOwner<'_>,
+    hook: LifecycleHook,
+    context: &'static str,
+    run: impl FnOnce(),
+) where
+    V: Clone + 'static,
+    A: ElementArity,
+{
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a leaving state's hook panic is recorded; later elements still leave"
+    )]
+    if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(run)) {
+        owner.record_hook_panic(
+            core.self_id(),
+            core.creation_site(),
+            TypeId::of::<V>(),
+            hook,
+            payload.as_ref(),
+            context,
+        );
+        flui_foundation::panic::discard_payload(payload);
+    }
+}
+
 /// Run an element's `provide` hook and publish what it wrote (ADR-0322 §5).
 ///
 /// The hook is user code. A panic in it, or in a value's
@@ -96,7 +207,7 @@ fn mark_lifecycle_records(owner: &crate::ElementOwner<'_>, start: Option<usize>)
 /// a signal it writes is refused, as in `build` (ADR-0074). The phase stays
 /// armed for the `build_or_recover_begun` that follows, and is disarmed here
 /// when the hook fails.
-fn publish_provided<V, A>(
+pub(super) fn publish_provided<V, A>(
     publication: &mut Publication,
     core: &ElementCore<V, A>,
     owner: &mut crate::ElementOwner<'_>,
@@ -842,76 +953,28 @@ where
         // clean. Both run from the element's current view, so an update that
         // reached the element before this build is already in the state.
         if self.state.is_none() {
-            let sink_start = lifecycle_sink_len(owner);
             let lifecycle_ctx = ctx_choice.as_lifecycle_ctx();
             let view = core.view();
-            // A state whose `init_state` panics unwinds out of the closure and
-            // is dropped there: the element keeps no half-made state.
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a state's create_state or init_state panic is recorded and the element recovers"
-            )]
-            let init = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let state = first_state(core, owner, "initializing StatefulElement", || {
                 let mut state = view.create_state(lifecycle_ctx);
                 state.init_state(lifecycle_ctx);
                 state
-            }));
-            mark_lifecycle_records(owner, sink_start);
-            match init {
-                Ok(state) => self.state = Some(state),
-                Err(payload) => {
-                    owner.record_armed_lifecycle_panic(
-                        core.self_id(),
-                        core.creation_site(),
-                        TypeId::of::<V>(),
-                        LifecycleHook::InitState,
-                        payload.as_ref(),
-                        "initializing StatefulElement",
-                    );
-                    // The dropped state's signals are slots the element owns:
-                    // release them, so a retry does not stack a second set.
-                    // Before a state exists the element owns no other slot.
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "ADR-0287: a released value's destructor panic must not replace the initialization panic"
-                    )]
-                    if let Some(element) = core.self_id()
-                        && let Err(release) = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                            owner.release_reactive(element);
-                        }))
-                    {
-                        flui_foundation::panic::discard_payload(release);
-                    }
-                    std::panic::resume_unwind(payload);
-                }
-            }
+            });
+            self.state = Some(state);
         }
 
         if !super::behavior_commons::should_build_with_trace(core, "StatefulBehavior") {
             return Vec::new();
         }
         if self.apply_pending {
-            let sink_start = lifecycle_sink_len(owner);
             let state = self.initialized_state();
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a state's apply_view panic is recorded and the element recovers"
-            )]
-            let applied = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                state.apply_view(core.view(), ctx_choice.as_ctx());
-            }));
-            mark_lifecycle_records(owner, sink_start);
-            if let Err(payload) = applied {
-                owner.record_armed_lifecycle_panic(
-                    core.self_id(),
-                    core.creation_site(),
-                    TypeId::of::<V>(),
-                    LifecycleHook::ApplyView,
-                    payload.as_ref(),
-                    "applying the view to StatefulElement",
-                );
-                std::panic::resume_unwind(payload);
-            }
+            armed_state_hook(
+                core,
+                owner,
+                LifecycleHook::ApplyView,
+                "applying the view to StatefulElement",
+                || state.apply_view(core.view(), ctx_choice.as_ctx()),
+            );
             self.apply_pending = false;
         }
         // One clone of the view serves `provide` and `build`, taken before the
@@ -985,23 +1048,14 @@ where
         if self.state.is_none() {
             return;
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a state's dispose panic is recorded; later elements still unmount"
-        )]
-        if let Err(payload) =
-            std::panic::catch_unwind(AssertUnwindSafe(|| self.initialized_state().dispose()))
-        {
-            owner.record_hook_panic(
-                core.self_id(),
-                core.creation_site(),
-                TypeId::of::<V>(),
-                LifecycleHook::Dispose,
-                payload.as_ref(),
-                "disposing StatefulElement",
-            );
-            flui_foundation::panic::discard_payload(payload);
-        }
+        let state = self.initialized_state();
+        contained_state_hook(
+            core,
+            owner,
+            LifecycleHook::Dispose,
+            "disposing StatefulElement",
+            || state.dispose(),
+        );
     }
 
     /// Run `ViewState::activate` under the same containment shape as
@@ -1030,23 +1084,14 @@ where
         if self.state.is_none() {
             return;
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a state's activate panic is recorded against its element"
-        )]
-        if let Err(payload) =
-            std::panic::catch_unwind(AssertUnwindSafe(|| self.initialized_state().activate()))
-        {
-            owner.record_armed_lifecycle_panic(
-                core.self_id(),
-                core.creation_site(),
-                TypeId::of::<V>(),
-                LifecycleHook::Activate,
-                payload.as_ref(),
-                "activating StatefulElement",
-            );
-            std::panic::resume_unwind(payload);
-        }
+        let state = self.initialized_state();
+        armed_state_hook(
+            core,
+            owner,
+            LifecycleHook::Activate,
+            "activating StatefulElement",
+            || state.activate(),
+        );
     }
 
     /// Runs `ViewState::deactivate` under a panic boundary with a narrow
@@ -1068,23 +1113,14 @@ where
         if self.state.is_none() {
             return;
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a state's deactivate panic is recorded and the flip still happens"
-        )]
-        if let Err(payload) =
-            std::panic::catch_unwind(AssertUnwindSafe(|| self.initialized_state().deactivate()))
-        {
-            owner.record_hook_panic(
-                core.self_id(),
-                core.creation_site(),
-                TypeId::of::<V>(),
-                LifecycleHook::Deactivate,
-                payload.as_ref(),
-                "deactivating StatefulElement",
-            );
-            flui_foundation::panic::discard_payload(payload);
-        }
+        let state = self.initialized_state();
+        contained_state_hook(
+            core,
+            owner,
+            LifecycleHook::Deactivate,
+            "deactivating StatefulElement",
+            || state.deactivate(),
+        );
     }
 
     fn on_view_updated(
@@ -1135,26 +1171,13 @@ where
             return;
         };
         let ctx_choice = make_build_ctx(core, owner);
-        let sink_start = lifecycle_sink_len(owner);
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a state's did_change_dependencies panic is recorded, not unwound"
-        )]
-        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            state.did_change_dependencies(ctx_choice.as_lifecycle_ctx());
-        }));
-        mark_lifecycle_records(owner, sink_start);
-        if let Err(payload) = outcome {
-            owner.record_armed_lifecycle_panic(
-                core.self_id(),
-                core.creation_site(),
-                TypeId::of::<V>(),
-                LifecycleHook::DidChangeDependencies,
-                payload.as_ref(),
-                "notifying StatefulElement dependency change",
-            );
-            std::panic::resume_unwind(payload);
-        }
+        armed_state_hook(
+            core,
+            owner,
+            LifecycleHook::DidChangeDependencies,
+            "notifying StatefulElement dependency change",
+            || state.did_change_dependencies(ctx_choice.as_lifecycle_ctx()),
+        );
     }
 }
 
@@ -1196,105 +1219,29 @@ impl<V: RenderView> Default for RenderBehavior<V> {
 
 impl<V: RenderView> RenderBehavior<V> {
     /// Push the current view's configuration onto the live render object
-    /// through `RenderView::update_render_object`.
+    /// through `RenderView::update_render_object` (`render_custody::push`).
     ///
     /// It runs from `build_into_views`: a render element that took a new view
     /// (the dispatch marks it dirty, and every update caller schedules a dirty
     /// child) and one an inherited provider notified both reach it, so the hook
-    /// runs once per rebuild. Inside a `build_scope` drain the context carries
-    /// the borrowed tree, so `RenderObjectContext::depend_on` resolves and
-    /// records. The two behaviors that build their child themselves
-    /// (`LayoutBuilder`, the persistent headers) call it from `on_update`
-    /// instead, with a tree-less context.
-    ///
-    /// The user hook runs under `catch_unwind`, inside the `with_mut` borrow
-    /// that hands it the render object, and the unwind resumes only after that
-    /// borrow is released. A caught panic is staged through the armed lifecycle
-    /// handoff, so the `build_scope` seam replaces this element with the
-    /// registered `ErrorView` (ADR-0287), and the half-applied render object
-    /// goes with it; `apply_render_update_impact` is not reached for it. From
-    /// `on_update` no handoff is armed and the unwind reaches the update's own
-    /// containment window, which substitutes the same way.
-    ///
-    /// An element mounted with no `PipelineOwner` in scope (a render-less
-    /// unit-test tree) minted no render object in `on_mount` — that path warns
-    /// and continues — so there is nothing here to update either. The symmetric
-    /// tolerance keeps such a tree usable. Every other half-state is the
-    /// invariant violation it always was: an owner without a render id means
-    /// `on_mount` failed to mint, a render id without an owner means the owner
-    /// was withdrawn under a live node.
+    /// runs once per rebuild. The two behaviors that build their child
+    /// themselves (`LayoutBuilder`, the persistent headers) call it from
+    /// `on_update` instead, with a tree-less context.
     pub(crate) fn push_config<A>(
         &mut self,
         core: &ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
     ) where
         A: ElementArity,
-        flui_rendering::storage::RenderNode:
-            From<Box<dyn flui_rendering::traits::RenderObject<V::Protocol>>>,
     {
-        let (render_id, pipeline_owner) = match (self.render_id, core.pipeline_owner()) {
-            (Some(render_id), Some(owner)) => (render_id, owner),
-            (None, None) => {
-                tracing::trace!(
-                    "RenderBehavior::push_config skipped: mounted without a PipelineOwner, \
-                     no render object to update"
-                );
-                return;
-            }
-            (None, Some(_)) => {
-                panic!("BUG: RenderBehavior with a PipelineOwner must own a RenderId during update")
-            }
-            (Some(_), None) => {
-                panic!("BUG: active RenderBehavior must have a PipelineOwner during update")
-            }
-        };
-        let ctx = match (owner.build_view, core.self_id()) {
-            (Some(handle), Some(element_id)) => crate::RenderObjectContext::for_rebuild(
-                owner.interaction_dispatch.as_ref(),
-                Some(owner.reactive),
-                handle.tree,
-                element_id,
-                core.depth(),
-                handle.dep_sink,
-            ),
-            _ => crate::RenderObjectContext::new(
-                owner.interaction_dispatch.as_ref(),
-                Some(owner.reactive),
-            ),
-        };
-        let outcome = pipeline_owner.with_mut(|pipeline_owner| {
-            let node = pipeline_owner
-                .render_tree_mut()
-                .get_mut(render_id)
-                .expect("BUG: RenderBehavior's RenderId must resolve to a live node during update");
-            let render_object = node.downcast_render_object_mut::<V::RenderObject>().expect(
-                "BUG: RenderBehavior's live node must match RenderView::RenderObject during update",
-            );
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a view's update_render_object panic replaces the element with an ErrorView"
-            )]
-            std::panic::catch_unwind(AssertUnwindSafe(|| {
-                core.view().update_render_object(&ctx, render_object)
-            }))
-        });
-        let impact = match outcome {
-            Ok(impact) => impact,
-            Err(payload) => {
-                owner.record_armed_lifecycle_panic(
-                    core.self_id(),
-                    core.creation_site(),
-                    TypeId::of::<V>(),
-                    LifecycleHook::Update,
-                    payload.as_ref(),
-                    "updating the render object of RenderElement",
-                );
-                std::panic::resume_unwind(payload);
-            }
-        };
-        pipeline_owner.with_mut(|pipeline_owner| {
-            pipeline_owner.apply_render_update_impact(render_id, impact);
-        });
+        super::render_custody::push(
+            self.render_id,
+            core,
+            owner,
+            |ctx, render_object: &mut V::RenderObject| {
+                core.view().update_render_object(ctx, render_object)
+            },
+        );
     }
 }
 
@@ -1366,158 +1313,25 @@ where
     }
 
     fn on_mount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        // Create RenderObject and insert into RenderTree
-        if let Some(pipeline_owner) = core.pipeline_owner() {
-            tracing::info!("RenderBehavior::on_mount creating RenderObject");
-
-            let ctx = crate::RenderObjectContext::new(
-                owner.interaction_dispatch.as_ref(),
-                Some(owner.reactive),
-            );
-            let render_object = core.view().create_render_object(&ctx);
-
-            let sliver_slot = core.sliver_slot();
-            let render_id = pipeline_owner.with_mut(|pipeline_owner| {
-                // Use helper to insert (handles Protocol type)
-                let render_id = insert_render_object_helper(render_object, pipeline_owner);
-
-                // Set the field HERE, before adoption/stamp below can
-                // panic — not after this closure returns. A panic in
-                // either step still leaves `self.render_id` populated, so
-                // the undo path a panicking mount takes
-                // (`ElementTree::discard_unannounced` ->
-                // `RenderBehavior::on_unmount`) can find and detach the
-                // already-inserted, now-orphaned render object instead of
-                // leaking it.
-                self.render_id = Some(render_id);
-
-                // The node reports where its view was created when an error
-                // names it.
-                if let Some(node) = pipeline_owner.render_tree_mut().get_mut(render_id) {
-                    node.set_creation_site(core.creation_site());
-                }
-
-                // Handle parent relationship. `adopt_child` writes the
-                // child's parent link and the parent's child-list entry in
-                // one call — the two directions can never be written
-                // independently (see `RenderTree::adopt_child`).
-                if let Some(parent_id) = core.parent_render_id() {
-                    pipeline_owner.adopt_render_child(parent_id, render_id);
-                } else if let Some(element_parent) = core.element_parent() {
-                    // A render element mounted under an element-tree parent
-                    // with an active PipelineOwner must have a render parent
-                    // in the chain. Reaching here means it has none: the
-                    // adoption is skipped and the render object just created
-                    // sits in the render tree with no parent link — present
-                    // in render space, invisible to layout/paint. The legal
-                    // bare mount (element-tree root, no parent) has
-                    // `element_parent == None` and stays silent — it is
-                    // pinned by `mount_bootstrap.rs`.
-                    tracing::error!(
-                        element_id = ?core.self_id(),
-                        ?element_parent,
-                        ?render_id,
-                        "BUG: a render element mounted under an element-tree parent \
-                         with an active PipelineOwner has no render parent — \
-                         adoption would orphan the render object"
-                    );
-                    debug_assert!(
-                        core.parent_render_id().is_some(),
-                        "BUG: render element {:?} mounted under element-tree parent \
-                         {:?} with an active PipelineOwner but no render ancestor in \
-                         the chain — a render element mounted under an active \
-                         PipelineOwner must have a render parent; adoption would \
-                         orphan the render object",
-                        core.self_id(),
-                        element_parent,
-                    );
-                }
-
-                // Adopt-time stamp. The inherited
-                // slot reaches this render object through however many
-                // composite elements sit between it and the sparse sliver
-                // host, so a bare `Text` or a `StatefulView` item carries
-                // its logical index the moment its first render descendant
-                // attaches; the sliver rebuilds its `logical -> dense slot`
-                // map from this parent data on every layout pass.
-                if let Some(slot) = sliver_slot {
-                    super::behavior_commons::stamp_sliver_slot(pipeline_owner, render_id, slot);
-                }
-
-                render_id
-            });
-
-            self.render_id = Some(render_id);
-
-            tracing::debug!("RenderBehavior::on_mount created render_id={:?}", render_id);
-        } else {
-            tracing::warn!("RenderBehavior::on_mount called without PipelineOwner");
-        }
+        super::render_custody::mount(&mut self.render_id, core, owner, |ctx| {
+            core.view().create_render_object(ctx)
+        });
     }
 
-    /// Run `RenderView::did_unmount_render_object` under a containment
-    /// catch so a user panic there cannot escape `finalize_tree` (mirrors
-    /// `StatefulBehavior::{on_unmount, on_deactivate}` one hook over).
-    ///
-    /// # Why the push sits outside `with_mut`
-    ///
-    /// The catch itself has to sit *inside* the `with_mut` closure — the
-    /// render node it hands the user hook a `&mut` into only exists behind
-    /// that borrow. The push happens only after the closure returns and
-    /// the cell borrow is released: `PipelineCell::with_mut` is not
-    /// reentrant (a self-locking call from inside it deadlocks with no
-    /// compile-time oracle to catch the mistake), so nothing in the
-    /// recovery path may call back into the owner while the render tree is
-    /// still checked out — the local `recovered` payload is the handoff
-    /// that keeps the two windows disjoint.
-    ///
-    /// `remove_render_object_from_tree` still runs unconditionally after,
-    /// whether or not the hook panicked.
-    ///
-    /// A panicking hook therefore never skips the detach; the only work it
-    /// can skip is the render object's own disposal, which follows the hook.
-    /// ADR-0048 (the frame transaction boundary) is where the accounting for
-    /// the removal-path seams lives.
+    /// Runs `RenderView::did_unmount_render_object` contained, then removes
+    /// the render object: a panicking hook never skips the removal
+    /// (`render_custody::unmount`). ADR-0048 (the frame transaction boundary)
+    /// is where the accounting for the removal-path seams lives.
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        let mut recovered: Option<Box<dyn Any + Send>> = None;
-        if let Some(render_id) = self.render_id
-            && let Some(pipeline_owner) = core.pipeline_owner()
-        {
-            let ctx = crate::RenderObjectContext::new(
-                owner.interaction_dispatch.as_ref(),
-                Some(owner.reactive),
-            );
-            pipeline_owner.with_mut(|pipeline_owner| {
-                #[expect(clippy::disallowed_methods, reason = "ADR-0287: the view's unmount hook runs contained; the element still unmounts")]
-                if let Some(render_object) = pipeline_owner
-                    .render_tree_mut()
-                    .get_mut(render_id)
-                    .and_then(|node| node.downcast_render_object_mut::<V::RenderObject>())
-                    && let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                        core.view().did_unmount_render_object(&ctx, render_object);
-                    }))
-                {
-                    recovered = Some(payload);
-                }
-            });
-        }
-        if let Some(payload) = recovered {
-            owner.record_hook_panic(
-                core.self_id(),
-                core.creation_site(),
-                TypeId::of::<V>(),
-                LifecycleHook::UnmountRenderObject,
-                payload.as_ref(),
-                "unmounting the render object of RenderElement",
-            );
-            flui_foundation::panic::discard_payload(payload);
-        }
-        super::behavior_commons::remove_render_object_from_tree(
+        super::render_custody::unmount(
+            &mut self.render_id,
             core,
-            self.render_id,
+            owner,
             "RenderBehavior",
+            |ctx, render_object: &mut V::RenderObject| {
+                core.view().did_unmount_render_object(ctx, render_object);
+            },
         );
-        self.render_id = None;
     }
 
     /// A view swap pushes nothing here. The dispatch that swapped the view
@@ -1532,16 +1346,6 @@ where
     /// configuration did not change, and an inherited change reaches it as a
     /// dependency rebuild.
     fn on_update(&mut self, _core: &ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {}
-}
-
-// Helper function for RenderObject insertion
-fn insert_render_object_helper<R, P>(render_object: R, owner: &mut PipelineOwner) -> RenderId
-where
-    R: RenderObjectTrait<P>,
-    P: Protocol,
-    flui_rendering::storage::RenderNode: From<Box<dyn RenderObjectTrait<P>>>,
-{
-    owner.insert(Box::new(render_object))
 }
 
 // ============================================================================

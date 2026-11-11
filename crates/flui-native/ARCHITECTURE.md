@@ -122,8 +122,9 @@ trait depends on `flui-platform` instead.
   Android and wasm32. A list of what may be named fails closed: an OS binding
   a dependency brings is a finding without anyone listing it. The windows a
   host builds are crate-private: the platform hands out `Rc<dyn HostWindow>`,
-  a raw window or display handle leaves through the window's `SurfaceTarget`
-  and `raw-window-handle`, and what
+  a raw window or display handle leaves through the window's `SurfaceTarget`,
+  the host's `DisplayConnection` (`OwnerPlatform::display_connection`, from
+  the table's window position) and `raw-window-handle`, and what
   one OS offers beyond the window contract is an extension implemented for
   `dyn HostWindow` (`os::windows::WindowsWindowExt::win32`,
   `os::macos::MacOSWindowExt::appkit`) over
@@ -1559,10 +1560,16 @@ axes otherwise) leaves the pixel (`native_pen_position_keeps_himetric_precision`
 `synthetic_touch_and_pen_reach_native_pointer_dispatch` holds each injected pen press
 against its own himetric reading and device rectangles within 1e-6).
 
-Each pointer of a multi-touch frame is still decoded from its own message, so a
-two-finger frame reaches a recognizer as two steps; one step per frame
-(`GetPointerFrameInfoHistory`, `SkipPointerFrameMessages`) needs a frame unit in
-the shared pointer vocabulary first.
+A frame of several touches or pens reaches the window as one
+`PlatformInput::PointerFrame`. Its pointers are read from the frame's own
+history (`GetPointerFrameTouchInfoHistory`, `GetPointerFramePenInfoHistory`,
+`GetPointerFrameInfoHistory`: one row per entry, one column per pointer), never
+from `GetPointerInfo`, which answers for the message last retrieved for that
+pointer: for a pointer other than the message's own, its previous frame. The
+system still sends one message per pointer of the frame. Each is retrieved and
+the frame is delivered on the first, by its frame id; `SkipPointerFrameMessages`
+is not used, because the system then held back the next frame of the pointers
+whose messages it discarded (`two_injected_touches_arrive_as_one_pointer_frame`).
 
 The private `native_pointer_decoding_contracts` rows
 `coalesced_burst_is_ordered_by_performance_count` and
@@ -4673,7 +4680,22 @@ the view reports a composition is marked composing (`key_composition`): Android 
 every key to the input method, so such a key is one it passed on. `drag::android::AndroidTransfer` is the
 platform's one `DragTransport`: drags over the view mint offers from their
 `ClipDescription` (`drag::android::clip::offered`) and drops are answered from the cached
-feedback; `drag::android::AndroidDragSource` serves the whole clip at the start (`clip_parts`) and maps
+feedback. `FluiView` holds a taken drop's `ClipData` and URI permissions under the offer's key
+(`drag::android::drops::java_key`) until the target concludes it, and a request reads one
+representation from it under its limits (`clip::delivered`): text, HTML and the URI list on the
+requesting thread, a URI's bytes on a thread of their own, at most `drops::MAX_READS` at once,
+answered `SourceGone` when the offer retires first and `TimedOut` `drops::READ_TIMEOUT` after it
+was asked for, its wait for a place included (a waiting request times out where it waits), when
+the view cancels the open and closes the stream (`cancelDropRead`, on a cancel worker of the
+transport's, so neither the owner thread nor the watch waits on it) and the read keeps its place
+until its thread ends; at most `drops::MAX_WAITING` wait, and past them a request is `Busy`. A
+thread that cannot start answers what it was for (`drops::settle`): without the watch the waiting
+requests and running reads answer `SourceGone` and none starts with no deadline, a read with no
+thread answers `SourceGone`, and a cancel worker that cannot start is tried again by the watch every
+`drops::CANCEL_RETRY`. The view lets go of a refused drop at once,
+and of every held one when it leaves the window. Requests are completed, and reading threads
+started, with the drops unlocked (`drops::After`).
+`drag::android::AndroidDragSource` serves the whole clip at the start (`clip_parts`) and maps
 `ACTION_DRAG_ENDED` to `OsDragEnd` (`source_end`). Without the view, or below API 24, the
 window reports no drag source and `outgoing_drag()` `Unavailable`.
 
@@ -4688,8 +4710,9 @@ view reports of its editor (`EditorState`) is the view's own vocabulary. A pen t
 reads is offered to `InputMethod::pen_down`; stylus handwriting has not run on a device (the
 S21 has no S Pen).
 
-`android_ime_adapter` (`src/text/android/ime/tests.rs`) and `android_drag_mapping` (beside
-`drag::android::clip`) pin the pure halves in Linux CI, with the Android rows of
+`android_ime_adapter` (`src/text/android/ime/tests.rs`), `android_drag_mapping` (beside
+`drag::android::clip`) and `android_drop_state` (beside `drag::android::drops`) pin the pure
+halves in Linux CI, with the Android rows of
 `backend_conformance` and `input_capabilities_contracts`. A run on a device
 covered the JNI half: a drag started there dropped on its own window, and the default
 keyboard composed, committed, passed Escape on while composing and sent its action key.

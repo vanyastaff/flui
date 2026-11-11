@@ -1,3 +1,5 @@
+#![expect(deprecated, reason = "ADR-0305: pins the old raster lane's Send supertrait until the window runners move to `RasterExecutor` and it goes")]
+
 //! Pins ADR-0045 decision 1's `RasterBackend: Send` supertrait: a backend
 //! whose fields make it `!Send` must fail to implement `RasterBackend` at
 //! the `impl` site itself, not merely fail later at a

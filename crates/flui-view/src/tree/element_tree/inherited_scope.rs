@@ -9,11 +9,29 @@ use flui_foundation::ElementId;
 use super::ElementTree;
 use crate::view::ElementBase;
 
+/// The providers in scope at a node: published type → providing element.
+///
+/// Shared down the tree: an element that publishes nothing holds its parent's
+/// map, so only a provider allocates. The empty scope holds no map at all, so
+/// a node outside every provider costs no allocation either.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct InheritedScope(Option<Arc<HashMap<TypeId, ElementId>>>);
+
+impl InheritedScope {
+    /// No provider in scope.
+    pub(crate) const EMPTY: Self = Self(None);
+
+    /// The provider of `type_id` in scope, if any.
+    pub(super) fn get(&self, type_id: TypeId) -> Option<ElementId> {
+        self.0.as_ref()?.get(&type_id).copied()
+    }
+}
+
 /// Compute a node's inherited scope from its parent's.
 ///
-/// An element that publishes nothing returns the parent map unchanged
-/// (`Arc::clone` — refcount bump, no allocation); a provider returns
-/// `parent_map + (type → id)` for each type it publishes, so the nearest
+/// An element that publishes nothing returns the parent scope unchanged (a
+/// refcount bump at most, no allocation); a provider returns
+/// `parent + (type → id)` for each type it publishes, so the nearest
 /// provider of a type shadows. Average/worst case O(k) where k = providers in
 /// scope (only at provider nodes; tiny in practice).
 ///
@@ -21,19 +39,19 @@ use crate::view::ElementBase;
 /// Its own reads go through [`ElementTree::enclosing_provider`], which skips
 /// it.
 pub(super) fn compute_inherited_scope(
-    parent_map: &Arc<HashMap<TypeId, ElementId>>,
+    parent: &InheritedScope,
     element: &dyn ElementBase,
     id: ElementId,
-) -> Arc<HashMap<TypeId, ElementId>> {
+) -> InheritedScope {
     let Some(provider) = element.as_inherited() else {
-        return Arc::clone(parent_map);
+        return parent.clone();
     };
     let mut map: Option<HashMap<TypeId, ElementId>> = None;
     provider.provided_types(&mut |type_id| {
-        map.get_or_insert_with(|| (**parent_map).clone())
+        map.get_or_insert_with(|| parent.0.as_deref().cloned().unwrap_or_default())
             .insert(type_id, id);
     });
-    map.map_or_else(|| Arc::clone(parent_map), Arc::new)
+    map.map_or_else(|| parent.clone(), |map| InheritedScope(Some(Arc::new(map))))
 }
 
 impl ElementTree {
@@ -64,10 +82,10 @@ impl ElementTree {
         let Some(node) = self.get(id) else {
             return Vec::new();
         };
-        let parent_map = node.parent.and_then(|parent| self.get(parent)).map_or_else(
-            || Arc::new(HashMap::new()),
-            |parent| Arc::clone(&parent.inherited),
-        );
+        let parent_map = node
+            .parent
+            .and_then(|parent| self.get(parent))
+            .map_or_else(|| InheritedScope::EMPTY, |parent| parent.inherited.clone());
         let scope = compute_inherited_scope(&parent_map, node.element(), id);
         if let Some(node) = self.get_mut(id) {
             node.inherited = scope;

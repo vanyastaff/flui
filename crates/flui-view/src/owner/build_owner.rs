@@ -18,6 +18,7 @@ use std::{
 use flui_foundation::{ElementId, RebuildReasons, RenderId, SlotSet, ViewKey};
 use flui_interaction::FocusManager;
 use flui_rendering::pipeline::DetachedRenderSubtrees;
+use rustc_hash::FxHashMap;
 
 use super::dirty_queue::{DirtyElement, DirtyQueue};
 use crate::{
@@ -351,7 +352,7 @@ pub struct BuildOwner {
     ///
     /// `pub(crate)` for the [`ElementOwner`](super::ElementOwner)
     /// split-borrow.
-    pub(crate) dirty_reasons: HashMap<ElementId, RebuildReasons>,
+    pub(crate) dirty_reasons: FxHashMap<ElementId, RebuildReasons>,
 
     /// GlobalKey registry: key hash -> element ID.
     ///
@@ -715,7 +716,7 @@ impl BuildOwner {
         let focus_manager = std::mem::ManuallyDrop::into_inner(focus_manager);
         let owner = Self {
             dirty_elements: DirtyQueue::default(),
-            dirty_reasons: HashMap::new(),
+            dirty_reasons: FxHashMap::default(),
             global_keys: GlobalKeyRegistry::new(),
             global_key_reservations: Box::new(GlobalKeyReservations::new()),
             global_key_diagnostics: Vec::new(),

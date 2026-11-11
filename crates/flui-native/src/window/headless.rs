@@ -364,6 +364,14 @@ impl host::Window<HeadlessLoop> for HeadlessHostWindow {
         // A headless window draws no frame.
         Size::new(0.0, 0.0)
     }
+
+    /// No window system, so no display.
+    fn display_connection(
+        _: &HeadlessLoop,
+        _: &HeadlessWindows,
+    ) -> std::sync::Arc<dyn flui_platform::DisplayConnection> {
+        std::sync::Arc::new(crate::display_connection::NoDisplay)
+    }
 }
 
 // ==================== Mock Implementations ====================

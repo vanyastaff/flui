@@ -17,7 +17,7 @@ order it paints; the reference for everything below the `Scene` is wgpu itself.
 Cross-crate contracts carry an ADR; crate-local shapes are recorded under
 [Mapping decisions](#mapping-decisions).
 
-[`flui_layer::Scene`]: ../flui-layer/src/scene.rs
+[`flui_layer::Scene`]: ../flui-layer/src/scene/mod.rs
 [`RasterBackend`]: src/raster.rs
 
 ---
@@ -56,7 +56,7 @@ oversized radii against the same public path commands without a shape hint.
 
 | Concern | Files | What lives there |
 |---|---|---|
-| Entry points | `renderer.rs`, `gpu_context.rs`, `headless.rs` | `Renderer` (a window's device, queue, surface, recovery); `GpuContext` (one instance, device and painter shared by every slot, ADR-0305 §1; offscreen slots today); `HeadlessRenderer` (a context with one offscreen slot, rasterising a tree to RGBA8 bytes) |
+| Entry points | `renderer.rs`, `gpu_context.rs`, `headless.rs` | `Renderer` (a window's device, queue, surface, recovery); `GpuContext` (one instance, device and painter shared by every slot, ADR-0305 §1; offscreen slots today, the raster executor's backend); `HeadlessRenderer` (a context with one offscreen slot, rasterising a tree to RGBA8 bytes) |
 | Window ownership | `window_target.rs`, `surface_lease.rs`, `adapter.rs` | The owned `'static` handle source a surface is created over; the lease that pins surface-before-target drop order; adapter/device acquisition policy |
 | Frame walk | `layer_walk.rs`, `layer_render.rs`, `layer_dispatcher.rs`, `layer_offscreen.rs`, `layer_compositor.rs` | Iterative layer traversal; per-variant lowering of `Layer`; `DrawCommand` → painter routing; offscreen layer rendering and compositing; save/restore layer state |
 | Recording | `painter/`, `batches/`, `command_ir.rs`, `state_stack.rs` | `WgpuPainter` (per-frame coordinator), `DrawBatcher` (per-primitive record methods), the Command IR they write, the transform/clip stacks |
@@ -64,9 +64,9 @@ oversized radii against the same public path commands without a shape hint.
 | Offscreen effects | `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
 | GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
-| Raster protocol | `raster.rs`, `raster_owner.rs`, `frame_timing.rs` | `RasterBackend`; the mailbox/ack channel a threaded raster lane uses (ADR-0045); frame timers |
+| Raster protocol | `raster_executor/`, `raster.rs`, `raster_owner.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6): slot ids the owner mints, the closed commands, each slot's inbox (the one lock, held only to swap values) and settlement ring, the inline turn, and `SlotBackend`, its GPU-free seam; the deprecated per-window `RasterBackend` and mailbox/ack channel (ADR-0045) the window runners use until they move to slots; frame timers |
 | Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The dirty-rect accumulator behind `render_scene`'s scissor (ADR-0061), `plan_frame` (where a frame renders), `begin_partial` (the scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
-| Test support | `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | Device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
+| Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `SlotBackend` without a GPU); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
 
 `wgsl_bindgen` generates the uniform-layout wrappers for the filter shaders
 into `OUT_DIR` from `build.rs`; each `<filter>/generated.rs` is the committed

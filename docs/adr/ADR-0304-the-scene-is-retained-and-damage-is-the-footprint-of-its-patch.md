@@ -33,8 +33,7 @@
   scene); [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (a replaced value
   is released after the owner's state commits); [ADR-0098](ADR-0098-owned-f64-geometry-values.md)
   §4 and §6 (float cache keys by canonical bits; covering bounds round outward);
-  [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the lineage counter is the exempt
-  monotonic shape)
+  [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the lineage mint is a granted `counter`)
 
 ## Context and problem statement
 
@@ -99,14 +98,17 @@ the owner but that value and a base.
 ```rust
 pub struct SceneVersion(Arc<VersionInner>);                // Clone is one reference-count increment
 pub struct SceneVersionId { lineage: Lineage, seq: NonZeroU64 }   // Copy, Eq
-pub struct SceneNodeId(GenId<SceneNodeMarker>);            // u32 slot, NonZeroU32 generation
-struct SceneNode {
-    parent: Option<SceneNodeId>,
+pub struct SceneNodeId { lineage: Lineage, key: NodeKey }  // Copy; Eq and Hash on both
+struct NodeKey(GenId<SceneNodeMarker>);                    // u32 slot, NonZeroU32 generation
+struct NodeRecord {
+    key: NodeKey,
+    parent: Option<NodeKey>,
     depth: u32,
     placement: Placement,                                  // in the parent's slot space
     content: Arc<BoundaryContent>,
     subtree_bounds: Bounds,                                // §4
 }
+pub struct SceneNode<'a> { lineage: Lineage, record: &'a NodeRecord }   // read through a version
 ```
 
 `VersionInner` keeps the nodes in a path-copying table of fanout 32, written in `flui-layer`
@@ -119,9 +121,17 @@ is shared with the version before. `SceneVersion` is `Send + Sync` by its auto t
 the layers a `SceneSnapshot` holds today, which is plain `Send + Sync` data
 (`scene_snapshot.rs:155-159`; an annotation value is `Any + Send + Sync`,
 `crates/flui-layer/src/layer/annotated_region.rs:129`), so no `unsafe impl` is added. A node id
-is minted with `new_gen(slot, generation)` (`crates/flui-foundation/src/id.rs:807-825`) and
-replaces, for every reader that keeps an id across frames, the per-frame `LayerId` and its scene
-number (`layer_tree.rs:185-197`).
+is its owner's lineage and a slot key minted with `new_gen(slot, generation)`
+(`crates/flui-foundation/src/id.rs:807-825`), and replaces, for every reader that keeps an id
+across frames, the per-frame `LayerId` and its scene number (`layer_tree.rs:185-197`). The
+lineage is part of the id because two owners mint the same slot keys (each root is slot 0 of the
+first generation) and one `GpuContext` serves every window (ADR-0305), so a cache or an inspector
+link keyed by a slot key alone would mix two scenes' nodes. Inside a version every reference (a
+node's key and parent, the table keys, the three indexes) is the bare `NodeKey`, since one version
+has one lineage; the public id is assembled from the version's lineage where the API hands one
+out, and `SceneVersion::node` answers `None` for an id of another lineage. A slot entry keeps the
+whole `SceneNodeId`, because an `Entry`'s size is set by its `Layer` variant and the id lets
+`apply` refuse a slot of another owner.
 
 §2. **Content belongs to one boundary, and a chunk to one render object.**
 
@@ -163,9 +173,9 @@ the paint queue, ADR-0062) and its recording inputs, the device pixel ratio and 
 boundary, are unchanged; otherwise it gets the next one. A composited-layer update republishes the
 boundary's content with the new effect and the same chunks. `seq` comes from the scene owner's
 `IdMint<NonZeroU64>` (`crates/flui-foundation/src/sequence.rs:118-186`), which never wraps, and
-`SceneVersionId` draws from the same mint. `Lineage(NonZeroU64)` comes from `fetch_add(1)` on a
-non-`pub` `static AtomicU64`, the monotonic counter `cargo xtask globals` exempts
-(`tools/xtask/src/globals.rs:16-20`), as `LayerLink`'s is (`crates/flui-layer/src/link.rs:40-42`).
+`SceneVersionId` draws from the same mint. `Lineage(NonZeroU64)` comes from a non-`pub`
+`static AtomicIdMint<NonZeroU64>`, because every UI thread builds scene owners; it never wraps,
+refuses with `IdExhausted` once spent, and is a `counter` grant in the `globals` of `flui-layer`.
 A new scene owner takes a new lineage, so a restarted `seq` never equals an old one, which is what
 `ContentToken` was an allocation for (`stamp.rs:23-30`); `ContentToken` and `BoundaryStamp` are
 deleted.
@@ -182,7 +192,8 @@ impl Placement {
     pub fn try_new(offset: Offset) -> Result<Placement, NonFinite>;
 }
 pub enum SceneError {
-    UnknownNode(SceneNodeId), StaleNode(SceneNodeId), RetiredInUse(SceneNodeId),
+    ForeignNode(SceneNodeId), UnknownNode(SceneNodeId), StaleNode(SceneNodeId),
+    RetiredInUse(SceneNodeId),
     TwoParents(SceneNodeId), OwnAncestor(SceneNodeId), DepthOverflow(SceneNodeId),
     VersionsExhausted,
 }
@@ -205,18 +216,21 @@ generation when it issues the id, so an id from a patch that is never applied is
 slot whose generation would overflow is retired, and running out of the 2³² slots panics with
 `BUG:`, as `scenes_painted` does for its `u64` (`paint.rs:372-377`). `apply` consumes the
 operations the writer buffered. It validates each of them against the version and the rest of
-the patch before it builds anything, and refuses an unknown or stale id, a retired node a slot
-still names, a node named by two slots, a slot that names its own ancestor (found by walking up
-from the parent, at most as many nodes as the version holds) and a depth past `u32`. `apply` runs
-no code the scene does not own; on `Err` the version and the pending log are as they were, and
-the node ids and content versions minted for the refused patch stay spent.
+the patch before it builds anything, and refuses an id of another lineage (before its slot key is
+read), an unknown or stale id, a retired node a slot still names, a node named by two slots, a
+slot that names its own ancestor (found by walking up from the parent, at most as many nodes as
+the version holds) and a depth past `u32`. `apply` runs no code the scene does not own and hashes
+nothing: its working sets are slot-indexed, kept by the owner and cleared per patch. A republished
+content costs the slots it gains or loses, since a child named before and after keeps its parent
+unwritten. On `Err` the version and the pending log are as they were, and the node ids and content
+versions minted for the refused patch stay spent.
 
 A node stores its parent and depth, so the common ancestor of a leader and a follower is found by
 depth in O(depth), not by id order (`layer_tree.rs:305-326`). A node attached under a new parent has
-the depths below it recomputed, counted as `scene_depth_updates`. The link index changes on
-`Publish` (the old content's link layers leave, the new content's enter) and on `Retire`, and on
-nothing else; an unattached node's links resolve to nothing. Two leaders on one link resolve to the
-one published last, and a debug build asserts, as `LayerTree::push` does today
+the depths below it recomputed, counted as `scene_depth_updates`. The indexes change on a
+`Publish` whose link, texture or filter entries differ from the old content's (the old ones leave,
+the new ones enter) and on `Retire`, and on nothing else; an unattached node's links resolve to nothing. Two leaders on one link resolve to the
+one indexed last, and a debug build asserts, as `LayerTree::push` does today
 (`layer_tree.rs:226-234`). `flui_layer::resolve_follower_transform` takes the version and the
 follower's address (node and entry) and keeps ADR-0276's rule.
 
@@ -339,10 +353,11 @@ publication's base is `acked` and its damage is the union of the log: `Full(Firs
 base, `Full(SurfaceChanged)` when the log spans two surface keys. A seventeenth entry folds the two
 oldest into one (the union of their damage, the newer id), counted as `pending_log_folds`: the
 damage stays relative to the same base and only over-reports, so a long raster stall costs a larger
-region, never a lost one. `renew` takes a new lineage, empties the version and the log, advances
-the generation of every slot, so no node id of the old lineage is valid in the new one, and makes
-the next publication `Full(Resync(reason))`. Raster-side state keyed by a node carries the
-version's lineage with it.
+region, never a lost one. `renew` takes a new lineage and empties the version, the slots and the
+log; every node id of the old lineage is refused as `ForeignNode`, and `renew` makes
+the next publication `Full(Resync(reason))`. Raster-side state and inspector links keyed by a
+node are keyed by its `SceneNodeId` (with the `ContentVersion` where a recording matters), which
+carries the lineage, so no separate lineage pair is kept.
 
 `SceneSnapshot` carries `base` and `scene: SceneVersion` (`scene_snapshot.rs:172-180`). It still
 moves by value; what it shares with the owner is immutable, and its doc's "ownership transfer, not
@@ -478,18 +493,19 @@ consecutive versions. The patch damage must cover the diff damage.
   nothing (§7), where ADR-0068 §3 repainted the whole tree.
 - Neutral, because the inspector's layer link (`Link::Layer`,
   `crates/flui-layer/src/inspect.rs:144-152`) compares scene numbers today and names a node by
-  `(Lineage, SceneNodeId)` instead, so a link into an old lineage resolves to nothing.
+  its `SceneNodeId` instead, whose lineage makes a link into an old lineage resolve to nothing.
 
 ### Confirmation
 
 - Compiler: `DamageRegion`, `FullReason` and `ResyncReason` are exhaustive and matched without a
   wildcard; `SceneOp` carries `SceneNodeId`, never an index; a placement exists only through
   `Placement::try_new`.
-- Gates: `cargo xtask globals` passes with `Lineage`'s counter in the exempt shape;
+- Gates: `cargo xtask globals` passes with the lineage mint under its `counter` grant;
   `cargo xtask send-impls` lists no new `unsafe impl`; no author-written `Send` or `Sync` bound is
   added, so `cargo xtask send-positions` is unchanged.
 - `flui-layer` (`tests/main.rs` modules, to be added): the `scene_apply_contract` table
   (`a_slot_naming_its_own_ancestor_is_refused`, `a_stale_generation_is_refused`,
+  `a_node_of_another_owner_is_refused`,
   `a_node_named_by_two_slots_is_refused`, `a_refused_patch_leaves_the_version_and_log_unchanged`,
   `a_place_damages_the_subtree_under_both_placements`,
   `an_effect_chain_change_damages_every_slot_under_it`,
