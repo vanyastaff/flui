@@ -852,3 +852,89 @@ pub(crate) fn raw_button_writes_its_states_to_the_controller() {
         "a controller keeps no state of a button that is gone"
     );
 }
+
+/// Paints from the states a control writes, and repaints when they change.
+#[derive(Debug)]
+struct StateReader {
+    states: WidgetStatesController,
+    painted: Rc<RefCell<Vec<WidgetStates>>>,
+}
+
+impl flui_rendering::delegates::CustomPainter for StateReader {
+    fn paint(&self, _canvas: &mut flui_painting::Canvas, _size: flui_foundation::geometry::Size) {
+        self.painted.borrow_mut().push(self.states.value());
+    }
+
+    fn should_repaint(&self, _old: &dyn flui_rendering::delegates::CustomPainter) -> bool {
+        false
+    }
+
+    fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
+        Some(Rc::new(self.states.clone()))
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// A reader that takes a control's states at paint follows a hover with no
+/// build (ADR-0322 §3): the hover rebuilds no element, lays out no node and
+/// paints the reader's repaint boundary alone, where the reader sees `Hovered`.
+///
+/// Red-check: drop `StateReader::repaint` (nothing paints), or have the
+/// button's node rebuild on a hover (an element builds).
+pub(crate) fn hover_repaints_without_rebuilding() {
+    use std::time::Duration;
+
+    use flui_rendering::pipeline::PipelineOwner;
+
+    let states = WidgetStatesController::default();
+    let painted = Rc::new(RefCell::new(Vec::<WidgetStates>::new()));
+    let reader = StateReader {
+        states: states.clone(),
+        painted: Rc::clone(&painted),
+    };
+    let mut app = lay_out(
+        Column::new((
+            RawButton::new(
+                flui_widgets::RepaintBoundary::new().child(
+                    flui_widgets::CustomPaint::new()
+                        .size(flui_foundation::geometry::Size::new(120.0, 60.0))
+                        .painter(reader),
+                ),
+            )
+            .states_controller(states.clone())
+            .on_press(|_cx: &mut EventCx<'_>| {}),
+            Text::new("A neighbour"),
+        )),
+        loose(400.0),
+    );
+    app.pump_for(Duration::ZERO);
+    painted.borrow_mut().clear();
+    let before = app.pipeline_owner().with(PipelineOwner::counters);
+
+    app.dispatch_pointer_hover(20.0, 20.0);
+    app.pump_for(Duration::ZERO);
+
+    let work = app
+        .pipeline_owner()
+        .with(PipelineOwner::counters)
+        .since(before);
+    let built = app.with_build_owner_mut(|owner| owner.last_frame_build_report());
+    assert_eq!(states.value(), WidgetStates::HOVERED);
+    assert_eq!(
+        *painted.borrow(),
+        [WidgetStates::HOVERED],
+        "the reader paints once, from the state the hover wrote"
+    );
+    assert_eq!(
+        built.elements_built, 0,
+        "a hover builds nothing: {built:#?}"
+    );
+    assert_eq!(work.nodes_laid_out, 0, "{work:#?}");
+    assert_eq!(
+        work.nodes_painted, 2,
+        "the reader and its repaint boundary paint, the button and its neighbour do not: {work:#?}"
+    );
+}

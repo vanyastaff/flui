@@ -388,8 +388,9 @@ render object or already owns the element the value comes from.
   disable during a contact and an action notifier that fires with no rebuild. The pointer and
   action rows of a control that keeps its callback while disabled are the node's `switch_tests`
   (`crates/flui-widgets/src/interaction/node.rs`).
-- `hover_repaints_without_rebuilding`: a hover over a control with a paint-time state reader
-  rebuilds zero elements and paints one render object.
+- `hover_repaints_without_rebuilding`: a hover over a control whose child reads the controller at
+  paint (a `CustomPainter` that returns it from `repaint`) builds no element, lays out no node and
+  paints the reader's repaint boundary alone.
 - `crates/flui-view/tests/provided_values.rs`: `provided_value_change_notifies_like_inherited_element`,
   `provided_value_follows_a_moved_subtree` and `provided_value_unmount_releases_dependents` run one
   table over an inherited view, a stateless view that publishes and a state that publishes;

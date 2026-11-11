@@ -988,6 +988,7 @@ fn semantics_translation_and_routing() {
             ("raw_button::raw_button_a11y_tree_matches_wrappers", crate::raw_button::raw_button_a11y_tree_matches_wrappers),
             ("raw_button::disabled_raw_button_is_disabled_in_every_part", crate::raw_button::disabled_raw_button_is_disabled_in_every_part),
             ("raw_button::raw_button_writes_its_states_to_the_controller", crate::raw_button::raw_button_writes_its_states_to_the_controller),
+            ("raw_button::hover_repaints_without_rebuilding", crate::raw_button::hover_repaints_without_rebuilding),
         ],
     );
 }
