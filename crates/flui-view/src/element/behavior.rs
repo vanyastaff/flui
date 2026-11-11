@@ -664,14 +664,14 @@ where
 /// runs there, from the element's current view, right before `init_state`.
 /// A parent that updates the element before its first build therefore needs
 /// no replay of `did_update_view`: the state is made from the newest view.
+/// A panic in `create_state` or `init_state` drops the half-made state, so
+/// the retry creates it again from the view the element holds then.
 #[derive(Debug)]
 pub struct StatefulBehavior<V: StatefulView> {
-    /// The persistent state for this element, `None` until the first build
-    /// creates it.
+    /// The persistent state for this element: `None` until `create_state`
+    /// and `init_state` have both returned. A state without them receives no
+    /// other lifecycle hook.
     state: Option<V::State>,
-    /// `init_state` returned. A state whose `init_state` never ran or
-    /// panicked receives no other lifecycle hook.
-    initialized: bool,
     /// The view or the dependencies changed since `ViewState::apply_view`
     /// last ran; the next build calls it first.
     apply_pending: bool,
@@ -682,7 +682,6 @@ impl<V: StatefulView> StatefulBehavior<V> {
     pub fn new() -> Self {
         Self {
             state: None,
-            initialized: false,
             apply_pending: true,
         }
     }
@@ -748,33 +747,36 @@ where
         // `create_state` and `init_state` exactly once even if the element is
         // clean. Both run from the element's current view, so an update that
         // reached the element before this build is already in the state.
-        if !self.initialized {
+        if self.state.is_none() {
             let sink_start = lifecycle_sink_len(owner);
             let lifecycle_ctx = ctx_choice.as_lifecycle_ctx();
             let view = core.view();
-            let state = &mut self.state;
+            // A state whose `init_state` panics unwinds out of the closure and
+            // is dropped there: the element keeps no half-made state.
             #[expect(
                 clippy::disallowed_methods,
                 reason = "ADR-0287: a state's create_state or init_state panic is recorded and the element recovers"
             )]
             let init = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let mut state = view.create_state(lifecycle_ctx);
+                state.init_state(lifecycle_ctx);
                 state
-                    .get_or_insert_with(|| view.create_state(lifecycle_ctx))
-                    .init_state(lifecycle_ctx);
             }));
             mark_lifecycle_records(owner, sink_start);
-            if let Err(payload) = init {
-                owner.record_armed_lifecycle_panic(
-                    core.self_id(),
-                    core.creation_site(),
-                    TypeId::of::<V>(),
-                    LifecycleHook::InitState,
-                    payload.as_ref(),
-                    "initializing StatefulElement",
-                );
-                std::panic::resume_unwind(payload);
+            match init {
+                Ok(state) => self.state = Some(state),
+                Err(payload) => {
+                    owner.record_armed_lifecycle_panic(
+                        core.self_id(),
+                        core.creation_site(),
+                        TypeId::of::<V>(),
+                        LifecycleHook::InitState,
+                        payload.as_ref(),
+                        "initializing StatefulElement",
+                    );
+                    std::panic::resume_unwind(payload);
+                }
             }
-            self.initialized = true;
         }
 
         if !super::behavior_commons::should_build_with_trace(core, "StatefulBehavior") {
@@ -827,7 +829,7 @@ where
     /// there cannot escape `finalize_tree` and abort the rest of the
     /// per-presentation frame.
     ///
-    /// # The `initialized` gate
+    /// # The state gate
     ///
     /// FLUI's split mount/build means `init_state` does not run synchronously
     /// at mount, so a state whose `init_state` never ran — it panicked, or the
@@ -835,9 +837,9 @@ where
     /// it — has never acquired whatever `dispose` would release, so `dispose`
     /// must not run for it either. What `create_state` acquired (signals,
     /// capability handles) is element-owned or dropped with the state.
-    /// `self.initialized` is set `true` only after `init_state` *returns*
-    /// (see `build_into_views` above), so a panicking `init_state` leaves
-    /// it `false` and this guard holds.
+    /// The element holds a state only once `init_state` *returned* (see
+    /// `build_into_views` above): a panicking `create_state` or `init_state`
+    /// leaves it `None`, and this guard holds.
     ///
     /// # Containment
     ///
@@ -856,7 +858,7 @@ where
     /// `dispose` panicked, rather than leaving every later element in the
     /// finalize pass un-unmounted.
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        if !self.initialized {
+        if self.state.is_none() {
             return;
         }
         #[expect(
@@ -881,7 +883,7 @@ where
     /// Run `ViewState::activate` under the same containment shape as
     /// [`Self::on_unmount`]/[`Self::on_deactivate`].
     ///
-    /// # The `initialized` gate
+    /// # The state gate
     ///
     /// Symmetric with `dispose`/`deactivate`: a state whose `init_state`
     /// never ran has nothing to resume either.
@@ -901,7 +903,7 @@ where
     /// does not arm the handoff, so its panic propagates without being
     /// reported as recovered.
     fn on_activate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        if !self.initialized {
+        if self.state.is_none() {
             return;
         }
         #[expect(
@@ -939,7 +941,7 @@ where
     /// would skip that flip on a panic and hand a same-frame `GlobalKey`
     /// retake an element still reporting `Active`.
     fn on_deactivate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        if !self.initialized {
+        if self.state.is_none() {
             return;
         }
         #[expect(
@@ -970,9 +972,9 @@ where
         // A parent can rebuild this element between its mount and its first
         // build (`create_state` and `init_state` run in the build drain, not
         // at mount). The first build creates the state from the newest view,
-        // so an uninitialized state has no older view to be told about.
+        // so an element with no state yet has no older view to tell it about.
         self.apply_pending = true;
-        if !self.initialized {
+        if self.state.is_none() {
             return;
         }
         // `core.view()` is already the freshly-swapped-in configuration here.

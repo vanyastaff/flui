@@ -90,6 +90,7 @@ struct HookOrderView {
 }
 
 struct HookOrderState {
+    config: &'static str,
     log: HookLog,
 }
 
@@ -102,6 +103,7 @@ impl StatefulView for HookOrderView {
             .expect("the hook log is never poisoned")
             .push(format!("create {}", self.config));
         HookOrderState {
+            config: self.config,
             log: Arc::clone(&self.log),
         }
     }
@@ -113,6 +115,10 @@ impl ViewState<HookOrderView> for HookOrderState {
             .lock()
             .expect("the hook log is never poisoned")
             .push("init".to_owned());
+        assert_ne!(
+            self.config, "fails",
+            "the fixture's init_state fails for this view"
+        );
     }
 
     fn apply_view(&mut self, view: &HookOrderView, _ctx: &dyn BuildContext) {
@@ -178,6 +184,42 @@ pub(crate) fn an_update_before_the_first_build_creates_the_state_from_the_newest
             .map(String::as_str),
         Some("update c -> d"),
         "an initialized state is updated at once"
+    );
+}
+
+/// A panic in `init_state` leaves the element without a state. An update that
+/// arrives before the retry is not lost: the retry creates the state from the
+/// newest view, as the first build would have.
+pub(crate) fn a_retry_after_a_failed_init_state_creates_the_state_from_the_newest_view() {
+    let log = HookLog::default();
+    let view = |config| HookOrderView {
+        config,
+        log: Arc::clone(&log),
+    };
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+    let root = tree.mount_root(&view("fails"), &mut owner.element_owner_mut());
+
+    owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
+    let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owner.build_scope(&mut tree);
+    }));
+    if let Err(payload) = first {
+        flui_foundation::panic::discard_payload(payload);
+    }
+    assert_eq!(
+        *log.lock().expect("the hook log is never poisoned"),
+        ["create fails", "init"],
+        "the first build created the state and its init_state failed"
+    );
+
+    tree.update(root, &view("b"), &mut owner.element_owner_mut());
+    owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
+    assert_eq!(
+        *log.lock().expect("the hook log is never poisoned"),
+        ["create fails", "init", "create b", "init", "apply_view b"],
+        "the retry creates the state from the newest view instead of reusing the failed one"
     );
 }
 

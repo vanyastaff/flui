@@ -85,7 +85,7 @@ fn main() -> Result<(), LaunchError> {
 }
 ```
 
-A stateless view is `#[derive(Clone, StatelessView)]` plus `impl StatelessView for T { fn build(&self, ctx: &dyn BuildContext) -> impl IntoView }`; a stateful one names its state with `impl StatefulView for T { type State = S; fn create_state(&self) -> S }` and implements `ViewState<T>` on `S`. Inherited data is published with `InheritedView` and read with `ctx.depend_on::<T>()`. The compiler error for a missing impl names the exact derive or impl to write.
+A stateless view is `#[derive(Clone, StatelessView)]` plus `impl StatelessView for T { fn build(&self, ctx: &dyn BuildContext) -> impl IntoView }`; a stateful one names its state with `impl StatefulView for T { type State = S; fn create_state(&self, ctx: &dyn LifecycleContext) -> S }`, creating the state's signals there with `ctx.signal(..)`, and implements `ViewState<T>` on `S`. Inherited data is published with `InheritedView` and read with `ctx.depend_on::<T>()`. The compiler error for a missing impl names the exact derive or impl to write.
 
 ## For contributors and agents
 

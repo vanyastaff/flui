@@ -741,4 +741,77 @@ mod seed_tests {
             drop(state);
         }
     }
+
+    /// A route whose copy fails for the second route of a stack, and counts
+    /// the destruction of the copies made before it.
+    struct CloneFails {
+        second: bool,
+        copied: bool,
+        copies_dropped: Arc<AtomicUsize>,
+    }
+
+    impl Clone for CloneFails {
+        fn clone(&self) -> Self {
+            assert!(!self.second, "second route clone failure");
+            Self {
+                second: false,
+                copied: true,
+                copies_dropped: Arc::clone(&self.copies_dropped),
+            }
+        }
+    }
+
+    impl Drop for CloneFails {
+        fn drop(&mut self) {
+            if self.copied {
+                self.copies_dropped.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    impl PartialEq for CloneFails {
+        fn eq(&self, other: &Self) -> bool {
+            self.second == other.second
+        }
+    }
+
+    impl Routable for CloneFails {
+        fn to_path(&self) -> RoutePath {
+            RoutePath::root()
+        }
+
+        fn from_path(path: &RoutePath) -> Result<Self, RouteParseError> {
+            Err(RouteParseError::NoMatch { path: path.clone() })
+        }
+    }
+
+    child_test! {
+        /// A copy of the initial stack that fails while the state is made
+        /// destroys the copies made before it (ADR-0281), and the router
+        /// keeps its own stack.
+        fn state_construction_destroys_the_copies_before_a_failing_clone() {
+            let copies_dropped = Arc::new(AtomicUsize::new(0));
+            let route = |second| CloneFails {
+                second,
+                copied: false,
+                copies_dropped: Arc::clone(&copies_dropped),
+            };
+            let mut router = Router::new(route(false), |_, _| crate::Text::new("page").boxed());
+            router.initial.push(route(true));
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                drop(RouterState::new(&router));
+            }))
+            .expect_err("the second route's copy fails");
+            assert_eq!(
+                flui_foundation::panic::payload_text(failure.as_ref()),
+                Some("second route clone failure")
+            );
+            assert_eq!(
+                copies_dropped.load(Ordering::SeqCst),
+                1,
+                "the copy made before the failing clone is destroyed by its unwind"
+            );
+            assert_eq!(router.initial.len(), 2, "the router keeps its own stack");
+        }
+    }
 }

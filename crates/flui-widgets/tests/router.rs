@@ -743,7 +743,7 @@ fn router_observer_failure_and_terminal_retirement() {
             "terminal-modal-cycle" => terminal_seeded_modal_releases_its_factories(),
             "terminal-modal-alias" => terminal_modal_aliases_remain_usable_until_last_release(),
             "terminal-mounted-router" => terminal_mounted_router_retires_accepted_values(),
-            "router-parser" | "router-clone" | "router-state-clone" => {
+            "router-parser" | "router-clone" => {
                 terminal_router_construction_matrix(&case);
             }
             "page-healthy" | "page-result" | "page-factory" | "page-incoming" => {
@@ -772,7 +772,6 @@ fn router_observer_failure_and_terminal_retirement() {
             "terminal-mounted-router",
             "router-parser",
             "router-clone",
-            "router-state-clone",
             "page-healthy",
             "page-result",
             "page-factory",
@@ -1208,21 +1207,16 @@ fn terminal_router_construction_matrix(case: &str) {
         let router =
             Router::<CloneRoute>::from_location("/clone", |_, _| Text::new("page").boxed())
                 .expect("known path");
-        if case == "router-clone" {
-            let failure =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(router.clone())))
-                    .expect_err("second route clone fails");
-            drop(router);
-            assert_eq!(
-                flui_foundation::panic::payload_text(failure.as_ref()),
-                Some("first route clone failure")
-            );
-        } else {
-            // The state's copy of the initial stack is made at the first
-            // build, from the mounted router; the build failure is contained
-            // and the element replaced.
-            drop(mount(router));
-        }
+        // The state's copy of the initial stack is pinned by the router's
+        // `state_construction_destroys_the_copies_before_a_failing_clone`.
+        let failure =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(router.clone())))
+                .expect_err("second route clone fails");
+        drop(router);
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("first route clone failure")
+        );
         assert_eq!(
             COPIES_DROPPED.get(),
             1,

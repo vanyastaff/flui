@@ -65,8 +65,9 @@ pub trait StatefulView: Clone + 'static + Sized {
     /// state never holds an `Option` that `init_state` fills in. `init_state`
     /// stays, for work that needs the created state.
     ///
-    /// A panic here is recorded like a panic in `init_state`, and the next
-    /// build of the element calls `create_state` again.
+    /// A panic here or in `init_state` is recorded as an `init_state` panic
+    /// and drops the state: the next build calls `create_state` again, from
+    /// the view the element holds then.
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State;
 }
 
