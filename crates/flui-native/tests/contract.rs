@@ -5101,6 +5101,25 @@ mod native_windows {
             return;
         };
         let hwnd = hwnd_of(&window);
+        // Away from the screen's edge, so the point beside the window is on
+        // the desktop wherever the system first placed it.
+        // SAFETY: the fixture's live owner-thread HWND; only its position changes.
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                None,
+                200,
+                200,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        }
+        .expect("move the pointer target away from the screen edge");
+        for _ in 0..25 {
+            pump_pointer_thread();
+            std::thread::sleep(Duration::from_millis(2));
+        }
         let screen = |x: i32, y: i32| {
             let mut point = POINT { x, y };
             // SAFETY: the live shown owner window and an initialized point.

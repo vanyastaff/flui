@@ -167,6 +167,9 @@ struct InputWindow {
     message_clock: raw::MessageClock,
     /// Whether the mouse is over its client area.
     hovered: Cell<bool>,
+    /// The system id of the pointer frame last delivered whole: each other
+    /// pointer's message of that frame delivers nothing.
+    delivered_frame: Cell<Option<u32>>,
     /// The keyboard modifiers its last key message carried.
     modifiers: Cell<Modifiers>,
     /// Its pointer contacts and devices.
@@ -214,6 +217,7 @@ impl InputWindow {
             )),
             message_clock,
             hovered: Cell::new(false),
+            delivered_frame: Cell::new(None),
             modifiers: Cell::new(Modifiers::NONE),
             touchpad: direct_manipulation::TouchpadSlot::default(),
             pending_high_surrogate: Cell::new(None),
@@ -456,6 +460,7 @@ impl InputWindows {
         unsafe {
             let answer = match msg {
                 WM_MOUSEMOVE => {
+                    eprintln!("FLUI_DIAG WM_MOUSEMOVE {lparam:?}");
                     if let Some(ctx) = ctx {
                         let time = ctx.message_clock.message_time();
                         // Request WM_MOUSELEAVE notification for hover tracking
@@ -767,6 +772,7 @@ impl InputWindows {
 
                 // WM_MOUSELEAVE (0x02A3), requested by WM_MOUSEMOVE.
                 WM_MOUSELEAVE => {
+                    eprintln!("FLUI_DIAG WM_MOUSELEAVE");
                     if let Some(ctx) = ctx {
                         ctx.set_hovered(false);
                     }
@@ -958,22 +964,31 @@ impl InputWindow {
         // hover is read from the cursor once its input is delivered.
         let hover =
             (mouse && message != WM_POINTERCAPTURECHANGED).then_some(message != WM_POINTERLEAVE);
-        let members = (!mouse
-            && matches!(message, WM_POINTERDOWN | WM_POINTERUP | WM_POINTERUPDATE))
-        .then(|| raw::pointer_frame_members(raw))
-        .flatten();
+        let frame = (!mouse && matches!(message, WM_POINTERDOWN | WM_POINTERUP | WM_POINTERUPDATE))
+            .then(|| raw::pointer_frame(raw))
+            .flatten();
         // FLUI_DIAG (temporary): what each pointer message reads.
         eprintln!(
-            "FLUI_DIAG msg={message:#x} raw={raw} mouse={mouse} hover={hover:?} cell={} members={:?} raw_info={:?}",
+            "FLUI_DIAG msg={message:#x} raw={raw} mouse={mouse} hover={hover:?} cell={} frame={:?} raw_info={:?}",
             self.hovered.get(),
-            members.as_ref().map(|members| members
-                .iter()
-                .map(|m| (m.id, m.message))
-                .collect::<Vec<_>>()),
+            frame.as_ref().map(|frame| (
+                frame.id,
+                frame
+                    .members
+                    .iter()
+                    .map(|m| (m.id, m.message))
+                    .collect::<Vec<_>>()
+            )),
             raw::diag_info(raw),
         );
-        let inputs = if let Some(members) = members {
-            let contacts = members.iter().map(|member| {
+        if let Some(frame) = &frame
+            && self.delivered_frame.replace(Some(frame.id)) == Some(frame.id)
+        {
+            // Another pointer's message of a frame delivered whole already.
+            return;
+        }
+        let inputs = if let Some(frame) = frame {
+            let contacts = frame.members.iter().map(|member| {
                 raw::frame_member_input(
                     hwnd,
                     member,
@@ -982,9 +997,7 @@ impl InputWindow {
                     &self.registry,
                 )
             });
-            let frame = crate::input::assembly::framed(contacts.collect::<Vec<_>>());
-            raw::skip_frame_messages(raw);
-            frame
+            crate::input::assembly::framed(contacts.collect::<Vec<_>>())
         } else {
             raw::native_pointer_input(
                 hwnd,
@@ -1684,10 +1697,20 @@ mod raw {
         packets: Vec<PointerPacket>,
     }
 
-    /// The pointers of the frame `raw`'s message belongs to, when the frame
-    /// holds more than one, in the frame's order. The system sends one message
-    /// per pointer of a frame; the others are skipped once the frame is read
-    /// ([`skip_frame_messages`]).
+    /// A frame of several pointers, read whole: the system's id for it and
+    /// its pointers.
+    pub(super) struct NativeFrame {
+        pub(super) id: u32,
+        pub(super) members: Vec<FrameMember>,
+    }
+
+    /// The frame `raw`'s message belongs to, when the frame holds more than
+    /// one pointer, its pointers in the frame's order. The system sends one
+    /// message per pointer of a frame, and the window delivers the frame on the
+    /// first and nothing on the others, by its id. The others are retrieved,
+    /// not skipped: `SkipPointerFrameMessages` left the system holding back the
+    /// next frame of the pointers whose messages it discarded, so a lift of
+    /// two touches never arrived (the first nightly run on windows-latest).
     ///
     /// Every reading comes from the frame's own history
     /// (`GetPointerFrame*InfoHistory`, one row per entry and one column per
@@ -1695,7 +1718,7 @@ mod raw {
     /// answer for the message last retrieved for that pointer, which for a
     /// pointer other than `raw` is its previous frame: its press read again
     /// in place of its move.
-    pub(super) fn pointer_frame_members(raw: u32) -> Option<Vec<FrameMember>> {
+    pub(super) fn pointer_frame(raw: u32) -> Option<NativeFrame> {
         use windows::Win32::UI::{
             Input::Pointer::{
                 GetPointerFrameInfoHistory, GetPointerFramePenInfoHistory,
@@ -1807,7 +1830,11 @@ mod raw {
                     packets,
                 })
             })
-            .collect()
+            .collect::<Option<Vec<FrameMember>>>()
+            .map(|members| NativeFrame {
+                id: info.frameId,
+                members,
+            })
     }
 
     /// Read a frame's history of up to `entries` rows of `pointers` columns:
@@ -1886,22 +1913,6 @@ mod raw {
         )
     }
 
-    /// The frame `raw` belongs to was read whole: the system sends no message
-    /// for its other pointers.
-    pub(super) fn skip_frame_messages(raw: u32) {
-        use windows::Win32::UI::Input::Pointer::SkipPointerFrameMessages;
-        // FLUI_DIAG (temporary): a run that leaves the frame's other messages.
-        if std::env::var_os("FLUI_DIAG_NO_SKIP").is_some() {
-            eprintln!("FLUI_DIAG   skip disabled");
-            return;
-        }
-        // SAFETY: only the id of the message being handled is passed; a refused
-        // call leaves the other messages to arrive, each a frame of its own.
-        if unsafe { SkipPointerFrameMessages(raw) }.is_err() {
-            tracing::warn!(raw, "pointer frame messages could not be skipped");
-        }
-    }
-
     /// Whether the `WM_POINTER` id `raw` is the mouse's. A stale or invented id
     /// is not.
     pub(super) fn is_mouse_pointer(raw: u32) -> bool {
@@ -1946,7 +1957,7 @@ mod raw {
     }
 
     /// The input of one pointer of a frame read whole
-    /// ([`pointer_frame_members`]).
+    /// ([`pointer_frame`]).
     pub(super) fn frame_member_input(
         hwnd: HWND,
         member: &FrameMember,

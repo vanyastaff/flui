@@ -42,7 +42,7 @@ jobs:
       - name: Build
         run: cargo test -p flui-native --locked --no-run --lib --test platform_it
       - name: TSF rows
-        if: false
+        if: ${{ !cancelled() }}
         run: cargo test -p flui-native --locked --lib -- --exact text::windows::tsf::tests::the_text_services_answer_a_completion_for_its_store --nocapture
       - name: Window rows
         if: ${{ !cancelled() }}
@@ -54,9 +54,6 @@ jobs:
             echo "::endgroup::"
           done
           exit $status
-      - name: Touch frame row without frame skipping
+      - name: Whole window contract, as the nightly runs it
         if: ${{ !cancelled() }}
-        env:
-          FLUI_DIAG_NO_SKIP: "1"
-          FLUI_NATIVE_WINDOW_CONTRACT_CHILD: two_injected_touches_arrive_as_one_pointer_frame
-        run: cargo test -p flui-native --locked --test platform_it -- --exact contract::test_window_lifecycle_contract --nocapture
+        run: cargo test -p flui-native --locked --test platform_it -- --exact contract::test_window_lifecycle_contract
