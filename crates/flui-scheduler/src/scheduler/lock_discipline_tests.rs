@@ -253,42 +253,32 @@ fn transient_callback_runs_with_no_scheduler_lock_held() {
 /// lock-discipline test, while `notify_frame_completion` is exactly where a
 /// lock-across-`wake()` regression would land.
 fn completion_waker_runs_with_no_scheduler_lock_held() {
+    use flui_foundation::testing::CountingWaker;
+
     thread_local! {
         #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static PROBE: RefCell<Option<WeakUpdateScheduler>> = const { RefCell::new(None) };
     }
-    struct ProbingWaker {
-        owner_thread: std::thread::ThreadId,
-        ran: Arc<AtomicBool>,
-    }
-
-    impl std::task::Wake for ProbingWaker {
-        fn wake(self: Arc<Self>) {
-            self.wake_by_ref();
-        }
-
-        fn wake_by_ref(self: &Arc<Self>) {
-            assert_eq!(self.owner_thread, std::thread::current().id());
-            let probe = PROBE
-                .with(|slot| {
-                    slot.borrow()
-                        .as_ref()
-                        .and_then(WeakUpdateScheduler::upgrade)
-                })
-                .expect("live owner probe");
-            assert_no_scheduler_lock_held(&probe);
-            self.ran.store(true, Ordering::Release);
-        }
-    }
-
     let scheduler = UpdateScheduler::new();
     PROBE.with(|slot| *slot.borrow_mut() = Some(scheduler.downgrade()));
     let ran = Arc::new(AtomicBool::new(false));
     let mut future = scheduler.end_of_frame();
-    let waker = Waker::from(Arc::new(ProbingWaker {
-        owner_thread: std::thread::current().id(),
-        ran: Arc::clone(&ran),
-    }));
+    let owner_thread = std::thread::current().id();
+    let ran_in_wake = Arc::clone(&ran);
+    let waker = CountingWaker::calling(move || {
+        assert_eq!(owner_thread, std::thread::current().id());
+        let probe = PROBE
+            .with(|slot| {
+                slot.borrow()
+                    .as_ref()
+                    .and_then(WeakUpdateScheduler::upgrade)
+            })
+            .expect("live owner probe");
+        assert_no_scheduler_lock_held(&probe);
+        ran_in_wake.store(true, Ordering::Release);
+    })
+    .shared()
+    .waker();
     let mut cx = Context::from_waker(&waker);
     assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
 

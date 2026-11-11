@@ -4,9 +4,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 use std::time::Instant;
 
+use flui_foundation::testing::CountingWaker;
 use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{FrameCompletionFuture, FrameOutcome, IdleDeadline, UpdateScheduler};
 
@@ -32,19 +33,14 @@ fn bombs(count: usize, drops: &Arc<AtomicUsize>) -> Vec<Bomb> {
         })
         .collect()
 }
-struct Probe {
-    calls: Arc<AtomicUsize>,
-    action: Box<dyn Fn() + Send + Sync>,
-    _captures: Vec<Bomb>,
-}
-impl Wake for Probe {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.calls.fetch_add(1, Ordering::Relaxed);
-        (self.action)();
-    }
+/// A waker that counts into `calls`, runs `action`, and keeps `captures` until it is
+/// dropped.
+fn probe(
+    calls: &Arc<CountingWaker>,
+    action: impl Fn() + Send + Sync + 'static,
+    captures: Vec<Bomb>,
+) -> Waker {
+    calls.retiring_waker(action, captures)
 }
 fn register(future: &mut FrameCompletionFuture, waker: &Waker) {
     assert!(
@@ -99,8 +95,8 @@ fn delivery(case: &str) {
     let mut later = scheduler.end_of_frame();
     let mut last = scheduler.end_of_frame();
     let drops = Arc::new(AtomicUsize::new(0));
-    let first_calls = Arc::new(AtomicUsize::new(0));
-    let tail_calls = Arc::new(AtomicUsize::new(0));
+    let first_calls = CountingWaker::new().shared();
+    let tail_calls = CountingWaker::new().shared();
     let retirement = case == "ordinary retirement";
     let preserve = case == "pipeline preserves successful envelope"
         || case == "post-frame preserves successful envelope";
@@ -114,36 +110,32 @@ fn delivery(case: &str) {
     } else {
         0
     };
-    let first_waker = Waker::from(Arc::new(Probe {
-        calls: Arc::clone(&first_calls),
-        action: Box::new(move || {
+    let first_waker = probe(
+        &first_calls,
+        move || {
             assert!(retirement || preserve, "wake primary");
-        }),
-        _captures: bombs(first_captures, &drops),
-    }));
+        },
+        bombs(first_captures, &drops),
+    );
     register(&mut first, &first_waker);
     drop(first_waker);
     let secondary_drops = Arc::new(AtomicUsize::new(0));
     let competition = case == "competing wake failure";
-    let tail_waker = Waker::from(Arc::new(Probe {
-        calls: Arc::clone(&tail_calls),
-        action: Box::new(move || {
+    let tail_waker = probe(
+        &tail_calls,
+        move || {
             assert!(!competition, "competing wake");
-        }),
-        _captures: if case == "later successful envelope" {
+        },
+        if case == "later successful envelope" {
             bombs(2, &secondary_drops)
         } else {
             Vec::new()
         },
-    }));
+    );
     register(&mut later, &tail_waker);
     drop(tail_waker);
-    let last_calls = Arc::new(AtomicUsize::new(0));
-    let last_waker = Waker::from(Arc::new(Probe {
-        calls: Arc::clone(&last_calls),
-        action: Box::new(|| {}),
-        _captures: Vec::new(),
-    }));
+    let last_calls = CountingWaker::new().shared();
+    let last_waker = probe(&last_calls, || {}, Vec::new());
     register(&mut last, &last_waker);
     drop(last_waker);
     if case == "post-frame preserves successful envelope" {
@@ -209,14 +201,14 @@ fn delivery(case: &str) {
             },
         );
     }
-    assert_eq!(first_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(first_calls.count(), 1);
     assert_eq!(
-        tail_calls.load(Ordering::Relaxed),
+        tail_calls.count(),
         1,
         "a failed wake must not starve the tail"
     );
     assert_eq!(
-        last_calls.load(Ordering::Relaxed),
+        last_calls.count(),
         1,
         "competing failures must not starve the final waiter"
     );
@@ -267,16 +259,15 @@ fn pending_cancellation_during_unwind() {
     let scheduler = UpdateScheduler::new();
     let drops = Arc::new(AtomicUsize::new(0));
     let mut future = scheduler.end_of_frame();
-    let waker = Waker::from(Arc::new(Probe {
-        calls: Arc::new(AtomicUsize::new(0)),
-        action: Box::new(|| {}),
-        _captures: (0..2)
+    let waker = CountingWaker::new().shared().retiring_waker(
+        || {},
+        (0..2)
             .map(|_| Bomb {
                 drops: Arc::clone(&drops),
                 armed: false,
             })
-            .collect(),
-    }));
+            .collect::<Vec<_>>(),
+    );
     register(&mut future, &waker);
     drop(waker);
     assert_failure(

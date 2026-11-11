@@ -262,28 +262,14 @@ impl Drop for PanicsOnDrop {
 
 /// Counts its wakes, and panics on each when told to, with a payload that
 /// panics again when dropped.
-struct CountingWaker {
-    wakes: std::sync::atomic::AtomicUsize,
-    panics: bool,
-}
-
-impl std::task::Wake for CountingWaker {
-    fn wake(self: std::sync::Arc<Self>) {
-        self.wake_by_ref();
+fn counting_waker(panics: bool) -> std::sync::Arc<flui_foundation::testing::CountingWaker> {
+    use flui_foundation::testing::CountingWaker;
+    if panics {
+        CountingWaker::calling(|| std::panic::panic_any(PanicsOnDrop))
+    } else {
+        CountingWaker::new()
     }
-    fn wake_by_ref(self: &std::sync::Arc<Self>) {
-        self.wakes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if self.panics {
-            std::panic::panic_any(PanicsOnDrop);
-        }
-    }
-}
-
-fn counting_waker(panics: bool) -> std::sync::Arc<CountingWaker> {
-    std::sync::Arc::new(CountingWaker {
-        wakes: std::sync::atomic::AtomicUsize::new(0),
-        panics,
-    })
+    .shared()
 }
 
 /// A held request keeps only the waker of its last poll, and lets it go
@@ -351,11 +337,7 @@ fn a_release_wakes_every_held_request_past_a_panicking_waker() {
     // Its destructor panics: destroyed under containment, as `release` does
     // with the later ones.
     flui_foundation::panic::discard_payload(first);
-    assert_eq!(
-        waker.wakes.load(std::sync::atomic::Ordering::SeqCst),
-        3,
-        "every held request is woken"
-    );
+    assert_eq!(waker.count(), 3, "every held request is woken");
     drop(requests);
 }
 
@@ -641,19 +623,17 @@ fn no_room_leads_here() {
     drop(extra);
 }
 
-/// Panics on its first wake only.
-struct PanicsOnFirstWake(std::sync::atomic::AtomicBool);
-
-impl std::task::Wake for PanicsOnFirstWake {
-    fn wake(self: std::sync::Arc<Self>) {
-        self.wake_by_ref();
-    }
-    fn wake_by_ref(self: &std::sync::Arc<Self>) {
+/// A waker that panics on its first wake only.
+fn panics_on_first_wake() -> std::task::Waker {
+    let woken = std::sync::atomic::AtomicBool::new(false);
+    flui_foundation::testing::CountingWaker::calling(move || {
         assert!(
-            self.0.swap(true, std::sync::atomic::Ordering::SeqCst),
+            woken.swap(true, std::sync::atomic::Ordering::SeqCst),
             "a subscriber's waker panicked"
         );
-    }
+    })
+    .shared()
+    .waker()
 }
 
 /// The run is parked with no room on the lanes, and the waker of a
@@ -671,9 +651,7 @@ fn a_panicking_waker_leaves_the_rest_told() {
         nth_url(LOAD_SLOTS),
         LoadServices::new().with_http(http.handle()),
     );
-    let waker = std::task::Waker::from(std::sync::Arc::new(PanicsOnFirstWake(
-        std::sync::atomic::AtomicBool::new(false),
-    )));
+    let waker = panics_on_first_wake();
     assert!(
         std::pin::Pin::new(&mut panicking)
             .poll(&mut std::task::Context::from_waker(&waker))
@@ -716,9 +694,7 @@ fn a_panicking_waker_keeps_its_outcome() {
     http.respond(URL, ScriptedResponse::Fail(HttpError::Timeout));
     let lead = registry.load_network_image(URL, lanes.services().with_http(http.handle()));
     let mut panicking = registry.load_network_image(URL, lanes.services().with_http(http.handle()));
-    let waker = std::task::Waker::from(std::sync::Arc::new(PanicsOnFirstWake(
-        std::sync::atomic::AtomicBool::new(false),
-    )));
+    let waker = panics_on_first_wake();
     assert!(
         std::pin::Pin::new(&mut panicking)
             .poll(&mut std::task::Context::from_waker(&waker))

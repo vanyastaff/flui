@@ -10,10 +10,11 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use flui_assets::LoadServices;
+use flui_foundation::testing::CountingWaker;
 use flui_platform::executor::{ComputeJob, Executor, IoFuture, Lane, RoomFuture, SpawnError};
 use parking_lot::Mutex;
 
@@ -23,18 +24,11 @@ const BLOCK_ON_BUDGET: Duration = Duration::from_secs(10);
 /// Polls `future` on this thread, parked between wakes, with no ambient
 /// async runtime: an [`ImageLoad`](flui_assets::ImageLoad) needs none.
 pub fn block_on<F: Future>(future: F) -> F::Output {
-    struct ThreadWaker(std::thread::Thread);
-    impl Wake for ThreadWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-        fn wake_by_ref(self: &Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
     let mut future = std::pin::pin!(future);
-    let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
+    let thread = std::thread::current();
+    let waker = CountingWaker::calling(move || thread.unpark())
+        .shared()
+        .waker();
     let mut cx = Context::from_waker(&waker);
     let deadline = Instant::now() + BLOCK_ON_BUDGET;
     loop {
@@ -157,18 +151,6 @@ impl Refusals {
     }
 }
 
-/// Records that a queued future asked to be polled again.
-struct Flag(AtomicBool);
-
-impl Wake for Flag {
-    fn wake(self: Arc<Self>) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-}
-
 impl QueuedLanes {
     pub fn new() -> Arc<Self> {
         Arc::default()
@@ -258,8 +240,11 @@ impl QueuedLanes {
     }
 
     fn run(&self, compute: bool) {
-        let flag = Arc::new(Flag(AtomicBool::new(true)));
-        let waker = Waker::from(Arc::clone(&flag));
+        // A queued future asked to be polled again when the count moved; the first pass
+        // polls regardless.
+        let wakes = CountingWaker::new().shared();
+        let waker = wakes.waker();
+        let mut seen = None;
         let mut cx = Context::from_waker(&waker);
         loop {
             let mut ran = false;
@@ -271,7 +256,9 @@ impl QueuedLanes {
                     ran = true;
                 }
             }
-            let woken = flag.0.swap(false, Ordering::SeqCst);
+            let count = wakes.count();
+            let woken = seen != Some(count);
+            seen = Some(count);
             if self.fresh.swap(false, Ordering::SeqCst) || woken {
                 // Polled outside the queue's lock: a future may spawn.
                 let mut futures = std::mem::take(&mut *self.io.lock());
