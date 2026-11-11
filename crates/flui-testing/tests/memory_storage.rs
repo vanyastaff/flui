@@ -114,9 +114,7 @@ fn competing_waker_panics_keep_the_first_and_wake_the_rest() {
     let storage = MemoryStorage::new();
     storage.put(&NOTES, "old");
     let held = storage.hold_copies();
-    let first_waker = CountingWaker::calling(|| panic!("the first waiting copy's waker panics"))
-        .shared()
-        .waker();
+    let first_waker = panicking_waker("the first waiting copy's waker panics");
     let second_waker = panicking_waker("the second waiting copy's waker panics");
     let woken = CountingWaker::new().shared();
     let third_waker = woken.waker();

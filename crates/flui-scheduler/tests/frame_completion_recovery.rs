@@ -34,21 +34,13 @@ fn bombs(count: usize, drops: &Arc<AtomicUsize>) -> Vec<Bomb> {
         .collect()
 }
 /// A waker that counts into `calls`, runs `action`, and keeps `captures` until it is
-/// dropped. The count is a waker of its own, so a test reads it after the captures'
-/// destructors ran.
+/// dropped.
 fn probe(
     calls: &Arc<CountingWaker>,
     action: impl Fn() + Send + Sync + 'static,
     captures: Vec<Bomb>,
 ) -> Waker {
-    let count = calls.waker();
-    CountingWaker::calling(move || {
-        count.wake_by_ref();
-        action();
-    })
-    .holding(captures)
-    .shared()
-    .waker()
+    calls.retiring_waker(action, captures)
 }
 fn register(future: &mut FrameCompletionFuture, waker: &Waker) {
     assert!(
@@ -267,17 +259,15 @@ fn pending_cancellation_during_unwind() {
     let scheduler = UpdateScheduler::new();
     let drops = Arc::new(AtomicUsize::new(0));
     let mut future = scheduler.end_of_frame();
-    let waker = CountingWaker::new()
-        .holding(
-            (0..2)
-                .map(|_| Bomb {
-                    drops: Arc::clone(&drops),
-                    armed: false,
-                })
-                .collect::<Vec<_>>(),
-        )
-        .shared()
-        .waker();
+    let waker = CountingWaker::new().shared().retiring_waker(
+        || {},
+        (0..2)
+            .map(|_| Bomb {
+                drops: Arc::clone(&drops),
+                armed: false,
+            })
+            .collect::<Vec<_>>(),
+    );
     register(&mut future, &waker);
     drop(waker);
     assert_failure(

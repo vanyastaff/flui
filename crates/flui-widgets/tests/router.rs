@@ -1044,9 +1044,8 @@ fn terminal_route_record_destroys_pending_waker() {
     let wake = TerminalResult::new("pending waker", false);
     let wake_calls = Arc::clone(&wake.calls);
     let waker = flui_foundation::testing::CountingWaker::new()
-        .holding(wake)
         .shared()
-        .waker();
+        .retiring_waker(|| {}, wake);
     assert_eq!(
         Pin::new(&mut result).poll(&mut Context::from_waker(&waker)),
         Poll::Pending

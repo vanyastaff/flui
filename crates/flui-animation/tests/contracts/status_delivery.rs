@@ -1354,15 +1354,13 @@ fn completed_run_waiter_custody(explicit: bool) {
     let calls = CountingWaker::new().shared();
     let mut run = Box::pin(controller.forward().expect("waited run starts"));
     {
-        // The count is its own waker so the test reads it once the capturing waker is gone.
-        let count = calls.waker();
-        let waker = CountingWaker::calling(move || count.wake_by_ref())
-            .holding(Captures {
+        let waker = calls.retiring_waker(
+            || {},
+            Captures {
                 _first: DropCount(Arc::clone(&drops)),
                 _second: DropCount(Arc::clone(&drops)),
-            })
-            .shared()
-            .waker();
+            },
+        );
         assert!(matches!(
             run.as_mut().poll(&mut Context::from_waker(&waker)),
             Poll::Pending

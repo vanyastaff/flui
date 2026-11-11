@@ -15,15 +15,13 @@ impl Drop for Retired {
 }
 
 #[test]
-fn a_counting_waker_counts_each_wake_runs_its_action_and_retires_its_capture() {
+fn a_counting_waker_counts_each_wake_and_runs_its_action() {
     let actions = Arc::new(AtomicUsize::new(0));
-    let retired = Arc::new(AtomicUsize::new(0));
     let wakes = {
         let actions = Arc::clone(&actions);
         CountingWaker::calling(move || {
             actions.fetch_add(1, Ordering::SeqCst);
         })
-        .holding(Retired(Arc::clone(&retired)))
         .shared()
     };
     assert!(!wakes.was_woken());
@@ -31,22 +29,39 @@ fn a_counting_waker_counts_each_wake_runs_its_action_and_retires_its_capture() {
     waker.wake_by_ref();
     wakes.waker().wake();
     assert_eq!((wakes.count(), actions.load(Ordering::SeqCst)), (2, 2));
-    drop(waker);
-    assert_eq!(
-        retired.load(Ordering::SeqCst),
-        0,
-        "the test still shares it"
-    );
-    drop(wakes);
-    assert_eq!(retired.load(Ordering::SeqCst), 1);
 }
 
 #[test]
-fn a_panicking_waker_panics_on_every_wake() {
+fn a_retiring_waker_drops_its_captures_with_its_last_clone_and_the_count_stays_readable() {
+    let actions = Arc::new(AtomicUsize::new(0));
+    let retired = Arc::new(AtomicUsize::new(0));
+    let wakes = CountingWaker::new().shared();
+    let waker = {
+        let actions = Arc::clone(&actions);
+        wakes.retiring_waker(
+            move || {
+                actions.fetch_add(1, Ordering::SeqCst);
+            },
+            Retired(Arc::clone(&retired)),
+        )
+    };
+    let clone = waker.clone();
+    waker.wake();
+    assert_eq!(retired.load(Ordering::SeqCst), 0, "a clone is still out");
+    clone.wake_by_ref();
+    drop(clone);
+    assert_eq!(retired.load(Ordering::SeqCst), 1);
+    assert_eq!((wakes.count(), actions.load(Ordering::SeqCst)), (2, 2));
+}
+
+#[test]
+fn a_panicking_waker_panics_with_its_message_on_every_wake() {
     let waker = panicking_waker("woken");
     for _ in 0..2 {
         let mut first = FirstPanic::new();
         first.contain(|| waker.wake_by_ref());
-        assert_eq!(first.held().and_then(payload_text), Some("woken"));
+        let payload = first.held().expect("the wake panics");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"woken"));
+        assert_eq!(payload_text(payload), Some("woken"));
     }
 }

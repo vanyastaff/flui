@@ -23,14 +23,12 @@ use std::task::{Wake, Waker};
 /// A [`Wake`] that counts its wakes and can run an action on each one.
 ///
 /// A waker crosses threads, so the counter is atomic and the action is
-/// `Send + Sync`: the [`Waker`] contract requires both. The count is read with
-/// [`count`](Self::count) or [`was_woken`](Self::was_woken). A value given to
-/// [`holding`](Self::holding) is dropped with the last [`Waker`] clone, so a
-/// test observes the waker's own retirement through that value's `Drop`.
+/// `Send + Sync`: the [`Waker`] contract requires both. The test keeps the
+/// [`shared`](Self::shared) handle and reads [`count`](Self::count) or
+/// [`was_woken`](Self::was_woken) while the wakers made from it are out.
 pub struct CountingWaker {
     wakes: AtomicUsize,
     action: Option<Box<dyn Fn() + Send + Sync>>,
-    held: Option<Box<dyn Any + Send + Sync>>,
 }
 
 impl CountingWaker {
@@ -40,7 +38,6 @@ impl CountingWaker {
         Self {
             wakes: AtomicUsize::new(0),
             action: None,
-            held: None,
         }
     }
 
@@ -48,16 +45,9 @@ impl CountingWaker {
     #[must_use]
     pub fn calling(action: impl Fn() + Send + Sync + 'static) -> Self {
         Self {
+            wakes: AtomicUsize::new(0),
             action: Some(Box::new(action)),
-            ..Self::new()
         }
-    }
-
-    /// Keeps `value` until the last [`Waker`] made from this one is dropped.
-    #[must_use]
-    pub fn holding(mut self, value: impl Any + Send + Sync) -> Self {
-        self.held = Some(Box::new(value));
-        self
     }
 
     /// The shared handle a test keeps to read the count while wakers are out.
@@ -70,6 +60,24 @@ impl CountingWaker {
     #[must_use]
     pub fn waker(self: &Arc<Self>) -> Waker {
         Waker::from(Arc::clone(self))
+    }
+
+    /// A [`Waker`] with captures of its own: each wake counts into this counter, then runs
+    /// `action`, and `captures` are dropped when the last clone of the returned waker is.
+    ///
+    /// The counter outlives the waker, so a test reads the count after the captures'
+    /// destructors ran: the retirement of a waker a future replaced or dropped.
+    #[must_use]
+    pub fn retiring_waker(
+        self: &Arc<Self>,
+        action: impl Fn() + Send + Sync + 'static,
+        captures: impl Any + Send + Sync,
+    ) -> Waker {
+        Waker::from(Arc::new(RetiringWaker {
+            counter: Arc::clone(self),
+            action: Box::new(action),
+            _captures: Box::new(captures),
+        }))
     }
 
     /// How many times a [`Waker`] made from this one was woken.
@@ -96,7 +104,6 @@ impl fmt::Debug for CountingWaker {
         f.debug_struct("CountingWaker")
             .field("wakes", &self.count())
             .field("calls_action", &self.action.is_some())
-            .field("holds_value", &self.held.is_some())
             .finish()
     }
 }
@@ -114,15 +121,33 @@ impl Wake for CountingWaker {
     }
 }
 
-/// A [`Waker`] whose every wake panics with `message`: the user code a test
-/// needs to fail inside a wake call.
+/// The waker [`CountingWaker::retiring_waker`] returns.
+struct RetiringWaker {
+    counter: Arc<CountingWaker>,
+    action: Box<dyn Fn() + Send + Sync>,
+    _captures: Box<dyn Any + Send + Sync>,
+}
+
+impl Wake for RetiringWaker {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.counter.wake_by_ref();
+        (self.action)();
+    }
+}
+
+/// A [`Waker`] whose every wake panics with `message` as a `&'static str` payload: the
+/// user code a test needs to fail inside a wake call.
 ///
 /// # Panics
 ///
 /// The returned waker panics on every `wake` and `wake_by_ref`; making it does not.
 #[must_use]
 pub fn panicking_waker(message: &'static str) -> Waker {
-    CountingWaker::calling(move || panic!("{message}"))
+    CountingWaker::calling(move || std::panic::panic_any(message))
         .shared()
         .waker()
 }

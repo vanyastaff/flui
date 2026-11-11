@@ -5,7 +5,7 @@ use flui_animation::simulation::Simulation;
 use flui_animation::{Animation, AnimationController, DrivenController, MotionClock, Vsync};
 use flui_foundation::Listenable;
 use flui_foundation::panic::{FailureClass, PanicRecovery};
-use flui_foundation::testing::CountingWaker;
+use flui_foundation::testing::panicking_waker;
 use std::cell::Cell;
 use std::future::Future;
 use std::pin::Pin;
@@ -279,9 +279,7 @@ fn terminal_delivery(stage: TerminalDelivery) {
             panic!("terminal delivery");
         }),
         TerminalDelivery::Waiter => {
-            let waker = CountingWaker::calling(|| panic!("terminal delivery"))
-                .shared()
-                .waker();
+            let waker = panicking_waker("terminal delivery");
             assert_eq!(
                 Pin::new(&mut run).poll(&mut Context::from_waker(&waker)),
                 Poll::Pending

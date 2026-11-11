@@ -1470,7 +1470,7 @@ mod tests {
     }
 
     fn shutdown_settles_all_requests_when_a_receiver_waker_panics() {
-        use flui_foundation::testing::CountingWaker;
+        use flui_foundation::testing::panicking_waker;
         use std::{
             future::Future,
             pin::Pin,
@@ -1521,9 +1521,7 @@ mod tests {
                         });
                     });
                 }
-                let waker = CountingWaker::calling(|| panic!("cancelled receiver wake"))
-                    .shared()
-                    .waker();
+                let waker = panicking_waker("cancelled receiver wake");
                 assert!(matches!(
                     Pin::new(&mut requests[0]).poll(&mut Context::from_waker(&waker)),
                     Poll::Pending
@@ -1560,7 +1558,7 @@ mod tests {
     }
 
     fn receipt_wake_failure_retries_the_accepted_installation_tail() {
-        use flui_foundation::testing::CountingWaker;
+        use flui_foundation::testing::panicking_waker;
         use std::{
             future::Future,
             pin::Pin,
@@ -1618,9 +1616,7 @@ mod tests {
                     };
                     let (reply, mut request) = crate::app::WindowRequest::new();
                     if first {
-                        let waker = CountingWaker::calling(|| panic!("installed receiver wake"))
-                            .shared()
-                            .waker();
+                        let waker = panicking_waker("installed receiver wake");
                         assert!(matches!(
                             Pin::new(&mut request).poll(&mut Context::from_waker(&waker)),
                             Poll::Pending

@@ -153,23 +153,13 @@ fn waiter_failure_keeps_later_waiters_live(primary: bool, retirement: bool) {
     if primary {
         first.when_complete_or_cancel(|_| panic!("primary continuation"));
     }
-    // The test reads the count after the waker's retirement ran, so the counter is a second
-    // waker the probe forwards to: the probe itself is held by nothing but its `Waker`.
     let first_calls = CountingWaker::new().shared();
     let later_calls = CountingWaker::new().shared();
     let drops = Arc::new(AtomicUsize::new(0));
-    let first_count = first_calls.waker();
-    let probe = CountingWaker::calling(move || {
-        first_count.wake_by_ref();
-        assert!(retirement, "waker failure");
-    });
-    let first_waker = if retirement {
-        probe.holding(Bomb(Arc::clone(&drops)))
-    } else {
-        probe
-    }
-    .shared()
-    .waker();
+    let first_waker = first_calls.retiring_waker(
+        move || assert!(retirement, "waker failure"),
+        retirement.then(|| Bomb(Arc::clone(&drops))),
+    );
     let later_waker = later_calls.waker();
     register(&mut first, &first_waker);
     register(&mut later, &later_waker);
@@ -213,13 +203,8 @@ fn independent_replaced_and_dropped_waiters() {
     }
     let released = Arc::new(AtomicUsize::new(0));
     let resource = ReleasedResource(Arc::clone(&released));
-    // The resource goes with the waker the future drops; the counter is a separate waker it
-    // forwards to, so the test can read it after that waker is gone.
-    let dropped_count = dropped_calls.waker();
-    let canceled = CountingWaker::calling(move || dropped_count.wake_by_ref())
-        .holding(resource)
-        .shared()
-        .waker();
+    // The resource goes with the waker the future drops.
+    let canceled = dropped_calls.retiring_waker(|| {}, resource);
     register(&mut first, &old);
     register(&mut first, &replacement);
     register(&mut first, &replacement);
@@ -295,7 +280,7 @@ fn replaced_waker_retirement_can_reenter_registration() {
         owner_thread: std::thread::current().id(),
         calls: Arc::clone(&retired),
     };
-    let old = CountingWaker::new().holding(capture).shared().waker();
+    let old = CountingWaker::new().shared().retiring_waker(|| {}, capture);
     register(&mut future, &old);
     drop(old);
     register(&mut future, Waker::noop());

@@ -96,17 +96,9 @@ impl Drop for Bomb {
     }
 }
 /// A waker that counts into `calls`, panics when `fail`, and keeps `captures` until it is
-/// dropped. The count is a waker of its own, so a test reads it after the captures'
-/// destructors ran.
+/// dropped.
 fn executor(calls: &Arc<CountingWaker>, fail: bool, captures: Vec<Bomb>) -> Waker {
-    let count = calls.waker();
-    CountingWaker::calling(move || {
-        count.wake_by_ref();
-        assert!(!fail, "wake secondary");
-    })
-    .holding(captures)
-    .shared()
-    .waker()
+    calls.retiring_waker(move || assert!(!fail, "wake secondary"), captures)
 }
 fn clone_failure_preserves_registration() {
     let (mut request, completer) = TransferRequest::pending();

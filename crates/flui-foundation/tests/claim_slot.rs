@@ -18,21 +18,13 @@ impl Drop for Bomb {
     }
 }
 /// A waker that counts into `calls`, runs `action`, and keeps `captures` until it is
-/// dropped. The count lives in `calls`, a waker of its own, so a test reads it after this
-/// waker's captures were destroyed.
+/// dropped.
 fn executor(
     calls: &Arc<CountingWaker>,
     action: impl Fn() + Send + Sync + 'static,
     captures: Vec<Bomb>,
 ) -> Waker {
-    let count = calls.waker();
-    CountingWaker::calling(move || {
-        count.wake_by_ref();
-        action();
-    })
-    .holding(captures)
-    .shared()
-    .waker()
+    calls.retiring_waker(action, captures)
 }
 fn register<T>(handle: &mut ClaimHandle<T>, waker: &Waker) {
     assert!(
