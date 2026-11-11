@@ -562,7 +562,13 @@ fn close_filtered(
             if !geometry.is_attached(key) {
                 continue;
             }
-            if direct_closures(geometry, key, record.content(), &mut closures) {
+            if direct_closures(
+                geometry,
+                key,
+                record.content(),
+                &mut closures,
+                &mut cost.filter_input_reads,
+            ) {
                 waiting.push((geometry, version, key, geometry.subtree_reach(key)));
             }
         }
@@ -603,17 +609,25 @@ fn close_filtered(
 /// backdrop and colour filters, the chunks that read the destination, and
 /// the foreground image filters that paint transparent black. Whether it
 /// holds other foreground image filters, read once the damage reaches it.
+///
+/// Visits only the content's closure entries, each counted in `reads`: a
+/// node's ordinary chunks cost nothing here however many it holds.
 fn direct_closures(
     geometry: Geometry<'_>,
     key: NodeKey,
     content: &BoundaryContent,
     out: &mut Vec<Closure>,
+    reads: &mut u64,
 ) -> bool {
     let mut foreground = false;
-    for (position, entry) in content.entries().iter().enumerate() {
+    for &index in content.closure_entries() {
+        *reads = reads.saturating_add(1);
+        let Some(entry) = content.entries().get(index.get()) else {
+            continue;
+        };
         let at = Address {
             node: key,
-            entry: EntryIndex::at(position),
+            entry: index,
         };
         match entry {
             Entry::Effect { layer, .. } => match layer {

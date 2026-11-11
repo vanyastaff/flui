@@ -229,7 +229,8 @@ both versions. A follower under `LeaderClip::Hide` is damaged when the patch cha
 leader's branch, and so is every follower whose chains pass through it, since hidden it hides
 them. Footprints fold an effect chain from its last entry back, without recursion; a clip over
 filters with a kernel bounds their scope by the clip. A node's foreground filter inputs are read
-only once the damage meets its subtree footprint, in one fold. A surface
+only once the damage meets its subtree footprint, in one fold; until then only the content's
+closure entries are visited, never its other chunks. A surface
 change between applies is
 `Full(SurfaceChanged)`, and `renew` makes the next one `Full(Resync(_))`.
 

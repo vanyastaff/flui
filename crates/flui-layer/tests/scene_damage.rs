@@ -724,8 +724,9 @@ pub(crate) fn a_clip_over_a_shrunk_slotted_filter_keeps_its_device_kernel() {
 
 /// A filtered boundary's filter inputs are read only once the damage meets
 /// it, and then in one fold of its content: fifty nested blurs over two
-/// hundred chunks cost nothing when a node far away moves, and each
-/// version's entries once when a chunk under them changes.
+/// hundred chunks cost one visit of each filter when a node far away
+/// moves, never a pass over the chunks, and each version's entries once
+/// when a chunk under them changes.
 pub(crate) fn filter_inputs_are_read_once_the_damage_reaches_them() {
     const FILTERS: u32 = 50;
     const CHUNKS: u32 = 200;
@@ -771,16 +772,21 @@ pub(crate) fn filter_inputs_are_read_once_the_damage_reaches_them() {
     let mut writer = owner.writer();
     writer.push(place(mover, 0.0, 20.0));
     owner.apply(SURFACE).expect("the far node moves");
-    assert_eq!(owner.filter_input_reads(), reads, "damage that misses them");
+    let missed = owner.filter_input_reads() - reads;
+    assert_eq!(
+        missed,
+        2 * u64::from(FILTERS),
+        "damage that misses them visits each version's filters, not its chunks"
+    );
 
     let mut writer = owner.writer();
     let content = blurred(&mut writer, 12.0);
     writer.push(publish(filtered, content));
     owner.apply(SURFACE).expect("a chunk under the blurs grows");
     assert_eq!(
-        owner.filter_input_reads() - reads,
-        2 * u64::from(FILTERS + CHUNKS),
-        "one fold of each version"
+        owner.filter_input_reads() - reads - missed,
+        2 * u64::from(FILTERS) + 2 * u64::from(FILTERS + CHUNKS),
+        "each version's filters, then one fold of each version"
     );
 }
 

@@ -331,8 +331,9 @@ fixed point, at most 64 rounds (the cap of `frame_protocol.rs:285-299`), past wh
 `Full(Unbounded)`; damage that meets a `Closure::Unbounded` is `Full(Unbounded)`. A
 foreground image filter is read only once the region meets its node's subtree footprint, which holds
 all it writes, and then with the node's other filters in one fold of its content; a backdrop or colour
-filter and a reading chunk cost their chain. The filtered-node index
-keeps the closure at O(filtered × depth) plus one fold of each filtered node the damage reaches. The
+filter and a reading chunk cost their chain. The filtered-node index and each content's list of its
+closure entries keep the closure at O(filtered × depth), never a pass over a node's other chunks,
+plus one fold of each filtered node the damage reaches. The
 scene owner's `apply` and the raster side's texture
 damage (§9) call this function; the differ's rule (`differ.rs:480-507`) and the engine's
 (`frame_protocol.rs:215-300`) are deleted. At the fixed point every footprint the region meets lies
