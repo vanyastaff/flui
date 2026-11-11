@@ -28,10 +28,10 @@
 //! }
 //! ```
 //!
-//! The root passed to [`run_app`] implements [`view::StatelessView`]; compose
-//! stateful children beneath it when the screen owns changing state. Create
-//! signals in [`view::StatefulView::create_state`] with a [`view::LifecycleContext`],
-//! read them during `build`, and write them from event callbacks. The
+//! The root passed to [`run_app`] is any view, stateless or stateful, as
+//! Flutter's `runApp` takes any widget. Create signals in
+//! [`view::StatefulView::create_state`] with a [`view::LifecycleContext`], read
+//! them during `build`, and write them from event callbacks. The
 //! [`view::BuildContext`] deliberately does not provide lifecycle capabilities.
 //!
 //! # Application entry points
@@ -370,7 +370,7 @@ pub use flui_app::app::{AppControlError, AppHandle, AppRunError, Application, St
 /// the frame loop with an [`AppLaunch`]'s configuration and capabilities.
 /// Re-exported from [`app`] (`flui-app`).
 ///
-/// The root must implement [`view::StatelessView`]. It returns a
+/// The root is any [`view::View`], stateless or stateful. It returns a
 /// [`LaunchError`] when the capability registrations conflict or the platform
 /// cannot start; on desktop it returns after shutdown and panics on an
 /// event-loop failure. On Android it panics: use `flui::run_app_android` with

@@ -15,15 +15,6 @@
 use flui::prelude::*;
 use flui::widgets::SafeArea;
 
-#[derive(Clone, StatelessView)]
-struct CounterApp;
-
-impl StatelessView for CounterApp {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        SafeArea::new().child(CounterView)
-    }
-}
-
 #[derive(Clone, StatefulView)]
 struct CounterView;
 
@@ -45,20 +36,22 @@ impl ViewState<CounterView> for CounterState {
     fn build(&self, _view: &CounterView, ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count;
 
-        Center::new().child(
-            Column::new((
-                Text::new("You have pushed the button this many times:"),
-                SizedBox::height(16.0),
-                Text::new(count.get(ctx).to_string()),
-                SizedBox::height(16.0),
-                RawButton::new(Text::new("Increment"))
-                    .on_press(move |cx| count.update(cx, |n| *n += 1)),
-            ))
-            .main_axis_alignment(MainAxisAlignment::Center),
+        SafeArea::new().child(
+            Center::new().child(
+                Column::new((
+                    Text::new("You have pushed the button this many times:"),
+                    SizedBox::height(16.0),
+                    Text::new(count.get(ctx).to_string()),
+                    SizedBox::height(16.0),
+                    RawButton::new(Text::new("Increment"))
+                        .on_press(move |cx| count.update(cx, |n| *n += 1)),
+                ))
+                .main_axis_alignment(MainAxisAlignment::Center),
+            ),
         )
     }
 }
 
 fn main() -> Result<(), LaunchError> {
-    run_app(CounterApp, AppLaunch::new())
+    run_app(CounterView, AppLaunch::new())
 }
