@@ -1061,6 +1061,22 @@ fn scroll_physics_and_activity() {
                 crate::scroll::standard_scroll_views_scroll_themselves,
             ),
             (
+                "scroll::a_scroll_configuration_answers_what_a_scroll_view_leaves_open",
+                crate::scroll::a_scroll_configuration_answers_what_a_scroll_view_leaves_open,
+            ),
+            (
+                "scroll::the_default_scroll_behavior_follows_the_platform_convention",
+                crate::scroll::the_default_scroll_behavior_follows_the_platform_convention,
+            ),
+            (
+                "scroll::a_scroll_view_asks_its_behavior_again_only_when_it_changes",
+                crate::scroll::a_scroll_view_asks_its_behavior_again_only_when_it_changes,
+            ),
+            (
+                "scroll::scroll_physics_refuse_coefficients_outside_the_unit_range",
+                crate::scroll::scroll_physics_refuse_coefficients_outside_the_unit_range,
+            ),
+            (
                 "scroll::scrollable_drag_up_increases_scroll_offset",
                 crate::scroll::scrollable_drag_up_increases_scroll_offset,
             ),

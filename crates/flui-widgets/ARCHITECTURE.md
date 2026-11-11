@@ -1026,6 +1026,24 @@ resolved once from the configured axis, `reverse` and the ambient `Directionalit
 scrollable orients its gestures by the same value. `standard_scroll_views_scroll_themselves`
 drags and wheels each of them, forward and reversed, with no `Scrollable` of the caller's.
 
+### A scroll view asks its `ScrollBehavior` what its configuration leaves open
+
+`ScrollViewConfig` holds only what the author said: `physics` and `devices` are `None` until a
+builder sets them. `Scrollable` resolves each open setting by asking the `ScrollBehavior` of the
+nearest `ScrollConfiguration`, or `DefaultScrollBehavior` where there is none, with a
+`ScrollBehaviorDetails` of the `PlatformConvention` it is built under and its axis. The default
+behavior answers `BouncingScrollPhysics` on macOS and iOS, `ClampingScrollPhysics` elsewhere, and
+every pointer kind for drags. A `ScrollConfiguration` notifies its dependents only when its
+behavior is another `Rc`, and a scrollable keeps the physics it was answered until the behavior,
+the platform or the axis changes, so a rebuild keeps one physics and its owner
+(`a_scroll_view_asks_its_behavior_again_only_when_it_changes`). What the view names wins over the
+behavior (`a_scroll_configuration_answers_what_a_scroll_view_leaves_open`).
+
+Whether a release flings is the drag gesture's question: `DragEndDetails::fling_velocity` is zero
+below `GestureSettings::min_fling_velocity`, and the standard physics fling on any other finite
+velocity, with no threshold of their own. Their coefficients are private and checked by
+`try_new`, which refuses a value outside the open range `(0, 1)` with `ScrollPhysicsError`.
+
 ### Programmatic scroll replacement preserves the published velocity
 
 `ScrollController::animate_to` services its command through the existing owning
