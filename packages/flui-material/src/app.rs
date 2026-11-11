@@ -33,8 +33,10 @@
 //!
 //! ## Deferred (named gaps, not silent ones)
 //!
-//! - **`DefaultSelectionStyle`**, **`ScrollConfiguration`** /
-//!   `MaterialScrollBehavior` — neither widget exists in FLUI yet.
+//! - **`DefaultSelectionStyle`** — the app does not install one yet.
+//! - **`MaterialScrollBehavior`** — the app installs no `ScrollConfiguration`,
+//!   so its scroll views follow `DefaultScrollBehavior` until the Material
+//!   behavior lands with its scrollbar and overscroll indicator.
 //! - **Material hero motion** — Material spec heroes fly along an arc; FLUI
 //!   has no arc tween yet, and the `Navigator`'s auto-installed default
 //!   controller already provides (linear) flights, so no hero-controller scope
