@@ -50,24 +50,35 @@ fn append_sparse_sliver_children(
         return;
     };
 
-    let desired_membership: HashSet<_> = desired_children.iter().copied().collect();
-    let mut sparse_children = parent_node
-        .children()
-        .iter()
-        .copied()
-        .filter(|child| !desired_membership.contains(child))
-        .filter_map(|child| {
-            let child_node = render_tree.get(child)?;
-            if render_tree.parent(child) != Some(parent_render) {
-                return None;
-            }
-            let index = child_node
-                .parent_data()?
-                .downcast_ref::<SliverMultiBoxAdaptorParentData>()?
-                .index;
-            Some((index, child))
-        })
-        .collect::<Vec<_>>();
+    // A child the walk did not reach is a lazy sliver child when its parent
+    // data says so; most parents have none, so membership in the walk's own
+    // list is built only once the first such child turns up.
+    let mut desired_membership: Option<HashSet<RenderId>> = None;
+    let mut sparse_children: Vec<(usize, RenderId)> = Vec::new();
+    for &child in parent_node.children() {
+        let Some(child_node) = render_tree.get(child) else {
+            continue;
+        };
+        if render_tree.parent(child) != Some(parent_render) {
+            continue;
+        }
+        let Some(index) = child_node
+            .parent_data()
+            .and_then(|data| data.downcast_ref::<SliverMultiBoxAdaptorParentData>())
+            .map(|data| data.index)
+        else {
+            continue;
+        };
+        let desired = desired_membership.get_or_insert_with(|| {
+            desired_children
+                .iter()
+                .copied()
+                .collect::<HashSet<RenderId>>()
+        });
+        if !desired.contains(&child) {
+            sparse_children.push((index, child));
+        }
+    }
 
     sparse_children.sort_by_key(|&(index, child)| (index, child));
     desired_children.extend(sparse_children.into_iter().map(|(_, child)| child));
