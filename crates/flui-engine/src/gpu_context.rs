@@ -1222,4 +1222,35 @@ mod tests {
             .expect("the retry configures the surface");
         assert_eq!(size(&window), Some((64, 32)));
     }
+
+    /// A latency change reconfigures the swapchain, which may hold none of
+    /// the pixels shown, so the next frame of an unchanged scene repaints in
+    /// full instead of skipping.
+    ///
+    /// Red-check: drop the `surface_changed` from `WindowSlot::set_latency`
+    /// and the unchanged frame is skipped.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_latency_change_repaints_the_next_frame() {
+        use std::sync::Arc;
+
+        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+
+        let (context, factory) = noop_context();
+        let surface = factory
+            .create(Arc::new(crate::testing::FakeWindow::new(7)))
+            .expect("the no-op backend makes a surface for any window");
+        let mut window = WindowSlot::configured_without_capabilities(
+            surface,
+            (32, 16),
+            ScriptedAcquire::Timeout,
+        );
+        window.settle_presented();
+        assert!(!window.owes_a_frame(), "a presented slot owes nothing");
+        window.set_latency(&context.gpu(), crate::FrameLatency::Low);
+        assert!(
+            window.owes_a_frame(),
+            "the reconfigured swapchain is repainted"
+        );
+    }
 }

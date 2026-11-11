@@ -269,10 +269,13 @@ impl WindowSlot {
             surface.configure(gpu.device, &config);
             self.recovery.configured();
         }
-        // Committed once the surface took it, as a resize is.
+        // Committed once the surface took it, as a resize is. A reconfigured
+        // swapchain may hold none of the pixels shown, so the next frame
+        // repaints in full, as after a resize.
         if let Some(configured) = self.configured.as_mut() {
             configured.config = config;
         }
+        self.frame.surface_changed();
     }
 
     /// The working format and size the painter renders the next frame in;
@@ -484,5 +487,19 @@ impl SurfaceAcquireBackend for Acquire<'_, '_> {
 
     fn recovery(&mut self) -> &mut SurfaceRecovery {
         &mut self.slot.recovery
+    }
+}
+
+#[cfg(all(test, feature = "testing"))]
+impl WindowSlot {
+    /// Pay the damage owed, as a presented frame does.
+    pub(crate) fn settle_presented(&mut self) {
+        let _plan = self.frame.plan(self.uses_intermediate());
+        self.frame.presented();
+    }
+
+    /// Whether the next frame of an unchanged scene would render.
+    pub(crate) fn owes_a_frame(&mut self) -> bool {
+        self.frame.plan(self.uses_intermediate()) != crate::damage::FramePlan::Skip
     }
 }
