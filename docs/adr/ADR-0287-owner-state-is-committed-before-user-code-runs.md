@@ -172,7 +172,13 @@ its own `catch_unwind` inside the queued call.
 
 `SelectionArea` already contains its fan-out with `FirstPanic` and has no hand-written
 `catch_unwind` left. Its state is spread over the separate cells of its model, so `commit` reaches
-it only once that model is one cell. The next seams are the owners with the most `ADR-0287:`
+it only once that model is one cell.
+
+The UI runtime's owner, its runtimes and the application runner carry their first failure in
+`FirstPanic` and contain each host hook, retirement and observer through `FirstPanic::contain`;
+the hand-written folds they had are deleted. Their remaining catches are boundaries that report
+or resume one payload (the owner turn of ADR-0258, the runner's terminal slot) and a site whose
+`Ok` value decides what runs next. The next seams are the owners with the most `ADR-0287:`
 expectations.
 
 ## More information

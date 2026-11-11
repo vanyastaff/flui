@@ -4,7 +4,7 @@ use super::UiRuntime;
 use crate::presentation::PresentationState;
 use crate::renderer_binding::RenderingBinding;
 use flui_animation::Vsync;
-use flui_foundation::PresentationId;
+use flui_foundation::{PresentationId, panic::FirstPanic};
 use flui_rendering::binding::RendererBinding as _;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -488,31 +488,18 @@ impl UiRuntime {
         if !self.set_pipeline_device_pixel_ratio_for(id, device_pixel_ratio) {
             return false;
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: gesture context refresh runs contained so the first failure is kept"
-        )]
-        let mut first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Each step runs contained so the first failure is kept.
+        let mut first = FirstPanic::new();
+        first.contain(|| {
             self.refresh_gesture_context_for(id);
-        }))
-        .err();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: media query publication runs contained so the first failure is kept"
-        )]
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        });
+        first.contain(|| {
             if let Some(source) = self.media_query_for(id) {
                 source.update(|data| data.device_pixel_ratio = device_pixel_ratio);
             }
-        }))
-        .err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first,
-            failure,
-            "pixel ratio publication",
-        );
-        if let Some(failure) = first {
-            std::panic::resume_unwind(failure);
+        });
+        if let Some(payload) = first.into_payload() {
+            std::panic::resume_unwind(payload);
         }
         true
     }

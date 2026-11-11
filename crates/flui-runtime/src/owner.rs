@@ -6,14 +6,14 @@
 
 use std::cell::{RefCell, RefMut};
 use std::collections::VecDeque;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
 use std::rc::{Rc, Weak};
 
 use flui_foundation::{PresentationAddress, PresentationId, UiRuntimeId};
 
-use crate::lifecycle_state::preserve_first_lifecycle_panic;
 use crate::presentation::{PresentationState, PresentationWindow};
 use crate::ui_runtime::{PresentationFactory, UiRuntime};
+use flui_foundation::panic::FirstPanic;
 
 mod callback;
 mod close;
@@ -54,7 +54,7 @@ impl Drop for OwnerCore {
     fn drop(&mut self) {
         let entries = std::mem::take(&mut self.state.get_mut().runtimes);
         let queued = std::mem::take(&mut self.state.get_mut().queue);
-        let mut first_failure = None;
+        let mut first_failure = FirstPanic::new();
         retire_queued(queued, &mut first_failure);
         for entry in entries {
             retire_entry(entry, &mut first_failure);
@@ -62,7 +62,7 @@ impl Drop for OwnerCore {
         for retired in self.retired.get_mut().drain(..) {
             retire_value(retired, &mut first_failure);
         }
-        finish_retirement(first_failure);
+        first_failure.resume();
     }
 }
 
@@ -112,8 +112,6 @@ enum RetiredRuntime {
     Runtime(Box<UiRuntime>),
 }
 
-type Failure = Option<Box<dyn std::any::Any + Send>>;
-
 /// Whether mandatory host cleanup must preserve an already active failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecoveryState {
@@ -127,8 +125,8 @@ pub enum RecoveryState {
 impl RecoveryState {
     /// An incoming unwind is a held failure: it decides only that optional
     /// callbacks are skipped, never that a value goes undestroyed.
-    fn current(failure: &Failure) -> Self {
-        if failure.is_some() || std::thread::panicking() {
+    fn current(failure: &FirstPanic) -> Self {
+        if failure.is_held() || std::thread::panicking() {
             Self::PreservingFailure
         } else {
             Self::Healthy
@@ -142,62 +140,38 @@ enum OwnerWork {
     StopRuntimes,
 }
 
-fn retire_queued(queued: VecDeque<OwnerWork>, first_failure: &mut Failure) {
+fn retire_queued(queued: VecDeque<OwnerWork>, first_failure: &mut FirstPanic) {
     for work in queued {
         retire_work(work, first_failure);
     }
 }
 
-fn retire_work(work: OwnerWork, first_failure: &mut Failure) {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: queued work's drop runs contained so retirement completes"
-    )]
-    let failure = catch_unwind(AssertUnwindSafe(|| drop(work))).err();
-    preserve_first_lifecycle_panic(first_failure, failure, "queued owner work retirement");
+fn retire_work(work: OwnerWork, first_failure: &mut FirstPanic) {
+    // A queued work item's drop runs contained so retirement completes.
+    first_failure.contain(|| drop(work));
 }
 
-fn retire_value(retired: RetiredRuntime, first_failure: &mut Failure) {
+fn retire_value(retired: RetiredRuntime, first_failure: &mut FirstPanic) {
     match retired {
         RetiredRuntime::Entry(entry) => retire_entry(entry, first_failure),
         RetiredRuntime::Runtime(runtime) => retire_runtime(runtime, first_failure),
     }
 }
 
-fn retire_runtime(runtime: Box<UiRuntime>, first_failure: &mut Failure) {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a runtime's drop runs contained so retirement completes"
-    )]
-    let failure = catch_unwind(AssertUnwindSafe(|| drop(runtime))).err();
-    preserve_first_lifecycle_panic(first_failure, failure, "owner runtime retirement");
+fn retire_runtime(runtime: Box<UiRuntime>, first_failure: &mut FirstPanic) {
+    first_failure.contain(|| drop(runtime));
 }
 
 fn retire_entry(
     RuntimeEntry {
         residence, factory, ..
     }: RuntimeEntry,
-    first_failure: &mut Failure,
+    first_failure: &mut FirstPanic,
 ) {
     if let Residence::Resident(runtime) = residence {
         retire_runtime(runtime, first_failure);
     }
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a factory's drop runs contained so retirement completes"
-    )]
-    let failure = catch_unwind(AssertUnwindSafe(|| drop(factory))).err();
-    preserve_first_lifecycle_panic(first_failure, failure, "assembly capability retirement");
-}
-
-fn finish_retirement(first_failure: Failure) {
-    if let Some(failure) = first_failure {
-        if std::thread::panicking() {
-            flui_foundation::panic::discard_payload(failure);
-        } else {
-            resume_unwind(failure);
-        }
-    }
+    first_failure.contain(|| drop(factory));
 }
 
 enum InstallPayload {
@@ -239,19 +213,16 @@ impl PreparedInstall {
 
 impl Drop for PreparedInstall {
     fn drop(&mut self) {
-        let mut first_failure = None;
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a presentation's drop runs contained so the first failure is kept"
-        )]
+        let mut first_failure = FirstPanic::new();
         match self.payload.take() {
             Some(InstallPayload::Runtime(entry)) => retire_entry(*entry, &mut first_failure),
             Some(InstallPayload::Presentation { presentation, .. }) => {
-                first_failure = catch_unwind(AssertUnwindSafe(|| drop(presentation))).err();
+                // A presentation's drop runs contained so the first failure is kept.
+                first_failure.contain(|| drop(presentation));
             }
             None => {}
         }
-        finish_retirement(first_failure);
+        first_failure.resume();
     }
 }
 

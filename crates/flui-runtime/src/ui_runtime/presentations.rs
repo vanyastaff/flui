@@ -2,12 +2,12 @@
 
 use super::UiRuntime;
 use crate::presentation::{PresentationState, PresentationWindow};
-use flui_foundation::PresentationId;
+use flui_foundation::{PresentationId, panic::FirstPanic};
 #[cfg(any(test, feature = "testing"))]
 use flui_interaction::FocusManager;
 use flui_interaction::GestureBinding;
 use flui_view::__runtime::GlobalKeyRegistryComposite;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::panic::resume_unwind;
 #[cfg(any(test, feature = "testing"))]
 use std::rc::Rc;
 
@@ -233,15 +233,11 @@ impl UiRuntime {
     /// With the first panic of a start or of a refusal's observer, once every
     /// session was started or sent back to its window.
     pub fn enter_pending_os_drags(&self) {
-        let mut first = None;
+        let mut first = FirstPanic::new();
         let refused = start_os_drags(self.take_os_drag_starts(), &mut first);
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: drag refusals are told contained so the first failure is kept"
-        )]
-        let told = catch_unwind(AssertUnwindSafe(|| self.os_drags_refused(refused))).err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(&mut first, told, "OS drag refusal");
-        if let Some(payload) = first {
+        // Drag refusals are told contained so the first failure is kept.
+        first.contain(|| self.os_drags_refused(refused));
+        if let Some(payload) = first.into_payload() {
             resume_unwind(payload);
         }
     }
@@ -282,20 +278,14 @@ impl UiRuntime {
         // Each refusal tells its source's observer; one that panics leaves the
         // rest told, and the first failure is the one that propagates.
         self.enter(|ui_runtime| {
-            let mut first = None;
+            let mut first = FirstPanic::new();
             for (key, error) in refused {
-                #[expect(clippy::disallowed_methods, reason = "ADR-0287: a drag refusal receiver runs contained so the others are told")]
-                let failure = catch_unwind(AssertUnwindSafe(|| {
+                // A drag refusal receiver runs contained so the others are told.
+                first.contain(|| {
                     ui_runtime.drag.os_drag_refused(key, error);
-                }))
-                .err();
-                crate::lifecycle_state::preserve_first_lifecycle_panic(
-                    &mut first,
-                    failure,
-                    "drag escalation refusal",
-                );
+                });
             }
-            if let Some(payload) = first {
+            if let Some(payload) = first.into_payload() {
                 resume_unwind(payload);
             }
         });
@@ -765,22 +755,23 @@ impl UiRuntime {
     /// returns — not nested inside it, so there is no borrow conflict and
     /// no need to give `PresentationForest` interior mutability.
     pub fn close_presentation_entered(&mut self, id: PresentationId) -> bool {
-        self.close_presentation_after_failure(id, None)
+        self.close_presentation_after_failure(id, FirstPanic::new())
     }
 
     pub(crate) fn close_presentation_after_failure(
         &mut self,
         id: PresentationId,
-        failure: Option<Box<dyn std::any::Any + Send>>,
+        failure: FirstPanic,
     ) -> bool {
         if self.presentations.get(id).is_none() {
-            if let Some(failure) = failure {
-                resume_unwind(failure);
+            if let Some(payload) = failure.into_payload() {
+                resume_unwind(payload);
             }
             return false;
         }
-        #[expect(clippy::disallowed_methods, reason = "ADR-0287: stopping a presentation runs contained so the first failure is kept")]
-        let mut first_panic = catch_unwind(AssertUnwindSafe(|| {
+        // Stopping a presentation runs contained so the first failure is kept.
+        let mut first_panic = FirstPanic::new();
+        first_panic.contain(|| {
             self.enter(|ui_runtime| {
                 if ui_runtime.focus_coordinator.active() == id
                     && let Some(surviving) = ui_runtime.primary_id_excluding(id)
@@ -791,76 +782,31 @@ impl UiRuntime {
                 // tree still stands. A receiver that panics does not keep the
                 // presentation from stopping; an earlier failure stays first.
                 let mut failure = failure;
-                #[expect(clippy::disallowed_methods, reason = "ADR-0287: a drag receiver's panic must not keep the presentation from stopping")]
-                let detached = catch_unwind(AssertUnwindSafe(|| {
+                failure.contain(|| {
                     ui_runtime.drag.detach_presentation(id);
-                }))
-                .err();
-                crate::lifecycle_state::preserve_first_lifecycle_panic(
-                    &mut failure,
-                    detached,
-                    "drag withdrawal",
-                );
+                });
                 ui_runtime.stop_presentation_after_failure(id, failure);
             });
-        }))
-        .err();
+        });
         // Membership removal must complete even when an observer or disposer panics.
         let removed = self.presentations.remove(id);
-        if first_panic.is_some()
+        if first_panic.is_held()
             && let Some(presentation) = &removed
         {
-            // A close that already owes a failure omits optional callbacks.
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a removed presentation's close runs contained so cleanup continues"
-            )]
-            let failure = catch_unwind(AssertUnwindSafe(|| {
+            // A close that already owes a failure omits optional callbacks, and
+            // runs contained so cleanup continues.
+            first_panic.contain(|| {
                 presentation
                     .close_with_mode(flui_interaction::__runtime::CloseMode::PreservingFailure);
-            }))
-            .err();
-            crate::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first_panic,
-                failure,
-                "removed presentation withdrawal",
-            );
+            });
         }
         // The removed presentation is destroyed under containment, after a
         // failure too; the first failure stays the one resumed (ADR-0281 §3).
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the removed presentation's drop runs contained after a failure too"
-        )]
-        let failure = catch_unwind(AssertUnwindSafe(|| drop(removed))).err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first_panic,
-            failure,
-            "removed presentation cleanup",
-        );
+        first_panic.contain(|| drop(removed));
         // The agents' recordings started on it end with their `end` rows.
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first_panic,
-            self.end_agent_recordings_of(id),
-            "agent recording end",
-        );
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: window lifecycle sync runs contained so the first failure is kept"
-        )]
-        let failure = catch_unwind(AssertUnwindSafe(|| self.synchronize_window_lifecycle())).err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first_panic,
-            failure,
-            "surviving presentation lifecycle",
-        );
-        if let Some(payload) = first_panic {
-            if std::thread::panicking() {
-                flui_foundation::panic::discard_payload(payload);
-            } else {
-                resume_unwind(payload);
-            }
-        }
+        first_panic.absorb(self.end_agent_recordings_of(id));
+        first_panic.contain(|| self.synchronize_window_lifecycle());
+        first_panic.resume();
         true
     }
 }
@@ -884,29 +830,21 @@ pub(crate) type OsDragRefusal = (
 /// run.
 pub(crate) fn start_os_drags(
     entries: Vec<OsDragEntry>,
-    first: &mut Option<Box<dyn std::any::Any + Send>>,
+    first: &mut FirstPanic,
 ) -> Vec<OsDragRefusal> {
     let mut refused = Vec::new();
     for OsDragEntry { source, pending } in entries {
         let key = pending.key();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: an OS drag start runs contained; a failure refuses only that drag"
-        )]
-        match catch_unwind(AssertUnwindSafe(|| pending.start(source.as_deref()))) {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => refused.push((key, error)),
-            Err(failure) => {
+        // An OS drag start runs contained; a failure refuses only that drag.
+        match first.contain(|| pending.start(source.as_deref())) {
+            Some(Ok(())) => {}
+            Some(Err(error)) => refused.push((key, error)),
+            None => {
                 // The start never answered: the drag goes back to its window,
                 // and a later one may start.
                 let not_now =
                     flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable);
                 refused.push((key, not_now.into()));
-                crate::lifecycle_state::preserve_first_lifecycle_panic(
-                    first,
-                    Some(failure),
-                    "OS drag start",
-                );
             }
         }
     }
