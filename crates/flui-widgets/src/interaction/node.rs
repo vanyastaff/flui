@@ -54,6 +54,8 @@ use crate::{Listener, Semantics};
 #[derive(Clone)]
 pub(crate) struct InteractiveNode {
     behavior: HitTestBehavior,
+    /// The one switch of ADR-0322 §2.
+    enabled: bool,
     on_tap: Option<EventCallback>,
     focus: Option<FocusConfig>,
     focus_ring: bool,
@@ -67,6 +69,7 @@ impl std::fmt::Debug for InteractiveNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InteractiveNode")
             .field("behavior", &self.behavior)
+            .field("enabled", &self.enabled)
             .field("on_tap", &self.on_tap.is_some())
             .field("focus", &self.focus.is_some())
             .field("actions", &self.actions.len())
@@ -81,6 +84,7 @@ impl InteractiveNode {
     pub(crate) fn new(child: BoxedView) -> Self {
         Self {
             behavior: HitTestBehavior::DeferToChild,
+            enabled: true,
             on_tap: None,
             focus: None,
             focus_ring: false,
@@ -95,6 +99,50 @@ impl InteractiveNode {
     pub(crate) fn behavior(mut self, behavior: HitTestBehavior) -> Self {
         self.behavior = behavior;
         self
+    }
+
+    /// Whether the control is enabled: the only switch of its parts
+    /// (ADR-0322 §2). While `false` no recognizer joins an arena, the focus
+    /// node cannot take focus and gives up the focus it holds, every bound
+    /// action answers `is_enabled` `false` and stays declared, and the
+    /// semantics say disabled and offer no action. The node is still hit
+    /// where it was, so a disabled control covers what is beneath it.
+    #[must_use]
+    pub(crate) fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// The tap the pointer part answers: the control's, while enabled. The
+    /// recognizer and the click the semantics offer both follow it, so a
+    /// disabled control has neither, and a contact in flight when the switch
+    /// turns ends in nothing.
+    fn live_tap(&self) -> Option<EventCallback> {
+        self.on_tap.clone().filter(|_| self.enabled)
+    }
+
+    /// The focus part's configuration: the control's own, conjoined with
+    /// the switch.
+    fn focus_config(&self) -> Option<FocusConfig> {
+        self.focus.as_ref().map(|config| FocusConfig {
+            can_request_focus: Some(config.can_request_focus.unwrap_or(true) && self.enabled),
+            ..config.clone()
+        })
+    }
+
+    /// The bindings the node declares: its own while enabled, and the same
+    /// types switched off while disabled, so an intent stops at the control
+    /// and does not activate an enclosing one.
+    fn declared_actions(&self) -> Rc<Vec<(TypeId, ErasedAction)>> {
+        if self.enabled {
+            return Rc::clone(&self.actions);
+        }
+        Rc::new(
+            self.actions
+                .iter()
+                .map(|(intent, action)| (*intent, action.switched_off()))
+                .collect::<Vec<(TypeId, ErasedAction)>>(),
+        )
     }
 
     /// Call `callback` on a primary tap, recognized as
@@ -213,7 +261,11 @@ impl InteractiveNodeState {
     /// subtree with. A node that cannot take focus says nothing about focus,
     /// and a node with none of the three has no semantics part.
     fn semantics(&self, view: &InteractiveNode) -> Option<Semantics> {
-        let mut semantics = view.semantics.clone();
+        // The description never carries the switch itself (ADR-0322 §2).
+        let mut semantics = view
+            .semantics
+            .clone()
+            .map(|described| described.enabled(view.enabled));
         if self.tap.is_set() {
             semantics = Some(semantics.unwrap_or_default().on_click(self.tap.click()));
         }
@@ -241,12 +293,12 @@ impl StatefulRenderView for InteractiveNode {
     type State = InteractiveNodeState;
 
     fn create_state(&self) -> Self::State {
-        let tap = TapSlot::new(self.on_tap.clone());
+        let tap = TapSlot::new(self.live_tap());
         InteractiveNodeState {
             recognizers: RecognizerHost::new(tap.factory().as_slice()),
             tap,
-            focus: self.focus.as_ref().map(FocusHost::new),
-            own_actions: Rc::clone(&self.actions),
+            focus: self.focus_config().as_ref().map(FocusHost::new),
+            own_actions: self.declared_actions(),
             ambient_actions: None,
             chain: None,
             platform: None,
@@ -303,14 +355,14 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
     fn did_update_view(&mut self, _old: &InteractiveNode, new: &InteractiveNode) {
         let mut failure = FirstPanic::new();
         failure.contain(|| {
-            self.tap.set(new.on_tap.clone());
+            self.tap.set(new.live_tap());
             self.recognizers.update(self.tap.factory().as_slice());
         });
         // The replaced bindings drop here; an action is user code.
-        failure.contain(|| self.own_actions = Rc::clone(&new.actions));
+        failure.contain(|| self.own_actions = new.declared_actions());
         self.layer_actions();
         let record = self.focus_record();
-        if let (Some(focus), Some(config)) = (&mut self.focus, &new.focus) {
+        if let (Some(focus), Some(config)) = (&mut self.focus, &new.focus_config()) {
             failure.contain(|| {
                 focus.update(config);
                 focus.record(record);
@@ -383,3 +435,52 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
 }
 
 impl_stateful_render_view!(InteractiveNode);
+
+/// The node's switch is reachable from a mounted tree only through
+/// `RawButton`, whose disabled form has no press callback to begin with.
+/// The pointer and action rows of the switch, for a control that keeps its
+/// callback while disabled, are checked here on the view.
+#[cfg(test)]
+mod switch_tests {
+    use std::any::TypeId;
+    use std::rc::Rc;
+
+    use flui_view::{EventCx, ViewExt};
+
+    use super::InteractiveNode;
+    use crate::support::event_callback;
+    use crate::{Action, ActionOutcome, ActivateIntent, SizedBox};
+
+    struct Willing;
+
+    impl Action<ActivateIntent> for Willing {
+        fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+            ActionOutcome::Performed
+        }
+    }
+
+    fn node(enabled: bool) -> InteractiveNode {
+        InteractiveNode::new(SizedBox::new(10.0, 10.0).boxed())
+            .on_tap(event_callback(|_cx| {}))
+            .action::<ActivateIntent, Willing>(&Rc::new(Willing))
+            .enabled(enabled)
+    }
+
+    #[test]
+    fn a_disabled_node_answers_no_tap_though_it_holds_the_callback() {
+        assert!(node(true).live_tap().is_some());
+        assert!(node(false).live_tap().is_none());
+    }
+
+    #[test]
+    fn a_disabled_node_declares_its_bindings_switched_off() {
+        for (enabled, runs) in [(true, true), (false, false)] {
+            let declared = node(enabled).declared_actions();
+            let [(intent, action)] = declared.as_slice() else {
+                panic!("one binding stays declared, enabled or not");
+            };
+            assert_eq!(*intent, TypeId::of::<ActivateIntent>());
+            assert_eq!(action.is_enabled(&ActivateIntent), runs);
+        }
+    }
+}
