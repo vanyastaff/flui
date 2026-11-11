@@ -638,7 +638,7 @@ pub trait LifecycleContext: BuildContext {
     /// it whenever the answer changes. Same shape, and same reason, as
     /// [`rebuild_handle`](Self::rebuild_handle).
     ///
-    /// Acquire it in `init_state` / `did_change_dependencies`, never inside a
+    /// Acquire it in `create_state` / `init_state` / `did_change_dependencies`, never inside a
     /// frame phase.
     fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle;
 
@@ -766,7 +766,7 @@ pub trait LifecycleContextExt: LifecycleContext {
     /// The handle of capability `C`, made by this UI runtime's provider for
     /// this widget's presentation.
     ///
-    /// Acquire it in `init_state` or `did_change_dependencies` and keep it in
+    /// Acquire it in `create_state`, `init_state` or `did_change_dependencies` and keep it in
     /// the state; the provider runs on every acquisition, and a handle that
     /// holds an operating-system subscription ends it when its last clone
     /// drops.

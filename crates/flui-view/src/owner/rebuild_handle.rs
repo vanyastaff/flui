@@ -30,7 +30,7 @@
 //!
 //! # Where it may be acquired
 //!
-//! From `init_state` / `did_change_dependencies` — i.e. lifecycle hooks, not
+//! From `create_state` / `init_state` / `did_change_dependencies` — lifecycle hooks, not
 //! `build`. Acquiring a handle inside `build` (or any layout/paint path) and
 //! scheduling from it is how you write an unbounded rebuild loop.
 //! An out-of-catalog `mark_needs_build` driver is allowed only when it
