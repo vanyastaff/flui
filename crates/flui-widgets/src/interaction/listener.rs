@@ -209,6 +209,14 @@ impl Listener {
         self
     }
 
+    /// Replace the recognizer attachments with `set`: for an owner that
+    /// keeps its recognizers in a host and attaches them all at once.
+    #[must_use]
+    pub(crate) fn recognizers(mut self, set: RecognizerSet) -> Self {
+        self.recognizers = set;
+        self
+    }
+
     /// Admit new contacts only when `admit` accepts their Down event.
     ///
     /// Later events, including Up and Cancel, reach every live attachment
