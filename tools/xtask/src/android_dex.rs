@@ -21,7 +21,8 @@
 //!   installed otherwise, which it says).
 //!
 //! Without a local JDK or SDK, `.github/workflows/android-dex.yml` runs
-//! `--write` (or `--rebuild`) on a GitHub runner by hand and uploads the dex
+//! `--write` on a GitHub runner for a pull request that changes the sources
+//! (and `--write` or `--rebuild` by hand on any branch) and uploads the dex
 //! and its record as an artifact to commit.
 
 use std::fmt::Write as _;
