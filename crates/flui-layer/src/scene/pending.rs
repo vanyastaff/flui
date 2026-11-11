@@ -105,7 +105,7 @@ impl PendingLog {
         self.entries
             .drain(..)
             .flat_map(|entry| entry.replaced)
-            .collect()
+            .collect::<Vec<Arc<BoundaryContent>>>()
     }
 
     /// Entries held now.
