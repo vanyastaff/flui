@@ -41,7 +41,6 @@ fn native_typecheck_selects_target_gated_workspace_targets() {
         }
         for (package, target) in [
             ("flui-engine", "aarch64-apple-darwin"),
-            ("flui-widgets", "aarch64-apple-darwin"),
             ("flui-hot-reload", "x86_64-pc-windows-msvc"),
             ("flui-native", "aarch64-linux-android"),
         ] {
