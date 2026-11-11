@@ -774,10 +774,11 @@ mod tests {
         );
         lane.with_backend(|backend| {
             assert_eq!(backend.full, 1, "only the first frame is full");
-            let expected = flui_layer::DamageRect::covering(
+            let expected = flui_layer::DamageRect::try_covering(
                 flui_foundation::geometry::Rect::from_xywh(100.0, 50.0, 10.0, 10.0),
                 (640, 480),
             )
+            .expect("finite")
             .expect("on the surface")
             .to_rect();
             assert_eq!(backend.dirty, vec![expected]);

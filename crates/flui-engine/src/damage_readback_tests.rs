@@ -141,9 +141,9 @@ fn scene(root: &ContentToken, boundaries: &[Boundary<'_>], backdrop: Option<Rect
 /// backend.
 fn apply(capture: &mut RetainedCapture, region: DamageRegion) {
     match region {
-        DamageRegion::Partial(rect) => capture.mark_dirty(rect.to_rect()),
+        DamageRegion::Region(region) => capture.mark_dirty(region.bounds().to_rect()),
         DamageRegion::Unchanged => {}
-        _ => capture.mark_full_repaint(),
+        DamageRegion::Full(_) => capture.mark_full_repaint(),
     }
 }
 
@@ -255,7 +255,7 @@ fn a_moved_box_repaints_its_old_and_new_positions_only() {
 
     let second = build(a_moved);
     let region = differ.diff(&second, (SIDE, SIDE));
-    assert!(matches!(region, DamageRegion::Partial(_)), "{region:?}");
+    assert!(matches!(region, DamageRegion::Region(_)), "{region:?}");
     frame(&mut capture, &second, region, |plan| {
         matches!(plan, FramePlan::RetainedPartial(_))
     });
@@ -788,7 +788,7 @@ fn a_frame_outside_the_protocol_is_followed_by_a_full_one() {
         };
         let region = differ.diff(&resumed, (SIDE, SIDE));
         assert_eq!(
-            matches!(region, DamageRegion::Partial(_)),
+            matches!(region, DamageRegion::Region(_)),
             resume_with_change,
             "precondition: the producer sees only its own scenes: {region:?}"
         );
@@ -1069,9 +1069,10 @@ fn partial_equals_full_inside_damage() {
     });
     warm(&mut partial, &before);
     let region = differ.diff(&after, (SIDE, SIDE));
-    let DamageRegion::Partial(damage) = region else {
+    let DamageRegion::Region(damage) = region else {
         panic!("the text change is a partial region, got {region:?}");
     };
+    let damage = damage.bounds();
     assert!(
         damage.right() >= 70 && damage.bottom() >= 60,
         "the damage reaches the backdrop and joins it: {damage:?}"
@@ -1321,9 +1322,10 @@ fn a_damage_edge_through_an_advanced_blend_matches_a_full_frame() {
     });
     warm(&mut partial, &before);
     let region = differ.diff(&after, (SIDE, SIDE));
-    let DamageRegion::Partial(damage) = region else {
+    let DamageRegion::Region(damage) = region else {
         panic!("the moved marker is a partial region, got {region:?}");
     };
+    let damage = damage.bounds();
     let multiply = Rect::from_xywh(48.0, 48.0, 32.0, 32.0);
     assert!(
         damage.to_rect().intersects(&multiply) && !damage.to_rect().contains_rect(&multiply),

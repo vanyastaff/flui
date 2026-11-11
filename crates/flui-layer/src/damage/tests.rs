@@ -7,8 +7,9 @@ use flui_painting::styling::Color;
 use super::{DamageMode, LayerDiffer};
 use crate::{
     BackdropFilterLayer, ClipRectLayer, ContentToken, DamageRect, DamageRegion, FollowerLayer,
-    Layer, LayerId, LayerLink, LayerNode, LayerTree, LeaderLayer, OffsetLayer, OpacityLayer,
-    PerformanceOverlayLayer, PictureLayer, Scene, TextureLayer, TransformLayer,
+    FullReason, Layer, LayerId, LayerLink, LayerNode, LayerTree, LeaderLayer, OffsetLayer,
+    OpacityLayer, PerformanceOverlayLayer, PictureLayer, ResyncReason, Scene, TextureLayer,
+    TransformLayer,
 };
 
 const SURFACE: (u32, u32) = (400, 400);
@@ -83,14 +84,19 @@ impl Frame {
 
 fn partial(region: DamageRegion) -> (u32, u32, u32, u32) {
     match region {
-        DamageRegion::Partial(rect) => (rect.left(), rect.top(), rect.right(), rect.bottom()),
+        DamageRegion::Region(region) => match region.rects() {
+            [rect] => (rect.left(), rect.top(), rect.right(), rect.bottom()),
+            rects => panic!("the differ reports one rect, got {rects:?}"),
+        },
         other => panic!("expected a partial region, got {other:?}"),
     }
 }
 
 /// The damage rect a surface-pixel rect becomes.
 fn covering(l: f64, t: f64, r: f64, b: f64) -> (u32, u32, u32, u32) {
-    let rect = DamageRect::covering(Rect::from_ltrb(l, t, r, b), SURFACE).expect("on the surface");
+    let rect = DamageRect::try_covering(Rect::from_ltrb(l, t, r, b), SURFACE)
+        .expect("finite")
+        .expect("on the surface");
     (rect.left(), rect.top(), rect.right(), rect.bottom())
 }
 
@@ -111,7 +117,7 @@ fn first_frame_is_full() {
             &one_boundary(&root, &child, Offset::new(50.0, 50.0)),
             SURFACE
         ),
-        DamageRegion::Full
+        DamageRegion::Full(FullReason::FirstFrame)
     );
     assert_eq!(differ.retained_boundaries(), 2);
 }
@@ -300,8 +306,14 @@ fn unstamped_root_is_full() {
         Scene::new(tree)
     };
     let mut differ = LayerDiffer::default();
-    assert_eq!(differ.diff(&scene(), SURFACE), DamageRegion::Full);
-    assert_eq!(differ.diff(&scene(), SURFACE), DamageRegion::Full);
+    assert_eq!(
+        differ.diff(&scene(), SURFACE),
+        DamageRegion::Full(FullReason::FirstFrame)
+    );
+    assert_eq!(
+        differ.diff(&scene(), SURFACE),
+        DamageRegion::Full(FullReason::FirstFrame)
+    );
     assert_eq!(differ.retained_boundaries(), 0);
 }
 
@@ -318,13 +330,16 @@ fn root_id_change_is_full() {
     let mut differ = LayerDiffer::default();
     differ.diff(&scene(1), SURFACE);
     assert_eq!(differ.diff(&scene(1), SURFACE), DamageRegion::Unchanged);
-    assert_eq!(differ.diff(&scene(9), SURFACE), DamageRegion::Full);
+    assert_eq!(
+        differ.diff(&scene(9), SURFACE),
+        DamageRegion::Full(FullReason::Resync(ResyncReason::Rebuilt))
+    );
     // A root placement change (the device pixel ratio) is Full too.
     let root = ContentToken::mint();
     differ.diff(&Frame::new(1.0, &root).scene(), SURFACE);
     assert_eq!(
         differ.diff(&Frame::new(2.0, &root).scene(), SURFACE),
-        DamageRegion::Full
+        DamageRegion::Full(FullReason::Resync(ResyncReason::Rebuilt))
     );
 }
 
@@ -337,7 +352,7 @@ fn size_change_is_full() {
     differ.diff(&one_boundary(&root, &child, at), SURFACE);
     assert_eq!(
         differ.diff(&one_boundary(&root, &child, at), (401, 400)),
-        DamageRegion::Full
+        DamageRegion::Full(FullReason::SurfaceChanged)
     );
 }
 
@@ -618,7 +633,7 @@ fn layers_that_paint_transparent_pixels_damage_everything() {
         differ.diff(&build(&ContentToken::mint()), SURFACE);
         assert_eq!(
             differ.diff(&build(&ContentToken::mint()), SURFACE),
-            DamageRegion::Full,
+            DamageRegion::Full(FullReason::AboveThreshold),
             "{effect:?}"
         );
     }
@@ -814,14 +829,14 @@ fn damage_over_threshold_is_full() {
     differ.diff(&build(&ContentToken::mint()), SURFACE);
     assert_eq!(
         differ.diff(&build(&ContentToken::mint()), SURFACE),
-        DamageRegion::Full,
+        DamageRegion::Full(FullReason::AboveThreshold),
         "301x301 of 400x400 is over half the surface"
     );
     let mut lenient = LayerDiffer::new(DamageMode::On { full_above: 0.9 });
     lenient.diff(&build(&ContentToken::mint()), SURFACE);
     assert!(matches!(
         lenient.diff(&build(&ContentToken::mint()), SURFACE),
-        DamageRegion::Partial(_)
+        DamageRegion::Region(_)
     ));
 }
 
@@ -834,7 +849,7 @@ fn off_retains_nothing_and_is_always_full() {
     for _ in 0..3 {
         assert_eq!(
             differ.diff(&one_boundary(&root, &child, at), SURFACE),
-            DamageRegion::Full
+            DamageRegion::Full(FullReason::DamageOff)
         );
         assert_eq!(differ.retained_boundaries(), 0);
     }
@@ -847,7 +862,7 @@ fn off_retains_nothing_and_is_always_full() {
     differ.forget();
     assert_eq!(
         differ.diff(&one_boundary(&root, &child, at), SURFACE),
-        DamageRegion::Full
+        DamageRegion::Full(FullReason::FirstFrame)
     );
     differ.set_mode(DamageMode::Off);
     assert_eq!(differ.retained_boundaries(), 0);
@@ -872,7 +887,10 @@ fn a_boundary_stamped_twice_is_full() {
     };
     let mut differ = LayerDiffer::default();
     differ.diff(&build(), SURFACE);
-    assert_eq!(differ.diff(&build(), SURFACE), DamageRegion::Full);
+    assert_eq!(
+        differ.diff(&build(), SURFACE),
+        DamageRegion::Full(FullReason::FirstFrame)
+    );
 }
 
 /// A transform backdrop reads where its inverse sends its bounds: shrunk to
