@@ -55,8 +55,9 @@ type Counts = BTreeMap<String, BTreeMap<String, u64>>;
 /// Arguments for `cargo xtask perf`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct PerfArgs {
-    /// Fail when any counter differs from the baseline (with `--instructions`: when a
-    /// scaling scenario grows with the tree).
+    /// Fail when a cost counter (a name with `alloc` or `bytes`) rose above the
+    /// baseline, or a work counter differs from it; a cost that fell is reported
+    /// and passes (with `--instructions`: when a scaling scenario grows with the tree).
     #[arg(long, conflicts_with_all = ["bless", "self_test"])]
     check: bool,
     /// Rewrite the baseline from this run.
@@ -77,7 +78,7 @@ pub(crate) struct PerfArgs {
 enum Mode {
     /// Print them and exit 0.
     Advisory,
-    /// Exit 1 on any.
+    /// Exit 1 on any finding that fails.
     Check,
     /// Rewrite the baseline and exit 0.
     Bless,
