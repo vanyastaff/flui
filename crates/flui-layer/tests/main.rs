@@ -330,6 +330,10 @@ fn scene_patch_damage() {
                 d::damage_under_a_backdrop_takes_what_it_reads,
             ),
             (
+                "an_unattached_leader_never_shadows_the_attached_one",
+                d::an_unattached_leader_never_shadows_the_attached_one,
+            ),
+            (
                 "a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it",
                 d::a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it,
             ),

@@ -15,10 +15,10 @@ use smallvec::SmallVec;
 use super::content::{BoundaryContent, Bounds, Entry, EntryIndex};
 use super::id::NodeKey;
 use super::version::{Address, NodeRecord, VersionInner};
-use crate::LeaderClip;
 use crate::damage::closure::footprint;
 use crate::layer::Layer;
 use crate::link::{MAX_FOLLOWER_NESTING, invert};
+use crate::{LayerLink, LeaderClip};
 
 /// One step from a space into the one it holds, as a footprint crosses it
 /// outward.
@@ -195,6 +195,21 @@ impl<'v> Geometry<'v> {
         }
     }
 
+    /// The leader a follower of `link` resolves against: the last attached
+    /// one in the index. A published node no slot reaches draws nothing, so a
+    /// leader in it never shadows the leader the scene draws, as
+    /// [`SceneVersion::flatten`](super::SceneVersion::flatten) leaves it out.
+    pub(crate) fn leader(self, link: LayerLink) -> Option<Address> {
+        self.version
+            .links
+            .get(link.id())?
+            .leaders
+            .iter()
+            .rev()
+            .copied()
+            .find(|leader| self.is_attached(leader.node))
+    }
+
     /// The node of the leader the follower at `at` hides behind: its leader,
     /// when it follows one under [`LeaderClip::Hide`], since a clip on the
     /// leader's branch then shows or hides it without changing its
@@ -210,11 +225,7 @@ impl<'v> Geometry<'v> {
         if follower.leader_clip() != LeaderClip::Hide {
             return None;
         }
-        self.version
-            .links
-            .get(follower.link().id())
-            .and_then(|users| users.leaders.last())
-            .map(|leader| leader.node)
+        self.leader(follower.link()).map(|leader| leader.node)
     }
 
     /// `key` and every node above it.
@@ -463,12 +474,7 @@ impl<'v> Geometry<'v> {
                 Err(Unresolved::Hidden)
             }
         };
-        let Some(leader_at) = self
-            .version
-            .links
-            .get(follower.link().id())
-            .and_then(|users| users.leaders.last().copied())
-        else {
+        let Some(leader_at) = self.leader(follower.link()) else {
             return unlinked();
         };
         let Entry::Effect {

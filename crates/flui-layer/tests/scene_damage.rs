@@ -239,6 +239,63 @@ pub(crate) fn a_follower_resolves_after_its_leaders_boundary_moves_parents() {
     );
 }
 
+/// A follower resolves against the leader the scene draws: a leader of the
+/// same link in a published node no slot reaches never shadows it, so moving
+/// the attached leader moves the follower's footprint.
+pub(crate) fn an_unattached_leader_never_shadows_the_attached_one() {
+    let link = LayerLink::new();
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let (p, leader, stray, follower) = (
+        writer.mint_node(),
+        writer.mint_node(),
+        writer.mint_node(),
+        writer.mint_node(),
+    );
+    let leading = || {
+        let mut content = BoundaryContent::builder();
+        content.push_effect(
+            Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
+            RenderId::new(1),
+            0,
+        );
+        content.finish()
+    };
+    writer.push(publish(leader, leading()));
+    let version = writer.next_content_version().expect("a version");
+    let mut following = BoundaryContent::builder();
+    following.push_effect(Layer::from(FollowerLayer::new(link)), RenderId::new(2), 0);
+    following.chunk(chunk(2, version, Rect::from_xywh(0.0, 0.0, 20.0, 20.0)));
+    writer.push(publish(follower, following.finish()));
+    let mut holding = BoundaryContent::builder();
+    holding.slot(leader);
+    writer.push(publish(p, holding.finish()));
+    let mut top = BoundaryContent::builder();
+    top.slot(p);
+    top.slot(follower);
+    writer.push(publish(root, top.finish()));
+    writer.push(place(p, 100.0, 100.0));
+    // Indexed after the attached leader, and no slot names it.
+    writer.push(publish(stray, leading()));
+    owner
+        .apply(SURFACE)
+        .expect("an attached leader under p and a stray one");
+
+    let mut writer = owner.writer();
+    writer.push(place(p, 300.0, 300.0));
+    owner.apply(SURFACE).expect("the attached leader moves");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(100.0, 100.0, 120.0, 120.0)),
+        "{damage:?}"
+    );
+    assert!(
+        covered(&damage, covering(300.0, 300.0, 320.0, 320.0)),
+        "{damage:?}"
+    );
+}
+
 /// A clip on the leader's branch hides a follower under `LeaderClip::Hide`
 /// without changing its transform: the follower's footprint is damaged.
 pub(crate) fn a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it() {

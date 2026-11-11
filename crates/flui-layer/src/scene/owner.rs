@@ -1075,14 +1075,17 @@ impl<'a> Patch<'a> {
                 continue;
             };
             for (link, _, _) in node.content().links() {
-                let leaders = self
-                    .next
-                    .links
-                    .get(link.id())
-                    .map_or(0, |users| users.leaders.len());
+                let geometry = super::geometry::Geometry::new(&self.next);
+                let leaders = self.next.links.get(link.id()).map_or(0, |users| {
+                    users
+                        .leaders
+                        .iter()
+                        .filter(|leader| geometry.is_attached(leader.node))
+                        .count()
+                });
                 debug_assert!(
                     leaders <= 1,
-                    "BUG: two LeaderLayers share {link:?} in one scene"
+                    "BUG: two attached LeaderLayers share {link:?} in one scene"
                 );
             }
         }

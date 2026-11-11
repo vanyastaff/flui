@@ -246,8 +246,8 @@ impl SceneVersion {
     }
 
     /// The leader entries publishing `link`, in the order they entered the
-    /// index; a scene
-    /// resolves a follower against the last.
+    /// index, unattached nodes included; a scene resolves a follower against
+    /// the last attached one.
     pub fn leaders(&self, link: LayerLink) -> impl Iterator<Item = EntryAddress> + '_ {
         self.0
             .links

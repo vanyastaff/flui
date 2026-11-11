@@ -216,9 +216,10 @@ republished content pairs its entries by key (a chunk and an effect by owner and
 by its node); a changed chunk or effect, or an unpaired entry, damages its old and new scope, and
 kept entries outside the longest increasing run of their old order damage both positions. `Place`
 damages the moved subtree at both placements. After the operations every follower is resolved
-again in both versions, and one whose transform changed damages its subtree under both. The
-region then closes over the filtered nodes of both versions; a foreground filter whose node, an
-ancestor or a descendant the patch changed seeds it with its whole footprint first, since stored
+again in both versions against its link's last attached leader (a published node no slot
+reaches draws nothing and never shadows it), and one whose transform changed damages its subtree
+under both. The region then closes over the filtered nodes of both versions; a foreground filter
+whose node, an ancestor or a descendant the patch changed seeds it with its whole footprint first, since stored
 bounds spread a filter in the boundary's space and a shrinking ancestor shrinks that below the
 renderer's device-pixel kernel. A follower under `LeaderClip::Hide` is damaged when the patch
 changes a node on its leader's branch. A surface change between applies is
