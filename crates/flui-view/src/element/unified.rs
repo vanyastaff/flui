@@ -396,7 +396,7 @@ where
         }
     }
 
-    fn build_into_views(&mut self, owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
+    fn build_into_views(&mut self, owner: &mut crate::ElementOwner<'_>) -> crate::view::ChildViews {
         self.behavior.build_into_views(&mut self.core, owner)
     }
 

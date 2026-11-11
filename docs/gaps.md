@@ -473,7 +473,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - From a backtrace per allocation of that scenario, where each part goes:
   - **Text** (shaping and the shaped paragraph, about half): a painter whose text changes shapes into the buffers of the layout it dropped, so Parley allocates a fresh `Layout` only for a painter shaping for the first time; each shaping still fills Parley's style and break lists, and FLUI copies the spans' text, styles and run colours into the shaped paragraph. This lane is `flui-painting`'s `TextContext` and `TextPainter`, and it outlives the retained scene.
   - **Paint and layers** (about a third): fragment op vectors, display-list commands, and the `LayerTree` and `FragmentComposer` rebuilt every frame. This lane is the retained scene, `docs/plans/specs/render-scaling/` (RS4, RS8).
-  - **View rebuild** (about a sixth): each rebuilt level boxes its child view, collects it into a `Vec` and clones it into the element. This lane is `flui-view`'s element update path.
+  - **View rebuild** (about a sixth): each rebuilt level hands its single child to the reconciler as `ChildViews::one`, without a list, and the element clones the offered view without boxing it; the child is still boxed twice, once into a `BoxedView` and once into the `Box<dyn View>` the reconciler reads. This lane is `flui-view`'s element update path.
 - The entry closes when a label change allocates at most 40 times a frame, held by those rows. It is measured after the retained scene lands, and until then each change that lowers a row re-blesses it.
 
 ### Accepted ADR sections not built yet

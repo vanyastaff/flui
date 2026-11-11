@@ -227,6 +227,68 @@ pub trait View: Downcast + DynClone + 'static {
 impl_downcast!(View);
 clone_trait_object!(View);
 
+/// The child views one build of an element produced, in order.
+///
+/// Most elements build exactly one child, and [`ChildViews::one`] holds it
+/// without a list of its own; [`ChildViews::none`] holds nothing, and a
+/// `Vec` converts for an element with several.
+pub struct ChildViews(ChildViewsRepr);
+
+enum ChildViewsRepr {
+    One(Box<dyn View>),
+    Many(Vec<Box<dyn View>>),
+}
+
+impl ChildViews {
+    /// No child view: a leaf, or a build that did not run.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self(ChildViewsRepr::Many(Vec::new()))
+    }
+
+    /// Exactly one child view.
+    #[must_use]
+    pub fn one(view: Box<dyn View>) -> Self {
+        Self(ChildViewsRepr::One(view))
+    }
+
+    /// Appends `view` after the child views already held.
+    pub fn push(&mut self, view: Box<dyn View>) {
+        let held = std::mem::replace(&mut self.0, ChildViewsRepr::Many(Vec::new()));
+        self.0 = match held {
+            ChildViewsRepr::Many(views) if views.is_empty() => ChildViewsRepr::One(view),
+            ChildViewsRepr::Many(mut views) => {
+                views.push(view);
+                ChildViewsRepr::Many(views)
+            }
+            ChildViewsRepr::One(first) => ChildViewsRepr::Many(vec![first, view]),
+        };
+    }
+
+    /// The child views, in order.
+    #[must_use]
+    pub fn as_slice(&self) -> &[Box<dyn View>] {
+        match &self.0 {
+            ChildViewsRepr::One(view) => std::slice::from_ref(view),
+            ChildViewsRepr::Many(views) => views,
+        }
+    }
+}
+
+impl From<Vec<Box<dyn View>>> for ChildViews {
+    fn from(views: Vec<Box<dyn View>>) -> Self {
+        Self(ChildViewsRepr::Many(views))
+    }
+}
+
+impl std::fmt::Debug for ChildViews {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChildViews")
+            .field("len", &self.as_slice().len())
+            .finish()
+    }
+}
+
 /// Base trait for Elements that can be boxed.
 ///
 /// This is the object-safe version of Element for dynamic dispatch.
@@ -461,9 +523,9 @@ pub trait ElementBase: Downcast + 'static {
     /// `&mut tree` child mutation — see the E3 design.
     ///
     /// Return contract by behavior:
-    /// - Stateless / Stateful → `vec![child_view]` (single child).
-    /// - Proxy / Inherited → `vec![child_view]` (the proxied child).
-    /// - Leaf / a render element with no view-children → `vec![]`.
+    /// - Stateless / Stateful → `ChildViews::one(child_view)`.
+    /// - Proxy / Inherited → `ChildViews::one` of the proxied child.
+    /// - Leaf / a render element with no view-children → `ChildViews::none()`.
     /// - RenderObject → the child view(s) the render element owns; the
     ///   RenderObject-attach side-effects stay inside `build_into_views`
     ///   (they touch the pipeline owner / render tree, not the element
@@ -472,7 +534,7 @@ pub trait ElementBase: Downcast + 'static {
     /// The split-borrow `owner` handle is threaded through so the build
     /// half can still register `GlobalKey`s or schedule downstream
     /// rebuilds without re-borrowing the [`BuildOwner`](crate::BuildOwner).
-    fn build_into_views(&mut self, owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>>;
+    fn build_into_views(&mut self, owner: &mut crate::ElementOwner<'_>) -> crate::view::ChildViews;
 
     // ========================================================================
     // Dependency Notifications

@@ -1018,7 +1018,7 @@ where
         &mut self,
         core: &mut ElementCore<SliverMultiBoxAdaptor<R>, Variable>,
         owner: &mut ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>> {
+    ) -> crate::view::ChildViews {
         self.inner.build_into_views(core, owner)
     }
 

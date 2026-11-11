@@ -136,7 +136,7 @@ where
 
     // Memoization equality-bail (`should_skip_rebuild`).
     //
-    // Evaluate on a BORROW before the unconditional `clone_box` below —
+    // Evaluate on a BORROW before the clone below —
     // every skip must pay zero clone cost. The downcast_ref here is
     // sanctioned: the `as_any().type_id() == TypeId::of::<V>()` guard
     // above means the ref is guaranteed to succeed.
@@ -151,20 +151,14 @@ where
         return ViewUpdate::Equal;
     }
 
-    // TypeId equality should guarantee the dynamic value is V.
-    // `Downcast::into_any` + `Box::downcast::<V>` produces the
-    // typed inner by value rather than through `downcast_ref::<V>()`.
-    // The downcast is FALLIBLE on principle: if a future
-    // trait-method override violates the `as_any().type_id() ==
-    // TypeId::of::<V>() ⇒ downcastable to V` invariant, the
-    // dispatch degrades to "replace element" instead of
-    // panicking. The guard above means the `Err` arm should be
-    // unreachable today, but defense in depth costs us one
-    // `match` arm.
-    let cloned: Box<dyn View> = dyn_clone::clone_box(effective);
-    match cloned.into_any().downcast::<V>() {
-        Ok(typed) => {
-            let previous = core.replace_view_for_dispatch(*typed);
+    // The element takes its own copy of the offered view: `V::clone` on the
+    // reference the guard above produced, so the copy costs no box of its
+    // own. The downcast is fallible on principle: should an override ever
+    // break `as_any().type_id() == TypeId::of::<V>() ⇒ downcastable to V`,
+    // the element is replaced instead of the dispatch panicking.
+    match nv {
+        Some(new_ref) => {
+            let previous = core.replace_view_for_dispatch(new_ref.clone());
             core.note_source_view(shared.map(Rc::downgrade));
             core.mark_dirty_for_dispatch();
             tracing::debug!(
@@ -173,12 +167,7 @@ where
             );
             ViewUpdate::Replaced { previous }
         }
-        Err(_) => {
-            // Should be unreachable post-guard but reachable in
-            // principle (see invariant note above). Treat as
-            // type-mismatch — caller replaces the element.
-            ViewUpdate::Mismatch
-        }
+        None => ViewUpdate::Mismatch,
     }
 }
 

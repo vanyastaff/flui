@@ -35,7 +35,7 @@ use flui_foundation::RenderId;
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
     owner::{LifecycleHook, RecoveredAt, RecoveredPanic},
-    view::{FrameworkError, IntoView, View},
+    view::{BoxedView, FrameworkError, IntoView, View},
 };
 
 // ============================================================================
@@ -283,7 +283,7 @@ where
 
 /// Shared tail for any behavior whose build half produces exactly one
 /// child view: normalize it to a boxed `View`, clear the dirty flag, emit
-/// the `completed` trace, and return it as a single-element `Vec`.
+/// the `completed` trace, and return it as `ChildViews::one`.
 ///
 /// Used by `StatelessBehavior`, `StatefulBehavior`, `ProxyBehavior`,
 /// `InheritedBehavior`. `RenderBehavior` keeps its `build_into_views`
@@ -304,7 +304,7 @@ pub(crate) fn single_child_views<V, A, R>(
     core: &mut ElementCore<V, A>,
     child_view: R,
     behavior_name: &'static str,
-) -> Vec<Box<dyn View>>
+) -> crate::view::ChildViews
 where
     V: Clone + 'static,
     A: ElementArity,
@@ -313,7 +313,7 @@ where
     let boxed: Box<dyn View> = Box::new(child_view.into_view());
     core.clear_dirty();
     tracing::debug!("{}::build_into_views completed", behavior_name);
-    vec![boxed]
+    crate::view::ChildViews::one(boxed)
 }
 
 /// Full `build_into_views` body for behaviors that delegate to a `child()`
@@ -325,10 +325,10 @@ where
 /// identical otherwise:
 ///
 /// ```text
-///   guard → view.child() → clone_box → clear dirty → vec![child]
+///   guard → view.child() → share or clone → clear dirty → one child
 /// ```
 ///
-/// Returns `vec![]` when the guard short-circuits (clean element /
+/// Returns `ChildViews::none()` when the guard short-circuits (clean element /
 /// non-buildable lifecycle), so `build_scope` reconciles to the same
 /// child list the prior frame produced only when a real build ran — a
 /// clean proxy contributes no view churn.
@@ -337,18 +337,23 @@ pub(crate) fn proxy_style_views<V, A, F>(
     core: &mut ElementCore<V, A>,
     behavior_name: &'static str,
     get_child: F,
-) -> Vec<Box<dyn View>>
+) -> crate::view::ChildViews
 where
     V: Clone + 'static,
     A: ElementArity,
     F: FnOnce(&V) -> &dyn View,
 {
     if !should_build_with_trace(core, behavior_name) {
-        return Vec::new();
+        return crate::view::ChildViews::none();
     }
     let child_view = get_child(core.view());
-    let child_view_boxed = dyn_clone::clone_box(child_view);
-    single_child_views(core, child_view_boxed, behavior_name)
+    // A child held as a `BoxedView` is shared, not copied: the clone is the
+    // same allocation, which keeps the child's identity for the reconcile.
+    let child_view: BoxedView = match child_view.as_any().downcast_ref::<BoxedView>() {
+        Some(shared) => shared.clone(),
+        None => BoxedView::from(dyn_clone::clone_box(child_view)),
+    };
+    single_child_views(core, child_view, behavior_name)
 }
 
 // ============================================================================
