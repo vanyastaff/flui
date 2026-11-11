@@ -416,8 +416,9 @@ impl VersionInner {
     }
 }
 
-#[cfg(feature = "testing")]
 mod flatten {
+    use std::sync::Arc;
+
     use flui_foundation::LayerId;
 
     use super::SceneVersion;
@@ -430,7 +431,8 @@ mod flatten {
         /// [`OffsetLayer`] at its placement, each effect its layer, each chunk
         /// a [`PictureLayer`]. Unattached nodes are left out.
         ///
-        /// The oracle a retained frame is compared against
+        /// What the raster lane hands the engine until the engine walks the
+        /// version itself, and the oracle a retained frame is compared against
         /// (ADR-0304 §11).
         #[must_use]
         pub fn flatten(&self) -> LayerTree {
@@ -450,7 +452,7 @@ mod flatten {
                         Entry::Effect { layer, .. } => tree.push_child(parent, layer.clone()),
                         Entry::Chunk { chunk, .. } => tree.push_child(
                             parent,
-                            Layer::from(PictureLayer::new(chunk.commands().clone())),
+                            Layer::from(PictureLayer::from_shared(Arc::clone(chunk.shared_commands()))),
                         ),
                         Entry::Slot { node: child, .. } => {
                             let placement = self
@@ -469,6 +471,131 @@ mod flatten {
                 }
             }
             tree
+        }
+    }
+}
+
+mod annotations {
+    use std::any::Any;
+    use std::sync::Arc;
+
+    use flui_foundation::geometry::Point;
+    use smallvec::SmallVec;
+
+    use super::{EntryAddress, SceneVersion};
+    use crate::layer::Layer;
+    use crate::scene::content::Entry;
+    use crate::scene::id::SceneNodeId;
+    use crate::tree::annotations::clip_admits;
+
+    impl SceneVersion {
+        /// The topmost `T` an annotated region holds at `point` on the
+        /// surface, as [`LayerTree::find_annotation`] answers over
+        /// [`Self::flatten`]'s tree, read off the version without building
+        /// it.
+        ///
+        /// [`LayerTree::find_annotation`]: crate::LayerTree::find_annotation
+        #[must_use]
+        pub fn find_annotation<T: Any + Send + Sync>(&self, point: Point<f64>) -> Option<Arc<T>> {
+            let root = self.node(self.root())?;
+            let offset = root.placement().offset();
+            self.annotation_in(
+                self.root(),
+                Point::new(point.x - offset.dx, point.y - offset.dy),
+            )
+        }
+
+        /// The topmost `T` in `node`'s content at `point`, in the node's own
+        /// space.
+        fn annotation_in<T: Any + Send + Sync>(
+            &self,
+            node: SceneNodeId,
+            point: Point<f64>,
+        ) -> Option<Arc<T>> {
+            let content = Arc::clone(self.node(node)?.content());
+            let entries = content.entries();
+            // Each effect's point in its own space, `None` where the effect,
+            // or one it sits under, does not take `point`.
+            let mut local: SmallVec<[Option<Point<f64>>; 32]> = SmallVec::new();
+            for (index, entry) in entries.iter().enumerate() {
+                let under = match entry.parent() {
+                    None => Some(point),
+                    Some(parent) => local[parent.get()],
+                };
+                local.push(match (entry, under) {
+                    (Entry::Effect { layer, .. }, Some(under)) => {
+                        self.point_in_effect(node, index, layer, under)
+                            .filter(|at| clip_admits(layer, *at))
+                    }
+                    _ => None,
+                });
+            }
+            // Reversed paint order is the tree's topmost-first order: an
+            // effect's descendants and later siblings come before it.
+            for (index, entry) in entries.iter().enumerate().rev() {
+                match entry {
+                    Entry::Effect {
+                        layer: Layer::AnnotatedRegion(region),
+                        ..
+                    } => {
+                        if let Some(at) = local[index]
+                            && (region.is_sized_by_parent() || region.bounds().contains(at))
+                            && let Some(value) = region.value().downcast::<T>()
+                        {
+                            return Some(value);
+                        }
+                    }
+                    Entry::Slot {
+                        node: child,
+                        parent,
+                    } => {
+                        let under = match parent {
+                            None => Some(point),
+                            Some(parent) => local[parent.get()],
+                        };
+                        let Some(under) = under else {
+                            continue;
+                        };
+                        let Some(placed) = self.node(*child) else {
+                            continue;
+                        };
+                        let offset = placed.placement().offset();
+                        if let Some(found) = self.annotation_in(
+                            *child,
+                            Point::new(under.x - offset.dx, under.y - offset.dy),
+                        ) {
+                            return Some(found);
+                        }
+                    }
+                    Entry::Effect { .. } | Entry::Chunk { .. } => {}
+                }
+            }
+            None
+        }
+
+        /// `point` in the effect's own space, `None` when its placement
+        /// cannot be inverted or resolved.
+        fn point_in_effect(
+            &self,
+            node: SceneNodeId,
+            index: usize,
+            layer: &Layer,
+            point: Point<f64>,
+        ) -> Option<Point<f64>> {
+            let transform = match layer {
+                Layer::Transform(transform) => *transform.transform(),
+                Layer::Follower(_) => self.follower_transform(EntryAddress {
+                    node,
+                    entry: crate::scene::content::EntryIndex::at(index),
+                })?,
+                _ => {
+                    let offset = layer.local_translation();
+                    return Some(Point::new(point.x - offset.dx, point.y - offset.dy));
+                }
+            };
+            let inverse = transform.try_inverse()?;
+            let (x, y) = inverse.unproject_to_plane(point.x, point.y)?;
+            Some(Point::new(x, y))
         }
     }
 }

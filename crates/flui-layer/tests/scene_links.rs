@@ -1,13 +1,13 @@
-//! A scene version resolves its followers and leaders exactly as the layer
-//! tree it flattens to does, so the paint side can read links off the
+//! A scene version resolves its followers, leaders and annotations exactly as
+//! the layer tree it flattens to does, so the paint side can read them off the
 //! applied version without building a tree (ADR-0304 §8).
 
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
-use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use flui_layer::{
-    BoundaryContent, Chunk, ClipRectLayer, ContentVersion, FollowerLayer, Layer, LayerLink,
+    AnnotatedRegionLayer, BoundaryContent, Chunk, ClipRectLayer, ContentVersion, FollowerLayer, Layer, LayerLink,
     LeaderClip, LeaderLayer, OffsetLayer, Placement, SceneNodeId, SceneOp, SceneOwner, SurfaceKey,
     TransformLayer, leader_origin, resolve_follower_transform,
 };
@@ -53,7 +53,7 @@ const LINKS: usize = 3;
 /// One random effect, with each link led and followed at most once so a
 /// layer of the flattened tree is named by its link alone.
 fn effect(rng: &mut Rng, links: &[LayerLink], led: &mut [bool], followed: &mut [bool]) -> Layer {
-    match rng.below(6) {
+    match rng.below(7) {
         0 => Layer::from(OffsetLayer::new(Offset::new(
             rng.signed(50.0),
             rng.signed(50.0),
@@ -84,6 +84,18 @@ fn effect(rng: &mut Rng, links: &[LayerLink], led: &mut [bool], followed: &mut [
                 Size::new(10.0 + rng.unit() * 40.0, 10.0 + rng.unit() * 40.0),
                 Offset::new(rng.signed(30.0), rng.signed(30.0)),
             ))
+        }
+        6 => {
+            let value = Arc::new(u32::try_from(rng.below(1_000)).expect("below 1 000"));
+            if rng.chance(30) {
+                Layer::from(AnnotatedRegionLayer::sized_by_parent(value))
+            } else {
+                let (x, y) = (rng.signed(60.0), rng.signed(60.0));
+                Layer::from(AnnotatedRegionLayer::new(
+                    Rect::from_xywh(x, y, 10.0 + rng.unit() * 90.0, 10.0 + rng.unit() * 90.0),
+                    value,
+                ))
+            }
         }
         _ => {
             let link = rng.below(LINKS);
@@ -216,6 +228,17 @@ fn first_disagreement(cases: u64) -> Option<String> {
                 ));
             }
         }
+        for _ in 0..8 {
+            let point = Point::new(rng.signed(150.0), rng.signed(150.0));
+            let from_tree = tree.find_annotation::<u32>(point).map(|value| *value);
+            let from_version = version.find_annotation::<u32>(point).map(|value| *value);
+            if from_tree != from_version {
+                return Some(format!(
+                    "case {case}: annotation at {point:?} {from_version:?} against the tree's \
+                     {from_tree:?}"
+                ));
+            }
+        }
     }
     None
 }
@@ -233,8 +256,8 @@ fn matrices_agree(a: Option<Matrix4>, b: Option<Matrix4>) -> bool {
 }
 
 fn points_agree(
-    a: Option<flui_foundation::geometry::Point<f64>>,
-    b: Option<flui_foundation::geometry::Point<f64>>,
+    a: Option<Point<f64>>,
+    b: Option<Point<f64>>,
 ) -> bool {
     match (a, b) {
         (None, None) => true,
@@ -243,10 +266,12 @@ fn points_agree(
     }
 }
 
-/// Random trees of boundaries, transforms, clips, leaders and followers
-/// under either leader clip: every follower's transform and every leader's
-/// origin read off the version equal what the flattened tree resolves.
-pub(crate) fn a_version_resolves_links_as_its_flattened_tree_does() {
+/// Random trees of boundaries, transforms, clips, annotated regions, leaders
+/// and followers
+/// under either leader clip: every follower's transform, every leader's
+/// origin and the topmost annotation at random points read off the version
+/// equal what the flattened tree resolves.
+pub(crate) fn a_version_resolves_links_and_annotations_as_its_flattened_tree_does() {
     if let Some(disagreement) = first_disagreement(5_000) {
         panic!("{disagreement}");
     }

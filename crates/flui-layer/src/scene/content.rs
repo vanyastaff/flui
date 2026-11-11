@@ -50,7 +50,7 @@ pub struct Chunk {
     owner: RenderId,
     ordinal: u32,
     version: ContentVersion,
-    commands: DisplayList,
+    commands: Arc<DisplayList>,
     bounds: Bounds,
     textures: SmallVec<[TextureId; 1]>,
     reads_destination: bool,
@@ -88,7 +88,7 @@ impl Chunk {
             owner,
             ordinal,
             version,
-            commands,
+            commands: Arc::new(commands),
             bounds,
             textures,
             reads_destination: destination,
@@ -123,6 +123,13 @@ impl Chunk {
     /// The recorded commands.
     #[must_use]
     pub fn commands(&self) -> &DisplayList {
+        &self.commands
+    }
+
+    /// The recorded commands, shared: a picture built from the chunk holds
+    /// them without copying.
+    #[must_use]
+    pub fn shared_commands(&self) -> &Arc<DisplayList> {
         &self.commands
     }
 

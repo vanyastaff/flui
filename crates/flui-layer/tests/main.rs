@@ -444,6 +444,6 @@ fn patch_damage_covers_diff_damage() {
 /// A scene version resolves followers and leaders as the tree it flattens to
 /// does (ADR-0304 §8).
 #[test]
-fn a_version_resolves_links_as_its_flattened_tree_does() {
-    scene_links::a_version_resolves_links_as_its_flattened_tree_does();
+fn a_version_resolves_links_and_annotations_as_its_flattened_tree_does() {
+    scene_links::a_version_resolves_links_and_annotations_as_its_flattened_tree_does();
 }
