@@ -18,7 +18,38 @@ struct WakeState {
     reentrant_threads: HashSet<std::thread::ThreadId>,
 }
 
-type WakeToken = Arc<AtomicBool>;
+/// One frame request a wake answers. Tickets are compared under the ledger's
+/// lock, so a wake that began before a newer request never acknowledges it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WakeTicket(u64);
+
+/// The frame request still owed, if any.
+#[derive(Debug, Default)]
+struct WakeLedger {
+    issued: u64,
+    owed: Option<WakeTicket>,
+    /// Set once `issued` cannot advance: tickets would repeat, so from then on
+    /// no wake acknowledges a request and each later one retries it.
+    exhausted: bool,
+}
+
+impl WakeLedger {
+    fn request(&mut self) -> WakeTicket {
+        match self.issued.checked_add(1) {
+            Some(next) => self.issued = next,
+            None => self.exhausted = true,
+        }
+        let ticket = WakeTicket(self.issued);
+        self.owed = Some(ticket);
+        ticket
+    }
+
+    fn acknowledge(&mut self, ticket: WakeTicket) {
+        if !self.exhausted && self.owed == Some(ticket) {
+            self.owed = None;
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 enum BuildStamp {
@@ -142,7 +173,7 @@ impl Default for PendingState {
 pub(crate) struct ExternalBuildInbox {
     closed: AtomicBool,
     pending: Mutex<PendingState>,
-    current_wake: Mutex<Option<WakeToken>>,
+    current_wake: Mutex<WakeLedger>,
     wake_state: Mutex<WakeState>,
 }
 
@@ -156,11 +187,9 @@ impl ExternalBuildInbox {
         self.closed.store(true, Ordering::Release);
         pending.builds.clear();
         drop(pending);
-        let token = self.current_wake.lock().take();
-        if let Some(token) = token {
-            token.store(true, Ordering::Release);
-        }
+        self.current_wake.lock().owed = None;
     }
+
     /// Existing-work transport, without admitting a new build premise.
     pub(crate) fn lock(&self) -> parking_lot::MappedMutexGuard<'_, PendingBuilds> {
         parking_lot::MutexGuard::map(self.pending.lock(), |state| &mut state.builds)
@@ -209,10 +238,8 @@ impl ExternalBuildInbox {
         newly_queued
     }
 
-    fn request_token(&self) -> WakeToken {
-        let token = Arc::new(AtomicBool::new(false));
-        *self.current_wake.lock() = Some(Arc::clone(&token));
-        token
+    fn request_ticket(&self) -> WakeTicket {
+        self.current_wake.lock().request()
     }
 
     /// Owe a frame for fresh work without waking now: the next
@@ -220,16 +247,12 @@ impl ExternalBuildInbox {
     /// it, as it retries a wake that panicked.
     pub(crate) fn owe_frame(&self, has_fresh_work: bool) {
         if has_fresh_work && !self.is_closed() {
-            let _owed = self.request_token();
+            let _owed = self.request_ticket();
         }
     }
 
-    fn pending_token(&self) -> Option<WakeToken> {
-        self.current_wake
-            .lock()
-            .as_ref()
-            .filter(|token| !token.load(Ordering::Acquire))
-            .cloned()
+    fn pending_ticket(&self) -> Option<WakeTicket> {
+        self.current_wake.lock().owed
     }
 
     /// [`request_frame_if_needed`](Self::request_frame_if_needed) for a
@@ -265,7 +288,7 @@ impl ExternalBuildInbox {
     ///
     /// Calls never wait behind an arbitrary external wake hook. Concurrent
     /// callers may race delivery, and each successful hook acknowledges only
-    /// the work token captured before that hook began. A same-thread
+    /// the work ticket captured before that hook began. A same-thread
     /// reentrant caller cannot invoke the hook recursively, so its outer call
     /// makes at most one compensating attempt before returning or resuming the
     /// first panic.
@@ -280,8 +303,8 @@ impl ExternalBuildInbox {
         let Some(request_frame) = request_frame else {
             return;
         };
-        let requested = has_fresh_work.then(|| self.request_token());
-        let Some(mut token) = requested.or_else(|| self.pending_token()) else {
+        let requested = has_fresh_work.then(|| self.request_ticket());
+        let Some(mut ticket) = requested.or_else(|| self.pending_ticket()) else {
             return;
         };
 
@@ -305,15 +328,15 @@ impl ExternalBuildInbox {
             };
 
             if woke {
-                token.store(true, Ordering::Release);
+                self.current_wake.lock().acknowledge(ticket);
             }
 
             let compensation = (reentered && may_compensate)
-                .then(|| self.pending_token())
+                .then(|| self.pending_ticket())
                 .flatten();
-            if let Some(pending_token) = compensation {
+            if let Some(pending_ticket) = compensation {
                 may_compensate = false;
-                token = pending_token;
+                ticket = pending_ticket;
                 continue;
             }
 
@@ -329,7 +352,7 @@ impl ExternalBuildInbox {
 
 #[cfg(test)]
 mod tests {
-    use super::{BuildStamp, ExternalBuildInbox};
+    use super::{BuildStamp, ExternalBuildInbox, WakeLedger};
     use flui_foundation::{ElementId, RebuildReason, RebuildReasons};
     use std::sync::Arc;
 
@@ -362,5 +385,37 @@ mod tests {
         assert_eq!(delivered[0].0, first);
         assert_eq!(delivered[1].0, second);
         assert!(!inbox.accepts_premise(&inbox.premise()));
+    }
+
+    #[test]
+    fn a_wake_acknowledges_only_the_request_it_answered() {
+        let mut ledger = WakeLedger::default();
+        let older = ledger.request();
+        let newer = ledger.request();
+        ledger.acknowledge(older);
+        assert_eq!(
+            ledger.owed,
+            Some(newer),
+            "an older wake cleared a newer request"
+        );
+        ledger.acknowledge(newer);
+        assert_eq!(ledger.owed, None);
+    }
+
+    #[test]
+    fn an_exhausted_ledger_keeps_every_request_owed() {
+        let mut ledger = WakeLedger {
+            issued: u64::MAX - 1,
+            ..WakeLedger::default()
+        };
+        let last = ledger.request();
+        let repeated = ledger.request();
+        assert_eq!(last, repeated, "the ticket counter stops at its end");
+        ledger.acknowledge(last);
+        assert_eq!(
+            ledger.owed,
+            Some(repeated),
+            "a repeated ticket must not let an older wake acknowledge a newer request"
+        );
     }
 }
