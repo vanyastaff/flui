@@ -14,6 +14,8 @@ mod inspect;
 mod region;
 #[path = "scene.rs"]
 mod scene;
+#[path = "scene_damage.rs"]
+mod scene_damage;
 #[path = "texture_registry.rs"]
 mod texture_registry;
 
@@ -296,4 +298,100 @@ fn scene_table_cost() {
             ),
         ],
     );
+}
+
+/// A patch damages the footprint of its operations under the version before
+/// and after it, resolves followers after them and closes over what filters
+/// read (ADR-0304 §4, §6).
+#[test]
+fn scene_patch_damage() {
+    use scene_damage as d;
+    run_rows(
+        "scene_patch_damage",
+        &[
+            (
+                "a_place_damages_the_subtree_under_both_placements",
+                d::a_place_damages_the_subtree_under_both_placements,
+            ),
+            (
+                "an_effect_chain_change_damages_every_slot_under_it",
+                d::an_effect_chain_change_damages_every_slot_under_it,
+            ),
+            (
+                "a_follower_resolves_after_its_leaders_boundary_moves_parents",
+                d::a_follower_resolves_after_its_leaders_boundary_moves_parents,
+            ),
+            (
+                "a_patch_that_changes_no_pixel_damages_nothing",
+                d::a_patch_that_changes_no_pixel_damages_nothing,
+            ),
+            (
+                "damage_under_a_backdrop_takes_what_it_reads",
+                d::damage_under_a_backdrop_takes_what_it_reads,
+            ),
+            (
+                "an_unattached_leader_never_shadows_the_attached_one",
+                d::an_unattached_leader_never_shadows_the_attached_one,
+            ),
+            (
+                "a_magnifier_damages_its_sampling_fringe",
+                d::a_magnifier_damages_its_sampling_fringe,
+            ),
+            (
+                "a_follower_at_the_nesting_limit_damages_what_it_draws",
+                d::a_follower_at_the_nesting_limit_damages_what_it_draws,
+            ),
+            (
+                "nested_filter_kernels_add_along_the_chain",
+                d::nested_filter_kernels_add_along_the_chain,
+            ),
+            (
+                "a_picture_effect_damages_its_damage_extent",
+                d::a_picture_effect_damages_its_damage_extent,
+            ),
+            (
+                "nested_followers_resolve_below_their_common_ancestor",
+                d::nested_followers_resolve_below_their_common_ancestor,
+            ),
+            (
+                "a_deep_effect_chain_applies_without_recursion",
+                d::a_deep_effect_chain_applies_without_recursion,
+            ),
+            (
+                "a_clip_over_a_shrunk_filter_keeps_its_device_kernel",
+                d::a_clip_over_a_shrunk_filter_keeps_its_device_kernel,
+            ),
+            (
+                "a_clip_over_a_shrunk_slotted_filter_keeps_its_device_kernel",
+                d::a_clip_over_a_shrunk_slotted_filter_keeps_its_device_kernel,
+            ),
+            (
+                "filter_inputs_are_read_once_the_damage_reaches_them",
+                d::filter_inputs_are_read_once_the_damage_reaches_them,
+            ),
+            (
+                "sibling_followers_pair_in_one_pass_over_their_links",
+                d::sibling_followers_pair_in_one_pass_over_their_links,
+            ),
+            (
+                "a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it",
+                d::a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it,
+            ),
+            (
+                "a_hidden_follower_hides_the_followers_of_the_leader_inside_it",
+                d::a_hidden_follower_hides_the_followers_of_the_leader_inside_it,
+            ),
+            (
+                "a_filter_under_a_shrinking_ancestor_damages_its_device_kernel",
+                d::a_filter_under_a_shrinking_ancestor_damages_its_device_kernel,
+            ),
+        ],
+    );
+}
+
+/// The patch damage covers the full diff on 10 000 random cases and misses
+/// it once a patch drops one operation's footprint (ADR-0304 §11).
+#[test]
+fn patch_damage_covers_diff_damage() {
+    scene_damage::patch_damage_covers_diff_damage();
 }

@@ -251,14 +251,26 @@ version before and after it:
 - `Retire` damages nothing, since only a node no slot names can be retired.
 - After the operations every follower is resolved again (O(followers × depth), counted as
   `followers_resolved`); one whose transform changed damages its subtree footprint under the old and
-  the new transform. A follower is no longer damaged every frame.
+  the new transform, and so does one under `LeaderClip::Hide` whose leader's branch the patch
+  changed, or whose chains pass through such a follower. A follower is no longer damaged every
+  frame. The followers of a republished
+  boundary pair with its old ones in one pass over each side's links (`follower_pairing_reads`).
 
-A subtree's footprint is its `subtree_bounds` mapped through the chain to the surface, rounded
-outward (ADR-0098 §6). A node's `subtree_bounds`, in its own space, covers its content's bounds and
-each child's `subtree_bounds` mapped through the child's placement and the effects above its slot.
-`Publish` recomputes it exactly from the children (O(children)); every other change grows the
-ancestors' bounds by union up to the root (O(depth)) and never shrinks them, so a footprint can
-over-report and never under-report. The engine culls with the same bounds. A chain, placement or
+A subtree's footprint is its `subtree_bounds` mapped through the chain to the surface, grown by
+its kernel and rounded outward (ADR-0098 §6). A node's `subtree_bounds`, in its own space, covers
+its content's bounds and each child's `subtree_bounds` mapped through the child's placement and the
+effects above its slot. Its kernel is how far, in device pixels, the filters in the subtree spread
+past those bounds once mapped: the renderer takes a blur or morphology kernel in physical pixels
+whatever the transform, so a bound in the boundary's space, which a shrinking ancestor shrinks,
+cannot hold it; a magnifier scales the kernel it takes, and a transform filter that is not a uniform
+scale has no kernel bound inside its boundary. A filter adds its own kernel to the maximum of its
+children's, so kernels sum along a chain and take the maximum across siblings; inside a boundary a
+filter moves what it takes and leaves its spread to the kernel, and a clip over a scope with a kernel
+bounds it by the clip, its kernel spent. `Publish`
+recomputes both exactly from the children (O(children)); every other change grows the ancestors'
+bounds by union and their kernel by maximum
+up to the root (O(depth)) and never shrinks them, so a footprint can over-report and never
+under-report. The engine culls with the same bounds. A chain, placement or
 bound that is not finite makes the frame `Full(NonFinite)`; a singular chain draws nothing and
 contributes only its old footprint.
 
@@ -313,9 +325,13 @@ under the norm of the CTM) and `writes` what it changes; a chunk with `reads_des
 writes its own bounds. Damage that meets an entry's `reads ∪ writes`, unless one rect of the
 region already contains it, joins `reads ∪ writes`. The joins and the region's merges repeat to a
 fixed point, at most 64 rounds (the cap of `frame_protocol.rs:285-299`), past which the frame is
-`Full(Unbounded)`; damage that meets a `Closure::Unbounded` is `Full(Unbounded)`. Each
-`BoundaryContent` caches its entries' footprints in its own space, and the filtered-node index
-keeps the closure at O(filtered × depth). The scene owner's `apply` and the raster side's texture
+`Full(Unbounded)`; damage that meets a `Closure::Unbounded` is `Full(Unbounded)`. A
+foreground image filter is read only once the region meets its node's subtree footprint, which holds
+all it writes, and then with the node's other filters in one fold of its content; a backdrop or colour
+filter and a reading chunk cost their chain. The filtered-node index and each content's list of its
+closure entries keep the closure at O(filtered × depth), never a pass over a node's other chunks,
+plus one fold of each filtered node the damage reaches. The
+scene owner's `apply` and the raster side's texture
 damage (§9) call this function; the differ's rule (`differ.rs:480-507`) and the engine's
 (`frame_protocol.rs:215-300`) are deleted. At the fixed point every footprint the region meets lies
 inside one of its rects, so each rect can be redrawn alone (§9).
