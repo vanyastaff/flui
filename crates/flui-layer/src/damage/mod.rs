@@ -24,7 +24,8 @@ pub use differ::LayerDiffer;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DamageMode {
     /// Retain nothing and report every frame as
-    /// [`DamageRegion::Full`](crate::DamageRegion::Full), without walking
+    /// [`DamageRegion::Full`](crate::DamageRegion::Full) for
+    /// [`FullReason::DamageOff`](crate::FullReason::DamageOff), without walking
     /// the tree: the cost per frame is the cost of not having a differ.
     Off,
     /// Diff every frame against the previous one.

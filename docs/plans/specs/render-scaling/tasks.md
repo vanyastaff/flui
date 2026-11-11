@@ -1,6 +1,6 @@
 # render-scaling: задачи
 
-- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS14. Следующие: RS3, RS5, RS15 (не
+- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS3, RS14. Следующие: RS5, RS15 (не
   зависят друг от друга); RS4 сливается в одной серии с RS8.
 - **Design:** [design.md](design.md); требования и ворота G1–G7: [requirements.md](requirements.md)
 - **База:** `main` @ `da69efa`. Пути и строки в ADR даны на `e5ba8fe8f`; перед правкой сверить.
@@ -230,7 +230,9 @@
 - **Что:** ADR-0305 §2–§6 без удаления оси ресурсов (она в RS19): `SurfaceFactory` (`!Send`),
   закрытые команды слота, расчёт кадра по штампу, темп и `SurfaceGeneration` на слот. Три PR:
   (a) исполнитель, команды и кольцо расчётов в `flui-engine`; (b) `Queued` и `settle_frame` в
-  `flui-runtime`; (c) `DisplayConnection`, `SurfaceFactory`, `bootstrap` и оконные слоты.
+  `flui-runtime`; (c) `DisplayConnection`, `SurfaceFactory`, `bootstrap` и оконные слоты; в (c)
+  отказ resize повторяется только после паники или переходной ошибки, а размер, который backend
+  отклоняет всегда, пишет warn один раз.
 - **Тесты:** compile-fail `surface_factory_is_owner_local`, `surface_factory_rejects_borrowed_window`;
   `a_full_lifecycle_queue_returns_the_command`, `a_stale_slot_id_is_refused_after_detach`,
   `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released`,
@@ -289,6 +291,7 @@
 | Задача | PR | Состояние | Доказательство |
 |---|---|---|---|
 | RS1 | #2384 | готова | `painting_it recording_contract::a_non_finite_op_is_refused_by_kind`, `…a_destructor_that_panics_during_reset_leaves_the_canvas_empty` (падает без порядка `reset`); `a_non_finite_op_is_omitted_and_the_frame_draws`, `inline_picture_replay_owns_its_root_clips` на lavapipe; `.snap` не тронуты; `rg draw_picture crates packages` пуст |
+| RS3 | #2383 | готова | `layer_it region_contract` (четыре строки), `union_table`, `bounds_round_outward_with_aa_margin`; `damage_readback_tests` на lavapipe без правки ожиданий; `_ =>` над `DamageRegion`, `FullReason`, `ResyncReason` нет |
 | RS14 | #2382 | готова; `RasterExecutor` переходит в RS15 вместе с командами, его единственный API это ход по ним | `every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format` (lavapipe): 3 слота в двух форматах дают 1 instance, 1 device, 1 атлас, 2 набора пайплайнов, 0 сборок на перерисовке; до: 3/3/3/3 |
-| RS15a | #2396 | на ревью: исполнитель, очередь жизненного цикла, ящики слотов, кольцо расчётов; RS15b, RS15c не начаты | `engine_it` 12 тестов, среди них `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released` (без фикса взаимоблокировка), `a_full_settlement_ring_holds_the_next_frame`, `a_stopped_executor_settles_every_pending_frame_failed` |
-| RS2–RS13, RS15b–RS19 | | не начата | |
+| RS15a | #2396 | готова (ревью принято); RS15b, RS15c не начаты | `engine_it` 15 тестов; без фикса падают `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released` (взаимоблокировка), `a_full_settlement_ring_holds_the_next_frame`, `a_stopped_executor_settles_every_pending_frame_failed`, `a_failed_resize_is_held_in_the_record_and_retried_next_turn`, `a_panicking_subscriber_cannot_strand_a_refused_slot`, `an_untaken_panic_payload_is_dropped_outside_the_slot_table` |
+| RS2, RS4–RS13, RS15b–RS19 | | не начата | |

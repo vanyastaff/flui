@@ -149,7 +149,11 @@ fn frame(epoch: FrameEpoch, surface_generation: SurfaceGeneration) -> SceneSnaps
         surface_generation,
         GpuResourceGeneration::ZERO,
     );
-    SceneSnapshot::new(stamp, DamageRegion::Full, scene_from_canvas())
+    SceneSnapshot::new(
+        stamp,
+        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+        scene_from_canvas(),
+    )
 }
 
 /// The measured claim: after warmup (the owner's own one-time

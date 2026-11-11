@@ -109,7 +109,11 @@ fn bench_frame(epoch: FrameEpoch, surface_generation: SurfaceGeneration) -> Scen
         surface_generation,
         GpuResourceGeneration::ZERO,
     );
-    SceneSnapshot::new(stamp, DamageRegion::Full, scene_from_canvas())
+    SceneSnapshot::new(
+        stamp,
+        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+        scene_from_canvas(),
+    )
 }
 
 /// Uncontended baseline: one thread doing submit→pump→retire in a tight

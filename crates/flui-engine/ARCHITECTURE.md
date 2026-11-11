@@ -1022,7 +1022,10 @@ Locked by `a_hard_rect_clip_keeps_the_pixels_whose_centres_are_inside`
 ### 18. Partial frames render into a retained target and blit — [ADR-0087 §4](../../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md)
 
 Damage arrives as `flui_layer::DamageRegion` on each `SceneSnapshot`, from the
-host's `LayerDiffer`; `RasterOwner::pump` hands it to the backend before the
+host's `LayerDiffer`. The enum is exhaustive (ADR-0304 §5): `Unchanged`,
+`Region` of up to eight disjoint rects, or `Full` with its `FullReason`, and the
+engine matches all three with no wildcard, so a new variant fails to compile
+here. The tracker plans by the region's bounds. `RasterOwner::pump` hands it to the backend before the
 freshness checks, so a frame rejected on a stale generation still leaves its
 debt, a superseded frame's region is folded into the frame that replaced it,
 and a failed render marks the next frame full. The tracker forgets its debt
@@ -1067,7 +1070,7 @@ submitted and would otherwise scissor over pixels it never saw.
 
 FLUI has no per-buffer damage accumulation (buffer age), so it keeps a committed
 retained image and prepares a candidate; it rounds damage outward with a 1 px anti-aliasing
-margin (`DamageRect::covering`) rather than aligning to tiles; and a frame with
+margin (`DamageRect::try_covering`) rather than aligning to tiles; and a frame with
 nothing damaged does not present (`PresentDisposition::NoDamage`).
 
 Before candidate isolation, `render_throughput`'s `damage_retained_target` group (1920×1080,
@@ -1135,7 +1138,7 @@ Edge cases:
   Captured transforms are validated affine geometry; unsupported projective
   input is a typed refusal. The conservative bounding extent still bounds damage.
 - Composite quads are not anti-aliased: a pixel is in the region when its
-  centre is. Damage rounds outward by a pixel (`DamageRect::covering`), so
+  centre is. Damage rounds outward by a pixel (`DamageRect::try_covering`), so
   every changed pixel stays covered.
 - The composite pipelines of the destination-replacing modes write
   transparent texels instead of discarding them (`replaces_destination` in

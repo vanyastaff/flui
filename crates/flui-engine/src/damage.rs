@@ -4,7 +4,7 @@
 //! [`crate::damage::DamageTracker`] is the renderer's per-frame accumulator of dirty area:
 //! the consuming half of ADR-0061 (the scissor + self-heal in
 //! `Renderer::render_scene`). The producer is `flui_layer::LayerDiffer`
-//! (ADR-0087 §3); its `flui_layer::DamageRegion` reaches the tracker through
+//! (ADR-0087 §3); its `flui_layer::DamageRegion` (ADR-0304 §5) reaches the tracker through
 //! `RasterOwner::pump`, which marks every frame it retires — presented or not
 //! — so debt a frame did not present stays here until one does.
 //!

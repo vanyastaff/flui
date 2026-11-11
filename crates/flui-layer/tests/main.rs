@@ -10,6 +10,8 @@ mod annotations;
 mod follower;
 #[path = "inspect.rs"]
 mod inspect;
+#[path = "region.rs"]
+mod region;
 #[path = "texture_registry.rs"]
 mod texture_registry;
 
@@ -161,6 +163,35 @@ fn texture_registry() {
             (
                 "a_panicking_listener_drop_still_wakes_the_retirement",
                 t::a_panicking_listener_drop_still_wakes_the_retirement,
+            ),
+        ],
+    );
+}
+
+/// A damage region holds at most eight disjoint rects, merges a ninth into
+/// the cheapest pair, and escalates a non-finite rect to `Full`, whose first
+/// reason survives a union (ADR-0304 §5).
+#[test]
+fn region_contract() {
+    use region as r;
+    run_rows(
+        "region_contract",
+        &[
+            (
+                "a_ninth_rect_merges_the_cheapest_pair",
+                r::a_ninth_rect_merges_the_cheapest_pair,
+            ),
+            (
+                "merged_rects_stay_pairwise_disjoint",
+                r::merged_rects_stay_pairwise_disjoint,
+            ),
+            (
+                "a_non_finite_rect_escalates_to_full",
+                r::a_non_finite_rect_escalates_to_full,
+            ),
+            (
+                "full_keeps_its_first_reason",
+                r::full_keeps_its_first_reason,
             ),
         ],
     );
