@@ -418,7 +418,6 @@ enum FocusNodeRegistrationKind {
 #[must_use = "dropping the registration immediately removes the installed focus-node property"]
 pub struct FocusNodeRegistration {
     node: Weak<FocusNode>,
-    node_id: FocusNodeId,
     generation: u64,
     kind: FocusNodeRegistrationKind,
     armed: bool,
@@ -428,7 +427,6 @@ impl FocusNodeRegistration {
     fn new(node: &Rc<FocusNode>, generation: u64, kind: FocusNodeRegistrationKind) -> Self {
         Self {
             node: Rc::downgrade(node),
-            node_id: node.id(),
             generation,
             kind,
             armed: true,
@@ -534,7 +532,7 @@ impl Drop for FocusNodeRegistration {
 impl std::fmt::Debug for FocusNodeRegistration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FocusNodeRegistration")
-            .field("node_id", &self.node_id)
+            .field("node_id", &self.node.upgrade().map(|node| node.id()))
             .field("generation", &self.generation)
             .field("kind", &self.kind)
             .field("current", &self.is_current())

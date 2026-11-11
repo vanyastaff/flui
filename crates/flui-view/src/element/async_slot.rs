@@ -10,9 +10,9 @@
 use std::{rc::Rc, sync::Arc};
 
 use crate::RebuildHandle;
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{AsyncSnapshot, ConnectionState};
 use parking_lot::Mutex;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use crate::BoxedView;
 use crate::context::BuildContext;
@@ -108,30 +108,13 @@ pub(crate) fn apply_update<T, E>(
     };
     // The incoming value belongs to the published slot already. Retiring the
     // old snapshot cannot destroy it during the old value's unwind.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a retired snapshot's drop runs contained after the swap"
-    )]
-    let mut first = catch_unwind(AssertUnwindSafe(|| drop(retired))).err();
+    // A retired snapshot's panic does not lose the rebuild the published
+    // value owes.
+    let mut first = FirstPanic::new();
+    first.contain(|| drop(retired));
     if rebuild {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the rebuild wake runs contained after the slot is published"
-        )]
-        let wake = catch_unwind(AssertUnwindSafe(|| {
-            handle.schedule(crate::RebuildReason::AsyncCompletion);
-        }))
-        .err();
-        if let Some(payload) = wake {
-            if first.is_none() {
-                first = Some(payload);
-            } else {
-                flui_foundation::panic::discard_payload(payload);
-            }
-        }
+        first.contain(|| handle.schedule(crate::RebuildReason::AsyncCompletion));
     }
-    if let Some(payload) = first {
-        resume_unwind(payload);
-    }
+    first.resume();
     accepted
 }

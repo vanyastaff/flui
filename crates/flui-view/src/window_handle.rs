@@ -6,7 +6,6 @@
 //! call answers closed. The host owns the window through a [`WindowSource`].
 
 use std::cell::Cell;
-use std::panic::resume_unwind;
 use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Point, Size};
@@ -297,9 +296,7 @@ impl WindowSource {
     /// Deliver queued states in FIFO order. Nested drains defer to the active
     /// walk; the first callback panic resumes after every eligible callback ran.
     pub fn drain(&self) {
-        if let Some(payload) = self.states.drain() {
-            resume_unwind(payload);
-        }
+        self.states.drain().resume();
     }
 
     /// Close the window's handles: later calls answer closed and every
@@ -314,11 +311,9 @@ impl WindowSource {
 
 impl Drop for WindowSource {
     fn drop(&mut self) {
-        let mut first = None;
+        // A drop raises no release failure: `first` discards it when it drops.
+        let mut first = flui_foundation::panic::FirstPanic::new();
         self.states.release(&mut first);
-        if let Some(payload) = first {
-            flui_foundation::panic::discard_payload(payload);
-        }
     }
 }
 

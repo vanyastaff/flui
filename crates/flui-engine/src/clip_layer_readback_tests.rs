@@ -1329,7 +1329,7 @@ fn path_clip_fill_rules_and_implicit_close() {
     );
 }
 
-/// A window-sized antialiased clip pays its samples only along its edges.
+/// A window-sized antialiased clip pays its samples only at its corners.
 /// Mask pixels whose every sample passes every leaf take full coverage
 /// without walking the tape (`MaskInterior`), are charged one unit each, and
 /// read back byte for byte as sampling resolves them.
@@ -1571,7 +1571,7 @@ fn lazy_pipeline_admission_recovers() {
             attachment_to_root: [1.0, 0.0, 0.0, 1.0],
             translation: [0.0; 4],
             extent_counts: [4, 4, 0, 0],
-            interior: [0; 4],
+            interior: [[0; 4]; 2],
         };
         let prepare = |pipeline: &mut ClipMaskPipeline,
                        resources: &mut GpuResources,
