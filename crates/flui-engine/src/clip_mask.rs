@@ -33,37 +33,49 @@ pub(crate) struct MaskMapping {
     pub(crate) translation: [f32; 4],
     /// Mask width/height; prepare overwrites node count and sample count (1 hard, 64 AA).
     pub(crate) extent_counts: [u32; 4],
-    /// Mask pixels `[x0, x1) × [y0, y1)` resolved to full coverage without
+    /// Two boxes of mask pixels, each `[x0, x1) × [y0, y1)` as `[x0, y0, x1, y1]`,
+    /// resolved to full coverage without
     /// sampling ([`MaskInterior`]); all zero when there are none. Prepare
     /// overwrites it from the tape.
-    pub(crate) interior: [u32; 4],
+    pub(crate) interior: [[u32; 4]; 2],
 }
 
 /// Mask pixels every sample of which every node of a tape decides as full
 /// coverage does: inside each intersected node, outside each subtracted one.
 ///
 /// The membership shader returns full coverage there without walking the
-/// tape, so an antialiased clip pays its samples only along its edges. It is
+/// tape, so an antialiased clip pays its samples only along its curves. It is
 /// derived from the tape and mapping the shader reads, in their `f32`
 /// values, and is conservative: a pixel is in it only when its whole square
 /// lies inside the node by more than the rounding of the shader's `f32`
 /// arithmetic, so the early answer is the answer the samples would give.
+///
+/// It is the union of two boxes, so a rounded rectangle's interior is the
+/// cross of its two arms and only its corners are sampled. The second box
+/// is all zero when it adds no pixel to the first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MaskInterior {
-    left: u32,
-    top: u32,
-    right: u32,
-    bottom: u32,
+    boxes: [[u32; 4]; 2],
 }
 
 impl MaskInterior {
-    /// Pixels in the interior.
+    /// Pixels in the interior: the union of its boxes.
     pub(crate) fn area(self) -> usize {
-        (self.right - self.left) as usize * (self.bottom - self.top) as usize
+        let area = |[left, top, right, bottom]: [u32; 4]| {
+            right.saturating_sub(left) as usize * bottom.saturating_sub(top) as usize
+        };
+        let [first, second] = self.boxes;
+        let shared = [
+            first[0].max(second[0]),
+            first[1].max(second[1]),
+            first[2].min(second[2]),
+            first[3].min(second[3]),
+        ];
+        area(first) + area(second) - area(shared)
     }
 
-    fn packed(self) -> [u32; 4] {
-        [self.left, self.top, self.right, self.bottom]
+    fn packed(self) -> [[u32; 4]; 2] {
+        self.boxes
     }
 }
 
@@ -193,12 +205,16 @@ impl NodeAxis {
 /// when it is empty or not a box this test can find: a mapping or a node
 /// that rotates or skews, a path node, a non-finite value.
 ///
-/// An intersected rectangle keeps its bounds; a rounded rectangle or a
-/// superellipse keeps the larger of its two arms clear of every corner (a
-/// corner rejects a point only when it lies past the corner's centre on both
-/// axes). A subtracted node removes its bounds, keeping the largest slab
-/// beside them. Membership is a conjunction, so the order the nodes are
-/// taken in changes which box is found, never whether it is inside.
+/// Two boxes are kept. An intersected rectangle keeps its bounds in both; a
+/// rounded rectangle or a superellipse keeps the larger of its two arms clear
+/// of every corner in the first and the other arm in the second (a corner
+/// rejects a point only when it lies past the corner's centre on both axes),
+/// so one window-sized rounded rectangle leaves the cross of its arms and
+/// only the corners are sampled. A subtracted node removes its bounds from
+/// each, keeping the largest slab beside them. Each box lies inside every
+/// node on its own, so their union does; membership is a conjunction, so
+/// the order the nodes are taken in changes which boxes are found, never
+/// whether they are inside.
 pub(crate) fn uniform_interior(nodes: &[MaskNode], mapping: &MaskMapping) -> Option<MaskInterior> {
     let [m0, m1, m2, m3] = mapping.attachment_to_root.map(f64::from);
     let [tx, ty, ox, oy] = mapping.translation.map(f64::from);
@@ -206,10 +222,11 @@ pub(crate) fn uniform_interior(nodes: &[MaskNode], mapping: &MaskMapping) -> Opt
     if nodes.is_empty() || m1 != 0.0 || m2 != 0.0 {
         return None;
     }
-    let mut interior = PixelBox {
+    let mask = PixelBox {
         x: (0, i64::from(width)),
         y: (0, i64::from(height)),
     };
+    let (mut first, mut second) = (mask, mask);
     for node in nodes {
         let [i0, i1, i2, i3] = node.inverse.map(f64::from);
         if node.meta[0] > 2 || i1 != 0.0 || i2 != 0.0 {
@@ -245,17 +262,20 @@ pub(crate) fn uniform_interior(nodes: &[MaskNode], mapping: &MaskMapping) -> Opt
             top.abs() + h.abs() + largest(ry),
         )?;
         if node.meta[1] == 1 {
-            interior = interior.without(PixelBox {
+            let hole = PixelBox {
                 x: x.touching(left, right),
                 y: y.touching(top, bottom),
-            });
+            };
+            first = first.without(hole);
+            second = second.without(hole);
         } else {
             let arm = |l: f64, t: f64, r: f64, b: f64| PixelBox {
                 x: x.inside(l, r),
                 y: y.inside(t, b),
             };
-            let kept = if node.meta[0] == 0 {
-                arm(left, top, right, bottom)
+            let (larger, other) = if node.meta[0] == 0 {
+                let bounds = arm(left, top, right, bottom);
+                (bounds, bounds)
             } else {
                 // Corners in order top-left, top-right, bottom-right, bottom-left.
                 let horizontal = arm(
@@ -271,25 +291,41 @@ pub(crate) fn uniform_interior(nodes: &[MaskNode], mapping: &MaskMapping) -> Opt
                     bottom,
                 );
                 if vertical.area() > horizontal.area() {
-                    vertical
+                    (vertical, horizontal)
                 } else {
-                    horizontal
+                    (horizontal, vertical)
                 }
             };
-            interior = interior.intersect(kept);
+            first = first.intersect(larger);
+            second = second.intersect(other);
         }
-        if interior.area() == 0 {
+        if first.area() == 0 && second.area() == 0 {
             return None;
         }
     }
-    // Every bound lies in `[0, extent]`: the box started as the mask and only
-    // shrank.
+    if first.area() == 0 {
+        (first, second) = (second, first);
+    }
+    // A second box inside the first adds nothing to sample less.
+    if second.area() == 0 || first.intersect(second) == second {
+        second = PixelBox {
+            x: (0, 0),
+            y: (0, 0),
+        };
+    }
+    // Every bound lies in `[0, extent]`: each box started as the mask and
+    // only shrank, and an empty second box is all zero.
     let bound = |v: i64| u32::try_from(v).expect("BUG: the interior lies within the mask");
+    let packed = |pixels: PixelBox| {
+        [
+            bound(pixels.x.0),
+            bound(pixels.y.0),
+            bound(pixels.x.1),
+            bound(pixels.y.1),
+        ]
+    };
     Some(MaskInterior {
-        left: bound(interior.x.0),
-        top: bound(interior.y.0),
-        right: bound(interior.x.1),
-        bottom: bound(interior.y.1),
+        boxes: [packed(first), packed(second)],
     })
 }
 
@@ -644,7 +680,7 @@ impl ClipMaskPipeline {
         mapping.extent_counts[2] = u32::try_from(nodes.len())
             .map_err(|_| limit("clip node count", nodes.len(), u32::MAX as usize))?;
         mapping.extent_counts[3] = if all_hard { 1 } else { 64 };
-        mapping.interior = interior.map_or([0; 4], MaskInterior::packed);
+        mapping.interior = interior.map_or([[0; 4]; 2], MaskInterior::packed);
         // Fixed uniform arrays work on baseline WebGL2 without storage buffers.
         let payload = 7168 + 8192 + std::mem::size_of::<MaskMapping>();
         let texture_bytes = (extent.0 as usize)
@@ -810,7 +846,7 @@ mod tests {
             attachment_to_root,
             translation,
             extent_counts: [extent.0, extent.1, 0, 0],
-            interior: [0; 4],
+            interior: [[0; 4]; 2],
         }
     }
 
@@ -820,10 +856,15 @@ mod tests {
 
     fn interior(left: u32, top: u32, right: u32, bottom: u32) -> MaskInterior {
         MaskInterior {
-            left,
-            top,
-            right,
-            bottom,
+            boxes: [[left, top, right, bottom], [0; 4]],
+        }
+    }
+
+    impl MaskInterior {
+        /// This interior with `[left, right) × [top, bottom)` as its second box.
+        fn and(mut self, left: u32, top: u32, right: u32, bottom: u32) -> Self {
+            self.boxes[1] = [left, top, right, bottom];
+            self
         }
     }
 
@@ -943,10 +984,10 @@ mod tests {
         );
         let rows: Vec<Row> = vec![
             (
-                "a window-sized rounded rectangle keeps its horizontal arm",
+                "a window-sized rounded rectangle keeps the cross of its arms",
                 vec![window; 16],
                 identity((1024, 1024)),
-                Some(interior(1, 33, 1023, 991)),
+                Some(interior(1, 33, 1023, 991).and(33, 1, 991, 1023)),
             ),
             (
                 "a hard rectangle at fractional edges",
@@ -981,13 +1022,13 @@ mod tests {
                     [24.0, 2.0, 2.0, 2.0],
                 )],
                 identity(small),
-                Some(interior(5, 1, 59, 63)),
+                Some(interior(5, 1, 59, 63).and(1, 25, 63, 61)),
             ),
             (
                 "a superellipse",
                 vec![node(SUPERELLIPSE, [0.0, 0.0, 64.0, 64.0], r(16.0), r(16.0))],
                 identity(small),
-                Some(interior(1, 17, 63, 47)),
+                Some(interior(1, 17, 63, 47).and(17, 1, 47, 63)),
             ),
             (
                 "nested leaves intersect",
@@ -996,7 +1037,7 @@ mod tests {
                     node(RRECT, [8.0, 8.0, 48.0, 48.0], r(8.0), r(8.0)),
                 ],
                 identity(small),
-                Some(interior(9, 17, 55, 47)),
+                Some(interior(9, 17, 55, 47).and(17, 9, 47, 55)),
             ),
             (
                 "a subtracted rectangle keeps the largest slab beside it",
@@ -1056,19 +1097,26 @@ mod tests {
                 continue;
             }
             let Some(found) = found else { continue };
-            // Every pixel of a small mask, the border of a large one.
-            let [left, top, right, bottom] = found.packed();
-            let pixels: Vec<(u32, u32)> = if found.area() <= 4096 {
-                (top..bottom)
-                    .flat_map(|y| (left..right).map(move |x| (x, y)))
-                    .collect()
-            } else {
-                (left..right)
-                    .flat_map(|x| [(x, top), (x, bottom - 1)])
-                    .chain((top..bottom).flat_map(|y| [(left, y), (right - 1, y)]))
-                    .collect()
-            };
-            if let Some((x, y, covered, samples)) = pixels.into_iter().find_map(|(x, y)| {
+            // Every pixel of a small box, the border of a large one, for
+            // each box that holds any.
+            let mut pixels = found
+                .packed()
+                .into_iter()
+                .filter(|[left, top, right, bottom]| left < right && top < bottom)
+                .flat_map(|[left, top, right, bottom]| -> Vec<(u32, u32)> {
+                    if (right - left) * (bottom - top) <= 4096 {
+                        (top..bottom)
+                            .flat_map(|y| (left..right).map(move |x| (x, y)))
+                            .collect()
+                    } else {
+                        (left..right)
+                            .flat_map(|x| [(x, top), (x, bottom - 1)])
+                            .chain((top..bottom).flat_map(|y| [(left, y), (right - 1, y)]))
+                            .collect()
+                    }
+                });
+
+            if let Some((x, y, covered, samples)) = pixels.find_map(|(x, y)| {
                 let (covered, samples) = shader_coverage(nodes, mapping, x, y);
                 (covered != samples).then_some((x, y, covered, samples))
             }) {
@@ -1088,12 +1136,14 @@ mod tests {
         let window = node(RRECT, [0.0, 0.0, 1024.0, 1024.0], [32.0; 4], [32.0; 4]);
         let nodes = vec![window; 16];
         let mapping = identity((1024, 1024));
-        let sampled = 1024 * 1024 - 1022 * 958;
+        // The cross of the two arms: only the four 32 × 32 corners sample.
+        let interior_area = 2 * 1022 * 958 - 958 * 958;
+        let sampled = 1024 * 1024 - interior_area;
         assert_eq!(
             membership_work(&nodes, &mapping).expect("in range"),
             (
-                sampled * 64 * 16 + 1022 * 958,
-                Some(interior(1, 33, 1023, 991))
+                sampled * 64 * 16 + interior_area,
+                Some(interior(1, 33, 1023, 991).and(33, 1, 991, 1023))
             ),
         );
         assert_eq!(
@@ -1108,7 +1158,8 @@ mod tests {
 
         // A 6K window under one antialiased rounded rectangle of radius 12:
         // 1,302,921,216 units sampled whole, refused on every full frame;
-        // the vertical arm is the wider one.
+        // the vertical arm is the wider one, and the horizontal one adds its
+        // strips along the short sides.
         let window = node(RRECT, [0.0, 0.0, 6016.0, 3384.0], [12.0; 4], [12.0; 4]);
         let mapping = identity((6016, 3384));
         assert_eq!(
@@ -1117,7 +1168,10 @@ mod tests {
         );
         assert_eq!(
             membership_work(&[window], &mapping).expect("in range"),
-            (26_655_876, Some(interior(13, 1, 6003, 3383))),
+            (
+                21_578_580,
+                Some(interior(13, 1, 6003, 3383).and(1, 13, 6015, 3371))
+            ),
         );
     }
 }

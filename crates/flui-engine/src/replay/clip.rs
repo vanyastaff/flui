@@ -388,7 +388,7 @@ impl GpuReplay {
             attachment_to_root: [m[0] as f32, m[1] as f32, m[2] as f32, m[3] as f32],
             translation: [m[4] as f32, m[5] as f32, origin.0 as f32, origin.1 as f32],
             extent_counts: [extent.0, extent.1, 0, 0],
-            interior: [0; 4],
+            interior: [[0; 4]; 2],
         };
         // The work of the mask the pipeline will resolve: the same tape and
         // mapping, so the interior admitted here is the one it skips.

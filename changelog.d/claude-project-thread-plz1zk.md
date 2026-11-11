@@ -26,3 +26,10 @@
 
 - **`flui-engine`**: `RasterOwner`, `RasterHandle` and the per-window `RasterBackend`, replaced by
   `RasterExecutor` and its slots; they go once the window runners move to slots.
+
+### Fixed
+
+- **`flui-engine`**: an antialiased rounded-rectangle or superellipse clip samples only its
+  corners: the clip mask skips the cross of both arms, not one arm, so a window-sized clip at
+  sixteen leaves samples 8,188 mask pixels instead of 69,500 and fits a software adapter's
+  readback deadline.
