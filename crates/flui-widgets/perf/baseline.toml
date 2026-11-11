@@ -2,7 +2,7 @@
 # One table per scenario of crates/flui-widgets/tests/perf.rs.
 
 [full_reassemble]
-allocations = 2913
+allocations = 2895
 builds_run = 273
 elements_rebuilt = 147
 frames_produced = 1
@@ -15,13 +15,13 @@ nodes_painted = 134
 semantics_nodes_updated = 42
 
 [label_change_large]
-allocations = 822
+allocations = 590
 
 [label_change_small]
-allocations = 822
+allocations = 590
 
 [list_10k_scroll_one_screen]
-allocations = 4332
+allocations = 4302
 builds_run = 126
 elements_rebuilt = 126
 frames_produced = 1
@@ -34,7 +34,7 @@ nodes_painted = 134
 semantics_nodes_updated = 81
 
 [slide_transition_tick]
-allocations = 90
+allocations = 78
 builds_run = 0
 elements_rebuilt = 0
 frames_produced = 1

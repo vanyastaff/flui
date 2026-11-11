@@ -466,10 +466,23 @@ pub struct GlobalKeyRegistryComposite(crate::key::registry::GlobalKeyRegistryHan
 
 impl GlobalKeyRegistryComposite {
     /// Assemble a composite spanning `bindings`' own registries, in order.
+    ///
+    /// A composite of one binding is that binding's own registry: with a
+    /// single member, trying each in turn and remembering which one answered
+    /// both reduce to asking it, so a UI runtime with one presentation
+    /// enters its scope without building anything.
     #[must_use]
     pub fn assemble<'a>(bindings: impl IntoIterator<Item = &'a WidgetsBinding>) -> Self {
-        let handles = bindings
+        let mut bindings = bindings.into_iter();
+        let first = bindings.next();
+        let second = bindings.next();
+        if let (Some(only), None) = (first, second) {
+            return Self(only.global_key_registry_handle());
+        }
+        let handles: Vec<crate::key::registry::GlobalKeyRegistryHandle> = first
             .into_iter()
+            .chain(second)
+            .chain(bindings)
             .map(WidgetsBinding::global_key_registry_handle)
             .collect();
         Self(crate::key::registry::build_composite(handles))
