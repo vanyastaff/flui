@@ -92,9 +92,10 @@ impl RawButton {
     }
 }
 
-/// The button's answer to the activation intents: the press callback, or —
-/// disabled — a declared but disabled mapping, so the intent stops here
-/// instead of activating an enclosing control.
+/// The button's answer to the activation intents: the press callback. A
+/// disabled button's node keeps the bindings declared and switched off, so
+/// the intent stops at the button instead of activating an enclosing
+/// control.
 #[derive(Clone)]
 struct Press(Option<PressCallback>);
 
@@ -111,20 +112,12 @@ impl Press {
 }
 
 impl Action<ActivateIntent> for Press {
-    fn is_enabled(&self, _intent: &ActivateIntent) -> bool {
-        self.0.is_some()
-    }
-
     fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
         self.run(cx)
     }
 }
 
 impl Action<ButtonActivateIntent> for Press {
-    fn is_enabled(&self, _intent: &ButtonActivateIntent) -> bool {
-        self.0.is_some()
-    }
-
     fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
         self.run(cx)
     }
@@ -134,10 +127,6 @@ impl Action<ButtonActivateIntent> for Press {
 /// release that activates belong to the button. It changes nothing — the
 /// button has no pressed look.
 impl Action<ActivationPressIntent> for Press {
-    fn is_enabled(&self, _intent: &ActivationPressIntent) -> bool {
-        self.0.is_some()
-    }
-
     fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
         ActionOutcome::Performed
     }
@@ -153,14 +142,13 @@ impl StatelessView for RawButton {
         let semantics = Semantics::new()
             .container(true)
             .role(crate::SemanticsRole::Button)
-            .enabled(enabled)
             .identifier_if(self.identifier.as_ref());
         // The bindings are the node's own, so its focus node records them
         // and the root bindings resolve the activation here (ADR-0079).
         let mut node = InteractiveNode::new(self.child.clone())
             .behavior(HitTestBehavior::Opaque)
+            .enabled(enabled)
             .focus(FocusConfig {
-                can_request_focus: Some(enabled),
                 debug_label: Some("RawButton"),
                 ..FocusConfig::new()
             })

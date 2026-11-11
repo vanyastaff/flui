@@ -377,7 +377,9 @@ render object or already owns the element the value comes from.
   long press, cancel) gives the same winner, the same callbacks and the same order as the
   wrappers.
 - `disabled_raw_button_is_disabled_in_every_part`: one switch, the six rows of §2, including a
-  disable during a contact and an action notifier that fires with no rebuild.
+  disable during a contact and an action notifier that fires with no rebuild. The pointer and
+  action rows of a control that keeps its callback while disabled are the node's `switch_tests`
+  (`crates/flui-widgets/src/interaction/node.rs`).
 - `hover_repaints_without_rebuilding`: a hover over a control with a paint-time state reader
   rebuilds zero elements and paints one render object.
 - `crates/flui-view/tests/provided_values.rs`: `provided_value_change_notifies_like_inherited_element`,

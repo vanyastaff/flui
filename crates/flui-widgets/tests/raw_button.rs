@@ -512,3 +512,151 @@ pub(crate) fn nested_raw_button_contests_like_gesture_detector() {
         }
     }
 }
+
+/// A button whose test turns it off and on: enabled, it presses into `log`;
+/// disabled, it has no callback. An enclosing binding for the keyboard
+/// activation logs `"outer"`.
+#[derive(Clone, StatefulView)]
+struct Switched {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+    log: PressLog,
+}
+
+struct SwitchedState {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+}
+
+struct Outer(PressLog);
+
+impl IntentAction<ActivateIntent> for Outer {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+        self.0.borrow_mut().push("outer");
+        ActionOutcome::Performed
+    }
+}
+
+impl StatefulView for Switched {
+    type State = SwitchedState;
+    fn create_state(&self) -> Self::State {
+        SwitchedState {
+            enabled: self.enabled.clone(),
+        }
+    }
+}
+
+impl ViewState<Switched> for SwitchedState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.enabled.bind(ctx);
+    }
+
+    fn build(&self, view: &Switched, ctx: &dyn BuildContext) -> impl IntoView {
+        let on_press = self.enabled.get(ctx).then(|| logging(&view.log, "press"));
+        Actions::new(button(
+            Made::Raw,
+            on_press,
+            flui_widgets::SizedBox::new(120.0, 60.0).child(Text::new("Press")),
+        ))
+        .action::<ActivateIntent>(Outer(Rc::clone(&view.log)))
+    }
+}
+
+/// One switch turns a button off in every part (ADR-0322 §2): its semantics
+/// say disabled and offer no click, a tap presses nothing, it is not a Tab
+/// stop and gives up the focus it holds, and the keyboard activation stops
+/// at it instead of reaching a binding above. A contact in flight when the
+/// button is disabled presses nothing when it lifts. Turned on again, every
+/// part works.
+///
+/// Red-check: drop the switch from the node's focus configuration (the
+/// disabled button stays a Tab stop), or from its semantics (the node does
+/// not read as disabled). A button without a callback has no tap and no
+/// press to run, so the pointer and action rows of the switch are checked
+/// on the node itself (`switch_tests` beside it).
+pub(crate) fn disabled_raw_button_is_disabled_in_every_part() {
+    use flui_platform::keyboard::{Key, NamedKey};
+
+    use crate::keyboard_focus::{press as press_key, tab};
+
+    let enabled = flui_testing::widgets::SharedSignal::new(true);
+    let log = PressLog::default();
+    let mut app = lay_out(
+        Switched {
+            enabled: enabled.clone(),
+            log: Rc::clone(&log),
+        },
+        loose(400.0),
+    );
+    let manager = app.focus_manager();
+    let offers_click = |app: &mut LaidOut| {
+        let (tree, _id) = button_node(app);
+        let node = tree.find_by_label("Press").expect("the button's node");
+        (node.supports_action(Action::Click), node.is_disabled())
+    };
+    let enter = |app: &LaidOut| {
+        let manager = app.focus_manager();
+        app.enter_owner_scope(|| press_key(&manager, &Key::Named(NamedKey::Enter)))
+    };
+
+    // Enabled: every part works.
+    assert_eq!(offers_click(&mut app), (true, false));
+    contact(&mut app, Contact::Tap, 20.0, 20.0);
+    assert!(
+        app.enter_owner_scope(|| tab(&manager)),
+        "an enabled button is a Tab stop"
+    );
+    let _ = enter(&app);
+    assert_eq!(*log.borrow(), ["press", "press"]);
+
+    // A contact goes down, and the button is disabled under it.
+    app.dispatch_pointer_down(20.0, 20.0);
+    enabled.set(false);
+    app.pump();
+    app.dispatch_pointer_up(20.0, 20.0);
+    app.pump_for(std::time::Duration::from_millis(400));
+    assert_eq!(
+        *log.borrow(),
+        ["press", "press"],
+        "a contact in flight when the button is disabled presses nothing"
+    );
+
+    // Disabled: each part is off.
+    assert_eq!(
+        offers_click(&mut app),
+        (false, true),
+        "semantics say disabled and offer no click"
+    );
+    assert!(
+        manager.primary_focus().is_none(),
+        "a disabled button gives up the focus it holds"
+    );
+    contact(&mut app, Contact::Tap, 20.0, 20.0);
+    assert!(
+        !app.enter_owner_scope(|| tab(&manager)),
+        "a disabled button is not a Tab stop"
+    );
+    assert_eq!(
+        *log.borrow(),
+        ["press", "press"],
+        "a tap on a disabled button presses nothing"
+    );
+
+    // Enabled again.
+    enabled.set(true);
+    app.pump();
+    assert_eq!(offers_click(&mut app), (true, false));
+    contact(&mut app, Contact::Tap, 20.0, 20.0);
+    assert!(app.enter_owner_scope(|| tab(&manager)));
+    let _ = enter(&app);
+    assert_eq!(*log.borrow(), ["press", "press", "press", "press"]);
+
+    // Disabled while it holds the focus: the key activates nothing, here
+    // or above.
+    enabled.set(false);
+    app.pump();
+    let _ = enter(&app);
+    assert_eq!(
+        *log.borrow(),
+        ["press", "press", "press", "press"],
+        "the activation key reaches neither the disabled button nor the action above it"
+    );
+}

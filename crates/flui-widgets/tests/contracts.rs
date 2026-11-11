@@ -986,6 +986,7 @@ fn semantics_translation_and_routing() {
             ("semantics::semantics_turned_on_later_publish_the_tree_of_semantics_on_from_the_start", crate::semantics::semantics_turned_on_later_publish_the_tree_of_semantics_on_from_the_start),
             ("raw_button::raw_button_press_is_reachable_through_a_platform_click", crate::raw_button::raw_button_press_is_reachable_through_a_platform_click),
             ("raw_button::raw_button_a11y_tree_matches_wrappers", crate::raw_button::raw_button_a11y_tree_matches_wrappers),
+            ("raw_button::disabled_raw_button_is_disabled_in_every_part", crate::raw_button::disabled_raw_button_is_disabled_in_every_part),
         ],
     );
 }
