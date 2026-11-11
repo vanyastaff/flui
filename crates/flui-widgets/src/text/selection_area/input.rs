@@ -991,7 +991,7 @@ impl SelectionGesturesState {
         if self.built_for.as_ref() == Some(&policy) {
             return;
         }
-        let GesturePolicy { arena, settings } = policy.clone();
+        let (arena, settings) = (policy.arena().clone(), policy.settings().clone());
         let weak = Rc::downgrade(&self.model);
         let tap_and_drag = {
             let (up, start, update, end, cancel) = (

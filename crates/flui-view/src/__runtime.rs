@@ -25,12 +25,12 @@ use std::any::{Any, TypeId};
 use std::cell::Cell;
 use std::fmt;
 use std::num::NonZeroU64;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Weak};
 use std::task::Waker;
 use std::time::Duration;
 
+use flui_foundation::panic::FirstPanic;
 use flui_protocol::RecordRow;
 use flui_protocol::input_recording::Header;
 use flui_protocol::method::WindowMethod;
@@ -292,27 +292,18 @@ impl WakeSlot {
     /// serves (ADR-0288 §3).
     pub fn wake(&self) {
         let woken = self.0.lock().take();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a kept waker's wake runs contained so the owner never unwinds"
-        )]
+        let mut caught = FirstPanic::new();
         if let Some(waker) = woken
-            && let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake()))
+            && caught.contain(|| waker.wake()).is_none()
         {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a waker's panic report runs contained; its own panic is discarded"
-            )]
-            let reported = catch_unwind(AssertUnwindSafe(|| {
+            // The report is contained too; the collectors destroy both
+            // payloads under containment when they drop.
+            FirstPanic::new().contain(|| {
                 tracing::error!(
-                    panic = flui_foundation::panic::payload_text(payload.as_ref()),
+                    panic = caught.held().and_then(flui_foundation::panic::payload_text),
                     "a development agent's waker panicked; its answer or event stays readable"
                 );
-            }));
-            if let Err(second) = reported {
-                flui_foundation::panic::discard_payload(second);
-            }
-            flui_foundation::panic::discard_payload(payload);
+            });
         }
     }
 }

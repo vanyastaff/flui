@@ -2,6 +2,8 @@
 //! §3): the preflight peek happens before any teardown runs, the occupant
 //! stays live, and the refusal does not expose the slot to the next insert.
 
+use std::panic::AssertUnwindSafe;
+
 use super::*;
 
 /// A slot's terminal seed: only this injection is private; refusal and reuse

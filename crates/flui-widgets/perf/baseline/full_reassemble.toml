@@ -2,8 +2,13 @@
 # One scenario of crates/flui-widgets/tests/perf.rs.
 
 [full_reassemble]
+<<<<<<< HEAD
 allocated_bytes = 733303
 allocations = 1714
+=======
+allocated_bytes = 736255
+allocations = 1840
+>>>>>>> origin/main
 builds_run = 273
 elements_rebuilt = 147
 frames_produced = 1

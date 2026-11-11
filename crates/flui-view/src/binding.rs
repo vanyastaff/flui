@@ -45,6 +45,7 @@ use std::{
 
 use flui_foundation::ElementId;
 use flui_foundation::inspect::{SnapshotError, SnapshotNode, SnapshotQuery};
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::FocusManager;
 use flui_rendering::pipeline::PipelineCell;
 use tree_cell::TreeCell;
@@ -655,20 +656,20 @@ impl WidgetsBinding {
         observer: std::sync::Arc<dyn flui_foundation::observe::TreeObserver>,
     ) {
         let mut inner = self.inner.write();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a tree observer's replay runs contained so install can abort"
-        )]
-        let replay_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            inner.element_tree.replay_mounts(&*observer);
-        }))
-        .is_ok();
-        if replay_ok {
+        let mut caught = FirstPanic::new();
+        if caught
+            .contain(|| inner.element_tree.replay_mounts(&*observer))
+            .is_some()
+        {
             inner.build_owner.set_tree_observer(observer);
         } else {
-            tracing::error!(
-                "TreeObserver panicked during seeded replay; install aborted, nothing registered"
-            );
+            // The replay's payload is destroyed under containment when
+            // `caught` drops; the log is contained the same way.
+            FirstPanic::new().contain(|| {
+                tracing::error!(
+                    "TreeObserver panicked during seeded replay; install aborted, nothing registered"
+                );
+            });
         }
     }
 
@@ -893,7 +894,7 @@ impl WidgetsBinding {
             }
             keys
         };
-        let mut first = flui_foundation::panic::FirstPanic::new();
+        let mut first = FirstPanic::new();
         for key in keys {
             if preserving {
                 // The host already owns the failure this close preserves.
@@ -1393,7 +1394,7 @@ impl WidgetsBinding {
         // An observer that panics ends the observers' walk, as any binding
         // notification does; the scoped subscribers still hear the state,
         // and the observer's panic is the one resumed.
-        let mut first = flui_foundation::panic::FirstPanic::new();
+        let mut first = FirstPanic::new();
         first.contain(|| {
             let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
             for observer in &observers {

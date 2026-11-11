@@ -43,8 +43,9 @@ gpu-profiler = ["dep:wgpu-profiler"]
 # --features testing`, CI's gpu-test job) and the bench scaffolding they share
 # (`OffscreenRenderer`, `TexturePool`, `PathCache`). Off by default and not
 # part of the public API; the same name and meaning as in flui-layer and
-# flui-rendering.
-testing = []
+# flui-rendering. It turns on wgpu's no-op backend, which only
+# `testing::noop_surface_factory` asks for: surfaces without a GPU or a window.
+testing = ["wgpu/noop"]
 
 [dependencies]
 flui-painting = { workspace = true }

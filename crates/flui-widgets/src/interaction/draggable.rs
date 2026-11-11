@@ -882,7 +882,7 @@ impl DraggableState {
         let Some(policy) = self.policy.clone() else {
             return;
         };
-        let GesturePolicy { arena, settings } = policy.clone();
+        let (arena, settings) = (policy.arena().clone(), policy.settings().clone());
         let built_for = BuiltFor {
             policy,
             trigger,

@@ -16,6 +16,7 @@
 use std::any::Any;
 
 use flui_foundation::ElementId;
+use flui_foundation::panic::FirstPanic;
 
 use crate::owner::{LifecycleHook, RecoveredAt, RecoveredPanic, StagedRecoveredPanic};
 use crate::view::View;
@@ -64,6 +65,18 @@ pub(crate) struct ChildHookPanic {
     /// The caught panic payload, unconverted — the primitive builds the
     /// `FrameworkError`/`RecoveredPanic` from it exactly once.
     pub(crate) payload: Box<dyn Any + Send>,
+}
+
+/// Run one containment window: its value, or the payload of the panic that
+/// interrupted it, for the [`ChildHookPanic`] the window reports.
+pub(super) fn contain_window<R>(window: impl FnOnce() -> R) -> Result<R, Box<dyn Any + Send>> {
+    let mut caught = FirstPanic::new();
+    let finished = caught.contain(window);
+    finished.ok_or_else(move || {
+        caught
+            .into_payload()
+            .expect("BUG: a window that returned nothing holds its panic")
+    })
 }
 
 impl ElementTree {

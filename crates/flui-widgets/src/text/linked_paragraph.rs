@@ -207,8 +207,8 @@ pub(super) struct LinkedParagraphState {
 /// `link`'s tap recognizer, in `mount`'s arena.
 fn tap(live: &Rc<LiveLinks>, mount: &Mount, link: TextLink) -> Rc<TapGestureRecognizer> {
     let (live, writer) = (Rc::clone(live), mount.writer.clone());
-    TapGestureRecognizer::builder(mount.policy.arena.clone())
-        .settings(mount.policy.settings.clone())
+    TapGestureRecognizer::builder(mount.policy.arena().clone())
+        .settings(mount.policy.settings().clone())
         .on_tap(move |_| writer.write(|cx| live.open(cx, &link)))
         .build()
 }

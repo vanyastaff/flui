@@ -460,6 +460,7 @@ fn pointer_and_gesture_recognition() {
             ("gesture_detector::nested_native_scale_loser_recovers_touch_after_winner_terminal", crate::gesture_detector::nested_native_scale_loser_recovers_touch_after_winner_terminal),
             ("gesture_detector::scoped_settings_control_touch_recognition_thresholds", crate::gesture_detector::scoped_settings_control_touch_recognition_thresholds),
             ("gesture_detector::scoped_settings_control_gesture_deadlines", crate::gesture_detector::scoped_settings_control_gesture_deadlines),
+            ("gesture_detector::a_scope_without_settings_follows_the_scope_above", crate::gesture_detector::a_scope_without_settings_follows_the_scope_above),
             ("gesture_detector::scoped_estimator_controls_delivered_drag_velocity", crate::gesture_detector::scoped_estimator_controls_delivered_drag_velocity),
             ("gesture_detector::unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival", crate::gesture_detector::unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival as fn()),
             ("gesture_detector::viewer_reports_cancelled_then_completed_interactions", crate::gesture_detector::viewer_reports_cancelled_then_completed_interactions as fn()),
