@@ -2,7 +2,7 @@
 # One scenario of crates/flui-widgets/tests/perf.rs.
 
 [semantics_action_over_text]
-allocations = 15
+allocations = 12
 bytes = 2667
 elements = 1
 reallocations = 1
