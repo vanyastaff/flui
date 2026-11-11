@@ -3334,7 +3334,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[expect(
         deprecated,
-        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
     )]
     fn an_owed_surface_recreation_runs_through_the_backend_render_path() {
         use crate::RasterBackend;
@@ -3382,7 +3382,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[expect(
         deprecated,
-        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
     )]
     fn quarantined_domain_reaches_the_backend_recovery_predicate() {
         // This tests the actual backend predicate in the released-surface state.

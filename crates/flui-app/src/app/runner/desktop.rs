@@ -67,7 +67,7 @@ pub(super) fn rendered_window_options(config: &AppConfig) -> flui_platform::Wind
 
 #[expect(
     deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
 )]
 pub(super) fn install_desktop_window<V>(
     root: V,

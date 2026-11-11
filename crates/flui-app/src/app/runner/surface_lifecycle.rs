@@ -133,7 +133,7 @@ impl DisplayColorFollow for flui_engine::Renderer {
 #[cfg(not(target_arch = "wasm32"))]
 #[expect(
     deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
 )]
 pub(super) fn follow_display_color<B>(
     lane: &parking_lot::Mutex<crate::app::raster_lane::RasterLane<B>>,
@@ -570,7 +570,7 @@ impl SurfaceRecreationRetry {
 )]
 #[expect(
     deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
 )]
 pub(super) fn settle_surface_availability<B>(
     lane: &mut crate::app::raster_lane::RasterLane<B>,
@@ -647,7 +647,7 @@ pub(super) fn report_surface_settlement(platform: &'static str, outcome: &Surfac
 )]
 #[expect(
     deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
 )]
 pub(super) fn retry_surface_recreation<B>(
     lane: &parking_lot::Mutex<crate::app::raster_lane::RasterLane<B>>,
@@ -682,7 +682,7 @@ where
 /// those two calls.
 #[expect(
     deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
 )]
 #[cfg(all(
     test,

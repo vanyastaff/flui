@@ -27,7 +27,7 @@ pub(crate) struct HostMemory {
     #[cfg(not(target_arch = "wasm32"))]
     #[expect(
         deprecated,
-        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
     )]
     rasters: Mutex<Vec<flui_engine::RasterHandle>>,
 }
@@ -46,7 +46,7 @@ impl HostMemory {
     #[cfg(not(target_arch = "wasm32"))]
     #[expect(
         deprecated,
-        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
     )]
     pub(crate) fn track_raster_lane(&self, lane: flui_engine::RasterHandle) {
         let mut rasters = self.rasters.lock();
@@ -60,7 +60,7 @@ impl ReclaimMemory for HostMemory {
         not(target_arch = "wasm32"),
         expect(
             deprecated,
-            reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+            reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
         )
     )]
     fn reclaim(&self, level: MemoryPressureLevel) {

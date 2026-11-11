@@ -47,7 +47,7 @@
 
 #![expect(
     deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
 )]
 
 use std::fmt;
@@ -770,7 +770,7 @@ pub enum RasterSubmitError {
 /// (the private render-invalidation sender, `WindowCommandSender`).
 #[derive(Clone)]
 #[deprecated(
-    note = "use `RasterExecutor` and its slots (ADR-0305); removed once the window runners move in RS16"
+    note = "use `RasterExecutor` and its slots (ADR-0305); removed once the window runners move to it"
 )]
 pub struct RasterHandle {
     mailbox: Arc<RasterMailbox>,
@@ -1228,7 +1228,7 @@ pub enum PumpOutcome {
 /// `missing_debug_implementations` crate-wide for the same reason (wgpu
 /// resource handles do not implement `Debug`).
 #[deprecated(
-    note = "use `RasterExecutor` and its slots (ADR-0305); removed once the window runners move in RS16"
+    note = "use `RasterExecutor` and its slots (ADR-0305); removed once the window runners move to it"
 )]
 pub struct RasterOwner<B: RasterBackend> {
     backend: B,

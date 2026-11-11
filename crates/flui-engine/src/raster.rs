@@ -15,7 +15,7 @@
 
 #![expect(
     deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
 )]
 
 use flui_foundation::geometry::Rect;
@@ -106,7 +106,7 @@ impl PresentDisposition {
 /// site that does not — a `Box<dyn RasterBackend>` staying on one thread —
 /// needs nothing extra.
 #[deprecated(
-    note = "use `RasterExecutor` and its slots (ADR-0305); removed once the window runners move in RS16"
+    note = "use `RasterExecutor` and its slots (ADR-0305); removed once the window runners move to it"
 )]
 pub trait RasterBackend: Send {
     /// Render a [`Scene`] to the surface.

@@ -374,7 +374,7 @@ pub(super) struct FrameRecoveryOutcome {
 #[cfg(not(target_arch = "wasm32"))]
 #[expect(
     deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
 )]
 pub(super) fn pump_with_device_recovery<B>(
     ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
@@ -510,7 +510,7 @@ where
 /// failures at its ceiling until the application asks for a rebuild again.
 #[expect(
     deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
 )]
 #[cfg(all(
     test,
@@ -573,7 +573,7 @@ mod device_recovery_tests {
     /// mailbox) — the size matches the scripted backends' own `size()`.
     #[expect(
         deprecated,
-        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
     )]
     fn lane_over<B: RasterBackend>(
         backend: B,
