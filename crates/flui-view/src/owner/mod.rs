@@ -73,7 +73,7 @@ pub(crate) use recovered_panic::{LifecyclePanicHandoff, StagedRecoveredPanic};
 /// Owns the two contract halves every emission site relies on:
 /// - **Laziness**: `f` (which constructs the payload) runs only when an
 ///   observer is installed — the off path is one `Option` load + branch.
-/// - **Panic policy**: the observer call runs under `catch_unwind`; on
+/// - **Panic policy**: the observer call runs contained (`FirstPanic`); on
 ///   unwind the observer is REMOVED from the slot (`detached()` is not
 ///   called — the observer just proved it cannot be trusted to run) and the
 ///   detachment is logged. The frame survives.
@@ -84,25 +84,16 @@ pub(crate) fn emit_observation(
     let Some(observer) = slot.as_deref() else {
         return;
     };
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a tree observer's emission runs contained; the observer is detached"
-    )]
-    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(observer))) {
+    let mut emission = flui_foundation::panic::FirstPanic::new();
+    if emission.contain(|| f(observer)).is_none() {
         // Destroy both before reporting, each under containment (ADR-0281).
-        flui_foundation::panic::discard_payload(payload);
+        drop(emission);
         crate::drop_contained(slot.take());
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a panicking log is contained and discarded"
-        )]
-        let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // A panicking log is contained and discarded.
+        flui_foundation::panic::FirstPanic::new().contain(|| {
             tracing::error!(
                 "TreeObserver panicked during emission; observer detached (no detached() call)"
             );
-        }));
-        if let Err(payload) = reported {
-            flui_foundation::panic::discard_payload(payload);
-        }
+        });
     }
 }

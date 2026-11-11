@@ -20,9 +20,9 @@
 //! }
 //! ```
 
+use flui_foundation::panic::FirstPanic;
 use std::fmt;
 use std::future::Future;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -102,11 +102,9 @@ impl Background {
                 answer.resolve(Err(BackgroundError::Cancelled));
                 return;
             }
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a compute job's panic becomes the task's error on the pool thread"
-            )]
-            let outcome = catch_unwind(AssertUnwindSafe(job)).map_err(panicked);
+            // A compute job's panic becomes the task's error on the pool thread.
+            let mut caught = FirstPanic::new();
+            let outcome = caught.contain(job).ok_or_else(|| panicked(caught));
             answer.resolve_unless_cancelled(outcome);
         });
         if let Err(error) = self.executor.spawn_compute(work) {
@@ -273,24 +271,19 @@ fn answer_of<T>(
     }
 }
 
-/// Logs a panic where the work ran and destroys its payload under
-/// containment (ADR-0281). A panicking log is contained and discarded the
-/// same way, so reporting never stops the answer.
-fn panicked(payload: Box<dyn std::any::Any + Send>) -> BackgroundError {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a panicking log is discarded so reporting never stops the answer"
-    )]
-    let report = catch_unwind(AssertUnwindSafe(|| {
+/// Logs the panic `caught` holds where the work ran. Its payload is destroyed
+/// under containment when `caught` drops (ADR-0281), and a panicking log is
+/// contained and discarded the same way, so reporting never stops the answer.
+fn panicked(caught: FirstPanic) -> BackgroundError {
+    FirstPanic::new().contain(|| {
         tracing::error!(
-            message = flui_foundation::panic::payload_text(payload.as_ref()).unwrap_or("<opaque>"),
+            message = caught
+                .held()
+                .and_then(flui_foundation::panic::payload_text)
+                .unwrap_or("<opaque>"),
             "background work panicked"
         );
-    }));
-    flui_foundation::panic::discard_payload(payload);
-    if let Err(diagnostic) = report {
-        flui_foundation::panic::discard_payload(diagnostic);
-    }
+    });
     BackgroundError::Panicked
 }
 
@@ -395,16 +388,14 @@ impl<T: Send + 'static> Future for Cancellable<T> {
                 .future
                 .as_mut()
                 .expect("BUG: a Cancellable keeps its future until it answers");
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a polled future's panic becomes the task's error, not an unwind"
-            )]
-            match catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(cx))) {
-                Ok(Poll::Pending) => return Poll::Pending,
-                Ok(Poll::Ready(value)) => Ok(value),
-                Err(payload) => {
+            // A polled future's panic becomes the task's error, not an unwind.
+            let mut caught = FirstPanic::new();
+            match caught.contain(|| future.as_mut().poll(cx)) {
+                Some(Poll::Pending) => return Poll::Pending,
+                Some(Poll::Ready(value)) => Ok(value),
+                None => {
                     crate::drop_contained(this.future.take());
-                    Err(panicked(payload))
+                    Err(panicked(caught))
                 }
             }
         };
