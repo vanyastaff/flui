@@ -42,6 +42,9 @@ pub struct NotificationCallback<Arg>(CallbackKind<Arg>);
 enum CallbackKind<Arg> {
     User(ArgCallback<Arg>),
     Relay(RecoveryCallback<Arg>),
+    /// A listener that takes no argument, held as it was given: no adapter
+    /// is allocated to drop the argument.
+    Plain(crate::notifier::ListenerCallback),
 }
 
 type OwnedCallback<Arg> = Rc<NotificationCallback<Arg>>;
@@ -61,6 +64,7 @@ impl<Arg> NotificationCallback<Arg> {
         match &self.0 {
             CallbackKind::User(callback) => callback(arg),
             CallbackKind::Relay(callback) => callback(arg, recovery),
+            CallbackKind::Plain(callback) => callback(),
         }
     }
 }
@@ -81,6 +85,10 @@ struct ListenerStorage<Arg> {
     /// Captures handed over by [`Notifier::retire_after_delivery`], retired
     /// after this round's own removed listeners.
     deferred: RefCell<Vec<Box<dyn Any>>>,
+    /// Listener identities: the owner-local mint whose refusal is sticky, so
+    /// a listener id is never issued twice.
+    next_id: IdMint<ListenerId>,
+    is_disposed: Cell<bool>,
 }
 
 impl<Arg> Drop for ListenerStorage<Arg> {
@@ -145,18 +153,12 @@ impl<Arg: 'static> SubscribedChannel for ListenerStorage<Arg> {
 /// while the thread is already unwinding aborts, as in std (ADR-0281).
 pub struct Notifier<Arg> {
     listeners: Rc<ListenerStorage<Arg>>,
-    /// Listener identities, shared across clones: the owner-local mint whose
-    /// refusal is sticky, so a listener id is never issued twice.
-    next_id: Rc<IdMint<ListenerId>>,
-    is_disposed: Rc<Cell<bool>>,
 }
 
 impl<Arg> Clone for Notifier<Arg> {
     fn clone(&self) -> Self {
         Self {
             listeners: Rc::clone(&self.listeners),
-            next_id: Rc::clone(&self.next_id),
-            is_disposed: Rc::clone(&self.is_disposed),
         }
     }
 }
@@ -187,9 +189,9 @@ impl<Arg> Notifier<Arg> {
                 failed: AtomicBool::new(false),
                 retired: RefCell::new(Vec::new()),
                 deferred: RefCell::new(Vec::new()),
+                next_id: IdMint::new(),
+                is_disposed: Cell::new(false),
             }),
-            next_id: Rc::new(IdMint::new()),
-            is_disposed: Rc::new(Cell::new(false)),
         }
     }
 
@@ -197,7 +199,8 @@ impl<Arg> Notifier<Arg> {
     /// use-after-dispose path can hand out an unregistered id without
     /// tripping this notifier's own (differently-worded) disposed check.
     pub(crate) fn mint_id(&self) -> ListenerId {
-        self.next_id
+        self.listeners
+            .next_id
             .next()
             .expect("BUG: listener identities exhausted")
     }
@@ -206,14 +209,14 @@ impl<Arg> Notifier<Arg> {
     #[must_use]
     #[inline]
     pub fn is_disposed(&self) -> bool {
-        self.is_disposed.get()
+        self.listeners.is_disposed.get()
     }
 
     /// Debug-panics if disposed; release degrades to `tracing::warn!` + no-op.
     /// Returns `true` if the caller should early-return (disposed in release).
     #[inline]
     fn check_disposed(&self) -> bool {
-        if self.is_disposed.get() {
+        if self.listeners.is_disposed.get() {
             #[cfg(debug_assertions)]
             panic!("Notifier used after dispose: once dispose() is called the channel is unusable");
             // Unreachable in debug (the panic above diverges); reached only in
@@ -251,7 +254,11 @@ impl<Arg> Notifier<Arg> {
     where
         Arg: 'static,
     {
-        let id = self.add(Rc::new(move |_: &Arg| listener()));
+        let id = if self.check_disposed() {
+            self.mint_id()
+        } else {
+            self.add_plain_unchecked(listener)
+        };
         let channel: Rc<dyn SubscribedChannel> = self.listeners.clone();
         crate::notifier::Subscription::for_channel(Rc::downgrade(&channel), id)
     }
@@ -280,6 +287,15 @@ impl<Arg> Notifier<Arg> {
     /// call proceed.
     pub(crate) fn add_unchecked(&self, listener: ArgCallback<Arg>) -> ListenerId {
         self.admit_callback(NotificationCallback::user(listener))
+    }
+
+    /// [`Self::add_unchecked`] for a listener that takes no argument: it is
+    /// registered as given, with no adapter around it.
+    pub(crate) fn add_plain_unchecked(
+        &self,
+        listener: crate::notifier::ListenerCallback,
+    ) -> ListenerId {
+        self.admit_callback(Rc::new(NotificationCallback(CallbackKind::Plain(listener))))
     }
 
     /// Register a [`RecoveryCallback`] in the same ordered notification channel
@@ -367,7 +383,7 @@ impl<Arg> Notifier<Arg> {
     #[doc(hidden)]
     #[must_use]
     pub fn dispose_and_take_callbacks(&self) -> Vec<OwnedCallback<Arg>> {
-        self.is_disposed.set(true);
+        self.listeners.is_disposed.set(true);
         self.take_all_callbacks()
     }
 
@@ -436,7 +452,7 @@ impl<Arg> Notifier<Arg> {
 
     /// Discard listeners and mark disposed. Idempotent (second call is a no-op).
     pub fn dispose(&self) {
-        if self.is_disposed.replace(true) {
+        if self.listeners.is_disposed.replace(true) {
             return;
         }
         self.retire_removed_map(self.extract_locked(std::mem::take));
@@ -567,7 +583,9 @@ impl<Arg> Notifier<Arg> {
             for (id, callback) in &snapshot {
                 // Skip a listener individually removed mid-notify (by an earlier
                 // callback), and skip the tail once the channel is disposed.
-                if self.is_disposed.get() || !self.listeners.entries.borrow().contains_key(id) {
+                if self.listeners.is_disposed.get()
+                    || !self.listeners.entries.borrow().contains_key(id)
+                {
                     continue;
                 }
                 #[expect(

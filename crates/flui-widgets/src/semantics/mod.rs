@@ -90,7 +90,9 @@ type EventActionHandler = Rc<dyn Fn(&mut EventCx<'_>, ActionCall)>;
 /// of labelled custom actions.
 #[derive(Clone, Default)]
 struct EventActions {
-    handlers: Vec<(SemanticsAction, EventActionHandler)>,
+    /// Two are held inline: a control advertises its activation and, when
+    /// it takes focus, the focus request.
+    handlers: smallvec::SmallVec<[(SemanticsAction, EventActionHandler); 2]>,
     custom: Vec<CustomEntry>,
     /// Told when the assistive technology's cursor enters (`true`) or leaves
     /// the node's subtree.
@@ -1316,19 +1318,24 @@ impl Semantics {
         }))
     }
 
+    /// The handler that tells `target`'s table where the assistive
+    /// technology's cursor is.
+    fn assistive_focus_route(
+        target: LocalPayloadTarget,
+    ) -> flui_rendering::semantics::AssistiveFocusHandler {
+        Rc::new(move |within| deliver_assistive_focus(target, within))
+    }
+
     /// Register this build's action table in the owner lane and mint the
-    /// handler that reaches it.
+    /// handler that reaches it. The handler for the assistive cursor is
+    /// minted only for a table that asks to hear it.
     fn register_actions(&self, ctx: &RenderObjectContext<'_>) -> Option<SemanticsActionRoute> {
         let cell = self.action_cell(ctx)?;
         match ctx.register_local_payload(cell) {
             Ok(target) => {
                 let handler: SemanticsActionHandler = Rc::new(move |call| deliver(target, call));
-                let assistive_focus: flui_rendering::semantics::AssistiveFocusHandler =
-                    Rc::new(move |within| deliver_assistive_focus(target, within));
-                Some(
-                    SemanticsActionRoute::new(target, handler)
-                        .with_assistive_focus(assistive_focus),
-                )
+                let route = SemanticsActionRoute::new(target, handler);
+                Some(self.with_assistive_focus_route(route))
             }
             Err(error) => {
                 tracing::debug!(
@@ -1338,6 +1345,17 @@ impl Semantics {
                 None
             }
         }
+    }
+
+    /// `route` with the assistive-cursor handler this build needs: minted
+    /// once, when a table first asks to hear the cursor, and kept after.
+    fn with_assistive_focus_route(&self, route: SemanticsActionRoute) -> SemanticsActionRoute {
+        if self.event_actions.assistive_focus.is_none() || route.assistive_focus_handler().is_some()
+        {
+            return route;
+        }
+        let target = route.target();
+        route.with_assistive_focus(Self::assistive_focus_route(target))
     }
 
     /// Bring the render object's lane registration in line with this build:
@@ -1357,7 +1375,7 @@ impl Semantics {
             return None;
         };
         match ctx.replace_local_payload(existing.target(), cell) {
-            Ok(()) => Some(existing),
+            Ok(()) => Some(self.with_assistive_focus_route(existing)),
             Err(RenderObjectContextError::Interaction(InteractionDispatchError::TargetGone)) => {
                 tracing::debug!("semantics action table was gone; registering anew");
                 self.register_actions(ctx)

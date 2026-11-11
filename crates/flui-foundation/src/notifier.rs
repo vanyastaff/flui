@@ -404,7 +404,7 @@ impl ChangeNotifier {
         if self.check_disposed() {
             return self.inner.mint_id();
         }
-        self.inner.add_unchecked(Rc::new(move |&()| listener()))
+        self.inner.add_plain_unchecked(listener)
     }
 
     /// The channel's own registration of a relay, whose id the channel's
