@@ -119,7 +119,11 @@ impl SceneHost {
         &mut self,
         cell: &crate::pipeline::PipelineCell,
     ) -> Result<Option<LayerTree>, TreeError<RenderError>> {
-        cell.with_mut(|owner| self.run_frame_in_place(owner))
+        // The frame checks the owner out; applying the patch and dropping the
+        // version it replaces happen after that checkout ends: an
+        // annotation's `Drop` is user code and may reach the cell.
+        let (result, tree) = self.drive_cell(cell, |writer| cell.run_frame(writer));
+        result.map(|painted| painted.then_some(tree).flatten())
     }
 
     /// Runs `paint` with a patch open, for a test that drives the phases

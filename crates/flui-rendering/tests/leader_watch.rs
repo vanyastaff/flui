@@ -287,54 +287,64 @@ impl Drop for DropProbe {
 
 /// The version a newly applied one replaces drops once the pipeline is free:
 /// an annotation it held last runs its `Drop`, user code, with no borrow of
-/// the pipeline live.
+/// the pipeline live. Each row drives the frames another way a test kit
+/// offers.
 ///
 /// Red-check: drop the replaced version inside the `with_mut` that reports
-/// the applied scene (the drop finds the pipeline borrowed).
+/// the applied scene, or apply inside `run_cell_frame`'s checkout (the drop
+/// finds the pipeline borrowed).
 #[test]
 fn a_replaced_version_drops_outside_the_pipeline_borrow() {
     use flui_objects::RenderAnnotatedRegion;
     use std::sync::Arc;
 
-    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-    let (root, registry) = tree::mount(
-        &mut owner,
-        box_node(RenderAnnotatedRegion::new(Arc::new(DropProbe)))
-            .label("region")
-            .child(box_node(RenderSizedBox::fixed(10.0, 10.0))),
-    );
-    owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(50.0, 50.0))));
-    let region = registry.get("region").expect("labelled");
-    let cell = PipelineCell::new(owner);
-    let mut host = SceneHost::new();
-    WATCHED.with(|watched| *watched.borrow_mut() = (Some(cell.downgrade()), Vec::new()));
+    type Driver = fn(&mut SceneHost, &PipelineCell);
+    let drivers: [(&str, Driver); 2] = [
+        ("drive_cell", |host, cell| {
+            let (painted, _) = host.drive_cell(cell, |writer| cell.run_frame(writer));
+            painted.expect("the frame runs");
+        }),
+        ("run_cell_frame", |host, cell| {
+            host.run_cell_frame(cell).expect("the frame runs");
+        }),
+    ];
+    for (name, frame) in drivers {
+        let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+        let (root, registry) = tree::mount(
+            &mut owner,
+            box_node(RenderAnnotatedRegion::new(Arc::new(DropProbe)))
+                .label("region")
+                .child(box_node(RenderSizedBox::fixed(10.0, 10.0))),
+        );
+        owner.set_root_id(Some(root));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(50.0, 50.0))));
+        let region = registry.get("region").expect("labelled");
+        let cell = PipelineCell::new(owner);
+        let mut host = SceneHost::new();
+        WATCHED.with(|watched| *watched.borrow_mut() = (Some(cell.downgrade()), Vec::new()));
 
-    let frame = |host: &mut SceneHost| {
-        let (painted, _) = host.drive_cell(&cell, |writer| cell.run_frame(writer));
-        painted.expect("the frame runs");
-    };
-    frame(&mut host);
-    // A renewed scene keeps nothing of the last version, so the version the
-    // watches hold is the last holder of the first annotation.
-    drop(
-        host.owner_mut()
-            .renew(flui_layer::ResyncReason::RasterReset),
-    );
-    cell.with_mut(|owner| {
-        update_render_object::<RenderAnnotatedRegion, _>(owner, region, |region| {
-            region.set_value(Arc::new(DropProbe))
+        frame(&mut host, &cell);
+        // A renewed scene keeps nothing of the last version, so the version
+        // the watches hold is the last holder of the first annotation.
+        drop(
+            host.owner_mut()
+                .renew(flui_layer::ResyncReason::RasterReset),
+        );
+        cell.with_mut(|owner| {
+            update_render_object::<RenderAnnotatedRegion, _>(owner, region, |region| {
+                region.set_value(Arc::new(DropProbe))
+            });
         });
-    });
-    frame(&mut host);
+        frame(&mut host, &cell);
 
-    let drops = WATCHED.with(|watched| std::mem::take(&mut watched.borrow_mut().1));
-    WATCHED.with(|watched| watched.borrow_mut().0 = None);
-    assert!(!drops.is_empty(), "a replaced annotation dropped");
-    assert!(
-        drops.iter().all(|free| *free),
-        "each annotation dropped with the pipeline free: {drops:?}"
-    );
+        let drops = WATCHED.with(|watched| std::mem::take(&mut watched.borrow_mut().1));
+        WATCHED.with(|watched| watched.borrow_mut().0 = None);
+        assert!(!drops.is_empty(), "{name}: a replaced annotation dropped");
+        assert!(
+            drops.iter().all(|free| *free),
+            "{name}: each annotation dropped with the pipeline free: {drops:?}"
+        );
+    }
 }
 
 /// A patch painted and never reported applied holds the only copy of what it
