@@ -1,6 +1,11 @@
 //! The test kit's renderer: what a headless run's windows render with, since
 //! the headless platform has no surface a GPU could present into.
 
+#![expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
+
 use std::sync::Arc;
 
 use flui_engine::{EngineError, FrameLatency, PresentDisposition, RasterBackend};

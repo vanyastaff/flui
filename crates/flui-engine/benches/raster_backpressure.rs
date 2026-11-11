@@ -26,6 +26,11 @@
 //!
 //! Run with `cargo bench -p flui-engine --bench raster_backpressure`.
 
+#![expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
+
 // Benchmark harness functions are internal measurement scaffolding, not a
 // public API surface — exempt from the crate's missing-docs lint, matching
 // this crate's other bench targets.

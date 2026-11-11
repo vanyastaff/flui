@@ -24,7 +24,8 @@ use flui_layer::LayerTree;
 use crate::painter::WgpuPainter;
 use crate::{
     error::{EngineError, EngineResult},
-    gpu_context::{GpuContext, SlotId},
+    gpu_context::GpuContext,
+    raster_executor::{SlotId, SlotMint},
 };
 
 /// The pixel format headless capture renders and reads back in. RGBA8 maps
@@ -161,12 +162,14 @@ impl HeadlessRenderer {
             .try_borrow_mut()
             .map_err(|_busy| EngineError::FrameAlreadyActive)?;
         let Capture { context, slot } = &mut *capture;
-        let slot = match *slot {
-            Some(attached) => {
-                context.resize_slot(attached, size)?;
-                attached
-            }
-            None => *slot.insert(context.attach_offscreen(size, CAPTURE_FORMAT)?),
+        let slot = if let Some(attached) = *slot {
+            context.resize_slot(attached, size)?;
+            attached
+        } else {
+            // The renderer's one slot: the only id its own mint issues.
+            let id = SlotMint::default().mint()?;
+            context.attach_offscreen(id, size, CAPTURE_FORMAT)?;
+            *slot.insert(id)
         };
         context.render_slot(slot, tree)?;
         context.read_slot(slot)
@@ -560,6 +563,10 @@ impl RetainedCapture {
     ///
     /// # Errors
     /// The frame's failure.
+    #[expect(
+        deprecated,
+        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+    )]
     pub(crate) fn render_unmanaged(
         &mut self,
         scene: &flui_layer::Scene,
@@ -713,6 +720,10 @@ impl RetainedCapture {
 }
 
 #[cfg(test)]
+#[expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
 impl crate::raster::RasterBackend for RetainedCapture {
     fn render_scene(
         &mut self,

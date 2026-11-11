@@ -49,6 +49,11 @@
 //! No component keeps a private counter, and a frame stamped with a stale
 //! or zero generation is rejected before `render_scene` is ever called.
 
+#![expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
+
 // The mailbox-lane half of this module is not wired on wasm32: the web
 // runner still drives the direct sink (see `DirectSink`'s doc), so the lane
 // machinery is compiled out there rather than left as dead code.

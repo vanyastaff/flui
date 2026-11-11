@@ -8,6 +8,11 @@
 //! runner's test kit gives every window a stand-in that needs no GPU, so a
 //! headless run opens the windows an application opens and runs their frames.
 
+#![expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
+
 use flui_engine::{EngineError, FrameLatency, PresentDisposition, RasterBackend, Renderer};
 use flui_foundation::geometry::Rect;
 

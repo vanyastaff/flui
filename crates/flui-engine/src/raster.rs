@@ -13,6 +13,11 @@
 //!   window-specific and async, so it stays on the concrete type.
 //! - The trait is dyn-compatible (no generics, no `async` in methods).
 
+#![expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
+
 use flui_foundation::geometry::Rect;
 use flui_foundation::memory::MemoryPressureLevel;
 use flui_layer::Scene;
@@ -100,6 +105,9 @@ impl PresentDisposition {
 /// object to cross a thread must spell out `dyn RasterBackend + Send`. A use
 /// site that does not — a `Box<dyn RasterBackend>` staying on one thread —
 /// needs nothing extra.
+#[deprecated(
+    note = "use `RasterExecutor` and its slots (ADR-0305); removed once the window runners move in RS16"
+)]
 pub trait RasterBackend: Send {
     /// Render a [`Scene`] to the surface.
     ///

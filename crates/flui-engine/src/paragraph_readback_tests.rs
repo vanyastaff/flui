@@ -1,6 +1,11 @@
 //! The engine rasterises the paragraph it is handed and never shapes one
 //! itself (ADR-0065).
 
+#![expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
+
 use flui_foundation::geometry::Offset;
 use flui_layer::SceneBuilder;
 use flui_painting::FontCollection;

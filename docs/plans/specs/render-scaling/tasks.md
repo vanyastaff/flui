@@ -227,8 +227,10 @@
 
 ### RS15. Фабрика поверхностей, команды слота, расчёт по штампу
 
-- **Что:** ADR-0305 §2–§6: `SurfaceFactory` (`!Send`), закрытые команды слота, расчёт кадра по
-  штампу, темп и `SurfaceGeneration` на слот.
+- **Что:** ADR-0305 §2–§6 без удаления оси ресурсов (она в RS19): `SurfaceFactory` (`!Send`),
+  закрытые команды слота, расчёт кадра по штампу, темп и `SurfaceGeneration` на слот. Три PR:
+  (a) исполнитель, команды и кольцо расчётов в `flui-engine`; (b) `Queued` и `settle_frame` в
+  `flui-runtime`; (c) `DisplayConnection`, `SurfaceFactory`, `bootstrap` и оконные слоты.
 - **Тесты:** compile-fail `surface_factory_is_owner_local`, `surface_factory_rejects_borrowed_window`;
   `a_full_lifecycle_queue_returns_the_command`, `a_stale_slot_id_is_refused_after_detach`,
   `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released`,
@@ -236,7 +238,8 @@
   `a_stopped_executor_settles_every_pending_frame_failed`;
   `a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored` (`flui-runtime`);
   протокольные тесты `raster_owner` переписаны на слот (список в ADR-0305, Confirmation).
-- **Ворота:** все перечисленные тесты; ни одного `Mutex` в типах слота и исполнителя.
+- **Ворота:** все перечисленные тесты; в `RasterExecutor`, слоте и `RasterHost` нет `Mutex`;
+  единственный замок у inbox слота, держится только на обмен значений.
 - **Зависит:** RS14. **Размер:** L. **Ревью сильной модели.**
 
 ### RS16. Настольные раннеры на слотах
@@ -266,7 +269,8 @@
 ### RS19. Паника на команду, пересборка устройства, остановка, замер доли растра
 
 - **Что:** ADR-0305 §7–§9: паника сдерживается на команду и стоит общих кэшей, но не пайплайнов;
-  потерянное устройство пересобирается с сохранением поверхностей; остановка ограничена по времени.
+  потерянное устройство пересобирается с сохранением поверхностей; остановка ограничена по времени;
+  ось `GpuResourceGeneration` удаляется (§6), раз пересборка у контекста.
   Плюс замер: доля растра в кадре на сцене-сетке, записанная в теле PR, как вход для решения о
   потоке растра по ADR-0305 §10.
 - **Тесты:** `a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines`,

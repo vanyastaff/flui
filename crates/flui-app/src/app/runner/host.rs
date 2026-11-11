@@ -130,6 +130,10 @@ pub(crate) const SANDBOXED_STORAGE_DIR: &str = "app";
 /// Have the host trim the GPU memory behind a new raster lane on a
 /// memory-pressure notice, for as long as the lane exists.
 #[cfg(not(target_arch = "wasm32"))]
+#[expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
 pub(super) fn track_raster_lane(lane: flui_engine::RasterHandle) {
     let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
     memory.track_raster_lane(lane);

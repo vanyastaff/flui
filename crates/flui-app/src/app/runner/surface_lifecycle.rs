@@ -131,6 +131,10 @@ impl DisplayColorFollow for flui_engine::Renderer {
 /// Not on the Web: its renderer is not behind a raster lane, and its runner
 /// hands the renderer the colour itself.
 #[cfg(not(target_arch = "wasm32"))]
+#[expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
 pub(super) fn follow_display_color<B>(
     lane: &parking_lot::Mutex<crate::app::raster_lane::RasterLane<B>>,
     display: Option<flui_platform::DisplayColor>,
@@ -564,6 +568,10 @@ impl SurfaceRecreationRetry {
         reason = "driven by the Android/iOS runners and by this module's tests"
     )
 )]
+#[expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
 pub(super) fn settle_surface_availability<B>(
     lane: &mut crate::app::raster_lane::RasterLane<B>,
     retry: &SurfaceRecreationRetry,
@@ -637,6 +645,10 @@ pub(super) fn report_surface_settlement(platform: &'static str, outcome: &Surfac
         reason = "driven by the Android/iOS runners and by this module's tests"
     )
 )]
+#[expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
 pub(super) fn retry_surface_recreation<B>(
     lane: &parking_lot::Mutex<crate::app::raster_lane::RasterLane<B>>,
     retry: &SurfaceRecreationRetry,
@@ -668,6 +680,10 @@ where
 /// failed rebuild is tolerated as a typed outcome that leaves the
 /// presentation released, and one release-then-acquire cycle records exactly
 /// those two calls.
+#[expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
 #[cfg(all(
     test,
     not(target_os = "android"),

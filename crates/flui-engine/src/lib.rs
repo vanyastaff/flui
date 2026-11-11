@@ -219,10 +219,17 @@ pub(crate) mod superellipse;
 /// flui-app's GPU-free test doubles stand in for.
 pub mod raster;
 
+/// The raster executor: one mutator rendering every presentation's slot,
+/// fed by closed commands and settling each frame by its stamp (ADR-0305).
+pub mod raster_executor;
 /// The raster mailbox + dedicated ack channel boundary
 /// ([`RasterOwner`]/[`RasterHandle`]/[`RasterAck`]).
 /// Generic over [`RasterBackend`].
 pub mod raster_owner;
+
+/// Test support: a GPU-free stand-in for the raster executor's backend.
+#[cfg(feature = "testing")]
+pub mod testing;
 
 /// Portable monotonic timestamps for GPU-path diagnostic spans.
 /// Acquire/present timers must not panic on wasm32 before the wgpu backend is
@@ -482,11 +489,25 @@ pub use external_texture_registry::{
 };
 // RasterBackend: the frame-driver swap point. The trait is unconditional;
 // only the wgpu impl is feature-gated.
+#[expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
 pub use raster::{PrePresentHook, PresentDisposition, RasterBackend};
 // Raster mailbox + dedicated ack channel boundary.
+#[expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
 pub use raster_owner::{
     FrameDropReason, PumpOutcome, RasterAck, RasterCompletion, RasterHandle, RasterOwner,
     RasterSubmitError, SurfaceState,
+};
+// The raster executor and its commands (ADR-0305).
+pub use raster_executor::{
+    ExecutorHealth, RasterCommand, RasterExecutor, RasterSendError, RasterSender, RasterVerdict,
+    SendReceipt, SlotBackend, SlotChange, SlotConfig, SlotFailure, SlotId, SlotPhase, SlotRecord,
+    SlotSettlement, SlotTarget, SlotVisibility, TurnOutcome,
 };
 // The GPU-resource freshness stamp (ADR-0045 decision 4); declared in
 // `flui-foundation` and re-exported here so `flui_engine::GpuResourceGeneration`
@@ -495,6 +516,8 @@ pub use raster_owner::{
 pub use flui_foundation::GpuResourceGeneration;
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;
+// The one GPU context every slot renders through (ADR-0305 §1).
+pub use gpu_context::GpuContext;
 pub use painter::WgpuPainter;
 // Renderer (the one externally-consumed wgpu/* type)
 pub use frame_latency::FrameLatency;

@@ -25,6 +25,10 @@ pub(crate) type SharedReceiver = Arc<dyn ReclaimMemory + Send + Sync>;
 pub(crate) struct HostMemory {
     receivers: Mutex<Vec<SharedReceiver>>,
     #[cfg(not(target_arch = "wasm32"))]
+    #[expect(
+        deprecated,
+        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+    )]
     rasters: Mutex<Vec<flui_engine::RasterHandle>>,
 }
 
@@ -40,6 +44,10 @@ impl HostMemory {
     /// Trim the GPU memory behind `lane` along with the application's
     /// receivers, until the lane's owner is gone.
     #[cfg(not(target_arch = "wasm32"))]
+    #[expect(
+        deprecated,
+        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+    )]
     pub(crate) fn track_raster_lane(&self, lane: flui_engine::RasterHandle) {
         let mut rasters = self.rasters.lock();
         rasters.retain(flui_engine::RasterHandle::is_live);
@@ -48,6 +56,13 @@ impl HostMemory {
 }
 
 impl ReclaimMemory for HostMemory {
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        expect(
+            deprecated,
+            reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+        )
+    )]
     fn reclaim(&self, level: MemoryPressureLevel) {
         let receivers = self.receivers.lock().clone();
         let mut failure = FirstPanic::new();

@@ -45,6 +45,11 @@
 //! the blocking loop a dedicated raster thread (or this module's own
 //! threaded test harness) drives instead.
 
+#![expect(
+    deprecated,
+    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor` in RS16"
+)]
+
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -764,6 +769,9 @@ pub enum RasterSubmitError {
 /// the same enqueue-and-wake shape as [`crate`]'s sibling handles
 /// (the private render-invalidation sender, `WindowCommandSender`).
 #[derive(Clone)]
+#[deprecated(
+    note = "use `RasterExecutor` and its slots (ADR-0305); removed once the window runners move in RS16"
+)]
 pub struct RasterHandle {
     mailbox: Arc<RasterMailbox>,
 }
@@ -1219,6 +1227,9 @@ pub enum PumpOutcome {
 /// implement it either — this crate already suppresses
 /// `missing_debug_implementations` crate-wide for the same reason (wgpu
 /// resource handles do not implement `Debug`).
+#[deprecated(
+    note = "use `RasterExecutor` and its slots (ADR-0305); removed once the window runners move in RS16"
+)]
 pub struct RasterOwner<B: RasterBackend> {
     backend: B,
     mailbox: Arc<RasterMailbox>,
