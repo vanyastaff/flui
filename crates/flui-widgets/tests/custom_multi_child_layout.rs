@@ -8,7 +8,6 @@ use flui_foundation::geometry::{Offset, Size};
 use flui_rendering::constraints::BoxConstraints;
 use flui_widgets::{
     CustomMultiChildLayout, LayoutId, MultiChildLayoutContext, MultiChildLayoutDelegate, SizedBox,
-    row,
 };
 
 #[derive(Debug)]
@@ -62,10 +61,10 @@ pub(crate) fn custom_multi_child_layout_mounts_render_object_and_positions_layou
     let laid = lay_out(
         CustomMultiChildLayout::new(
             two_slot_delegate(),
-            row![
+            (
                 LayoutId::new("header", SizedBox::new(10.0, 10.0)),
                 LayoutId::new("body", SizedBox::new(10.0, 10.0)),
-            ],
+            ),
         ),
         loose(200.0),
     );

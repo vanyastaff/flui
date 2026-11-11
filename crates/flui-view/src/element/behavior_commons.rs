@@ -36,7 +36,7 @@ use flui_foundation::panic::FirstPanic;
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
     owner::{LifecycleHook, RecoveredAt, RecoveredPanic},
-    view::{FrameworkError, IntoView, View},
+    view::{BoxedView, FrameworkError, IntoView, View},
 };
 
 // ============================================================================
@@ -159,11 +159,11 @@ pub(crate) fn build_or_recover_begun<V, A, F>(
     owner: &mut crate::ElementOwner<'_>,
     behavior_name: &'static str,
     build: F,
-) -> Box<dyn View>
+) -> BoxedView
 where
     V: Clone + 'static,
     A: ElementArity,
-    F: FnOnce() -> Box<dyn View>,
+    F: FnOnce() -> BoxedView,
 {
     // Only `build()` is inside the catch — see the panic-safety note.
     // The typed `impl IntoView` from `StatelessView::build` /
@@ -171,8 +171,8 @@ where
     // borrows by Rust 2024 RPITIT default, so returning the opaque value
     // across the closure boundary would trip E0515. The fix lives at the
     // call site (see `behavior.rs`): the closure body itself consumes the
-    // opaque value via `IntoView::into_view()` + `Box::new`, producing an
-    // owned `Box<dyn View>` with no escaping borrows. Authors need no
+    // opaque value via `IntoView::into_view()` + `BoxedView::new`, producing an
+    // owned `BoxedView` with no escaping borrows. Authors need no
     // `+ use<…>` annotations on their `build()` impls.
     // ADR-0074: every element kind builds through this one function, so this
     // is where "an element is building" is armed for the ui_runtime's reactive
@@ -214,10 +214,10 @@ where
                          (no element id to record)"
                     );
                 });
-                return crate::view::ErrorView::build_error_view(
+                return BoxedView::from(crate::view::ErrorView::build_error_view(
                     &error,
                     owner.capabilities.error_view_builder,
-                );
+                ));
             };
             let panic = RecoveredPanic::from_payload(
                 RecoveredAt::Element {
@@ -234,10 +234,10 @@ where
             owner.reactive.end_element_build(element, false);
             // A recovery factory failure retains its existing authority. No
             // successful recovery record is published until it returns a view.
-            let error_view = crate::view::ErrorView::build_error_view(
+            let error_view = BoxedView::from(crate::view::ErrorView::build_error_view(
                 &panic.error,
                 owner.capabilities.error_view_builder,
-            );
+            ));
             if let Some(flag) = owner.build_recovered {
                 flag.set(true);
             }
@@ -268,11 +268,11 @@ pub(crate) fn build_or_recover<V, A, F>(
     owner: &mut crate::ElementOwner<'_>,
     behavior_name: &'static str,
     build: F,
-) -> Box<dyn View>
+) -> BoxedView
 where
     V: Clone + 'static,
     A: ElementArity,
-    F: FnOnce() -> Box<dyn View>,
+    F: FnOnce() -> BoxedView,
 {
     begin_reactive_build(core, owner);
     build_or_recover_begun(core, owner, behavior_name, build)

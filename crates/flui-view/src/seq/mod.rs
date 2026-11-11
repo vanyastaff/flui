@@ -24,9 +24,9 @@
 //! retains at the outer `match self.kind { … }` dispatch in the
 //! element-storage layer.
 //!
-//! The `column!` / `row!` macros (`crates/flui-view/src/macros/mod.rs`)
-//! expand to the tuple form and emit the friendly FR-034
-//! `compile_error!` at >16 children.
+//! A widget takes its children as one of these values directly:
+//! `Column::new((a, b, c))`, `Row::new([a, b])`, `Stack::new(children)`
+//! with a `Vec`. A one-child tuple keeps its comma: `(a,)`.
 
 mod tuple_impls;
 mod vec_impls;
@@ -43,6 +43,7 @@ use crate::view::{BoxedView, View};
 ///   element boundary.
 /// - `Vec<V: View>` (homogeneous dynamic case) — see the crate's
 ///   `seq::vec_impls` module.
+/// - `[V; N]` with `V: View` (a fixed list of one type).
 /// - `Vec<BoxedView>` (heterogeneous dynamic case) — covered by
 ///   the same `Vec<V: View>` blanket since `BoxedView: View`.
 ///
@@ -57,6 +58,11 @@ use crate::view::{BoxedView, View};
 /// takes a generic `F: FnMut(usize, &dyn View)`. Multi-child widgets
 /// bind `C: ViewSeq` as a type parameter (or land on `Vec<BoxedView>`
 /// directly); no `dyn ViewSeq` use exists or is needed.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a list of children",
+    label = "children are a tuple of up to 16 views, an array or a `Vec`",
+    note = "write `(a, b, c)`, `(a,)` for one child, `[a, b]` for one type, or `vec![a.boxed(), ..]` past 16 children"
+)]
 pub trait ViewSeq {
     /// Number of children in this sequence.
     fn len(&self) -> usize;

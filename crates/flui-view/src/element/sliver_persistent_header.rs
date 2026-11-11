@@ -547,12 +547,8 @@ impl<R: PersistentHeaderRenderObject> ElementBehavior<PersistentHeaderView<R>, V
         let ctx = ctx_choice.as_ctx();
         let view = core.view().clone();
         let child_view = build_or_recover(core, owner, "PersistentHeaderElement", move || {
-            // The reconciler speaks `Box<dyn View>`; the box keeps the
-            // `BoxedView` inside it, and with it the view's identity.
-            Box::new(
-                view.delegate
-                    .build(ctx, shrink.shrink_offset, shrink.overlaps_content),
-            ) as Box<dyn View>
+            view.delegate
+                .build(ctx, shrink.shrink_offset, shrink.overlaps_content)
         });
         single_child_views(core, child_view, "PersistentHeaderBehavior")
     }

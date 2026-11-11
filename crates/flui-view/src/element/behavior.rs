@@ -19,8 +19,8 @@ use crate::{
     context::{BuildContext, BuildCtx, LifecycleContext},
     owner::LifecycleHook,
     view::{
-        AnimatedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView, StatelessView,
-        View, ViewState,
+        AnimatedView, BoxedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView,
+        StatelessView, ViewState,
     },
 };
 
@@ -708,10 +708,10 @@ where
                 // RPITIT default). We consume the opaque value through
                 // `IntoView::into_view()` inside the closure body — the
                 // resulting `<R as IntoView>::View` is `'static`, and
-                // boxing it produces an owned `Box<dyn View>` with no
+                // erasing it produces an owned `BoxedView` with no
                 // escaping borrows for `catch_unwind` to return.
                 let opaque = view.build(ctx);
-                Box::new(IntoView::into_view(opaque)) as Box<dyn View>
+                BoxedView::new(IntoView::into_view(opaque))
             },
         );
         super::behavior_commons::single_child_views(core, child_view, "StatelessBehavior")
@@ -987,10 +987,10 @@ where
             move || {
                 // See `StatelessBehavior::build_into_views` for the
                 // RPITIT-capture rationale — consume the opaque
-                // `impl IntoView` inside the closure body to box an owned
-                // `Box<dyn View>` for the `catch_unwind` return.
+                // `impl IntoView` inside the closure body to erase an owned
+                // `BoxedView` for the `catch_unwind` return.
                 let opaque = state.build(&view, ctx);
-                Box::new(IntoView::into_view(opaque)) as Box<dyn View>
+                BoxedView::new(IntoView::into_view(opaque))
             },
         );
         super::behavior_commons::single_child_views(core, child_view, "StatefulBehavior")

@@ -13,7 +13,6 @@ fn ui_tests() {
     t.compile_fail("tests/ui/writer_source_minting_is_private.rs");
     t.compile_fail("tests/ui/element_depth_minting_is_private.rs");
     t.compile_fail("tests/ui/element_depth_rejects_raw_stamping.rs");
-    t.compile_fail("tests/ui/column_17_compile_error.rs");
     // `#[diagnostic::on_unimplemented]` on the view traits: the message a
     // framework user sees must name the derive/impl they are missing, not
     // the blanket impl the compiler walked through. The expected stderr also

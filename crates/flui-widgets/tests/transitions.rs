@@ -34,7 +34,7 @@ use flui_view::{BoxedView, View, ViewExt};
 use flui_widgets::{
     Align, AlignTransition, ColoredBox, Column, DecoratedBoxTransition, GestureDetector,
     PositionedTransition, RotationTransition, ScaleTransition, SizeTransition, SizedBox,
-    SlideTransition, Stack, app_root, row,
+    SlideTransition, Stack, app_root,
 };
 
 /// The child's side: every transition here wraps a 40×40 box.
@@ -355,10 +355,7 @@ pub(crate) fn positioned_ticks_without_rebuilding() {
         )
         .animate(scalar(&c)),
     );
-    let view = Stack::new(row![PositionedTransition::new(
-        rect,
-        ColoredBox::new(CHILD_FILL)
-    )]);
+    let view = Stack::new((PositionedTransition::new(rect, ColoredBox::new(CHILD_FILL)),));
     ticks_without_rebuilding(view, &c, "positioned", |tree, v| {
         let (size, origin) = tree.node_geometry("RenderAnimatedInset");
         assert_eq!(size, Size::new(200.0, 200.0), "fills the stack");
@@ -441,7 +438,7 @@ pub(crate) fn reduced_motion_lands_on_the_end_value() {
     assert_eq!(laid.offset(laid.only_child(node)).dx, free);
 
     let (laid, _owner) = settle(|t| {
-        Stack::new(row![PositionedTransition::new(
+        Stack::new((PositionedTransition::new(
             std::rc::Rc::new(
                 Tween::new(
                     RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
@@ -450,7 +447,7 @@ pub(crate) fn reduced_motion_lands_on_the_end_value() {
                 .animate(t),
             ),
             ColoredBox::new(CHILD_FILL),
-        )])
+        ),))
     });
     let node = laid.find_by_render_type("RenderAnimatedInset");
     assert_eq!(laid.offset(laid.only_child(node)).dy, 40.0);

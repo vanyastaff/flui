@@ -8,7 +8,6 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::common::{lay_out, tight};
-use flui_widgets::row;
 use flui_widgets::{Expanded, SizedBox, Stack};
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -24,7 +23,7 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 pub(crate) fn expanded_under_stack_panics_at_attach_with_ancestry_diagnostic() {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         lay_out(
-            Stack::new(row![Expanded::new(SizedBox::new(20.0, 20.0))]),
+            Stack::new((Expanded::new(SizedBox::new(20.0, 20.0)),)),
             tight(100.0, 100.0),
         );
     }));

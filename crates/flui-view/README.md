@@ -93,20 +93,20 @@ also satisfies `IntoView` through the blanket implementation.
 
 ## Children
 
-Static heterogeneous children use tuple-backed `ViewSeq` values. The `column!`
-and `row!` macros are authoring helpers for the tuple shape:
+Static heterogeneous children are a tuple-backed `ViewSeq` value, passed to the widget
+directly:
 
 ```rust,ignore
-let children = column![
+let children = (
     Header::new("Inbox"),
     MessageRow::new(first),
     Footer::default(),
-];
+);
 ```
 
-Tuple `ViewSeq` implementations are generated for arities `0..=16`. At 17+
-children, `column!` and `row!` deliberately emit a friendly compile error that
-points to the dynamic fallback:
+A one-child tuple keeps its comma, `(a,)`, and children of one type can be an array
+`[a, b]`. Tuple `ViewSeq` implementations are generated for arities `0..=16`. At 17+
+children, `ViewSeq`'s diagnostic points to the dynamic fallback:
 
 ```rust,ignore
 let children: Vec<BoxedView> = items
@@ -140,7 +140,6 @@ preserve state across inactive retake and active-to-active reparent paths.
 - `tree/` - slab-backed element tree, keyed reconciliation, global-key
   reparenting, and `ReconcileEvent`.
 - `seq/` - `ViewSeq` tuple and `Vec` implementations.
-- `macros/` - `column!` and `row!`.
 - `key/` - `ObjectKey`, `GlobalKey`, and the lookup handle `GlobalKey` reads,
   which belongs to one binding and is active only while its UI runtime is entered.
 - `binding.rs` and `owner/` - `WidgetsBinding` (build-frame coordination for

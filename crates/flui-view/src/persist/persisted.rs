@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::future::Future;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::{Poll, Waker};
@@ -413,21 +413,9 @@ impl<D: Document> Persisted<D> {
         if document.registry.is_none() {
             return Err(PersistError::Storage(NO_REGISTRY.into()));
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a document's encode runs contained and reports a typed error"
-        )]
-        let body = match catch_unwind(AssertUnwindSafe(|| value.encode())) {
+        let body = match contained_step(CodecStep::Encode, || value.encode()) {
             Ok(body) => body,
-            Err(payload) => {
-                let message = payload_text(&*payload)
-                    .unwrap_or("a panic without a message")
-                    .to_owned();
-                flui_foundation::panic::discard_payload(payload);
-                let error = PersistError::Panicked {
-                    during: CodecStep::Encode,
-                    message,
-                };
+            Err(error) => {
                 // The failure is recorded before the value's drop, which is
                 // application code; each is contained, the first failure kept.
                 let mut first = FirstPanic::new();
@@ -768,32 +756,13 @@ impl<D: Document> OpenDocument<D> {
                 // then cancelled, and the fresh start is left failed, so
                 // `retry` copies again. The hook's panic is raised, or kept
                 // while a panic already unwinds.
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: the frame hook woken by spawn runs contained; the copy is cancelled"
-                )]
-                let spawned = catch_unwind(AssertUnwindSafe(|| {
+                let mut first = FirstPanic::new();
+                let Some(token) = first.contain(|| {
                     driver.spawn_local(Box::pin(copy_aside(Rc::downgrade(self), copy, base)))
-                }));
-                let token = match spawned {
-                    Ok(token) => token,
-                    Err(payload) => {
-                        #[expect(
-                            clippy::disallowed_methods,
-                            reason = "ADR-0287: a failure report runs contained while the spawn panic is handled"
-                        )]
-                        let failed = catch_unwind(AssertUnwindSafe(|| {
-                            self.fail(PersistError::Storage(StorageError::Cancelled));
-                        }));
-                        if let Err(again) = failed {
-                            flui_foundation::panic::discard_payload(again);
-                        }
-                        if std::thread::panicking() {
-                            flui_foundation::panic::discard_payload(payload);
-                            return;
-                        }
-                        resume_unwind(payload);
-                    }
+                }) else {
+                    first.contain(|| self.fail(PersistError::Storage(StorageError::Cancelled)));
+                    first.resume();
+                    return;
                 };
                 let stale = self.state.borrow_mut().copying.replace(token);
                 drop(stale);
@@ -818,26 +787,13 @@ impl<D: Document> OpenDocument<D> {
                 return;
             }
         };
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a document's encode runs contained and reports a typed error"
-        )]
-        let body = match catch_unwind(AssertUnwindSafe(|| value.encode())) {
+        let body = match contained_step(CodecStep::Encode, || value.encode()) {
             Ok(body) => body,
-            Err(payload) => {
-                let message = payload_text(&*payload)
-                    .unwrap_or("a panic without a message")
-                    .to_owned();
-                flui_foundation::panic::discard_payload(payload);
+            Err(error) => {
                 // The failure is recorded before the value's drop, which is
                 // application code; each is contained, the first failure kept.
                 let mut first = FirstPanic::new();
-                first.contain(|| {
-                    self.fail(PersistError::Panicked {
-                        during: CodecStep::Encode,
-                        message,
-                    });
-                });
+                first.contain(|| self.fail(error));
                 first.contain(|| drop(value));
                 first.resume();
                 return;
@@ -1020,24 +976,19 @@ impl<D: Document> OpenDocument<D> {
         let (Some(driver), Some((registry, _))) = (&self.driver, &self.registry) else {
             return;
         };
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the frame hook woken by spawn runs contained; the watch can restart"
-        )]
-        let spawned = catch_unwind(AssertUnwindSafe(|| {
-            driver.spawn_local(Box::pin(watch(Rc::downgrade(self), registry.clone())))
-        }));
-        match spawned {
-            Ok(token) => commit(&self.state, |state, out| {
-                if let Some(stale) = state.watch.replace(token) {
-                    out.release(stale);
-                }
-            }),
-            Err(payload) => {
-                self.state.borrow_mut().watching = false;
-                resume_unwind(payload);
+        let mut first = FirstPanic::new();
+        let Some(token) = first
+            .contain(|| driver.spawn_local(Box::pin(watch(Rc::downgrade(self), registry.clone()))))
+        else {
+            self.state.borrow_mut().watching = false;
+            first.resume();
+            return;
+        };
+        commit(&self.state, |state, out| {
+            if let Some(stale) = state.watch.replace(token) {
+                out.release(stale);
             }
-        }
+        });
     }
 
     /// The registry's last confirmed write of this value, by any document.
@@ -1105,22 +1056,12 @@ impl<D: Document> OpenDocument<D> {
         // Spawning wakes the frame hook, which may panic; the task is then
         // cancelled, and nothing stays queued, so the next announcement tries
         // again. While a panic already unwinds, the hook's is kept, not raised.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the frame hook woken by spawn runs contained; nothing stays queued"
-        )]
-        let spawned = catch_unwind(AssertUnwindSafe(|| {
-            driver.spawn_local(Box::pin(async move { deliver(&document) }))
-        }));
-        let token = match spawned {
-            Ok(token) => token,
-            Err(payload) => {
-                if std::thread::panicking() {
-                    flui_foundation::panic::discard_payload(payload);
-                    return;
-                }
-                resume_unwind(payload);
-            }
+        let mut first = FirstPanic::new();
+        let Some(token) =
+            first.contain(|| driver.spawn_local(Box::pin(async move { deliver(&document) })))
+        else {
+            first.resume();
+            return;
         };
         announcer.queued.set(true);
         // The task it replaces has run, or is the delivery running now,
@@ -1157,15 +1098,13 @@ fn deliver<D: Document>(document: &Weak<OpenDocument<D>>) {
     // queues nothing more. A refresh that panics (a frame hook it wakes)
     // ends this delivery, and the next announcement queues another.
     let announcer = &open.announcer;
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a refresh that panics clears the queued flag before resuming"
-    )]
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| open.refresh())) {
-        announcer.queued.set(false);
-        resume_unwind(payload);
-    }
+    let mut first = FirstPanic::new();
+    let refreshed = first.contain(|| open.refresh()).is_some();
     announcer.queued.set(false);
+    if !refreshed {
+        first.resume();
+        return;
+    }
     let now = open.reported();
     let changed = {
         let mut told = announcer.told.borrow_mut();
@@ -1376,22 +1315,24 @@ fn framed<D: Document>(revision: Revision, body: &[u8]) -> Vec<u8> {
     bytes
 }
 
+/// Run one of the document's codec steps contained. A panic in it is answered
+/// as [`PersistError::Panicked`] with the panic's message, and its payload is
+/// destroyed under containment.
+fn contained_step<R>(during: CodecStep, step: impl FnOnce() -> R) -> Result<R, PersistError> {
+    let mut caught = FirstPanic::new();
+    caught.contain(step).ok_or_else(|| PersistError::Panicked {
+        during,
+        message: caught
+            .held()
+            .and_then(payload_text)
+            .unwrap_or("a panic without a message")
+            .to_owned(),
+    })
+}
+
 /// [`Document::initial`], with a panic in it contained and reported.
 fn contained_initial<D: Document>() -> Result<D, PersistError> {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a document's initial runs contained and reports a typed error"
-    )]
-    catch_unwind(D::initial).map_err(|payload| {
-        let message = payload_text(&*payload)
-            .unwrap_or("a panic without a message")
-            .to_owned();
-        flui_foundation::panic::discard_payload(payload);
-        PersistError::Panicked {
-            during: CodecStep::Initial,
-            message,
-        }
-    })
+    contained_step(CodecStep::Initial, D::initial)
 }
 
 /// The document a storage read holds: [`Document::initial`] when nothing is
@@ -1413,25 +1354,8 @@ fn decode_stored<D: Document>(stored: Stored) -> Result<Loaded<D>, PersistError>
         });
     }
     let body = &bytes[header.body_start..];
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a document's decode runs contained and reports a typed error"
-    )]
-    let decoded = catch_unwind(AssertUnwindSafe(|| D::decode(header.version, body)));
-    let value = match decoded {
-        Ok(Ok(value)) => value,
-        Ok(Err(error)) => return Err(PersistError::Decode(error)),
-        Err(payload) => {
-            let message = payload_text(&*payload)
-                .unwrap_or("a panic without a message")
-                .to_owned();
-            flui_foundation::panic::discard_payload(payload);
-            return Err(PersistError::Panicked {
-                during: CodecStep::Decode,
-                message,
-            });
-        }
-    };
+    let value = contained_step(CodecStep::Decode, || D::decode(header.version, body))?
+        .map_err(PersistError::Decode)?;
     Ok(Loaded {
         value: Rc::new(value),
         base: stored.version,

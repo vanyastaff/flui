@@ -20,7 +20,7 @@ use crate::support::generic_render_view_element;
 /// Backed by `RenderFlow`. `clip_behavior` defaults to `Clip::HardEdge`.
 ///
 /// Generic over `C: ViewSeq`, like [`Stack`](crate::Stack) — a dynamic
-/// `Vec<BoxedView>` or a `stack!`/`column!`-style tuple.
+/// `Vec<BoxedView>` or a tuple `(a, b)`.
 #[derive(Clone)]
 pub struct Flow<C = Vec<BoxedView>> {
     delegate: Rc<dyn FlowDelegate>,
