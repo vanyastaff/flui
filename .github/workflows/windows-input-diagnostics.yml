@@ -1,7 +1,8 @@
 name: Windows input diagnostics (temporary)
 
-# Temporary: the three Win32 input rows the first nightly run failed, with
-# their pointer messages printed. Removed before the pull request merges.
+# Temporary: flui-native's Windows suite as the nightly runs it, on this
+# branch and on main, each on a fresh runner. Removed before the pull request
+# merges.
 
 on:
   pull_request:
@@ -29,7 +30,7 @@ env:
   RUSTUP_HOME: ${{ github.workspace }}/../flui-diag-rustup
 
 jobs:
-  rows:
+  branch:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -39,32 +40,16 @@ jobs:
           persist-credentials: false
       - name: Install pinned Rust
         uses: ./.github/actions/rust-toolchain
-      - name: Build
-        run: cargo test -p flui-native --locked --no-run --lib --test platform_it
-      - name: TSF rows
-        if: ${{ !cancelled() }}
-        run: cargo test -p flui-native --locked --lib -- --exact text::windows::tsf::tests::the_text_services_answer_a_completion_for_its_store --nocapture
-      - name: Window rows
-        if: ${{ !cancelled() }}
-        run: |
-          status=0
-          for row in two_injected_touches_arrive_as_one_pointer_frame a_pointer_routed_mouse_hovers_the_window a_leave_callback_that_hovers_again_keeps_the_hover; do
-            echo "::group::$row"
-            FLUI_NATIVE_WINDOW_CONTRACT_CHILD=$row cargo test -p flui-native --locked --test platform_it -- --exact contract::test_window_lifecycle_contract --nocapture 2>&1 || status=1
-            echo "::endgroup::"
-          done
-          exit $status
       - name: Install cargo-nextest
-        if: ${{ !cancelled() }}
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9
       - name: Whole suite, as the nightly runs it
-        if: ${{ !cancelled() }}
         run: cargo xtask platform-test
+      - name: Whole window contract again
+        if: ${{ !cancelled() }}
+        run: cargo test -p flui-native --locked --test platform_it -- --exact contract::test_window_lifecycle_contract
 
-  # The same suite on main's code, to tell this branch's failures from the
-  # runner's.
   main:
     runs-on: windows-latest
     timeout-minutes: 60
@@ -82,3 +67,6 @@ jobs:
           tool: cargo-nextest@0.9
       - name: Whole suite on main
         run: cargo xtask platform-test
+      - name: Whole window contract again
+        if: ${{ !cancelled() }}
+        run: cargo test -p flui-native --locked --test platform_it -- --exact contract::test_window_lifecycle_contract
