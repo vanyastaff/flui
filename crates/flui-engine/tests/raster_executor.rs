@@ -1072,3 +1072,87 @@ fn an_untaken_panic_payload_is_dropped_outside_the_slot_table() {
         "the collected index is reused"
     );
 }
+
+/// An error whose `Debug` and `Display` panic: a backend error can carry
+/// user code.
+struct PanicsWhenFormatted;
+
+impl std::fmt::Debug for PanicsWhenFormatted {
+    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        panic!("the error's Debug panics")
+    }
+}
+
+impl std::fmt::Display for PanicsWhenFormatted {
+    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        panic!("the error's Display panics")
+    }
+}
+
+impl std::error::Error for PanicsWhenFormatted {}
+
+fn unformattable() -> EngineError {
+    EngineError::SurfaceCreation(Box::new(PanicsWhenFormatted))
+}
+
+/// The executor never formats a failure it hands to the owner: an attach or
+/// resize refused with an error that panics when formatted still commits the
+/// refusal, settles the pending frame and keeps the resize pending.
+#[test]
+fn a_refusal_whose_error_panics_when_formatted_still_commits() {
+    let mut rig = rig();
+    rig.backend
+        .script_attach(ScriptedAnswer::Fail(unformattable()));
+    let slot = rig.sender.mint_slot().expect("a slot id is left");
+    let SendReceipt::Configured(generation) = rig
+        .sender
+        .send(attach_command(slot, address(1)))
+        .expect("accepted")
+    else {
+        panic!("a positive size configures the slot");
+    };
+    let refused = Attached {
+        slot,
+        address: address(1),
+        generation,
+    };
+    let _ = rig.sender.send(frame(refused, 1)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(phase(&rig.sender, slot), SlotPhase::Refused);
+    assert_eq!(verdicts(&rig.sender, slot), [(1, RasterVerdict::Failed)]);
+    assert!(matches!(
+        rig.sender.take_failure(slot),
+        Some(SlotFailure::Refused(EngineError::SurfaceCreation(_)))
+    ));
+
+    let at = attached(&mut rig, 2);
+    rig.backend
+        .script_resize(ScriptedAnswer::Fail(unformattable()));
+    let SendReceipt::Configured(resized) = rig
+        .sender
+        .send(RasterCommand::Configure {
+            slot: at.slot,
+            change: SlotChange::Size(DeviceSize::new(16, 16)),
+        })
+        .expect("accepted")
+    else {
+        panic!("a positive size mints a generation");
+    };
+    let current = Attached {
+        generation: resized,
+        ..at
+    };
+    let _ = rig.sender.send(frame(current, 1)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(1, RasterVerdict::SurfaceStale)]
+    );
+    let _ = rig.sender.send(frame(current, 2)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(2, RasterVerdict::Presented)],
+        "the resize stayed pending and was retried"
+    );
+}

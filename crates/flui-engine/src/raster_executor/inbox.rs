@@ -138,20 +138,25 @@ impl SlotInbox {
 }
 
 /// The last owner of an inbox drops what it still holds as a command would:
-/// a frame's scene and a panic payload nobody took run their destructors
-/// contained, and the payload goes to `discard_payload` (ADR-0281).
+/// a frame's scene, an error nobody took and a panic payload nobody took run
+/// their destructors contained, and a payload goes to `discard_payload`
+/// (ADR-0281).
 impl Drop for InboxState {
     fn drop(&mut self) {
         let frame = self.frame.take();
         let failure = self.failure.take();
+        let mut caught = FirstPanic::new();
         if let Some(frame) = frame {
-            let mut caught = FirstPanic::new();
-            caught.contain(move || drop(frame));
-            if let Some(payload) = caught.into_payload() {
-                discard_payload(payload);
-            }
+            let _dropped = caught.contain(move || drop(frame));
         }
-        if let Some(SlotFailure::Panicked(payload)) = failure {
+        match failure {
+            Some(SlotFailure::Panicked(payload)) => discard_payload(payload),
+            Some(SlotFailure::Refused(error)) => {
+                let _dropped = caught.contain(move || drop(error));
+            }
+            None => {}
+        }
+        if let Some(payload) = caught.into_payload() {
             discard_payload(payload);
         }
     }

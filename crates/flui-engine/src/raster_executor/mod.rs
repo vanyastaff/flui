@@ -248,7 +248,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             });
             return 0;
         };
-        let described = format!("{failure:?}");
+        let cause = cause(&failure);
         // A frame sent before the refusal was visible settles here; later
         // ones are refused at send.
         let (frame, extra) = {
@@ -263,13 +263,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
         };
         let settled = usize::from(frame.is_some());
         retire(frame, extra, first);
-        report(
-            Report::Refused {
-                slot,
-                failure: described,
-            },
-            first,
-        );
+        report(Report::Refused { slot, cause }, first);
         settled
     }
 
@@ -336,10 +330,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 }
                 Some(Err(error)) => {
                     retry = Some(size);
-                    resize_report = Some(Report::ResizeRefused {
-                        slot: slot.id,
-                        error: error.to_string(),
-                    });
+                    resize_report = Some(Report::ResizeRefused { slot: slot.id });
                     failure = Some(SlotFailure::Refused(error));
                 }
                 None => {
@@ -466,11 +457,10 @@ fn render<B: SlotBackend>(
 enum Report {
     Refused {
         slot: SlotId,
-        failure: String,
+        cause: &'static str,
     },
     ResizeRefused {
         slot: SlotId,
-        error: String,
     },
     Stale {
         slot: SlotId,
@@ -484,13 +474,30 @@ enum Report {
     },
 }
 
+/// What kind of failure a slot's record holds, for a report that must not
+/// format the failure itself: an error's `Debug` or `Display` can be user
+/// code, and the owner reads the failure from the record.
+fn cause(failure: &SlotFailure) -> &'static str {
+    match failure {
+        SlotFailure::Refused(_) => "refused",
+        SlotFailure::Panicked(_) => "panicked",
+    }
+}
+
 fn report(report: Report, first: &mut FirstPanic) {
     first.contain(move || match report {
-        Report::Refused { slot, failure } => {
-            tracing::warn!(?slot, %failure, "raster executor: slot refused");
+        Report::Refused { slot, cause } => {
+            tracing::warn!(
+                ?slot,
+                cause,
+                "raster executor: slot refused; the record holds why"
+            );
         }
-        Report::ResizeRefused { slot, error } => {
-            tracing::warn!(?slot, %error, "raster executor: resize refused; retried next turn");
+        Report::ResizeRefused { slot } => {
+            tracing::warn!(
+                ?slot,
+                "raster executor: resize refused; the record holds why, retried next turn"
+            );
         }
         Report::Stale {
             slot,
@@ -559,7 +566,9 @@ fn retire(frame: Option<SceneSnapshot>, extra: Option<SlotFailure>, first: &mut 
     }
     match extra {
         Some(SlotFailure::Panicked(payload)) => discard_payload(payload),
-        Some(SlotFailure::Refused(error)) => drop(error),
+        Some(SlotFailure::Refused(error)) => {
+            let _dropped = first.contain(move || drop(error));
+        }
         None => {}
     }
 }
