@@ -598,6 +598,21 @@ pub(crate) fn a_scroll_behavior_builds_the_bar_of_its_scroll_views() {
         painted(&laid, INNER_THUMB).is_empty(),
         "and the behavior adds no second one"
     );
+    // A bar that follows another controller is not the bar of the scroll
+    // view under it, which keeps the one its behavior gives it.
+    let elsewhere = ScrollController::new();
+    laid.pump_widget(ScrollConfiguration::new(
+        Rc::clone(&behavior),
+        shown(column(&scroll, 3000.0)).controller(
+            elsewhere,
+            flui_rendering::constraints::AxisDirection::TopToBottom,
+        ),
+    ));
+    assert_eq!(
+        thumb(&laid, INNER_THUMB).top(),
+        135.0,
+        "the scroll view under a bar of another controller keeps its own bar"
+    );
 }
 
 /// A bar told to show its thumb with no scroll view under it is a mistake

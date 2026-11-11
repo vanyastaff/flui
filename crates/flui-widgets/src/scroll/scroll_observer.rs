@@ -49,13 +49,12 @@ impl ObservedScroll {
 
 /// The observer's side: the scroll views attached to it, the most recent
 /// first in line, and who hears that the observed one changed.
+#[derive(Default)]
 pub(crate) struct ScrollObserver {
     /// Each attachment is owned by its scroll view's [`ObserverSeat`]; a
     /// dropped seat leaves a dead entry the next change prunes.
     attached: RefCell<Vec<Weak<RefCell<ObservedScroll>>>>,
     changed: ChangeNotifier,
-    /// Whether the observer paints a bar for what it observes.
-    paints_scrollbar: bool,
 }
 
 impl std::fmt::Debug for ScrollObserver {
@@ -67,16 +66,6 @@ impl std::fmt::Debug for ScrollObserver {
 }
 
 impl ScrollObserver {
-    /// An observer; `paints_scrollbar` when it is a bar, which the scroll
-    /// view it observes then does not get from its behavior again.
-    pub(crate) fn new(paints_scrollbar: bool) -> Self {
-        Self {
-            attached: RefCell::default(),
-            changed: ChangeNotifier::new(),
-            paints_scrollbar,
-        }
-    }
-
     /// The scroll view this observer follows: the latest attached one still
     /// mounted.
     pub(crate) fn observed(&self) -> Option<ObservedScroll> {
@@ -173,6 +162,8 @@ impl Drop for ObserverSeat {
 #[derive(Debug, Default)]
 pub(crate) struct ObservedBy {
     seat: Option<ObserverSeat>,
+    /// Whether the scope of that observer paints this scroll view's bar.
+    under_scrollbar: bool,
 }
 
 impl ObservedBy {
@@ -180,28 +171,29 @@ impl ObservedBy {
     /// the one at depth zero under it; leave any other observer.
     pub(crate) fn sync(&mut self, ctx: &dyn BuildContext, scroll: ObservedScroll) {
         match ScrollObserverScope::depth_zero_observer(ctx) {
-            Some(observer) => match &self.seat {
-                Some(seat) if seat.is_for(&observer) => seat.update(scroll),
-                _ => {
-                    let outgoing = self.seat.replace(observer.attach(scroll));
-                    drop(outgoing);
+            Some((observer, paints_scrollbar)) => {
+                self.under_scrollbar = paints_scrollbar;
+                match &self.seat {
+                    Some(seat) if seat.is_for(&observer) => seat.update(scroll),
+                    _ => {
+                        let outgoing = self.seat.replace(observer.attach(scroll));
+                        drop(outgoing);
+                    }
                 }
-            },
-            None => drop(self.seat.take()),
+            }
+            None => self.clear(),
         }
     }
 
-    /// Detach from the observer, if any.
-    /// Whether the observer this scroll view is attached to paints its bar,
-    /// so the scroll view's behavior adds none.
+    /// Whether the observer this scroll view is attached to paints the bar
+    /// of this very scroll view, so its behavior adds none.
     pub(crate) fn under_scrollbar(&self) -> bool {
-        self.seat
-            .as_ref()
-            .and_then(|seat| seat.observer.upgrade())
-            .is_some_and(|observer| observer.paints_scrollbar)
+        self.seat.is_some() && self.under_scrollbar
     }
 
+    /// Detach from the observer, if any.
     pub(crate) fn clear(&mut self) {
+        self.under_scrollbar = false;
         drop(self.seat.take());
     }
 }
@@ -212,36 +204,48 @@ pub(crate) struct ScrollObserverScope {
     observer: Rc<ScrollObserver>,
     /// The position of the scroll view the scope itself sits in, if any.
     enclosing: Option<ScrollPosition>,
+    /// Whether the observer paints the bar of the scroll view it observes:
+    /// a bar that follows a controller of its own does not.
+    paints_scrollbar: bool,
     child: BoxedView,
 }
 
 impl ScrollObserverScope {
     /// Install `observer` over `child`; `ctx` is where the scope is built,
-    /// read for the scroll view it sits in.
+    /// read for the scroll view it sits in. `paints_scrollbar` when the
+    /// observer is a bar showing what it observes.
     pub(crate) fn new(
         ctx: &dyn BuildContext,
         observer: Rc<ScrollObserver>,
+        paints_scrollbar: bool,
         child: impl IntoView,
     ) -> Self {
         Self {
             observer,
             enclosing: ScrollPositionScope::position_of(ctx),
+            paints_scrollbar,
             child: BoxedView::new(child.into_view()),
         }
     }
 
-    /// The observer a scroll view built at `ctx` attaches to: the nearest
-    /// scope's, when no other scroll view sits between the two.
-    fn depth_zero_observer(ctx: &dyn BuildContext) -> Option<Rc<ScrollObserver>> {
-        let (observer, enclosing) = ctx
-            .depend_on::<Self, _>(|scope| (Rc::clone(&scope.observer), scope.enclosing.clone()))?;
+    /// The observer a scroll view built at `ctx` attaches to, and whether it
+    /// paints that scroll view's bar: the nearest scope's, when no other
+    /// scroll view sits between the two.
+    fn depth_zero_observer(ctx: &dyn BuildContext) -> Option<(Rc<ScrollObserver>, bool)> {
+        let (observer, enclosing, paints_scrollbar) = ctx.depend_on::<Self, _>(|scope| {
+            (
+                Rc::clone(&scope.observer),
+                scope.enclosing.clone(),
+                scope.paints_scrollbar,
+            )
+        })?;
         let nearest = ScrollPositionScope::position_of(ctx);
         let depth_zero = match (&enclosing, &nearest) {
             (None, None) => true,
             (Some(enclosing), Some(nearest)) => enclosing.ptr_eq(nearest),
             _ => false,
         };
-        depth_zero.then_some(observer)
+        depth_zero.then_some((observer, paints_scrollbar))
     }
 }
 
@@ -266,6 +270,7 @@ impl InheritedView for ScrollObserverScope {
 
     fn update_should_notify(&self, old: &Self) -> bool {
         !Rc::ptr_eq(&self.observer, &old.observer)
+            || self.paints_scrollbar != old.paints_scrollbar
             || match (&self.enclosing, &old.enclosing) {
                 (None, None) => false,
                 (Some(new), Some(old)) => !new.ptr_eq(old),

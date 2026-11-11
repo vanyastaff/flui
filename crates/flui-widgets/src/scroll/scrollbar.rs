@@ -853,7 +853,7 @@ impl StatefulView for Scrollbar {
             .build_on(None);
         let bar = Rc::new(Bar {
             knobs: Cell::new(self.knobs),
-            observer: Rc::new(ScrollObserver::new(true)),
+            observer: Rc::new(ScrollObserver::default()),
             followed: RefCell::new(self.followed.clone()),
             shown: RefCell::new(None),
             text_direction: Cell::new(TextDirection::Ltr),
@@ -990,6 +990,9 @@ impl ViewState<Scrollbar> for ScrollbarState {
                     ScrollObserverScope::new(
                         ctx,
                         Rc::clone(&self.bar.observer),
+                        // A bar with a controller of its own shows that one,
+                        // not the scroll view below it.
+                        view.followed.is_none(),
                         view.child.clone(),
                     ),
                 ));
