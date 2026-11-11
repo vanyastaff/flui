@@ -89,6 +89,11 @@ pub struct SlotRecord {
     pub undrained: usize,
     /// The generation the slot's next frame must be stamped with.
     pub required_generation: SurfaceGeneration,
+    /// The window slot lost its surface for good and dropped it: the owner
+    /// makes a new one with its [`SurfaceFactory`](crate::SurfaceFactory) and
+    /// sends it in a [`RasterCommand::Restore`](super::RasterCommand::Restore).
+    /// Until one is restored the slot's frames settle not shown.
+    pub wants_surface: bool,
 }
 
 /// The values one slot's owner and executor exchange.
@@ -108,6 +113,8 @@ pub(crate) struct InboxState {
     pub(crate) generation: SurfaceGeneration,
     /// Frames accepted and not settled yet.
     pub(crate) in_flight: u32,
+    /// Whether the slot dropped its surface and waits for a restore.
+    pub(crate) wants_surface: bool,
     /// Settlements not drained yet, oldest first.
     pub(crate) settlements: VecDeque<SlotSettlement>,
     pub(crate) phase: SlotPhase,
@@ -133,6 +140,7 @@ impl SlotInbox {
                 latency: None,
                 generation,
                 in_flight: 0,
+                wants_surface: false,
                 settlements: VecDeque::with_capacity(INLINE_DEPTH),
                 phase: SlotPhase::Attaching,
                 failure: None,
@@ -153,6 +161,7 @@ impl SlotInbox {
             in_flight: state.in_flight,
             undrained: state.settlements.len(),
             required_generation: state.generation,
+            wants_surface: state.wants_surface,
         }
     }
 }

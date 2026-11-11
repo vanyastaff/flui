@@ -266,3 +266,87 @@ fn a_windows_colour_and_latency_reach_the_backend_once_a_turn() {
         ]
     );
 }
+
+/// A window slot that dropped a surface lost for good asks its owner for a
+/// new one in its record: the frame settles not shown, the next generation is
+/// minted so frames stamped before the loss are refused, and the restore the
+/// owner sends clears the ask.
+///
+/// Red-check: classify `SurfaceReplacementNeeded` as any other failure and the
+/// record never asks for a surface.
+#[test]
+fn a_dropped_surface_is_asked_of_the_owner_and_a_restore_answers_it() {
+    let mut rig = rig();
+    let (slot, before) = rig.sized_window();
+    rig.backend
+        .script_render(ScriptedAnswer::Fail(EngineError::SurfaceReplacementNeeded));
+    let _ = rig.frame(slot, before, 0);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(0, RasterVerdict::NotShown)]);
+    let record = rig.sender.record(slot).expect("held");
+    assert!(
+        record.wants_surface,
+        "the record asks the owner for a surface"
+    );
+    assert_ne!(record.required_generation, before);
+    let _ = rig.frame(slot, before, 1);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(1, RasterVerdict::SurfaceStale)]);
+
+    let SendReceipt::Configured(restored) = rig.send(RasterCommand::Restore {
+        slot,
+        surface: rig.surface(),
+    }) else {
+        panic!("a restore of a sized window mints a generation");
+    };
+    let _ = rig.frame(slot, restored, 2);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(2, RasterVerdict::Presented)]);
+    assert!(!rig.sender.record(slot).expect("held").wants_surface);
+}
+
+/// A restore keeps the barrier of a size the backend refused: the restored
+/// surface is configured at the size the slot has, so a frame stamped after
+/// the restore, laid out for the refused size, is refused on its generation
+/// until a size the backend accepts arrives.
+///
+/// Red-check: let the restore authorise its generation whatever size is
+/// pending or refused, and the frame renders into the old configuration.
+#[test]
+fn a_restore_keeps_the_barrier_of_a_refused_size() {
+    let mut rig = rig();
+    let (slot, _) = rig.sized_window();
+    rig.backend
+        .script_resize(ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
+            width: 1 << 20,
+            height: 16,
+        }));
+    let SendReceipt::Configured(refused) = rig.send(RasterCommand::Configure {
+        slot,
+        change: SlotChange::Size(DeviceSize::new(1 << 20, 16)),
+    }) else {
+        panic!("a positive size mints a generation");
+    };
+    let _ = rig.executor.turn();
+    let _refusal = rig.sender.take_failure(slot);
+    let SendReceipt::Configured(restored) = rig.send(RasterCommand::Restore {
+        slot,
+        surface: rig.surface(),
+    }) else {
+        panic!("a restore mints a generation");
+    };
+    assert_ne!(restored, refused);
+    let _ = rig.frame(slot, restored, 1);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(1, RasterVerdict::SurfaceStale)]);
+
+    let SendReceipt::Configured(accepted) = rig.send(RasterCommand::Configure {
+        slot,
+        change: SlotChange::Size(DeviceSize::new(64, 32)),
+    }) else {
+        panic!("a positive size mints a generation");
+    };
+    let _ = rig.frame(slot, accepted, 2);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(2, RasterVerdict::Presented)]);
+}

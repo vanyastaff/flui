@@ -1352,3 +1352,50 @@ fn a_surface_loss_keeps_the_barrier_of_a_pending_resize() {
         "the resize that succeeds authorises the frame"
     );
 }
+
+/// A surface lost after the backend refused a size keeps that size's barrier,
+/// as a pending one does: the generation the loss mints is not authorised
+/// while the slot keeps its old configuration.
+///
+/// Red-check: let a surface loss authorise its generation when no size is
+/// pending, ignoring a refused one, and the frame renders.
+#[test]
+fn a_surface_loss_keeps_the_barrier_of_a_refused_size() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    let _ = rig
+        .sender
+        .send(RasterCommand::Configure {
+            slot: at.slot,
+            change: SlotChange::Size(DeviceSize::new(1 << 20, 16)),
+        })
+        .expect("accepted");
+    rig.backend
+        .script_resize(ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
+            width: 1 << 20,
+            height: 16,
+        }));
+    rig.backend
+        .script_render(ScriptedAnswer::Fail(EngineError::SurfaceLost));
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(1, RasterVerdict::SurfaceStale)]
+    );
+    let required = Attached {
+        generation: rig
+            .sender
+            .record(at.slot)
+            .expect("the owner holds the slot")
+            .required_generation,
+        ..at
+    };
+    let _ = rig.sender.send(frame(required, 2)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(2, RasterVerdict::SurfaceStale)],
+        "no frame renders laid out for a size the slot does not have"
+    );
+}

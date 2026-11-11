@@ -13,6 +13,8 @@ use std::sync::Arc;
 use flui_layer::{DamageRegion, Scene};
 use flui_platform::{DisplayColor, SurfaceTarget};
 
+#[cfg(all(test, feature = "testing"))]
+use crate::testing::ScriptedAcquire;
 use crate::{
     error::{EngineError, EngineResult},
     frame_latency::FrameLatency,
@@ -31,7 +33,6 @@ use crate::{
 
 /// The context's parts a window slot works with.
 pub(crate) struct Gpu<'a> {
-    pub(crate) instance: &'a wgpu::Instance,
     pub(crate) adapter: &'a wgpu::Adapter,
     pub(crate) device: &'a wgpu::Device,
     pub(crate) queue: &'a wgpu::Queue,
@@ -59,6 +60,10 @@ pub(crate) struct WindowSlot {
     latency: FrameLatency,
     frame: FrameProtocol,
     recovery: SurfaceRecovery,
+    /// What every acquire answers instead of the surface, in a test of a
+    /// surface no GPU presents to.
+    #[cfg(all(test, feature = "testing"))]
+    acquire_answers: Option<ScriptedAcquire>,
 }
 
 impl WindowSlot {
@@ -88,7 +93,66 @@ impl WindowSlot {
             latency,
             frame: FrameProtocol::new(),
             recovery: SurfaceRecovery::default(),
+            #[cfg(all(test, feature = "testing"))]
+            acquire_answers: None,
         })
+    }
+
+    /// A slot over `surface`, configured at `size` in 8-bit sRGB as if the
+    /// adapter offered it: wgpu's no-op adapter reports no capabilities, so a
+    /// test reaches the acquire path of a surface no GPU presents to, and
+    /// every acquire answers `answers`.
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn configured_without_capabilities(
+        surface: UnconfiguredSurface,
+        size: (u32, u32),
+        answers: ScriptedAcquire,
+    ) -> Self {
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+        let caps = wgpu::SurfaceCapabilities {
+            formats: vec![format],
+            format_capabilities: vec![wgpu::SurfaceFormatCapabilities {
+                format,
+                color_spaces: wgpu::SurfaceColorSpaces::SRGB,
+            }],
+            ..Default::default()
+        };
+        let color = ResolvedSurfaceColor::resolve(
+            SurfaceColor::Srgb8,
+            &caps,
+            None,
+            &wgpu::DisplayHdrInfo::default(),
+            false,
+        )
+        .expect("BUG: a surface offering BGRA8 in sRGB resolves to 8-bit sRGB");
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: size.0,
+            height: size.1,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: FrameLatency::default().frames(),
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: Vec::new(),
+            color_space: color.color_space(),
+        };
+        let UnconfiguredSurface { lease, target } = surface;
+        Self {
+            lease,
+            target,
+            size: Some(size),
+            configured: Some(Configured {
+                config,
+                color,
+                supports_copy_src: false,
+            }),
+            color: color.request(),
+            latency: FrameLatency::default(),
+            frame: FrameProtocol::new(),
+            recovery: SurfaceRecovery::default(),
+            #[cfg(all(test, feature = "testing"))]
+            acquire_answers: Some(answers),
+        }
     }
 
     /// Give the surface `size` device pixels, both sides positive and within
@@ -238,6 +302,11 @@ impl WindowSlot {
             return Ok(classify_frame(false, false));
         }
         let Some(output) = acquire_surface_texture_with(&mut Acquire { slot: self, gpu })? else {
+            // The slot held a surface when the frame began: one gone now was
+            // lost for good and dropped, and only the owner makes another.
+            if !self.lease.has_surface() {
+                return Err(EngineError::SurfaceReplacementNeeded);
+            }
             return Ok(classify_frame(true, false));
         };
         // Acquiring may have configured the surface again, which owes a full
@@ -356,6 +425,15 @@ impl SurfaceAcquireBackend for Acquire<'_, '_> {
     type Frame = wgpu::SurfaceTexture;
 
     fn acquire(&mut self) -> Result<SurfaceAcquireOutcome<Self::Frame>, EngineError> {
+        #[cfg(all(test, feature = "testing"))]
+        if let Some(answer) = self.slot.acquire_answers
+            && self.slot.lease.has_surface()
+        {
+            return Ok(match answer {
+                ScriptedAcquire::Timeout => SurfaceAcquireOutcome::Timeout,
+                ScriptedAcquire::Lost => SurfaceAcquireOutcome::Lost,
+            });
+        }
         let Some(surface) = self.slot.lease.surface() else {
             return Ok(SurfaceAcquireOutcome::Released);
         };
@@ -372,20 +450,14 @@ impl SurfaceAcquireBackend for Acquire<'_, '_> {
         Ok(())
     }
 
+    /// Drop the lost surface and make none: a surface is made on the thread
+    /// the window system serves, which the executor may not be on (Apple and
+    /// Android hosts answer `Unavailable` elsewhere), so the owner makes the
+    /// replacement with its factory and sends it in a `Restore` (ADR-0305 §2,
+    /// §8). The frame then answers [`EngineError::SurfaceReplacementNeeded`].
     fn recreate(&mut self) -> Result<(), EngineError> {
-        let slot = &mut *self.slot;
-        slot.lease.probe()?;
-        // Drop first: a platform refuses a second surface for a live window
-        // (`Renderer::recreate_surface` has the Android case).
-        let released = slot.lease.release();
-        slot.configured = None;
-        let surface = self
-            .gpu
-            .instance
-            .create_surface(Arc::clone(released.target()))
-            .map_err(EngineError::surface_creation)?;
-        slot.lease.replace_surface(released, surface);
-        slot.configure(self.gpu)
+        self.slot.release();
+        Ok(())
     }
 
     fn recovery(&mut self) -> &mut SurfaceRecovery {

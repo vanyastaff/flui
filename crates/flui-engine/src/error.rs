@@ -384,6 +384,15 @@ pub enum EngineError {
     #[error("the GPU context's adapter cannot present to this window's surface")]
     IncompatibleSurface,
 
+    /// A window slot's surface stayed lost after a reconfigure and the slot
+    /// dropped it (ADR-0305 §2, §8). The executor makes no surface: the owner
+    /// makes a new one with its [`SurfaceFactory`](crate::SurfaceFactory),
+    /// on the thread the window system serves, and sends it in a
+    /// `RasterCommand::Restore`. Until then the slot's record says it wants
+    /// a surface and its frames settle not shown.
+    #[error("the window's surface was lost; its owner must restore a new one")]
+    SurfaceReplacementNeeded,
+
     /// Adapter request failed with a backend-specific diagnostic payload.
     ///
     /// Wraps wgpu's `RequestAdapterError` (or any other backend-specific
@@ -518,6 +527,7 @@ impl EngineError {
             | Self::SurfaceCreation(_)
             | Self::SurfaceOnForeignDisplay
             | Self::IncompatibleSurface
+            | Self::SurfaceReplacementNeeded
             | Self::AdapterRequest(_)
             | Self::NoSupportedGpu { .. }
             | Self::DeviceCreation(_)

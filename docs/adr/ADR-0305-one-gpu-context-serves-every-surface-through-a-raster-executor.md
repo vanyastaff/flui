@@ -201,7 +201,10 @@ pub struct GpuBootstrap {
   answer `Unavailable` (`surface_target.rs:18-25`). It probes the target before creating, as
   ADR-0063 decision 3 types it, and the surface reaches the executor in an `Attach` or `Restore`
   command (§3). `wgpu::Instance` is `Clone + Send + Sync` (`wgpu/src/api/instance.rs:31-36`), so
-  the factory and the context share one instance.
+  the factory and the context share one instance. The executor makes no surface either: a
+  window surface still lost after a reconfigure is dropped, the frame answers
+  `EngineError::SurfaceReplacementNeeded`, and the slot's record says it wants a surface
+  (`SlotRecord::wants_surface`) until the owner sends one in a `Restore`.
 - **The bootstrap runs ADR-0244 decision 1's probe once**, over the first window when there is
   one: each backend attempt in its own instance, the winning instance kept by both the factory
   and the context. It is `async`; native runners block on it once at startup, and the web runner
@@ -325,6 +328,8 @@ answers `None` for it today (`raster_owner.rs:928`). A minted size the backend r
 next turn retries it; a size it always refuses is not retried: the slot keeps its previous
 configuration, so frames stamped with that generation settle `SurfaceStale`, the failure waits in
 the slot's record, and the executor warns once for that size until the owner sends another one.
+A size pending or refused is a barrier for every newer generation: neither a lost surface nor a
+`Restore` authorises frames laid out for a size the slot does not have.
 `GpuResourceGeneration`, `FrameStamp::gpu_resource_generation`,
 `RasterHandle::bind_gpu_resource_generation` (`raster_owner.rs:954`) and
 `PumpOutcome::ResourceOutdated` are deleted: a frame carries CPU data only, every GPU object it

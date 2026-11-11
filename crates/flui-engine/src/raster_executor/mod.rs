@@ -355,12 +355,18 @@ impl<B: SlotBackend> RasterExecutor<B> {
             .expect("BUG: the slot was found attached above");
         // The restore answers for every frame stamped before it, whatever its
         // outcome: a refused or panicked one leaves the slot released, whose
-        // frames settle not shown.
-        held.applied = generation;
+        // frames settle not shown. A size still pending or refused keeps its
+        // barrier: the restored surface is configured at the size the slot
+        // has, and only a size the backend accepts authorises frames laid out
+        // for a newer one.
+        let size_barrier = held.refused_size.is_some() || held.inbox.lock().size.is_some();
+        if !size_barrier {
+            held.applied = generation;
+        }
         held.owe_full(FullReason::SurfaceChanged);
         let mut caught = FirstPanic::new();
         match caught.contain(|| backend.restore(slot, surface)) {
-            Some(Ok(())) => {}
+            Some(Ok(())) => held.inbox.lock().wants_surface = false,
             Some(Err(error)) => {
                 let extra = held.inbox.lock().hold_failure(SlotFailure::Refused(error));
                 retire(None, extra, first);
@@ -473,7 +479,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             report_each([resize_report, None], first);
             return 0;
         };
-        let (verdict, render_failure, surface_lost, render_report) = render(backend, slot, &frame);
+        let (verdict, render_failure, surface_loss, render_report) = render(backend, slot, &frame);
         let discarded = if failure.is_none() {
             failure = render_failure;
             None
@@ -485,13 +491,16 @@ impl<B: SlotBackend> RasterExecutor<B> {
             if let Some(size) = retry {
                 state.size.get_or_insert(size);
             }
-            if surface_lost {
+            if surface_loss != SurfaceLoss::Kept {
                 state.generation = state.generation.next();
-                // A resize still pending keeps its barrier: only its success
-                // authorises frames of the size it asked for.
-                if state.size.is_none() {
+                // A resize still pending or refused keeps its barrier: only a
+                // size the backend accepts authorises frames laid out for it.
+                if state.size.is_none() && slot.refused_size.is_none() {
                     slot.applied = state.generation;
                 }
+            }
+            if surface_loss == SurfaceLoss::Dropped {
+                state.wants_surface = true;
             }
             state.settle(&frame, verdict);
             failure.and_then(|failure| state.hold_failure(failure))
@@ -520,16 +529,21 @@ impl<B: SlotBackend> Drop for RasterExecutor<B> {
 }
 
 /// Render `frame` into `slot`: its verdict, the slot failure it raised,
-/// whether the surface was lost, and what to report once the frame settled.
+/// what it did to the surface, and what to report once the frame settled.
 fn render<B: SlotBackend>(
     backend: &mut B,
     slot: &mut ExecSlot,
     frame: &SceneSnapshot,
-) -> (RasterVerdict, Option<SlotFailure>, bool, Option<Report>) {
+) -> (
+    RasterVerdict,
+    Option<SlotFailure>,
+    SurfaceLoss,
+    Option<Report>,
+) {
     let stamped = frame.stamp.surface_generation;
     if !slot.visibility.is_shown() {
         slot.owe_full(RESET);
-        return (RasterVerdict::NotShown, None, false, None);
+        return (RasterVerdict::NotShown, None, SurfaceLoss::Kept, None);
     }
     if stamped == SurfaceGeneration::ZERO || stamped != slot.applied {
         slot.owe_full(FullReason::SurfaceChanged);
@@ -538,7 +552,12 @@ fn render<B: SlotBackend>(
             stamped,
             applied: slot.applied,
         };
-        return (RasterVerdict::SurfaceStale, None, false, Some(report));
+        return (
+            RasterVerdict::SurfaceStale,
+            None,
+            SurfaceLoss::Kept,
+            Some(report),
+        );
     }
     let damage = slot.full_redraw.map_or(frame.damage, DamageRegion::Full);
     let mut caught = FirstPanic::new();
@@ -551,29 +570,31 @@ fn render<B: SlotBackend>(
         return (
             RasterVerdict::Retry,
             Some(SlotFailure::Panicked(payload)),
-            false,
+            SurfaceLoss::Kept,
             None,
         );
     };
     match rendered {
         Ok(PresentDisposition::Presented) => {
             slot.full_redraw = None;
-            (RasterVerdict::Presented, None, false, None)
+            (RasterVerdict::Presented, None, SurfaceLoss::Kept, None)
         }
-        Ok(PresentDisposition::NoDamage) => (RasterVerdict::NoPresent, None, false, None),
+        Ok(PresentDisposition::NoDamage) => {
+            (RasterVerdict::NoPresent, None, SurfaceLoss::Kept, None)
+        }
         Ok(PresentDisposition::NotShown) => {
             slot.owe_full(RESET);
-            (RasterVerdict::NotShown, None, false, None)
+            (RasterVerdict::NotShown, None, SurfaceLoss::Kept, None)
         }
         Err(error) => {
             slot.owe_full(RESET);
-            let (verdict, surface_lost) = classify(&error);
+            let (verdict, surface_loss) = classify(&error);
             let report = Report::FrameFailed {
                 slot: slot.id,
                 error,
                 verdict,
             };
-            (verdict, None, surface_lost, Some(report))
+            (verdict, None, surface_loss, Some(report))
         }
     }
 }
@@ -652,20 +673,33 @@ fn report_each<const N: usize>(reports: [Option<Report>; N], first: &mut FirstPa
     }
 }
 
-/// A render error's verdict, and whether it lost the surface (which mints the
-/// slot's next generation).
-fn classify(error: &EngineError) -> (RasterVerdict, bool) {
+/// What a frame did to its slot's surface.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SurfaceLoss {
+    /// The surface is as it was.
+    Kept,
+    /// The surface was lost, and the backend configures it again: the slot's
+    /// next generation is minted.
+    Lost,
+    /// The surface was lost for good and dropped: the next generation is
+    /// minted and the record asks the owner for a new surface.
+    Dropped,
+}
+
+/// A render error's verdict, and what it did to the surface.
+fn classify(error: &EngineError) -> (RasterVerdict, SurfaceLoss) {
     match error {
+        EngineError::SurfaceReplacementNeeded => (RasterVerdict::NotShown, SurfaceLoss::Dropped),
         EngineError::DeviceLost | EngineError::GpuUnavailable | EngineError::GpuProgress { .. } => {
-            (RasterVerdict::DeviceLost, false)
+            (RasterVerdict::DeviceLost, SurfaceLoss::Kept)
         }
         EngineError::SurfaceLost | EngineError::SurfaceValidation => {
-            (RasterVerdict::SurfaceStale, true)
+            (RasterVerdict::SurfaceStale, SurfaceLoss::Lost)
         }
         other if other.recoverability() == Recoverability::Recoverable => {
-            (RasterVerdict::Retry, false)
+            (RasterVerdict::Retry, SurfaceLoss::Kept)
         }
-        _ => (RasterVerdict::Failed, false),
+        _ => (RasterVerdict::Failed, SurfaceLoss::Kept),
     }
 }
 

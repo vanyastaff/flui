@@ -323,3 +323,13 @@ impl raw_window_handle::HasDisplayHandle for FakeWindow {
 impl flui_platform::SurfaceTarget for FakeWindow {
     fn pre_present_notify(&self, _statistics: flui_platform::SwapChainStatistics) {}
 }
+
+/// What a test's window slot acquires instead of a surface texture.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ScriptedAcquire {
+    /// The surface hands out no texture in time.
+    Timeout,
+    /// The surface is lost, and stays lost after a reconfigure.
+    Lost,
+}
