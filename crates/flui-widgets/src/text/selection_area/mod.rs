@@ -305,6 +305,7 @@ impl StatefulView for SelectionArea {
                 pipeline: RefCell::new(None),
                 primary: RefCell::default(),
                 direction: Cell::new(TextDirection::Ltr),
+                platform: Cell::new(flui_platform::TargetPlatform::Unknown),
                 writer: RefCell::new(None),
                 clipboard: RefCell::new(None),
                 focus: FocusNode::with_debug_label("SelectionArea"),
@@ -424,6 +425,9 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             ctx,
             view.magnifier.as_ref(),
         ));
+        self.model
+            .platform
+            .set(flui_view::environment::PlatformConvention::of(ctx));
         // The document reads its lines in the ambient direction.
         let direction = crate::Directionality::maybe_of(ctx).unwrap_or_default();
         // Shown handles are built for the direction they read in.
@@ -521,6 +525,10 @@ struct SelectionModel {
     /// The direction the area read as of its last build, which orders the
     /// texts along a line.
     direction: Cell<TextDirection>,
+    /// The platform whose conventions the area followed as of its last
+    /// build: which chord extends by word, whether a secondary press
+    /// selects the word under it.
+    pub(super) platform: Cell<flui_platform::TargetPlatform>,
     /// Where the listener hears of a change the pointer made, acquired in
     /// `init_state`.
     writer: RefCell<Option<WriterSource>>,

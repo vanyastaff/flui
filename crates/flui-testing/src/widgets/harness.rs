@@ -72,6 +72,17 @@ pub fn mount(root: impl View) -> Harness {
     mount_in(root, HeadlessWindow::new(SURFACE.0, SURFACE.1))
 }
 
+/// [`mount`], on a window that names `platform`: the runtime installs its
+/// [`PlatformConvention`](flui_view::environment::PlatformConvention) above
+/// the root and the app-root bindings, so the whole tree, the clipboard and
+/// traversal chords included, follows that platform's conventions.
+pub fn mount_on(root: impl View, platform: flui_platform::TargetPlatform) -> Harness {
+    mount_in(
+        root,
+        HeadlessWindow::new(SURFACE.0, SURFACE.1).with_platform(platform),
+    )
+}
+
 /// [`mount`], with a window whose input method pulls from the focused field,
 /// as the Win32 text services do (ADR-0135): the UI runtime's presentation tells
 /// a recording host which field's store takes input

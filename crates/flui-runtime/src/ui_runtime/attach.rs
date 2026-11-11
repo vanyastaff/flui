@@ -3,7 +3,7 @@
 use super::UiRuntime;
 #[cfg(any(test, feature = "testing"))]
 use flui_foundation::PresentationId;
-use flui_view::environment::{FocusTreeRoot, GestureArenaScope, VsyncScope};
+use flui_view::environment::{FocusTreeRoot, GestureArenaScope, PlatformConvention, VsyncScope};
 
 impl UiRuntime {
     // ========================================================================
@@ -63,7 +63,10 @@ impl UiRuntime {
             std::rc::Rc::clone(self.media_query()),
             flui_view::view::ViewExt::boxed(view.clone()),
         );
-        let focused = FocusTreeRoot::new(with_media_query);
+        let focused = FocusTreeRoot::new(PlatformConvention::new(
+            self.presentations.primary().platform,
+            with_media_query,
+        ));
         let animated = VsyncScope::new(self.vsync(), focused);
         let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated)
             .settings(self.presentations.primary().gesture_settings.provider())
@@ -152,7 +155,10 @@ impl UiRuntime {
                 std::rc::Rc::clone(&presentation.media_query),
                 flui_view::view::ViewExt::boxed(view.clone()),
             );
-            let focused = FocusTreeRoot::new(with_media_query);
+            let focused = FocusTreeRoot::new(PlatformConvention::new(
+                presentation.platform,
+                with_media_query,
+            ));
             let animated = VsyncScope::new(presentation.vsync(), focused);
             let wrapped = GestureArenaScope::new(presentation.gestures().arena().clone(), animated)
                 .settings(presentation.gesture_settings.provider())
@@ -214,7 +220,10 @@ impl UiRuntime {
             std::rc::Rc::clone(self.media_query()),
             flui_view::view::ViewExt::boxed(view.clone()),
         );
-        let focused = FocusTreeRoot::new(with_media_query);
+        let focused = FocusTreeRoot::new(PlatformConvention::new(
+            self.presentations.primary().platform,
+            with_media_query,
+        ));
         let animated = VsyncScope::new(self.vsync(), focused);
         let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated)
             .settings(self.presentations.primary().gesture_settings.provider())

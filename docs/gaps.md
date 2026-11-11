@@ -204,6 +204,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - Windows: the precision-touchpad pan and pinch (DirectManipulation) have never run on a touchpad, and no injector reaches it, so its golden recording can only come from a `native-capture` run on one (injected touch, pen, mouse and wheel already record theirs through a manual Windows run).
 - Android: touchpad pinch and two-finger scroll and its pen hover and tilt ran only from `uinput` devices through a manual Android run, with no hardware touchpad or stylus. Its widgets ran with `uinput` touches, `input` stylus and mouse events and hardware key events through a manual Android run, with no physical keyboard, key repeat or dead key.
 - Android: a touch held while the app goes to the background makes the system report it not responding ten seconds later. The loop reads its input queue only while the Activity is resumed, so the cancel the system sends for the window it took away is never answered (seen on a Galaxy S21 by holding a touch and pressing Home).
+- Web: the runner names the compile target (`TargetPlatform::Unknown`) as the tree's `PlatformConvention`, not the browser's OS, so a Safari tab on macOS follows the platform-neutral conventions: Control jumps by word and the clipboard and refresh chords use Control.
 - Web: no precise-scroll phases, and its trackpad pinch (decoded from Control-held wheel and WebKit gesture events) ran only with constructed events in headless Chrome.
 - The native Linux hosts' touch, pens, pinches and smooth scrolling ran only through their translation tests, never on a session with a touchscreen, tablet or touchpad.
 - Pointer frames (`PlatformInput::PointerFrame`): only Windows touch and pen report them, read with `GetPointerFrameInfo` and delivered as one frame after `SkipPointerFrameMessages`, and that path has run on synthetic data only: no two-finger touch run on a Windows touch machine yet. The native Wayland host frames the touches each `wl_touch.frame` closes, as one pointer frame per surface (translation tests only, no touchscreen run). Android frames the fingers of one `ACTION_MOVE` (cross-checked in CI, no run on a device), and iOS (a touch set) still reports each contact on its own, as frames of one.
@@ -454,6 +455,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - A page's agent is reached through the browser's own remote protocol (ADR-0288 §6): `flui run --agent` speaks WebDriver BiDi to Firefox and the DevTools protocol to Chrome, Chromium, Edge, Brave and Opera, which need no driver of their own. Safari has neither: `safaridriver` speaks classic WebDriver, which has no channel or binding a page can report through, so `flui run --agent --device browser:safari` is refused, naming this entry.
 - The likely shape is a third dialect of the CLI's `BrowserLink` once `safaridriver` serves WebDriver BiDi, or one over classic WebDriver that polls the page for its lines.
 - The check is `flui run --agent` in Safari on macOS, `flui mcp` reading the app and acting on it, and a reload reconnecting.
+
+### An interactive widget costs eighteen elements
+
+> **Environments:** all · **Who it hurts:** Every screen with many controls; every catalog built on the wrappers · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- `RawButton` is five wrappers around its child (`Semantics`, `GestureDetector`, `Actions`, `Focus`, `FocusRing`; `crates/flui-widgets/src/interaction/raw_button.rs`), and each brings its own elements, render object and state. The Material and Cupertino controls are built the same way.
+- Measured at `main` `da69efa` (Linux x86_64, 4 cores, release, headless, semantics off), one `RawButton` holding a `Text`: 18 elements, 8 render nodes, 421 allocations and 46 KB at mount, 58–127 µs to mount. A `Text` alone is 3 elements, 1 render node, 105 allocations and 9 KB; a `SizedBox` holding a `ColoredBox` is 2 elements, 2 render nodes, 31 allocations and 4.6 KB, although an `ElementNode` is 112 bytes and a `RenderEntry` 232.
+- The entry closes when a `RawButton` adds to its child at most 2 elements, 1 render node, 40 allocations and 3 KB (today 15, 7, 316 and 37 KB over the `Text` it holds), held by a counted scenario of `crates/flui-widgets/tests/perf.rs`. The `Text` itself, 105 allocations for one short line, is measured by the same scenario and is not this entry's condition. Until then no new widget family starts on the wrappers (`AGENTS.md`, "Working here").
 
 ### Accepted ADR sections not built yet
 

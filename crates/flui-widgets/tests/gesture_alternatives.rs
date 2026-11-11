@@ -1060,7 +1060,7 @@ pub(crate) fn reserved_keys_are_not_bound() {
         .key(SingleActivator::named(NamedKey::Escape))
         .key(SingleActivator::character("x"))
         .key(SingleActivator::named(NamedKey::F2));
-    let bound: Vec<_> = command.keys(TargetPlatform::current()).cloned().collect();
+    let bound: Vec<_> = command.keys(TargetPlatform::Unknown).collect();
     assert_eq!(
         bound,
         [SingleActivator::named(NamedKey::F2)],
