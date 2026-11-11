@@ -297,7 +297,7 @@ fn run_custom_key_child(fail: bool) {
     };
     let first = KeyedCloseView(key(1, Arc::clone(&first_drops)));
     let second = KeyedCloseView(key(2, Arc::clone(&second_drops)));
-    let root = flui_widgets::Column::new(flui_widgets::column![first, second]);
+    let root = flui_widgets::Column::new((first, second));
     ui_runtime
         .attach_root_widget(&root)
         .expect("custom global keys mount");

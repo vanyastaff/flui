@@ -64,7 +64,7 @@ const LIB: &str = r#"//! The application, and the entry points the platforms cal
 //! a `cdylib` (`flui build android`).
 
 use flui::prelude::*;
-use flui::widgets::{SafeArea, column};
+use flui::widgets::SafeArea;
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
@@ -104,14 +104,14 @@ impl ViewState<CounterView> for CounterState {
         let count = self.count;
 
         Center::new().child(
-            Column::new(column![
+            Column::new((
                 Text::new("You have pushed the button this many times:"),
                 SizedBox::height(16.0),
                 Text::new(count.get(ctx).to_string()),
                 SizedBox::height(16.0),
                 RawButton::new(Text::new("Increment"))
                     .on_press(move |cx| count.update(cx, |n| *n += 1)),
-            ])
+            ))
             .main_axis_alignment(MainAxisAlignment::Center),
         )
     }

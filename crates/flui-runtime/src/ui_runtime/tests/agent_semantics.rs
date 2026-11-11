@@ -17,7 +17,7 @@ use flui_semantics::{
 };
 use flui_view::Signal;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow};
-use flui_widgets::{Column, RawButton, Text, column};
+use flui_widgets::{Column, RawButton, Text};
 
 use super::*;
 
@@ -60,7 +60,7 @@ impl ViewState<Counter> for CounterState {
                 .into_view()
                 .boxed()
         };
-        Column::new(column![Text::new(format!("Count: {value}")), control])
+        Column::new((Text::new(format!("Count: {value}")), control))
     }
 }
 

@@ -7,7 +7,6 @@
 
 use crate::common::{lay_out, offset, size, tight};
 use flui_objects::VerticalDirection;
-use flui_widgets::row;
 use flui_widgets::{Column, CrossAxisAlignment, Expanded, Row, SizedBox};
 
 pub(crate) fn vertical_direction_updates_mounted_flex_children() {
@@ -48,14 +47,14 @@ pub(crate) fn vertical_direction_updates_mounted_flex_children() {
     }
     // The convenience producers share the same configuration path.
     let row = lay_out(
-        Row::new(row![SizedBox::new(20.0, 10.0)])
+        Row::new((SizedBox::new(20.0, 10.0),))
             .cross_axis_alignment(CrossAxisAlignment::Start)
             .vertical_direction(VerticalDirection::Up),
         tight(100.0, 100.0),
     );
     assert_eq!(row.offset(row.child(row.root(), 0)), offset(0.0, 90.0));
     let column = lay_out(
-        Column::new(row![SizedBox::new(20.0, 10.0)]).vertical_direction(VerticalDirection::Up),
+        Column::new((SizedBox::new(20.0, 10.0),)).vertical_direction(VerticalDirection::Up),
         tight(100.0, 100.0),
     );
     assert_eq!(column.offset(column.child(column.root(), 0)).dy, 90.0);
@@ -64,10 +63,10 @@ pub(crate) fn vertical_direction_updates_mounted_flex_children() {
 pub(crate) fn two_expandeds_split_main_axis_by_flex_factor() {
     // Two Expandeds at flex 1 and 2 split a 300-wide row 100 / 200.
     let laid = lay_out(
-        Row::new(row![
+        Row::new((
             Expanded::new(SizedBox::height(50.0)),
             Expanded::new(SizedBox::height(50.0)).flex(2),
-        ]),
+        )),
         tight(300.0, 50.0),
     );
 

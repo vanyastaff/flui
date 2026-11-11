@@ -18,7 +18,6 @@ use flui_painting::paint::TextureId;
 use flui_painting::styling::Color;
 use flui_platform::TargetPlatform;
 use flui_view::{IntoView, ViewExt};
-use flui_widgets::row;
 use flui_widgets::{
     AbsorbPointer, Center, ColoredBox, ContentShape, GestureDetector, HitShape, HitSlop,
     InsertPosition, Overlay, OverlayEntry, OverlayHandle, Positioned, RepaintBoundary, SizedBox,
@@ -54,12 +53,12 @@ pub(crate) fn overlapping_slops_go_to_the_nearest_edge_then_the_topmost() {
     let left = Arc::new(AtomicUsize::new(0));
     let right = Arc::new(AtomicUsize::new(0));
     let laid = lay_out(
-        Stack::new(row![
+        Stack::new((
             SizedBox::new(200.0, 200.0).child(page()),
             Positioned::new(
                 HitSlop::new()
                     .slop(EdgeInsets::all(30.0))
-                    .child(target(20.0, &left))
+                    .child(target(20.0, &left)),
             )
             .left(50.0)
             .top(90.0),
@@ -70,7 +69,7 @@ pub(crate) fn overlapping_slops_go_to_the_nearest_edge_then_the_topmost() {
             )
             .left(100.0)
             .top(90.0),
-        ]),
+        )),
         tight(200.0, 200.0),
     );
 
@@ -92,7 +91,7 @@ pub(crate) fn a_visual_hit_beats_a_neighbours_slop() {
     let plain = Arc::new(AtomicUsize::new(0));
     let slopped = Arc::new(AtomicUsize::new(0));
     let laid = lay_out(
-        Stack::new(row![
+        Stack::new((
             SizedBox::new(200.0, 200.0).child(page()),
             Positioned::new(target(20.0, &plain)).left(50.0).top(90.0),
             Positioned::new(
@@ -102,7 +101,7 @@ pub(crate) fn a_visual_hit_beats_a_neighbours_slop() {
             )
             .left(72.0)
             .top(90.0),
-        ]),
+        )),
         tight(200.0, 200.0),
     );
 
@@ -124,15 +123,13 @@ pub(crate) fn slop_does_not_leave_its_composited_layer() {
     }
 
     fn overlay(kind: Page, isolated: bool, taps: &Arc<AtomicUsize>) -> LaidOut {
-        let content = Stack::new(row![
-            Positioned::new(
-                HitSlop::new()
-                    .slop(EdgeInsets::all(30.0))
-                    .child(target(20.0, taps)),
-            )
-            .left(90.0)
-            .top(90.0),
-        ]);
+        let content = Stack::new((Positioned::new(
+            HitSlop::new()
+                .slop(EdgeInsets::all(30.0))
+                .child(target(20.0, taps)),
+        )
+        .left(90.0)
+        .top(90.0),));
         let layer = if isolated {
             RepaintBoundary::new().child(content).into_view().boxed()
         } else {
@@ -143,7 +140,7 @@ pub(crate) fn slop_does_not_leave_its_composited_layer() {
             Page::Texture => Texture::new(TextureId::new(1)).into_view().boxed(),
         };
         lay_out(
-            Stack::new(row![SizedBox::new(200.0, 200.0).child(page), layer]),
+            Stack::new((SizedBox::new(200.0, 200.0).child(page), layer)),
             tight(200.0, 200.0),
         )
     }
@@ -185,7 +182,7 @@ pub(crate) fn slop_does_not_cross_an_overlay_entry() {
     let taps = Arc::new(AtomicUsize::new(0));
     let page_taps = Arc::clone(&taps);
     let page_entry = OverlayEntry::new(move |_ctx| {
-        Stack::new(row![
+        Stack::new((
             SizedBox::new(200.0, 200.0).child(page()),
             Positioned::new(
                 HitSlop::new()
@@ -194,18 +191,16 @@ pub(crate) fn slop_does_not_cross_an_overlay_entry() {
             )
             .left(90.0)
             .top(90.0),
-        ])
+        ))
         .into_view()
         .boxed()
     });
     let toast = OverlayEntry::new(|_ctx| {
-        Stack::new(row![
-            Positioned::new(
-                SizedBox::new(25.0, 20.0).child(ColoredBox::new(Color::rgb(30, 30, 30)))
-            )
-            .left(60.0)
-            .top(90.0),
-        ])
+        Stack::new((Positioned::new(
+            SizedBox::new(25.0, 20.0).child(ColoredBox::new(Color::rgb(30, 30, 30))),
+        )
+        .left(60.0)
+        .top(90.0),))
         .into_view()
         .boxed()
     });
@@ -226,10 +221,10 @@ pub(crate) fn content_shape_rejects_the_corners_of_a_circle() {
     let circle = Arc::new(AtomicUsize::new(0));
     let below = Arc::new(AtomicUsize::new(0));
     let laid = lay_out(
-        Stack::new(row![
+        Stack::new((
             target(100.0, &below),
             ContentShape::new(HitShape::Oval).child(target(100.0, &circle)),
-        ]),
+        )),
         tight(100.0, 100.0),
     );
 
@@ -247,12 +242,12 @@ pub(crate) fn min_target_defaults_to_the_settings_preset() {
         let laid = lay_out(
             SettingsScope::new(
                 GestureSettings::preset(platform, kind),
-                Stack::new(row![
+                Stack::new((
                     SizedBox::new(200.0, 200.0).child(page()),
                     Positioned::new(HitSlop::new().child(target(20.0, &taps)))
                         .left(90.0)
                         .top(90.0),
-                ]),
+                )),
             ),
             tight(200.0, 200.0),
         );
@@ -277,12 +272,12 @@ pub(crate) fn min_target_follows_a_live_settings_update() {
     let laid = lay_out(
         SettingsScope::new(
             source.provider(),
-            Stack::new(row![
+            Stack::new((
                 SizedBox::new(200.0, 200.0).child(page()),
                 Positioned::new(HitSlop::new().child(target(20.0, &taps)))
                     .left(90.0)
                     .top(90.0),
-            ]),
+            )),
         ),
         tight(200.0, 200.0),
     );
@@ -315,11 +310,11 @@ pub(crate) fn slop_takes_the_gap_between_items_in_their_own_layers() {
         )
     };
     let laid = lay_out(
-        ColoredBox::new(Color::rgb(250, 250, 250)).child(Stack::new(row![
+        ColoredBox::new(Color::rgb(250, 250, 250)).child(Stack::new((
             // Buttons at x 60..80 and 120..140; the cells meet at x 100.
             Positioned::new(item(&first)).left(40.0).top(80.0),
             Positioned::new(item(&second)).left(100.0).top(80.0),
-        ])),
+        ))),
         tight(200.0, 200.0),
     );
 
@@ -340,12 +335,12 @@ pub(crate) fn a_modal_barrier_blocks_slop_on_both_sides() {
             .child(target(20.0, taps))
     };
     let laid = lay_out(
-        Stack::new(row![
+        Stack::new((
             SizedBox::new(200.0, 200.0).child(page()),
             Positioned::new(slop(&page_target)).left(20.0).top(90.0),
             AbsorbPointer::new().child(SizedBox::new(200.0, 200.0)),
             Positioned::new(slop(&dialog_target)).left(120.0).top(90.0),
-        ]),
+        )),
         tight(200.0, 200.0),
     );
 

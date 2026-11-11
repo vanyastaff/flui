@@ -15,7 +15,6 @@ use flui_foundation::geometry::Size;
 use flui_interaction::gesture::PanClaim;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::prelude::{BuildContext, IntoView, StatelessView};
-use flui_widgets::row;
 use flui_widgets::{Column, ListView, PanClaimRegion, Row, SizedBox, Stack, Wrap};
 
 /// A minimal `StatelessView` (component element — no render object of its own)
@@ -36,13 +35,13 @@ pub(crate) fn component_child_keeps_slot_order_before_a_render_sibling() {
     // Row 300 wide: a component child FIRST (builds its box in a later
     // iteration), a directly-rendered box SECOND. Slot order must win.
     let laid = lay_out(
-        Row::new(row![
+        Row::new((
             BoxBuilder {
                 width: 50.0,
                 height: 30.0,
             },
             SizedBox::new(70.0, 30.0),
-        ]),
+        )),
         tight(300.0, 30.0),
     );
 
@@ -59,6 +58,29 @@ pub(crate) fn component_child_keeps_slot_order_before_a_render_sibling() {
     // child(root, 1) is the directly-rendered SizedBox, following at x = 50.
     assert_eq!(laid.size(second), size(70.0, 30.0));
     assert_eq!(laid.offset(second), offset(50.0, 0.0));
+}
+
+/// An array of children of one type lays out like the tuple of the same
+/// children: one child per element, in array order.
+pub(crate) fn an_array_of_children_lays_out_in_array_order() {
+    let laid = lay_out(
+        Row::new([
+            SizedBox::new(40.0, 30.0),
+            SizedBox::new(60.0, 30.0),
+            SizedBox::new(80.0, 30.0),
+        ]),
+        tight(300.0, 30.0),
+    );
+
+    let root = laid.root();
+    for (index, (width, x)) in [(40.0, 0.0), (60.0, 40.0), (80.0, 100.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let child = laid.child(root, index);
+        assert_eq!(laid.size(child), size(width, 30.0), "child {index}");
+        assert_eq!(laid.offset(child), offset(x, 0.0), "child {index}");
+    }
 }
 
 /// The first child of each container in

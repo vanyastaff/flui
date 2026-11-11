@@ -125,7 +125,7 @@ macro_rules! flex_style_builders {
 /// Prefer
 /// [`Row`] / [`Column`] for the common fixed-direction cases.
 ///
-/// Generic over `C: ViewSeq`: a static `column!`/`row!` tuple keeps each child
+/// Generic over `C: ViewSeq`: a static tuple `(a, b)` keeps each child
 /// monomorphic (the contract-C2 fast path), while a `Vec<BoxedView>` carries a
 /// dynamic, runtime-sized child list.
 ///
