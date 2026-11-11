@@ -123,8 +123,8 @@ priority = 100
 [test-groups]
 gpu-readback = { max-threads = 1 }
 system-clipboard = { max-threads = 1 }
-# flui-native's Win32 window tests share the one desktop's foreground (see
-# `desktop-foreground` below).
+# flui-native's Win32 and AppKit window tests share the one desktop's foreground
+# (and AppKit's Spaces; see `desktop-foreground` below).
 desktop-foreground = { max-threads = 1 }
 # xtask's binary test spawns the built `cargo xtask` binary, which runs
 # `cargo metadata`; one at a time keeps it off the other tests' timing.
@@ -163,6 +163,17 @@ test-group = 'system-clipboard'
 # contract's Win32 cases with them.
 [[profile.default.overrides]]
 filter = 'package(flui-native) & binary(platform_it) & (test(/^windows_/) | test(/^contract::/))'
+test-group = 'desktop-foreground'
+
+# The AppKit window cases share the one desktop the same way, and its Spaces
+# too: a window that enters full screen takes a Space of its own, and a
+# `toggleFullScreen:` sent while another process's window animates into or
+# out of one can go unanswered. Each case of `appkit_window` and
+# `os_extensions` (their own harnesses) is a process of its own, so the group
+# runs them one at a time: on a `macos-latest` runner three overlapping cases
+# that each entered full screen left one of them normal.
+[[profile.default.overrides]]
+filter = 'package(flui-native) & (binary(appkit_window) | binary(os_extensions))'
 test-group = 'desktop-foreground'
 
 # flui-native's X11 window tests map real windows on the one X server the run

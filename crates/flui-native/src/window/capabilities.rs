@@ -10,8 +10,10 @@
 //!
 //! The AppKit window reports when its frames reached the screen: its view is
 //! backed by a `CAMetalLayer` whose drawables tell
-//! (`owner::apple::metal_layer`), from macOS 10.15.4, below the floor. The
-//! UIKit and Activity windows do not yet ([`PRESENTATION`]).
+//! (`owner::apple::metal_layer`), from macOS 10.15.4, below the floor, except
+//! on a hypervisor's guest, whose virtual display tells nothing
+//! ([`appkit_presentation`]). The UIKit and Activity windows do not yet
+//! ([`PRESENTATION`]).
 
 /// Why a UIKit or Activity window reports no presentation, though its
 /// platform tells when a frame reached the screen. On iOS that is the
@@ -93,12 +95,20 @@ pub(crate) fn pointer_absence(version: AppleVersion, shows_a_pointer: bool) -> C
 /// to the contract is unavailable here until `apply` carries it out. The
 /// material is an `NSVisualEffectView` behind FLUI's view, which lives on the
 /// main thread: a window whose owner is not the AppKit main lane draws none,
-/// which the host could reach through the main lane and does not yet.
+/// which the host could reach through the main lane and does not yet. The
+/// window reports when its frames reached the screen unless `presentation`
+/// names why the machine's display cannot tell ([`appkit_presentation`]).
 #[cfg(any(target_os = "macos", test))]
-pub(crate) const fn appkit_window_capabilities(owner_is_main: bool) -> WindowCapabilities {
+pub(crate) const fn appkit_window_capabilities(
+    owner_is_main: bool,
+    presentation: Option<CapabilityAbsence>,
+) -> WindowCapabilities {
     use flui_platform::Availability::Native;
     let mut capabilities = WindowCapabilities::NONE;
     capabilities.reports_presentation = Native;
+    if let Some(absence) = presentation {
+        capabilities = capabilities.without_presentation_feedback(absence);
+    }
     capabilities.sets_title = Native;
     capabilities.sets_position = Native;
     capabilities.sets_size = Native;
@@ -124,6 +134,35 @@ pub(crate) const fn appkit_window_capabilities(owner_is_main: bool) -> WindowCap
         capabilities = capabilities.unavailable(&MATERIAL, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     }
     capabilities
+}
+
+/// Why an AppKit window reports no presentation on this machine; `None` where
+/// its display tells when a drawable reached the screen.
+///
+/// A Mac that is a hypervisor's guest (`kern.hv_vmm_present`) shows its
+/// windows on a virtual display: on a `macos-latest` runner (Apple Virtual
+/// display at 60 Hz, Metal's Apple Paravirtual device) every drawable a
+/// visible, unoccluded window presented was handed to its presented handler
+/// with a `presentedTime` of 0, Metal's "never shown", so no frame is ever
+/// reported.
+///
+/// The guest flag is a proxy: the cause is the virtual display, and a guest
+/// whose display does stamp its drawables is told it reports nothing. It is
+/// used because the answer is owed before any frame
+/// (`Platform::window_capabilities` before a window exists, the snapshot at
+/// open), and nothing readable then names the cause: Metal says whether a
+/// drawable was shown only after it was presented, and the virtual display is
+/// told apart from a real one only by a localized screen name or an EDID
+/// vendor of 0, which a real display without EDID shares. Downgrading after
+/// the first unstamped drawables would leave the claim untrue for those
+/// frames and change a capability under a running window.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) const fn appkit_presentation(hypervisor_guest: bool) -> Option<CapabilityAbsence> {
+    if hypervisor_guest {
+        Some(CapabilityAbsence::NOT_ON_THIS_DEVICE)
+    } else {
+        None
+    }
 }
 
 /// `NSView.displayLink` (macOS 14), whose `preferredFrameRateRange` a
@@ -294,8 +333,8 @@ mod tests {
     use super::{
         ActivityFacts, AppleVersion, MATERIAL, MacOSVersion, PointerInteraction,
         UnbufferedDispatch, ViewDisplayLink, WindowColorMode, activity_capabilities,
-        activity_color_mode, appkit_window_capabilities, frame_rate_absence, pointer_absence,
-        pointer_icon_absence, scene_capabilities, unbuffered_input_sources,
+        activity_color_mode, appkit_presentation, appkit_window_capabilities, frame_rate_absence,
+        pointer_absence, pointer_icon_absence, scene_capabilities, unbuffered_input_sources,
     };
     use crate::version::gate::android::AndroidApi;
     use crate::version::gate::testing::row;
@@ -350,7 +389,7 @@ mod tests {
         let ios = AppleVersion::new;
         let macos = MacOSVersion::new;
         let api = AndroidApi::from_level;
-        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 24] = [
+        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 25] = [
             (
                 "UIKit material",
                 material(&scene_capabilities()),
@@ -373,17 +412,17 @@ mod tests {
             ),
             (
                 "AppKit material on the main lane",
-                material(&appkit_window_capabilities(true)),
+                material(&appkit_window_capabilities(true, None)),
                 None,
             ),
             (
                 "AppKit material off the main lane",
-                material(&appkit_window_capabilities(false)),
+                material(&appkit_window_capabilities(false, None)),
                 Some(HOST),
             ),
             (
                 "AppKit title bar of the application's",
-                app_title_bar(&appkit_window_capabilities(true)),
+                app_title_bar(&appkit_window_capabilities(true, None)),
                 None,
             ),
             (
@@ -422,9 +461,17 @@ mod tests {
                 Some(HOST),
             ),
             (
-                "AppKit presentation report",
-                presentation(&appkit_window_capabilities(true)),
+                "AppKit presentation report on a Mac",
+                presentation(&appkit_window_capabilities(
+                    true,
+                    appkit_presentation(false),
+                )),
                 None,
+            ),
+            (
+                "AppKit presentation report on a hypervisor's guest",
+                presentation(&appkit_window_capabilities(true, appkit_presentation(true))),
+                Some(DEVICE),
             ),
             (
                 "Activity keyboard inset, API 23",

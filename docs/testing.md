@@ -166,7 +166,8 @@ it skips itself without `Xvfb` or `weston`, and fails then under
 `an_activation_asks_the_compositor_with_a_token` checks only the refusal; the
 token's whole path (asked, answered, handed back, the window left behind its
 cover) runs only against a sway started by hand. On Windows the Win32 window
-tests and the contract's share the desktop's foreground and run one at a time
+tests and the contract's share the desktop's foreground, and on macOS the
+AppKit window cases share it and its Spaces: each set runs one at a time
 (test group `desktop-foreground`).
 
 `flui_foundation::inspect::Untyped::new`, the untyped escape hatch that describes a field by its

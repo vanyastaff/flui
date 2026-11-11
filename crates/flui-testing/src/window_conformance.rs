@@ -138,8 +138,11 @@ pub trait WindowFixture {
     /// (the surface target's
     /// [`pre_present_notify`](flui_platform::SurfaceTarget::pre_present_notify)
     /// with what the presenter read, then the present), let the window system
-    /// show them, then have the window ask for a frame and settle; the frame
-    /// request its handler received. The window is the fixture's where the
+    /// show them, then have the window ask for a frame and return soon after
+    /// the request arrived, not after a settle: the checks time its stamps
+    /// against their reading as this returns, and a quiet second waited out
+    /// after it would age them past the slack. The frame request its handler
+    /// received. The window is the fixture's where the
     /// window system still shows it whatever the earlier checks did, else one
     /// of the same host the fixture opens for this and closes after (a
     /// minimized Wayland window shows no frame and cannot be restored). `None` where the fixture cannot present
