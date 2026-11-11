@@ -2,7 +2,7 @@
 
 - `WidgetState::FocusVisible`: the widget holds focus and the focus is shown (moved or last used
   by a key, traversal or assistive technology).
-- `RawButton::states_controller`: the button writes `Pressed`, `Focused`, `FocusVisible` and
+- `RawButton::states_controller`: the button writes `Hovered`, `Pressed`, `Focused`, `FocusVisible` and
   `Disabled` to the given `WidgetStatesController` and clears them when it unmounts or is given
   another one.
 

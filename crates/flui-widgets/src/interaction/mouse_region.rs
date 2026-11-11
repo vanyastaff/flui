@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 
+use crate::widget_state::{WidgetState, WidgetStatesController};
 use flui_foundation::geometry::Offset;
 use flui_objects::RenderMouseRegion;
 use flui_platform::pointer::PointerInfo;
@@ -154,6 +155,20 @@ impl MouseRegion {
         self
     }
 
+    /// The region a control tracks the pointer with: it writes
+    /// [`WidgetState::Hovered`] to `states` when a pointer enters and when
+    /// it leaves, and asks for no cursor.
+    pub(crate) fn hovering(states: &WidgetStatesController) -> Self {
+        let (entered, left) = (states.clone(), states.clone());
+        Self::new()
+            .on_enter(move |_cx: &mut EventCx<'_>, _pointer, _position| {
+                entered.update(WidgetState::Hovered, true);
+            })
+            .on_exit(move |_cx: &mut EventCx<'_>, _pointer, _position| {
+                left.update(WidgetState::Hovered, false);
+            })
+    }
+
     fn configure(&self, render_object: &mut RenderMouseRegion) {
         render_object.set_cursor(self.cursor);
         render_object.set_opaque(self.opaque);
@@ -240,6 +255,26 @@ impl MouseRegion {
     }
 }
 
+/// Detach the target of a mouse region that leaves the tree for good, as
+/// its own unmount does: a pending exit is not delivered to it.
+pub(crate) fn release_part(
+    ctx: &flui_view::RenderObjectContext<'_>,
+    render_object: &mut RenderMouseRegion,
+) {
+    if let Some(target) = render_object.mouse_region_target() {
+        // `detach_mouse_region`, not `unregister_mouse_region`: this
+        // render object is being permanently removed from the tree, so
+        // any pending exit a stationary device's postframe recheck might
+        // otherwise resolve against it must not fire. See
+        // `RenderObjectContext::detach_mouse_region`'s doc for why the
+        // two calls differ.
+        if let Err(error) = ctx.detach_mouse_region(target) {
+            tracing::debug!(?error, "MouseRegion target detach failed");
+        }
+        render_object.set_mouse_region_target(None);
+    }
+}
+
 impl RenderView for MouseRegion {
     type Protocol = BoxProtocol;
     type RenderObject = RenderMouseRegion;
@@ -266,18 +301,7 @@ impl RenderView for MouseRegion {
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) {
-        if let Some(target) = render_object.mouse_region_target() {
-            // `detach_mouse_region`, not `unregister_mouse_region`: this
-            // render object is being permanently removed from the tree, so
-            // any pending exit a stationary device's postframe recheck might
-            // otherwise resolve against it must not fire. See
-            // `RenderObjectContext::detach_mouse_region`'s doc for why the
-            // two calls differ.
-            if let Err(error) = ctx.detach_mouse_region(target) {
-                tracing::debug!(?error, "MouseRegion target detach failed");
-            }
-            render_object.set_mouse_region_target(None);
-        }
+        release_part(ctx, render_object);
     }
 
     flui_view::single_child_view_children!();

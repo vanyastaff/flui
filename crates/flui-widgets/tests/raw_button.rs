@@ -713,7 +713,8 @@ impl ViewState<Stated> for StatedState {
 }
 
 /// The button writes its interaction states to the controller it is given
-/// (ADR-0322 §3): `Pressed` for a contact that is down, `Focused` and
+/// (ADR-0322 §3): `Hovered` for a pointer inside it, `Pressed` for a contact
+/// that is down, `Focused` and
 /// `FocusVisible` for the focus a key gave it, `Disabled` for the switch;
 /// disabling under a contact leaves `Disabled` alone, and a controller the
 /// button stops writing to, by a swap or by unmounting, keeps nothing, and a
@@ -746,6 +747,34 @@ pub(crate) fn raw_button_writes_its_states_to_the_controller() {
     let manager = app.focus_manager();
     let focus_states = WidgetStates::FOCUSED | WidgetStates::FOCUS_VISIBLE;
     assert_eq!(one.value(), WidgetStates::NONE, "an idle button");
+
+    app.dispatch_pointer_hover(20.0, 20.0);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::HOVERED,
+        "a pointer inside the button hovers it"
+    );
+    app.dispatch_pointer_hover(300.0, 300.0);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::NONE,
+        "and leaving ends the hover"
+    );
+    app.dispatch_pointer_hover(20.0, 20.0);
+    app.pump();
+    enabled.set(false);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::DISABLED,
+        "a disabled button tracks no pointer"
+    );
+    app.dispatch_pointer_hover(300.0, 300.0);
+    enabled.set(true);
+    app.pump();
+    assert_eq!(one.value(), WidgetStates::NONE);
 
     app.dispatch_pointer_down(20.0, 20.0);
     app.pump_for(Duration::from_millis(200));

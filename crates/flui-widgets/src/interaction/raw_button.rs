@@ -94,7 +94,8 @@ impl RawButton {
         self
     }
 
-    /// Write the button's interaction states to `controller`: `Pressed`
+    /// Write the button's interaction states to `controller`: `Hovered`
+    /// while a pointer is inside it, `Pressed`
     /// while a contact is down on it, `Focused` while it holds focus,
     /// `FocusVisible` while that focus is shown, and `Disabled` without an
     /// [`on_press`](Self::on_press). A design system draws its pressed and

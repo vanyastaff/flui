@@ -46,7 +46,7 @@ use super::listener::release_targets;
 use super::raw_gesture_detector::RecognizerHost;
 use crate::support::EventCallback;
 use crate::widget_state::{WidgetState, WidgetStates, WidgetStatesController};
-use crate::{Listener, Semantics};
+use crate::{Listener, MouseRegion, Semantics};
 
 /// The behaviours of a control around its child, in one element.
 ///
@@ -218,7 +218,8 @@ impl InteractiveNode {
     }
 
     /// Write the interaction states the node owns to `controller`
-    /// (ADR-0322 §3): `Pressed` while a contact its tap tracks is down,
+    /// (ADR-0322 §3): `Hovered` while a pointer is inside it, `Pressed`
+    /// while a contact its tap tracks is down,
     /// `Focused` while its focus node or a descendant of it holds the focus,
     /// `FocusVisible` while that focus is shown, and `Disabled` while the
     /// switch is off. No other part of the tree writes them for the control.
@@ -232,7 +233,8 @@ impl InteractiveNode {
 }
 
 /// The states a node writes to its controller.
-const WRITTEN: WidgetStates = WidgetStates::PRESSED
+const WRITTEN: WidgetStates = WidgetStates::HOVERED
+    .union(WidgetStates::PRESSED)
     .union(WidgetStates::FOCUSED)
     .union(WidgetStates::FOCUS_VISIBLE)
     .union(WidgetStates::DISABLED);
@@ -280,13 +282,14 @@ pub(crate) struct InteractiveNodeState {
 }
 
 impl InteractiveNodeState {
-    /// Bring the controller to what the node is now. `pressed` says a
-    /// contact was down on the controller this one replaces, and the press
-    /// follows the contact to it. The focus states come
-    /// from the focus node, so a controller given to a control that already
-    /// holds focus starts right; a control with no tap has no contact, so
-    /// nothing of it is pressed.
-    fn write_states(&self, pressed: bool) {
+    /// Bring the controller to what the node is now. `carried` is what the
+    /// controller this one replaces held of the states an edge writes: a
+    /// press and a hover follow their contact and their pointer to the new
+    /// one. The focus states come from the focus node, so a controller
+    /// given to a control that already holds focus starts right; a control
+    /// with no tap has no contact, so nothing of it is pressed, and a
+    /// disabled one tracks no pointer, so nothing hovers it.
+    fn write_states(&self, carried: WidgetStates) {
         let Some(states) = &self.states else {
             return;
         };
@@ -303,13 +306,21 @@ impl InteractiveNodeState {
         if node.is_some_and(|node| node.has_visible_focus()) {
             values |= WidgetStates::FOCUS_VISIBLE;
         }
-        let mut mask = WRITTEN.difference(WidgetStates::PRESSED);
-        if pressed && self.tap.is_set() {
+        let edges = WidgetStates::PRESSED.union(WidgetStates::HOVERED);
+        let mut mask = WRITTEN.difference(edges);
+        if carried.contains(WidgetStates::PRESSED) && self.tap.is_set() {
             mask |= WidgetStates::PRESSED;
             values |= WidgetStates::PRESSED;
         }
         if !self.tap.is_set() {
             mask |= WidgetStates::PRESSED;
+        }
+        if carried.contains(WidgetStates::HOVERED) && self.enabled {
+            mask |= WidgetStates::HOVERED;
+            values |= WidgetStates::HOVERED;
+        }
+        if !self.enabled {
+            mask |= WidgetStates::HOVERED;
         }
         states.write(mask, values);
     }
@@ -415,6 +426,9 @@ impl StatefulRenderView for InteractiveNode {
         render_object: &mut Self::RenderObject,
     ) {
         release_targets(cx, render_object.pointer_mut());
+        if let Some(part) = render_object.mouse_mut() {
+            super::mouse_region::release_part(cx, part);
+        }
         if let Some(part) = render_object.semantics_mut() {
             crate::semantics::release_part(cx, part);
         }
@@ -434,7 +448,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
                 record,
             );
         }
-        self.write_states(false);
+        self.write_states(WidgetStates::NONE);
     }
 
     fn did_change_dependencies(&mut self, cx: &dyn LifecycleContext) {
@@ -472,15 +486,15 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
                 .as_ref()
                 .is_some_and(|states| states.is_same(old))
         });
-        let pressed = replaced
+        let carried = replaced
             .as_ref()
-            .is_some_and(|old| old.value().contains(WidgetStates::PRESSED));
+            .map_or(WidgetStates::NONE, WidgetStatesController::value);
         if let Some(replaced) = replaced {
             failure.contain(|| replaced.write(WRITTEN, WidgetStates::NONE));
         }
         self.states.clone_from(&new.states);
         self.enabled = new.enabled;
-        failure.contain(|| self.write_states(pressed));
+        failure.contain(|| self.write_states(carried));
         failure.resume();
     }
 
@@ -514,6 +528,29 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
                     crate::semantics::release_part(cx, &mut previous);
                 }
                 impact |= removed;
+            }
+            (None, None) => {}
+        }
+        // The mouse part exists for a reader of `Hovered`, while the control
+        // is enabled: a disabled control tracks no pointer (ADR-0322 §2).
+        let hover = view
+            .states
+            .as_ref()
+            .filter(|_| view.enabled)
+            .map(MouseRegion::hovering);
+        match (hover, render_object.mouse_mut()) {
+            (Some(hover), Some(part)) => {
+                impact |= RenderView::update_render_object(&hover, cx, part);
+            }
+            (Some(hover), None) => {
+                let part = RenderView::create_render_object(&hover, cx);
+                let replaced = render_object.set_mouse(Some(part));
+                debug_assert!(replaced.is_none(), "BUG: the mouse part was absent");
+            }
+            (None, Some(_)) => {
+                if let Some(mut previous) = render_object.set_mouse(None) {
+                    super::mouse_region::release_part(cx, &mut previous);
+                }
             }
             (None, None) => {}
         }
