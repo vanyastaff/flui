@@ -4483,14 +4483,16 @@ mod native_windows {
             use windows::Win32::UI::Controls::{
                 CreateSyntheticPointerDevice, POINTER_FEEDBACK_NONE,
             };
-            let watch = TouchKeyboardWatch::start();
+            // The hosts are counted before the device exists; the watch is armed
+            // only once it does, so a refused device waits for nothing.
+            let spared = TouchKeyboardWatch::spared_hosts();
             // SAFETY: plain values in; the returned handle is owned by `Self`,
             // which destroys it once.
             let handle =
                 unsafe { CreateSyntheticPointerDevice(kind, contacts, POINTER_FEEDBACK_NONE) }?;
             Ok(Self {
                 handle,
-                watch: Some(watch),
+                watch: Some(TouchKeyboardWatch::arm(spared)),
             })
         }
 
@@ -4501,6 +4503,7 @@ mod native_windows {
         /// Destroy the device now, so the pointer registry sees it removed
         /// where a row's golden expects it, and keep ending the touch keyboard
         /// host for when the returned watch drops.
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
         fn retire(mut self) -> TouchKeyboardWatch {
             self.watch
                 .take()
@@ -4514,8 +4517,9 @@ mod native_windows {
             use windows::Win32::UI::Controls::DestroySyntheticPointerDevice;
             // SAFETY: `try_new` created this handle and nothing else destroys it.
             unsafe { DestroySyntheticPointerDevice(self.handle) };
-            // `watch`, when the device still holds it, drops after this and
-            // ends the host its touches started.
+            // The watch, when the device still holds it, ends the host its
+            // touches started, after the device is gone.
+            drop(self.watch.take());
         }
     }
 
@@ -4534,15 +4538,20 @@ mod native_windows {
         /// five seconds of the row's process starting.
         const HOST_START: Duration = Duration::from_secs(8);
 
-        fn start() -> Self {
-            let spared = match std::env::var(HOSTS_BEFORE) {
+        /// The hosts no watch may end: the parent's count, or the running ones
+        /// for a row run alone.
+        fn spared_hosts() -> Vec<u32> {
+            match std::env::var(HOSTS_BEFORE) {
                 Ok(listed) => listed
                     .split(',')
                     .filter(|pid| !pid.is_empty())
                     .map(|pid| pid.parse::<u32>().expect("the parent lists process ids"))
                     .collect::<Vec<u32>>(),
                 Err(_) => touch_keyboard_hosts(),
-            };
+            }
+        }
+
+        fn arm(spared: Vec<u32>) -> Self {
             Self {
                 spared,
                 created: Instant::now(),
@@ -4558,16 +4567,18 @@ mod native_windows {
             let desktop_host = touch_keyboard_hosts()
                 .iter()
                 .any(|pid| self.spared.contains(pid));
-            while !desktop_host {
-                let started = touch_keyboard_hosts()
-                    .into_iter()
-                    .any(|pid| !self.spared.contains(&pid));
-                if started || Instant::now() >= deadline {
-                    break;
+            if !desktop_host {
+                loop {
+                    let started = touch_keyboard_hosts()
+                        .into_iter()
+                        .any(|pid| !self.spared.contains(&pid));
+                    if started || Instant::now() >= deadline {
+                        break;
+                    }
+                    // The thread's windows keep answering while the host starts.
+                    pump_pointer_thread();
+                    std::thread::sleep(Duration::from_millis(50));
                 }
-                // The thread's windows keep answering while the host starts.
-                pump_pointer_thread();
-                std::thread::sleep(Duration::from_millis(50));
             }
             end_touch_keyboard_hosts_except(&self.spared);
         }
