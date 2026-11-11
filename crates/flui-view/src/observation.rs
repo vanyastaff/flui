@@ -6,15 +6,14 @@
 //! instances of [`Observation`]; they differ in the event type and in whether
 //! the latest event is kept as a snapshot.
 
+use flui_foundation::panic::FirstPanic;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::{Rc, Weak};
 
 use crate::lifecycle::LifecycleClosed;
 
 type Callback<E> = Box<dyn FnMut(&E)>;
-pub(crate) type Panic = Box<dyn std::any::Any + Send>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Phase {
@@ -195,16 +194,16 @@ impl<E: Clone + 'static> Observation<E> {
 
     /// Drain committed events in FIFO order. Nested drains defer to this walk.
     /// All eligible callbacks run before the first panic is returned.
-    pub(crate) fn drain(&self) -> Option<Panic> {
+    pub(crate) fn drain(&self) -> FirstPanic {
         {
             let mut state = self.inner.state.borrow_mut();
             if state.draining {
-                return None;
+                return FirstPanic::new();
             }
             state.draining = true;
             state.retirement_failed = false;
         }
-        let mut first = None;
+        let mut first = FirstPanic::new();
         loop {
             let event = self.inner.state.borrow_mut().pending.pop_front();
             let Some(event) = event else {
@@ -221,15 +220,9 @@ impl<E: Clone + 'static> Observation<E> {
                 let Some(mut callback) = callback else {
                     continue;
                 };
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: a listener's panic must not stop the remaining listeners"
-                )]
-                preserve(
-                    &mut first,
-                    catch_unwind(AssertUnwindSafe(|| callback(&event.value))).err(),
-                );
-                if first.is_some() {
+                // A listener's panic does not stop the remaining listeners.
+                first.contain(|| callback(&event.value));
+                if first.is_held() {
                     self.inner.state.borrow_mut().retirement_failed = true;
                 }
                 if listener.active.get() && self.inner.state.borrow().phase != Phase::Closed {
@@ -237,7 +230,7 @@ impl<E: Clone + 'static> Observation<E> {
                     drop(previous);
                 } else {
                     retire_callback(Some(callback), &mut first);
-                    if first.is_some() {
+                    if first.is_held() {
                         self.inner.state.borrow_mut().retirement_failed = true;
                     }
                 }
@@ -256,7 +249,7 @@ impl<E: Clone + 'static> Observation<E> {
 
     /// Invalidate the observation and release its callbacks. Cleanup completes
     /// before a callback-capture destructor panic is reported through `first`.
-    pub(crate) fn release(&self, first: &mut Option<Panic>) {
+    pub(crate) fn release(&self, first: &mut FirstPanic) {
         let listeners = {
             let mut state = self.inner.state.borrow_mut();
             state.phase = Phase::Closed;
@@ -267,7 +260,7 @@ impl<E: Clone + 'static> Observation<E> {
             listener.active.set(false);
             let callback = listener.callback.borrow_mut().take();
             retire_callback(callback, first);
-            if first.is_some() {
+            if first.is_held() {
                 let mut state = self.inner.state.borrow_mut();
                 state.retirement_failed = true;
                 state.preserving_close = true;
@@ -348,11 +341,9 @@ impl<E: Clone + 'static> Drop for Subscription<E> {
             crate::drop_contained(callback);
             return;
         }
-        let mut first = None;
+        let mut first = FirstPanic::new();
         retire_callback(callback, &mut first);
-        if let Some(payload) = first {
-            resume_unwind(payload);
-        }
+        first.resume();
     }
 }
 
@@ -361,10 +352,6 @@ impl<E: Clone + 'static> Drop for CloseWindow<E> {
         let mut state = self.inner.state.borrow_mut();
         state.closing = state.closing.saturating_sub(1);
     }
-}
-
-pub(crate) fn preserve(first: &mut Option<Panic>, next: Option<Panic>) {
-    flui_foundation::panic::FirstPanic::fold(first, next);
 }
 
 // Rejected admission owns the generic callback too. It releases source borrows
@@ -380,13 +367,6 @@ fn retire_rejected_callback<E>(callback: Callback<E>, prior_failure: bool) {
 
 /// Retire one envelope under containment: the first failure stays in `first`,
 /// a later destructor panic is discarded (ADR-0281 §3).
-fn retire_callback<E>(callback: Option<Callback<E>>, first: &mut Option<Panic>) {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a retired callback's drop runs contained; the first panic is kept"
-    )]
-    preserve(
-        first,
-        catch_unwind(AssertUnwindSafe(|| drop(callback))).err(),
-    );
+fn retire_callback<E>(callback: Option<Callback<E>>, first: &mut FirstPanic) {
+    first.contain(|| drop(callback));
 }
