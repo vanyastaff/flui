@@ -46,22 +46,27 @@ jobs:
           tool: cargo-nextest@0.9
       - name: Build
         run: cargo nextest run -p flui-native --locked --test platform_it --no-run
-      - name: Rows in order on a fresh session
-        if: ${{ !cancelled() }}
+      - name: What a first touch leaves on the desktop
         run: |
+          set +e
           one() {
             echo "::group::$1"
             FLUI_NATIVE_WINDOW_CONTRACT_CHILD=$1 cargo nextest run -p flui-native --locked --test platform_it --no-capture -E 'test(=contract::test_window_lifecycle_contract)' 2>&1 | grep -E "panicked|assertion|left:|right:|CANNOT_VERIFY|PASS|FAIL|hover"
             echo "::endgroup::"
           }
-          one unhandled_system_key_closes_window
+          windows() {
+            echo "::group::windows: $1"
+            tasklist //v //fo csv | grep -v '"N/A"'
+            echo "::endgroup::"
+          }
+          windows "before"
           one a_pointer_routed_mouse_hovers_the_window
           one two_injected_touches_arrive_as_one_pointer_frame
-          one a_pointer_routed_mouse_hovers_the_window
-          one a_leave_callback_that_hovers_again_keeps_the_hover
-          one unhandled_system_key_closes_window
-          sleep 20
+          windows "right after the touch"
           one a_pointer_routed_mouse_hovers_the_window
           one unhandled_system_key_closes_window
-          one two_injected_touches_arrive_as_one_pointer_frame
+          sleep 30
+          windows "30 s later"
           one a_pointer_routed_mouse_hovers_the_window
+          one unhandled_system_key_closes_window
+          exit 0
