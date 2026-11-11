@@ -414,16 +414,8 @@ thread_local! {
     static ON_WAKER_DROP: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
 }
 
-/// A waker whose destructor runs user code, as an executor's may.
+/// A waker capture whose destructor runs user code, as an executor's may.
 struct ReenterOnDrop;
-
-#[expect(
-    clippy::manual_noop_waker,
-    reason = "the waker's Drop re-enters the owner; Waker::noop has none"
-)]
-impl std::task::Wake for ReenterOnDrop {
-    fn wake(self: Arc<Self>) {}
-}
 
 impl Drop for ReenterOnDrop {
     fn drop(&mut self) {
@@ -439,7 +431,9 @@ fn a_replaced_waker_may_reenter_the_owner_when_it_drops() {
     let (completion, resolver) = owner.source.pending::<u32>();
     let mut future = pin!(completion.into_future());
 
-    let reentering = Waker::from(Arc::new(ReenterOnDrop));
+    let reentering = flui_foundation::testing::CountingWaker::new()
+        .shared()
+        .retiring_waker(|| {}, ReenterOnDrop);
     assert_eq!(
         future.as_mut().poll(&mut Context::from_waker(&reentering)),
         Poll::Pending

@@ -9,7 +9,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, RawWaker, RawWakerVTable, Wake, Waker};
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::time::{Duration, Instant};
 
 fn poll(
@@ -198,13 +198,6 @@ fn cancellation_wake_failure_preserves_cancelled_state() {
     next_request();
 }
 struct ReenterOnRetirement(Arc<Mutex<Option<TransferCompleter>>>);
-#[expect(
-    clippy::manual_noop_waker,
-    reason = "executor retirement must invoke the reentrant Drop hook; Waker::noop has none"
-)]
-impl Wake for ReenterOnRetirement {
-    fn wake(self: Arc<Self>) {}
-}
 impl Drop for ReenterOnRetirement {
     fn drop(&mut self) {
         assert!(
@@ -221,7 +214,9 @@ impl Drop for ReenterOnRetirement {
 fn displaced_executor_retirement_reenters_producer() {
     let (mut request, completer) = TransferRequest::pending();
     let owner = Arc::new(Mutex::new(Some(completer)));
-    let previous = Waker::from(Arc::new(ReenterOnRetirement(Arc::clone(&owner))));
+    let previous = CountingWaker::new()
+        .shared()
+        .retiring_waker(|| {}, ReenterOnRetirement(Arc::clone(&owner)));
     assert!(poll(&mut request, &previous).is_pending());
     drop(previous);
     assert!(poll(&mut request, Waker::noop()).is_pending());
