@@ -439,6 +439,38 @@ fn drop_contained_destroys_the_value_and_discards_its_panic() {
     );
 }
 
+/// One `FirstPanic` folded into another keeps the earlier one's panic and
+/// discards the later; `held` reports the kept payload before it resumes.
+fn an_absorbed_first_panic_keeps_the_earlier_failure() {
+    let mut first = flui_foundation::panic::FirstPanic::new();
+    assert!(!first.is_held(), "nothing is held yet");
+    let mut later = flui_foundation::panic::FirstPanic::new();
+    later.contain(|| panic!("later failure"));
+    let mut earlier = flui_foundation::panic::FirstPanic::new();
+    earlier.contain(|| panic!("earlier failure"));
+    first.absorb(earlier);
+    let discarded = Arc::new(AtomicUsize::new(0));
+    let payload = HostileDrop(Arc::clone(&discarded));
+    later.contain(move || std::panic::panic_any(payload));
+    assert_eq!(
+        discarded.load(Ordering::Relaxed),
+        1,
+        "a panic after the held one is destroyed"
+    );
+    first.absorb(later);
+    assert!(first.is_held(), "the earlier failure is held");
+    assert_eq!(
+        first
+            .held()
+            .and_then(|payload| payload.downcast_ref::<&str>()),
+        Some(&"earlier failure"),
+        "the earlier failure is the one held"
+    );
+    let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| first.resume()))
+        .expect_err("the held failure resumes");
+    assert_eq!(resumed.downcast_ref::<&str>(), Some(&"earlier failure"));
+}
+
 /// A `FirstPanic` resumed from a `Drop` that an earlier failure's unwind
 /// runs discards what it holds: the unwinding failure is the first one, and
 /// raising out of that destructor would abort (ADR-0281 §1).
@@ -488,6 +520,10 @@ fn recovery_preserves_provenance_and_owned_failure() {
         (
             "first panic resumed during an unwind",
             a_first_panic_resumed_during_an_unwind_discards_what_it_holds,
+        ),
+        (
+            "absorbed first panic",
+            an_absorbed_first_panic_keeps_the_earlier_failure,
         ),
         (
             "unproved retirement",

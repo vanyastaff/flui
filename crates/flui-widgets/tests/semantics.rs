@@ -2825,3 +2825,130 @@ pub(crate) fn authored_properties_and_relations_reach_the_published_node() {
     assert_eq!(slider.role_description(), Some("fader"));
     assert_eq!(slider.numeric_value_jump(), Some(5.0));
 }
+
+/// A window collects semantics only while someone reads them, and a
+/// `Semantics` keeps its action route only while the window collects
+/// (ADR-0322 §8). Turning semantics on over a tree that mounted without
+/// them publishes the tree a window that collected from the start
+/// publishes, and its actions reach their handlers; turning them off stops
+/// that, and turning them on again restores both.
+///
+/// Red-check: let `Semantics::update_render_object` leave the route alone
+/// when the presentation starts collecting (the late tree loses its click
+/// action).
+pub(crate) fn semantics_turned_on_later_publish_the_tree_of_semantics_on_from_the_start() {
+    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_widgets::{Column, RawButton, Text};
+    use std::time::Duration;
+
+    const FRAME: Duration = Duration::from_millis(16);
+    type Clicks = Rc<Cell<u32>>;
+
+    #[derive(Clone)]
+    struct Scene {
+        clicks: Clicks,
+        presses: Clicks,
+    }
+    impl flui_view::View for Scene {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
+        }
+    }
+    impl flui_view::StatelessView for Scene {
+        fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+            let clicks = Rc::clone(&self.clicks);
+            let presses = Rc::clone(&self.presses);
+            Column::new(vec![
+                flui_view::ViewExt::boxed(
+                    host()
+                        .on_click(move |_cx| clicks.set(clicks.get() + 1))
+                        .child(SizedBox::new(40.0, 20.0)),
+                ),
+                flui_view::ViewExt::boxed(
+                    RawButton::new(Text::new("Press"))
+                        .on_press(move |_cx| presses.set(presses.get() + 1)),
+                ),
+            ])
+        }
+    }
+
+    let published = |host: &HeadlessHost| {
+        let tree = host
+            .published_a11y_tree(host.primary_window())
+            .expect("a collecting window publishes its tree");
+        format!("{:#?}", tree.raw())
+    };
+    let click = |host: &mut HeadlessHost, label: &str| {
+        let tree = host
+            .published_a11y_tree(host.primary_window())
+            .expect("a collecting window publishes its tree");
+        let node = tree.find_by_label(label).expect("one node by this label");
+        assert!(
+            node.supports_action(Action::Click),
+            "{label} offers a click"
+        );
+        let listener = host
+            .accessibility_action_listener()
+            .expect("production platform listener");
+        listener(request(Action::Click, node.id(), None));
+        let _ = host.pump(FRAME);
+    };
+
+    // Collecting before anything mounts.
+    let early_scene = Scene {
+        clicks: Clicks::default(),
+        presses: Clicks::default(),
+    };
+    let mut early = HeadlessHost::new(HeadlessWindow::new(400, 300));
+    early.enable_semantics();
+    let _ = early.pump(FRAME);
+    early
+        .attach(&early_scene)
+        .expect("a fresh host takes a root");
+    let _ = early.pump(FRAME);
+    let _ = early.pump(FRAME);
+    let from_the_start = published(&early);
+    assert!(
+        from_the_start.contains("Click"),
+        "the tree advertises its click actions:\n{from_the_start}"
+    );
+
+    // Mounted and settled without semantics, then turned on.
+    let scene = Scene {
+        clicks: Clicks::default(),
+        presses: Clicks::default(),
+    };
+    let mut late = HeadlessHost::new(HeadlessWindow::new(400, 300));
+    late.attach(&scene).expect("a fresh host takes a root");
+    let _ = late.pump(FRAME);
+    let _ = late.pump(FRAME);
+    assert!(!late.collects_semantics(), "nobody asked for the tree");
+    late.enable_semantics();
+    let _ = late.pump(FRAME);
+    let _ = late.pump(FRAME);
+    assert_eq!(
+        published(&late),
+        from_the_start,
+        "turned on later, the window publishes the tree of one that collected from the start"
+    );
+    click(&mut late, LABEL);
+    click(&mut late, "Press");
+    assert_eq!((scene.clicks.get(), scene.presses.get()), (1, 1));
+
+    // Turned off, nothing is collected; turned on again, the same tree
+    // and the same routes are back.
+    late.disable_semantics();
+    let _ = late.pump(FRAME);
+    assert!(!late.collects_semantics(), "the last reader left");
+    late.enable_semantics();
+    let _ = late.pump(FRAME);
+    let _ = late.pump(FRAME);
+    assert_eq!(
+        published(&late),
+        from_the_start,
+        "turned on again, the window publishes the same tree"
+    );
+    click(&mut late, LABEL);
+    click(&mut late, "Press");
+    assert_eq!((scene.clicks.get(), scene.presses.get()), (2, 2));
+}

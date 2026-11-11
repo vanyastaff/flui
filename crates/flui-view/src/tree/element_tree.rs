@@ -50,24 +50,35 @@ fn append_sparse_sliver_children(
         return;
     };
 
-    let desired_membership: HashSet<_> = desired_children.iter().copied().collect();
-    let mut sparse_children = parent_node
-        .children()
-        .iter()
-        .copied()
-        .filter(|child| !desired_membership.contains(child))
-        .filter_map(|child| {
-            let child_node = render_tree.get(child)?;
-            if render_tree.parent(child) != Some(parent_render) {
-                return None;
-            }
-            let index = child_node
-                .parent_data()?
-                .downcast_ref::<SliverMultiBoxAdaptorParentData>()?
-                .index;
-            Some((index, child))
-        })
-        .collect::<Vec<_>>();
+    // A child the walk did not reach is a lazy sliver child when its parent
+    // data says so; most parents have none, so membership in the walk's own
+    // list is built only once the first such child turns up.
+    let mut desired_membership: Option<HashSet<RenderId>> = None;
+    let mut sparse_children: Vec<(usize, RenderId)> = Vec::new();
+    for &child in parent_node.children() {
+        let Some(child_node) = render_tree.get(child) else {
+            continue;
+        };
+        if render_tree.parent(child) != Some(parent_render) {
+            continue;
+        }
+        let Some(index) = child_node
+            .parent_data()
+            .and_then(|data| data.downcast_ref::<SliverMultiBoxAdaptorParentData>())
+            .map(|data| data.index)
+        else {
+            continue;
+        };
+        let desired = desired_membership.get_or_insert_with(|| {
+            desired_children
+                .iter()
+                .copied()
+                .collect::<HashSet<RenderId>>()
+        });
+        if !desired.contains(&child) {
+            sparse_children.push((index, child));
+        }
+    }
 
     sparse_children.sort_by_key(|&(index, child)| (index, child));
     desired_children.extend(sparse_children.into_iter().map(|(_, child)| child));
@@ -3051,7 +3062,7 @@ mod tests {
     impl crate::StatefulView for ActiveRetakePanicsOnActivate {
         type State = ActiveRetakePanicState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             ActiveRetakePanicState {
                 armed: std::rc::Rc::clone(&self.armed),
             }
@@ -3475,6 +3486,83 @@ mod tests {
         );
     }
 
+    /// A provider fixture with a type of its own per `N`.
+    #[derive(Clone)]
+    struct Tier<const N: usize> {
+        data: ThemeData,
+        child: TestView,
+    }
+
+    impl<const N: usize> crate::view::InheritedView for Tier<N> {
+        type Data = ThemeData;
+
+        fn data(&self) -> &Self::Data {
+            &self.data
+        }
+
+        fn child(&self) -> &dyn View {
+            &self.child
+        }
+
+        fn update_should_notify(&self, old: &Self) -> bool {
+            self.data != old.data
+        }
+    }
+
+    impl<const N: usize> View for Tier<N> {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::inherited(self)
+        }
+    }
+
+    fn tier<const N: usize>() -> Tier<N> {
+        Tier {
+            data: ThemeData { color: 0 },
+            child: leaf("unused"),
+        }
+    }
+
+    /// More provider types than a scope keeps beside its table: the ones
+    /// folded into the table still resolve, a type published again below the
+    /// fold shadows the folded provider, and a sibling branch that forked
+    /// before the fold does not see what was published after it.
+    fn providers_folded_into_the_table_resolve_and_shadow() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+
+        let first = tree.mount_root(&tier::<0>(), &mut owner.element_owner_mut());
+        let second = tree.insert(&tier::<1>(), first, 0, &mut owner.element_owner_mut());
+        let branch = tree.insert(&leaf("branch"), second, 1, &mut owner.element_owner_mut());
+        let third = tree.insert(&tier::<2>(), second, 0, &mut owner.element_owner_mut());
+        let fourth = tree.insert(&tier::<3>(), third, 0, &mut owner.element_owner_mut());
+        let fifth = tree.insert(&tier::<4>(), fourth, 0, &mut owner.element_owner_mut());
+        let sixth = tree.insert(&tier::<5>(), fifth, 0, &mut owner.element_owner_mut());
+        let again = tree.insert(&tier::<0>(), sixth, 0, &mut owner.element_owner_mut());
+        let leaf_id = tree.insert(&leaf("l"), again, 0, &mut owner.element_owner_mut());
+
+        let provider =
+            |at: ElementId, type_id: TypeId| tree.get(at).unwrap().inherited_provider(type_id);
+        let expected = [
+            (TypeId::of::<Tier<0>>(), again),
+            (TypeId::of::<Tier<1>>(), second),
+            (TypeId::of::<Tier<2>>(), third),
+            (TypeId::of::<Tier<3>>(), fourth),
+            (TypeId::of::<Tier<4>>(), fifth),
+            (TypeId::of::<Tier<5>>(), sixth),
+        ];
+        for (type_id, id) in expected {
+            assert_eq!(provider(leaf_id, type_id), Some(id));
+        }
+        assert_eq!(
+            provider(sixth, TypeId::of::<Tier<0>>()),
+            Some(first),
+            "above the second provider of the type the first is the one in scope"
+        );
+        assert_eq!(provider(branch, TypeId::of::<Tier<1>>()), Some(second));
+        assert_eq!(provider(branch, TypeId::of::<Tier<2>>()), None);
+        assert_eq!(provider(leaf_id, TypeId::of::<Theme>()), None);
+    }
+
     #[test]
     fn element_tree_contract_matrix() {
         crate::table_test::run_table(
@@ -3500,6 +3588,10 @@ mod tests {
                 (
                     "nested_same_type_provider_shadows_nearest",
                     nested_same_type_provider_shadows_nearest as fn(),
+                ),
+                (
+                    "providers_folded_into_the_table_resolve_and_shadow",
+                    providers_folded_into_the_table_resolve_and_shadow as fn(),
                 ),
             ],
         );

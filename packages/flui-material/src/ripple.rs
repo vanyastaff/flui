@@ -91,7 +91,7 @@ impl StateLayerAlpha {
             self.dragged
         } else if states.contains_state(WidgetState::Pressed) {
             self.pressed
-        } else if states.contains_state(WidgetState::Focused) {
+        } else if states.contains_state(WidgetState::FocusVisible) {
             self.focused
         } else if states.contains_state(WidgetState::Hovered) {
             self.hovered
@@ -222,7 +222,7 @@ pub(crate) struct IndicationStyle {
     /// Without one a wave could not grow, so the well behaves as under
     /// reduced motion.
     pub(crate) has_clock: bool,
-    /// Whether the ambient state layer shows `Focused`. A well that draws a
+    /// Whether the ambient state layer shows `FocusVisible`. A well that draws a
     /// focus ring shows focus with the ring alone, so its layer skips it; an
     /// explicit `overlay_color` still sees the state.
     pub(crate) focus_layer: bool,
@@ -243,7 +243,7 @@ impl IndicationStyle {
         let layered = if self.focus_layer {
             states
         } else {
-            states.without_state(WidgetState::Focused)
+            states.without_state(WidgetState::FocusVisible)
         };
         let alpha = configuration.alpha.resolve(layered);
         (alpha > 0.0).then(|| base.with_opacity(f64::from(base.opacity()) * alpha))
@@ -265,7 +265,9 @@ impl IndicationStyle {
 
 /// The state layer's fade into `states`.
 fn enter_duration(states: WidgetStates) -> Duration {
-    if states.contains_state(WidgetState::Dragged) || states.contains_state(WidgetState::Focused) {
+    if states.contains_state(WidgetState::Dragged)
+        || states.contains_state(WidgetState::FocusVisible)
+    {
         FOCUS_ENTER
     } else {
         HOVER_ENTER

@@ -294,7 +294,7 @@ impl View for SelectionArea {
 impl StatefulView for SelectionArea {
     type State = SelectionAreaState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SelectionAreaState {
             model: Rc::new_cyclic(|this| SelectionModel {
                 this: Weak::clone(this),
@@ -441,8 +441,7 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         // menu.
         let enclosing = EnclosingActions::depend_on(ctx);
         let chain = self.model.action_chain(enclosing);
-        self.model
-            .configure_menu(ctx, &view.menu, Rc::clone(&chain));
+        self.model.configure_menu(ctx, &view.menu, chain.clone());
         let content = SelectionGestures {
             model: Rc::clone(&self.model),
             child: SelectionScope {
@@ -1326,7 +1325,7 @@ impl View for SelectableParagraph {
 impl StatefulView for SelectableParagraph {
     type State = SelectableParagraphState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SelectableParagraphState {
             entry: Rc::new(SelectableEntry {
                 anchor: SemanticsAnchor::new(),

@@ -652,6 +652,8 @@ roxmltree.workspace = true
 # tests run against a loopback server. Checkout-only test edge:
 # versionless, so Cargo drops it from the published manifest.
 flui-native = { path = ".", features = ["testing", "http"] }
+# `panicking_waker` for a request whose waker fails as it is answered.
+flui-foundation = { path = "../flui-foundation", features = ["testing"] }
 # `WindowId::try_from_raw`, by which a test of a backend's pure part names a
 # window without opening one.
 flui-platform = { workspace = true, features = ["testing"] }

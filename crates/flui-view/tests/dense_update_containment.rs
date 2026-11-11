@@ -2,6 +2,7 @@
 //! A `BUG:` payload prefix classifies a recovered panic as an internal
 //! invariant; it never routes the panic or expands the containment window.
 
+use flui_view::LifecycleContext;
 use std::{any::TypeId, cell::Cell, collections::HashSet, rc::Rc};
 
 use flui_foundation::geometry::Size;
@@ -119,7 +120,7 @@ impl DenseDidUpdateView {
 impl StatefulView for DenseDidUpdateView {
     type State = DenseDidUpdateState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DenseDidUpdateState
     }
 }

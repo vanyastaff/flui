@@ -47,6 +47,9 @@ several behaviours mount?
 - The entry [An interactive widget costs eighteen elements](../gaps.md#an-interactive-widget-costs-eighteen-elements)
   closes on counted numbers: a button adds to its child at most 2 elements, 1 render node, 40
   allocations and 3 KB.
+- The catalogs do not wait for the last kilobyte. The Material and Cupertino controls move to the
+  node at a migration threshold counted by the same scenario: 2 elements, 1 render node, at most
+  40 allocations and at most 5 KB. The entry's numbers above stay the goal.
 - Nothing a user or a tool observes changes: the accessibility tree, the gesture arena's
   outcomes, focus traversal, action resolution, what locators and `inspect` select.
 - A disabled control is disabled in one place. A control that is disabled for the pointer and
@@ -102,18 +105,24 @@ padding, size, shape or per-state style and never will: appearance belongs to th
 widgets and the theme (`ButtonStyle`, `WidgetStateProperty`, `Theme`).
 
 The node mounts one element (§4) and one render object, `RenderInteractive` in `flui-objects`: a
-single-child box of its child's size that answers the hit test, routes pointer events to the
-recognizers, registers the mouse region, describes one `SemanticsConfiguration` and paints the
-focus ring as a foreground. A part that is absent allocates nothing and registers nothing. The
-element's state holds what the wrappers' states hold today: the `FocusNode` and its attachment,
-the recognizers, the action chain, the states controller.
+single-child box of its child's size. It is made of parts, each the value of the render object
+that carries the behaviour alone: a `RenderListener` (always present: where the object is hit and
+its pointer targets), an optional `RenderMouseRegion`, an optional `RenderSemanticsAnnotations`
+and an optional `FocusRingStyle` painted as a foreground. The views that configure those objects
+configure the parts (`Listener` and `Semantics` through their own `RenderView` impls), and the
+object forwards each question of `RenderBox` to the part that answers it, so no rule of a wrapper
+is written twice. A part that is absent registers nothing, describes nothing and paints nothing.
+The object publishes its identity into a `SubtreeAnchor` while mounted, which is how its focus
+node is measured. The element's state holds what the wrappers' states hold: the `FocusNode` and
+its attachment, the recognizers, the action chain, the states controller.
 
 The focus logic (node, configuration, attachment, reparenting, replacement, autofocus, the rule
 that only the current attachment may focus the node from assistive technology) is one
 `FocusHost` (`crates/flui-widgets/src/interaction/focus_host.rs`) that `Focus` and the node both
 own an instance of. Its owner forwards the lifecycle hooks and says how the node is measured: an
-anchor over the child for `Focus`, the render object itself for the node. Recognizer mounting
-does the same with the body of `RawGestureDetector`. One implementation, two hosts.
+anchor over the child for `Focus`, the render object itself for the node. Recognizer mounting is
+one `RecognizerHost` (`interaction/raw_gesture_detector.rs`) in the same way, owned by
+`RawGestureDetector` and by the node. One implementation, two hosts.
 
 ### §2 Enablement has one source
 
@@ -140,30 +149,39 @@ states, then runs the cancel callbacks.
 
 ### §3 Interaction states are one value, read at paint
 
-The node owns a `WidgetStatesController` (`crates/flui-widgets/src/widget_state.rs`), or shares
-the one given to `states`. It writes five states of `WidgetStates` and no other part of the tree
-writes them for that control:
+A control gives its node a `WidgetStatesController` (`crates/flui-widgets/src/widget_state.rs`):
+its own, or the one an application handed it (`RawButton::states_controller`). The node writes
+five states of `WidgetStates` to it and no other part of the tree writes them for that control. A
+node given no controller writes none and keeps none: its only reader would be its own focus ring,
+which reads the focus node.
 
-- `Hovered`: a pointer is inside the mouse region;
+- `Hovered`: a pointer is inside the mouse region, from the first one in to the last one out (a
+  mouse and a hovering pen are two);
 - `Pressed`: a contact a recognizer tracks is down and not yet rejected;
-- `Focused`: the node holds focus;
+- `Focused`: the node or a descendant of it holds the primary focus, as `Focus::on_focus_change`
+  reports it;
 - `FocusVisible`: the node holds focus and focus is shown (ADR-0079);
 - `Disabled`: §2.
 
-`WidgetState::FocusVisible` is new and `WidgetStates` widens from `u8` to `u16` for it.
-`Focused` becomes "holds focus, by any cause"; the readers that mean "show it" (state-layer
-overlays, rings, halos) resolve on `FocusVisible`, and the change that adds the variant moves
-them.
+`Focused` is "holds focus, by any cause" and `FocusVisible` is the focus a user can see; the
+readers that mean "show it" (state-layer overlays, rings, halos) resolve on `FocusVisible`.
+`WidgetStates` is a `u16`.
 
 The value is a `Cell` behind the controller, and the controller is a `Listenable`. A reader at
 paint (a state layer, a Cupertino highlight) holds the controller, reads `value()` in `paint`, and
 returns it as its repaint listenable, so a hover repaints that render object and rebuilds nothing.
-The focus ring of §1 is such a reader inside the node. A reader at build subscribes with
-`listen`, as today. The node sets the cell, then notifies (ADR-0287); a listener that panics is
-handled by the notifier's first-failure custody, and the value it was notified of stays committed.
+A reader at build subscribes with `listen`, as today. The node sets the cell, then notifies
+(ADR-0287); a listener that panics is handled by the notifier's first-failure custody, and the
+value it was notified of stays committed.
 
-When the element unmounts, the node clears the states it wrote from a controller it was
-given, so a shared controller keeps no state of a control that is gone.
+When the element unmounts, or the control hands the node another controller, the node clears the
+states it wrote from the one it stops writing to, so a shared controller keeps no state of a
+control that is gone. A controller given later starts at what the node is: the five states are the
+node's, so one that arrives holding any of them keeps only what is true of this control, and a
+press or a hover under way follows its contact or its pointers to it.
+
+The two focus edges are delivered each on its own: a handler of one that panics does not cost the
+other, and the first failure is the one resumed (ADR-0281).
 
 The node may be built first with the states written and the wrappers' rebuild-on-change readers
 kept; moving a reader to paint does not change this shape.
@@ -178,6 +196,7 @@ pub trait StatefulRenderView: Clone + 'static + Sized {
     type State: RenderViewState<Self>;
     fn create_state(&self /* the arguments `StatefulView::create_state` takes */) -> Self::State;
     fn create_render_object(&self, cx: &RenderObjectContext<'_>) -> Self::RenderObject;
+    fn did_unmount_render_object(&self, cx: &RenderObjectContext<'_>, object: &mut Self::RenderObject) {}
 }
 
 pub trait RenderViewState<V: StatefulRenderView>: 'static {
@@ -196,14 +215,19 @@ pub trait RenderViewState<V: StatefulRenderView>: 'static {
 It is an element kind, `Element<V, Variable, StatefulRenderBehavior<V>>`, with the lifecycle
 of a stateful element and the render-object custody of a render element; the two behaviours
 share that custody (`flui_view::element::render_custody`) and the containment of a state's
-hooks. Presentation capabilities are acquired in `init_state` and `did_change_dependencies`
-only (ADR-0078).
+hooks. Presentation capabilities are acquired in `create_state`, `init_state` and
+`did_change_dependencies` only (ADR-0078).
 
 The view creates the render object, not the state: the object is created and adopted at mount,
-and `init_state` runs at the element's first build, so at mount the state holds nothing it
-acquires there. Putting the constructor on the view makes that order a signature instead of a
-rule to remember. The first build runs `init_state` and then `update_render_object` in the
-same frame, before layout, so the object never lays out without its state's configuration.
+and the state does not exist until `create_state` and `init_state` run at the element's first
+build. Putting the constructor on the view makes that order a signature instead of a rule to
+remember. The first build runs `create_state`, `init_state` and then `update_render_object` in
+the same frame, before layout, so the object never lays out without its state's configuration.
+
+The view also releases it. What the object holds in the owner's runtime is data: the targets
+registered for it (ADR-0027). `did_unmount_render_object` unregisters them from the object
+after the state's `dispose`, and for an element whose state never initialized, so a target
+registered at any point is released on every way out.
 
 A build runs `update_render_object`, `provide` and `child`, in that order, so the child mounts
 under what is published and next to an object that is already configured. A state change that
@@ -287,15 +311,52 @@ the node in place of its five wrappers, with the same constructor and methods; t
 `flui-material` and `flui-cupertino` follow, each family in its own change, and none changes its
 public API for it.
 
+### §8 An action route and a control's description exist while the window collects semantics
+
+A window collects semantics while someone reads them: assistive technology is attached, or an
+agent or a test holds the tree (`flui-runtime`'s `SemanticsHost` counts the holders, and
+`reconcile_semantics_enablement` carries the answer to the pipeline at the start of a frame). The
+view layer follows the same answer. `BuildOwner` holds it, every `RenderObjectContext` carries it,
+a `Semantics` registers the route of its actions only while it holds, and a control's node builds
+its semantics part, the description and the handlers it offers, only while it holds. The node's
+view carries what the description is made from (a role and an identifier), not a built
+`Semantics`, so the copies of the view the tree keeps stay small:
+
+```rust
+impl BuildOwner {
+    pub const fn collects_semantics(&self) -> bool;
+    /// A change marks every live element dirty; returns whether any was.
+    pub fn set_collects_semantics(&mut self, tree: &mut ElementTree, collects: bool) -> bool;
+}
+
+impl RenderObjectContext<'_> {
+    pub const fn collects_semantics(&self) -> bool;
+}
+```
+
+- A presentation starts with the answer `false`, and the runtime sets it beside the pipeline's
+  flag. A tree mounted outside a runtime (`BuildOwner::new`, a detached context) has the answer
+  `true`, so its semantics are complete without anyone turning them on.
+- A change of the answer costs one full build: every element is marked dirty, each render view's
+  configuration is pushed again, `Semantics` registers or releases its route in that pass, and a
+  node builds or drops its semantics part, which its render object holds out of line.
+  The change is rare, and the alternative, a dependency on an inherited value, was measured: it
+  costs every node with an action two allocations and more bytes than the route it saves.
+- The tree a window publishes after semantics are turned on over a mounted tree is the tree of a
+  window that collected from the start, and its actions reach their handlers.
+- Nothing changes for a widget author: `Semantics::on_click` and the other builders are written
+  as before, and a locator or an accessibility check in a test turns semantics on as before.
+
 ### Flutter counterparts
 
 | Here | Flutter | Why it differs |
 |---|---|---|
 | The private node behind a control | a control's `State` composing `Focus`, `Actions`, `MouseRegion`, `GestureDetector`, `Semantics` (`InkResponse`, `FocusableActionDetector`) | measured: fifteen elements and seven render nodes per control (table above); the widgets an author writes are the same |
-| `WidgetStates`, `WidgetStatesController`, a reader that repaints | `WidgetState`, `WidgetStatesController`, `WidgetStateProperty` | none |
+| `WidgetStates`, `WidgetStatesController`, a reader that repaints, `RawButton::states_controller` | `WidgetState`, `WidgetStatesController`, `WidgetStateProperty`, `statesController` of `InkWell` and `ButtonStyleButton` | none |
 | `WidgetState::FocusVisible` | `FocusManager.highlightMode` and `FocusableActionDetector.onShowFocusHighlight` | one value a painter reads, where Flutter has a state and a separate callback |
 | `StatefulRenderView` (§4) | a `RenderObjectElement` subclass that keeps state, which any Flutter library may write | FLUI's elements are one generic `Element<V, Arity, Behavior>`, so the capability is a behaviour kind and not a subclass |
 | `provide` (§5) | `Element.updateInheritance`, which any element may override to enter `_inheritedElements` | the same mechanism, typed: the value type is the key and `ProvidedValue` carries `updateShouldNotify` |
+| `collects_semantics` (§8) | `SemanticsBinding.semanticsEnabled`, kept on by `SemanticsHandle`s from `ensureSemantics`; `PipelineOwner.semanticsOwner` is absent until one is held | Flutter's semantics callbacks live in the widget's configuration, so nothing is registered per node; FLUI's handlers are owner-local and reach the render tree through a route, which is what is deferred |
 
 `InheritedView` remains the form in which an application or a widget hands a value down, as
 `InheritedWidget` is in Flutter. `StatefulRenderView` and `provide` are for a widget that owns a
@@ -316,12 +377,12 @@ render object or already owns the element the value comes from.
 - Bad, because `RenderInteractive` implements hit testing, semantics and paint that five small
   render objects split today, and the focus and recognizer logic must be extracted into hosts
   before the node exists.
-- Bad, because `Focused` changes meaning for existing `WidgetStateProperty` resolvers; the change
-  that adds `FocusVisible` has to move every reader.
+- Bad, because a `WidgetStateProperty` resolver ported from Flutter that shows focus on `Focused`
+  shows it after a click too; it has to resolve on `FocusVisible`.
 
 ### Confirmation
 
-- `crates/flui-widgets/tests/perf.rs`, scenario `raw_button_over_text`: the counted elements,
+- `crates/flui-widgets/tests/perf.rs`, `perf_raw_button_over_text`: the counted elements,
   render nodes, allocations and bytes a `RawButton` adds to its `Text` are within the entry's
   numbers.
 - `raw_button_a11y_tree_matches_wrappers`: `a11y_tree()` of `RawButton` equals, byte for byte, the
@@ -332,9 +393,12 @@ render object or already owns the element the value comes from.
   long press, cancel) gives the same winner, the same callbacks and the same order as the
   wrappers.
 - `disabled_raw_button_is_disabled_in_every_part`: one switch, the six rows of §2, including a
-  disable during a contact and an action notifier that fires with no rebuild.
-- `hover_repaints_without_rebuilding`: a hover over a control with a paint-time state reader
-  rebuilds zero elements and paints one render object.
+  disable during a contact and an action notifier that fires with no rebuild. The pointer and
+  action rows of a control that keeps its callback while disabled are the node's `switch_tests`
+  (`crates/flui-widgets/src/interaction/node.rs`).
+- `hover_repaints_without_rebuilding`: a hover over a control whose child reads the controller at
+  paint (a `CustomPainter` that returns it from `repaint`) builds no element, lays out no node and
+  paints the reader's repaint boundary alone.
 - `crates/flui-view/tests/provided_values.rs`: `provided_value_change_notifies_like_inherited_element`,
   `provided_value_follows_a_moved_subtree` and `provided_value_unmount_releases_dependents` run one
   table over an inherited view, a stateless view that publishes and a state that publishes;
@@ -352,6 +416,12 @@ render object or already owns the element the value comes from.
   `a_state_that_failed_to_initialize_is_not_disposed`,
   `an_update_panic_replaces_the_element_and_the_next_frame_runs` and
   `a_state_hook_failure_is_recorded_against_its_hook`.
+- `semantics_turned_on_later_publish_the_tree_of_semantics_on_from_the_start`: a window that
+  mounted without semantics and one that collected from the start publish the same tree, a click
+  requested through the platform listener reaches its handler on a `Semantics` and on a
+  `RawButton`, and both hold again after semantics are turned off and on.
+- `perf_semantics_action_over_text`: the allocations and bytes a `Semantics` with one action adds
+  to its child in a window that collects no semantics.
 - The node's module is absent from the facade and from every prelude: the facade's public-API
   snapshot.
 - The `render_object_harness` row of `RenderInteractive`.

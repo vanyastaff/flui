@@ -41,12 +41,9 @@
 use flui_rendering::parent_data::SliverSlot;
 use std::{
     any::TypeId,
+    cell::Cell,
     marker::PhantomData,
     rc::{Rc, Weak},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
 };
 
 use flui_foundation::{ElementId, ListenerCallback, RenderId};
@@ -85,10 +82,9 @@ struct CoreState {
     depth: usize,
 
     /// Whether this element needs to rebuild.
-    ///
-    /// Uses `Arc<AtomicBool>` for interior mutability, allowing listener
-    /// callbacks to mark the element dirty without mutable access.
-    dirty: Arc<AtomicBool>,
+    /// A listener between frames does not touch it: its rebuild handle queues
+    /// the element on the external build inbox, and the drain marks it dirty.
+    dirty: Cell<bool>,
 
     /// Owner-local handle to the render tree's `PipelineOwner`, propagated
     /// from parent elements. Typed directly -- no `Arc<dyn Any>` erasure --
@@ -143,7 +139,7 @@ impl CoreState {
         Self {
             lifecycle: Lifecycle::Initial,
             depth: 0,
-            dirty: Arc::new(AtomicBool::new(true)),
+            dirty: Cell::new(true),
             pipeline_owner: None,
             parent_render_id: None,
             sliver_slot: None,
@@ -173,7 +169,7 @@ impl CoreState {
         );
         self.lifecycle = Lifecycle::Active;
         self.element_parent = parent;
-        self.dirty.store(true, Ordering::Relaxed);
+        self.dirty.set(true);
 
         // Capture the handle that lets an out-of-frame listener tick schedule
         // THIS element's rebuild (see `create_mark_dirty_callback`). Stamped
@@ -250,23 +246,6 @@ impl CoreState {
         );
     }
 
-    fn schedule_self_build(
-        &self,
-        owner: &mut crate::ElementOwner<'_>,
-        reason: crate::RebuildReason,
-    ) {
-        debug_assert!(
-            self.self_id.is_some(),
-            "ElementCore::schedule_self_build called before set_self_id: \
-             a slab-resident element must be stamped with its ElementId at \
-             mount (ElementTree::insert / mount_root_* do this) before any \
-             setState can schedule it."
-        );
-        if let Some(id) = self.self_id {
-            owner.schedule_build_for(id, self.depth, reason);
-        }
-    }
-
     fn rebuild_handle(&self) -> crate::RebuildHandle {
         match (self.external_scheduler.clone(), self.self_id) {
             (Some(scheduler), Some(element)) => crate::RebuildHandle::new(scheduler, element),
@@ -275,10 +254,8 @@ impl CoreState {
     }
 
     fn create_mark_dirty_callback(&self, reason: crate::RebuildReason) -> ListenerCallback {
-        let dirty = Arc::clone(&self.dirty);
         let handle = self.rebuild_handle();
         std::rc::Rc::new(move || {
-            dirty.store(true, Ordering::Relaxed);
             handle.schedule(reason);
         })
     }
@@ -397,25 +374,6 @@ where
         self.state.element_parent
     }
 
-    /// Push this element onto the dirty heap so
-    /// [`BuildOwner::build_scope`](crate::BuildOwner) reaches it.
-    ///
-    /// E3 (atomic box→arena swap): the slab/drain model rebuilds only
-    /// elements on the heap, so `setState` flips dirty AND schedules via
-    /// this. Uses the element's own stamped `self_id` + `depth`. If
-    /// `self_id` is unset — a hand-rolled element that bypassed
-    /// `ElementTree::insert` / `mount_root_*` — scheduling is skipped (the
-    /// element is not slab-addressable, so `build_scope` could not reach
-    /// it anyway); a `debug_assert!` makes that framework-invariant
-    /// violation loud in tests.
-    pub(crate) fn schedule_self_build(
-        &self,
-        owner: &mut crate::ElementOwner<'_>,
-        reason: crate::RebuildReason,
-    ) {
-        self.state.schedule_self_build(owner, reason);
-    }
-
     // NOTE: the production build/reconcile path reads `self_id` through
     // the element surface stamped by `set_self_id`; external consumers
     // (the build-time `BuildCtx` anchor) go through [`Self::self_id`].
@@ -502,12 +460,10 @@ where
 
     /// Update this element with a new View of the same type.
     ///
-    /// FR-021: dispatch routes through
-    /// `crate::element::dispatch::dispatch_view_update` (`pub(crate)`)
-    /// which discriminates on `TypeId` and extracts the typed inner
-    /// via `Downcast::into_any` + `Box::downcast::<V>` — the literal
-    /// `downcast_ref::<V>()` view-type smuggling is gone from this
-    /// path entirely. On type mismatch
+    /// Dispatch routes through
+    /// `crate::element::dispatch::dispatch_view_update` (`pub(crate)`),
+    /// which discriminates on the concrete `TypeId` and only then
+    /// downcasts by reference and clones the typed view. On type mismatch
     /// the dispatch returns [`ViewUpdate::Mismatch`] without `tracing::warn!`; the
     /// caller (reconciler) replaces the element rather than
     /// continuing with stale state.
@@ -558,7 +514,7 @@ where
 
     /// Replace the stored view. Used by
     /// [`crate::element::dispatch::dispatch_view_update`] after the
-    /// `TypeId`-keyed `Box::downcast::<V>` succeeds.
+    /// `TypeId`-guarded downcast matches `V`.
     pub(crate) fn replace_view_for_dispatch(&mut self, view: V) -> V {
         std::mem::replace(&mut self.view, view)
     }
@@ -567,7 +523,7 @@ where
     /// [`crate::element::dispatch::dispatch_view_update`] after the
     /// view is replaced.
     pub(crate) fn mark_dirty_for_dispatch(&self) {
-        self.state.dirty.store(true, Ordering::Relaxed);
+        self.state.dirty.set(true);
     }
 
     // E3 (atomic box→arena swap): the child-management methods
@@ -675,42 +631,39 @@ where
     ///
     /// Returns `true` if dirty and lifecycle allows building.
     pub fn should_build(&self) -> bool {
-        self.state.dirty.load(Ordering::Relaxed) && self.state.lifecycle.can_build()
+        self.state.dirty.get() && self.state.lifecycle.can_build()
     }
 
     /// Check if this element is dirty (needs rebuild).
     pub fn is_dirty(&self) -> bool {
-        self.state.dirty.load(Ordering::Relaxed)
+        self.state.dirty.get()
     }
 
     /// Mark this element as needing a rebuild.
     pub fn mark_dirty(&mut self) {
-        self.state.dirty.store(true, Ordering::Relaxed);
+        self.state.dirty.set(true);
     }
 
     /// Clear the dirty flag.
     ///
     /// Should be called after perform_build completes.
     pub fn clear_dirty(&mut self) {
-        self.state.dirty.store(false, Ordering::Relaxed);
+        self.state.dirty.set(false);
     }
 
-    /// Create a callback that marks this element dirty AND schedules its
-    /// rebuild.
+    /// Create a callback that schedules this element's rebuild.
     ///
     /// Used by `AnimatedBehavior` (and any behavior driving rebuilds from a
     /// `Listenable`): the returned callback is registered with the listenable,
-    /// so a `notify_listeners` fired between frames — an animation tick — both
-    /// flips the dirty flag and enqueues `(self_id, depth)` onto the inbox that
-    /// [`BuildOwner::build_scope`](crate::BuildOwner) drains, then requests a
-    /// frame. Without the schedule half the flag would flip but the element
-    /// would never be on the heap `build_scope` processes, so its
-    /// `ViewState::build` would never re-run.
+    /// so a `notify_listeners` fired between frames (an animation tick) queues
+    /// the element on the external build inbox and requests a frame. The drain
+    /// in [`BuildOwner::build_scope`](crate::BuildOwner) marks the element
+    /// dirty, so the callback holds no reference to the element's own state.
     ///
     /// The `ExternalBuildScheduler` + `self_id` are captured by value, so the
     /// callback is `'static` and needs no access to the owner when it fires. A
-    /// callback created before mount (no scheduler / `self_id` yet) degrades to
-    /// the flag-only behavior.
+    /// callback created before mount (no scheduler / `self_id` yet) is inert:
+    /// the element is dirty from creation and builds when it mounts.
     ///
     /// # Example
     ///
@@ -769,7 +722,7 @@ where
             .field("view_type", &TypeId::of::<V>())
             .field("lifecycle", &self.state.lifecycle)
             .field("depth", &self.state.depth)
-            .field("dirty", &self.state.dirty.load(Ordering::Relaxed))
+            .field("dirty", &self.state.dirty.get())
             .field("has_pipeline_owner", &self.state.pipeline_owner.is_some())
             .field("parent_render_id", &self.state.parent_render_id)
             .finish_non_exhaustive()

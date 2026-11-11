@@ -107,18 +107,17 @@ pub use writer::{
 
 /// Process-wide counter that gives every [`Reactive`] graph a distinct id, so
 /// a [`SignalSlot`] is meaningful only against the graph that minted it. Id 0
-/// ([`SignalSlot::UNBOUND_GRAPH`]) is never handed out: it names the unbound
-/// handle [`Signal::default`].
+/// ([`SignalSlot::NO_GRAPH`]) is never handed out.
 static NEXT_GRAPH_ID: AtomicU32 = AtomicU32::new(1);
 
 /// Takes the next graph id from `counter`. The space is never reused: a wrapped
 /// id would let a stale [`SignalSlot`] of a dropped graph validate against a
-/// live one, so the counter parks at the unbound id after the last and every
+/// live one, so the counter parks at the no-graph id after the last and every
 /// later graph is refused.
 fn next_graph_id(counter: &AtomicU32) -> u32 {
     counter
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            (current != SignalSlot::UNBOUND_GRAPH).then(|| current.wrapping_add(1))
+            (current != SignalSlot::NO_GRAPH).then(|| current.wrapping_add(1))
         })
         .expect("BUG: reactive graph id space exhausted")
 }
@@ -359,7 +358,7 @@ impl Reactive {
                 target: "flui.signals",
                 element = ?element,
                 owner = ?owner,
-                "refused: a signal was created during build (create it in init_state and hold the handle)"
+                "refused: a signal was created during build (create it in create_state and hold the handle)"
             );
             return Err((SignalError::CreatedDuringBuild { element }, value));
         }
@@ -467,9 +466,6 @@ impl Reactive {
         if inner.closed {
             return Err(SignalError::OwnerClosed);
         }
-        if slot.is_unbound() {
-            return Err(SignalError::Unbound);
-        }
         if slot.graph() != self.id {
             return Err(SignalError::ForeignGraph {
                 index: slot.index(),
@@ -490,7 +486,7 @@ impl Reactive {
     /// Create a signal that lives as long as the graph — application-level
     /// state released with the UI runtime. Widget-level state belongs to its
     /// element: use [`Reactive::signal_owned_by`] (or `cx.signal(..)` from
-    /// `init_state`, which does that for you) so the slot is released when
+    /// `create_state`, which does that for you) so the slot is released when
     /// the element unmounts.
     ///
     /// # Errors
@@ -608,28 +604,19 @@ impl Reactive {
     /// the first failure the rest are still destroyed and the first failure
     /// is the one resumed (ADR-0281 §3).
     fn retire_released(values: impl IntoIterator<Item = Option<Box<dyn Any>>>) {
-        let mut first = None;
+        let mut first = FirstPanic::new();
         Self::retire_released_into(values, &mut first);
-        if let Some(payload) = first {
-            std::panic::resume_unwind(payload);
-        }
+        raise_held(first);
     }
 
     /// [`Self::retire_released`] for one batch of a larger release: `first`
     /// is the failure an earlier batch already caught, if any.
     fn retire_released_into(
         values: impl IntoIterator<Item = Option<Box<dyn Any>>>,
-        first: &mut Option<Box<dyn Any + Send>>,
+        first: &mut FirstPanic,
     ) {
         for value in values {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a released value's drop runs contained; the first panic is kept"
-            )]
-            FirstPanic::fold(
-                first,
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))).err(),
-            );
+            first.contain(|| drop(value));
         }
     }
 
@@ -761,7 +748,7 @@ impl Reactive {
             retired
         };
         let (released, values): (Vec<_>, Vec<_>) = retired.into_iter().unzip();
-        let mut first = None;
+        let mut first = FirstPanic::new();
         Self::retire_released_into(values, &mut first);
         {
             let mut inner = self.inner.borrow_mut();
@@ -769,9 +756,7 @@ impl Reactive {
                 inner.retiring.swap_remove(at);
             }
         }
-        if let Some(payload) = first {
-            std::panic::resume_unwind(payload);
-        }
+        raise_held(first);
         // After retirement: a subscriber failure here owns no released value.
         for slot in released {
             tracing::trace!(
@@ -842,6 +827,47 @@ impl Reactive {
 
 // -------------------------------------------------------- take / put back
 
+/// Raise the panic `first` holds. Like the `resume_unwind` it stands for, it
+/// raises during an unwind too: every caller holds the first failure of a
+/// signal operation, never a later one.
+fn raise(first: FirstPanic) -> ! {
+    std::panic::resume_unwind(
+        first
+            .into_payload()
+            .expect("BUG: raise is called only with a held panic"),
+    )
+}
+
+/// [`raise`] when `first` holds a panic; nothing otherwise.
+fn raise_held(first: FirstPanic) {
+    if first.is_held() {
+        raise(first);
+    }
+}
+
+/// End a call into the user closure `f` once the graph's own state is
+/// durable: on a failure `f` and its `outcome` are destroyed under
+/// containment and the first failure is raised; otherwise `f` is destroyed
+/// last, so a capture whose destructor panics cannot bypass loan restoration
+/// or reader invalidation (generated closure drop glue aborts when two
+/// captured fields panic, so it must not run inside those steps).
+fn settle_opaque<F, R>(mut first: FirstPanic, outcome: Option<R>, f: F) -> R {
+    let result = match outcome {
+        Some(result) if !first.is_held() => result,
+        outcome => {
+            crate::drop_contained(f);
+            crate::drop_contained(outcome);
+            raise(first);
+        }
+    };
+    first.contain(|| drop(f));
+    if first.is_held() {
+        crate::drop_contained(result);
+        raise(first);
+    }
+    result
+}
+
 /// A slot's value on loan to a user closure. Dropping the loan puts the
 /// value back (if the slot is still the same generation) — **on unwind
 /// too**, so a panicking closure, which `build_or_recover` contains, does
@@ -857,16 +883,11 @@ impl Loan<'_> {
     /// value stays owned here until graph bookkeeping has finished, so opaque
     /// drop glue cannot run inside the restoration boundary.
     fn finish(mut self, preserve_failure: bool) {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: graph put-back runs contained so the loan always closes"
-        )]
-        let restored = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.graph.put_back(self.slot, &mut self.value);
-        }));
-        if let Err(payload) = restored {
+        let mut restored = FirstPanic::new();
+        restored.contain(|| self.graph.put_back(self.slot, &mut self.value));
+        if restored.is_held() {
             crate::drop_contained(self.value.take());
-            std::panic::resume_unwind(payload);
+            raise_held(restored);
         }
         let retired = self.value.take();
         if preserve_failure {
@@ -955,51 +976,13 @@ impl Reactive {
                 index: slot.index(),
                 expected: type_name::<T>(),
             })?;
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a signal reader's panic is contained until the loan is restored"
-        )]
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(typed)));
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: loan restoration runs contained so the slot is never stranded"
-        )]
-        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            loan.finish(outcome.is_err());
-        }));
-        match outcome {
-            Ok(result) => {
-                if let Err(payload) = finalized {
-                    crate::drop_contained(f);
-                    crate::drop_contained(result);
-                    std::panic::resume_unwind(payload);
-                }
-                // Restore the loan before destroying the opaque capture
-                // bundle. Generated closure drop glue can abort when two
-                // captured fields panic; it must not strand the slot. A
-                // contained capture panic is the first failure only after
-                // loan restoration succeeds.
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: an updater's captures drop contained after the loan is restored"
-                )]
-                let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)));
-                match disposed {
-                    Err(payload) => {
-                        crate::drop_contained(result);
-                        std::panic::resume_unwind(payload)
-                    }
-                    Ok(()) => Ok(result),
-                }
-            }
-            Err(payload) => {
-                crate::drop_contained(f);
-                if let Err(secondary) = finalized {
-                    flui_foundation::panic::discard_payload(secondary);
-                }
-                std::panic::resume_unwind(payload)
-            }
-        }
+        // The reader's panic is the first failure; the loan is restored
+        // whatever it did, so the slot is never stranded.
+        let mut first = FirstPanic::new();
+        let outcome = first.contain(|| f(typed));
+        let failed = outcome.is_none();
+        first.contain(|| loan.finish(failed));
+        Ok(settle_opaque(first, outcome, f))
     }
 
     /// The type is checked before anything is marked, so a write through a
@@ -1013,22 +996,15 @@ impl Reactive {
         // write. Keep the opaque updater outside that unwind too: destroying
         // its captures during a telemetry panic could otherwise abort before
         // the caller regains control.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: graph preparation runs contained; the updater is kept outside"
-        )]
-        let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut first = FirstPanic::new();
+        let Some(prepared) = first.contain(|| {
             self.refuse_if_building(slot)?;
             self.loan(slot)
-        }));
-        let mut loan = match prepared {
-            Ok(Ok(loan)) => loan,
-            Ok(Err(error)) => return Err(error),
-            Err(payload) => {
-                crate::drop_contained(f);
-                std::panic::resume_unwind(payload)
-            }
+        }) else {
+            crate::drop_contained(f);
+            raise(first);
         };
+        let mut loan = prepared?;
         let typed = loan
             .value
             .as_deref_mut()
@@ -1037,76 +1013,17 @@ impl Reactive {
                 index: slot.index(),
                 expected: type_name::<T>(),
             })?;
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a signal updater's panic is contained until the loan is restored"
-        )]
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(typed)));
         // `f` must remain outside the caught invocation: consuming a `FnOnce`
         // there would destroy its captures while the updater panic is still
         // unwinding, and a panicking capture destructor would abort the
-        // process before `catch_unwind` can return. A panicking updater's
-        // captures are destroyed under containment afterwards; a successful
-        // updater is destroyed only after loan restoration and invalidation
-        // are durable.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: loan restoration runs contained so the slot is never stranded"
-        )]
-        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            loan.finish(outcome.is_err());
-        }));
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: graph invalidation runs contained after the loan is restored"
-        )]
-        let invalidated =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.mark(slot)));
-        match outcome {
-            Ok(result) => {
-                if let Err(payload) = finalized {
-                    crate::drop_contained(f);
-                    crate::drop_contained(result);
-                    if let Err(secondary) = invalidated {
-                        flui_foundation::panic::discard_payload(secondary);
-                    }
-                    std::panic::resume_unwind(payload)
-                }
-                if let Err(payload) = invalidated {
-                    // Invalidation is chronologically earlier than opaque
-                    // callback teardown: the captures are destroyed under
-                    // containment, so a destructor panic cannot replace it.
-                    crate::drop_contained(f);
-                    crate::drop_contained(result);
-                    std::panic::resume_unwind(payload)
-                }
-                // All graph protocol state is durable before user captures
-                // are destroyed, so a panicking destructor can
-                // no longer bypass loan restoration or reader invalidation.
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: an updater's captures drop contained after graph state is durable"
-                )]
-                let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)));
-                match disposed {
-                    Ok(()) => Ok(result),
-                    Err(payload) => {
-                        crate::drop_contained(result);
-                        std::panic::resume_unwind(payload)
-                    }
-                }
-            }
-            Err(payload) => {
-                crate::drop_contained(f);
-                if let Err(secondary) = finalized {
-                    flui_foundation::panic::discard_payload(secondary);
-                }
-                if let Err(secondary) = invalidated {
-                    flui_foundation::panic::discard_payload(secondary);
-                }
-                std::panic::resume_unwind(payload)
-            }
-        }
+        // process before the catch can return. Loan restoration and reader
+        // invalidation run whatever the updater did, in that order, and the
+        // first of the three failures is the one raised.
+        let outcome = first.contain(|| f(typed));
+        let failed = outcome.is_none();
+        first.contain(|| loan.finish(failed));
+        first.contain(|| self.mark(slot));
+        Ok(settle_opaque(first, outcome, f))
     }
 }
 
@@ -1124,34 +1041,18 @@ impl ReadGraph for Reactive {
         read: &mut dyn FnMut(&dyn Any),
     ) -> Result<(), SignalError> {
         let loan = self.loan(slot)?;
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a signal reader's panic is contained until the loan is restored"
-        )]
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // The reader's panic is the first failure; the loan is restored
+        // whatever it did.
+        let mut first = FirstPanic::new();
+        first.contain(|| {
             if let Some(value) = loan.value.as_deref() {
                 read(value);
             }
-        }));
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: loan restoration runs contained so the slot is never stranded"
-        )]
-        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            loan.finish(outcome.is_err());
-        }));
-        match outcome {
-            Ok(()) => match finalized {
-                Ok(()) => Ok(()),
-                Err(payload) => std::panic::resume_unwind(payload),
-            },
-            Err(payload) => {
-                if let Err(secondary) = finalized {
-                    flui_foundation::panic::discard_payload(secondary);
-                }
-                std::panic::resume_unwind(payload)
-            }
-        }
+        });
+        let failed = first.is_held();
+        first.contain(|| loan.finish(failed));
+        raise_held(first);
+        Ok(())
     }
 }
 
@@ -1217,8 +1118,7 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
     /// # Errors
     ///
     /// [`SignalError::WrittenDuringBuild`] from inside a `build`, plus the
-    /// handle errors of [`Signal::try_with`] and [`SignalError::Unbound`] for
-    /// a [`Signal::default`] handle.
+    /// handle errors of [`Signal::try_with`].
     fn set<W: WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<(), SignalError>;
 
     /// Mutate in place and mark every reader.
@@ -1266,22 +1166,15 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
         // If tracing or graph access panics, its destructor is a later,
         // separately-contained phase rather than a second panic during the
         // preparation unwind.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: graph preparation runs contained; the proposed value is kept"
-        )]
-        let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut first = FirstPanic::new();
+        let Some(prepared) = first.contain(|| {
             graph.refuse_if_building(slot)?;
             graph.loan(slot)
-        }));
-        let mut loan = match prepared {
-            Ok(Ok(loan)) => loan,
-            Ok(Err(error)) => return Err(error),
-            Err(payload) => {
-                crate::drop_contained(pending.take());
-                std::panic::resume_unwind(payload)
-            }
+        }) else {
+            crate::drop_contained(pending.take());
+            raise(first);
         };
+        let mut loan = prepared?;
         let typed = loan
             .value
             .as_deref_mut()
@@ -1302,41 +1195,14 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
                 .take()
                 .expect("BUG: a signal replacement is consumed only once"),
         );
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: loan restoration runs contained so the slot is never stranded"
-        )]
-        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            loan.finish(false);
-        }));
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: graph invalidation runs contained after the loan is restored"
-        )]
-        let invalidated =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| graph.mark(slot)));
-
-        let mut first = None;
-        FirstPanic::fold(&mut first, finalized.err());
-        if let Some(payload) = first {
+        first.contain(|| loan.finish(false));
+        first.contain(|| graph.mark(slot));
+        if first.is_held() {
             crate::drop_contained(retired);
-            if let Err(secondary) = invalidated {
-                flui_foundation::panic::discard_payload(secondary);
-            }
-            std::panic::resume_unwind(payload);
+            raise(first);
         }
-        if let Err(payload) = invalidated {
-            crate::drop_contained(retired);
-            std::panic::resume_unwind(payload)
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a replaced value's drop runs contained after the swap"
-        )]
-        let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(retired)));
-        if let Err(payload) = disposed {
-            std::panic::resume_unwind(payload)
-        }
+        first.contain(|| drop(retired));
+        raise_held(first);
         Ok(())
     }
 
@@ -1354,11 +1220,10 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
     {
         let r = w.graph(writer::sealed::Token::new());
         let mut pending = Some(value);
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a user comparison's panic must not strand the signal loan"
-        )]
-        let compared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // A user comparison's panic must not strand the signal loan, and the
+        // proposed value is destroyed only after it has unwound.
+        let mut first = FirstPanic::new();
+        let Some(compared) = first.contain(|| {
             r.refuse_if_building(self.slot())?;
             r.read(self.slot(), |current: &T| {
                 current
@@ -1366,15 +1231,11 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
                         .as_ref()
                         .expect("BUG: comparison does not consume the proposed value")
             })
-        }));
-        let equal = match compared {
-            Ok(Ok(equal)) => equal,
-            Ok(Err(error)) => return Err(error),
-            Err(payload) => {
-                crate::drop_contained(pending.take());
-                std::panic::resume_unwind(payload)
-            }
+        }) else {
+            crate::drop_contained(pending.take());
+            raise(first);
         };
+        let equal = compared?;
         if equal {
             return Ok(false);
         }

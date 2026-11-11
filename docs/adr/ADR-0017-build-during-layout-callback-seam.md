@@ -281,7 +281,7 @@ heterogeneous small scrolls from 40 to 34, and the heterogeneous scroll from 2 t
   marking layout, because that path evicts children the last pass did place.
 - R2 becomes a per-render-object opt-in, not an `as_sliver()` check.
 - It needs tests that fail without each rule and an updated
-  `crates/flui-widgets/perf/baseline.toml`.
+  `crates/flui-widgets/perf/baseline/`.
 
 Until then R1 and R2 are candidates only.
 

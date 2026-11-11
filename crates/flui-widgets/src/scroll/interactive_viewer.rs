@@ -566,7 +566,7 @@ impl View for InteractiveViewer {
 impl StatefulView for InteractiveViewer {
     type State = InteractiveViewerState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let controller = AnimationController::builder(Duration::from_millis(1))
             .debug_label("InteractiveViewer.fling")
             .behavior(flui_animation::AnimationBehavior::Preserve)
@@ -1489,7 +1489,7 @@ struct AlternativesMountState;
 impl StatefulView for AlternativesMount {
     type State = AlternativesMountState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AlternativesMountState
     }
 }
@@ -1537,7 +1537,7 @@ struct RowFocusProbeState;
 impl StatefulView for RowFocusProbe {
     type State = RowFocusProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         RowFocusProbeState
     }
 }

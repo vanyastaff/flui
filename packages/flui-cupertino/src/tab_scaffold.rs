@@ -243,7 +243,7 @@ impl AnimatedView for CupertinoTabScaffold {
 impl StatefulView for CupertinoTabScaffold {
     type State = CupertinoTabScaffoldState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         CupertinoTabScaffoldState {
             should_build_tab: RefCell::new(Vec::new()),
             controller: self.controller.clone(),

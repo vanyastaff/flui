@@ -2650,7 +2650,7 @@ of `R` itself; the parser and delegate are the route type. The page per value
 is a `PageRoute<()>` named with the value's path, on a `Navigator` the router
 builds, so transitions, heroes and `PopScope` are unchanged.
 `Router::<R>::handle` takes `&dyn LifecycleContext` (ADR-0078), so a handle
-is acquired in `init_state`/`did_change_dependencies` and resolves the
+is acquired in `create_state`/`init_state`/`did_change_dependencies` and resolves the
 **nearest** `Router<R>`, as `Navigator`'s handle does. The page builder
 and transitions are shared with every page, so a parent rebuild reaches the
 pages already on the stack; a transition duration is fixed when a page is
@@ -2984,29 +2984,37 @@ edits but not the caller's own, and `set_value` on a text form field seen by
 
 ### 33. `RawButton` is a widgets-layer button whose press writes through `EventCx`
 
-**Choice:** `RawButton` is a theme-free press target, a `GestureDetector`
-with a `Semantics(button: true)` around it, as one widget, so an application
-that uses no design system has a button, and its `on_press` takes
-`Fn(&mut EventCx<'_>)`, the typed write capability of ADR-0086. It builds
-`Semantics::new().container(true).role(SemanticsRole::Button).enabled(on_press.is_some())`
-around an opaque `GestureDetector` and forwards its event context to the press
-callback. The detector owns the lifecycle-acquired writer source; `RawButton`
-is stateless. The gesture arena's lower-level callback aliases do not change
-(ADR-0086 §4). Without
-`on_press` the node is disabled and advertises no click, and a tap does
-nothing. A press may return a write's
-`Result`; a refused write is logged on `flui.signals`. Inside the detector an
-`Actions` maps `ActivateIntent` and `ButtonActivateIntent` to the press and
-consumes `ActivationPressIntent` (Space's key-down), above a `Focus` that can
-take focus only with `on_press` and a `FocusRing` that shows while focus is
-visible; without `on_press` the mappings are declared but disabled, so an
-activation key stops there and bubbles unconsumed instead of pressing an
-enclosing control. Pressed and hovered looks are not implemented. **Tests:**
+**Choice:** `RawButton` is a theme-free press target, so an application that
+uses no design system has a button, and its `on_press` takes
+`Fn(&mut EventCx<'_>)`, the typed write capability of ADR-0086. It is
+stateless and builds one `InteractiveNode` (`interaction/node.rs`, private;
+ADR-0322 §1): one element and one `RenderInteractive` that carry what the
+wrappers `Semantics`, `GestureDetector`, `Actions`, `Focus` and `FocusRing`
+carry, on the hosts those wrappers run on (`FocusHost`, `RecognizerHost`). The
+node is hit opaquely and mounts the tap recognizer a `GestureDetector` would;
+its semantics are
+`Semantics::new().container(true).role(SemanticsRole::Button).enabled(on_press.is_some())`,
+then the click its tap gives, then the focus state. The gesture arena's
+lower-level callback aliases do not change (ADR-0086 §4). Without `on_press`
+the node is disabled and advertises no click, and a tap does nothing. A press
+may return a write's `Result`; a refused write is logged on `flui.signals`.
+The node binds `ActivateIntent` and `ButtonActivateIntent` to the press and
+consumes `ActivationPressIntent` (Space's key-down); its focus node records
+those bindings, can take focus only with `on_press`, and the node paints the
+focus ring while focus is visible. Without `on_press` the bindings are
+declared but disabled, so an activation key stops there and bubbles unconsumed
+instead of pressing an enclosing control. Pressed and hovered looks are not
+implemented. **Tests:**
 `tests/raw_button.rs` (`raw_button_press_is_reachable_through_a_platform_click`,
 `a_refused_write_in_a_press_is_reported_not_panicked`,
 `raw_button_activates_from_the_keyboard`, which also pins that a button without
-`on_press` is no Tab stop). A button without `on_press` advertising no click:
-**Unasserted:** no test pins this.
+`on_press` is no Tab stop; `raw_button_a11y_tree_matches_wrappers`, which pins
+the tree against the wrappers enabled and disabled, so a button without
+`on_press` advertises no click;
+`raw_button_in_scrollable_contests_like_gesture_detector` and
+`nested_raw_button_contests_like_gesture_detector`) and
+`perf_raw_button_over_text` in `tests/perf.rs` for what a button adds to its
+child.
 
 ### 34. `EditableText` answers an input method's pulls; one platform session is one change
 

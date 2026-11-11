@@ -5,6 +5,7 @@ use flui_foundation::{ManualClock, geometry::Offset};
 use flui_painting::TextSizing;
 use flui_platform::{Distance, PlatformWindow};
 use flui_view::prelude::*;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::{
     cell::Cell,
     sync::{

@@ -187,7 +187,7 @@ struct TaskOwnerState {
 impl StatefulView for TaskOwner {
     type State = TaskOwnerState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         TaskOwnerState { view: self.clone() }
     }
 }

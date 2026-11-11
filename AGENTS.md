@@ -50,6 +50,7 @@ and edits its row.
 | State only the owner thread touches | `Rc` with `Cell`/`RefCell`; a re-entry that finds it busy gets a typed outcome (ADR-0266) | `Arc<Mutex<_>>`, atomics, `try_lock` as a re-entrancy detector, `Send + Sync` on a callback that never leaves the thread |
 | A list of listeners | `Notifier<Arg>`, `ChangeNotifier`; a listener's owned handle is a `Subscription` from its channel's `listen` | a hand-rolled `Vec` of callbacks guarded by a `notifying: bool` |
 | A new identity | `IdMint<I>` and `IdExhausted` (`flui_foundation::sequence`), its `AtomicIdMint` where two threads mint one id domain, or a generational key whose slot generations `GenSlots` carries (ADR-0313) | `wrapping_add`, a `pub` integer field, an ID derived from an OS handle or pointer |
+| A state's signals and capability handles | created in `StatefulView::create_state(&self, ctx)`, so the state is born bound | an `Option` field that `init_state` fills with `Some(ctx.…)` ([gaps](docs/gaps.md#widget-states-still-fill-their-handles-in-init_state)) |
 | A test that drives an application's frames | `flui_testing::HeadlessHost` over `UiRuntime::pump` and its manual clock | `HeadlessBinding::pump_frame`, which ADR-0083 removes |
 | Which crate may depend on which | `tier`, `order` and `reach` (ADR-0081) | reasoning from `layer = N`, which ADR-0081 removed |
 | The platform whose conventions a widget follows (chords, handles, menus, transitions) | `flui_view::environment::PlatformConvention::of`, installed by the runtime above every root; a test names its platform with `HeadlessWindow::with_platform` or a `PlatformConvention` wrapper (ADR-0028) | `TargetPlatform::current()` outside the app runner, a theme's platform field, a `Default` that reads the build host |
@@ -106,8 +107,9 @@ conversation:
   edit `CHANGELOG.md`. A platform-support change updates `crates/flui-native/platform-parity.toml`
   and restates `docs/platform-parity.md` from it (✅ only
   after a run on that platform) and `docs/gaps.md`.
-- Commits are `area: what changed`. CI executes Linux and wasm32 only; native and GPU changes are
-  run locally.
+- Commits are `area: what changed`. Pull-request CI executes Linux and wasm32 only; Windows,
+  macOS, the iOS Simulator and an Android emulator run nightly on main
+  (`nightly-platforms.yml`), so native and GPU changes are run locally before the PR.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
@@ -136,7 +138,7 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 
 | Rule | Enforced by |
 |------|-------------|
-| Presentation capabilities (`rebuild_handle`, `focus_manager`, `text_input_handle`, `pipeline_owner`, …) are acquired only in `init_state`/`did_change_dependencies` | `LifecycleContext`, which only those hooks receive (ADR-0078) |
+| Presentation capabilities (`rebuild_handle`, `focus_manager`, `text_input_handle`, `pipeline_owner`, …) and signals are acquired only in `create_state`/`init_state`/`did_change_dependencies` | `LifecycleContext`, which only those hooks receive (ADR-0078) |
 | Signals are read in `build`, never written or created there | run-time guard in `flui-view::reactive` (ADR-0074) |
 | **ID offset** — plain slab-backed IDs (`ViewId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize` (`slab_index + 1`); generational keys (`ElementId`, `RenderId`, `UiRuntimeId`) are minted with `new_gen(slab_index, generation)` and read with `.index()` | ID newtypes |
 | Logical and device geometry don't mix (ADR-0098) | trybuild `crates/flui-painting/tests/compile_fail/` |
@@ -147,7 +149,7 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
 | Every `static`/`thread_local!` outside tests has a `globals` entry (an ADR that removes it, or an ADR-0097 grant) | `xtask globals` |
 | Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit handler, a closure handed to the OS) is a constant or one call of `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16) | `xtask panic-boundary` |
-| A value crosses a thread because the compiler proves it may: every `unsafe impl Send`/`Sync` is listed and the list only shrinks; `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed and the list only shrinks (ADR-0136 §3) | `xtask send-impls`, `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
+| A value crosses a thread because the compiler proves it may: every `unsafe impl Send`/`Sync` is listed and the list only shrinks; `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed under ADR-0136 §3 | `xtask send-impls`, `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
 | Test support is named `testing`; a hand-written `pump`/`advance`/`tick` or a `Mock*`/`Fake*`/`Scripted*`/`Recording*`/`Probe*` type in test code is in a kit or counted in the allowlist (ADR-0243) | `xtask testing` |
 | A constructor that can fail is `try_new`: every `new` returning `Result` or `Option` is listed and the list only shrinks | `xtask try-new` |
 | A production `expect` or `panic!` names its invariant (`BUG: `) or its `try_` twin; the per-file counts of the ones that do not only go down | `xtask panic-messages` |
@@ -254,6 +256,6 @@ by, with the better shape. What this repository keeps getting wrong:
 - a document that records a change by appending to a record instead of rewriting its rule, or a
   reversal that leaves other records teaching the old rule.
 
-Not a finding: a native or GPU path not yet run on its platform. CI runs Linux and wasm32 only;
+Not a finding: a native or GPU path not yet run on its platform. PR CI runs Linux and wasm32 only;
 the PR body names the platforms the change still needs a run on, and the owner runs them from a
 device list.

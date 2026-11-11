@@ -5,21 +5,17 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use flui_foundation::PresentationAddress;
+use flui_foundation::{PresentationAddress, panic::FirstPanic};
 use flui_runtime::owner::{
     InitializationOutcome, InstallInitialization, InstallToken, OwnerEffects, OwnerHost,
     PreparedInstall, PublicationError, RecoveryState,
 };
 use flui_runtime::ui_runtime::UiRuntime;
 
-use crate::app::lifecycle_state::preserve_first_lifecycle_panic;
-
 use super::display_host::DisplayHost;
 use super::host::APP_RUNTIME;
 use super::native_bindings::{NativeBindings, NativeInstallError, PreparedNativeWindow};
 use super::window_install::InstallationWindow;
-
-type Failure = Option<Box<dyn std::any::Any + Send>>;
 
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 pub(super) enum InstallError {
@@ -226,7 +222,7 @@ impl HostState {
         pending.remove(index)
     }
 
-    fn complete_native(&self, first: &mut Failure) {
+    fn complete_native(&self, first: &mut FirstPanic) {
         self.native.sweep_retired();
         self.native.retirement().drain(first);
     }
@@ -275,9 +271,9 @@ impl OwnerEffects for HostState {
     fn retire_host(&self, _: &[PresentationAddress], _: RecoveryState) {
         // Each HostState owns its own native registry. No replacement shares it.
         self.native.retire_all();
-        let mut first = None;
+        let mut first = FirstPanic::new();
         self.complete_native(&mut first);
-        finish(first);
+        first.resume();
     }
 
     fn commit_install(
@@ -338,32 +334,32 @@ impl OwnerEffects for HostState {
                 .expect("BUG: published installation retains its completion receipt");
             initializing.remove(index)
         };
-        let mut first = None;
+        let mut first = FirstPanic::new();
         if outcome == InitializationOutcome::Ready {
-            contain(&mut first, || entry.window.native().request_redraw());
-            if first.is_none() && self.installation_is_live(&entry) {
-                contain(&mut first, || self.native.installed(address));
+            first.contain(|| entry.window.native().request_redraw());
+            if !first.is_held() && self.installation_is_live(&entry) {
+                first.contain(|| self.native.installed(address));
             }
             // Native activation can close the window or tear down its host.
             // The development hook sees only a still-live installation and
             // may itself close it before the readiness receipt is settled.
-            if first.is_none() && self.installation_is_live(&entry) {
-                contain(&mut first, || entry.window.notify_opened());
+            if !first.is_held() && self.installation_is_live(&entry) {
+                first.contain(|| entry.window.notify_opened());
             }
-            if first.is_none() && self.installation_is_live(&entry) {
+            if !first.is_held() && self.installation_is_live(&entry) {
                 entry.window.publish();
                 entry.result.set(Some(Ok(())));
                 return;
             }
         }
         let error =
-            if recovery == RecoveryState::Healthy && first.is_none() && entry.window.is_closed() {
+            if recovery == RecoveryState::Healthy && !first.is_held() && entry.window.is_closed() {
                 InstallError::WindowClosed
             } else {
                 InstallError::InitializationFailed
             };
         entry.result.set(Some(Err(error)));
-        contain(&mut first, || {
+        first.contain(|| {
             if let Ok(target) = self.logical.presentation_dispatcher(address) {
                 self.native.fence_presentation(address);
                 let _ = target.close(self);
@@ -371,8 +367,8 @@ impl OwnerEffects for HostState {
         });
         self.native.retire_presentation(address);
         self.complete_native(&mut first);
-        contain(&mut first, || drop(entry.window));
-        finish(first);
+        first.contain(|| drop(entry.window));
+        first.resume();
     }
 
     fn cancel_install(&self, token: InstallToken, _: RecoveryState) {
@@ -400,9 +396,9 @@ impl OwnerEffects for HostState {
         self.native.retire_presentation(address);
         #[cfg(not(target_arch = "wasm32"))]
         self.closed_presentations.borrow_mut().push(address);
-        let mut first = None;
+        let mut first = FirstPanic::new();
         self.complete_native(&mut first);
-        finish(first);
+        first.resume();
     }
 
     /// See [`requests_refresh_rate`].
@@ -421,9 +417,9 @@ impl OwnerEffects for HostState {
     fn after_turn(&self, turn_recovery: RecoveryState) {
         #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
         let _ = turn_recovery;
-        let mut first = None;
+        let mut first = FirstPanic::new();
         if self.is_current() && turn_recovery == RecoveryState::Healthy {
-            contain(&mut first, || {
+            first.contain(|| {
                 self.native.refresh_text_sizing(&self.logical, self, false);
             });
         }
@@ -435,7 +431,7 @@ impl OwnerEffects for HostState {
             not(target_arch = "wasm32")
         ))]
         if self.is_current() {
-            contain(&mut first, super::placement::tick);
+            first.contain(super::placement::tick);
         }
         self.complete_native(&mut first);
         #[cfg(not(target_arch = "wasm32"))]
@@ -447,7 +443,7 @@ impl OwnerEffects for HostState {
                 not(target_arch = "wasm32")
             ))]
             for address in &closed {
-                contain(&mut first, || {
+                first.contain(|| {
                     super::main_window::main_window_closed(*address);
                 });
             }
@@ -456,7 +452,7 @@ impl OwnerEffects for HostState {
                 let wake =
                     APP_RUNTIME.with(|slot| slot.borrow().exit_policy_reevaluation_notifier());
                 if let Some(wake) = wake {
-                    contain(&mut first, || wake());
+                    first.contain(|| wake());
                 }
             }
             #[cfg(all(
@@ -465,23 +461,23 @@ impl OwnerEffects for HostState {
                 not(target_arch = "wasm32")
             ))]
             {
-                contain(&mut first, super::owner_dispatch::drain_quit_notification);
+                first.contain(super::owner_dispatch::drain_quit_notification);
                 // Retire accepted work above, but do not start new window
                 // construction while preserving a failure from this turn.
-                let recovery = if first.is_some() {
+                let recovery = if first.is_held() {
                     RecoveryState::PreservingFailure
                 } else {
                     turn_recovery
                 };
-                contain(&mut first, || {
+                first.contain(|| {
                     super::secondary_window::drain_pending_secondary_window_completions(recovery);
                 });
-                if turn_recovery == RecoveryState::Healthy && first.is_none() {
-                    contain(&mut first, super::main_window::drive_main_window);
+                if turn_recovery == RecoveryState::Healthy && !first.is_held() {
+                    first.contain(super::main_window::drive_main_window);
                 }
             }
         }
-        finish(first);
+        first.resume();
     }
 
     fn request_continuation(&self) -> bool {
@@ -501,25 +497,6 @@ impl OwnerEffects for HostState {
             return Some(frontier);
         }
         self.native.resolve_text_sizing(frontier, self)
-    }
-}
-
-pub(super) fn contain(first: &mut Failure, run: impl FnOnce()) {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a host completion's panic is kept as the first failure"
-    )]
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).err();
-    preserve_first_lifecycle_panic(first, failure, "native host completion");
-}
-
-pub(super) fn finish(first: Failure) {
-    if let Some(first) = first {
-        if std::thread::panicking() {
-            flui_foundation::panic::discard_payload(first);
-        } else {
-            std::panic::resume_unwind(first);
-        }
     }
 }
 

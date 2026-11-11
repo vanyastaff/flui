@@ -6,7 +6,8 @@ use flui_foundation::RenderId;
 use super::{
     arity::ElementArity,
     behavior::{
-        ElementBehavior, armed_state_hook, contained_state_hook, make_build_ctx, publish_provided,
+        ElementBehavior, armed_state_hook, contained_state_hook, first_state, make_build_ctx,
+        publish_provided,
     },
     behavior_commons::{build_or_recover_begun, should_build_with_trace, single_child_views},
     generic::ElementCore,
@@ -20,17 +21,14 @@ use crate::{
 
 /// Behavior of a [`StatefulRenderView`] element.
 ///
-/// The state follows the rules of `StatefulBehavior`: `init_state` runs at
-/// the first build, a view update that arrives before it is delivered right
-/// after it, and `dispose` runs only for a state whose `init_state`
-/// returned. The render object follows the rules of `RenderBehavior`: it is
-/// created and adopted at mount and removed at unmount.
+/// The state follows the rules of `StatefulBehavior`: `create_state` and
+/// `init_state` run at the first build, from the view the element holds
+/// then, and `dispose` runs only for a state whose `init_state` returned.
+/// The render object follows the rules of `RenderBehavior`: it is created
+/// and adopted at mount and removed at unmount.
 pub struct StatefulRenderBehavior<V: StatefulRenderView> {
-    state: V::State,
-    initialized: bool,
-    /// The view `create_state` saw, held while a parent updates this element
-    /// before its first build.
-    pending_update: Option<V>,
+    /// `None` until `create_state` and `init_state` have both returned.
+    state: Option<V::State>,
     render_id: Option<RenderId>,
     /// The values the state publishes to its subtree.
     publication: Publication,
@@ -39,22 +37,26 @@ pub struct StatefulRenderBehavior<V: StatefulRenderView> {
 impl<V: StatefulRenderView> std::fmt::Debug for StatefulRenderBehavior<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StatefulRenderBehavior")
-            .field("initialized", &self.initialized)
+            .field("initialized", &self.state.is_some())
             .field("render_id", &self.render_id)
             .finish_non_exhaustive()
     }
 }
 
 impl<V: StatefulRenderView> StatefulRenderBehavior<V> {
-    /// A behavior holding the state `view` creates.
-    pub fn new(view: &V) -> Self {
+    /// A behavior whose state the element's first build creates.
+    pub fn new() -> Self {
         Self {
-            state: view.create_state(),
-            initialized: false,
-            pending_update: None,
+            state: None,
             render_id: None,
             publication: Publication::default(),
         }
+    }
+}
+
+impl<V: StatefulRenderView> Default for StatefulRenderBehavior<V> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -70,7 +72,7 @@ where
     }
 
     fn state_as_any(&self) -> Option<&dyn std::any::Any> {
-        Some(&self.state as &dyn std::any::Any)
+        self.state.as_ref().map(|state| state as &dyn std::any::Any)
     }
 
     fn render_id(&self) -> Option<RenderId> {
@@ -101,40 +103,31 @@ where
         &mut self,
         core: &mut ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>> {
+    ) -> crate::view::ChildViews {
         // The context borrows the tree and the sink, not `owner` or `self`.
         let ctx_choice = make_build_ctx(core, owner);
         let ctx = ctx_choice.as_ctx();
 
-        // Before the `should_build` guard, so a mounted element initializes
-        // its state exactly once even when it is clean.
-        if !self.initialized {
-            let state = &mut self.state;
-            armed_state_hook(
-                core,
-                owner,
-                LifecycleHook::InitState,
-                "initializing StatefulRenderElement",
-                || state.init_state(ctx_choice.as_lifecycle_ctx()),
-            );
-            self.initialized = true;
-            if let Some(old_view) = self.pending_update.take() {
-                let state = &mut self.state;
-                armed_state_hook(
-                    core,
-                    owner,
-                    LifecycleHook::Update,
-                    "updating StatefulRenderElement after its init_state",
-                    || state.did_update_view(&old_view, core.view()),
-                );
-            }
+        // Before the `should_build` guard, so a mounted element creates and
+        // initializes its state exactly once even when it is clean.
+        if self.state.is_none() {
+            let lifecycle_ctx = ctx_choice.as_lifecycle_ctx();
+            let view = core.view();
+            let state = first_state(core, owner, "initializing StatefulRenderElement", || {
+                let mut state = view.create_state(lifecycle_ctx);
+                state.init_state(lifecycle_ctx);
+                state
+            });
+            self.state = Some(state);
         }
 
         if !should_build_with_trace(core, "StatefulRenderBehavior") {
-            return Vec::new();
+            return crate::view::ChildViews::none();
         }
 
-        let state = &self.state;
+        let state = self.state.as_ref().expect(
+            "BUG: an initialized StatefulRenderElement holds the state its first build created",
+        );
         render_custody::push(
             self.render_id,
             core,
@@ -165,8 +158,7 @@ where
     /// render object is removed either way.
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         self.publication.release(core.self_id(), owner);
-        if self.initialized {
-            let state = &mut self.state;
+        if let Some(state) = self.state.as_mut() {
             contained_state_hook(
                 core,
                 owner,
@@ -180,15 +172,16 @@ where
             core,
             owner,
             "StatefulRenderBehavior",
-            |_cx, _render_object: &mut V::RenderObject| {},
+            |cx, render_object: &mut V::RenderObject| {
+                core.view().did_unmount_render_object(cx, render_object);
+            },
         );
     }
 
     fn on_activate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        if !self.initialized {
+        let Some(state) = self.state.as_mut() else {
             return;
-        }
-        let state = &mut self.state;
+        };
         armed_state_hook(
             core,
             owner,
@@ -199,10 +192,9 @@ where
     }
 
     fn on_deactivate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        if !self.initialized {
+        let Some(state) = self.state.as_mut() else {
             return;
-        }
-        let state = &mut self.state;
+        };
         contained_state_hook(
             core,
             owner,
@@ -219,15 +211,12 @@ where
         _owner: &mut crate::ElementOwner<'_>,
     ) {
         // A parent can update this element between its mount and its first
-        // build. Keep the view the state was created from; the first build
-        // delivers the update after `init_state`.
-        if !self.initialized {
-            if self.pending_update.is_none() {
-                self.pending_update = Some(old_view.clone());
-            }
+        // build. The first build creates the state from the newest view, so
+        // an element with no state yet has no older view to tell it about.
+        let Some(state) = self.state.as_mut() else {
             return;
-        }
-        self.state.did_update_view(old_view, core.view());
+        };
+        state.did_update_view(old_view, core.view());
     }
 
     fn did_change_dependencies(
@@ -236,7 +225,11 @@ where
         owner: &mut crate::ElementOwner<'_>,
     ) {
         let ctx_choice = make_build_ctx(core, owner);
-        let state = &mut self.state;
+        // A dependency registers during a build, which created the state
+        // first; an element with no state has nothing to notify.
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
         armed_state_hook(
             core,
             owner,

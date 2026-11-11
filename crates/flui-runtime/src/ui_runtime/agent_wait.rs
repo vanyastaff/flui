@@ -8,10 +8,11 @@
 //! times out. A timeout is an answer (`satisfied: false` with the last observation and why the
 //! window had not settled), not an error.
 
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::panic::resume_unwind;
 use std::time::Duration;
 
 use flui_foundation::geometry::DevicePixelRatio;
+use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
     Condition, UnsettledCause, UnsettledReason, WaitOutcome, WaitParams, WindowId,
 };
@@ -105,7 +106,7 @@ impl UiRuntime {
     /// that ran out is seen. A condition that is pure code and panics answers its own wait
     /// `platform`, and the panic continues once the rest are put back.
     pub(crate) fn evaluate_agent_waits(&self, frame: bool) {
-        let mut first_panic = None;
+        let mut first_panic = FirstPanic::new();
         for state in self.presentations.iter() {
             if state.agent_waits.borrow().is_empty() {
                 continue;
@@ -123,19 +124,17 @@ impl UiRuntime {
                     wait.frames += 1;
                 }
                 let reply = wait.reply.clone();
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: a wait's settle runs contained so the reply is still sent"
-                )]
-                let settled = catch_unwind(AssertUnwindSafe(|| self.settle_wait(state, wait, now)));
-                match settled {
-                    Ok(Some(wait)) => keep.push(wait),
-                    Ok(None) => {}
-                    Err(payload) => {
+                // A wait's settle runs contained so the reply is still sent; its
+                // panic joins `first_panic` after that.
+                let mut settle_failure = FirstPanic::new();
+                match settle_failure.contain(|| self.settle_wait(state, wait, now)) {
+                    Some(Some(wait)) => keep.push(wait),
+                    Some(None) => {}
+                    None => {
                         // The evaluation consumed the wait; the sender kept apart still
                         // answers it, and the panic continues once the rest are put back.
                         send_reply(&reply, None, Err(AgentError::Malformed));
-                        first_panic.get_or_insert(payload);
+                        first_panic.absorb(settle_failure);
                         keep.extend(waits);
                         break;
                     }
@@ -151,7 +150,7 @@ impl UiRuntime {
                 self.request_redraw_for(state);
             }
         }
-        if let Some(payload) = first_panic {
+        if let Some(payload) = first_panic.into_payload() {
             resume_unwind(payload);
         }
     }

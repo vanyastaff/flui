@@ -198,6 +198,9 @@ pub mod ticket;
 // the prelude: this is a narrow, deliberately-reached-for utility, not a
 // commonly-imported type.
 pub mod panic;
+#[cfg(feature = "testing")]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+pub mod testing;
 // A child's position during reconciliation (index plus previous sibling).
 pub mod slot;
 // Slot-addressed side tables: membership and position without hashing.

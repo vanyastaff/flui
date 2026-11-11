@@ -954,3 +954,16 @@ pub enum ImageSampling {
     #[default]
     Linear,
 }
+
+impl ImageSampling {
+    /// How far past a sample point, in source pixels, the pixels one read
+    /// takes reach: half a pixel for a bilinear read, none for a nearest one.
+    /// A renderer's sampling and a damage footprint both read it here.
+    #[must_use]
+    pub const fn reach(self) -> f64 {
+        match self {
+            Self::Nearest => 0.0,
+            Self::Linear => 0.5,
+        }
+    }
+}

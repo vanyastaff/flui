@@ -89,7 +89,7 @@ impl<T: Lerp + PartialEq + 'static> std::fmt::Debug for AnimatedLerpState<T> {
 impl<T: Lerp + PartialEq + 'static> StatefulView for AnimatedLerp<T> {
     type State = AnimatedLerpState<T>;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let progress = ImplicitMotion::new("AnimatedLerp", 1.0, 1.0, &self.motion);
         let stream = Rc::new(progress.stream());
         AnimatedLerpState {

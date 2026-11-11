@@ -400,7 +400,7 @@ struct RootState {
 impl StatefulView for Root {
     type State = RootState;
 
-    fn create_state(&self) -> RootState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> RootState {
         RootState {
             fixture: self.fixture.clone(),
         }

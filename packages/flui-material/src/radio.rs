@@ -255,7 +255,7 @@ impl std::fmt::Debug for RadioState {
 impl<T: PartialEq + Clone + 'static> StatefulView for Radio<T> {
     type State = RadioState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let initial = if self.is_selected() {
             WidgetStates::from(WidgetState::Selected)
         } else {
@@ -382,7 +382,7 @@ fn radio_default_fill_color(colors: &ColorScheme, states: WidgetStates) -> Color
     }
     if states.contains_state(WidgetState::Pressed)
         || states.contains_state(WidgetState::Hovered)
-        || states.contains_state(WidgetState::Focused)
+        || states.contains_state(WidgetState::FocusVisible)
     {
         return colors.on_surface;
     }
@@ -400,7 +400,7 @@ fn radio_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> Op
         if states.contains_state(WidgetState::Hovered) {
             return Some(colors.primary.with_opacity(StateLayerAlpha::M3.hovered));
         }
-        if states.contains_state(WidgetState::Focused) {
+        if states.contains_state(WidgetState::FocusVisible) {
             return Some(colors.primary.with_opacity(StateLayerAlpha::M3.focused));
         }
         return None;
@@ -411,7 +411,7 @@ fn radio_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> Op
     if states.contains_state(WidgetState::Hovered) {
         return Some(colors.on_surface.with_opacity(StateLayerAlpha::M3.hovered));
     }
-    if states.contains_state(WidgetState::Focused) {
+    if states.contains_state(WidgetState::FocusVisible) {
         return Some(colors.on_surface.with_opacity(StateLayerAlpha::M3.focused));
     }
     None

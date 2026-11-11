@@ -325,7 +325,7 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
     fn build_into_views(
         &mut self,
         _element_owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>> {
+    ) -> crate::view::ChildViews {
         // E3 (atomic box→arena swap): the root's single child is now a
         // slab-resident node. Return the child view; the slab
         // id-reconciler in `BuildOwner::build_scope` creates / updates the
@@ -339,7 +339,7 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         // returned child is always the one to reconcile; clear the flag now
         // that it has been handed off.
         self.needs_build = false;
-        vec![dyn_clone::clone_box(&self.view.child as &dyn View)]
+        crate::view::ChildViews::copy_of(&self.view.child)
     }
 
     fn pipeline_owner(&self) -> Option<PipelineCell> {

@@ -106,7 +106,7 @@ struct DeskState {
 impl StatefulView for Desk {
     type State = DeskState;
 
-    fn create_state(&self) -> DeskState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> DeskState {
         let handle = OverlayHandle::new();
         let shared = Rc::clone(&self.shared);
         let entry = OverlayEntry::new(move |_ctx| {
@@ -148,7 +148,7 @@ struct DeskContentState {
 impl StatefulView for DeskContent {
     type State = DeskContentState;
 
-    fn create_state(&self) -> DeskContentState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> DeskContentState {
         DeskContentState {
             board: self.shared.board.clone(),
         }
@@ -1321,7 +1321,7 @@ impl View for InsetDesk {
 impl StatefulView for InsetDesk {
     type State = DeskState;
 
-    fn create_state(&self) -> DeskState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> DeskState {
         let handle = OverlayHandle::new();
         let anchor = self.anchor;
         let entry = OverlayEntry::new(move |_ctx| {

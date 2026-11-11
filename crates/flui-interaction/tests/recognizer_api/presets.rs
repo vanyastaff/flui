@@ -185,6 +185,45 @@ fn behavior_values_resolve_os_then_preset_then_override() {
     );
 }
 
+/// The provider a recognizer builder starts from is the neutral preset for
+/// every pointer kind: equal to the provider authored from
+/// `GestureSettings::default()`, and read as that value.
+fn the_default_provider_is_the_neutral_preset_for_every_kind() {
+    let default = GestureSettingsProvider::default();
+    let authored = GestureSettingsProvider::from(GestureSettings::default());
+    assert_eq!(default, authored);
+    assert_eq!(authored, default);
+    assert_ne!(
+        default,
+        GestureSettingsProvider::from(GestureSettings::preset(
+            TargetPlatform::Android,
+            PointerKind::Mouse
+        )),
+    );
+    for kind in [
+        PointerKind::Mouse,
+        PointerKind::Touch,
+        PEN,
+        PointerKind::Trackpad,
+        PointerKind::Virtual,
+        PointerKind::Unknown,
+    ] {
+        assert_eq!(default.snapshot_for(kind), GestureSettings::default());
+        assert_eq!(
+            default.min_target_for(kind),
+            authored.min_target_for(kind),
+            "{kind:?}"
+        );
+    }
+    // An override over it still reads the authored values.
+    let wide = GestureSettings::preset(TargetPlatform::Android, PointerKind::Touch);
+    let overridden = default.overridden_by(wide.clone());
+    assert_eq!(
+        overridden.snapshot_for(PointerKind::Touch).touch_slop(),
+        wide.touch_slop()
+    );
+}
+
 #[test]
 fn gesture_presets_contract() {
     let cases: &[(&str, fn())] = &[
@@ -192,6 +231,10 @@ fn gesture_presets_contract() {
         (
             "accessibility_timing_floors_hold_under_overrides",
             accessibility_timing_floors_hold_under_overrides,
+        ),
+        (
+            "the_default_provider_is_the_neutral_preset_for_every_kind",
+            the_default_provider_is_the_neutral_preset_for_every_kind,
         ),
         (
             "behavior_values_resolve_os_then_preset_then_override",

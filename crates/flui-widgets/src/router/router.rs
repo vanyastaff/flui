@@ -252,13 +252,21 @@ impl<R: Routable> View for Router<R> {
 impl<R: Routable> StatefulView for Router<R> {
     type State = RouterState<R>;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        RouterState::new(self)
+    }
+}
+
+impl<R: Routable> RouterState<R> {
+    /// The state of `router`: its shared stack, observer and a copy of its
+    /// initial routes.
+    fn new(router: &Router<R>) -> Self {
         let shared = Rc::new(RouterShared {
             navigator: Terminal::new(NavigatorHandle::addressed(type_name::<R>())),
             stack: RefCell::new(Vec::new()),
-            page: Terminal::new(Rc::new(RefCell::new(Rc::clone(&self.page)))),
-            transitions: Terminal::new(Rc::new(RefCell::new(self.transitions.clone()))),
-            transition_duration: Cell::new(self.transition_duration),
+            page: Terminal::new(Rc::new(RefCell::new(Rc::clone(&router.page)))),
+            transitions: Terminal::new(Rc::new(RefCell::new(router.transitions.clone()))),
+            transition_duration: Cell::new(router.transition_duration),
             mounted: Cell::new(false),
             announcer: StackAnnouncer::default(),
         });
@@ -268,7 +276,7 @@ impl<R: Routable> StatefulView for Router<R> {
         RouterState {
             shared: Terminal::new(shared),
             observer: Terminal::new(observer),
-            initial: clone_routes(self.initial.iter()),
+            initial: clone_routes(router.initial.iter()),
         }
     }
 }
@@ -712,7 +720,7 @@ mod seed_tests {
             };
             let mut router = Router::new(value(0), |_, _| crate::Text::new("page").boxed());
             router.initial.extend([value(1), value(2)]);
-            let mut state = router.create_state();
+            let mut state = RouterState::new(&router);
             drop(router);
             RouteId::leave_process_identities(1);
             armed.store(true, Ordering::SeqCst);
@@ -731,6 +739,79 @@ mod seed_tests {
             assert_eq!(state.shared.stack.borrow().len(), 1, "the seeded page stays committed");
             assert_eq!(state.shared.navigator.route_ids().len(), 1);
             drop(state);
+        }
+    }
+
+    /// A route whose copy fails for the second route of a stack, and counts
+    /// the destruction of the copies made before it.
+    struct CloneFails {
+        second: bool,
+        copied: bool,
+        copies_dropped: Arc<AtomicUsize>,
+    }
+
+    impl Clone for CloneFails {
+        fn clone(&self) -> Self {
+            assert!(!self.second, "second route clone failure");
+            Self {
+                second: false,
+                copied: true,
+                copies_dropped: Arc::clone(&self.copies_dropped),
+            }
+        }
+    }
+
+    impl Drop for CloneFails {
+        fn drop(&mut self) {
+            if self.copied {
+                self.copies_dropped.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    impl PartialEq for CloneFails {
+        fn eq(&self, other: &Self) -> bool {
+            self.second == other.second
+        }
+    }
+
+    impl Routable for CloneFails {
+        fn to_path(&self) -> RoutePath {
+            RoutePath::root()
+        }
+
+        fn from_path(path: &RoutePath) -> Result<Self, RouteParseError> {
+            Err(RouteParseError::NoMatch { path: path.clone() })
+        }
+    }
+
+    child_test! {
+        /// A copy of the initial stack that fails while the state is made
+        /// destroys the copies made before it (ADR-0281), and the router
+        /// keeps its own stack.
+        fn state_construction_destroys_the_copies_before_a_failing_clone() {
+            let copies_dropped = Arc::new(AtomicUsize::new(0));
+            let route = |second| CloneFails {
+                second,
+                copied: false,
+                copies_dropped: Arc::clone(&copies_dropped),
+            };
+            let mut router = Router::new(route(false), |_, _| crate::Text::new("page").boxed());
+            router.initial.push(route(true));
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                drop(RouterState::new(&router));
+            }))
+            .expect_err("the second route's copy fails");
+            assert_eq!(
+                flui_foundation::panic::payload_text(failure.as_ref()),
+                Some("second route clone failure")
+            );
+            assert_eq!(
+                copies_dropped.load(Ordering::SeqCst),
+                1,
+                "the copy made before the failing clone is destroyed by its unwind"
+            );
+            assert_eq!(router.initial.len(), 2, "the router keeps its own stack");
         }
     }
 }

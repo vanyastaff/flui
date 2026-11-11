@@ -297,8 +297,8 @@ impl ChangeNotifier {
     ///   One panicking listener does NOT abort the rest.
     ///   The first failure resumes after the healthy tail and retirement.
     ///
-    /// Listeners fire in registration order (`ListenerId` ascending); the backing `HashMap` does not preserve
-    /// insertion order, so the snapshot is sorted by id before firing.
+    /// Listeners fire in registration order (`ListenerId` ascending), the order the channel's
+    /// list keeps them in.
     ///
     /// Post-snapshot *additions* are NOT fired in the current notify cycle;
     /// only listeners present at snapshot time and still
@@ -404,7 +404,7 @@ impl ChangeNotifier {
         if self.check_disposed() {
             return self.inner.mint_id();
         }
-        self.inner.add_unchecked(Rc::new(move |&()| listener()))
+        self.inner.add_plain_unchecked(listener)
     }
 
     /// The channel's own registration of a relay, whose id the channel's

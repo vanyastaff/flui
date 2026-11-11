@@ -3,7 +3,8 @@
 use crate::motion_trace::AnimatedValue;
 use flui_animation::simulation::{
     BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
-    SimulationBounds, SimulationError, SimulationParameter, SpringDescription, Tolerance,
+    SimulationBounds, SimulationError, SimulationParameter, SpeedLimit, SpringDescription,
+    Tolerance,
 };
 use flui_painting::styling::Color;
 
@@ -34,12 +35,12 @@ fn weak_drag_preserves_arrival_time() {
 
 fn weak_drag_with_a_subnormal_tolerance_reaches_finite_rest() {
     let distance = f64::from_bits(1);
-    for velocity_limit in [distance, f64::INFINITY] {
+    for speed in [SpeedLimit::AtMost(distance), SpeedLimit::Derived] {
         let simulation = FrictionSimulation::try_new(
             1.0_f64.next_down(),
             0.0,
             1.0,
-            Tolerance::try_new(distance, velocity_limit).expect("positive tolerance"),
+            Tolerance::try_new(distance, speed).expect("positive tolerance"),
         )
         .expect("finite glide endpoint");
         // Independent bound: drag^t < exp(-1000) at 1e19 seconds, so both
@@ -119,7 +120,7 @@ fn rests_when_the_remaining_glide_is_within_distance() {
         drag,
         0.0,
         8000.0,
-        Tolerance::try_new(0.5, f64::INFINITY).expect("tolerance"),
+        Tolerance::try_new(0.5, SpeedLimit::Derived).expect("tolerance"),
     )
     .expect("friction");
     // Reference: 8000·dᵗ/|ln d| = 0.5 at t = 4.48741315404835 s.
@@ -319,15 +320,15 @@ fn bouncing_simulation_hands_friction_to_spring_at_the_edge() {
 // --- tolerance ----------------------------------------------------------------
 
 fn valid_tolerances() {
-    assert!(Tolerance::try_new(1e-3, 1e-3).is_ok());
-    assert!(Tolerance::try_new(0.5, f64::INFINITY).is_ok());
+    assert!(Tolerance::try_new(1e-3, SpeedLimit::AtMost(1e-3)).is_ok());
+    assert!(Tolerance::try_new(0.5, SpeedLimit::Derived).is_ok());
     assert_eq!(
         Tolerance::for_device_pixel_ratio(1.0),
-        Tolerance::try_new(0.5, f64::INFINITY)
+        Tolerance::try_new(0.5, SpeedLimit::Derived)
     );
     assert_eq!(
         Tolerance::for_device_pixel_ratio(4.0),
-        Tolerance::try_new(0.125, f64::INFINITY)
+        Tolerance::try_new(0.125, SpeedLimit::Derived)
     );
 }
 fn refused_tolerances() {
@@ -339,12 +340,25 @@ fn refused_tolerances() {
         (1.0, f64::NAN),
         (1.0, 0.0),
         (1.0, -1.0),
+        // No sentinel: an unbounded limit is not a request to derive one.
+        (1.0, f64::INFINITY),
     ] {
         assert!(
-            Tolerance::try_new(distance, velocity).is_err(),
+            Tolerance::try_new(distance, SpeedLimit::AtMost(velocity)).is_err(),
             "({distance}, {velocity})"
         );
     }
+    assert!(
+        Tolerance::try_new(f64::NAN, SpeedLimit::Derived).is_err(),
+        "a derived limit does not excuse a bad distance"
+    );
+    assert_eq!(
+        Tolerance::try_new(1.0, SpeedLimit::AtMost(f64::INFINITY)),
+        Err(SimulationError::NonFinite {
+            parameter: SimulationParameter::SpeedLimit
+        }),
+        "an infinite fixed limit is refused by name"
+    );
     for ratio in [f64::NAN, 0.0, -1.0, f64::INFINITY, 1e-310] {
         match Tolerance::for_device_pixel_ratio(ratio) {
             Err(SimulationError::OutOfRange { parameter, .. }) if ratio.is_finite() => {

@@ -4,6 +4,7 @@ use super::UiRuntime;
 use super::presentation_lifecycle::HostLifecycle;
 use crate::epoch::FrameCommitState;
 use crate::presentation::PresentationState;
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{InputSequenceId, PresentationId};
 use flui_interaction::{InputSurface, PointerEvent};
 use flui_platform::keyboard::KeyState;
@@ -91,41 +92,6 @@ pub(super) enum InputOrigin {
     Platform,
     /// The development agent's `input.inject` or `input.release`.
     Agent,
-}
-
-/// Keep the earliest input-phase panic when cleanup or wake work also
-/// unwinds. Secondary panic payloads are discarded under containment
-/// (ADR-0281 §2), so a destructor that panics does not replace the original
-/// failure.
-pub(super) fn preserve_first_input_panic(
-    first: &mut Option<Box<dyn std::any::Any + Send>>,
-    candidate: Option<Box<dyn std::any::Any + Send>>,
-    phase: &'static str,
-) {
-    let Some(candidate) = candidate else {
-        return;
-    };
-    if first.is_none() {
-        *first = Some(candidate);
-    } else {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a tracing subscriber's panic must not replace the first failure"
-        )]
-        let telemetry_panic = catch_unwind(AssertUnwindSafe(|| {
-            tracing::error!(
-                phase,
-                "input phase panicked after an earlier phase; only the first panic is resumed"
-            );
-        }))
-        .err();
-        // The tracing subscriber is user code; its panic is discarded like
-        // the secondary payload, and the first failure stays.
-        if let Some(payload) = telemetry_panic {
-            flui_foundation::panic::discard_payload(payload);
-        }
-        flui_foundation::panic::discard_payload(candidate);
-    }
 }
 
 /// Whether the UI runtime's input entry point must drop `input` outright,
@@ -284,23 +250,17 @@ impl UiRuntime {
     /// The redraw flags are set before the wake runs, so even a panicking wake
     /// leaves durable demand behind. When both phases panic, the dispatch
     /// payload remains the first failure and the wake payload is discarded by
-    /// [`preserve_first_input_panic`].
+    /// [`FirstPanic`].
     pub(super) fn finish_addressed_input_dispatch(
         &self,
         presentation: &PresentationState,
-        dispatch: Result<(), Box<dyn std::any::Any + Send>>,
+        mut dispatch: FirstPanic,
     ) {
-        let mut first_panic = dispatch.err();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the redraw wake runs contained so the dispatch failure is kept"
-        )]
-        let wake_panic = catch_unwind(AssertUnwindSafe(|| {
+        // The redraw wake runs contained so the dispatch failure is kept.
+        dispatch.contain(|| {
             self.request_redraw_for(presentation);
-        }))
-        .err();
-        preserve_first_input_panic(&mut first_panic, wake_panic, "redraw wake");
-        if let Some(payload) = first_panic {
+        });
+        if let Some(payload) = dispatch.into_payload() {
             resume_unwind(payload);
         }
     }
@@ -511,35 +471,37 @@ impl UiRuntime {
         // sends this presentation is not a second contact ahead of this one,
         // and is dropped. The commit's failure is the first, raised once the
         // press was dispatched.
-        let committed = {
+        let mut committed = FirstPanic::new();
+        {
             let _commit = PressCommit::begin(&self.press_commit, target_id);
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: completing a composition runs contained before the press dispatches"
-            )]
-            catch_unwind(AssertUnwindSafe(|| {
+            // Completing a composition runs contained before the press dispatches.
+            committed.contain(|| {
                 presentation.text_input().complete_composition();
-            }))
-            .err()
-        };
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: input routing runs contained so the press commit is released"
-        )]
-        let routed = catch_unwind(AssertUnwindSafe(|| {
+            });
+        }
+        // Input routing runs contained so the press commit is released.
+        let mut routing_failure = FirstPanic::new();
+        let routed = routing_failure.contain(|| {
             if self.input_dropped_for(presentation, &input) {
                 Applied::default()
             } else {
                 self.journal_and_route(target, presentation, input, recording, origin)
             }
-        }));
-        match (committed, routed) {
-            (None, Ok(applied)) => applied,
-            (None, Err(failure)) => resume_unwind(failure),
-            (Some(failure), routed) => {
-                let mut first = Some(failure);
-                preserve_first_input_panic(&mut first, routed.err(), "press after the commit");
-                resume_unwind(first.expect("BUG: the commit's failure stays first"))
+        });
+        match (committed.is_held(), routed) {
+            (false, Some(applied)) => applied,
+            (false, None) => resume_unwind(
+                routing_failure
+                    .into_payload()
+                    .expect("BUG: a failed routing holds its failure"),
+            ),
+            (true, _) => {
+                committed.absorb(routing_failure);
+                resume_unwind(
+                    committed
+                        .into_payload()
+                        .expect("BUG: the commit's failure stays first"),
+                )
             }
         }
     }
@@ -624,9 +586,11 @@ impl UiRuntime {
                     };
                 }
                 let mut sequence = None;
-                let dispatch =
-                    Self::dispatch_pointer_event_entered(presentation, surface, &pointer_event)
-                        .map(|dispatched| sequence = dispatched);
+                let mut dispatch = FirstPanic::new();
+                match Self::dispatch_pointer_event_entered(presentation, surface, &pointer_event) {
+                    Ok(dispatched) => sequence = dispatched,
+                    Err(payload) => dispatch.record(payload),
+                }
                 self.finish_addressed_input_dispatch(presentation, dispatch);
                 Applied {
                     sequence,
@@ -655,12 +619,11 @@ impl UiRuntime {
                     return applied;
                 }
                 let mut sequence = None;
-                let mut first_panic = None;
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: the pointer frame runs contained so deferred work still runs"
-                )]
-                let framed = catch_unwind(AssertUnwindSafe(|| {
+                let mut first_panic = FirstPanic::new();
+                // The pointer frame runs contained so deferred work still runs; the
+                // events' own failures are recorded into `first_panic` as they come.
+                let mut frame_failure = FirstPanic::new();
+                frame_failure.contain(|| {
                     presentation.gestures().pointer_frame(|| {
                         for event in frame.events() {
                             match Self::route_pointer_event_entered(
@@ -670,28 +633,17 @@ impl UiRuntime {
                                 false,
                             ) {
                                 Ok(dispatched) => sequence = sequence.or(dispatched),
-                                Err(payload) => preserve_first_input_panic(
-                                    &mut first_panic,
-                                    Some(payload),
-                                    "pointer frame event",
-                                ),
+                                Err(payload) => first_panic.record(payload),
                             }
                         }
                     });
-                }))
-                .err();
-                preserve_first_input_panic(&mut first_panic, framed, "pointer frame end");
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: deferred arena resolutions run contained after the pointer frame"
-                )]
-                let deferred = catch_unwind(AssertUnwindSafe(|| {
+                });
+                first_panic.absorb(frame_failure);
+                // Deferred arena resolutions run contained after the pointer frame.
+                first_panic.contain(|| {
                     presentation.gestures().drain_deferred_arena_resolutions();
-                }))
-                .err();
-                preserve_first_input_panic(&mut first_panic, deferred, "deferred arena resolution");
-                let dispatch = first_panic.map_or(Ok(()), Err);
-                self.finish_addressed_input_dispatch(presentation, dispatch);
+                });
+                self.finish_addressed_input_dispatch(presentation, first_panic);
                 Applied {
                     sequence,
                     ..Applied::default()
@@ -730,7 +682,7 @@ impl UiRuntime {
                 );
                 let clock = presentation.clock();
                 clock.stamp_input_epoch(clock.now());
-                let mut hit_panic = None;
+                let mut hit_panic = FirstPanic::new();
                 let dispatch = Self::dispatch_after_pending_motion(presentation, || {
                     self.drag
                         .deliver(presentation.id(), drag_drop_event, &mut |position, kind| {
@@ -744,11 +696,9 @@ impl UiRuntime {
                                 0,
                             ) {
                                 ViewHitTest::Answered { panic } => {
-                                    preserve_first_input_panic(
-                                        &mut hit_panic,
-                                        panic,
-                                        "drag-and-drop hit test",
-                                    );
+                                    if let Some(payload) = panic {
+                                        hit_panic.record(payload);
+                                    }
                                     Some(result.path().to_vec())
                                 }
                                 ViewHitTest::TreeBusy => None,
@@ -756,10 +706,8 @@ impl UiRuntime {
                         });
                 });
                 // The hit test ran before the receivers it found were told.
-                let mut first = hit_panic;
-                preserve_first_input_panic(&mut first, dispatch.err(), "drag-and-drop delivery");
-                let dispatch = first.map_or(Ok(()), Err);
-                self.finish_addressed_input_dispatch(presentation, dispatch);
+                hit_panic.absorb(dispatch);
+                self.finish_addressed_input_dispatch(presentation, hit_panic);
                 Applied::default()
             }
             PlatformInput::Capabilities(capabilities) => {
@@ -776,31 +724,19 @@ impl UiRuntime {
     fn dispatch_after_pending_motion(
         presentation: &PresentationState,
         dispatch: impl FnOnce(),
-    ) -> Result<(), Box<dyn std::any::Any + Send>> {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: pending input flushes contained so dispatch still runs"
-        )]
-        let mut first = catch_unwind(AssertUnwindSafe(|| {
+    ) -> FirstPanic {
+        // Pending input flushes contained so dispatch still runs.
+        let mut first = FirstPanic::new();
+        first.contain(|| {
             presentation.gestures().flush_pending_input();
-        }))
-        .err();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: deferred arena resolutions run contained so dispatch still runs"
-        )]
-        let resolved = catch_unwind(AssertUnwindSafe(|| {
+        });
+        // Deferred arena resolutions run contained so dispatch still runs.
+        first.contain(|| {
             presentation.gestures().drain_deferred_arena_resolutions();
-        }))
-        .err();
-        preserve_first_input_panic(&mut first, resolved, "input motion resolution");
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the dispatch runs contained so the first input panic is kept"
-        )]
-        let dispatched = catch_unwind(AssertUnwindSafe(dispatch)).err();
-        preserve_first_input_panic(&mut first, dispatched, "input after measured motion");
-        first.map_or(Ok(()), Err)
+        });
+        // The dispatch runs contained so the first input panic is kept.
+        first.contain(dispatch);
+        first
     }
 
     /// Dispatch `pointer_event` on `surface` of `presentation`'s window;
@@ -831,24 +767,20 @@ impl UiRuntime {
             .unwrap_or(flui_interaction::events::PointerKind::Unknown);
         // A press decides the input modality before anything it reaches can
         // move focus: focus a click moves is not shown.
-        let modality_panic = pointer_pressed(pointer_event)
-            .then(|| {
-                #[expect(clippy::disallowed_methods, reason = "ADR-0287: a focus manager's note runs contained so the event still routes")]
-                catch_unwind(AssertUnwindSafe(|| {
-                    presentation.focus_manager().note_pointer_input();
-                }))
-                .err()
-            })
-            .flatten();
+        let mut modality_panic = FirstPanic::new();
+        if pointer_pressed(pointer_event) {
+            // A focus manager's note runs contained so the event still routes.
+            modality_panic.contain(|| {
+                presentation.focus_manager().note_pointer_input();
+            });
+        }
         let mut sequence = None;
         // A render object that panicked in the hit test is a miss there; its
         // panic is reported once the event reached the rest of the path.
         let mut hit_panic = None;
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: event routing runs contained so the hit panic is reported after"
-        )]
-        let routing_panic = catch_unwind(AssertUnwindSafe(|| {
+        // Event routing runs contained so the hit panic is reported after.
+        let mut routing_panic = FirstPanic::new();
+        routing_panic.contain(|| {
             let outcome =
                 presentation
                     .gestures()
@@ -874,46 +806,35 @@ impl UiRuntime {
             if let Some(sequence) = sequence {
                 tracing::trace!(sequence = sequence.get(), "pointer input dispatched");
             }
-        }))
-        .err();
-        let deferred_panic = if drain_deferred {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: deferred arena resolutions run contained after the frame"
-            )]
-            catch_unwind(AssertUnwindSafe(|| {
+        });
+        let mut deferred_panic = FirstPanic::new();
+        if drain_deferred {
+            // Deferred arena resolutions run contained after the frame.
+            deferred_panic.contain(|| {
                 presentation.gestures().drain_deferred_arena_resolutions();
-            }))
-            .err()
-        } else {
-            None
-        };
+            });
+        }
 
         // The back button (X1) is also the Back key, after its pointer event
         // reached the widgets under it.
-        let back_panic = back_button_change(pointer_event).and_then(|(state, time)| {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: the Back key's handlers run contained after the pointer event"
-            )]
-            catch_unwind(AssertUnwindSafe(|| {
+        let mut back_panic = FirstPanic::new();
+        if let Some((state, time)) = back_button_change(pointer_event) {
+            // The Back key's handlers run contained after the pointer event.
+            back_panic.contain(|| {
                 let _ = presentation
                     .focus_manager()
                     .dispatch_pointer_back(state, time);
-            }))
-            .err()
-        });
+            });
+        }
 
         let mut first_panic = modality_panic;
-        preserve_first_input_panic(&mut first_panic, hit_panic, "pointer hit test");
-        preserve_first_input_panic(&mut first_panic, routing_panic, "pointer routing");
-        preserve_first_input_panic(
-            &mut first_panic,
-            deferred_panic,
-            "deferred arena resolution",
-        );
-        preserve_first_input_panic(&mut first_panic, back_panic, "pointer back key");
-        match first_panic {
+        if let Some(payload) = hit_panic {
+            first_panic.record(payload);
+        }
+        first_panic.absorb(routing_panic);
+        first_panic.absorb(deferred_panic);
+        first_panic.absorb(back_panic);
+        match first_panic.into_payload() {
             Some(payload) => Err(payload),
             None => Ok(sequence),
         }

@@ -588,6 +588,7 @@ fn every_reply_is_attempted_and_the_first_panic_is_returned() {
         assert_ne!(item, 1, "the first receiver panics");
         assert_ne!(item, 2, "and so does the second");
     })
+    .into_payload()
     .expect("a panic was returned");
     assert_eq!(seen, [1, 2, 3], "every reply was attempted");
     let message = catch_unwind(AssertUnwindSafe(|| std::panic::resume_unwind(panicked)))

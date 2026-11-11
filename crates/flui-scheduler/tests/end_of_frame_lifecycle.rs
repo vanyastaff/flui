@@ -10,7 +10,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 
 use flui_scheduler::UpdateScheduler;
 
@@ -47,39 +47,22 @@ fn counting_wake_hook(scheduler: &UpdateScheduler) -> Arc<AtomicUsize> {
     edges
 }
 
-/// A raw `impl Wake` that registers a FRESH `end_of_frame()` from inside
-/// `wake()` and keeps it alive, so the registration is observable after the
-/// waking call returns.
-struct RegisteringWaker {
-    scheduler: crate::owner_callbacks::OwnerProbe,
-    registered: Mutex<Vec<FrameCompletionFuture>>,
-}
-
-impl RegisteringWaker {
-    fn new(scheduler: &UpdateScheduler) -> Arc<Self> {
-        Arc::new(Self {
-            scheduler: crate::owner_callbacks::owner_probe(scheduler),
-            registered: Mutex::new(Vec::new()),
-        })
-    }
-
-    fn registration_count(&self) -> usize {
-        self.registered.lock().expect("uncontended in a test").len()
-    }
-}
-
-impl Wake for RegisteringWaker {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        let fresh = self.scheduler.upgrade().expect("live owner").end_of_frame();
-        self.registered
-            .lock()
-            .expect("uncontended in a test")
-            .push(fresh);
-    }
+/// A waker that registers a FRESH `end_of_frame()` from inside `wake()` and
+/// keeps it alive in the returned list, so the registration is observable after
+/// the waking call returns.
+fn registering_waker(
+    scheduler: &UpdateScheduler,
+) -> (Waker, Arc<Mutex<Vec<FrameCompletionFuture>>>) {
+    let probe = crate::owner_callbacks::owner_probe(scheduler);
+    let registered = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&registered);
+    let waker = flui_foundation::testing::CountingWaker::calling(move || {
+        let fresh = probe.upgrade().expect("live owner").end_of_frame();
+        sink.lock().expect("uncontended in a test").push(fresh);
+    })
+    .shared()
+    .waker();
+    (waker, registered)
 }
 
 /// An idle registration IS the demand, and the frame it buys is the one it
@@ -141,10 +124,9 @@ fn an_idle_registration_demands_one_frame_and_resolves_with_its_timing() {
 fn a_registration_from_inside_an_aborted_frames_waker_demands_exactly_one_frame() {
     let scheduler = UpdateScheduler::new();
     let edges = counting_wake_hook(&scheduler);
-    let registrar = RegisteringWaker::new(&scheduler);
+    let (waker, registered) = registering_waker(&scheduler);
 
     let mut first = scheduler.end_of_frame();
-    let waker = Waker::from(Arc::clone(&registrar));
     assert!(
         Pin::new(&mut first)
             .poll(&mut Context::from_waker(&waker))
@@ -170,7 +152,7 @@ fn a_registration_from_inside_an_aborted_frames_waker_demands_exactly_one_frame(
     assert!(attempt.is_err(), "the frame must have aborted");
 
     assert_eq!(
-        registrar.registration_count(),
+        registered.lock().expect("uncontended in a test").len(),
         1,
         "an aborted frame still notifies its waiters -- it finished, badly"
     );

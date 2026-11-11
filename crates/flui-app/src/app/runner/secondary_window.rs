@@ -11,6 +11,12 @@ use std::{rc::Rc, sync::Arc};
     not(target_arch = "wasm32")
 ))]
 use crate::app::close_request::CloseRequestHandler;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+use flui_foundation::panic::FirstPanic;
 
 #[cfg(all(
     not(target_os = "android"),
@@ -550,78 +556,32 @@ pub(super) fn cancel_pending_secondary_windows() {
         PENDING_SECONDARY_WINDOW_OPENS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
     let completions =
         PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
-    let mut panic = None;
+    let mut panic = FirstPanic::new();
     for token in tokens {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a pending open's discard is contained; the first failure is kept"
-        )]
-        let error =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| discard_pending_open(token)))
-                .err();
-        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut panic,
-            error,
-            "pending open cancellation",
-        );
+        // A pending open's discard is contained; the first failure is kept.
+        panic.contain(|| discard_pending_open(token));
     }
     for completion in completions {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a cancelled open's window discard is contained; first failure kept"
-        )]
-        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // A cancelled open's window discard is contained; first failure kept.
+        panic.contain(|| {
             super::discard_window(completion.window.as_ref(), "a cancelled pending open");
-        }))
-        .err();
-        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut panic,
-            error,
-            "uninstalled window close",
-        );
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a cancelled reply's delivery is contained; the first failure kept"
-        )]
-        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        });
+        // A cancelled reply's delivery is contained; the first failure kept.
+        panic.contain(|| {
             if let Some(reply) = &completion.reply {
                 let _ = reply.deliver(Err(AppWindowError::Cancelled));
             }
-        }))
-        .err();
-        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut panic,
-            error,
-            "cancelled window reply",
-        );
+        });
         // Settle framework liveness before the envelope is destroyed (under
-        // containment, after a failure too: ADR-0281 §3).
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: reservation settling runs contained; the first failure is kept"
-        )]
-        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // containment, after a failure too: ADR-0281 §3). Reservation settling
+        // runs contained; the first failure is kept.
+        panic.contain(|| {
             completion.config.reservation.0.settle();
-        }))
-        .err();
-        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut panic,
-            error,
-            "cancelled window reservation",
-        );
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a cancelled completion's drop runs contained; first failure kept"
-        )]
-        let error =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(completion))).err();
-        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut panic,
-            error,
-            "cancelled window retirement",
-        );
+        });
+        // A cancelled completion's drop runs contained; first failure kept.
+        panic.contain(|| drop(completion));
     }
-    if let Some(payload) = panic {
+    if let Some(payload) = panic.into_payload() {
         std::panic::resume_unwind(payload);
     }
 }
@@ -681,28 +641,19 @@ pub(super) fn drain_pending_secondary_window_completions(
     let _guard = PollGuard;
     let pending =
         PENDING_SECONDARY_WINDOW_OPENS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
-    let mut first_panic = None;
+    let mut first_panic = FirstPanic::new();
     let mut retry_needed = false;
     for mut request in pending {
         if !secondary_install_admitted(&request.config.loop_identity)
             || request.config.reservation.0.failed()
         {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a refused open's discard is contained; the first failure is kept"
-            )]
-            let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // A refused open's discard is contained; the first failure is kept.
+            first_panic.contain(|| {
                 discard_pending_open(request);
-            }))
-            .err();
-            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first_panic,
-                error,
-                "failed pending window cleanup",
-            );
+            });
             continue;
         }
-        if recovery != flui_runtime::owner::RecoveryState::Healthy || first_panic.is_some() {
+        if recovery != flui_runtime::owner::RecoveryState::Healthy || first_panic.is_held() {
             retry_needed |= request.config.reservation.0.is_ready();
             PENDING_SECONDARY_WINDOW_OPENS.with(|queue| queue.borrow_mut().push(request));
             continue;
@@ -711,23 +662,21 @@ pub(super) fn drain_pending_secondary_window_completions(
             PENDING_SECONDARY_WINDOW_OPENS.with(|queue| queue.borrow_mut().push(request));
             continue;
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: polling a pending open is contained; the window is then failed"
-        )]
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Polling a pending open is contained; the window is then failed.
+        let result = first_panic.contain(|| {
             std::pin::Pin::new(&mut request.pending)
                 .poll(&mut std::task::Context::from_waker(&request.waker))
-        }));
+        });
         match result {
-            Ok(std::task::Poll::Pending)
+            Some(std::task::Poll::Pending)
                 if secondary_install_admitted(&request.config.loop_identity)
                     && !request.config.reservation.0.failed() =>
             {
                 PENDING_SECONDARY_WINDOW_OPENS.with(|queue| queue.borrow_mut().push(request));
             }
-            Ok(std::task::Poll::Pending) => {}
-            Ok(std::task::Poll::Ready(Ok(opened))) => match super::opened_window(opened) {
+            // `None`: the poll panicked, and `first_panic` holds it.
+            Some(std::task::Poll::Pending) | None => {}
+            Some(std::task::Poll::Ready(Ok(opened))) => match super::opened_window(opened) {
                 Ok(window) => {
                     request.routes.adopt(window.id());
                     PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
@@ -743,14 +692,9 @@ pub(super) fn drain_pending_secondary_window_completions(
                     tracing::error!(%error, "pending secondary window creation failed");
                 }
             },
-            Ok(std::task::Poll::Ready(Err(error))) => {
+            Some(std::task::Poll::Ready(Err(error))) => {
                 tracing::error!(%error, "pending secondary window creation failed");
             }
-            Err(payload) => crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first_panic,
-                Some(payload),
-                "pending window poll",
-            ),
         }
     }
     let completed =
@@ -758,7 +702,7 @@ pub(super) fn drain_pending_secondary_window_completions(
     for completion in completed {
         // Settling an accepted publication releases its reservation even during
         // recovery. Starting another installer or polling a future must wait.
-        if (recovery != flui_runtime::owner::RecoveryState::Healthy || first_panic.is_some())
+        if (recovery != flui_runtime::owner::RecoveryState::Healthy || first_panic.is_held())
             && !matches!(completion.stage, CompletionStage::Publishing(_))
         {
             retry_needed = true;
@@ -768,68 +712,45 @@ pub(super) fn drain_pending_secondary_window_completions(
         let window = Rc::clone(&completion.window);
         let reply = completion.reply.clone();
         let detail = completion.config.frame_failure_detail;
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a pending completion's panic is caught so its replies still go out"
-        )]
-        let result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| completion.advance()));
-        let failed = !matches!(&result, Ok(Ok(_)));
+        // A pending completion's panic is caught so its replies still go out.
+        let mut advance_failure = FirstPanic::new();
+        let result = advance_failure.contain(|| completion.advance());
+        let failed = !matches!(&result, Some(Ok(_)));
         let (reply_result, error) = match result {
-            Ok(Ok(address)) => (address.map(Ok), None),
-            Ok(Err(error)) => {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: a trace subscriber's panic must not hide the install error"
-                )]
-                let diagnostic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Some(Ok(address)) => (address.map(Ok), FirstPanic::new()),
+            Some(Err(error)) => {
+                // A trace subscriber's panic must not hide the install error.
+                let mut diagnostic = FirstPanic::new();
+                diagnostic.contain(|| {
                     tracing::error!(%error, "installing resolved secondary window failed");
-                }))
-                .err();
+                });
                 (Some(Err(error)), diagnostic)
             }
-            Err(payload) => {
-                let message = flui_runtime::frame_failure::panic_text(detail, payload.as_ref());
+            None => {
+                let message = flui_runtime::frame_failure::panic_text(
+                    detail,
+                    advance_failure
+                        .held()
+                        .expect("BUG: a failed advance holds its panic"),
+                );
                 (
                     Some(Err(AppWindowError::InstallerPanicked { message })),
-                    Some(payload),
+                    advance_failure,
                 )
             }
         };
-        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first_panic,
-            error,
-            "pending window installation",
-        );
+        first_panic.absorb(error);
         if failed {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a failed install's window discard is contained; first failure kept"
-            )]
-            let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // A failed install's window discard is contained; first failure kept.
+            first_panic.contain(|| {
                 super::discard_window(window.as_ref(), "a failed installation");
-            }))
-            .err();
-            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first_panic,
-                error,
-                "failed window close",
-            );
+            });
         }
         if let (Some(reply), Some(result)) = (reply, reply_result) {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a reply's delivery runs contained; the first failure is kept"
-            )]
-            let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // A reply's delivery runs contained; the first failure is kept.
+            first_panic.contain(|| {
                 let _ = reply.deliver(result);
-            }))
-            .err();
-            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first_panic,
-                error,
-                "window request reply",
-            );
+            });
         }
     }
     if retry_needed {
@@ -837,19 +758,11 @@ pub(super) fn drain_pending_secondary_window_completions(
         // independently of the failure that deferred their next healthy turn.
         let wake = APP_RUNTIME.with(|slot| slot.borrow().owner_turn_wake.clone());
         if let Some(wake) = wake {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: the owner-turn wake runs contained; the first failure is kept"
-            )]
-            let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| wake())).err();
-            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first_panic,
-                error,
-                "pending window continuation",
-            );
+            // The owner-turn wake runs contained; the first failure is kept.
+            first_panic.contain(|| wake());
         }
     }
-    if let Some(payload) = first_panic {
+    if let Some(payload) = first_panic.into_payload() {
         std::panic::resume_unwind(payload);
     }
 }
@@ -1557,21 +1470,13 @@ mod tests {
     }
 
     fn shutdown_settles_all_requests_when_a_receiver_waker_panics() {
+        use flui_foundation::testing::panicking_waker;
         use std::{
             future::Future,
             pin::Pin,
             sync::atomic::AtomicUsize,
-            task::{Context, Poll, Wake, Waker},
+            task::{Context, Poll},
         };
-        struct PanickingWake;
-        impl Wake for PanickingWake {
-            fn wake(self: Arc<Self>) {
-                panic!("cancelled receiver wake");
-            }
-            fn wake_by_ref(self: &Arc<Self>) {
-                panic!("cancelled receiver wake");
-            }
-        }
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         Box::new(HeadlessPlatform::new())
             .run(crate::app::runner::app_handler(|owner| {
@@ -1616,7 +1521,7 @@ mod tests {
                         });
                     });
                 }
-                let waker = Waker::from(Arc::new(PanickingWake));
+                let waker = panicking_waker("cancelled receiver wake");
                 assert!(matches!(
                     Pin::new(&mut requests[0]).poll(&mut Context::from_waker(&waker)),
                     Poll::Pending
@@ -1653,17 +1558,12 @@ mod tests {
     }
 
     fn receipt_wake_failure_retries_the_accepted_installation_tail() {
+        use flui_foundation::testing::panicking_waker;
         use std::{
             future::Future,
             pin::Pin,
-            task::{Context, Poll, Wake, Waker},
+            task::{Context, Poll},
         };
-        struct PanickingWake;
-        impl Wake for PanickingWake {
-            fn wake(self: Arc<Self>) {
-                panic!("installed receiver wake");
-            }
-        }
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         let platform = HeadlessPlatform::new();
         let turns = platform.owner_turns();
@@ -1716,7 +1616,7 @@ mod tests {
                     };
                     let (reply, mut request) = crate::app::WindowRequest::new();
                     if first {
-                        let waker = Waker::from(Arc::new(PanickingWake));
+                        let waker = panicking_waker("installed receiver wake");
                         assert!(matches!(
                             Pin::new(&mut request).poll(&mut Context::from_waker(&waker)),
                             Poll::Pending

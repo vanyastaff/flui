@@ -778,6 +778,8 @@ pub struct TextContext {
     lent: u64,
     pub(crate) font_cx: parley::FontContext,
     pub(crate) layout_cx: parley::LayoutContext<SpanBrush>,
+    /// A dropped layout the next shaping builds into, keeping its buffers.
+    pub(crate) spare_layout: Option<parley::Layout<SpanBrush>>,
 }
 
 impl TextContext {
@@ -794,6 +796,7 @@ impl TextContext {
                 source_cache: fonts.0.source_cache.clone(),
             },
             layout_cx: parley::LayoutContext::new(),
+            spare_layout: None,
         }
     }
 
@@ -814,6 +817,7 @@ impl TextContext {
     /// next use.
     pub fn reclaim(&mut self, level: MemoryPressureLevel) {
         self.layout_cx = parley::LayoutContext::new();
+        self.spare_layout = None;
         match level {
             MemoryPressureLevel::Moderate => self.font_cx.source_cache.prune(TRIM_MAX_AGE, false),
             _ => self.font_cx.source_cache.prune(0, true),

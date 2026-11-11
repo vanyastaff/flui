@@ -15,7 +15,6 @@ use crate::panic::RecoveryScope;
 use std::{
     any::Any,
     cell::{Cell, RefCell},
-    collections::HashMap,
     fmt,
     panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
@@ -25,6 +24,7 @@ use crate::notifier::ListenerCallback;
 use crate::panic::PanicRecovery;
 use crate::sequence::IdMint;
 use crate::sequence::ListenerId;
+use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A listener callback that borrows its argument for the duration of the call.
@@ -42,6 +42,9 @@ pub struct NotificationCallback<Arg>(CallbackKind<Arg>);
 enum CallbackKind<Arg> {
     User(ArgCallback<Arg>),
     Relay(RecoveryCallback<Arg>),
+    /// A listener that takes no argument, held as it was given: no adapter
+    /// is allocated to drop the argument.
+    Plain(crate::notifier::ListenerCallback),
 }
 
 type OwnedCallback<Arg> = Rc<NotificationCallback<Arg>>;
@@ -61,6 +64,7 @@ impl<Arg> NotificationCallback<Arg> {
         match &self.0 {
             CallbackKind::User(callback) => callback(arg),
             CallbackKind::Relay(callback) => callback(arg, recovery),
+            CallbackKind::Plain(callback) => callback(),
         }
     }
 }
@@ -72,15 +76,100 @@ impl<Arg> fmt::Debug for NotificationCallback<Arg> {
     }
 }
 
+/// The registrations of one channel, in registration order.
+///
+/// Identities are minted in ascending order, so the entries are sorted by
+/// the order they arrive in: a lookup is a binary search, a delivery walks
+/// them as they lie, and a channel with one listener holds it inline, with
+/// no table beside it. A withdrawn registration leaves its slot empty until
+/// the empty slots outnumber the live ones, so withdrawing every listener of
+/// a large channel one at a time is linear in all, not quadratic.
+struct Listeners<Arg> {
+    slots: SmallVec<[(ListenerId, Option<OwnedCallback<Arg>>); 1]>,
+    live: usize,
+}
+
+impl<Arg> Default for Listeners<Arg> {
+    fn default() -> Self {
+        Self {
+            slots: SmallVec::new(),
+            live: 0,
+        }
+    }
+}
+
+impl<Arg> Listeners<Arg> {
+    fn len(&self) -> usize {
+        self.live
+    }
+
+    fn is_empty(&self) -> bool {
+        self.live == 0
+    }
+
+    /// Registers `callback` under `id`, which is newer than every identity
+    /// this channel holds.
+    fn admit(&mut self, id: ListenerId, callback: OwnedCallback<Arg>) {
+        debug_assert!(
+            self.slots.last().is_none_or(|(last, _)| *last < id),
+            "listener ids are monotonic (see mint_id) — a fresh id is never \
+             older than a registration"
+        );
+        self.slots.push((id, Some(callback)));
+        self.live += 1;
+    }
+
+    fn slot(&self, id: ListenerId) -> Option<usize> {
+        self.slots.binary_search_by_key(&id, |(slot, _)| *slot).ok()
+    }
+
+    fn contains(&self, id: ListenerId) -> bool {
+        self.slot(id)
+            .is_some_and(|index| self.slots[index].1.is_some())
+    }
+
+    /// Withdraws the registration `id` names and hands its callback out, for
+    /// the caller to destroy outside the channel's borrow.
+    fn withdraw(&mut self, id: ListenerId) -> Option<OwnedCallback<Arg>> {
+        let index = self.slot(id)?;
+        let callback = self.slots[index].1.take()?;
+        self.live -= 1;
+        // Only empty slots are removed here, and an empty slot owns nothing:
+        // no destructor runs under the borrow.
+        if self.slots.len() - self.live > self.live {
+            self.slots.retain(|(_, callback)| callback.is_some());
+        }
+        Some(callback)
+    }
+
+    /// The live registrations, oldest first.
+    fn iter(&self) -> impl Iterator<Item = (ListenerId, &OwnedCallback<Arg>)> {
+        self.slots
+            .iter()
+            .filter_map(|(id, callback)| Some((*id, callback.as_ref()?)))
+    }
+
+    /// Every live registration, oldest first, leaving the channel empty.
+    fn into_callbacks(self) -> impl Iterator<Item = (ListenerId, OwnedCallback<Arg>)> {
+        self.slots
+            .into_iter()
+            .filter_map(|(id, callback)| Some((id, callback?)))
+    }
+}
+
 /// The physical shared owner, including retirement of the final listener set.
 struct ListenerStorage<Arg> {
-    entries: RefCell<HashMap<ListenerId, OwnedCallback<Arg>>>,
+    entries: RefCell<Listeners<Arg>>,
     delivery_depth: Cell<usize>,
     failed: AtomicBool,
     retired: RefCell<Vec<(ListenerId, OwnedCallback<Arg>)>>,
     /// Captures handed over by [`Notifier::retire_after_delivery`], retired
     /// after this round's own removed listeners.
     deferred: RefCell<Vec<Box<dyn Any>>>,
+    /// Listener identities: the owner-local mint whose refusal is sticky, so
+    /// a listener id is never issued twice.
+    next_id: IdMint<ListenerId>,
+    is_disposed: Cell<bool>,
 }
 
 impl<Arg> Drop for ListenerStorage<Arg> {
@@ -88,15 +177,15 @@ impl<Arg> Drop for ListenerStorage<Arg> {
         // Empty the field before any capture can unwind through its drop glue.
         // Final Rc ownership gives exclusive access without holding a borrow.
         let mut callbacks = std::mem::take(self.retired.get_mut());
-        callbacks.extend(std::mem::take(self.entries.get_mut()));
+        callbacks.extend(std::mem::take(self.entries.get_mut()).into_callbacks());
         let deferred = std::mem::take(self.deferred.get_mut());
         retire_callbacks(callbacks);
         drop(deferred);
     }
 }
 
-fn retire_listeners<Arg>(listeners: HashMap<ListenerId, OwnedCallback<Arg>>) {
-    retire_callbacks(listeners.into_iter().collect());
+fn retire_listeners<Arg>(listeners: Listeners<Arg>) {
+    retire_callbacks(listeners.into_callbacks().collect());
 }
 
 /// Drop callbacks in registration order. If one destructor panics, the rest
@@ -122,7 +211,7 @@ impl<Arg: 'static> SubscribedChannel for ListenerStorage<Arg> {
     /// delivery's retired list while a notify round is in progress, whose
     /// containment the round's tail provides (ADR-0287).
     fn detach_listener(&self, id: ListenerId) {
-        let callback = self.entries.borrow_mut().remove(&id);
+        let callback = self.entries.borrow_mut().withdraw(id);
         if let Some(callback) = callback {
             if self.delivery_depth.get() != 0 {
                 self.retired.borrow_mut().push((id, callback));
@@ -145,18 +234,12 @@ impl<Arg: 'static> SubscribedChannel for ListenerStorage<Arg> {
 /// while the thread is already unwinding aborts, as in std (ADR-0281).
 pub struct Notifier<Arg> {
     listeners: Rc<ListenerStorage<Arg>>,
-    /// Listener identities, shared across clones: the owner-local mint whose
-    /// refusal is sticky, so a listener id is never issued twice.
-    next_id: Rc<IdMint<ListenerId>>,
-    is_disposed: Rc<Cell<bool>>,
 }
 
 impl<Arg> Clone for Notifier<Arg> {
     fn clone(&self) -> Self {
         Self {
             listeners: Rc::clone(&self.listeners),
-            next_id: Rc::clone(&self.next_id),
-            is_disposed: Rc::clone(&self.is_disposed),
         }
     }
 }
@@ -182,14 +265,14 @@ impl<Arg> Notifier<Arg> {
     pub fn new() -> Self {
         Self {
             listeners: Rc::new(ListenerStorage {
-                entries: RefCell::new(HashMap::new()),
+                entries: RefCell::new(Listeners::default()),
                 delivery_depth: Cell::new(0),
                 failed: AtomicBool::new(false),
                 retired: RefCell::new(Vec::new()),
                 deferred: RefCell::new(Vec::new()),
+                next_id: IdMint::new(),
+                is_disposed: Cell::new(false),
             }),
-            next_id: Rc::new(IdMint::new()),
-            is_disposed: Rc::new(Cell::new(false)),
         }
     }
 
@@ -197,7 +280,8 @@ impl<Arg> Notifier<Arg> {
     /// use-after-dispose path can hand out an unregistered id without
     /// tripping this notifier's own (differently-worded) disposed check.
     pub(crate) fn mint_id(&self) -> ListenerId {
-        self.next_id
+        self.listeners
+            .next_id
             .next()
             .expect("BUG: listener identities exhausted")
     }
@@ -206,14 +290,14 @@ impl<Arg> Notifier<Arg> {
     #[must_use]
     #[inline]
     pub fn is_disposed(&self) -> bool {
-        self.is_disposed.get()
+        self.listeners.is_disposed.get()
     }
 
     /// Debug-panics if disposed; release degrades to `tracing::warn!` + no-op.
     /// Returns `true` if the caller should early-return (disposed in release).
     #[inline]
     fn check_disposed(&self) -> bool {
-        if self.is_disposed.get() {
+        if self.listeners.is_disposed.get() {
             #[cfg(debug_assertions)]
             panic!("Notifier used after dispose: once dispose() is called the channel is unusable");
             // Unreachable in debug (the panic above diverges); reached only in
@@ -242,7 +326,7 @@ impl<Arg> Notifier<Arg> {
     ///
     /// A removed-mid-notify listener is skipped for the rest of its round, as
     /// [`remove`](Self::remove) says; a subscription is no different. On a
-    /// disposed channel the subscription detaches quietly: the map is empty
+    /// disposed channel the subscription detaches quietly: the list is empty
     /// and the id it carries names nothing.
     ///
     /// The channel's value borrow does not follow the subscription: its
@@ -251,7 +335,11 @@ impl<Arg> Notifier<Arg> {
     where
         Arg: 'static,
     {
-        let id = self.add(Rc::new(move |_: &Arg| listener()));
+        let id = if self.check_disposed() {
+            self.mint_id()
+        } else {
+            self.add_plain_unchecked(listener)
+        };
         let channel: Rc<dyn SubscribedChannel> = self.listeners.clone();
         crate::notifier::Subscription::for_channel(Rc::downgrade(&channel), id)
     }
@@ -282,6 +370,15 @@ impl<Arg> Notifier<Arg> {
         self.admit_callback(NotificationCallback::user(listener))
     }
 
+    /// [`Self::add_unchecked`] for a listener that takes no argument: it is
+    /// registered as given, with no adapter around it.
+    pub(crate) fn add_plain_unchecked(
+        &self,
+        listener: crate::notifier::ListenerCallback,
+    ) -> ListenerId {
+        self.admit_callback(Rc::new(NotificationCallback(CallbackKind::Plain(listener))))
+    }
+
     /// Register a [`RecoveryCallback`] in the same ordered notification channel
     /// as [`add`](Self::add).
     pub fn add_with_recovery(&self, listener: RecoveryCallback<Arg>) -> ListenerId {
@@ -293,31 +390,23 @@ impl<Arg> Notifier<Arg> {
 
     fn admit_callback(&self, listener: OwnedCallback<Arg>) -> ListenerId {
         let id = self.mint_id();
-        let evicted = self.listeners.entries.borrow_mut().insert(id, listener);
-        debug_assert!(
-            evicted.is_none(),
-            "listener ids are monotonic (see mint_id) — a fresh id can never \
-             collide with a live registration"
-        );
+        self.listeners.entries.borrow_mut().admit(id, listener);
         id
     }
 
-    /// Runs `mutate` against the locked listener map and returns whatever it
-    /// extracts (a removed listener, or the whole displaced map on a clear),
+    /// Runs `mutate` against the locked listener list and returns whatever it
+    /// extracts (a removed listener, or the whole displaced list on a clear),
     /// only after this notifier's own lock has released.
     ///
     /// A removed/displaced [`ArgCallback`]'s `Drop` may run arbitrary user
     /// code: the last `Arc` clone of a listener closure reaching zero can
     /// destroy captured state whose own destructor calls back into this same
     /// notifier (e.g. another `remove`/`dispose`). `mutate` itself only
-    /// touches the map while the guard is held; its *return value* is not
+    /// touches the list while the guard is held; its *return value* is not
     /// dropped here — it is this function's tail expression, so the guard
     /// (a temporary scoped to this function body) releases before the
     /// caller ever receives, and can drop, the extracted value.
-    fn extract_locked<T>(
-        &self,
-        mutate: impl FnOnce(&mut HashMap<ListenerId, OwnedCallback<Arg>>) -> T,
-    ) -> T {
+    fn extract_locked<T>(&self, mutate: impl FnOnce(&mut Listeners<Arg>) -> T) -> T {
         mutate(&mut self.listeners.entries.borrow_mut())
     }
 
@@ -331,17 +420,17 @@ impl<Arg> Notifier<Arg> {
         if self.check_disposed() {
             return;
         }
-        self.retire_removed(id, self.extract_locked(|listeners| listeners.remove(&id)));
+        self.retire_removed(id, self.extract_locked(|listeners| listeners.withdraw(id)));
     }
 
     /// [`Self::remove`] without the disposed gate: always a silent no-op on a
-    /// disposed channel (whose listener map is already empty).
+    /// disposed channel (whose listener list is already empty).
     ///
     /// This is the flavour `ChangeNotifier::remove_listener` needs, so that
     /// teardown code can always detach without tripping a use-after-dispose
     /// check.
     pub fn remove_even_if_disposed(&self, id: ListenerId) {
-        self.retire_removed(id, self.extract_locked(|listeners| listeners.remove(&id)));
+        self.retire_removed(id, self.extract_locked(|listeners| listeners.withdraw(id)));
     }
 
     /// Withdraw a registration without destroying its callback: the caller
@@ -351,23 +440,21 @@ impl<Arg> Notifier<Arg> {
     /// drops the callback under its own scope instead.
     #[must_use]
     pub fn take_callback(&self, id: ListenerId) -> Option<OwnedCallback<Arg>> {
-        self.extract_locked(|listeners| listeners.remove(&id))
+        self.extract_locked(|listeners| listeners.withdraw(id))
     }
 
     #[doc(hidden)]
     pub fn take_all_callbacks(&self) -> Vec<OwnedCallback<Arg>> {
-        let mut callbacks: Vec<_> = self.extract_locked(std::mem::take).into_iter().collect();
-        callbacks.sort_unstable_by_key(|(id, _)| *id);
-        callbacks
-            .into_iter()
+        self.extract_locked(std::mem::take)
+            .into_callbacks()
             .map(|(_, callback)| callback)
-            .collect()
+            .collect::<Vec<OwnedCallback<Arg>>>()
     }
 
     #[doc(hidden)]
     #[must_use]
     pub fn dispose_and_take_callbacks(&self) -> Vec<OwnedCallback<Arg>> {
-        self.is_disposed.set(true);
+        self.listeners.is_disposed.set(true);
         self.take_all_callbacks()
     }
 
@@ -404,9 +491,12 @@ impl<Arg> Notifier<Arg> {
     #[doc(hidden)]
     #[must_use]
     pub fn listener_ids(&self) -> Vec<ListenerId> {
-        let mut ids: Vec<_> = self.listeners.entries.borrow().keys().copied().collect();
-        ids.sort_unstable();
-        ids
+        self.listeners
+            .entries
+            .borrow()
+            .iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<ListenerId>>()
     }
 
     /// Hand `capture` to this channel's delivery in progress: it retires with
@@ -436,7 +526,7 @@ impl<Arg> Notifier<Arg> {
 
     /// Discard listeners and mark disposed. Idempotent (second call is a no-op).
     pub fn dispose(&self) {
-        if self.is_disposed.replace(true) {
+        if self.listeners.is_disposed.replace(true) {
             return;
         }
         self.retire_removed_map(self.extract_locked(std::mem::take));
@@ -452,9 +542,12 @@ impl<Arg> Notifier<Arg> {
         }
     }
 
-    fn retire_removed_map(&self, callbacks: HashMap<ListenerId, OwnedCallback<Arg>>) {
+    fn retire_removed_map(&self, callbacks: Listeners<Arg>) {
         if self.listeners.delivery_depth.get() != 0 {
-            self.listeners.retired.borrow_mut().extend(callbacks);
+            self.listeners
+                .retired
+                .borrow_mut()
+                .extend(callbacks.into_callbacks());
         } else {
             retire_listeners(callbacks);
         }
@@ -470,7 +563,7 @@ impl<Arg> Notifier<Arg> {
     /// live registration is re-checked so one removed mid-notify is skipped, and
     /// each callback is `catch_unwind`-isolated so a panicking listener does not
     /// abort the rest. Listeners fire in ascending [`ListenerId`] order (the
-    /// backing `HashMap` is unordered, so the snapshot is sorted). Listeners
+    /// list keeps them in that order). Listeners
     /// *added* during a notify round are NOT fired in that round — only in the
     /// next one (same round-N-vs-round-N+1 rule as `notify_listeners`).
     /// Arguments are borrowed: notification never clones or destroys the value.
@@ -489,7 +582,7 @@ impl<Arg> Notifier<Arg> {
     /// [`Self::notify`] without the entry disposed gate — same single-check
     /// rationale as [`Self::add_unchecked`]. The firing loop itself is
     /// dispose-safe either way: disposing the channel skips its remaining
-    /// snapshot entries, and a disposed listener map yields an empty snapshot.
+    /// snapshot entries, and a disposed listener list yields an empty snapshot.
     pub(crate) fn notify_unchecked(&self, arg: &Arg) {
         let mut recovery = PanicRecovery::new();
         if self.listeners.failed.load(Ordering::Relaxed) {
@@ -555,19 +648,20 @@ impl<Arg> Notifier<Arg> {
             let mut snapshot: smallvec::SmallVec<[(ListenerId, OwnedCallback<Arg>); 4]> = self
                 .listeners
                 .entries
-                .borrow_mut()
+                .borrow()
                 .iter()
                 .filter(|(id, _)| ids.is_none_or(|ids| ids.binary_search(id).is_ok()))
-                .map(|(&id, cb)| (id, Rc::clone(cb)))
+                .map(|(id, cb)| (id, Rc::clone(cb)))
                 .collect();
-            snapshot.sort_unstable_by_key(|(id, _)| *id);
             // Membership and capture custody precede optional observer reentry.
             // An observer failure joins the same round, preserving the tail.
             recovery.run(before);
             for (id, callback) in &snapshot {
                 // Skip a listener individually removed mid-notify (by an earlier
                 // callback), and skip the tail once the channel is disposed.
-                if self.is_disposed.get() || !self.listeners.entries.borrow().contains_key(id) {
+                if self.listeners.is_disposed.get()
+                    || !self.listeners.entries.borrow().contains(*id)
+                {
                     continue;
                 }
                 #[expect(
@@ -663,6 +757,39 @@ mod tests {
         assert_eq!(fired_b.load(Ordering::SeqCst), 0);
     }
 
+    /// Withdrawing leaves no listener behind and none out of order, across
+    /// the points where the list drops its empty slots.
+    fn withdrawals_keep_the_rest_in_registration_order() {
+        let n: Notifier<()> = Notifier::new();
+        let fired = Rc::new(RefCell::new(Vec::<usize>::new()));
+        let ids: Vec<ListenerId> = (0..64_usize)
+            .map(|index| {
+                let fired = Rc::clone(&fired);
+                n.add(Rc::new(move |&()| fired.borrow_mut().push(index)))
+            })
+            .collect();
+        let mut expected: Vec<usize> = (0..64).collect();
+        // Oldest first, then every third of the rest, then the newest.
+        let order = (0..20_usize)
+            .chain((20..60).step_by(3))
+            .chain((60..64).rev());
+        for index in order {
+            n.remove(ids[index]);
+            n.remove(ids[index]);
+            expected.retain(|kept| *kept != index);
+            assert_eq!(n.len(), expected.len());
+            fired.borrow_mut().clear();
+            n.notify(&());
+            assert_eq!(*fired.borrow(), expected);
+            assert_eq!(n.listener_ids().len(), expected.len());
+        }
+        let late = Rc::clone(&fired);
+        let _ = n.add(Rc::new(move |&()| late.borrow_mut().push(usize::MAX)));
+        fired.borrow_mut().clear();
+        n.notify(&());
+        assert_eq!(fired.borrow().last(), Some(&usize::MAX));
+    }
+
     #[test]
     fn notifier_generic_contract() {
         crate::test_cases::run_cases(&[
@@ -673,6 +800,10 @@ mod tests {
             (
                 "removed during notify is skipped",
                 removed_during_notify_is_skipped,
+            ),
+            (
+                "withdrawals keep the rest in registration order",
+                withdrawals_keep_the_rest_in_registration_order,
             ),
         ]);
     }

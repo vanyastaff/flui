@@ -39,27 +39,43 @@ pub trait StatefulRenderView: Clone + 'static + Sized {
     /// The state the element keeps across rebuilds.
     type State: RenderViewState<Self>;
 
-    /// Creates the state, once, when the element is created. It acquires
-    /// nothing that `dispose` would have to release: a state whose
-    /// `init_state` never ran is dropped without `dispose`.
-    fn create_state(&self) -> Self::State;
+    /// Creates the state, once, at the element's first build and right
+    /// before `init_state`, from the view the element holds then. `cx` is
+    /// the context `init_state` receives: the state's signals and the
+    /// capabilities it keeps are created here, as in
+    /// [`StatefulView::create_state`](crate::StatefulView::create_state). A
+    /// panic here or in `init_state` drops the state and releases its
+    /// signals; the next build creates it again.
+    fn create_state(&self, cx: &dyn LifecycleContext) -> Self::State;
 
     /// Creates the render object, once, when the element mounts.
     fn create_render_object(&self, cx: &RenderObjectContext<'_>) -> Self::RenderObject;
+
+    /// Releases what the render object holds in the owner's runtime, such as
+    /// the targets registered for it, before it is removed from the render
+    /// tree. It runs once, after the state's `dispose`, and also for an
+    /// element whose state never initialized: what `create_render_object`
+    /// registered is released either way.
+    fn did_unmount_render_object(
+        &self,
+        _cx: &RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+    }
 }
 
 /// The state of a [`StatefulRenderView`].
 ///
 /// # Order of the hooks
 ///
-/// 1. `init_state`, once, at the first build; then `did_update_view` if the
-///    parent replaced the view between mount and that build.
+/// 1. `create_state` and `init_state`, once, at the first build, from the
+///    view the element holds then.
 /// 2. At every build: `update_render_object`, `provide`, `child`.
 /// 3. `did_update_view` when the parent gives a new view, and
 ///    `did_change_dependencies` when an inherited value read in a lifecycle
 ///    hook changed; each is followed by a build.
 /// 4. `deactivate` and `activate` around a move by `GlobalKey`.
-/// 5. `dispose`, once, before the render object is removed, and only if
+/// 5. `dispose`, once, before the render object is released and removed, and only if
 ///    `init_state` ran.
 ///
 /// A change of the state that the render object must see schedules the

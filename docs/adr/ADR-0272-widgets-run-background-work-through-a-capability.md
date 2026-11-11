@@ -107,7 +107,7 @@ impl<T> BackgroundTask<T> {
 pub enum BackgroundError { Refused(SpawnError), Cancelled, Panicked, OwnerRetired }
 ```
 
-1. A widget acquires the handle in `init_state` or `did_change_dependencies` (ADR-0078) and
+1. A widget acquires the handle in `create_state`, `init_state` or `did_change_dependencies` (ADR-0078) and
    keeps it.
 2. The answer is the seam's `Completion`: it settles at an owner turn boundary, never inside
    `compute` or `io`, and a refused spawn settles the same way, as `Refused`.

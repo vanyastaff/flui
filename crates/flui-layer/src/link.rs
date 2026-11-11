@@ -53,7 +53,7 @@ impl LayerLink {
 /// How many followers may stand on one another's chains before resolution
 /// gives up: a menu in a menu in a menu is a handful, and a cycle (two
 /// followers each on the other's leader chain) would never end.
-const MAX_FOLLOWER_NESTING: usize = 16;
+pub(crate) const MAX_FOLLOWER_NESTING: usize = 16;
 
 /// Why a follower resolves to nothing.
 enum Unresolved {
@@ -230,7 +230,7 @@ fn resolve_at_depth(
 /// an exact `1` and `0`, and a consumer that admits only affine transforms
 /// (the GPU painter) would refuse an ordinary scaled chain. Products of
 /// affine matrices keep the shape exactly, so only the inverse needs this.
-fn invert(matrix: &Matrix4) -> Option<Matrix4> {
+pub(crate) fn invert(matrix: &Matrix4) -> Option<Matrix4> {
     let coefficients = &matrix.m;
     let affine = [2, 3, 6, 7, 8, 9, 11, 14]
         .iter()

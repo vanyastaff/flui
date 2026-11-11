@@ -41,7 +41,7 @@ pub struct StateCreationsState;
 impl StatefulView for StateCreations {
     type State = StateCreationsState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.creations.fetch_add(1, Ordering::Relaxed);
         StateCreationsState
     }

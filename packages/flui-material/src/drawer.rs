@@ -702,7 +702,7 @@ impl DrawerControllerState {
 impl StatefulView for DrawerController {
     type State = DrawerControllerState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let controller = AnimationController::builder(BASE_SETTLE_DURATION)
             .debug_label("Drawer.settle")
             .build_on(None);

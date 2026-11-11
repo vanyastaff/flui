@@ -66,20 +66,22 @@ impl View for KeyedView {
     }
 }
 
-/// Build a `Vec<Box<dyn View>>` of keyless `TestView`s with the given
+/// Build the `ChildViews` of keyless `TestView`s with the given
 /// tags.
-fn plain_views(tags: &[u32]) -> Vec<Box<dyn View>> {
+fn plain_views(tags: &[u32]) -> crate::view::ChildViews {
     tags.iter()
         .map(|&t| Box::new(TestView::new(t)) as Box<dyn View>)
-        .collect()
+        .collect::<Vec<Box<dyn View>>>()
+        .into()
 }
 
-/// Build a `Vec<Box<dyn View>>` of keyed `KeyedView`s with the given
+/// Build the `ChildViews` of keyed `KeyedView`s with the given
 /// keys.
-fn keyed_views(keys: &[u32]) -> Vec<Box<dyn View>> {
+fn keyed_views(keys: &[u32]) -> crate::view::ChildViews {
     keys.iter()
         .map(|&k| Box::new(KeyedView::new(k)) as Box<dyn View>)
-        .collect()
+        .collect::<Vec<Box<dyn View>>>()
+        .into()
 }
 
 /// Mount a fresh keyless root and return `(tree, owner, root_id)`.
@@ -210,7 +212,6 @@ mod emission {
     use crate::tree::ElementTree;
     use crate::tree::ReconcileEventKind;
     use crate::tree::test_utils::{CollectedEvent, ReconcileEventCollector};
-    use crate::view::View;
 
     /// Process-global guard so the keep-alive subscriber installs once.
     static GLOBAL_SUBSCRIBER: OnceLock<()> = OnceLock::new();
@@ -288,11 +289,14 @@ mod emission {
         tree: &mut ElementTree,
         owner: &mut BuildOwner,
         parent: ElementId,
-        views: &[Box<dyn View>],
+        views: &crate::view::ChildViews,
     ) {
         let mut ids = Vec::with_capacity(views.len());
-        for (slot, view) in views.iter().enumerate() {
-            ids.push(tree.insert(view.as_ref(), parent, slot, &mut owner.element_owner_mut()));
+        for (slot, view) in (0..views.len())
+            .filter_map(|slot| views.get(slot))
+            .enumerate()
+        {
+            ids.push(tree.insert(view, parent, slot, &mut owner.element_owner_mut()));
         }
         tree.get_mut(parent)
             .expect("seeded parent resolves")

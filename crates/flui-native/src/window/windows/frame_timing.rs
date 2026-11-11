@@ -148,6 +148,41 @@ impl PresentTracker {
     }
 }
 
+/// A DXGI adapter as the presentation check reads it: its PCI ids and how many of its outputs the
+/// desktop is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DisplayAdapter {
+    /// `DXGI_ADAPTER_DESC1::VendorId`.
+    pub(crate) vendor_id: u32,
+    /// `DXGI_ADAPTER_DESC1::DeviceId`.
+    pub(crate) device_id: u32,
+    /// The outputs of the adapter whose `AttachedToDesktop` is set.
+    pub(crate) desktop_outputs: u32,
+}
+
+/// The vendor and device id of the Microsoft Basic Render Driver, Windows' software rasterizer
+/// (WARP).
+const BASIC_RENDER_DRIVER: (u32, u32) = (0x1414, 0x8c);
+
+/// Why the windows of this machine report no presentation, given its DXGI adapters; `None` where
+/// a hardware adapter drives a desktop output, whose swap chains' frame statistics name the
+/// refresh each present was shown at.
+///
+/// Where the desktop's outputs belong to the Basic Render Driver alone (a virtual machine whose
+/// display is a display-only device, such as Hyper-V Video), DWM composes on a timer, not on a
+/// display's refresh: on a `windows-latest` runner it reported a 64 Hz refresh (15.625 ms, the
+/// system timer's tick), and the frame statistics of 300 flip-model presents counted each present
+/// but never named a refresh or a counter time it was shown at. No present is ever placed, so the
+/// window says it reports none.
+pub(crate) fn presentation_absence(
+    adapters: &[DisplayAdapter],
+) -> Option<flui_platform::CapabilityAbsence> {
+    let scanned_out = adapters.iter().any(|adapter| {
+        adapter.desktop_outputs > 0 && (adapter.vendor_id, adapter.device_id) != BASIC_RENDER_DRIVER
+    });
+    (!scanned_out).then_some(flui_platform::CapabilityAbsence::NOT_ON_THIS_DEVICE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,5 +317,40 @@ mod tests {
     #[test]
     fn an_unplaceable_refresh_report_gives_no_timing() {
         assert_eq!(refresh_timing(300, 200, 0, MHZ_10), None, "no period");
+    }
+
+    /// A machine reports presentation where a hardware adapter drives a desktop output, and not
+    /// where the Basic Render Driver is all that does: an adapter with no desktop output, such as
+    /// the software adapter DXGI also lists, counts for neither.
+    #[test]
+    fn presentation_is_reported_where_hardware_drives_the_desktop() {
+        let adapter = |vendor_id, device_id, desktop_outputs| DisplayAdapter {
+            vendor_id,
+            device_id,
+            desktop_outputs,
+        };
+        let warp = |desktop_outputs| adapter(0x1414, 0x8c, desktop_outputs);
+        let absent = Some(flui_platform::CapabilityAbsence::NOT_ON_THIS_DEVICE);
+        for (machine, adapters, expected) in [
+            ("one GPU", vec![adapter(0x10de, 0x2482, 1), warp(0)], None),
+            (
+                "a hybrid laptop",
+                vec![
+                    adapter(0x8086, 0x9a49, 1),
+                    adapter(0x10de, 0x2520, 0),
+                    warp(0),
+                ],
+                None,
+            ),
+            ("a Hyper-V runner", vec![warp(1), warp(0)], absent),
+            (
+                "a GPU with no display on",
+                vec![adapter(0x10de, 0x2482, 0), warp(1)],
+                absent,
+            ),
+            ("no adapter read", vec![], absent),
+        ] {
+            assert_eq!(presentation_absence(&adapters), expected, "{machine}");
+        }
     }
 }

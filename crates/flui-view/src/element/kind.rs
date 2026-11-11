@@ -273,7 +273,7 @@ impl ElementKind {
     {
         Self::Stateful(Box::new(Element::<V, Single, StatefulBehavior<V>>::new(
             view,
-            StatefulBehavior::new(view),
+            StatefulBehavior::new(),
         )))
     }
 
@@ -326,7 +326,7 @@ impl ElementKind {
         Self::RenderVariable(Box::new(
             Element::<V, Variable, StatefulRenderBehavior<V>>::new(
                 view,
-                StatefulRenderBehavior::new(view),
+                StatefulRenderBehavior::new(),
             ),
         ))
     }
@@ -340,7 +340,7 @@ impl ElementKind {
     {
         Self::Stateful(Box::new(Element::<V, Single, AnimatedBehavior<V>>::new(
             view,
-            AnimatedBehavior::new(view),
+            AnimatedBehavior::new(),
         )))
     }
 
@@ -515,10 +515,7 @@ impl ElementBase for ElementKind {
         self.element().is_dirty()
     }
 
-    fn build_into_views(
-        &mut self,
-        owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn crate::view::View>> {
+    fn build_into_views(&mut self, owner: &mut crate::ElementOwner<'_>) -> crate::view::ChildViews {
         self.element_mut().build_into_views(owner)
     }
 

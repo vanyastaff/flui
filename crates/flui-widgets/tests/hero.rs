@@ -337,7 +337,7 @@ fn reparent_hero(initially_scoped: bool, read_scope: bool, stop_reading: bool) {
     }
     impl StatefulView for KeyedHero {
         type State = KeyedHeroState;
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
             KeyedHeroState {
                 inits: std::rc::Rc::clone(&self.inits),
                 changes: std::rc::Rc::clone(&self.changes),
@@ -609,7 +609,7 @@ pub(crate) fn a_hero_child_keeps_its_state_across_a_flight_without_a_global_key(
     }
     impl StatefulView for Counter {
         type State = CounterState;
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
             self.0.fetch_add(1, Ordering::SeqCst);
             CounterState
         }

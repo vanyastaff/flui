@@ -1,8 +1,6 @@
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use flui_foundation::{PresentationAddress, panic::FirstPanic};
 
-use flui_foundation::PresentationAddress;
-
-use super::{OwnerCore, OwnerEffects, Residence, finish_retirement};
+use super::{OwnerCore, OwnerEffects, Residence};
 use crate::ui_runtime::UiRuntime;
 
 impl OwnerCore {
@@ -35,35 +33,22 @@ impl OwnerCore {
         }
         // The window outlives the presentation, so a high refresh rate it was
         // given is released before the host stops following it.
-        let mut failure = None;
+        let mut failure = FirstPanic::new();
         self.release_frame_rate_demand(effects, address, &mut failure);
         // Withdraw native routing before terminal observers. A caught native
         // failure remains authoritative throughout logical close and retention.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: native retirement's panic is kept as the first failure"
-        )]
-        let retired = catch_unwind(AssertUnwindSafe(|| {
+        failure.contain(|| {
             effects.retire_presentation(address, surviving);
-        }))
-        .err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut failure,
-            retired,
-            "presentation retirement",
-        );
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: terminal observers run contained so close completes"
-        )]
-        let failure = catch_unwind(AssertUnwindSafe(|| {
+        });
+        // Terminal observers run contained so close completes.
+        let mut observers = FirstPanic::new();
+        observers.contain(|| {
             if surviving.is_some() {
                 runtime.close_presentation_after_failure(address.presentation_id, failure);
             } else {
                 runtime.stop_presentations_after_failure(failure);
             }
-        }))
-        .err();
-        finish_retirement(failure);
+        });
+        observers.resume();
     }
 }

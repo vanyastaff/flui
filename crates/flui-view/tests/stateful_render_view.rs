@@ -102,7 +102,7 @@ impl StatefulRenderView for Fade {
     type RenderObject = RenderOpacity;
     type State = FadeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _cx: &dyn flui_view::LifecycleContext) -> Self::State {
         FadeState {
             wires: self.wires.clone(),
             fail: self.fail,
@@ -112,6 +112,14 @@ impl StatefulRenderView for Fade {
     fn create_render_object(&self, _cx: &RenderObjectContext<'_>) -> Self::RenderObject {
         self.wires.log.borrow_mut().push("create");
         RenderOpacity::new(self.opacity)
+    }
+
+    fn did_unmount_render_object(
+        &self,
+        _cx: &RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+        self.wires.log.borrow_mut().push("release");
     }
 }
 
@@ -282,7 +290,11 @@ fn unmount_disposes_the_state_and_removes_the_render_object() {
     wires.take_log();
 
     harness.swap_root(Leaf);
-    assert_eq!(wires.take_log(), ["dispose"]);
+    assert_eq!(
+        wires.take_log(),
+        ["dispose", "release"],
+        "the view releases the render object after the state is disposed"
+    );
     assert_eq!(opacities(&harness), [] as [f64; 0]);
 }
 
@@ -293,7 +305,11 @@ fn a_dispose_panic_still_removes_the_render_object() {
     wires.take_log();
 
     harness.swap_root(Leaf);
-    assert_eq!(wires.take_log(), ["dispose"]);
+    assert_eq!(
+        wires.take_log(),
+        ["dispose", "release"],
+        "the view releases the render object after the state is disposed"
+    );
     assert_eq!(opacities(&harness), [] as [f64; 0]);
 }
 
@@ -304,8 +320,8 @@ fn a_state_that_failed_to_initialize_is_not_disposed() {
 
     assert_eq!(
         wires.take_log(),
-        ["create", "init"],
-        "nothing of the state runs after its init_state failed"
+        ["create", "init", "release"],
+        "nothing of the state runs after its init_state failed; the render object is released"
     );
     assert!(
         opacities(&harness).is_empty(),
@@ -322,7 +338,7 @@ fn an_update_panic_replaces_the_element_and_the_next_frame_runs() {
     harness.swap_root(Fade::new(0.8, &wires).failing(Fail::Update));
     assert_eq!(
         wires.take_log(),
-        ["did_update", "update", "dispose"],
+        ["did_update", "update", "dispose", "release"],
         "the failed update stops the build; the initialized state is disposed"
     );
     assert_eq!(opacities(&harness), [] as [f64; 0]);

@@ -734,7 +734,6 @@ impl FlushHost {
 mod tests {
     use std::future::Future;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Waker};
     use std::time::{Duration, Instant};
 
@@ -896,7 +895,7 @@ mod tests {
         let (host, signals) = host();
         let store = shared(&storage);
         let registry = host.registry();
-        let counter = Arc::new(CountingWaker::default());
+        let counter = flui_foundation::testing::CountingWaker::new().shared();
         let waker = Waker::from(Arc::clone(&counter));
         let mut cx = Context::from_waker(&waker);
         let mut changed = std::pin::pin!(registry.changed());
@@ -908,9 +907,9 @@ mod tests {
             Revision::new(1),
         );
         let _ = flush(&host);
-        let after_write = counter.0.load(Ordering::SeqCst);
+        let after_write = counter.count();
         let wake = host.settle();
-        let after_settle = counter.0.load(Ordering::SeqCst);
+        let after_settle = counter.count();
         // The owner wakes what settle returned, inside its containment.
         for waker in wake {
             waker.wake();
@@ -922,7 +921,7 @@ mod tests {
             "the finished write signalled the owner once"
         );
         assert_eq!(
-            counter.0.load(Ordering::SeqCst),
+            counter.count(),
             1,
             "the owner wakes the waiter once, from what settle returned"
         );
@@ -1110,15 +1109,5 @@ mod tests {
                 ),
             ],
         );
-    }
-
-    /// Counts its wakes, so a test can tell where a wake happened.
-    #[derive(Default)]
-    struct CountingWaker(AtomicUsize);
-
-    impl std::task::Wake for CountingWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.fetch_add(1, Ordering::SeqCst);
-        }
     }
 }

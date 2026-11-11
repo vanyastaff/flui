@@ -79,7 +79,7 @@ struct CloseCapabilities {
 impl StatefulView for CloseObserver {
     type State = Self;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.clone()
     }
 }
@@ -419,7 +419,7 @@ struct SiblingProbe {
 impl StatefulView for SiblingProbe {
     type State = Self;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.clone()
     }
 }
@@ -1825,7 +1825,7 @@ struct FailingTeardownState;
 impl StatefulView for FailingTeardownRoot {
     type State = FailingTeardownState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FailingTeardownState
     }
 }
@@ -1994,8 +1994,10 @@ fn a_close_that_holds_a_failure_detaches_once() {
             );
         });
     let held: Box<dyn std::any::Any + Send> = Box::new("presentation retirement failed");
+    let mut held_failure = flui_foundation::panic::FirstPanic::new();
+    held_failure.record(held);
     let closed = catch_unwind(AssertUnwindSafe(|| {
-        ui_runtime.close_presentation_after_failure(a, Some(held))
+        ui_runtime.close_presentation_after_failure(a, held_failure)
     }));
     let payload = closed.expect_err("the close resumes the failure it holds");
     assert_eq!(

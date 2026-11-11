@@ -3,7 +3,7 @@
 //! [`RawGestureDetector`] mounts.
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     rc::{Rc, Weak},
 };
 
@@ -29,10 +29,11 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 
 use super::raw_gesture_detector::{
-    ContactAdmission, GestureRecognizerFactory, RawGestureDetector, RecognizerContext,
+    ContactAdmission, FactoryEntry, GestureRecognizerFactory, RawGestureDetector, RecognizerContext,
 };
 use crate::Semantics;
 use crate::support::{EventCallback, ValueCallback, event_callback, value_callback};
+use crate::widget_state::{WidgetState, WidgetStatesController};
 
 /// Whether an unadmitted native update would act: the event, and how far its
 /// focal point moved since the session's start (the pinch's translation).
@@ -431,6 +432,9 @@ struct PressCallbacks {
     long_press: Option<EventCallback>,
     double_tap: Option<EventCallback>,
     double_tap_down: Option<ValueCallback<DoubleTapDetails>>,
+    /// Where the tap writes [`WidgetState::Pressed`]: set at its down,
+    /// cleared at its up or cancel, before the callback of that edge runs.
+    pressed: Option<WidgetStatesController>,
 }
 
 impl PressCallbacks {
@@ -459,6 +463,12 @@ struct PressShape {
 impl PressShape {
     fn is_empty(self) -> bool {
         !(self.tap || self.long_press || self.double_tap)
+    }
+
+    /// Whether the tap waits for the double tap to fail, which composes the
+    /// arena handle the two join through.
+    fn is_composed(self) -> bool {
+        self.tap && self.double_tap
     }
 }
 
@@ -943,16 +953,182 @@ fn deliver_event(
 // Factories
 // ============================================================================
 
+/// Where a press group reads its callbacks at event time: a detector's live
+/// slots, or the one cell of a control that only taps.
+trait PressLive {
+    fn press(&self) -> &RefCell<PressCallbacks>;
+}
+
+impl PressLive for LiveCallbacks {
+    fn press(&self) -> &RefCell<PressCallbacks> {
+        &self.press
+    }
+}
+
+impl PressLive for RefCell<PressCallbacks> {
+    fn press(&self) -> &RefCell<PressCallbacks> {
+        self
+    }
+}
+
+/// Write the pressed state of the control the live slots belong to, if it
+/// keeps one. The slot borrow ends before the controller notifies.
+fn mark_pressed(live: &dyn PressLive, pressed: bool) {
+    let states = live.press().borrow().pressed.clone();
+    if let Some(states) = states {
+        states.update(WidgetState::Pressed, pressed);
+    }
+}
+
+/// Run the press callback `read` takes from the live slots, inside one
+/// write. The slot borrow ends before the callback runs.
+fn deliver_press<T>(
+    live: &dyn PressLive,
+    writer: &WriterSource,
+    read: impl FnOnce(&PressCallbacks) -> Option<ValueCallback<T>>,
+    value: T,
+) {
+    let callback = read(&live.press().borrow());
+    if let Some(callback) = callback {
+        writer.write(|cx| callback(cx, value));
+    }
+}
+
+/// [`deliver_press`] for a callback without a value.
+fn deliver_press_event(
+    live: &dyn PressLive,
+    writer: &WriterSource,
+    read: impl FnOnce(&PressCallbacks) -> Option<EventCallback>,
+) {
+    let callback = read(&live.press().borrow());
+    if let Some(callback) = callback {
+        writer.write(|cx| callback(cx));
+    }
+}
+
 /// The press group: tap, long press and double tap, in that arena order, with
 /// the tap waiting for the double tap to fail when both are mounted.
+///
+/// A group whose members share the arena handle builds them at the first
+/// contact it is offered. Until then a recognizer holds nothing a contact
+/// could have changed, so a control that is mounted and never pressed pays
+/// for the group alone. A tap beside a double tap composes its arena branch
+/// when the group is created, where a refused composition is reported.
 struct PressRecognizers {
-    members: RecognizerSet,
+    shape: PressShape,
+    live: Rc<dyn PressLive>,
+    cx: RecognizerContext,
+    members: OnceCell<PressMembers>,
+}
+
+struct PressMembers {
+    set: RecognizerSet,
     tap: Option<Rc<TapGestureRecognizer>>,
     long_press: Option<Rc<LongPressGestureRecognizer>>,
     double_tap: Option<Rc<DoubleTapGestureRecognizer>>,
 }
 
-impl PressRecognizers {
+impl PressMembers {
+    fn build(shape: PressShape, live: &Rc<dyn PressLive>, cx: &RecognizerContext) -> Self {
+        let arena = cx.arena();
+        let settings = cx.settings();
+        let (double_tap_arena, tap_arena) = if shape.is_composed() {
+            match arena.compose(GestureComposition::RequireFailure) {
+                Ok(branches) => branches.into_branches(),
+                Err(error) => {
+                    composition_diagnostic(&error);
+                    (arena.clone(), arena.clone())
+                }
+            }
+        } else {
+            (arena.clone(), arena.clone())
+        };
+        let tap = shape.tap.then(|| {
+            let (primary, secondary) = (Rc::clone(live), Rc::clone(live));
+            let (primary_writer, secondary_writer) = (cx.writer().clone(), cx.writer().clone());
+            let (cancel, cancel_writer) = (Rc::clone(live), cx.writer().clone());
+            let (down, down_writer) = (Rc::clone(live), cx.writer().clone());
+            let (up, up_writer) = (Rc::clone(live), cx.writer().clone());
+            TapGestureRecognizer::builder(tap_arena)
+                .settings(settings.clone())
+                .on_tap(move |_| {
+                    deliver_press_event(&*primary, &primary_writer, |press| press.tap.clone());
+                })
+                .on_tap_down(move |details| {
+                    mark_pressed(&*down, true);
+                    deliver_press(
+                        &*down,
+                        &down_writer,
+                        |press| press.tap_down.clone(),
+                        details,
+                    );
+                })
+                .on_tap_up(move |details| {
+                    mark_pressed(&*up, false);
+                    deliver_press(&*up, &up_writer, |press| press.tap_up.clone(), details);
+                })
+                .on_tap_cancel(move |details| {
+                    mark_pressed(&*cancel, false);
+                    deliver_press(
+                        &*cancel,
+                        &cancel_writer,
+                        |press| press.tap_cancel.clone(),
+                        details,
+                    );
+                })
+                .on_secondary_tap(move |_| {
+                    deliver_press_event(&*secondary, &secondary_writer, |press| {
+                        press.secondary_tap.clone()
+                    });
+                })
+                .build()
+        });
+        let long_press = shape.long_press.then(|| {
+            let live = Rc::clone(live);
+            let writer = cx.writer().clone();
+            LongPressGestureRecognizer::builder(arena.clone())
+                .settings(settings.clone())
+                .on_long_press(move || {
+                    deliver_press_event(&*live, &writer, |press| press.long_press.clone());
+                })
+                .build()
+        });
+        let double_tap = shape.double_tap.then(|| {
+            let (done, down) = (Rc::clone(live), Rc::clone(live));
+            let (done_writer, down_writer) = (cx.writer().clone(), cx.writer().clone());
+            DoubleTapGestureRecognizer::builder(double_tap_arena)
+                .settings(settings.clone())
+                .on_double_tap(move |_| {
+                    deliver_press_event(&*done, &done_writer, |press| press.double_tap.clone());
+                })
+                .on_double_tap_down(move |details| {
+                    deliver_press(
+                        &*down,
+                        &down_writer,
+                        |press| press.double_tap_down.clone(),
+                        details,
+                    );
+                })
+                .build()
+        });
+        let mut set = RecognizerSet::default();
+        if let Some(tap) = &tap {
+            set.attach(tap);
+        }
+        if let Some(long_press) = &long_press {
+            set.attach(long_press);
+        }
+        if let Some(double_tap) = &double_tap {
+            set.attach(double_tap);
+        }
+        Self {
+            set,
+            tap,
+            long_press,
+            double_tap,
+        }
+    }
+
     fn recognizers(&self) -> impl Iterator<Item = &dyn GestureRecognizer> {
         let tap = self.tap.as_deref().map(|r| r as &dyn GestureRecognizer);
         let long_press = self
@@ -967,6 +1143,14 @@ impl PressRecognizers {
     }
 }
 
+impl PressRecognizers {
+    /// The members, built now if no contact was offered before.
+    fn members(&self) -> &PressMembers {
+        self.members
+            .get_or_init(|| PressMembers::build(self.shape, &self.live, &self.cx))
+    }
+}
+
 impl GestureArenaMember for PressRecognizers {
     // The members join the arena themselves.
     fn accept_gesture(&self, _: GestureContest) {}
@@ -975,136 +1159,117 @@ impl GestureArenaMember for PressRecognizers {
 
 impl GestureRecognizer for PressRecognizers {
     fn add_pointer(&self, down: PointerDispatch<'_>) {
-        self.members.dispatch(down);
+        self.members().set.dispatch(down);
     }
 
+    /// Members that were never offered a contact track none.
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-        self.members.dispatch(dispatch);
+        if let Some(members) = self.members.get() {
+            members.set.dispatch(dispatch);
+        }
     }
 
     fn cancel(&self) -> CancelOutcome {
-        cancel_all(self.recognizers())
+        self.members.get().map_or(CancelOutcome::Idle, |members| {
+            cancel_all(members.recognizers())
+        })
     }
 }
 
 struct PressFactory {
     shape: PressShape,
-    live: Rc<LiveCallbacks>,
+    live: Rc<dyn PressLive>,
 }
 
 impl GestureRecognizerFactory for PressFactory {
     type Recognizer = PressRecognizers;
 
     fn create(&self, cx: &RecognizerContext) -> Rc<PressRecognizers> {
-        let arena = cx.arena();
-        let settings = cx.settings();
-        let (double_tap_arena, tap_arena) = if self.shape.tap && self.shape.double_tap {
-            match arena.compose(GestureComposition::RequireFailure) {
-                Ok(branches) => branches.into_branches(),
-                Err(error) => {
-                    composition_diagnostic(&error);
-                    (arena.clone(), arena.clone())
-                }
-            }
-        } else {
-            (arena.clone(), arena.clone())
-        };
-        let tap = self.shape.tap.then(|| {
-            let (primary, secondary) = (Rc::clone(&self.live), Rc::clone(&self.live));
-            let (primary_writer, secondary_writer) = (cx.writer().clone(), cx.writer().clone());
-            let (cancel, cancel_writer) = (Rc::clone(&self.live), cx.writer().clone());
-            let (down, down_writer) = (Rc::clone(&self.live), cx.writer().clone());
-            let (up, up_writer) = (Rc::clone(&self.live), cx.writer().clone());
-            TapGestureRecognizer::builder(tap_arena)
-                .settings(settings.clone())
-                .on_tap(move |_| {
-                    deliver_event(&primary, &primary_writer, |live| {
-                        live.press.borrow().tap.clone()
-                    });
-                })
-                .on_tap_down(move |details| {
-                    deliver(
-                        &down,
-                        &down_writer,
-                        |live| live.press.borrow().tap_down.clone(),
-                        details,
-                    );
-                })
-                .on_tap_up(move |details| {
-                    deliver(
-                        &up,
-                        &up_writer,
-                        |live| live.press.borrow().tap_up.clone(),
-                        details,
-                    );
-                })
-                .on_tap_cancel(move |details| {
-                    deliver(
-                        &cancel,
-                        &cancel_writer,
-                        |live| live.press.borrow().tap_cancel.clone(),
-                        details,
-                    );
-                })
-                .on_secondary_tap(move |_| {
-                    deliver_event(&secondary, &secondary_writer, |live| {
-                        live.press.borrow().secondary_tap.clone()
-                    });
-                })
-                .build()
+        let recognizers = Rc::new(PressRecognizers {
+            shape: self.shape,
+            live: Rc::clone(&self.live),
+            cx: cx.clone(),
+            members: OnceCell::new(),
         });
-        let long_press = self.shape.long_press.then(|| {
-            let live = Rc::clone(&self.live);
-            let writer = cx.writer().clone();
-            LongPressGestureRecognizer::builder(arena.clone())
-                .settings(settings.clone())
-                .on_long_press(move || {
-                    deliver_event(&live, &writer, |live| {
-                        live.press.borrow().long_press.clone()
-                    });
-                })
-                .build()
-        });
-        let double_tap = self.shape.double_tap.then(|| {
-            let (done, down) = (Rc::clone(&self.live), Rc::clone(&self.live));
-            let (done_writer, down_writer) = (cx.writer().clone(), cx.writer().clone());
-            DoubleTapGestureRecognizer::builder(double_tap_arena)
-                .settings(settings.clone())
-                .on_double_tap(move |_| {
-                    deliver_event(&done, &done_writer, |live| {
-                        live.press.borrow().double_tap.clone()
-                    });
-                })
-                .on_double_tap_down(move |details| {
-                    deliver(
-                        &down,
-                        &down_writer,
-                        |live| live.press.borrow().double_tap_down.clone(),
-                        details,
-                    );
-                })
-                .build()
-        });
-        let mut members = RecognizerSet::default();
-        if let Some(tap) = &tap {
-            members.attach(tap);
+        if self.shape.is_composed() {
+            recognizers.members();
         }
-        if let Some(long_press) = &long_press {
-            members.attach(long_press);
-        }
-        if let Some(double_tap) = &double_tap {
-            members.attach(double_tap);
-        }
-        Rc::new(PressRecognizers {
-            members,
-            tap,
-            long_press,
-            double_tap,
-        })
+        recognizers
     }
 
     // The shape is in the key and the callbacks are read live.
     fn update(&self, _: &PressRecognizers) {}
+}
+
+/// The tap of a control that mounts its own recognizers instead of building
+/// a [`GestureDetector`]: the press group a detector with only
+/// [`on_tap`](GestureDetector::on_tap) mounts, so the control competes in
+/// the gesture arena exactly as that detector does.
+pub(super) struct TapSlot {
+    live: Rc<RefCell<PressCallbacks>>,
+}
+
+impl TapSlot {
+    /// A slot that calls `tap`, and writes the pressed state of its contact
+    /// to `pressed` while there is a tap to press.
+    pub(super) fn new(
+        tap: Option<EventCallback>,
+        pressed: Option<&WidgetStatesController>,
+    ) -> Self {
+        Self {
+            live: Rc::new(RefCell::new(Self::callbacks(tap, pressed))),
+        }
+    }
+
+    fn callbacks(
+        tap: Option<EventCallback>,
+        pressed: Option<&WidgetStatesController>,
+    ) -> PressCallbacks {
+        PressCallbacks {
+            pressed: pressed.filter(|_| tap.is_some()).cloned(),
+            tap,
+            ..PressCallbacks::default()
+        }
+    }
+
+    /// Replace the callback. A live recognizer reads it at event time, so a
+    /// contact in progress ends in the new one.
+    pub(super) fn set(&self, tap: Option<EventCallback>, pressed: Option<&WidgetStatesController>) {
+        // The outgoing closure drops after the borrow is released: a
+        // capture's `Drop` may reenter the control.
+        let outgoing = self.live.replace(Self::callbacks(tap, pressed));
+        drop(outgoing);
+    }
+
+    /// Whether the slot calls anything.
+    pub(super) fn is_set(&self) -> bool {
+        self.live.borrow().tap.is_some()
+    }
+
+    /// The activation assistive technology invokes: the callback the slot
+    /// holds when the request arrives, run inside that request's dispatch.
+    /// The slot borrow ends before the callback runs.
+    pub(super) fn click(&self) -> impl Fn(&mut EventCx<'_>) + 'static + use<> {
+        let live = Rc::clone(&self.live);
+        move |cx| {
+            let callback = live.borrow().tap.clone();
+            if let Some(callback) = callback {
+                callback(cx);
+            }
+        }
+    }
+
+    /// The recognizer to mount: the press group while there is a callback,
+    /// none otherwise. A slot's group is always the lone tap, so its
+    /// factory's type identifies it.
+    pub(super) fn factory(&self) -> Option<FactoryEntry> {
+        let shape = self.live.borrow().shape();
+        if shape.is_empty() {
+            return None;
+        }
+        let live: Rc<dyn PressLive> = self.live.clone();
+        Some(FactoryEntry::new(PressFactory { shape, live }))
+    }
 }
 
 struct MultiTapFactory {
@@ -1607,7 +1772,7 @@ impl std::fmt::Debug for GestureDetectorState {
 impl StatefulView for GestureDetector {
     type State = GestureDetectorState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let live = Rc::new(LiveCallbacks::default());
         live.refresh(self);
         GestureDetectorState {
@@ -1659,13 +1824,9 @@ impl GestureDetectorState {
         }
         let shape = view.press.shape();
         if !shape.is_empty() {
-            raw = raw.recognizer_with_key(
-                ValueKey::new((owner, shape)),
-                PressFactory {
-                    shape,
-                    live: Rc::clone(&self.live),
-                },
-            );
+            let live: Rc<dyn PressLive> = self.live.clone();
+            raw = raw
+                .recognizer_with_key(ValueKey::new((owner, shape)), PressFactory { shape, live });
         }
         if let Some(slot) = &view.multi_tap {
             raw = raw.recognizer_with_key(

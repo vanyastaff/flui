@@ -129,7 +129,7 @@ struct PanickingState {
 impl StatefulView for PanicsInInitState {
     type State = PanickingState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         PanickingState {
             failed_id: Rc::clone(&self.failed_id),
             init_calls: Rc::clone(&self.init_calls),

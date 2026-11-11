@@ -11,6 +11,7 @@
 //! the latter would silently reset the in-flight retarget state on every
 //! unrelated rebuild.
 
+use flui_view::LifecycleContext;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,7 +49,7 @@ struct SizeProbeState {
 impl StatefulView for SizeProbe {
     type State = SizeProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SizeProbeState {
             vsync: self.vsync.clone(),
             side: Arc::clone(&self.side),

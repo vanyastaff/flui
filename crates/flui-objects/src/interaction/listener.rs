@@ -118,6 +118,12 @@ impl RenderListener {
         self.smart_zoom_target = target;
     }
 
+    /// The hit-test behavior.
+    #[must_use]
+    pub const fn behavior(&self) -> HitTestBehavior {
+        self.behavior
+    }
+
     /// Replaces the hit-test behavior.
     pub fn set_behavior(&mut self, behavior: HitTestBehavior) {
         self.behavior = behavior;

@@ -396,7 +396,7 @@ where
         }
     }
 
-    fn build_into_views(&mut self, owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
+    fn build_into_views(&mut self, owner: &mut crate::ElementOwner<'_>) -> crate::view::ChildViews {
         self.behavior.build_into_views(&mut self.core, owner)
     }
 
@@ -440,56 +440,14 @@ impl<V> Element<V, Single, StatefulBehavior<V>>
 where
     V: StatefulView,
 {
-    /// Get a reference to the state.
-    pub fn state(&self) -> &V::State {
-        &self.behavior.state
+    /// The state, once the element's first build has created it.
+    pub fn state(&self) -> Option<&V::State> {
+        self.behavior.state()
     }
 
-    /// Get a mutable reference to the state.
-    pub fn state_mut(&mut self) -> &mut V::State {
-        &mut self.behavior.state
-    }
-
-    /// Mark as needing rebuild, flipping only
-    /// the dirty flag.
-    ///
-    /// E3 (atomic box→arena swap): marking dirty alone is necessary but
-    /// not sufficient in the slab/drain model — `BuildOwner::build_scope`
-    /// only rebuilds elements that are ALSO on the dirty heap. Use
-    /// [`Self::set_state_scheduled`] when an [`ElementOwner`](crate::ElementOwner)
-    /// is in scope so the element is both marked dirty AND pushed onto the heap (the
-    /// path that actually reaches `build_scope`). This bare variant
-    /// remains for direct-API / test callers that drive a rebuild
-    /// explicitly.
-    pub fn set_state<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut V::State),
-    {
-        f(&mut self.behavior.state);
-        self.core.mark_dirty();
-    }
-
-    /// `setState` that also schedules this element for rebuild through the
-    /// split-borrow `owner` — the slab/drain-model path that actually
-    /// reaches [`BuildOwner::build_scope`](crate::BuildOwner).
-    ///
-    /// Flips the dirty flag, then pushes `(self_id, depth)` onto the dirty
-    /// heap via [`ElementOwner::schedule_build_for`](crate::ElementOwner::schedule_build_for).
-    /// `self_id` was stamped
-    /// at mount (`ElementTree::insert` / `mount_root_*` call `set_self_id`
-    /// before `mount`); if it is somehow unset (a hand-rolled element that
-    /// bypassed the slab) only the dirty flag flips, matching the bare
-    /// [`Self::set_state`] — a `debug_assert!` flags the missing id in
-    /// tests so the framework-invariant violation is loud where it
-    /// matters.
-    pub fn set_state_scheduled<F>(&mut self, f: F, owner: &mut crate::ElementOwner<'_>)
-    where
-        F: FnOnce(&mut V::State),
-    {
-        f(&mut self.behavior.state);
-        self.core.mark_dirty();
-        self.core
-            .schedule_self_build(owner, crate::RebuildReason::StateChange);
+    /// The state, mutably, once the element's first build has created it.
+    pub fn state_mut(&mut self) -> Option<&mut V::State> {
+        self.behavior.state_mut()
     }
 }
 

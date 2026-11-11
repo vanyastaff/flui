@@ -1,5 +1,6 @@
 //! [`ScaleTransition`] — animates its child's scale from an [`Animation<f64>`].
 
+use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_animation::{Animation, ProxyAnimation};
@@ -73,7 +74,7 @@ impl ViewState<ScaleTransition> for ScaleTransitionState {
 impl StatefulView for ScaleTransition {
     type State = ScaleTransitionState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ScaleTransitionState {
             proxy: ProxyAnimation::new(Rc::clone(&self.scale)),
             scale: Rc::clone(&self.scale),

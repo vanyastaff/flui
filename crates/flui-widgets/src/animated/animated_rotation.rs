@@ -105,7 +105,7 @@ pub struct AnimatedRotationState {
 impl StatefulView for AnimatedRotation {
     type State = AnimatedRotationState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let animation =
             ImplicitMotion::new("AnimatedRotation", self.angle.turns(), 0.0, &self.motion);
         let proxy = ProxyAnimation::new(Rc::new(animation.stream()));

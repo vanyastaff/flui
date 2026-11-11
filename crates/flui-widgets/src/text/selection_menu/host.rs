@@ -352,7 +352,7 @@ impl ShowSelectionMenu {
         Self {
             host: Rc::downgrade(host),
             enclosing: enclosing
-                .and_then(|chain| chain.get(&std::any::TypeId::of::<ShowContextMenuIntent>()))
+                .and_then(|chain| chain.get(std::any::TypeId::of::<ShowContextMenuIntent>()))
                 .cloned(),
         }
     }

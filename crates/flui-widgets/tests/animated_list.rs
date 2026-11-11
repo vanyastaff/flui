@@ -60,7 +60,7 @@ struct RowState {
 impl StatefulView for Row {
     type State = RowState;
 
-    fn create_state(&self) -> RowState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> RowState {
         RowState {
             id: self.id,
             lives: Rc::clone(&self.lives),

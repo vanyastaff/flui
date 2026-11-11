@@ -209,7 +209,7 @@ impl GestureCommand {
     fn is_offered_in(&self, chain: Option<&ActionChain>) -> bool {
         let intent = self.intent_any();
         chain
-            .and_then(|chain| chain.get(&intent.type_id()))
+            .and_then(|chain| chain.get(intent.type_id()))
             .is_none_or(|action| action.is_enabled(intent))
     }
 
@@ -217,7 +217,7 @@ impl GestureCommand {
     /// bound to its intent in `chain`.
     fn offer_changes_in(&self, chain: Option<&ActionChain>) -> Option<ChangeNotifier> {
         chain
-            .and_then(|chain| chain.get(&self.intent_any().type_id()))
+            .and_then(|chain| chain.get(self.intent_any().type_id()))
             .and_then(|action| action.enablement_changes().cloned())
     }
 
@@ -225,7 +225,7 @@ impl GestureCommand {
     fn perform(&self, cx: &mut EventCx<'_>, chain: Option<&ActionChain>) -> ActionOutcome {
         let intent: &dyn Any = &*self.intent;
         let Some(action) = chain.and_then(|chain| resolve(chain, intent)) else {
-            if chain.is_none_or(|chain| !chain.contains_key(&intent.type_id())) {
+            if chain.is_none_or(|chain| !chain.declares(intent.type_id())) {
                 tracing::warn!(
                     target: "flui.a11y",
                     intent = self.intent_name,
@@ -771,7 +771,7 @@ impl MenuItem {
     /// Whether `other` offers the same command through the same bindings.
     pub(crate) fn same_as(&self, other: &Self) -> bool {
         let same_chain = match (&self.chain, &other.chain) {
-            (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+            (Some(a), Some(b)) => a.is(b),
             (None, None) => true,
             _ => false,
         };
@@ -998,7 +998,7 @@ type MenuOpener = Rc<dyn Fn(&mut EventCx<'_>, MenuCause, Option<Offset<f64>>)>;
 impl StatefulView for GestureAlternatives {
     type State = GestureAlternativesState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         GestureAlternativesState {
             warned_for: Cell::new(None),
             opener: OpenerSlot::new(Rc::new(|_cx, _cause, _position| {})),
@@ -1561,7 +1561,7 @@ struct FocusDecorationsState {
 impl StatefulView for FocusDecorations {
     type State = FocusDecorationsState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FocusDecorationsState {
             focus_manager: None,
             rebuild: None,

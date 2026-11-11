@@ -235,7 +235,7 @@ windows = "0.62"
 windows-core = "0.62"
 
 # COLLECTIONS - Used by multiple crates
-smallvec = { version = "1.13", features = ["union", "const_generics"] }
+smallvec = { version = "1.13", features = ["union", "const_generics", "const_new"] }
 slab = "0.4.12"
 
 # SERIALIZATION - Core functionality

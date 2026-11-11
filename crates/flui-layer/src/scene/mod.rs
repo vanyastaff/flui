@@ -3,15 +3,19 @@
 //! changes by typed patches.
 
 mod content;
+mod footprint;
+mod geometry;
 mod id;
 mod owner;
+mod pending;
 mod table;
 mod version;
 
 pub use content::{BoundaryContent, Bounds, Chunk, ContentBuilder, Entry, EntryIndex};
 pub use id::{ContentVersion, Lineage, SceneNodeId, SceneNodeMarker, SceneVersionId};
 pub use owner::{
-    Placement, SceneError, SceneOp, SceneOwner, ScenePublication, SceneWriter, SurfaceKey,
+    Applied, Placement, ReleasedContents, SceneError, SceneOp, SceneOwner, ScenePublication,
+    SceneWriter, SurfaceKey,
 };
 pub use version::{EntryAddress, SceneNode, SceneVersion};
 

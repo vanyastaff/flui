@@ -2995,39 +2995,20 @@ mod tests {
 
     // Frame Completion Future Tests
 
-    /// Counts `wake()` calls; shared by several tests below that assert
-    /// exactly how many times a stored waker fired.
-    struct CountingWaker(std::sync::atomic::AtomicUsize);
-
-    impl std::task::Wake for CountingWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
     /// A waker that panics must not starve waiters registered after it: the
     /// panic is caught, logged, and re-raised only once every waiter has
     /// been notified (issue #1057).
     fn notify_frame_completion_still_wakes_a_later_waiter_when_an_earlier_waker_panics() {
-        use std::sync::atomic::AtomicUsize;
-        use std::task::Wake;
-
-        struct PanicWaker;
-        impl Wake for PanicWaker {
-            fn wake(self: Arc<Self>) {
-                panic!("waker probe");
-            }
-        }
-
+        use flui_foundation::testing::{CountingWaker, panicking_waker};
         let scheduler = UpdateScheduler::new();
         let mut future_a = scheduler.end_of_frame();
         let mut future_b = scheduler.end_of_frame();
 
-        let panic_waker = Waker::from(Arc::new(PanicWaker));
+        let panic_waker = panicking_waker("waker probe");
         let mut cx_a = Context::from_waker(&panic_waker);
         assert!(Pin::new(&mut future_a).poll(&mut cx_a).is_pending());
 
-        let woken_b = Arc::new(CountingWaker(AtomicUsize::new(0)));
+        let woken_b = CountingWaker::new().shared();
         let counting_waker = Waker::from(Arc::clone(&woken_b));
         let mut cx_b = Context::from_waker(&counting_waker);
         assert!(Pin::new(&mut future_b).poll(&mut cx_b).is_pending());
@@ -3054,7 +3035,7 @@ mod tests {
         );
 
         assert_eq!(
-            woken_b.0.load(Ordering::SeqCst),
+            woken_b.count(),
             1,
             "the second waiter must still be woken despite the first waker panicking"
         );
@@ -3074,11 +3055,11 @@ mod tests {
     /// strong `UpdateScheduler` handle must resolve every registered waiter
     /// with `Err(SchedulerClosed)` and wake it exactly once.
     fn scheduler_drop_resolves_a_pending_waiter_with_scheduler_closed() {
-        use std::sync::atomic::AtomicUsize;
+        use flui_foundation::testing::CountingWaker;
 
         let scheduler = UpdateScheduler::new();
         let mut future = scheduler.end_of_frame();
-        let woken = Arc::new(CountingWaker(AtomicUsize::new(0)));
+        let woken = CountingWaker::new().shared();
         let waker = Waker::from(Arc::clone(&woken));
         assert!(
             Pin::new(&mut future)
@@ -3089,7 +3070,7 @@ mod tests {
         drop(scheduler);
 
         assert_eq!(
-            woken.0.load(Ordering::SeqCst),
+            woken.count(),
             1,
             "teardown must wake the waiter exactly once"
         );
@@ -3109,18 +3090,11 @@ mod tests {
     /// callback's panic when the notify step ALSO panicked, and still resets
     /// the phase.
     fn end_frame_impl_keeps_the_callback_panic_over_a_notify_panic() {
-        use std::task::Wake;
-
-        struct PanicWaker;
-        impl Wake for PanicWaker {
-            fn wake(self: Arc<Self>) {
-                panic!("notify probe");
-            }
-        }
+        use flui_foundation::testing::panicking_waker;
 
         let scheduler = UpdateScheduler::new();
         let mut future = scheduler.end_of_frame();
-        let waker = Waker::from(Arc::new(PanicWaker));
+        let waker = panicking_waker("notify probe");
         assert!(
             Pin::new(&mut future)
                 .poll(&mut Context::from_waker(&waker))

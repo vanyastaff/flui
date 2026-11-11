@@ -412,7 +412,7 @@ impl std::fmt::Debug for DropTargetState {
 impl StatefulView for DropTarget {
     type State = DropTargetState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DropTargetState {
             receiver: Rc::new(TargetReceiver {
                 config: RefCell::new(TargetConfig::of(self)),
@@ -571,7 +571,7 @@ impl View for PasteProbe {
 impl StatefulView for PasteProbe {
     type State = PasteProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         PasteProbeState {
             place: Rc::clone(&self.place),
         }

@@ -7,8 +7,8 @@ or another `Listenable`.
 ## Signals
 
 `flui::prelude::Signal<T>` (ADR-0074, placed by ADR-0085) is a `Copy` handle to a value in the
-presentation's reactive graph. `examples/counter.rs` keeps its count in one: created in `init_state`
-(`self.count = ctx.signal(0)`), read in `build` (`count.get(ctx)`, which subscribes the element), and written
+presentation's reactive graph. `examples/counter.rs` keeps its count in one: created in `create_state`
+(`count: ctx.signal(0)`), read in `build` (`count.get(ctx)`, which subscribes the element), and written
 from an event callback through the `cx` it receives (ADR-0086):
 
 ```rust,ignore

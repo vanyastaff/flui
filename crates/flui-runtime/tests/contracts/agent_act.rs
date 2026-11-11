@@ -33,18 +33,14 @@ struct MovingState {
 impl StatefulView for Moving {
     type State = MovingState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         MovingState {
-            moved: Signal::default(),
+            moved: ctx.signal(0),
         }
     }
 }
 
 impl ViewState<Moving> for MovingState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.moved = ctx.signal(0);
-    }
-
     fn build(&self, view: &Moving, ctx: &dyn BuildContext) -> impl IntoView {
         let moved = self.moved;
         let presses = Arc::clone(&view.presses);

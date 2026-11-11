@@ -113,6 +113,42 @@ pub(crate) struct RunData {
     pub(crate) glyphs: Range<u32>,
 }
 
+/// What reached the shaper for one span, printed by
+/// [`ShapedParagraph::describe_spans`]. Kept as values and formatted only when
+/// asked: a layout records it every time it shapes.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SpanDescription {
+    pub(crate) len: usize,
+    /// The resolved family as a snapshot prints it.
+    pub(crate) family: std::sync::Arc<str>,
+    pub(crate) weight: f32,
+    pub(crate) italic: bool,
+    pub(crate) size: Option<f32>,
+    /// The span's colour where it is not the paragraph command's.
+    pub(crate) color: Option<Color>,
+}
+
+impl fmt::Display for SpanDescription {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            out,
+            "len={} family={} weight={} style={}",
+            self.len,
+            self.family,
+            self.weight,
+            if self.italic { "Italic" } else { "Normal" }
+        )?;
+        if let Some(size) = self.size {
+            write!(out, " size={size:.2}")?;
+        }
+        if let Some(color) = self.color {
+            let [r, g, b, a] = color.to_rgba8();
+            write!(out, " color=#{r:02x}{g:02x}{b:02x}{a:02x}")?;
+        }
+        Ok(())
+    }
+}
+
 /// A shaped, line-broken paragraph: what `DrawOp::Paragraph` carries and the
 /// engine rasterizes.
 ///
@@ -129,7 +165,7 @@ pub struct ShapedParagraph {
     pub(crate) runs: Box<[RunData]>,
     pub(crate) glyphs: Box<[ShapedGlyph]>,
     pub(crate) coords: Box<[i16]>,
-    pub(crate) spans: Box<[String]>,
+    pub(crate) spans: Box<[SpanDescription]>,
 }
 
 impl ShapedParagraph {
@@ -169,8 +205,11 @@ impl ShapedParagraph {
     /// style, size, and a span colour where one differs from the root's), so
     /// a snapshot that prints them moves when a span is restyled.
     #[must_use]
-    pub fn describe_spans(&self) -> &[String] {
-        &self.spans
+    pub fn describe_spans(&self) -> Vec<String> {
+        self.spans
+            .iter()
+            .map(SpanDescription::to_string)
+            .collect::<Vec<String>>()
     }
 
     /// The glyph runs, line by line, in visual order within each line.

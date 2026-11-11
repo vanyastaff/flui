@@ -483,7 +483,7 @@ impl std::fmt::Debug for ScaffoldState {
 impl StatefulView for Scaffold {
     type State = ScaffoldState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ScaffoldState {
             handle: DrawerHandle::new(),
             rebuild: None,

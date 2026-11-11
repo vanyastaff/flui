@@ -1117,7 +1117,7 @@ impl std::fmt::Debug for ScaffoldMessengerState {
 impl StatefulView for ScaffoldMessenger {
     type State = ScaffoldMessengerState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ScaffoldMessengerState {
             handle: ScaffoldMessengerHandle::new(),
         }

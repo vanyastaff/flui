@@ -1,9 +1,9 @@
 //! The owner inbox: `UiCommand`, `UiCommandSender`, and draining it on the owner thread.
 
 use super::UiRuntime;
-use super::input::preserve_first_input_panic;
 use crossbeam_channel::{Sender, TrySendError};
 use flui_foundation::PresentationId;
+use flui_foundation::panic::FirstPanic;
 use flui_scheduler::SchedulerPhase;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
@@ -524,28 +524,23 @@ impl UiRuntime {
         answer: Result<T, super::AgentError>,
         payload: Box<dyn std::any::Any + Send>,
     ) -> ! {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: an agent reply's receiver runs contained before the panic resumes"
-        )]
-        let answered = catch_unwind(AssertUnwindSafe(|| {
+        // An agent reply's receiver runs contained before the panic resumes.
+        let mut first_panic = FirstPanic::new();
+        first_panic.record(payload);
+        first_panic.contain(|| {
             super::agent::send_reply(reply, element, answer);
-        }))
-        .err();
-        let mut first_panic = Some(payload);
-        preserve_first_input_panic(&mut first_panic, answered, "semantics agent reply");
+        });
         if self.has_queued_work() {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: the owner wake runs contained before the reply panic resumes"
-            )]
-            let wake_panic = catch_unwind(AssertUnwindSafe(|| {
+            // The owner wake runs contained before the reply panic resumes.
+            first_panic.contain(|| {
                 self.sender_prototype.wake_owner();
-            }))
-            .err();
-            preserve_first_input_panic(&mut first_panic, wake_panic, "semantics agent action wake");
+            });
         }
-        resume_unwind(first_panic.expect("BUG: the semantics agent job panic must be preserved"));
+        resume_unwind(
+            first_panic
+                .into_payload()
+                .expect("BUG: the semantics agent job panic must be preserved"),
+        );
     }
 
     /// Whether a command or an owner job waits for a later turn: what a
@@ -555,17 +550,15 @@ impl UiRuntime {
     }
 
     fn rearm_after_command_panic(&self, payload: Box<dyn std::any::Any + Send>) -> ! {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the owner wake runs contained before the command panic resumes"
-        )]
-        let wake_panic = catch_unwind(AssertUnwindSafe(|| {
+        let mut first_panic = FirstPanic::new();
+        first_panic.record(payload);
+        // The owner wake runs contained before the command panic resumes.
+        first_panic.contain(|| {
             self.sender_prototype.wake_owner();
-        }))
-        .err();
-        let mut first_panic = Some(payload);
-        preserve_first_input_panic(&mut first_panic, wake_panic, "command redraw wake");
-        let payload = first_panic.expect("BUG: the original command panic must be preserved");
+        });
+        let payload = first_panic
+            .into_payload()
+            .expect("BUG: the original command panic must be preserved");
         resume_unwind(payload);
     }
 
@@ -753,30 +746,18 @@ impl UiRuntime {
                             flui_foundation::panic::drop_contained(apply);
                             self.rearm_after_command_panic(payload);
                         }
-                        #[expect(
-                            clippy::disallowed_methods,
-                            reason = "ADR-0287: a command envelope's drop runs contained so the tail stays live"
-                        )]
-                        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(apply))) {
+                        // A command envelope's drop runs contained so the tail stays live.
+                        let mut destroyed = FirstPanic::new();
+                        destroyed.contain(|| drop(apply));
+                        if destroyed.is_held() {
                             // A producer can enqueue after the empty-inbox
                             // snapshot while opaque destruction is blocked.
                             // If that ingress's wake failed, pay its shared
                             // debt before resuming the destructor panic.
-                            #[expect(
-                                clippy::disallowed_methods,
-                                reason = "ADR-0287: the shared wake debt is paid before the destructor panic resumes"
-                            )]
-                            let wake_panic = catch_unwind(AssertUnwindSafe(|| {
+                            destroyed.contain(|| {
                                 self.sender_prototype.retry_wake_debt();
-                            }))
-                            .err();
-                            let mut first_panic = Some(payload);
-                            preserve_first_input_panic(
-                                &mut first_panic,
-                                wake_panic,
-                                "stale signal-write teardown wake",
-                            );
-                            resume_unwind(first_panic.expect(
+                            });
+                            resume_unwind(destroyed.into_payload().expect(
                                 "BUG: the stale command destructor panic must be preserved",
                             ));
                         }
@@ -827,8 +808,8 @@ impl UiRuntime {
         // their readers stopped or let go end, before a panic continues: a recording stopped
         // here holds the release.
         let mut first = self.release_counted_leases(released);
-        flui_foundation::panic::FirstPanic::fold(&mut first, self.sweep_agent_recordings());
-        if let Some(payload) = first {
+        first.absorb(self.sweep_agent_recordings());
+        if let Some(payload) = first.into_payload() {
             self.rearm_after_command_panic(payload);
         }
         // Then what providers posted back: settled completions run their

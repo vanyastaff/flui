@@ -226,7 +226,7 @@ pub struct SnackBarActionState {
 impl StatefulView for SnackBarAction {
     type State = SnackBarActionState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SnackBarActionState::default()
     }
 }
@@ -418,7 +418,7 @@ impl std::fmt::Debug for SnackBarPresenterState {
 impl StatefulView for SnackBarPresenter {
     type State = SnackBarPresenterState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SnackBarPresenterState {
             hover: Rc::new(HoverLease {
                 target: self.hover.clone(),

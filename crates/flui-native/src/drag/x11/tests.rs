@@ -1283,15 +1283,6 @@ fn a_failing_drag_handler_still_answers_the_source() {
     );
 }
 
-/// Fails as it is woken.
-struct FailsAsWoken;
-
-impl std::task::Wake for FailsAsWoken {
-    fn wake(self: Arc<Self>) {
-        panic!("the request's waker fails");
-    }
-}
-
 /// A window whose handler panics as the drag leaves still has every request
 /// on the retired offer answered, though the first request's waker panics as
 /// it is answered: the handler's panic is the one that goes on.
@@ -1336,7 +1327,7 @@ fn requests_are_answered_though_the_handler_and_a_waker_fail() {
     let mut other = target
         .drag
         .request(id, RepresentationIndex(0), TransferLimits::default());
-    let waker = Waker::from(Arc::new(FailsAsWoken));
+    let waker = flui_foundation::testing::panicking_waker("the request's waker fails");
     assert!(
         std::pin::Pin::new(&mut failing)
             .poll(&mut Context::from_waker(&waker))

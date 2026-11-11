@@ -736,7 +736,7 @@ fn page_snap(controller: &PageController) -> SharedSnapPolicy {
 impl StatefulView for PageView {
     type State = PageViewState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let controller = self.controller.clone().unwrap_or_default();
         PageViewState {
             last_reported_page: Rc::new(Cell::new(controller.initial_page() as i64)),

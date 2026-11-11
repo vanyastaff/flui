@@ -2343,7 +2343,7 @@ one for Win32 makes that safe without changing a signature.
 The other backends still store `Send` callbacks behind locks until their own
 steps.
 
-Tests (CI only type-checks Win32): the owner-affinity refusal order is pinned
+Tests (pull-request CI only type-checks Win32; the nightly `windows-latest` run executes them): the owner-affinity refusal order is pinned
 by `refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`
 (run by `the_owner_thread_machinery_honours_its_contracts` in `owner/handlers.rs`), and the callback panic and re-entrancy rules by
 `tests/window_callback_unwind.rs` and `tests/handler_reentry.rs`.
@@ -3148,7 +3148,7 @@ window or UI runtime frame. It is not a generic closure executor.
 A live macOS run needs a GUI session. External counters assert owner affinity, nonrecursive delivery, shutdown capture
 release and rejected work after quit. On Windows, a turn through the real
 message loop runs on the owner and is released there. **Unasserted:** no test
-pins this. CI only type-checks Win32. Mobile/web registration remains explicitly
+pins this. Pull-request CI only type-checks Win32. Mobile/web registration remains explicitly
 unsupported; proxy window creation support is separate from wake/quit support.
 
 ### Reveal without changing window mode

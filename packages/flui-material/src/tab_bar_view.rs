@@ -136,7 +136,7 @@ impl std::fmt::Debug for TabBarViewState {
 impl StatefulView for TabBarView {
     type State = TabBarViewState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         TabBarViewState {
             attached: RefCell::new(None),
         }
@@ -213,7 +213,7 @@ struct LeaveGateState {
 impl StatefulView for LeaveGate {
     type State = LeaveGateState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         LeaveGateState {
             suspender: self.suspender.clone(),
         }

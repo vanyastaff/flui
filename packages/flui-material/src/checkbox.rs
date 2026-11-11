@@ -317,7 +317,7 @@ impl std::fmt::Debug for CheckboxState {
 impl StatefulView for Checkbox {
     type State = CheckboxState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // `Selected` is seeded from the initial view (`&self` here IS that
         // initial view; an indeterminate value counts as selected), so it is
         // correct before the first `build` rather than needing a same-frame
@@ -533,7 +533,7 @@ fn checkbox_default_side(colors: &ColorScheme, states: WidgetStates) -> BorderSi
     }
     if states.contains_state(WidgetState::Pressed)
         || states.contains_state(WidgetState::Hovered)
-        || states.contains_state(WidgetState::Focused)
+        || states.contains_state(WidgetState::FocusVisible)
     {
         return side(colors.on_surface, 2.0);
     }
@@ -549,7 +549,7 @@ fn checkbox_default_overlay_color(colors: &ColorScheme, states: WidgetStates) ->
         if states.contains_state(WidgetState::Hovered) {
             return colors.error.with_opacity(StateLayerAlpha::M3.hovered);
         }
-        if states.contains_state(WidgetState::Focused) {
+        if states.contains_state(WidgetState::FocusVisible) {
             return colors.error.with_opacity(StateLayerAlpha::M3.focused);
         }
     }
@@ -560,7 +560,7 @@ fn checkbox_default_overlay_color(colors: &ColorScheme, states: WidgetStates) ->
         if states.contains_state(WidgetState::Hovered) {
             return colors.primary.with_opacity(StateLayerAlpha::M3.hovered);
         }
-        if states.contains_state(WidgetState::Focused) {
+        if states.contains_state(WidgetState::FocusVisible) {
             return colors.primary.with_opacity(StateLayerAlpha::M3.focused);
         }
         return Color::TRANSPARENT;
@@ -571,7 +571,7 @@ fn checkbox_default_overlay_color(colors: &ColorScheme, states: WidgetStates) ->
     if states.contains_state(WidgetState::Hovered) {
         return colors.on_surface.with_opacity(StateLayerAlpha::M3.hovered);
     }
-    if states.contains_state(WidgetState::Focused) {
+    if states.contains_state(WidgetState::FocusVisible) {
         return colors.on_surface.with_opacity(StateLayerAlpha::M3.focused);
     }
     Color::TRANSPARENT

@@ -52,7 +52,7 @@ use flui_view::{
     RenderObjectContextError, RenderView, WriterSource, impl_render_view,
 };
 
-use crate::support::{ValueCallback, event_callback, ref_callback, value_callback};
+use crate::support::{ValueCallback, ref_callback, value_callback};
 
 #[derive(Clone, Copy, Debug, Default)]
 struct SemanticsOptions {
@@ -90,7 +90,9 @@ type EventActionHandler = Rc<dyn Fn(&mut EventCx<'_>, ActionCall)>;
 /// of labelled custom actions.
 #[derive(Clone, Default)]
 struct EventActions {
-    handlers: Vec<(SemanticsAction, EventActionHandler)>,
+    /// Two are held inline: a control advertises its activation and, when
+    /// it takes focus, the focus request.
+    handlers: smallvec::SmallVec<[(SemanticsAction, EventActionHandler); 2]>,
     custom: Vec<CustomEntry>,
     /// Told when the assistive technology's cursor enters (`true`) or leaves
     /// the node's subtree.
@@ -1199,8 +1201,8 @@ impl Semantics {
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        let handler = event_callback(handler);
-        let handler: EventActionHandler = Rc::new(move |cx, _call| handler(cx));
+        let handler: EventActionHandler =
+            Rc::new(move |cx: &mut EventCx<'_>, _call| handler(cx).report());
         let entry = CustomEntry {
             label,
             handler,
@@ -1251,9 +1253,12 @@ impl Semantics {
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        let handler = event_callback(handler);
-        self.event_actions
-            .insert(action, Rc::new(move |cx, _call| handler(cx)));
+        // One allocation: the outcome is reported here, as `event_callback`
+        // reports it (ADR-0086).
+        self.event_actions.insert(
+            action,
+            Rc::new(move |cx: &mut EventCx<'_>, _call| handler(cx).report()),
+        );
         self
     }
 
@@ -1313,19 +1318,24 @@ impl Semantics {
         }))
     }
 
+    /// The handler that tells `target`'s table where the assistive
+    /// technology's cursor is.
+    fn assistive_focus_route(
+        target: LocalPayloadTarget,
+    ) -> flui_rendering::semantics::AssistiveFocusHandler {
+        Rc::new(move |within| deliver_assistive_focus(target, within))
+    }
+
     /// Register this build's action table in the owner lane and mint the
-    /// handler that reaches it.
+    /// handler that reaches it. The handler for the assistive cursor is
+    /// minted only for a table that asks to hear it.
     fn register_actions(&self, ctx: &RenderObjectContext<'_>) -> Option<SemanticsActionRoute> {
         let cell = self.action_cell(ctx)?;
         match ctx.register_local_payload(cell) {
             Ok(target) => {
                 let handler: SemanticsActionHandler = Rc::new(move |call| deliver(target, call));
-                let assistive_focus: flui_rendering::semantics::AssistiveFocusHandler =
-                    Rc::new(move |within| deliver_assistive_focus(target, within));
-                Some(
-                    SemanticsActionRoute::new(target, handler)
-                        .with_assistive_focus(assistive_focus),
-                )
+                let route = SemanticsActionRoute::new(target, handler);
+                Some(self.with_assistive_focus_route(route))
             }
             Err(error) => {
                 tracing::debug!(
@@ -1335,6 +1345,17 @@ impl Semantics {
                 None
             }
         }
+    }
+
+    /// `route` with the assistive-cursor handler this build needs: minted
+    /// once, when a table first asks to hear the cursor, and kept after.
+    fn with_assistive_focus_route(&self, route: SemanticsActionRoute) -> SemanticsActionRoute {
+        if self.event_actions.assistive_focus.is_none() || route.assistive_focus_handler().is_some()
+        {
+            return route;
+        }
+        let target = route.target();
+        route.with_assistive_focus(Self::assistive_focus_route(target))
     }
 
     /// Bring the render object's lane registration in line with this build:
@@ -1354,7 +1375,7 @@ impl Semantics {
             return None;
         };
         match ctx.replace_local_payload(existing.target(), cell) {
-            Ok(()) => Some(existing),
+            Ok(()) => Some(self.with_assistive_focus_route(existing)),
             Err(RenderObjectContextError::Interaction(InteractionDispatchError::TargetGone)) => {
                 tracing::debug!("semantics action table was gone; registering anew");
                 self.register_actions(ctx)
@@ -1373,11 +1394,37 @@ impl Semantics {
         }
     }
 
+    /// The route this build advertises its actions through: kept in line
+    /// with the build while the presentation collects semantics, released
+    /// while it does not.
+    fn route_while_collected(
+        &self,
+        ctx: &RenderObjectContext<'_>,
+        render_object: &RenderSemanticsAnnotations,
+    ) -> Option<SemanticsActionRoute> {
+        if ctx.collects_semantics() {
+            return self.sync_actions(ctx, render_object);
+        }
+        if let Some(existing) = render_object.action_route() {
+            release_actions(ctx, existing);
+        }
+        None
+    }
+
     /// Set the child.
     #[must_use]
     pub fn child(mut self, child: impl IntoView) -> Self {
         self.child = Child::some(child.into_view());
         self
+    }
+}
+
+/// Release the action table `part` holds in the owner lane: what a
+/// [`Semantics`] element does when it unmounts, for any owner of a
+/// [`RenderSemanticsAnnotations`].
+pub(crate) fn release_part(ctx: &RenderObjectContext<'_>, part: &mut RenderSemanticsAnnotations) {
+    if let Some(route) = part.set_action_route(None) {
+        release_actions(ctx, &route);
     }
 }
 
@@ -1393,7 +1440,10 @@ impl RenderView for Semantics {
     type RenderObject = RenderSemanticsAnnotations;
 
     fn create_render_object(&self, ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
-        let route = self.register_actions(ctx);
+        let route = ctx
+            .collects_semantics()
+            .then(|| self.register_actions(ctx))
+            .flatten();
         let mut render_object =
             RenderSemanticsAnnotations::from_configuration(self.configuration_with(route.as_ref()))
                 .with_container(self.options.contains(SemanticsOptions::CONTAINER))
@@ -1422,7 +1472,7 @@ impl RenderView for Semantics {
         ctx: &RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        let route = self.sync_actions(ctx, render_object);
+        let route = self.route_while_collected(ctx, render_object);
         let configuration = self.configuration_with(route.as_ref());
         let custom = self.gated_custom_actions(route.as_ref());
         let _previous = render_object.set_action_route(route);
@@ -1449,9 +1499,7 @@ impl RenderView for Semantics {
         ctx: &RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) {
-        if let Some(route) = render_object.set_action_route(None) {
-            release_actions(ctx, &route);
-        }
+        release_part(ctx, render_object);
     }
 
     flui_view::single_child_view_children!();

@@ -19,7 +19,7 @@ struct AsyncCaptureProbeState {
 impl StatefulView for AsyncCaptureProbeView {
     type State = AsyncCaptureProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AsyncCaptureProbeState {
             captured: Rc::clone(&self.captured),
         }

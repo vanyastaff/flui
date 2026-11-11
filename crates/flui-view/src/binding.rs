@@ -1074,6 +1074,25 @@ impl WidgetsBinding {
         self.inner.read().build_owner.dirty_count()
     }
 
+    /// Record whether this presentation collects its semantics tree
+    /// ([`BuildOwner::set_collects_semantics`]). On a change with a mounted
+    /// tree, the next [`draw_frame`](Self::draw_frame) pushes every render
+    /// view's configuration again.
+    pub fn set_collects_semantics(&self, collects: bool) {
+        let marked = {
+            let mut inner = self.inner.write_in(TreePhase::Building);
+            let WidgetsBindingInner {
+                ref mut build_owner,
+                ref mut element_tree,
+                ..
+            } = *inner;
+            build_owner.set_collects_semantics(element_tree, collects)
+        };
+        if marked {
+            self.handle_build_scheduled();
+        }
+    }
+
     /// Hot reload entry point.
     ///
     /// Marks every element dirty without unmounting or disposing state. The
@@ -1658,7 +1677,7 @@ mod tests {
     impl crate::StatefulView for RegistryStateView {
         type State = RegistryState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             RegistryState(self.value)
         }
     }
@@ -1744,7 +1763,7 @@ mod tests {
     impl crate::StatefulView for KeyedLookupParent {
         type State = RegistryState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             RegistryState(self.value)
         }
     }
@@ -1840,7 +1859,7 @@ mod tests {
     impl crate::StatefulView for DisposeMarkerView {
         type State = DisposeMarkerState;
 
-        fn create_state(&self) -> Self::State {
+        fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             DisposeMarkerState {
                 disposed: Arc::clone(&self.disposed),
             }

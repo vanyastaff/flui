@@ -117,7 +117,7 @@ pub(crate) enum FocusIndicator {
     /// tabs, list rows and every other control without one of its own.
     Ring,
     /// The control draws its own: the M3 halo of a checkbox, switch or radio,
-    /// which reads the well's `Focused` state.
+    /// which reads the well's `FocusVisible` state.
     Halo,
 }
 
@@ -301,7 +301,7 @@ impl InkWellState {
 impl StatefulView for InkWell {
     type State = InkWellState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let states = self.states_controller.clone().unwrap_or_default();
         let indication = Indication::new(
             states.clone(),
@@ -537,13 +537,18 @@ impl ViewState<InkWell> for InkWellState {
             FocusIndicator::Ring => FocusRing::new(content).boxed(),
             FocusIndicator::Halo => content.boxed(),
         };
-        // `Focused` is the focus a user can see (ADR-0079): a pointer press
-        // that focuses the well leaves no ring, halo or overlay behind.
-        let focus_states = self.states.clone();
+        // `Focused` follows the primary focus and `FocusVisible` the focus a
+        // user can see (ADR-0079): a pointer press that focuses the well
+        // leaves no ring, halo or overlay behind.
+        let held_states = self.states.clone();
+        let shown_states = self.states.clone();
         let mut focus = Focus::new(content)
             .can_request_focus(enabled)
+            .on_focus_change(move |_cx, held| {
+                held_states.update(WidgetState::Focused, held);
+            })
             .on_visible_focus_change(move |_cx, shown| {
-                focus_states.update(WidgetState::Focused, shown);
+                shown_states.update(WidgetState::FocusVisible, shown);
             });
         if let Some(node) = &view.focus_node {
             focus = focus.focus_node(Rc::clone(node));

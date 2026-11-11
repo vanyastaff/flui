@@ -499,7 +499,7 @@ impl std::fmt::Debug for TabBarState {
 impl StatefulView for TabBar {
     type State = TabBarState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         TabBarState {
             controller: RefCell::new(None),
             listener_id: RefCell::new(None),

@@ -73,7 +73,7 @@ pub struct AnimatedSlideState {
 impl StatefulView for AnimatedSlide {
     type State = AnimatedSlideState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let animation = ImplicitMotion::new(
             "AnimatedSlide",
             self.offset,
