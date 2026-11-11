@@ -725,6 +725,7 @@ fn text_contract() {
                 "styled_text_pipeline",
                 text_layout_pipeline::full_pipeline_with_styled_text,
             ),
+            ("a_truncated_layout_caches_the_authored_intrinsic_widths", text_painter_unit::a_truncated_layout_caches_the_authored_intrinsic_widths),
             (
                 "wide_ellipsis_floors_min_intrinsic_width",
                 text_painter_unit::wide_ellipsis_floors_min_intrinsic_width,
