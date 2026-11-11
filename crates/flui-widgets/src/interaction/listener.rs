@@ -721,6 +721,38 @@ impl Listener {
     }
 }
 
+/// Unregister every target `render_object` holds in the owner lane: what a
+/// listener's element does when it unmounts, for any owner of a
+/// [`RenderListener`].
+pub(crate) fn release_targets(ctx: &RenderObjectContext<'_>, render_object: &mut RenderListener) {
+    // Unmount removes the target from NEW route resolution; an active
+    // cached route keeps its strong handler cell through Up/Cancel.
+    if let Some(target) = render_object.target() {
+        if let Err(error) = ctx.unregister_pointer(target) {
+            tracing::debug!(?error, "Listener target unregistration failed");
+        }
+        render_object.set_target(None);
+    }
+    if let Some(target) = render_object.claimed_pan_zoom_target() {
+        if let Err(error) = ctx.unregister_pan_zoom(target) {
+            tracing::debug!(?error, "Listener pan-zoom-claim unregistration failed");
+        }
+        render_object.set_pan_zoom_target(None);
+    }
+    if let Some(target) = render_object.claimed_smart_zoom_target() {
+        if let Err(error) = ctx.unregister_smart_zoom(target) {
+            tracing::debug!(?error, "Listener smart-zoom-claim unregistration failed");
+        }
+        render_object.set_smart_zoom_target(None);
+    }
+    if let Some(target) = render_object.claimed_scroll_target() {
+        if let Err(error) = ctx.unregister_scroll(target) {
+            tracing::debug!(?error, "Listener scroll-claim unregistration failed");
+        }
+        render_object.set_scroll_target(None);
+    }
+}
+
 impl RenderView for Listener {
     type Protocol = BoxProtocol;
     type RenderObject = RenderListener;
@@ -764,32 +796,7 @@ impl RenderView for Listener {
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) {
-        // Unmount removes the target from NEW route resolution; an active
-        // cached route keeps its strong handler cell through Up/Cancel.
-        if let Some(target) = render_object.target() {
-            if let Err(error) = ctx.unregister_pointer(target) {
-                tracing::debug!(?error, "Listener target unregistration failed");
-            }
-            render_object.set_target(None);
-        }
-        if let Some(target) = render_object.claimed_pan_zoom_target() {
-            if let Err(error) = ctx.unregister_pan_zoom(target) {
-                tracing::debug!(?error, "Listener pan-zoom-claim unregistration failed");
-            }
-            render_object.set_pan_zoom_target(None);
-        }
-        if let Some(target) = render_object.claimed_smart_zoom_target() {
-            if let Err(error) = ctx.unregister_smart_zoom(target) {
-                tracing::debug!(?error, "Listener smart-zoom-claim unregistration failed");
-            }
-            render_object.set_smart_zoom_target(None);
-        }
-        if let Some(target) = render_object.claimed_scroll_target() {
-            if let Err(error) = ctx.unregister_scroll(target) {
-                tracing::debug!(?error, "Listener scroll-claim unregistration failed");
-            }
-            render_object.set_scroll_target(None);
-        }
+        release_targets(ctx, render_object);
     }
 
     flui_view::single_child_view_children!();

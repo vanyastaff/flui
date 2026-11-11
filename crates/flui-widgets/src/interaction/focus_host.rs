@@ -30,7 +30,8 @@ use flui_view::{Provided, RebuildHandle};
 
 use super::actions::FocusRecord;
 use super::focus::{
-    FocusChangeHandler, FocusParent, enclosing_focus_parent, record_action_chain, request_autofocus,
+    FocusChangeHandler, FocusParent, enclosing_focus_parent, record_focus_context,
+    request_autofocus,
 };
 use super::focus_reveal::{FocusRevealScope, SharedRevealTarget};
 
@@ -397,10 +398,13 @@ impl FocusHost {
         })
     }
 
-    fn record_action_chain(&mut self, ctx: &dyn BuildContext) {
-        record_action_chain(
-            ctx,
+    /// Record the bindings in force at the element on the node (ADR-0079):
+    /// the owner's `Actions` chain and platform convention. The owner calls
+    /// it when its own bindings change between dependency changes.
+    pub(crate) fn record(&mut self, record: Option<FocusRecord>) {
+        record_focus_context(
             &self.node,
+            record,
             &mut self.action_chain,
             &mut self.context_registration,
         );
@@ -438,7 +442,14 @@ impl FocusHost {
     /// `rect_provider` measures the node: traversal order and the reveal on
     /// focus read it. The owner builds it from whatever it lays out — an
     /// anchor over its child, or its own render object.
-    pub(crate) fn init(&mut self, ctx: &dyn LifecycleContext, rect_provider: RectProvider) {
+    /// `record` is what [`record`](Self::record) takes: the bindings in force
+    /// at the element when it mounts.
+    pub(crate) fn init(
+        &mut self,
+        ctx: &dyn LifecycleContext,
+        rect_provider: RectProvider,
+        record: Option<FocusRecord>,
+    ) {
         self.writer
             .set(ctx.writer_source())
             .expect("BUG: a focus host is initialized once");
@@ -456,7 +467,7 @@ impl FocusHost {
             "BUG: a focus host could not attach its node to the enclosing focus tree",
         )));
         self.parent = Some(parent);
-        self.record_action_chain(ctx);
+        self.record(record);
 
         self.try_autofocus();
     }
@@ -464,7 +475,11 @@ impl FocusHost {
     /// The owner's `did_change_dependencies`: when the enclosing focus node
     /// changed, move the hosted node — with focus — under the new parent, via
     /// ADR-0026's adopt.
-    pub(crate) fn dependencies_changed(&mut self, ctx: &dyn LifecycleContext) {
+    pub(crate) fn dependencies_changed(
+        &mut self,
+        ctx: &dyn LifecycleContext,
+        record: Option<FocusRecord>,
+    ) {
         let parent = enclosing_focus_parent(ctx);
         if self
             .parent
@@ -478,7 +493,7 @@ impl FocusHost {
                 .expect("BUG: a focus host could not reparent within its presentation focus tree");
             self.parent = Some(parent);
         }
-        self.record_action_chain(ctx);
+        self.record(record);
         *self.reveal.target.borrow_mut() = FocusRevealScope::of(ctx);
     }
 

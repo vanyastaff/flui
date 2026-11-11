@@ -29,7 +29,7 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 
 use super::raw_gesture_detector::{
-    ContactAdmission, GestureRecognizerFactory, RawGestureDetector, RecognizerContext,
+    ContactAdmission, FactoryEntry, GestureRecognizerFactory, RawGestureDetector, RecognizerContext,
 };
 use crate::Semantics;
 use crate::support::{EventCallback, ValueCallback, event_callback, value_callback};
@@ -1105,6 +1105,53 @@ impl GestureRecognizerFactory for PressFactory {
 
     // The shape is in the key and the callbacks are read live.
     fn update(&self, _: &PressRecognizers) {}
+}
+
+/// The tap of a control that mounts its own recognizers instead of building
+/// a [`GestureDetector`]: the press group a detector with only
+/// [`on_tap`](GestureDetector::on_tap) mounts, so the control competes in
+/// the gesture arena exactly as that detector does.
+pub(super) struct TapSlot {
+    live: Rc<LiveCallbacks>,
+}
+
+impl TapSlot {
+    /// A slot that calls `tap`.
+    pub(super) fn new(tap: Option<EventCallback>) -> Self {
+        let slot = Self {
+            live: Rc::new(LiveCallbacks::default()),
+        };
+        slot.set(tap);
+        slot
+    }
+
+    /// Replace the callback. A live recognizer reads it at event time, so a
+    /// contact in progress ends in the new one.
+    pub(super) fn set(&self, tap: Option<EventCallback>) {
+        // The outgoing closure drops after the borrow is released: a
+        // capture's `Drop` may reenter the control.
+        let outgoing = self.live.press.replace(PressCallbacks {
+            tap,
+            ..PressCallbacks::default()
+        });
+        drop(outgoing);
+    }
+
+    /// The recognizers to mount: the press group while there is a callback,
+    /// none otherwise.
+    pub(super) fn factories(&self) -> Vec<FactoryEntry> {
+        let shape = self.live.press.borrow().shape();
+        if shape.is_empty() {
+            return Vec::new();
+        }
+        vec![FactoryEntry::keyed(
+            ValueKey::new((0_u64, shape)),
+            PressFactory {
+                shape,
+                live: Rc::clone(&self.live),
+            },
+        )]
+    }
 }
 
 struct MultiTapFactory {

@@ -202,6 +202,24 @@ pub(crate) struct FactoryEntry {
     factory: Rc<dyn ErasedFactory>,
 }
 
+impl FactoryEntry {
+    /// A recognizer identified by its factory's type.
+    pub(crate) fn new(factory: impl GestureRecognizerFactory) -> Self {
+        Self {
+            key: None,
+            factory: Rc::new(factory),
+        }
+    }
+
+    /// A recognizer identified by its factory's type and `key`.
+    pub(crate) fn keyed(key: impl ViewKey, factory: impl GestureRecognizerFactory) -> Self {
+        Self {
+            key: Some(Rc::new(key)),
+            factory: Rc::new(factory),
+        }
+    }
+}
+
 struct Slot {
     factory_type: TypeId,
     key: Option<Rc<dyn ViewKey>>,
@@ -294,10 +312,7 @@ impl RawGestureDetector {
     /// Add a recognizer, identified by its factory's type.
     #[must_use]
     pub fn recognizer(mut self, factory: impl GestureRecognizerFactory) -> Self {
-        self.factories.push(FactoryEntry {
-            key: None,
-            factory: Rc::new(factory),
-        });
+        self.factories.push(FactoryEntry::new(factory));
         self
     }
 
@@ -310,10 +325,7 @@ impl RawGestureDetector {
         key: impl ViewKey,
         factory: impl GestureRecognizerFactory,
     ) -> Self {
-        self.factories.push(FactoryEntry {
-            key: Some(Rc::new(key)),
-            factory: Rc::new(factory),
-        });
+        self.factories.push(FactoryEntry::keyed(key, factory));
         self
     }
 

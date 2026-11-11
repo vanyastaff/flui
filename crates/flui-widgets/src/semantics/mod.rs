@@ -1381,6 +1381,15 @@ impl Semantics {
     }
 }
 
+/// Release the action table `part` holds in the owner lane: what a
+/// [`Semantics`] element does when it unmounts, for any owner of a
+/// [`RenderSemanticsAnnotations`].
+pub(crate) fn release_part(ctx: &RenderObjectContext<'_>, part: &mut RenderSemanticsAnnotations) {
+    if let Some(route) = part.set_action_route(None) {
+        release_actions(ctx, &route);
+    }
+}
+
 /// Remove a node's action table from the owner lane.
 fn release_actions(ctx: &RenderObjectContext<'_>, route: &SemanticsActionRoute) {
     if let Err(error) = ctx.unregister_local_payload(route.target()) {
@@ -1449,9 +1458,7 @@ impl RenderView for Semantics {
         ctx: &RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) {
-        if let Some(route) = render_object.set_action_route(None) {
-            release_actions(ctx, &route);
-        }
+        release_part(ctx, render_object);
     }
 
     flui_view::single_child_view_children!();

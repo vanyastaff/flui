@@ -442,6 +442,11 @@ pub(crate) fn ambient_action_chain(ctx: &dyn BuildContext) -> Option<ActionChain
 pub(crate) struct EnclosingActions(ActionChain);
 
 impl EnclosingActions {
+    /// `chain`, to publish from an element that layers its own bindings.
+    pub(crate) fn new(chain: ActionChain) -> Self {
+        Self(chain)
+    }
+
     /// The chain in force at `ctx`, registering a dependency: the reader
     /// rebuilds when an enclosing scope layers another chain.
     pub(crate) fn depend_on(ctx: &dyn BuildContext) -> Option<ActionChain> {

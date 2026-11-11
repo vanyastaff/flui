@@ -33,7 +33,7 @@ use flui_rendering::{
 };
 
 use super::{FocusRingStyle, RenderListener, RenderMouseRegion};
-use crate::RenderSemanticsAnnotations;
+use crate::{RenderSemanticsAnnotations, SubtreeAnchor};
 
 /// A single-child box of its child's size that is hit as its pointer part
 /// says, carries the targets of its pointer and mouse parts on one hit
@@ -45,6 +45,8 @@ pub struct RenderInteractive {
     mouse: Option<RenderMouseRegion>,
     semantics: Option<RenderSemanticsAnnotations>,
     focus_ring: Option<FocusRingStyle>,
+    /// Where the object publishes its identity while mounted.
+    anchor: Option<SubtreeAnchor>,
     /// Kept so a semantics part set after the object attached is attached
     /// too.
     invalidation: Option<LocalRenderInvalidationHandle>,
@@ -61,6 +63,7 @@ impl RenderInteractive {
             mouse: None,
             semantics: None,
             focus_ring: None,
+            anchor: None,
             invalidation: None,
             has_child: false,
         }
@@ -143,6 +146,23 @@ impl RenderInteractive {
         }
         self.focus_ring = style;
         RenderUpdateImpact::PAINT
+    }
+
+    /// Publishes this object's identity into `anchor` while it is mounted,
+    /// so its owner can measure it; `None` publishes nowhere. The previous
+    /// anchor stops naming this object.
+    pub fn set_anchor(&mut self, anchor: Option<SubtreeAnchor>) {
+        let id = self
+            .invalidation
+            .as_ref()
+            .map(LocalRenderInvalidationHandle::id);
+        if let (Some(previous), Some(id)) = (&self.anchor, id) {
+            previous.clear(id);
+        }
+        if let (Some(anchor), Some(id)) = (&anchor, id) {
+            anchor.publish(id);
+        }
+        self.anchor = anchor;
     }
 }
 
@@ -289,10 +309,16 @@ impl RenderBox for RenderInteractive {
         if let Some(semantics) = &mut self.semantics {
             RenderBox::attach(semantics, handle.clone());
         }
+        if let Some(anchor) = &self.anchor {
+            anchor.publish(handle.id());
+        }
         self.invalidation = Some(handle);
     }
 
     fn detach(&mut self) {
+        if let (Some(anchor), Some(handle)) = (&self.anchor, self.invalidation.take()) {
+            anchor.clear(handle.id());
+        }
         self.invalidation = None;
         if let Some(semantics) = &mut self.semantics {
             RenderBox::detach(semantics);

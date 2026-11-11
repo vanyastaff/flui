@@ -7,12 +7,12 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 
 use super::actions::{
-    Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent, ButtonActivateIntent,
+    Action, ActionOutcome, ActivateIntent, ActivationPressIntent, ButtonActivateIntent,
 };
-use super::focus::Focus;
-use super::focus_ring::FocusRing;
+use super::focus_host::FocusConfig;
+use super::node::InteractiveNode;
+use crate::Semantics;
 use crate::support::event_callback;
-use crate::{GestureDetector, Semantics};
 
 /// A press callback, already adapted to report its outcome.
 type PressCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
@@ -144,35 +144,37 @@ impl Action<ActivationPressIntent> for Press {
 }
 
 impl StatelessView for RawButton {
+    /// One [`InteractiveNode`] carries the tap target, the focus node, the
+    /// activation bindings, the semantics and the focus ring.
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         let enabled = self.on_press.is_some();
-        let ring = FocusRing::new(self.child.clone());
-        // The `Actions` sit above the `Focus`, so the focused node records
-        // them and the root bindings resolve the activation here (ADR-0079).
         let press = Press(self.on_press.clone());
-        let actions = Actions::new(
-            Focus::new(ring)
-                .can_request_focus(enabled)
-                .debug_label("RawButton"),
-        )
-        .action::<ActivateIntent>(press.clone())
-        .action::<ButtonActivateIntent>(press.clone())
-        .action::<ActivationPressIntent>(press);
-        let mut detector = GestureDetector::new()
-            .behavior(HitTestBehavior::Opaque)
-            .child(actions);
-        // `GestureDetector` refreshes its tap slot on every build, so a new
-        // closure takes effect on the next press.
-        if let Some(handler) = self.on_press.clone() {
-            detector = detector.on_tap(move |cx| handler(cx));
-        }
-        // One node for assistive technology: the button, which the focus
-        // annotation below joins.
-        Semantics::new()
+        // One node for assistive technology: the button.
+        let mut semantics = Semantics::new()
             .container(true)
             .role(crate::SemanticsRole::Button)
             .enabled(enabled)
-            .identifier_if(self.identifier.as_ref())
-            .child(detector)
+            .identifier_if(self.identifier.as_ref());
+        // The bindings are the node's own, so its focus node records them
+        // and the root bindings resolve the activation here (ADR-0079).
+        let mut node = InteractiveNode::new(self.child.clone())
+            .behavior(HitTestBehavior::Opaque)
+            .focus(FocusConfig {
+                can_request_focus: Some(enabled),
+                debug_label: Some("RawButton"),
+                ..FocusConfig::new()
+            })
+            .focus_ring()
+            .action::<ActivateIntent>(press.clone())
+            .action::<ButtonActivateIntent>(press.clone())
+            .action::<ActivationPressIntent>(press);
+        // The node replaces its callbacks on every build, so a new closure
+        // takes effect on the next press.
+        if let Some(handler) = self.on_press.clone() {
+            let activate = Rc::clone(&handler);
+            semantics = semantics.on_click(move |cx| activate(cx));
+            node = node.on_tap(handler);
+        }
+        node.semantics(semantics)
     }
 }
