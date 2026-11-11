@@ -47,7 +47,7 @@ fn paint_frame(
     owner.run_compositing().expect("compositing succeeds");
     let mut owner = owner.into_paint();
     let mut scene = SceneHost::new();
-    let (painted, tree) = scene.drive(&mut owner, |owner, writer| owner.run_paint(writer));
+    let (painted, tree) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
     painted.expect("paint succeeds");
     let tree = tree.expect("run_paint must produce a layer tree");
     (tree, owner)

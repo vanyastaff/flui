@@ -64,7 +64,7 @@ fn bench_flat_run_paint(c: &mut Criterion) {
                 || helpers::build_flat_paint_ready(n),
                 |(mut owner, mut scene)| {
                     let (painted, _) =
-                        scene.apply(&mut owner, |owner, writer| owner.run_paint(writer));
+                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
                     painted.expect("run_paint must succeed on a freshly composited flat tree");
                     black_box((owner, scene))
                 },
@@ -87,7 +87,7 @@ fn bench_deep_run_paint(c: &mut Criterion) {
                 || helpers::build_deep_paint_ready(depth),
                 |(mut owner, mut scene)| {
                     let (painted, _) =
-                        scene.apply(&mut owner, |owner, writer| owner.run_paint(writer));
+                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
                     painted.expect("run_paint must succeed on a freshly composited deep chain");
                     black_box((owner, scene))
                 },
@@ -132,7 +132,7 @@ fn bench_single_dirty_boundary(c: &mut Criterion) {
                 },
                 |(mut owner, mut scene)| {
                     let (painted, _) =
-                        scene.apply(&mut owner, |owner, writer| owner.run_paint(writer));
+                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
                     painted.expect("run_paint must succeed with one dirty boundary");
                     black_box((owner, scene))
                 },
@@ -162,7 +162,7 @@ fn bench_nested_caret(c: &mut Criterion) {
                 },
                 |(mut owner, mut scene)| {
                     let (painted, _) =
-                        scene.apply(&mut owner, |owner, writer| owner.run_paint(writer));
+                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
                     painted.expect("run_paint must succeed with one dirty nested boundary");
                     black_box((owner, scene))
                 },
@@ -194,7 +194,7 @@ fn bench_eight_dirty_boundaries(c: &mut Criterion) {
                 },
                 |(mut owner, mut scene)| {
                     let (painted, _) =
-                        scene.apply(&mut owner, |owner, writer| owner.run_paint(writer));
+                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
                     painted.expect("run_paint must succeed with eight dirty boundaries");
                     black_box((owner, scene))
                 },
@@ -250,7 +250,7 @@ fn bench_effect_change(
                         },
                         |(mut owner, mut scene)| {
                             let (painted, _) =
-                                scene.apply(&mut owner, |owner, writer| owner.run_paint(writer));
+                                scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
                             painted.expect("run_paint must succeed after the effect change");
                             black_box((owner, scene))
                         },
@@ -273,7 +273,7 @@ fn bench_effect_change(
                         },
                         |(mut owner, mut scene)| {
                             let (painted, _) =
-                                scene.apply(&mut owner, |owner, writer| owner.run_paint(writer));
+                                scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
                             painted.expect("run_paint must succeed after the effect change");
                             black_box((owner, scene))
                         },
@@ -485,7 +485,7 @@ fn bench_effect_change_in_lane(
                         |(mut owner, mut scene)| {
                             lane.enter(|| {
                                 let (painted, _) = scene
-                                    .apply(&mut owner, |owner, writer| owner.run_paint(writer));
+                                    .apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
                                 painted.expect("run_paint must succeed after the effect change");
                             });
                             black_box((owner, scene))
@@ -521,7 +521,7 @@ fn bench_effect_change_in_lane(
                         |(mut owner, mut scene)| {
                             lane.enter(|| {
                                 let (painted, _) = scene
-                                    .apply(&mut owner, |owner, writer| owner.run_paint(writer));
+                                    .apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
                                 painted.expect("run_paint must succeed after the effect change");
                             });
                             black_box((owner, scene))

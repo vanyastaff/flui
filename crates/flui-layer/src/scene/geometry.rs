@@ -9,7 +9,6 @@
 //! add once mapped to the surface, where no ancestor scales it.
 
 use std::cell::Cell;
-use std::ops::Range;
 
 use flui_foundation::geometry::{Matrix4, Offset, Point, Rect};
 use flui_painting::DamageExtent;
@@ -422,7 +421,7 @@ impl<'v> Geometry<'v> {
             at = content.entries()[effect.get()].parent();
         }
         for &effect in above.iter().rev() {
-            if let Entry::Effect { layer, .. } = &content.entries()[effect.get()] {
+            if let Some(layer) = content.effect_layer(effect) {
                 self.effect_links(
                     layer,
                     Address {
@@ -497,45 +496,87 @@ impl<'v> Geometry<'v> {
         }
     }
 
-    /// What the entries of `key` in `range`, one effect's whole scope or the
-    /// whole content, draw in the space that holds them (`key`'s own space
-    /// for a top-level entry), and how far, in device pixels, the filters
-    /// among them spread it once mapped to the surface (`device_spread`),
-    /// slotted subtrees included. One pass from the last entry back folds
-    /// each into its parent's, so a chain of effects of any depth costs no
-    /// stack.
+    /// What the scope of `start` (an entry and, for an effect, every entry
+    /// under it; `None` for the whole content) of `key` draws in the space
+    /// that holds it (`key`'s own space for a top-level entry), and how far,
+    /// in device pixels, the filters among them spread it once mapped to the
+    /// surface (`device_spread`), slotted subtrees included.
+    ///
+    /// Only the scope's effects and slots are folded: each effect's inside
+    /// starts from the union of its direct chunks, and the whole content's
+    /// from that of its top-level chunks, which the content holds. One pass
+    /// from the last of them back folds each into its parent's, so a chain of
+    /// effects of any depth costs no stack.
     fn scope(
         self,
         key: NodeKey,
-        range: Range<usize>,
+        start: Option<EntryIndex>,
         mut filters: Option<&mut Vec<(EntryIndex, Scope)>>,
     ) -> Scope {
         let content = self.record(key).content();
-        let entries = &content.entries()[range.clone()];
-        let mut inside = vec![Scope::EMPTY; entries.len()];
-        let mut whole = Scope::EMPTY;
-        for (offset, entry) in entries.iter().enumerate().rev() {
-            let scope = match entry {
-                Entry::Chunk { chunk, .. } => Scope {
-                    local: Reach::of(chunk.bounds()),
+        let entries = content.entries();
+        let all = content.structural();
+        let (structural, first_effect, mut whole, floor) = match start {
+            None => (
+                all,
+                0,
+                Scope {
+                    local: content.top_chunks(),
                     kernel: 0.0,
                 },
-                Entry::Slot { node, .. } => {
-                    let child = self.record(node.key());
-                    Scope {
-                        local: map_out(
-                            &[Link::Matrix(placement(child))],
-                            Reach::of(child.subtree()),
-                        ),
-                        kernel: child.kernel(),
-                    }
+                0,
+            ),
+            Some(entry) => match &entries[entry.get()] {
+                Entry::Chunk { chunk, .. } => {
+                    return Scope {
+                        local: Reach::of(chunk.bounds()),
+                        kernel: 0.0,
+                    };
                 }
-                Entry::Effect { layer, .. } => {
+                Entry::Slot { node, .. } => return self.slot_scope(node.key()),
+                Entry::Effect { .. } => {
+                    let position = content
+                        .effect_position(entry)
+                        .expect("BUG: an effect entry is among its content's effects");
+                    let end = content.effect_scope(position).end;
+                    let from = all.partition_point(|index| *index < entry);
+                    let to = all.partition_point(|index| index.get() < end);
+                    (&all[from..to], position, Scope::EMPTY, entry.get())
+                }
+            },
+        };
+        // Each structural entry's inside, and an effect's position among the
+        // content's effects: those of the scope are consecutive.
+        let mut inside: SmallVec<[Scope; 16]> = SmallVec::with_capacity(structural.len());
+        let mut positions: SmallVec<[usize; 16]> = SmallVec::with_capacity(structural.len());
+        let mut next_effect = first_effect;
+        for index in structural {
+            match entries[index.get()] {
+                Entry::Effect { .. } => {
+                    inside.push(Scope {
+                        local: content.effect_scope(next_effect).chunks,
+                        kernel: 0.0,
+                    });
+                    positions.push(next_effect);
+                    next_effect += 1;
+                }
+                Entry::Slot { .. } | Entry::Chunk { .. } => {
+                    inside.push(Scope::EMPTY);
+                    positions.push(usize::MAX);
+                }
+            }
+        }
+        for (offset, &index) in structural.iter().enumerate().rev() {
+            let entry = &entries[index.get()];
+            let scope = match entry {
+                Entry::Slot { node, .. } => self.slot_scope(node.key()),
+                Entry::Effect { .. } => {
                     let held = inside[offset];
+                    let layer = &content.layers()[positions[offset]];
                     let mut links = Links::new();
                     let at = Address {
                         node: key,
-                        entry: EntryIndex::at(range.start + offset),
+                        entry: index,
                     };
                     self.effect_links(layer, at, &mut links, 0);
                     if let Layer::ImageFilter(_) = layer
@@ -545,11 +586,15 @@ impl<'v> Geometry<'v> {
                     }
                     held.through(&links)
                 }
+                // The structural entries hold no chunk.
+                Entry::Chunk { .. } => continue,
             };
             match entry.parent() {
-                Some(parent) if parent.get() >= range.start => {
-                    let held = &mut inside[parent.get() - range.start];
-                    *held = held.join(scope);
+                Some(parent) if parent.get() >= floor => {
+                    let at = structural[..offset]
+                        .binary_search(&parent)
+                        .expect("BUG: an entry's parent effect precedes it in its scope");
+                    inside[at] = inside[at].join(scope);
                 }
                 _ => whole = whole.join(scope),
             }
@@ -557,10 +602,23 @@ impl<'v> Geometry<'v> {
         whole
     }
 
+    /// What the child boundary `child` slotted here draws, in its parent's
+    /// space, from its stored bounds.
+    fn slot_scope(self, child: NodeKey) -> Scope {
+        let child = self.record(child);
+        Scope {
+            local: map_out(
+                &[Link::Matrix(placement(child))],
+                Reach::of(child.subtree()),
+            ),
+            kernel: child.kernel(),
+        }
+    }
+
     /// What `key`'s content and subtree change, in its own space, from its
     /// children's stored bounds, and its filters' device kernel.
     pub(crate) fn subtree_scope(self, key: NodeKey) -> Scope {
-        self.scope(key, 0..self.record(key).content().entries().len(), None)
+        self.scope(key, None, None)
     }
 
     /// Where `entry` of `key` and its scope land on the surface; nothing when
@@ -571,11 +629,7 @@ impl<'v> Geometry<'v> {
             return Reach::Nothing;
         }
         self.content_links(key, entry, &mut links, 0);
-        let scope = self.scope(
-            key,
-            entry.get()..scope_end(self.record(key).content(), entry),
-            None,
-        );
+        let scope = self.scope(key, Some(entry), None);
         map_out_spread(&links, scope.local, scope.kernel)
     }
 
@@ -596,9 +650,7 @@ impl<'v> Geometry<'v> {
         let mut links = Links::new();
         self.node_links(at.node, &mut links, 0).ok()?;
         self.content_links(at.node, at.entry, &mut links, 0);
-        if let Entry::Effect { layer, .. } =
-            &self.record(at.node).content().entries()[at.entry.get()]
-        {
+        if let Some(layer) = self.record(at.node).content().effect_layer(at.entry) {
             self.effect_links(layer, at, &mut links, 0);
         }
         product(&links).ok()
@@ -606,8 +658,8 @@ impl<'v> Geometry<'v> {
 
     /// What each foreground image filter of `key` takes in, on the surface
     /// and unclipped, with the map under it, from one fold of the content;
-    /// `reads` counts the entries folded. A filter whose space nothing
-    /// draws in is left out.
+    /// `reads` counts the entries the fold covers. A filter whose space
+    /// nothing draws in is left out.
     pub(crate) fn filter_inputs(
         self,
         key: NodeKey,
@@ -615,7 +667,7 @@ impl<'v> Geometry<'v> {
     ) -> SmallVec<[(Address, Matrix4, Reach); 4]> {
         let entries = self.record(key).content().entries().len();
         let mut filters = Vec::new();
-        self.scope(key, 0..entries, Some(&mut filters));
+        self.scope(key, None, Some(&mut filters));
         *reads = reads.saturating_add(u64::try_from(entries).unwrap_or(u64::MAX));
         filters
             .into_iter()
@@ -652,10 +704,7 @@ impl<'v> Geometry<'v> {
         // A follower on either chain resolves one level deeper, as
         // `resolve_follower_transform` counts it.
         let chains = nesting + 1;
-        let Entry::Effect {
-            layer: Layer::Follower(follower),
-            ..
-        } = &self.record(at.node).content().entries()[at.entry.get()]
+        let Some(Layer::Follower(follower)) = self.record(at.node).content().effect_layer(at.entry)
         else {
             return Err(Unresolved::Hidden);
         };
@@ -670,10 +719,10 @@ impl<'v> Geometry<'v> {
         let Some(leader_at) = self.leader(follower.link()) else {
             return unlinked();
         };
-        let Entry::Effect {
-            layer: Layer::Leader(leader),
-            ..
-        } = &self.record(leader_at.node).content().entries()[leader_at.entry.get()]
+        let Some(Layer::Leader(leader)) = self
+            .record(leader_at.node)
+            .content()
+            .effect_layer(leader_at.entry)
         else {
             return unlinked();
         };
@@ -783,9 +832,7 @@ impl<'v> Geometry<'v> {
             match *step {
                 Up::Place(node) => links.push(Link::Matrix(placement(self.record(node)))),
                 Up::Effect(at) => {
-                    let Entry::Effect { layer, .. } =
-                        &self.record(at.node).content().entries()[at.entry.get()]
-                    else {
+                    let Some(layer) = self.record(at.node).content().effect_layer(at.entry) else {
                         continue;
                     };
                     if index > 0 {
@@ -810,9 +857,7 @@ impl<'v> Geometry<'v> {
             match *step {
                 Up::Place(node) => out.push(Link::Matrix(placement(self.record(node)))),
                 Up::Effect(at) => {
-                    if let Entry::Effect { layer, .. } =
-                        &self.record(at.node).content().entries()[at.entry.get()]
-                    {
+                    if let Some(layer) = self.record(at.node).content().effect_layer(at.entry) {
                         self.effect_links(layer, at, out, nesting);
                     }
                 }
@@ -866,20 +911,6 @@ fn finite(transform: Matrix4) -> Result<Matrix4, Unresolved> {
 fn placement(record: &NodeRecord) -> Matrix4 {
     let offset = record.placement().offset();
     Matrix4::translation(offset.dx, offset.dy, 0.0)
-}
-
-/// The position after the scope of `entry`: an effect's scope follows it,
-/// and the first entry whose parent precedes `entry` or that has none ends
-/// it.
-fn scope_end(content: &BoundaryContent, entry: EntryIndex) -> usize {
-    let entries = content.entries();
-    (entry.get() + 1..entries.len())
-        .find(|&position| {
-            entries[position]
-                .parent()
-                .is_none_or(|parent| parent.get() < entry.get())
-        })
-        .unwrap_or(entries.len())
 }
 
 /// Whether `entry` sits under `effect` in `content`.

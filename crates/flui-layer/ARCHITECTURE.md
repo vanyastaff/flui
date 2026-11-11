@@ -194,7 +194,14 @@ though both mint the same slot keys, so a cache keyed by a `SceneNodeId` serves 
 a version every reference is the bare slot key, and the public id is assembled from the version's
 lineage. A boundary's content is one paint-order stream of `Entry::{Effect, Chunk, Slot}` built by
 `ContentBuilder`, which makes every entry's parent an earlier effect by construction. A chunk is
-one render object's run; its bounds and textures are read from its `DisplayList`.
+one render object's run; its bounds and textures are read from its `DisplayList`. An effect's
+layer is held beside the stream, one per effect in paint order (`BoundaryContent::effect_layer`);
+the stream sits in an `Arc` with everything that depends on the entries alone: each effect's
+entry, the effects and slots in order, each effect's scope end and the union of its direct
+chunks' bounds, the union of the top-level chunks' bounds, the slots by node, and the chunks'
+texture and closure entries. `with_effects`, the composited-layer update, copies the layers,
+rebuilds the indexes they feed (links, texture layers, filter closures) and shares the stream, so
+it costs the content's effects and never its chunks.
 
 `SceneOwner::apply` builds the patch on a copy of the version and keeps it only when every
 operation is valid: an id of another lineage, an unknown or stale id, a retired node a slot still
@@ -214,7 +221,9 @@ its own space: `Publish` recomputes them exactly, deepest node first, and every 
 grows its ancestors' bounds by union, so a footprint over-reports and never under-reports. A
 republished content pairs its entries by key (a chunk and an effect by owner and ordinal, a slot
 by its node); a changed chunk or effect, or an unpaired entry, damages its old and new scope, and
-kept entries outside the longest increasing run of their old order damage both positions. `Place`
+kept entries outside the longest increasing run of their old order damage both positions. A
+content that shares its predecessor's stream skips the pairing: each changed effect none of whose
+ancestors changed damages its scope under both versions. `Place`
 damages the moved subtree at both placements. After the operations every follower is resolved
 again in both versions against its link's last attached leader (a published node no slot
 reaches draws nothing and never shadows it), and one whose transform changed damages its subtree
@@ -227,7 +236,8 @@ its own to the maximum of its children's, a sum along a chain), and a
 footprint adds it once mapped to the surface. The region then closes over the filtered nodes of
 both versions. A follower under `LeaderClip::Hide` is damaged when the patch changes a node on its
 leader's branch, and so is every follower whose chains pass through it, since hidden it hides
-them. Footprints fold an effect chain from its last entry back, without recursion; a clip over
+them. A scope's footprint folds only its effects and slots, from the last back and without
+recursion, each effect starting from its direct chunks' union; a clip over
 filters with a kernel bounds their scope by the clip. A node's foreground filter inputs are read
 only once the damage meets its subtree footprint, in one fold; until then only the content's
 closure entries are visited, never its other chunks. A surface

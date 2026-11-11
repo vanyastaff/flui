@@ -7,6 +7,7 @@ use std::cmp::Reverse;
 use std::sync::Arc;
 
 use flui_foundation::geometry::{Matrix4, Rect};
+use smallvec::SmallVec;
 
 use super::content::{BoundaryContent, Bounds, Entry, EntryIndex, LinkRole};
 use super::geometry::{Geometry, Link, Links, Reach, Scope, Watch};
@@ -401,13 +402,27 @@ fn pairing_key(entry: &Entry) -> (u8, u64, u32) {
     }
 }
 
-/// Whether a paired entry draws as before, its own part of the stream.
-fn same_entry(before: &Entry, after: &Entry) -> bool {
-    match (before, after) {
+/// Whether the paired entries at `old_index` of `before` and `index` of
+/// `after` draw as before, their own part of the stream.
+fn same_entry(
+    before: &BoundaryContent,
+    old_index: usize,
+    after: &BoundaryContent,
+    index: usize,
+) -> bool {
+    match (&before.entries()[old_index], &after.entries()[index]) {
         (Entry::Chunk { chunk: a, .. }, Entry::Chunk { chunk: b, .. }) => {
             std::sync::Arc::ptr_eq(a, b) || a.version() == b.version()
         }
-        (Entry::Effect { layer: a, .. }, Entry::Effect { layer: b, .. }) => a.same_effect(b),
+        (Entry::Effect { .. }, Entry::Effect { .. }) => {
+            match (
+                before.effect_layer(EntryIndex::at(old_index)),
+                after.effect_layer(EntryIndex::at(index)),
+            ) {
+                (Some(a), Some(b)) => a.same_effect(b),
+                _ => false,
+            }
+        }
         (Entry::Slot { node: a, .. }, Entry::Slot { node: b, .. }) => a == b,
         _ => false,
     }
@@ -425,6 +440,10 @@ fn content_damage(
     new: Geometry<'_>,
     footprints: &mut Footprints,
 ) {
+    if before.shares_stream(after) {
+        effects_damage(key, before, after, old, new, footprints);
+        return;
+    }
     let (old_entries, new_entries) = (before.entries(), after.entries());
     // A content republished entry for entry in its old order (a layer
     // update, a repaint that drew the same objects) pairs each entry with the
@@ -463,7 +482,7 @@ fn content_damage(
             }
             _ => false,
         };
-        if same_parent && same_entry(old_entry, entry) {
+        if same_parent && same_entry(before, old_index, after, index) {
             stable[index] = true;
             kept[old_index] = true;
         }
@@ -489,6 +508,46 @@ fn content_damage(
         if top(old_entries, &kept, index) {
             footprints.add(old.entry_reach(key, EntryIndex::at(index)));
         }
+    }
+}
+
+/// Damages what a composited-layer update changed: `after` shares
+/// `before`'s stream, so only the effects whose layer changed draw
+/// differently, and each topmost one (none of the effects it sits under
+/// changed) damages its scope under both versions, as the general pairing
+/// would. It costs the content's effects and the scopes of the changed ones,
+/// never the content's other chunks.
+fn effects_damage(
+    key: NodeKey,
+    before: &BoundaryContent,
+    after: &BoundaryContent,
+    old: Geometry<'_>,
+    new: Geometry<'_>,
+    footprints: &mut Footprints,
+) {
+    let (entries, effects) = (after.entries(), after.effects());
+    let (old_layers, new_layers) = (before.layers(), after.layers());
+    // Whether each effect, or one it sits under, changed.
+    let mut changed: SmallVec<[bool; 32]> = SmallVec::with_capacity(effects.len());
+    let mut tops: SmallVec<[EntryIndex; 4]> = SmallVec::new();
+    for (position, &index) in effects.iter().enumerate() {
+        let own = !old_layers[position].same_effect(&new_layers[position]);
+        let above = entries[index.get()].parent().is_some_and(|parent| {
+            let at = effects[..position]
+                .binary_search(&parent)
+                .expect("BUG: an effect's parent is an earlier effect");
+            changed[at]
+        });
+        changed.push(own || above);
+        if own && !above {
+            tops.push(index);
+        }
+    }
+    for &index in &tops {
+        footprints.add(new.entry_reach(key, index));
+    }
+    for &index in &tops {
+        footprints.add(old.entry_reach(key, index));
     }
 }
 
@@ -604,9 +663,9 @@ fn close_filtered(
                 return true;
             }
             for (at, ctm, input) in geometry.filter_inputs(key, &mut cost.filter_input_reads) {
-                let Some(Entry::Effect { layer, .. }) = version
+                let Some(layer) = version
                     .record(key)
-                    .and_then(|record| record.content().entries().get(at.entry.get()))
+                    .and_then(|record| record.content().effect_layer(at.entry))
                 else {
                     continue;
                 };
@@ -640,7 +699,7 @@ fn direct_closures(
     reads: &mut u64,
 ) -> bool {
     let mut foreground = false;
-    for &index in content.closure_entries() {
+    for index in content.closure_entries() {
         *reads = reads.saturating_add(1);
         let Some(entry) = content.entries().get(index.get()) else {
             continue;
@@ -650,8 +709,11 @@ fn direct_closures(
             entry: index,
         };
         match entry {
-            Entry::Effect { layer, .. } => match layer {
-                Layer::BackdropFilter(_) | Layer::ColorFilter(_) => {
+            Entry::Effect { .. } => match content
+                .effect_layer(index)
+                .expect("BUG: an effect entry has a layer")
+            {
+                layer @ (Layer::BackdropFilter(_) | Layer::ColorFilter(_)) => {
                     if let Some(ctm) = geometry.effect_ctm(at) {
                         out.push(read_closure(layer, &ctm, Rect::ZERO));
                     }

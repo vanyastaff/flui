@@ -566,10 +566,7 @@ impl PipelineOwner<PaintPhase> {
                 return Ok(None);
             }
             for (&index, layer) in slots.indices.iter().zip(fresh) {
-                let Some(flui_layer::Entry::Effect {
-                    layer: recorded, ..
-                }) = record.content.entries().get(index.get())
-                else {
+                let Some(recorded) = record.content.effect_layer(index) else {
                     debug_assert!(false, "BUG: an effect slot names no effect of its content");
                     return Ok(None);
                 };
@@ -994,7 +991,7 @@ impl PipelineOwner<PaintPhase> {
         }
         let update_targets = inputs.layer_updates.get(&id);
         let kept = committed.filter(|record| {
-            !record.stale && !(update_targets.is_none() && inputs.dirty_set.contains(&id))
+            !(record.stale || update_targets.is_none() && inputs.dirty_set.contains(&id))
         });
         if let Some(record) = kept {
             let Some(targets) = update_targets else {
@@ -1167,19 +1164,16 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             ops: _,
         } = staged;
         for (id, record) in records {
-            match record {
-                Some(record) => {
-                    if record.followers.is_empty() {
-                        self.follower_boundaries.remove(&id);
-                    } else {
-                        self.follower_boundaries.insert(id);
-                    }
-                    self.boundary_records.insert(id, record);
-                }
-                None => {
+            if let Some(record) = record {
+                if record.followers.is_empty() {
                     self.follower_boundaries.remove(&id);
-                    self.boundary_records.remove(&id);
+                } else {
+                    self.follower_boundaries.insert(id);
                 }
+                self.boundary_records.insert(id, record);
+            } else {
+                self.follower_boundaries.remove(&id);
+                self.boundary_records.remove(&id);
             }
         }
         for (id, placed) in placed {
@@ -1648,18 +1642,17 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
     /// `origin`, for a later composited-layer update.
     fn record_effect_layer(&mut self, render_id: RenderId, index: EntryIndex, origin: Offset) {
         let build = self.build();
-        match build.effect_owner.get(&render_id) {
-            Some(&at) => build.effect_slots[at].1.indices.push(index),
-            None => {
-                build
-                    .effect_owner
-                    .insert(render_id, build.effect_slots.len());
-                let mut indices = SmallVec::new();
-                indices.push(index);
-                build
-                    .effect_slots
-                    .push((render_id, EffectSlots { indices, origin }));
-            }
+        if let Some(&at) = build.effect_owner.get(&render_id) {
+            build.effect_slots[at].1.indices.push(index);
+        } else {
+            build
+                .effect_owner
+                .insert(render_id, build.effect_slots.len());
+            let mut indices = SmallVec::new();
+            indices.push(index);
+            build
+                .effect_slots
+                .push((render_id, EffectSlots { indices, origin }));
         }
     }
 
@@ -1773,7 +1766,7 @@ impl<'w, 'o> FragmentComposer<'w, 'o> {
                 if retired_set.contains(&node) {
                     return false;
                 }
-                let parent = current.node(node).and_then(|scene| scene.parent());
+                let parent = current.node(node).and_then(flui_layer::SceneNode::parent);
                 let free = parent.is_none_or(|parent| {
                     republished.contains(&parent) || retired_set.contains(&parent)
                 });

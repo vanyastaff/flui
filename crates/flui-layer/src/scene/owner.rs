@@ -1170,7 +1170,7 @@ impl<'a> Patch<'a> {
             if let Some(before) = before {
                 self.scratch.unindexed.insert(key.slot());
                 links.extend(before.links().iter().map(|(link, _, _)| link.id()));
-                textures.extend(before.textures().iter().map(|(texture, _)| texture.get()));
+                textures.extend(before.textures().map(|(texture, _)| texture.get()));
                 if before.is_filtered() {
                     self.next.filtered.remove(key.table_key(), &mut self.cost);
                 }

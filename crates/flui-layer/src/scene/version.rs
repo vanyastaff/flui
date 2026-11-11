@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 
-use super::content::{BoundaryContent, Bounds, Entry, EntryIndex, LinkRole};
+use super::content::{BoundaryContent, Bounds, EntryIndex, LinkRole};
 use super::geometry::Geometry;
 use super::id::{Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::owner::Placement;
@@ -304,11 +304,8 @@ impl SceneVersion {
         }
         let record = self.0.record(at.node.key())?;
         if !matches!(
-            record.content().entries().get(at.entry.get()),
-            Some(Entry::Effect {
-                layer: crate::Layer::Follower(_),
-                ..
-            })
+            record.content().effect_layer(at.entry),
+            Some(crate::Layer::Follower(_))
         ) {
             return None;
         }
@@ -348,11 +345,8 @@ impl SceneVersion {
         self.leaders(link)
             .filter(|at| geometry.is_attached(at.node.key()))
             .filter_map(
-                |at| match self.node(at.node)?.content().entries().get(at.entry.get()) {
-                    Some(Entry::Effect {
-                        layer: crate::Layer::Leader(leader),
-                        ..
-                    }) => Some(leader.size()),
+                |at| match self.node(at.node)?.content().effect_layer(at.entry) {
+                    Some(crate::Layer::Leader(leader)) => Some(leader.size()),
                     _ => None,
                 },
             )
@@ -427,10 +421,7 @@ impl VersionInner {
         for (texture, entry) in content.textures() {
             self.textures
                 .get_or_default(texture.get(), cost)
-                .push(Address {
-                    node,
-                    entry: *entry,
-                });
+                .push(Address { node, entry });
         }
         if content.is_filtered() {
             self.filtered.insert(node.table_key(), node, cost);
@@ -479,10 +470,14 @@ mod flatten {
         #[must_use]
         pub fn flatten_node(&self, node: SceneNodeId) -> Option<LayerTree> {
             let held = self.node(node)?;
-            let entries = held.content().entries();
+            let content = held.content();
+            let entries = content.entries();
             let enclosing = matches!(entries.first(), Some(Entry::Effect { .. }))
                 && entries.iter().skip(1).all(|entry| entry.parent().is_some());
-            if enclosing && let Some(Entry::Effect { layer, owner, .. }) = entries.first() {
+            if enclosing
+                && let Some(Entry::Effect { owner, .. }) = entries.first()
+                && let Some((_, layer)) = content.effect_layers().next()
+            {
                 let mut tree = LayerTree::new(LayerNode::new(layer.clone()).with_render(*owner))
                     .with_scene(self.id().seq());
                 let at = tree.root();
@@ -515,16 +510,30 @@ mod flatten {
                 let node = self
                     .node(id)
                     .expect("BUG: a slot names a node of its version");
-                let mut placed: Vec<LayerId> = Vec::with_capacity(node.content().entries().len());
-                for (position, entry) in node.content().entries().iter().enumerate() {
+                let content = node.content();
+                let mut placed: Vec<LayerId> = Vec::with_capacity(content.entries().len());
+                // The effects are in paint order, so a cursor walks their layers.
+                let mut layers = content.effect_layers().map(|(_, layer)| layer);
+                for (position, entry) in content.entries().iter().enumerate() {
+                    let effect_layer = match entry {
+                        Entry::Effect { .. } => layers.next(),
+                        Entry::Chunk { .. } | Entry::Slot { .. } => None,
+                    };
                     if position < skip {
                         placed.push(at);
                         continue;
                     }
                     let parent = entry.parent().map_or(at, |index| placed[index.get()]);
                     let layer = match entry {
-                        Entry::Effect { layer, owner, .. } => tree
-                            .push_child(parent, LayerNode::new(layer.clone()).with_render(*owner)),
+                        Entry::Effect { owner, .. } => tree.push_child(
+                            parent,
+                            LayerNode::new(
+                                effect_layer
+                                    .expect("BUG: each effect entry has a layer")
+                                    .clone(),
+                            )
+                            .with_render(*owner),
+                        ),
                         Entry::Chunk { chunk, .. } => tree.push_child(
                             parent,
                             LayerNode::new(Layer::from(PictureLayer::from_shared(Arc::clone(
@@ -561,7 +570,7 @@ mod annotations {
 
     use super::{EntryAddress, SceneVersion};
     use crate::layer::Layer;
-    use crate::scene::content::Entry;
+    use crate::scene::content::{Entry, EntryIndex};
     use crate::scene::id::SceneNodeId;
     use crate::tree::annotations::clip_admits;
 
@@ -600,9 +609,12 @@ mod annotations {
                     Some(parent) => local[parent.get()],
                 };
                 local.push(match (entry, under) {
-                    (Entry::Effect { layer, .. }, Some(under)) => self
-                        .point_in_effect(node, index, layer, under)
-                        .filter(|at| clip_admits(layer, *at)),
+                    (Entry::Effect { .. }, Some(under)) => content
+                        .effect_layer(EntryIndex::at(index))
+                        .and_then(|layer| {
+                            self.point_in_effect(node, index, layer, under)
+                                .filter(|at| clip_admits(layer, *at))
+                        }),
                     _ => None,
                 });
             }
@@ -610,11 +622,10 @@ mod annotations {
             // effect's descendants and later siblings come before it.
             for (index, entry) in entries.iter().enumerate().rev() {
                 match entry {
-                    Entry::Effect {
-                        layer: Layer::AnnotatedRegion(region),
-                        ..
-                    } => {
-                        if let Some(at) = local[index]
+                    Entry::Effect { .. } => {
+                        if let Some(Layer::AnnotatedRegion(region)) =
+                            content.effect_layer(EntryIndex::at(index))
+                            && let Some(at) = local[index]
                             && (region.is_sized_by_parent() || region.bounds().contains(at))
                             && let Some(value) = region.value().downcast::<T>()
                         {
@@ -643,7 +654,7 @@ mod annotations {
                             return Some(found);
                         }
                     }
-                    Entry::Effect { .. } | Entry::Chunk { .. } => {}
+                    Entry::Chunk { .. } => {}
                 }
             }
             None

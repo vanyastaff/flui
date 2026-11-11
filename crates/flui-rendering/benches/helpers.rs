@@ -177,7 +177,7 @@ pub fn build_boundary_tree_painted_once(
 
     let mut owner = advance_to_paint(owner.into_layout());
     let mut scene = SceneHost::new();
-    let (painted, warm_up) = scene.drive(&mut owner, |owner, writer| owner.run_paint(writer));
+    let (painted, warm_up) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
     painted.expect("the first paint must succeed on a freshly composited tree");
     drop(warm_up);
     (owner, scene, leaf_ids)
@@ -210,7 +210,7 @@ pub fn build_nested_boundary_tree_painted_once(
 
     let mut owner = advance_to_paint(owner.into_layout());
     let mut scene = SceneHost::new();
-    let (painted, warm_up) = scene.drive(&mut owner, |owner, writer| owner.run_paint(writer));
+    let (painted, warm_up) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
     painted.expect("the first paint must succeed on a freshly composited tree");
     drop(warm_up);
     (owner, scene, caret)
@@ -279,7 +279,7 @@ pub fn build_effect_tree(
 
     let mut owner = advance_to_paint(owner.into_layout());
     let mut scene = SceneHost::new();
-    let (painted, warm_up) = scene.drive(&mut owner, |owner, writer| owner.run_paint(writer));
+    let (painted, warm_up) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
     painted.expect("the first paint must succeed on a freshly composited tree");
     drop(warm_up);
     (owner, scene, effect_id)

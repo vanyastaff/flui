@@ -29,7 +29,7 @@ pub(crate) fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
     owner.run_compositing().expect("compositing");
     let mut owner = owner.into_paint();
     let mut scene = SceneHost::new();
-    let (painted, tree) = scene.drive(&mut owner, |owner, writer| owner.run_paint(writer));
+    let (painted, tree) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
     painted.expect("paint");
 
     let tree = tree.expect("layer tree");

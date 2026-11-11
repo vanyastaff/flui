@@ -62,7 +62,7 @@ pub(crate) fn run_paint_refuses_to_start_with_layout_work_pending() {
     );
 
     let mut owner = owner.into_layout().into_compositing().into_paint();
-    let (result, _) = scene.drive(&mut owner, |owner, writer| owner.run_paint(writer));
+    let (result, _) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
 
     match result {
         Err(RenderError::PaintBeforeLayout) => {}

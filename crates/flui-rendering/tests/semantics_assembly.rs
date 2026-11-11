@@ -89,7 +89,7 @@ pub(crate) fn a_panicking_semantics_callback_leaves_the_phase() {
     owner.run_compositing().expect("compositing");
     let mut owner = owner.into_paint();
     let mut scene = SceneHost::new();
-    let (painted, _) = scene.drive(&mut owner, |owner, writer| owner.run_paint(writer));
+    let (painted, _) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
     painted.expect("paint");
     let mut owner = owner.into_semantics();
     let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.run_semantics()))

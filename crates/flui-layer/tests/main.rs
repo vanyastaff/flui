@@ -18,6 +18,8 @@ mod region;
 mod scene;
 #[path = "scene_damage.rs"]
 mod scene_damage;
+#[path = "scene_effect_update.rs"]
+mod scene_effect_update;
 #[path = "scene_links.rs"]
 mod scene_links;
 #[path = "texture_registry.rs"]
@@ -446,4 +448,29 @@ fn patch_damage_covers_diff_damage() {
 #[test]
 fn a_version_resolves_links_and_annotations_as_its_flattened_tree_does() {
     scene_links::a_version_resolves_links_and_annotations_as_its_flattened_tree_does();
+}
+
+/// A composited-layer update shares its content's stream and damages and
+/// bounds what a content built afresh with its layers would (ADR-0304 §2,
+/// §4).
+#[test]
+fn scene_effect_update() {
+    use scene_effect_update as u;
+    run_rows(
+        "scene_effect_update",
+        &[
+            (
+                "a_nested_effect_update_damages_its_scope_and_moves_the_bounds",
+                u::a_nested_effect_update_damages_its_scope_and_moves_the_bounds,
+            ),
+            (
+                "an_outer_effect_update_damages_its_unchanged_descendants",
+                u::an_outer_effect_update_damages_its_unchanged_descendants,
+            ),
+            (
+                "an_effect_update_equals_a_content_built_afresh",
+                u::an_effect_update_equals_a_content_built_afresh,
+            ),
+        ],
+    );
 }
