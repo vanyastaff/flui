@@ -51,7 +51,7 @@ use super::nested::{
     Participant, PlaneSource, ScrollCause, ScrollDevice, ScrollEndReason, ScrollStep,
 };
 use super::scroll_owner::{MotionHook, MoveOutcome, ScrollOwner, SharedSnapPolicy};
-use super::{ScrollController, Scrollable};
+use super::{ClampingScrollPhysics, ScrollController, Scrollable, SharedScrollPhysics};
 use crate::anchored_box::AnchoredBox;
 use crate::interaction::raw_gesture_detector::ContactAdmission;
 use crate::transitions::transform_view::AnimatedTransformView;
@@ -885,6 +885,9 @@ pub struct AnchoredDragState<K> {
     haptics: Rc<RefCell<Option<HapticsHandle>>>,
     pipeline: Rc<RefCell<Option<WeakPipelineCell>>>,
     motion: MotionHook,
+    /// The bounds of the drag: clamped at the outermost anchors whatever
+    /// `ScrollBehavior` the subtree names (ADR-0209 §9).
+    physics: SharedScrollPhysics,
     ancestor: Rc<Ancestor>,
     /// The chain node the scrollables inside see, kept while the ancestor
     /// and the chain above stay the same.
@@ -977,6 +980,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
     ) -> Self {
         Self {
             motion: motion_hook(Rc::downgrade(&controller.inner), Rc::clone(&haptics)),
+            physics: Rc::new(ClampingScrollPhysics::new()),
             ancestor: Rc::new(Ancestor {
                 slot: Rc::clone(&controller.inner.slot),
                 pipeline: Rc::clone(&pipeline),
@@ -1256,6 +1260,7 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
             .scroll_direction(axis)
             .axis_direction(axis_direction)
             .snap_policy(Rc::clone(&anchors.policy))
+            .physics(Rc::clone(&self.physics))
             .anchored(AnchoredLeaf {
                 motion: Rc::clone(&self.motion),
                 slot: Rc::clone(&controller.inner.slot),
