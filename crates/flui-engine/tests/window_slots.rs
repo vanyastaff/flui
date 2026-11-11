@@ -350,3 +350,158 @@ fn a_restore_keeps_the_barrier_of_a_refused_size() {
     let _ = rig.executor.turn();
     assert_eq!(rig.verdicts(slot), [(2, RasterVerdict::Presented)]);
 }
+
+/// A [`ScriptedSlots`] whose next render sends a restore through the owner's
+/// sender before it answers, as an owner woken inside the frame would.
+struct RestoresDuringRender {
+    inner: ScriptedSlots,
+    restore: std::rc::Rc<std::cell::RefCell<Option<(RasterSender, UnconfiguredSurface)>>>,
+}
+
+impl flui_engine::SlotBackend for RestoresDuringRender {
+    fn attach(
+        &mut self,
+        slot: SlotId,
+        target: SlotTarget,
+        config: SlotConfig,
+    ) -> flui_engine::EngineResult<()> {
+        self.inner.attach(slot, target, config)
+    }
+
+    fn resize(&mut self, slot: SlotId, size: DeviceSize) -> flui_engine::EngineResult<()> {
+        self.inner.resize(slot, size)
+    }
+
+    fn release(&mut self, slot: SlotId) {
+        self.inner.release(slot);
+    }
+
+    fn restore(
+        &mut self,
+        slot: SlotId,
+        surface: UnconfiguredSurface,
+    ) -> flui_engine::EngineResult<()> {
+        self.inner.restore(slot, surface)
+    }
+
+    fn set_display_color(
+        &mut self,
+        slot: SlotId,
+        color: DisplayColor,
+    ) -> flui_engine::EngineResult<()> {
+        self.inner.set_display_color(slot, color)
+    }
+
+    fn set_latency(&mut self, slot: SlotId, latency: FrameLatency) {
+        self.inner.set_latency(slot, latency);
+    }
+
+    fn render(
+        &mut self,
+        slot: SlotId,
+        scene: &Scene,
+        damage: DamageRegion,
+    ) -> flui_engine::EngineResult<flui_engine::PresentDisposition> {
+        let queued = self.restore.borrow_mut().take();
+        if let Some((sender, surface)) = queued {
+            let _receipt = sender
+                .send(RasterCommand::Restore { slot, surface })
+                .expect("accepted");
+        }
+        self.inner.render(slot, scene, damage)
+    }
+
+    fn detach(&mut self, slot: SlotId) {
+        self.inner.detach(slot);
+    }
+
+    fn reclaim(&mut self, level: flui_foundation::memory::MemoryPressureLevel) {
+        self.inner.reclaim(level);
+    }
+}
+
+/// A restore sent from inside a frame that then loses its surface carries the
+/// generation minted at its send, older than the one the loss mints after it:
+/// applying it must not rewind the slot to that older generation, or every
+/// frame stamped with the record's required generation settles stale for good.
+///
+/// Red-check: let the restore authorise its send-time generation whatever was
+/// minted since, and the frame stamped with the required generation settles
+/// `SurfaceStale`.
+#[test]
+fn a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation() {
+    let inner = ScriptedSlots::new();
+    let restore = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let backend = RestoresDuringRender {
+        inner: inner.clone(),
+        restore: std::rc::Rc::clone(&restore),
+    };
+    let (executor, sender) = RasterExecutor::new(backend, || {});
+    let display: Arc<dyn DisplayConnection> = Arc::new(FakeDisplay);
+    let factory = noop_surface_factory(display);
+    let surface = || {
+        factory
+            .create(Arc::new(FakeWindow::new(7)))
+            .expect("the no-op backend makes a surface for any window")
+    };
+    let mut executor = executor;
+    let slot = sender.mint_slot().expect("a slot id is left");
+    let _ = sender
+        .send(RasterCommand::Attach {
+            slot,
+            address: address(),
+            target: SlotTarget::Window(surface()),
+            config: SlotConfig::new(),
+        })
+        .expect("accepted");
+    let SendReceipt::Configured(sized) = sender
+        .send(RasterCommand::Configure {
+            slot,
+            change: SlotChange::Size(DeviceSize::new(32, 16)),
+        })
+        .expect("accepted")
+    else {
+        panic!("a positive size configures the window");
+    };
+    let _ = executor.turn();
+
+    *restore.borrow_mut() = Some((sender.clone(), surface()));
+    inner.script_render(ScriptedAnswer::Fail(EngineError::SurfaceLost));
+    let frame = |generation, epoch| {
+        let mut frame_epoch = FrameEpoch::ZERO;
+        for _ in 0..epoch {
+            frame_epoch = frame_epoch.next();
+        }
+        RasterCommand::Frame {
+            slot,
+            snapshot: SceneSnapshot::new(
+                FrameStamp::new(
+                    address(),
+                    frame_epoch,
+                    generation,
+                    GpuResourceGeneration::ZERO,
+                ),
+                DamageRegion::Unchanged,
+                Scene::new(LayerTree::new(Layer::from(CanvasLayer::new()))),
+            ),
+        }
+    };
+    let drain = || {
+        let mut settled = Vec::new();
+        sender.drain_settlements(slot, &mut settled);
+        settled
+            .into_iter()
+            .map(|settlement| (settlement.epoch.get(), settlement.verdict))
+            .collect::<Vec<_>>()
+    };
+    let _ = sender.send(frame(sized, 0)).expect("accepted");
+    let _ = executor.turn();
+    assert_eq!(drain(), [(0, RasterVerdict::SurfaceStale)]);
+
+    // The restore is applied this turn; the frame is stamped as the record
+    // says, after the loss.
+    let required = sender.record(slot).expect("held").required_generation;
+    let _ = sender.send(frame(required, 1)).expect("accepted");
+    let _ = executor.turn();
+    assert_eq!(drain(), [(1, RasterVerdict::Presented)]);
+}

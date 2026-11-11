@@ -355,12 +355,18 @@ impl<B: SlotBackend> RasterExecutor<B> {
             .expect("BUG: the slot was found attached above");
         // The restore answers for every frame stamped before it, whatever its
         // outcome: a refused or panicked one leaves the slot released, whose
-        // frames settle not shown. A size still pending or refused keeps its
-        // barrier: the restored surface is configured at the size the slot
-        // has, and only a size the backend accepts authorises frames laid out
-        // for a newer one.
-        let size_barrier = held.refused_size.is_some() || held.inbox.lock().size.is_some();
-        if !size_barrier {
+        // frames settle not shown. It authorises its generation only while
+        // that is still the slot's newest: a loss settled after the restore
+        // was sent minted (and, without a barrier, authorised) a newer one,
+        // which the restored surface serves. A size still pending or refused
+        // keeps its barrier: the restored surface is configured at the size
+        // the slot has, and only a size the backend accepts authorises frames
+        // laid out for a newer one.
+        let newest = {
+            let state = held.inbox.lock();
+            state.generation == generation && state.size.is_none()
+        };
+        if newest && held.refused_size.is_none() {
             held.applied = generation;
         }
         held.owe_full(FullReason::SurfaceChanged);
