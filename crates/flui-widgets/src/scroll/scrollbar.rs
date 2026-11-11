@@ -181,7 +181,12 @@ impl Scrollbar {
     /// returns.
     #[must_use]
     pub fn for_scrollable(details: &ScrollableDetails, child: impl IntoView) -> Self {
-        Self::new(child).controller(details.controller().clone(), details.axis_direction())
+        let mut bar =
+            Self::new(child).controller(details.controller().clone(), details.axis_direction());
+        if let Some(followed) = &mut bar.followed {
+            followed.wheel_distances = details.wheel_distances();
+        }
+        bar
     }
 
     /// Follow the scroll view `controller` moves, whose offset grows toward
@@ -196,6 +201,7 @@ impl Scrollbar {
         self.followed = Some(ObservedScroll {
             controller,
             axis_direction,
+            wheel_distances: WheelScrollDistances::default(),
         });
         self
     }
@@ -528,6 +534,10 @@ impl Bar {
             _ => false,
         };
         if unchanged {
+            // The same position: only what the bar reads of it may differ,
+            // the wheel distances.
+            let replaced = self.shown.replace(next);
+            drop(replaced);
             return;
         }
         let (position, activity) = match &next {
@@ -560,10 +570,17 @@ impl Bar {
         );
         // The old subscriptions and controller drop with nothing borrowed.
         drop(replaced);
+        // A position already scrolling raises no activity change to hear:
+        // show the bar for the run under way.
+        if self
+            .shown()
+            .is_some_and(|shown| shown.controller.position().is_scrolling())
+        {
+            self.scrolling(true);
+        }
         self.repaint.notify_listeners();
     }
 
-    /// Show the bar while the position scrolls; fade it out once it stops.
     /// The position changed: repaint, and show the bar for a while when it
     /// moved outside a scroll activity, as a jump does.
     fn moved(&self) {
@@ -584,6 +601,7 @@ impl Bar {
         self.repaint.notify_listeners();
     }
 
+    /// Show the bar while the position scrolls; fade it out once it stops.
     fn scrolling(&self, scrolling: bool) {
         if scrolling {
             self.appear();
@@ -674,7 +692,7 @@ impl Bar {
             event,
             position.viewport_dimension(),
             preferences,
-            WheelScrollDistances::default(),
+            shown.wheel_distances,
         );
         if shown.axis_direction.is_reversed() {
             delta = -delta;

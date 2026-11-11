@@ -891,6 +891,7 @@ impl ViewState<Scrollable> for ScrollableState {
                 ObservedScroll {
                     controller: self.scroll_controller.clone(),
                     axis_direction,
+                    wheel_distances: view.config.wheel_distances,
                 },
             );
         }
@@ -944,7 +945,8 @@ impl ViewState<Scrollable> for ScrollableState {
                     applied.platform,
                     applied.axis_direction,
                     self.scroll_controller.clone(),
-                ),
+                )
+                .with_wheel_distances(view.config.wheel_distances),
             )
         };
         // A touchpad pan contests the contact with the recognizers that feed

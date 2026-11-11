@@ -2015,6 +2015,14 @@ fn scrollbar() {
                 "scrollbar::a_scroll_behavior_builds_the_bar_of_its_scroll_views",
                 crate::scrollbar::a_scroll_behavior_builds_the_bar_of_its_scroll_views,
             ),
+            (
+                "scrollbar::a_wheel_over_the_bar_keeps_the_scroll_views_line_distance",
+                crate::scrollbar::a_wheel_over_the_bar_keeps_the_scroll_views_line_distance,
+            ),
+            (
+                "scrollbar::a_bar_attached_mid_scroll_shows_for_the_run_under_way",
+                crate::scrollbar::a_bar_attached_mid_scroll_shows_for_the_run_under_way,
+            ),
             #[cfg(debug_assertions)]
             (
                 "scrollbar::a_shown_thumb_without_a_scroll_view_fails_loudly",

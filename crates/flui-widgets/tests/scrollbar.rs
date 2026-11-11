@@ -637,3 +637,77 @@ fn run(laid: &mut LaidOut, duration: Duration) {
         left -= step;
     }
 }
+
+/// A wheel tick of one line at `(x, y)`.
+fn wheel_line(laid: &LaidOut, x: f64, y: f64) {
+    use flui_platform::pointer::{
+        PointerEvent, PointerId, PointerInfo, PointerPosition, ScrollDelta, ScrollEvent, ScrollUnit,
+    };
+    laid.dispatch_pointer_event(&PointerEvent::Scroll(ScrollEvent::new(
+        PointerInfo::new(
+            PointerId::try_from(1_u64).expect("nonzero pointer"),
+            PointerKind::Mouse,
+        ),
+        flui_platform::EventTime::from_nanos(1),
+        PointerPosition::try_new(flui_foundation::geometry::Point::new(x, y))
+            .expect("finite wheel position"),
+        ScrollDelta::try_new(ScrollUnit::Lines, 0.0, 1.0).expect("finite wheel distance"),
+    )));
+}
+
+/// A line of the wheel over the bar moves the list as far as over its
+/// content, by the distances the scroll view names.
+pub(crate) fn a_wheel_over_the_bar_keeps_the_scroll_views_line_distance() {
+    // Each tick goes to a fresh tree, so no latch from the first carries
+    // the second to the content.
+    let line_at = |x: f64| {
+        let scroll = ScrollController::new();
+        let distances = flui_widgets::WheelScrollDistances::try_new(70.0, 10.0).expect("positive");
+        let (mut laid, _vsync) =
+            animated(shown(column(&scroll, 3000.0).wheel_distances(distances)));
+        wheel_line(&laid, x, 150.0);
+        run(&mut laid, Duration::from_millis(300));
+        scroll.pixels()
+    };
+    assert_close(line_at(150.0), 70.0, "a line over the content");
+    assert_close(line_at(297.0), 70.0, "a line over the bar moves as far");
+}
+
+/// A bar that starts following a scroll view already under way shows for
+/// that run, though no change of activity follows.
+pub(crate) fn a_bar_attached_mid_scroll_shows_for_the_run_under_way() {
+    let scroll = ScrollController::new();
+    let layout = |with_bar: bool| {
+        let beside: BoxedView = if with_bar {
+            Scrollbar::new(SizedBox::new(SIDE, 100.0))
+                .controller(
+                    scroll.clone(),
+                    flui_rendering::constraints::AxisDirection::TopToBottom,
+                )
+                .thumb_color(THUMB)
+                .boxed()
+        } else {
+            SizedBox::new(SIDE, 100.0).boxed()
+        };
+        Column::new(vec![
+            SizedBox::new(SIDE, 200.0)
+                .child(column(&scroll, 3000.0))
+                .boxed(),
+            beside,
+        ])
+    };
+    let (mut laid, vsync) = animated(layout(false));
+    scroll
+        .animate_to(
+            2000.0,
+            Duration::from_secs(2),
+            SharedCurve::new(curves::LINEAR),
+        )
+        .expect("no build is running");
+    run(&mut laid, Duration::from_millis(100));
+    assert!(scroll.position().is_scrolling(), "the run is under way");
+    laid.pump_widget(VsyncScope::new(vsync, layout(true)));
+    run(&mut laid, Duration::from_millis(400));
+    assert!(scroll.position().is_scrolling(), "still under way");
+    assert_eq!(painted(&laid, THUMB).len(), 1, "the bar shows for it");
+}
