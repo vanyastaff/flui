@@ -1402,26 +1402,41 @@ impl HasWindowHandle for X11Surface {
 }
 
 impl HasDisplayHandle for X11Surface {
-    #[expect(
-        unsafe_code,
-        reason = "a raw display handle is borrowed for as long as the target lives"
-    )]
     fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         if self.retirement.is_retired() {
             return Err(HandleError::Unavailable);
         }
-        let connection = std::ptr::NonNull::new(self.connection.xcb().get_raw_xcb_connection());
-        let screen =
-            i32::try_from(self.connection.screen_number()).map_err(|_| HandleError::Unavailable)?;
-        // SAFETY: the target holds the connection (`Arc<X11Connection>`), so
-        // the libxcb connection the pointer names stays open for as long as
-        // the borrow, which cannot outlive the target.
-        Ok(unsafe {
-            DisplayHandle::borrow_raw(RawDisplayHandle::Xcb(XcbDisplayHandle::new(
-                connection, screen,
-            )))
-        })
+        xcb_display(&self.connection)
     }
+}
+
+/// The X11 host's display connection (ADR-0305 §2): the connection its windows
+/// are made on, so its handle is every window target's.
+pub(crate) struct X11Display(pub(crate) Arc<X11Connection>);
+
+impl HasDisplayHandle for X11Display {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        xcb_display(&self.0)
+    }
+}
+
+impl flui_platform::DisplayConnection for X11Display {}
+
+/// The XCB display handle of `connection`, borrowed for as long as the
+/// connection is.
+#[expect(
+    unsafe_code,
+    reason = "a raw display handle is borrowed for as long as the connection lives"
+)]
+fn xcb_display(connection: &X11Connection) -> Result<DisplayHandle<'_>, HandleError> {
+    let raw = std::ptr::NonNull::new(connection.xcb().get_raw_xcb_connection());
+    let screen = i32::try_from(connection.screen_number()).map_err(|_| HandleError::Unavailable)?;
+    // SAFETY: the libxcb connection the pointer names closes only when the
+    // last `Arc<X11Connection>` drops, and the borrow cannot outlive the
+    // `&X11Connection` it is made from.
+    Ok(unsafe {
+        DisplayHandle::borrow_raw(RawDisplayHandle::Xcb(XcbDisplayHandle::new(raw, screen)))
+    })
 }
 
 impl flui_platform::SurfaceTarget for X11Surface {
@@ -2141,5 +2156,13 @@ impl host::Window<X11Loop> for X11Window {
 
     fn frame_inset(_: &X11Loop, shared: &X11Windows, scale_factor: f64) -> Size<f64> {
         shared.frame_inset.logical(scale_factor)
+    }
+
+    /// The connection every window of the host is made on.
+    fn display_connection(
+        _: &X11Loop,
+        shared: &X11Windows,
+    ) -> Arc<dyn flui_platform::DisplayConnection> {
+        Arc::new(X11Display(Arc::clone(&shared.connection)))
     }
 }

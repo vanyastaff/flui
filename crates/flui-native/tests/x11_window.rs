@@ -93,6 +93,10 @@ mod cases {
             "a_wake_deadline_no_frame_serviced_is_delivered_once",
             a_wake_deadline_no_frame_serviced_is_delivered_once,
         ),
+        (
+            "a_surface_targets_display_equals_the_platforms_connection",
+            a_surface_targets_display_equals_the_platforms_connection,
+        ),
     ];
 
     pub(super) fn main() {
@@ -610,6 +614,52 @@ mod cases {
     fn the_x11_window_conforms() {
         let mut fixture = X11Fixture::open("window conformance");
         window_conformance::assert_conforms(&mut fixture);
+    }
+
+    /// The platform's display connection answers the display every window
+    /// target of the platform answers, and keeps answering it after the
+    /// window closed, when the target answers nothing (ADR-0305 §2).
+    fn a_surface_targets_display_equals_the_platforms_connection() {
+        use raw_window_handle::HasDisplayHandle as _;
+
+        let platform = X11Platform::try_new().expect("the X11 platform");
+        let connection = platform.display_connection();
+        let window = platform
+            .open_window(
+                WindowOptions::default().with_size(Size::new(64.0, 64.0)),
+                RecordingWindowHandler::new(),
+            )
+            .expect("an X11 window opens");
+        let target = window.surface_target();
+        let display = connection
+            .display_handle()
+            .expect("the connection answers its display")
+            .as_raw();
+        assert_eq!(
+            target
+                .display_handle()
+                .expect("an open window answers")
+                .as_raw(),
+            display,
+            "the window's target is on the connection's display"
+        );
+        assert!(
+            matches!(display, raw_window_handle::RawDisplayHandle::Xcb(_)),
+            "an XCB display: {display:?}"
+        );
+        window.close_for_cleanup();
+        run_for(&platform, Duration::from_millis(50)).expect("the loop turns");
+        assert!(matches!(
+            target.display_handle(),
+            Err(HandleError::Unavailable)
+        ));
+        assert_eq!(
+            connection
+                .display_handle()
+                .expect("the connection outlives the window")
+                .as_raw(),
+            display
+        );
     }
 
     /// A window opened maximized is mapped once `_NET_WM_STATE` holds the

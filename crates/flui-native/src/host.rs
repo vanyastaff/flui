@@ -233,6 +233,12 @@ pub trait Window<O> {
 
     /// [`Platform::window_frame_inset`].
     fn frame_inset(owner: &O, shared: &Self::Shared, scale_factor: f64) -> Size<f64>;
+
+    /// [`Platform::display_connection`].
+    fn display_connection(
+        owner: &O,
+        shared: &Self::Shared,
+    ) -> Arc<dyn flui_platform::DisplayConnection>;
 }
 
 /// The text position: what one window, `W`, holds of the text feature.
@@ -510,6 +516,11 @@ impl<O> Window<O> for Absent<position::Window> {
 
     fn frame_inset(_: &O, (): &(), _: f64) -> Size<f64> {
         Size::new(0.0, 0.0)
+    }
+
+    /// No window, so no display either.
+    fn display_connection(_: &O, (): &()) -> Arc<dyn flui_platform::DisplayConnection> {
+        Arc::new(crate::display_connection::NoDisplay)
     }
 }
 

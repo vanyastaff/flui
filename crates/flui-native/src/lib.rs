@@ -191,6 +191,7 @@
 pub(crate) mod accessibility;
 pub(crate) mod clipboard;
 mod display;
+mod display_connection;
 pub(crate) mod drag;
 pub mod error;
 // Reachable for the backend conformance suite, which reads every backend's

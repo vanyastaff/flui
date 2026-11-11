@@ -1256,6 +1256,14 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         );
         decorated_frame_inset(main)
     }
+
+    /// AppKit's display handle, which carries no pointer.
+    fn display_connection(
+        _: &MacOSLoop,
+        _: &MacOSWindows,
+    ) -> std::sync::Arc<dyn flui_platform::DisplayConnection> {
+        std::sync::Arc::new(crate::display_connection::PointerlessDisplay::AppKit)
+    }
 }
 
 /// The class every window is an instance of: `NSWindow`, except that it can

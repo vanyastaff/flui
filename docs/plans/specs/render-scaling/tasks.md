@@ -246,12 +246,18 @@
 ### RS15. Фабрика поверхностей, команды слота, расчёт по штампу
 
 - **Что:** ADR-0305 §2–§6 без удаления оси ресурсов (она в RS19): `SurfaceFactory` (`!Send`),
-  закрытые команды слота, расчёт кадра по штампу, темп и `SurfaceGeneration` на слот. Три PR:
-  (a) исполнитель, команды и кольцо расчётов в `flui-engine`; (b) `Queued` и `settle_frame` в
-  `flui-runtime`; (c) `DisplayConnection`, `SurfaceFactory`, `bootstrap` и оконные слоты; в (c)
-  отказ resize повторяется только после паники или переходной ошибки, а размер, который backend
-  отклоняет всегда, пишет warn один раз.
-- **Тесты:** compile-fail `surface_factory_is_owner_local`, `surface_factory_rejects_borrowed_window`;
+  закрытые команды слота, расчёт кадра по штампу, темп и `SurfaceGeneration` на слот. PR идут в
+  порядке (a), (c1), (c2), затем RS16, затем (b): (a) исполнитель, команды и кольцо расчётов в
+  `flui-engine`; (c1) `DisplayConnection` каждого хоста и `OwnerPlatform::display_connection`;
+  (c2) `SurfaceFactory`, `bootstrap` и оконные слоты, где отказ resize повторяется только после
+  паники или переходной ошибки, а размер, который backend отклоняет всегда, пишет warn один раз;
+  (b) `Queued`, `settle_frame` и выпуск `FrameEpoch` в `flui-runtime`. (b) идёт после RS16,
+  потому что до потока растра `Queued` некому отвечать: RS16 сдаёт inline-вердикт тем же типом
+  результата и через тот же один вход рантайма, которым (b) примет `Queued`, а эпоху, которую пока
+  штампует дорожка `flui-app`, читает в одном месте, и (b) переносит это место в рантайм.
+- **Тесты:** `a_surface_targets_display_equals_the_platforms_connection` (c1: X11 под `Xvfb`, Wayland
+  под `weston`, headless); compile-fail `surface_factory_is_owner_local`,
+  `surface_factory_rejects_borrowed_window`;
   `a_full_lifecycle_queue_returns_the_command`, `a_stale_slot_id_is_refused_after_detach`,
   `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released`,
   `a_full_settlement_ring_holds_the_next_frame`,
@@ -260,17 +266,16 @@
   протокольные тесты `raster_owner` переписаны на слот (список в ADR-0305, Confirmation).
 - **Ворота:** все перечисленные тесты; в `RasterExecutor`, слоте и `RasterHost` нет `Mutex`;
   единственный замок у inbox слота, держится только на обмен значений.
-- **Зависит:** RS14. **Размер:** L. **Ревью сильной модели.**
+- **Зависит:** RS14; (b) ещё и RS16. **Размер:** L. **Ревью сильной модели.**
 
 ### RS16. Настольные раннеры на слотах
 
 - **Что:** Win32, AppKit, Wayland и X11 раннеры `flui-app` работают через слоты; удаляются
   `with_backend`, `Arc<Mutex<RasterLane>>` и замыкание-хук; у окна нет своего `Renderer`.
-- **Тесты:** `a_surface_targets_display_equals_the_platforms_connection` (строки Wayland под
-  `weston`, X11 под `Xvfb`, headless); `a_hidden_slot_is_not_acquired_and_settles_not_shown`.
+- **Тесты:** `a_hidden_slot_is_not_acquired_and_settles_not_shown`.
 - **Ворота:** `rg 'Arc<Mutex<RasterLane>>|with_backend' crates` пуст; два окна примера делят один
   device (G5 через оконный путь на Linux CI).
-- **Зависит:** RS15, RS9. **Размер:** L. Windows и macOS: проверка типов и ночной раннер.
+- **Зависит:** RS15a, RS15c, RS9. **Размер:** L. Windows и macOS: проверка типов и ночной раннер.
 
 ### RS17. Android и iOS на слотах
 
@@ -312,5 +317,6 @@
 | RS14 | #2382 | готова; `RasterExecutor` переходит в RS15 вместе с командами, его единственный API это ход по ним | `every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format` (lavapipe): 3 слота в двух форматах дают 1 instance, 1 device, 1 атлас, 2 набора пайплайнов, 0 сборок на перерисовке; до: 3/3/3/3 |
 | RS6 | #2399 | готова | `layer_it scene_patch_damage` (девятнадцать строк, каждая падает без своей части: следа `Place` с размещением корня, сравнения эффектов, разрешения последователей, выбора присоединённого лидера, глубины цепочки последователей, цепочек до общего предка (12 вложенных последователей: 24 разрешения вместо 531 440), спаривания последователей за один проход (2 000 соседей: 4 001 чтение ссылок вместо 8 006 001), бахромы билинейной выборки лупы, ветви лидера под `LeaderClip::Hide` и последователя, чья цепочка идёт через скрытого, цепочки из 30 000 эффектов на стеке в 256 КиБ, клипа над сжатым фильтром в той же границе и в дочерней, ленивого чтения входов фильтров (50 размытий над 200 кусками: 0 чтений при далёком сдвиге, 500 при правке под ними), ядра фильтра под сжимающим предком, суммы ядер вдоль цепочки (три фильтра и лупа между ними; с максимумом вместо суммы строка падает), `damage_extent` картинки, замыкания над подложкой); `patch_damage_covers_diff_damage`: 10 000 случаев по три патча (метки, сдвиги, эффекты, добавление и удаление кусков, перестановки, сдвиг лидера) зелёные за 0,7 с, подсаженный патч без следа одной операции пойман; `the_renderer_kernel_stays_inside_read_closure` (flui-engine); `damage_readback_tests` на lavapipe без правки ожиданий; в тестах differ четыре ожидания следуют правилу §6 (подложка берёт и то, что читает, цветовой фильтр без границы даёт `Full(Unbounded)`); счётчики `followers_resolved`, `follower_pairing_reads`, `filter_input_reads`, `depth_updates`; у differ нет своих `backdrops` и `foreground`, у `frame_protocol.rs` нет своего радиуса: оба зовут `read_closure` и `close_over` |
 | RS7 | #2401 | готова | `layer_it pending_log_contract`: пять строк ADR (`a_full_log_folds_its_two_oldest_entries`, `damage_from_an_older_base_covers_the_newer_one`, `a_base_from_another_lineage_renders_full`, `a_lost_completion_over_reports_and_never_under_reports`, `a_surface_change_in_the_log_publishes_full`) и пробы повторного входа `a_released_content_drops_after_the_owner_is_released`, `a_fold_releases_its_contents_after_the_owner_is_released` (40 кадров без подтверждения: журнал не больше 16 записей, свёрнутая запись сохраняет `Full(SurfaceChanged)`); каждая строка падает без своей проверки (линия, «только вперёд», сворачивание, отпускание после заимствования, сброс записей по подтверждению); счётчик `pending_log_folds`; `apply` (в `Applied::released`), `completed` и `renew` возвращают `ReleasedContents` для `Outbox` (ADR-0287), включая заменённую версию и содержимое, отпущенное сворачиванием; память журнала ограничена 16 записями |
-| RS15a | #2396 | готова (ревью принято); RS15b, RS15c не начаты | `engine_it` 17 тестов; без фикса падают `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released` (взаимоблокировка), `a_full_settlement_ring_holds_the_next_frame`, `a_stopped_executor_settles_every_pending_frame_failed`, `a_failed_resize_is_held_in_the_record_and_retried_next_turn`, `a_panicking_subscriber_cannot_strand_a_refused_slot`, `an_untaken_panic_payload_is_dropped_outside_the_slot_table`, `a_refusal_whose_error_panics_when_formatted_still_commits`, `a_surface_loss_keeps_the_barrier_of_a_pending_resize` |
-| RS2, RS4, RS8–RS13, RS15b–RS19 | | не начата | |
+| RS15a | #2396 | готова (ревью принято) | `engine_it` 17 тестов; без фикса падают `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released` (взаимоблокировка), `a_full_settlement_ring_holds_the_next_frame`, `a_stopped_executor_settles_every_pending_frame_failed`, `a_failed_resize_is_held_in_the_record_and_retried_next_turn`, `a_panicking_subscriber_cannot_strand_a_refused_slot`, `an_untaken_panic_payload_is_dropped_outside_the_slot_table`, `a_refusal_whose_error_panics_when_formatted_still_commits`, `a_surface_loss_keeps_the_barrier_of_a_pending_resize` |
+| RS15c1 | #2407 | в ревью | `a_surface_targets_display_equals_the_platforms_connection`: X11 под `Xvfb` (`x11_window`), Wayland под `weston` (`platform_it`), `the_headless_display_connection_answers_no_display`; проверка типов Windows, macOS, iOS, Android, wasm32 |
+| RS2, RS4, RS8–RS13, RS15b, RS15c2, RS16–RS19 | | не начата | |

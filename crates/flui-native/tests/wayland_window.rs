@@ -1132,3 +1132,47 @@ fn a_portal_parent_names_the_exported_window() {
     );
     eprintln!("{case}: {parent} imported, then revoked with the window");
 }
+
+/// The platform's display connection answers the display every window target
+/// of the platform answers, and keeps answering it after the window closed,
+/// when the target answers nothing (ADR-0305 §2).
+#[test]
+fn a_surface_targets_display_equals_the_platforms_connection() {
+    use raw_window_handle::{HandleError, HasDisplayHandle as _};
+
+    let case = "a_surface_targets_display_equals_the_platforms_connection";
+    let Some(platform) = platform(case) else {
+        return;
+    };
+    let connection = platform.display_connection();
+    let mut fixture = WaylandFixture::open(platform, "display");
+    let target = fixture.window.surface_target();
+    let display = connection
+        .display_handle()
+        .expect("the connection answers its display")
+        .as_raw();
+    assert_eq!(
+        target
+            .display_handle()
+            .expect("an open window answers")
+            .as_raw(),
+        display,
+        "the window's target is on the connection's display"
+    );
+    assert!(
+        matches!(display, raw_window_handle::RawDisplayHandle::Wayland(_)),
+        "a Wayland display: {display:?}"
+    );
+    fixture.close();
+    assert!(matches!(
+        target.display_handle(),
+        Err(HandleError::Unavailable)
+    ));
+    assert_eq!(
+        connection
+            .display_handle()
+            .expect("the connection outlives the window")
+            .as_raw(),
+        display
+    );
+}
