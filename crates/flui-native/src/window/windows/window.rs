@@ -474,15 +474,6 @@ impl WindowsWindow {
                     let read = super::proc::with_window_context(hwnd, "publish state", |ctx| {
                         (ctx.identity == identity).then(|| ctx.read_window_state(hwnd))
                     });
-                    // FLUI_DIAG (temporary).
-                    eprintln!(
-                        "FLUI_DIAG   publish: {:?}",
-                        read.as_ref()
-                            .map(|read| read.as_ref().map(|outcome| matches!(
-                                outcome,
-                                crate::owner::window_delivery::Publication::Changed
-                            )))
-                    );
                     match read {
                         Some(Some(outcome)) => outcome,
                         Some(None) => crate::owner::window_delivery::Publication::Unchanged,

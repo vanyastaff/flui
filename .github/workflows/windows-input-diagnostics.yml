@@ -54,6 +54,31 @@ jobs:
             echo "::endgroup::"
           done
           exit $status
-      - name: Whole window contract, as the nightly runs it
+      - name: Install cargo-nextest
         if: ${{ !cancelled() }}
-        run: cargo test -p flui-native --locked --test platform_it -- --exact contract::test_window_lifecycle_contract
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9
+      - name: Whole suite, as the nightly runs it
+        if: ${{ !cancelled() }}
+        run: cargo xtask platform-test
+
+  # The same suite on main's code, to tell this branch's failures from the
+  # runner's.
+  main:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: main
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9
+      - name: Whole suite on main
+        run: cargo xtask platform-test

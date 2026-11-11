@@ -460,7 +460,6 @@ impl InputWindows {
         unsafe {
             let answer = match msg {
                 WM_MOUSEMOVE => {
-                    eprintln!("FLUI_DIAG WM_MOUSEMOVE {lparam:?}");
                     if let Some(ctx) = ctx {
                         let time = ctx.message_clock.message_time();
                         // Request WM_MOUSELEAVE notification for hover tracking
@@ -772,7 +771,6 @@ impl InputWindows {
 
                 // WM_MOUSELEAVE (0x02A3), requested by WM_MOUSEMOVE.
                 WM_MOUSELEAVE => {
-                    eprintln!("FLUI_DIAG WM_MOUSELEAVE");
                     if let Some(ctx) = ctx {
                         ctx.set_hovered(false);
                     }
@@ -967,20 +965,6 @@ impl InputWindow {
         let frame = (!mouse && matches!(message, WM_POINTERDOWN | WM_POINTERUP | WM_POINTERUPDATE))
             .then(|| raw::pointer_frame(raw))
             .flatten();
-        // FLUI_DIAG (temporary): what each pointer message reads.
-        eprintln!(
-            "FLUI_DIAG msg={message:#x} raw={raw} mouse={mouse} hover={hover:?} cell={} frame={:?} raw_info={:?}",
-            self.hovered.get(),
-            frame.as_ref().map(|frame| (
-                frame.id,
-                frame
-                    .members
-                    .iter()
-                    .map(|m| (m.id, m.message))
-                    .collect::<Vec<_>>()
-            )),
-            raw::diag_info(raw),
-        );
         if let Some(frame) = &frame
             && self.delivered_frame.replace(Some(frame.id)) == Some(frame.id)
         {
@@ -1016,24 +1000,13 @@ impl InputWindow {
         }
         for input in inputs {
             let deliver = self.registry.borrow().delivers(&input);
-            eprintln!("FLUI_DIAG   input deliver={deliver}: {input:?}");
             if deliver {
                 self.delivery.dispatch_input(input);
             }
         }
         if mouse && message == WM_POINTERCAPTURECHANGED {
-            eprintln!(
-                "FLUI_DIAG   reconcile: over_client={} cell={}",
-                cursor_over_client(hwnd),
-                self.hovered.get()
-            );
             self.reconcile_hover(hwnd);
         }
-        eprintln!(
-            "FLUI_DIAG   done msg={message:#x} cell={} delivery={}",
-            self.hovered.get(),
-            self.delivery.hovered()
-        );
     }
 
     /// The window lost the mouse capture: no message may say where the
@@ -1759,7 +1732,11 @@ mod raw {
                 },
             )?
             .into_iter()
-            .map(|row| row.into_iter().map(PointerPacket::Touch).collect())
+            .map(|row| {
+                row.into_iter()
+                    .map(PointerPacket::Touch)
+                    .collect::<Vec<PointerPacket>>()
+            })
             .collect(),
             PT_PEN => read_frame_history(
                 entries,
@@ -1782,7 +1759,7 @@ mod raw {
                     .map(|pen| {
                         PointerPacket::Pen(pen, HimetricMap::of(pen.pointerInfo.sourceDevice))
                     })
-                    .collect()
+                    .collect::<Vec<PointerPacket>>()
             })
             .collect(),
             _ => read_frame_history(
@@ -1801,7 +1778,11 @@ mod raw {
                 },
             )?
             .into_iter()
-            .map(|row| row.into_iter().map(PointerPacket::Pointer).collect())
+            .map(|row| {
+                row.into_iter()
+                    .map(PointerPacket::Pointer)
+                    .collect::<Vec<PointerPacket>>()
+            })
             .collect(),
         };
         let newest = rows.first()?;
@@ -1859,58 +1840,6 @@ mod raw {
         let rows = usize::try_from(filled_entries).ok()?;
         values.truncate(rows.checked_mul(width)?);
         Some(values.chunks(width).map(<[T]>::to_vec).collect())
-    }
-
-    /// FLUI_DIAG (temporary): the pointer's info, its frame's ids and flags,
-    /// and its frame history size.
-    pub(super) fn diag_info(raw: u32) -> String {
-        use windows::Win32::UI::Input::Pointer::{
-            GetPointerFrameInfo, GetPointerFrameInfoHistory, GetPointerInfo,
-        };
-        let mut info = POINTER_INFO::default();
-        // SAFETY: a live local.
-        let got = unsafe { GetPointerInfo(raw, &raw mut info) };
-        let mut count = 0u32;
-        // SAFETY: count only.
-        let frame_count = unsafe { GetPointerFrameInfo(raw, &raw mut count, None) };
-        let mut frame = vec![POINTER_INFO::default(); count as usize];
-        let mut filled = count;
-        // SAFETY: buffer of `count`.
-        let frame_read = if count > 0 {
-            unsafe { GetPointerFrameInfo(raw, &raw mut filled, Some(frame.as_mut_ptr())) }
-        } else {
-            Ok(())
-        };
-        let mut entries = 0u32;
-        let mut pointers = 0u32;
-        // SAFETY: counts only.
-        let history =
-            unsafe { GetPointerFrameInfoHistory(raw, &raw mut entries, &raw mut pointers, None) };
-        let members: Vec<_> = frame
-            .iter()
-            .take(filled as usize)
-            .map(|p| {
-                (
-                    p.pointerId,
-                    p.frameId,
-                    format!("{:#x}", p.pointerFlags.0),
-                    (p.ptPixelLocation.x, p.ptPixelLocation.y),
-                )
-            })
-            .collect();
-        format!(
-            "info={:?} id={} frame={} flags={:#x} at=({},{}) hist={} | frame_count={:?} n={count} read={:?} members={members:?} | frame_hist={:?} {entries}x{pointers}",
-            got.is_ok(),
-            info.pointerId,
-            info.frameId,
-            info.pointerFlags.0,
-            info.ptPixelLocation.x,
-            info.ptPixelLocation.y,
-            info.historyCount,
-            frame_count.is_ok(),
-            frame_read.is_ok(),
-            history.is_ok(),
-        )
     }
 
     /// Whether the `WM_POINTER` id `raw` is the mouse's. A stale or invented id
