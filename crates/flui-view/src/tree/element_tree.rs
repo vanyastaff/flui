@@ -357,8 +357,19 @@ impl ElementNode {
     /// previous list wholesale — the caller is responsible for having
     /// already inserted / removed the corresponding slab nodes so the
     /// stored ids all resolve.
-    pub(crate) fn set_child_ids(&mut self, ids: Vec<ElementId>) {
-        self.child_ids = ids;
+    ///
+    /// The list keeps its buffer, so a rebuild that keeps the child count
+    /// allocates nothing. A list that outgrows its buffer, or shrank to
+    /// under a quarter of it, gets a buffer of exactly its own size: growing
+    /// in place would round a one-child list up to four slots.
+    pub(crate) fn set_child_ids(&mut self, ids: &[ElementId]) {
+        let capacity = self.child_ids.capacity();
+        if capacity < ids.len() || capacity / 4 > ids.len() {
+            self.child_ids = ids.to_vec();
+        } else {
+            self.child_ids.clear();
+            self.child_ids.extend_from_slice(ids);
+        }
     }
 
     fn commit_child_replacement(
@@ -3182,12 +3193,10 @@ mod tests {
             0,
             &mut owner.element_owner_mut(),
         );
-        tree.get_mut(root)
-            .expect("root")
-            .set_child_ids(vec![wrapper]);
+        tree.get_mut(root).expect("root").set_child_ids(&[wrapper]);
         tree.get_mut(wrapper)
             .expect("wrapper")
-            .set_child_ids(vec![keyed]);
+            .set_child_ids(&[keyed]);
 
         assert!(
             tree.get(keyed)
@@ -3269,19 +3278,19 @@ mod tests {
         );
         tree.get_mut(root)
             .expect("root")
-            .set_child_ids(vec![donor, destination]);
+            .set_child_ids(&[donor, destination]);
         tree.get_mut(donor)
             .expect("donor")
-            .set_child_ids(vec![candidate]);
+            .set_child_ids(&[candidate]);
         tree.get_mut(candidate)
             .expect("candidate")
-            .set_child_ids(vec![first_boundary, second_boundary]);
+            .set_child_ids(&[first_boundary, second_boundary]);
         tree.get_mut(first_boundary)
             .expect("first boundary")
-            .set_child_ids(vec![nested]);
+            .set_child_ids(&[nested]);
         tree.get_mut(destination)
             .expect("destination")
-            .set_child_ids(vec![prefix, suffix]);
+            .set_child_ids(&[prefix, suffix]);
 
         let destination_render = tree
             .get(destination)

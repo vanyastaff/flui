@@ -159,7 +159,7 @@ pub(crate) fn reconcile_children_by_id(
         old_ids.iter().copied().map(Some).collect();
 
     // The reconciled id list, built front-to-back in new-view order.
-    let mut result: Vec<ElementId> = Vec::with_capacity(new_len);
+    let mut result: SmallVec<[ElementId; INLINE_CHILDREN]> = SmallVec::with_capacity(new_len);
     // Scheduling cause for every surviving child, pushed beside its id in
     // `result` (same index), so fresh mounts and in-place updates remain
     // distinguishable when the final depth-aware scheduling pass runs.
@@ -434,7 +434,7 @@ pub(crate) fn reconcile_children_by_id(
     // than panic.
     let render_children_changed = old_ids.as_slice() != result.as_slice();
     if let Some(parent_node) = tree.get_mut(parent_id) {
-        parent_node.set_child_ids(result);
+        parent_node.set_child_ids(&result);
     }
     if render_children_changed {
         // A retake installs its destination-local provisional order before

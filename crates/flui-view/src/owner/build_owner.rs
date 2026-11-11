@@ -119,7 +119,7 @@ impl ExternalBuildScheduler {
         reason: RebuildReason,
     ) {
         // An iterator can run user code; collect before acquiring the inbox.
-        let ids: Vec<_> = ids.into_iter().collect();
+        let ids: smallvec::SmallVec<[ElementId; 4]> = ids.into_iter().collect();
         let any_newly_queued = self
             .inbox
             .admit_batch(&ids, RebuildReasons::from_reason(reason));
