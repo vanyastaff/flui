@@ -28,7 +28,7 @@ const KNOWN_GAPS: &[(&str, &str)] = &[(
 /// How long the app may take to build and answer the agent: `run.app.start`
 /// comes before the build on the desktop, and a cold build of the counter
 /// takes minutes. The job's own timeout bounds a hung one.
-const LAUNCH: Duration = Duration::from_secs(45 * 60);
+const LAUNCH: Duration = Duration::from_mins(45);
 
 /// How long the app may take to show a window with content once it answers,
 /// and the count to change after the press.
