@@ -43,6 +43,8 @@ tracing = { workspace = true }
 # Pins that the commit gate is owner-thread only.
 static_assertions = { workspace = true }
 serde_json = { workspace = true }
+# `CountingWaker`, the waker whose wakes a transfer or capability test counts.
+flui-foundation = { workspace = true, features = ["testing"] }
 # Compile-fail fixtures: `DisplayId` cannot be built from a number.
 trybuild = { workspace = true }
 

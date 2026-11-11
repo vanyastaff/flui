@@ -8,9 +8,10 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Wake, Waker};
+use std::task::{Context, Waker};
 use std::time::Duration;
 
+use flui_foundation::testing::CountingWaker;
 use flui_protocol::AppInfo;
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_runtime::agent::{Limits, Service, ServiceConfig};
@@ -75,26 +76,12 @@ impl Peer for Rc<Script> {
     }
 }
 
-/// Counts the wakes of a connection's task.
-#[derive(Default)]
-struct Wakes(AtomicUsize);
-
-impl Wake for Wakes {
-    fn wake(self: Arc<Self>) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
 /// A connection: its conversation, the script's end, and the task the page's executor runs.
 struct Connection {
     conversation: Rc<Conversation>,
     script: Rc<Script>,
     task: Option<Pin<Box<dyn Future<Output = ()>>>>,
-    wakes: Arc<Wakes>,
+    wakes: Arc<CountingWaker>,
 }
 
 impl Connection {
@@ -109,7 +96,7 @@ impl Connection {
             conversation,
             script,
             task: Some(task),
-            wakes: Arc::default(),
+            wakes: CountingWaker::new().shared(),
         };
         // A spawned task runs once.
         connection.poll();
@@ -203,11 +190,11 @@ fn a_page_conversation_answers_its_script_and_ends_when_the_script_closes_it() {
 
     let welcome = connection.greet(&mut host);
     assert_eq!(welcome["hello"]["app"]["target"], "web", "{welcome}");
-    let woken = connection.wakes.0.load(Ordering::SeqCst);
+    let woken = connection.wakes.count();
     connection.send(&json!({ "id": 1, "method": "windows.list", "params": {} }));
     connection.send(&json!({ "id": 2, "method": "windows.list", "params": {} }));
     assert!(
-        connection.wakes.0.load(Ordering::SeqCst) > woken,
+        connection.wakes.count() > woken,
         "a line the script sends wakes the task"
     );
     let second = connection.line_where(&mut host, |line| line["id"] == 2, "the second answer");
@@ -272,7 +259,7 @@ fn a_page_conversation_ends_when_its_script_stops_listening_or_no_timer_keeps_it
             ))),
             conversation,
             script,
-            wakes: Arc::default(),
+            wakes: CountingWaker::new().shared(),
         };
         assert!(
             connection.poll(),

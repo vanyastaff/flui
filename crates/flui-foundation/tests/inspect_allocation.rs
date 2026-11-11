@@ -192,7 +192,8 @@ fn the_snapshot_sink_is_where_allocation_happens() {
 
 /// A channel is one shared allocation, and a listener that takes no argument is registered
 /// as it was given: the only allocation a subscription adds is the envelope the channel
-/// holds it in. The first registration also allocates the channel's table.
+/// holds it in. The channel holds one registration inline, so its list reaches the heap with
+/// the second.
 #[test]
 fn a_notifier_is_one_allocation_and_a_plain_listener_one_more() {
     use flui_foundation::ListenerCallback;
@@ -209,15 +210,15 @@ fn a_notifier_is_one_allocation_and_a_plain_listener_one_more() {
     let first = black_box(notifier.listen(first));
     assert_eq!(
         allocations() - before,
-        2,
-        "the first listener allocates its envelope and the channel's table"
+        1,
+        "the first listener allocates its envelope alone: the channel holds it inline"
     );
     let before = allocations();
     let second = black_box(notifier.listen(second));
     assert_eq!(
         allocations() - before,
-        1,
-        "a later listener allocates its envelope alone"
+        2,
+        "the second listener allocates its envelope and moves the list to the heap"
     );
     drop((first, second));
 }

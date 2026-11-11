@@ -13,6 +13,7 @@ use super::focus_host::FocusConfig;
 use super::node::InteractiveNode;
 use crate::Semantics;
 use crate::support::event_callback;
+use crate::widget_state::WidgetStatesController;
 
 /// A press callback, already adapted to report its outcome.
 type PressCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
@@ -48,6 +49,7 @@ type PressCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 pub struct RawButton {
     on_press: Option<PressCallback>,
     identifier: Option<std::sync::Arc<str>>,
+    states: Option<WidgetStatesController>,
     child: BoxedView,
 }
 
@@ -67,6 +69,7 @@ impl RawButton {
         Self {
             on_press: None,
             identifier: None,
+            states: None,
             child: child.into_view().boxed(),
         }
     }
@@ -90,11 +93,25 @@ impl RawButton {
         self.identifier = Some(identifier.into());
         self
     }
+
+    /// Write the button's interaction states to `controller`: `Hovered`
+    /// while a pointer is inside it, `Pressed`
+    /// while a contact is down on it, `Focused` while it holds focus,
+    /// `FocusVisible` while that focus is shown, and `Disabled` without an
+    /// [`on_press`](Self::on_press). A design system draws its pressed and
+    /// focused looks from the controller; the button clears what it wrote
+    /// when it unmounts or is given another one.
+    #[must_use]
+    pub fn states_controller(mut self, controller: WidgetStatesController) -> Self {
+        self.states = Some(controller);
+        self
+    }
 }
 
-/// The button's answer to the activation intents: the press callback, or —
-/// disabled — a declared but disabled mapping, so the intent stops here
-/// instead of activating an enclosing control.
+/// The button's answer to the activation intents: the press callback. A
+/// disabled button's node keeps the bindings declared and switched off, so
+/// the intent stops at the button instead of activating an enclosing
+/// control.
 #[derive(Clone)]
 struct Press(Option<PressCallback>);
 
@@ -111,20 +128,12 @@ impl Press {
 }
 
 impl Action<ActivateIntent> for Press {
-    fn is_enabled(&self, _intent: &ActivateIntent) -> bool {
-        self.0.is_some()
-    }
-
     fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
         self.run(cx)
     }
 }
 
 impl Action<ButtonActivateIntent> for Press {
-    fn is_enabled(&self, _intent: &ButtonActivateIntent) -> bool {
-        self.0.is_some()
-    }
-
     fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
         self.run(cx)
     }
@@ -134,10 +143,6 @@ impl Action<ButtonActivateIntent> for Press {
 /// release that activates belong to the button. It changes nothing — the
 /// button has no pressed look.
 impl Action<ActivationPressIntent> for Press {
-    fn is_enabled(&self, _intent: &ActivationPressIntent) -> bool {
-        self.0.is_some()
-    }
-
     fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
         ActionOutcome::Performed
     }
@@ -153,14 +158,13 @@ impl StatelessView for RawButton {
         let semantics = Semantics::new()
             .container(true)
             .role(crate::SemanticsRole::Button)
-            .enabled(enabled)
             .identifier_if(self.identifier.as_ref());
         // The bindings are the node's own, so its focus node records them
         // and the root bindings resolve the activation here (ADR-0079).
         let mut node = InteractiveNode::new(self.child.clone())
             .behavior(HitTestBehavior::Opaque)
+            .enabled(enabled)
             .focus(FocusConfig {
-                can_request_focus: Some(enabled),
                 debug_label: Some("RawButton"),
                 ..FocusConfig::new()
             })
@@ -172,6 +176,9 @@ impl StatelessView for RawButton {
         // takes effect on the next press.
         if let Some(handler) = self.on_press.clone() {
             node = node.on_tap(handler);
+        }
+        if let Some(states) = self.states.clone() {
+            node = node.states(states);
         }
         node.semantics(semantics)
     }

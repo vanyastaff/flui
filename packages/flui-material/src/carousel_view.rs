@@ -254,7 +254,7 @@ fn resolve_style(theme: &ThemeData, view: &CarouselView) -> CardStyle {
                         Some(on_surface.with_opacity(alpha.pressed))
                     } else if states.contains_state(WidgetState::Hovered) {
                         Some(on_surface.with_opacity(alpha.hovered))
-                    } else if states.contains_state(WidgetState::Focused) {
+                    } else if states.contains_state(WidgetState::FocusVisible) {
                         Some(on_surface.with_opacity(alpha.focused))
                     } else {
                         None

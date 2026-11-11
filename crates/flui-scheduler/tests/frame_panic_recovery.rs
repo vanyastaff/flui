@@ -26,8 +26,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 
+use flui_foundation::testing::{CountingWaker, panicking_waker};
 use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{
     FrameCompletionFuture, FrameOutcome, IdleDeadline, Instant, OwnerFrame, Priority,
@@ -38,25 +39,6 @@ fn far_deadline() -> IdleDeadline {
     IdleDeadline::far_future(Instant::now())
 }
 
-/// Counts `wake()` calls; does nothing else.
-struct CountingWaker(AtomicUsize);
-
-impl CountingWaker {
-    fn new() -> Arc<Self> {
-        Arc::new(Self(AtomicUsize::new(0)))
-    }
-
-    fn count(&self) -> usize {
-        self.0.load(Ordering::SeqCst)
-    }
-}
-
-impl Wake for CountingWaker {
-    fn wake(self: Arc<Self>) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
 /// Registers `scheduler.end_of_frame()` and polls it once with a counting
 /// waker so the waker is stored (the future itself stays `Pending`) —
 /// letting a caller later assert exactly how many times the frame's own
@@ -65,7 +47,7 @@ fn armed_completion_probe(
     scheduler: &UpdateScheduler,
 ) -> (FrameCompletionFuture, Arc<CountingWaker>) {
     let mut future = scheduler.end_of_frame();
-    let counter = CountingWaker::new();
+    let counter = CountingWaker::new().shared();
     let waker = Waker::from(Arc::clone(&counter));
     let mut cx = Context::from_waker(&waker);
     assert!(
@@ -479,15 +461,6 @@ fn a_post_frame_callback_panic_still_resolves_completed_not_aborted() {
 }
 
 // ── A secondary panic during abort must not displace the original one ──
-
-struct PanicWaker;
-
-impl Wake for PanicWaker {
-    fn wake(self: Arc<Self>) {
-        panic!("waker probe");
-    }
-}
-
 /// The complete owner's recovery path aborts the frame, which calls
 /// `notify_frame_completion` -- and a panicking waker there is a SECOND,
 /// unrelated panic on top of the pipeline's own. Without containing it,
@@ -499,7 +472,7 @@ fn the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abor
     let scheduler = UpdateScheduler::new();
     let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let mut future = scheduler.end_of_frame();
-    let panic_waker = Waker::from(Arc::new(PanicWaker));
+    let panic_waker = panicking_waker("waker probe");
     let mut cx = Context::from_waker(&panic_waker);
     assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
 

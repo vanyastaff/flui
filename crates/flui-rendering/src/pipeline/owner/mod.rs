@@ -10,6 +10,7 @@ mod subtree_arena;
 
 mod accessors;
 mod actions;
+mod buffer_pool;
 mod cell;
 mod compositing;
 mod construction;
@@ -26,7 +27,6 @@ mod query;
 mod reassemble;
 mod relocation;
 mod semantics;
-mod transform_path;
 
 pub use cell::{PipelineCell, WeakPipelineCell};
 pub use counters::PipelineCounters;
@@ -163,7 +163,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     render_tree: RenderTree,
     /// Ancestry buffers checked out by read-only transform queries. A pool
     /// allows reentrant queries without borrowing across authored transforms.
-    transform_paths: std::cell::RefCell<Vec<Vec<RenderId>>>,
+    transform_paths: buffer_pool::BufferPool<RenderId>,
 
     /// The root render object ID of this pipeline.
     root_id: Option<RenderId>,
@@ -189,6 +189,10 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// counters and poison flags per node, owned here (not per-node) so a
     /// healthy tree carries zero overhead. See [`poison::LayoutPoison`].
     layout_poison: poison::LayoutPoison,
+
+    /// Child-list buffers every layout walk checks out per node and gives
+    /// back, so a settled frame lays out without allocating them.
+    layout_buffers: subtree_arena::LayoutBuffers,
 
     /// Constraints to pass to [`Self::layout_dirty_root`] when the
     /// dirty entry is the tree root (`root_id`) and the root has no
@@ -435,6 +439,7 @@ where
         notifier: from.notifier,
         scheduler: from.scheduler,
         layout_poison: from.layout_poison,
+        layout_buffers: from.layout_buffers,
         root_constraints: from.root_constraints,
         semantics_enabled: from.semantics_enabled,
         semantics_owner: from.semantics_owner,

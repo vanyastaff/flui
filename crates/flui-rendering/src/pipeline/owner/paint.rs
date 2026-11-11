@@ -1302,8 +1302,9 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
                 record.stale = true;
             }
         }
+        let previous_orphans = std::mem::replace(&mut self.orphaned_nodes, orphans);
         if let Some(scratch) = self.paint_scratch.as_mut() {
-            scratch.recycle_staged(records, placed, stale);
+            scratch.recycle_staged(records, placed, stale, previous_orphans);
         }
         if let Some(frame) = frame {
             self.scene_frame = Some(frame);
@@ -1311,7 +1312,6 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             // still find.
             self.abandoned_nodes.clear();
         }
-        self.orphaned_nodes = orphans;
 
         // Follower hit-testing: each follower's composite-resolved transform,
         // read off the applied version the engine resolves against, one
@@ -1362,13 +1362,14 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             mut records,
             placed,
             stale,
+            orphans,
             ..
         } = staged;
         for record in records.drain().filter_map(|(_, record)| record) {
             writer.discard(record.content);
         }
         if let Some(scratch) = self.paint_scratch.as_mut() {
-            scratch.recycle_staged(records, placed, stale);
+            scratch.recycle_staged(records, placed, stale, orphans);
         }
     }
 
@@ -1596,6 +1597,7 @@ impl PaintScratch {
         recycle_map(&mut composer.records);
         recycle_map(&mut composer.placed);
         recycle_vec(&mut composer.stale);
+        recycle_vec(&mut composer.orphans);
     }
 
     /// Hands back the maps a staged patch held, for the next pass to stage
@@ -1605,14 +1607,17 @@ impl PaintScratch {
         mut records: FxHashMap<RenderId, Option<BoundaryRecord>>,
         mut placed: FxHashMap<RenderId, Placed>,
         mut stale: Vec<RenderId>,
+        mut orphans: Vec<SceneNodeId>,
     ) {
         recycle_map(&mut records);
         recycle_map(&mut placed);
         recycle_vec(&mut stale);
+        recycle_vec(&mut orphans);
         let composer = &mut self.composer;
         composer.records = records;
         composer.placed = placed;
         composer.stale = stale;
+        composer.orphans = orphans;
     }
 }
 
@@ -1666,6 +1671,9 @@ struct ComposerScratch {
     records: FxHashMap<RenderId, Option<BoundaryRecord>>,
     placed: FxHashMap<RenderId, Placed>,
     stale: Vec<RenderId>,
+    /// The orphan list the owner held before the last applied patch
+    /// replaced it, emptied, for the next pass to collect into.
+    orphans: Vec<SceneNodeId>,
 }
 
 impl ComposerScratch {
@@ -1734,6 +1742,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
             records: std::mem::take(&mut work.records),
             placed: std::mem::take(&mut work.placed),
             stale: std::mem::take(&mut work.stale),
+            orphans: std::mem::take(&mut work.orphans),
             ..StagedScene::default()
         };
         Self {
@@ -2067,12 +2076,15 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
             }
         }
         // Removed boundaries: retired once no unchanged parent names them.
-        let mut orphans: Vec<SceneNodeId> = owner
-            .orphaned_nodes
-            .iter()
-            .copied()
-            .filter(|node| node.lineage() == lineage && current.node(*node).is_some())
-            .collect();
+        let mut orphans = std::mem::take(&mut self.staged.orphans);
+        orphans.clear();
+        orphans.extend(
+            owner
+                .orphaned_nodes
+                .iter()
+                .copied()
+                .filter(|node| node.lineage() == lineage && current.node(*node).is_some()),
+        );
         loop {
             let before = orphans.len();
             orphans.retain(|&node| {

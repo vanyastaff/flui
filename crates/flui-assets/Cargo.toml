@@ -56,6 +56,8 @@ tokio = { workspace = true, features = ["macros", "time", "rt-multi-thread"] }
 # `ScriptedHttp`, the scripted HTTP client network-image tests fetch with.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-platform = { path = "../flui-platform", features = ["testing"] }
+# `CountingWaker`, the waker whose wakes a network-image test counts.
+flui-foundation = { path = "../flui-foundation", features = ["testing"] }
 
 [features]
 default = []

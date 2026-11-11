@@ -28,6 +28,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | Tier | Drives | Entry point | Enabled by |
 |------|--------|-------------|------------|
 | Inspection | Typed self-description of any node | `flui_foundation::inspect::{Inspect, SnapshotNode}` | always |
+| Waker | A `Waker` that counts its wakes, runs an action, drops its captures when it retires, or panics | `flui_foundation::testing::{CountingWaker, panicking_waker}` | `flui-foundation/testing` |
 | Painting | A `DisplayList`, no canvas boilerplate | `flui_painting::testing::{record, command_count, bounds}` | `flui-painting/testing` |
 | Layer | Structural walkers over a `LayerTree` (built with `SceneBuilder` or `push_child`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
@@ -535,24 +536,33 @@ run) for the last pump.
 10 000-row list — through a one-screen scroll and a full reassemble, a
 `SlideTransition` tick over a painted panel, and a label change over an eager
 column of 500 and of 5 000 buttons, and asserts budgets on those reports. Each
-record also carries `allocations`, the heap allocations of the measured frames
-on the test thread, counted by the target's `#[global_allocator]`.
+record also carries what the measured frames asked of the heap on the test
+thread, counted by the target's `#[global_allocator]`: `allocations` (a
+`realloc` included), `reallocations` (buffers that outgrew their capacity) and
+`allocated_bytes`.
 `cargo xtask perf` runs that target with `FLUI_PERF_OUT` set and compares every
-count with `crates/flui-widgets/perf/baseline.toml`:
+count with its scenario's file under `crates/flui-widgets/perf/baseline/`:
 
 ```bash
 cargo nextest run -p flui-widgets --test perf   # the budget assertions alone
 cargo xtask perf                                # advisory: prints differences, exits 0
-cargo xtask perf --check                        # any difference fails
-cargo xtask perf --bless                        # rewrite the baseline from this run
+cargo xtask perf --check                        # a failing finding fails (see below)
+cargo xtask perf --bless                        # rewrite every scenario file from this run
 cargo xtask perf --instructions --check         # each perf_scaling_ scenario under callgrind (needs valgrind)
 cargo xtask perf --self-test                    # the comparison on planted fixtures (part of `cargo test -p xtask`)
 ```
 
-The comparison is exact: a count that rose is a regression, and one that fell
-is a finding too, until `--bless` locks the improvement in — otherwise a later
-regression back up to the old value would pass. Commit a re-blessed baseline
-with the change that moved it and say why in the PR. The run writes the merged
+The comparison is exact, and how a difference counts depends on the counter.
+A work counter (elements rebuilt, nodes laid out or painted, layers, frames) has
+to match its baseline: a rise is a regression, and a fall is work that went
+missing until `--bless` records it as meant, in the PR that changed it. A cost
+counter (a name with `alloc` or `bytes` in it) only has to stay at or under its
+baseline: a fall prints as an improvement and passes, so a PR that makes a
+scenario cheaper does not touch the baseline. After it merges, `cargo xtask
+perf --bless` on a fresh `main`, committed alone, ratchets the files down, and
+any thread may do it; from then on a rise back to the old value fails. Each
+scenario has its own file, so changes to different scenarios never conflict.
+The run writes the merged
 counts to `<target>/perf/current.toml`. A count is a function of the tree and
 the change, so it must not depend on a random seed: a per-frame table keyed by
 ids is slot-indexed (`flui_foundation::SlotIndex`, `SlotSet`) or hashed with a
@@ -560,7 +570,7 @@ fixed hasher, never `std`'s `RandomState`, whose tombstones decide when a table
 reallocates.
 
 A `perf_scaling_` scenario runs one change on a `small` and a `large` tree
-(`FLUI_PERF_SIZE` selects one) and asserts equal allocations on both.
+(`FLUI_PERF_SIZE` selects one) and asserts equal heap counts on both.
 `--instructions` runs each size alone under `valgrind --tool=callgrind`,
 counting only inside the target's `perf_measured`, and fails when the large
 tree costs more than 5% over the small one: a frame that clears a table the

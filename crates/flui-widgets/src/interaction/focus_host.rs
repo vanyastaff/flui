@@ -20,6 +20,7 @@ use std::{
 };
 
 use flui_foundation::Subscription;
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::focus::{
     FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration,
     FocusTraversalOverrides, KeyEventHandler, KeyEventResult, RectProvider,
@@ -65,6 +66,12 @@ struct Shared {
     on_focus_change: RefCell<Option<FocusChangeHandler>>,
     /// The current `on_visible_focus_change` handler, read the same way.
     on_visible_focus_change: RefCell<Option<FocusChangeHandler>>,
+    /// Generation-checked ownership of the host's attachment: holding the
+    /// token prevents a stale lifecycle callback from detaching a newer
+    /// host. Kept here so the assistive focus request can tell whether this
+    /// host still owns the node before it requests focus. `None` before
+    /// `init` and after `dispose`.
+    attachment: RefCell<Option<FocusAttachment>>,
     /// Where the node's shown focus is revealed (`focus_reveal.rs`).
     reveal: RevealSlot,
 }
@@ -269,11 +276,6 @@ pub(crate) struct FocusHost {
     /// The exact presentation-local manager acquired from the mounting build
     /// owner. Listener removal must go back to this same instance.
     focus_manager: Option<Rc<FocusManager>>,
-    /// Generation-checked ownership of this host's attachment. Holding the
-    /// token prevents stale lifecycle callbacks from detaching a newer host.
-    /// Shared so the assistive focus request can tell whether this host
-    /// still owns the node before it requests focus.
-    attachment: Option<Rc<FocusAttachment>>,
     /// The node this one currently hangs under; `dependencies_changed`
     /// moves it when the provider changes.
     parent: Option<Rc<FocusNode>>,
@@ -316,6 +318,7 @@ impl FocusHost {
             node_revision: Cell::new(0),
             on_focus_change: RefCell::new(config.on_focus_change.clone()),
             on_visible_focus_change: RefCell::new(config.on_visible_focus_change.clone()),
+            attachment: RefCell::new(None),
             reveal: RevealSlot::default(),
         });
         let mut key_handler_registration = None;
@@ -329,7 +332,6 @@ impl FocusHost {
             key_handler_registration,
             traversal_registration,
             focus_manager: None,
-            attachment: None,
             parent: None,
             rect_provider: None,
             rect_provider_registration: None,
@@ -384,6 +386,10 @@ impl FocusHost {
             let now_focused = node.has_focus();
             let now_shown = node.has_visible_focus();
             drop(node);
+            // The two edges and the reveal each finish whatever the one
+            // before it did: a handler is user code, and one that panics
+            // must not leave the shown focus unreported (ADR-0281).
+            let mut failure = FirstPanic::new();
             if shared.was_focused.replace(now_focused) != now_focused {
                 // FocusNode clones its listener list before dispatch, so
                 // user code may synchronously move focus. Clone the
@@ -391,7 +397,7 @@ impl FocusHost {
                 // same re-entrancy reason.
                 let handler = shared.on_focus_change.borrow().clone();
                 if let Some(handler) = handler {
-                    writer.write(|cx| handler(cx, now_focused));
+                    failure.contain(|| writer.write(|cx| handler(cx, now_focused)));
                 }
             }
             // Recorded before user code runs, so a notification it causes
@@ -400,15 +406,16 @@ impl FocusHost {
             if was_shown != now_shown {
                 let handler = shared.on_visible_focus_change.borrow().clone();
                 if let Some(handler) = handler {
-                    writer.write(|cx| handler(cx, now_shown));
+                    failure.contain(|| writer.write(|cx| handler(cx, now_shown)));
                 }
             }
             // Shown focus is never left where the user cannot see it
             // (WCAG 2.4.11): on the edge into it, the scopes above bring the
             // node into view.
             if now_shown && !was_shown {
-                shared.reveal.reveal();
+                failure.contain(|| shared.reveal.reveal());
             }
+            failure.resume();
         })
     }
 
@@ -478,9 +485,10 @@ impl FocusHost {
         *self.shared.reveal.target.borrow_mut() = FocusRevealScope::of(ctx);
         self.rect_provider = Some(rect_provider);
         self.rect_provider_registration = Some(rect_provider_registration);
-        self.attachment = Some(Rc::new(parent.attach_node(&self.node).expect(
-            "BUG: a focus host could not attach its node to the enclosing focus tree",
-        )));
+        let attachment = parent
+            .attach_node(&self.node)
+            .expect("BUG: a focus host could not attach its node to the enclosing focus tree");
+        drop(self.shared.attachment.replace(Some(attachment)));
         self.parent = Some(parent);
         self.record(record);
 
@@ -501,7 +509,9 @@ impl FocusHost {
             .as_ref()
             .is_none_or(|held| !Rc::ptr_eq(held, &parent))
         {
-            self.attachment
+            self.shared
+                .attachment
+                .borrow()
                 .as_ref()
                 .expect("BUG: a mounted focus host must retain its FocusAttachment")
                 .reparent(&parent)
@@ -562,11 +572,16 @@ impl FocusHost {
                 &mut *self.shared.observed_node.borrow_mut(),
                 Rc::downgrade(&replacement),
             );
-            let attachment = self
+            // The attachment stays in its cell while the tree answers, so a
+            // refusal leaves it where it was.
+            let replaced = self
+                .shared
                 .attachment
-                .take()
-                .expect("BUG: a mounted focus host must retain its FocusAttachment");
-            let replacement_attachment = match attachment.replace_node(&replacement) {
+                .borrow()
+                .as_ref()
+                .expect("BUG: a mounted focus host must retain its FocusAttachment")
+                .replace_node(&replacement);
+            let replacement_attachment = match replaced {
                 Ok(replacement_attachment) => replacement_attachment,
                 Err(error) => {
                     // Refused before anything changed — a focus listener is
@@ -580,7 +595,6 @@ impl FocusHost {
                          notification"
                     );
                     *self.shared.observed_node.borrow_mut() = previous;
-                    self.attachment = Some(attachment);
                     drop((
                         replacement_focus_subscription,
                         replacement_key_handler_registration,
@@ -610,7 +624,7 @@ impl FocusHost {
             self.traversal_registration = replacement_traversal_registration;
             self.rect_provider_registration = replacement_rect_provider_registration;
             self.context_registration = replacement_context_registration;
-            self.attachment = Some(Rc::new(replacement_attachment));
+            drop(self.shared.attachment.replace(Some(replacement_attachment)));
             drop(previous_subscription);
         } else {
             // Re-sync flags and handlers from the latest configuration.
@@ -634,9 +648,11 @@ impl FocusHost {
         // generation owns those registrations: a stale host must not erase
         // state installed by a newer host of the same external node.
         let owns_attachment = self
+            .shared
             .attachment
+            .borrow()
             .as_ref()
-            .is_some_and(|attachment| attachment.is_attached());
+            .is_some_and(FocusAttachment::is_attached);
         if owns_attachment {
             self.key_handler_registration.take();
             self.traversal_registration.take();
@@ -660,7 +676,7 @@ impl FocusHost {
         self.shared.reveal.rect.borrow_mut().take();
         // The generation-checked attachment is the sole detach authority:
         // an old host cannot detach a node that a newer host adopted.
-        if let Some(attachment) = self.attachment.take() {
+        if let Some(attachment) = self.shared.attachment.take() {
             let _ = attachment.detach();
         }
         self.parent = None;
@@ -687,11 +703,26 @@ impl FocusHost {
     /// Assistive technology moving focus is keyboard-like focus: the
     /// indicator shows, as it does after Tab.
     pub(crate) fn assistive_focus_request(&self) -> Option<impl Fn() + 'static> {
-        let attachment = self.attachment.as_ref().filter(|a| a.is_attached())?;
+        if !self
+            .shared
+            .attachment
+            .borrow()
+            .as_ref()
+            .is_some_and(FocusAttachment::is_attached)
+        {
+            return None;
+        }
         let node = Rc::clone(&self.node);
-        let attachment = Rc::downgrade(attachment);
+        let shared = Rc::downgrade(&self.shared);
         Some(move || {
-            if attachment.upgrade().is_some_and(|a| a.is_attached()) {
+            let attached = shared.upgrade().is_some_and(|shared| {
+                shared
+                    .attachment
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(FocusAttachment::is_attached)
+            });
+            if attached {
                 let _ = node.request_focus_with(FocusCause::Assistive);
             }
         })

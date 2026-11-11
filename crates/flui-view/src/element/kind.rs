@@ -515,10 +515,7 @@ impl ElementBase for ElementKind {
         self.element().is_dirty()
     }
 
-    fn build_into_views(
-        &mut self,
-        owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn crate::view::View>> {
+    fn build_into_views(&mut self, owner: &mut crate::ElementOwner<'_>) -> crate::view::ChildViews {
         self.element_mut().build_into_views(owner)
     }
 

@@ -14,7 +14,6 @@
 //! check that no read is parked.
 
 use std::num::NonZeroU32;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use flui_foundation::PresentationId;
 use flui_foundation::inspect::{
@@ -22,6 +21,7 @@ use flui_foundation::inspect::{
     SnapshotQuery, Unit, snapshot,
 };
 
+use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
     InspectField, InspectLevel, InspectNode, InspectParams, InspectReading, InspectUnit,
     InspectValue, LogicalRect, NonFinite,
@@ -132,18 +132,11 @@ pub(crate) struct StagedLayerRead {
 /// Runs `deliver` for every item even if one panics, and returns the first panic: a reply goes
 /// to a receiver whose drop or trace is user code, and the obligations behind it must not be
 /// lost with it.
-pub(crate) fn deliver_each<T>(
-    items: Vec<T>,
-    mut deliver: impl FnMut(T),
-) -> Option<Box<dyn std::any::Any + Send>> {
-    let mut first = None;
+pub(crate) fn deliver_each<T>(items: Vec<T>, mut deliver: impl FnMut(T)) -> FirstPanic {
+    let mut first = FirstPanic::new();
     for item in items {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a reply receiver's drop or trace runs contained for the next item"
-        )]
-        let panicked = catch_unwind(AssertUnwindSafe(|| deliver(item))).err();
-        super::input::preserve_first_input_panic(&mut first, panicked, "agent layer read reply");
+        // A reply receiver's drop or trace runs contained for the next item.
+        first.contain(|| deliver(item));
     }
     first
 }
@@ -170,13 +163,10 @@ impl PresentationState {
     /// The submit was classified. A scene the window showed (or already showed) answers the reads
     /// staged for it; a scene it did not show returns them to the parked list, for the next one.
     /// Returns the first panic of a reply's delivery, after every reply was attempted.
-    pub(crate) fn settle_agent_layer_reads(
-        &self,
-        shown: bool,
-    ) -> Option<Box<dyn std::any::Any + Send>> {
+    pub(crate) fn settle_agent_layer_reads(&self, shown: bool) -> FirstPanic {
         if !shown {
             self.repark_staged_agent_layer_reads();
-            return None;
+            return FirstPanic::new();
         }
         let staged = std::mem::take(&mut *self.agent_layer_staged.borrow_mut());
         deliver_each(staged, |staged| {
@@ -211,7 +201,7 @@ impl PresentationState {
 
     /// The window closes: every read parked or staged is answered `gone`. Returns the first panic
     /// of a reply's delivery, after every reply was attempted.
-    pub(crate) fn abandon_agent_layer_reads(&self) -> Option<Box<dyn std::any::Any + Send>> {
+    pub(crate) fn abandon_agent_layer_reads(&self) -> FirstPanic {
         let mut owed = std::mem::take(&mut *self.agent_layer_staged.borrow_mut())
             .into_iter()
             .map(|staged| staged.read)
@@ -468,17 +458,4 @@ fn reading_of(mut root: SnapshotNode) -> InspectReading {
     reading.count = count;
     reading.truncated = truncated;
     reading
-}
-
-/// The first panic of several stages that each ran to the end, or `None` when none panicked. The
-/// others are discarded under containment (ADR-0281 §2): a payload's destructor is user code and
-/// must not replace the failure being resumed.
-pub(crate) fn first_panic_of(
-    stages: impl IntoIterator<Item = Option<Box<dyn std::any::Any + Send>>>,
-) -> Option<Box<dyn std::any::Any + Send>> {
-    let mut first = None;
-    for stage in stages {
-        super::input::preserve_first_input_panic(&mut first, stage, "agent job abandonment");
-    }
-    first
 }

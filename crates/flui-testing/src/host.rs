@@ -570,6 +570,19 @@ impl HeadlessAccessibility {
     }
 }
 
+impl HeadlessAccessibility {
+    /// Detach assistive technology: the listener clears the presentation's
+    /// semantics flag, and the next frame stops collecting unless an agent
+    /// still holds the tree.
+    fn detach(&self) {
+        self.active.store(false, Ordering::Relaxed);
+        let listener = self.activation.lock().clone();
+        if let Some(listener) = listener {
+            listener(false);
+        }
+    }
+}
+
 impl PlatformAccessibility for HeadlessAccessibility {
     /// Fold `update` into the published tree as an adapter does: an update
     /// carrying tree data replaces it, any other replaces the nodes it names,
@@ -1300,6 +1313,13 @@ impl HeadlessHost {
     /// tree.
     pub fn enable_semantics(&self) {
         self.accessibility.attach();
+    }
+
+    /// Detach assistive technology from the window, as a platform adapter
+    /// does when the last screen reader goes: the next [`pump`](Self::pump)
+    /// stops collecting semantics unless a development agent still asks.
+    pub fn disable_semantics(&self) {
+        self.accessibility.detach();
     }
 
     /// Whether the window's pipeline holds a semantics tree: assistive

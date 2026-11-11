@@ -33,6 +33,7 @@ use super::raw_gesture_detector::{
 };
 use crate::Semantics;
 use crate::support::{EventCallback, ValueCallback, event_callback, value_callback};
+use crate::widget_state::{WidgetState, WidgetStatesController};
 
 /// Whether an unadmitted native update would act: the event, and how far its
 /// focal point moved since the session's start (the pinch's translation).
@@ -431,6 +432,9 @@ struct PressCallbacks {
     long_press: Option<EventCallback>,
     double_tap: Option<EventCallback>,
     double_tap_down: Option<ValueCallback<DoubleTapDetails>>,
+    /// Where the tap writes [`WidgetState::Pressed`]: set at its down,
+    /// cleared at its up or cancel, before the callback of that edge runs.
+    pressed: Option<WidgetStatesController>,
 }
 
 impl PressCallbacks {
@@ -967,6 +971,15 @@ impl PressLive for RefCell<PressCallbacks> {
     }
 }
 
+/// Write the pressed state of the control the live slots belong to, if it
+/// keeps one. The slot borrow ends before the controller notifies.
+fn mark_pressed(live: &dyn PressLive, pressed: bool) {
+    let states = live.press().borrow().pressed.clone();
+    if let Some(states) = states {
+        states.update(WidgetState::Pressed, pressed);
+    }
+}
+
 /// Run the press callback `read` takes from the live slots, inside one
 /// write. The slot borrow ends before the callback runs.
 fn deliver_press<T>(
@@ -1042,6 +1055,7 @@ impl PressMembers {
                     deliver_press_event(&*primary, &primary_writer, |press| press.tap.clone());
                 })
                 .on_tap_down(move |details| {
+                    mark_pressed(&*down, true);
                     deliver_press(
                         &*down,
                         &down_writer,
@@ -1050,9 +1064,11 @@ impl PressMembers {
                     );
                 })
                 .on_tap_up(move |details| {
+                    mark_pressed(&*up, false);
                     deliver_press(&*up, &up_writer, |press| press.tap_up.clone(), details);
                 })
                 .on_tap_cancel(move |details| {
+                    mark_pressed(&*cancel, false);
                     deliver_press(
                         &*cancel,
                         &cancel_writer,
@@ -1194,25 +1210,34 @@ pub(super) struct TapSlot {
 }
 
 impl TapSlot {
-    /// A slot that calls `tap`.
-    pub(super) fn new(tap: Option<EventCallback>) -> Self {
+    /// A slot that calls `tap`, and writes the pressed state of its contact
+    /// to `pressed` while there is a tap to press.
+    pub(super) fn new(
+        tap: Option<EventCallback>,
+        pressed: Option<&WidgetStatesController>,
+    ) -> Self {
         Self {
-            live: Rc::new(RefCell::new(PressCallbacks {
-                tap,
-                ..PressCallbacks::default()
-            })),
+            live: Rc::new(RefCell::new(Self::callbacks(tap, pressed))),
+        }
+    }
+
+    fn callbacks(
+        tap: Option<EventCallback>,
+        pressed: Option<&WidgetStatesController>,
+    ) -> PressCallbacks {
+        PressCallbacks {
+            pressed: pressed.filter(|_| tap.is_some()).cloned(),
+            tap,
+            ..PressCallbacks::default()
         }
     }
 
     /// Replace the callback. A live recognizer reads it at event time, so a
     /// contact in progress ends in the new one.
-    pub(super) fn set(&self, tap: Option<EventCallback>) {
+    pub(super) fn set(&self, tap: Option<EventCallback>, pressed: Option<&WidgetStatesController>) {
         // The outgoing closure drops after the borrow is released: a
         // capture's `Drop` may reenter the control.
-        let outgoing = self.live.replace(PressCallbacks {
-            tap,
-            ..PressCallbacks::default()
-        });
+        let outgoing = self.live.replace(Self::callbacks(tap, pressed));
         drop(outgoing);
     }
 

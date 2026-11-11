@@ -1,0 +1,7 @@
+# Written by `cargo xtask perf --bless`; counts, not timings.
+# One scenario of crates/flui-widgets/tests/perf.rs.
+
+[label_change_small]
+allocated_bytes = 90824
+allocations = 394
+reallocations = 4

@@ -102,7 +102,7 @@ where
         &mut self,
         core: &mut ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>> {
+    ) -> crate::view::ChildViews {
         // The context borrows the tree and the sink, not `owner` or `self`.
         let ctx_choice = make_build_ctx(core, owner);
         let ctx = ctx_choice.as_ctx();
@@ -132,7 +132,7 @@ where
         }
 
         if !should_build_with_trace(core, "StatefulRenderBehavior") {
-            return Vec::new();
+            return crate::view::ChildViews::none();
         }
 
         let state = &self.state;

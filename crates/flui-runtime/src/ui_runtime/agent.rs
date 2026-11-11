@@ -21,6 +21,7 @@ use std::sync::{Arc, Weak};
 
 use flui_foundation::PresentationId;
 use flui_foundation::geometry::DevicePixelRatio;
+use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
     ActOutcome, ActionName, ActionRequest, Actionability, ActionabilityParams, Effect, EffectKind,
     EffectUnit, ElementId, ElementRef, ErrorCode, ErrorObject, EventFilter, HandleKind, InputPath,
@@ -909,7 +910,7 @@ pub(super) fn actionability(
     state: &PresentationState,
     window: WindowId,
     params: &ActionabilityParams,
-    hit_panic: &mut Option<Box<dyn std::any::Any + Send>>,
+    hit_panic: &mut FirstPanic,
 ) -> Result<Actionability, AgentError> {
     let placement = placement_of(state, window);
     let point = state.pipeline().with(|pipeline| {
@@ -934,7 +935,7 @@ pub(super) fn actionability(
             ViewHitTest::Answered {
                 panic: Some(payload),
             } => {
-                *hit_panic = Some(payload);
+                hit_panic.record(payload);
                 return Err(AgentError::HitTestPanicked {
                     element: params.element.element,
                 });

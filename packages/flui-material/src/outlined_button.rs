@@ -150,7 +150,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
         side: Some(WidgetStateProperty::resolve_with(move |states| {
             let color = if states.contains_state(WidgetState::Disabled) {
                 colors.on_surface.with_opacity(0.12)
-            } else if states.contains_state(WidgetState::Focused) {
+            } else if states.contains_state(WidgetState::FocusVisible) {
                 colors.primary
             } else {
                 colors.outline

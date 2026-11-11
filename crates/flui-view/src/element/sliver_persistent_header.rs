@@ -525,9 +525,9 @@ impl<R: PersistentHeaderRenderObject> ElementBehavior<PersistentHeaderView<R>, V
         &mut self,
         core: &mut ElementCore<PersistentHeaderView<R>, Variable>,
         owner: &mut ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>> {
+    ) -> crate::view::ChildViews {
         if !should_build_with_trace(core, "PersistentHeaderBehavior") {
-            return Vec::new();
+            return crate::view::ChildViews::none();
         }
 
         // No layout pass has run yet, so no shrink state exists. Build no
@@ -540,7 +540,7 @@ impl<R: PersistentHeaderRenderObject> ElementBehavior<PersistentHeaderView<R>, V
                  child to this frame's next fixpoint pass"
             );
             core.clear_dirty();
-            return Vec::new();
+            return crate::view::ChildViews::none();
         };
 
         let ctx_choice = make_build_ctx(core, owner);

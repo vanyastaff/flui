@@ -1,6 +1,6 @@
 //! `cargo xtask send-positions`: every place the public API of `flui` and
-//! `flui-sdk` names `Send` or `Sync` is listed, and the list only shrinks
-//! (ADR-0089 §6, ADR-0136).
+//! `flui-sdk` names `Send` or `Sync` is listed, under the rule of ADR-0136 §3
+//! (and ADR-0089 §6).
 //!
 //! UI state is owner-local (ADR-0136): a bound that asks for `Send` where a
 //! value never leaves its owner thread shuts out every `Rc` an application
@@ -29,15 +29,18 @@
 //!
 //! A synthetic auto-trait implementation (rustdoc's `impl Send for Size`,
 //! which follows from the fields) is not a position: no author wrote it, a
-//! new data type would add one against a list that only shrinks, and which
+//! new data type would add one no author chose, and which
 //! types are or are not `Send` is pinned elsewhere (trybuild for the owner
 //! types, a consumer test for the handles meant to cross). Neither is a
 //! blanket implementation's copy on each type; its original is counted once.
 //!
 //! **The list.** [`ALLOWLIST`] names each position by item path, kind and
-//! marker, with a count when the item writes it more than once. A position
-//! the list does not cover is a finding; so is a listed one the code no longer
-//! has, so the list only shrinks. `--seed` prints the list the surface needs.
+//! marker, with a count when the item writes it more than once, and, for an
+//! entry added under ADR-0136 §3's rule, which kind of value crosses there
+//! (`crosses`). A position the list does not cover is a finding; so is a
+//! listed one the code no longer has. A position is added only by the change
+//! that writes it, for a value that really crosses a thread; every other entry
+//! only goes. `--seed` prints the list the surface needs.
 //!
 //! **Limits.** The surface is the host's build: an item only another target
 //! builds is not seen. An item path is the one rustdoc records where the item
@@ -624,6 +627,29 @@ struct Entry {
     marker: Marker,
     #[serde(default = "one")]
     count: usize,
+    /// Which of ADR-0136 §3's kinds of value crosses a thread here. An entry added since that
+    /// rule names it; the older ones are unnamed until a change touches them.
+    #[serde(default)]
+    #[expect(
+        dead_code,
+        reason = "for the reviewer of the entry: the gate checks counts, not kinds"
+    )]
+    crosses: Option<Crossing>,
+}
+
+/// What crosses a thread at a listed position (ADR-0136 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum Crossing {
+    /// A caught panic's payload, which `std` makes `Send`.
+    PanicPayload,
+    /// A waker, or what a waker carries: `Waker` is `Send + Sync`.
+    Waker,
+    /// A worker's result, made on another thread and handed back.
+    WorkerResult,
+    /// A handle meant for another thread: a display, a redraw request, a factory a runtime
+    /// on another thread calls.
+    Handle,
 }
 
 fn one() -> usize {
@@ -746,9 +772,10 @@ fn check(surface: &Surface, list: &BTreeMap<Position, usize>) -> Vec<Finding> {
 fn seed(surface: &Surface) -> String {
     let mut out = String::from(
         "# Every place the public API of `flui` and `flui-sdk` names `Send` or `Sync`\n\
-         # (ADR-0089 §6, ADR-0136), written by `cargo xtask send-positions --seed`. The list\n\
-         # only shrinks: the gate fails on a position it does not cover and on an entry that\n\
-         # allows more than the code has.\n\
+         # (ADR-0089 §6, ADR-0136 §3), written by `cargo xtask send-positions --seed`. The gate\n\
+         # fails on a position it does not cover and on an entry that allows more than the code\n\
+         # has. A position is added only for a value that really crosses a thread, by the change\n\
+         # that writes it, with its kind in `crosses`; every other entry only goes.\n\
          reason = \"a value crosses a thread here: a panic payload, a waker, a worker's result \
          or a handle meant for another thread\"\n\npositions = [\n",
     );
@@ -981,6 +1008,27 @@ mod tests {
         )
         .expect_err("a position listed twice is an error");
         assert!(error.to_string().contains("listed twice"), "{error}");
+    }
+
+    #[test]
+    fn send_positions_list_entry_names_one_of_the_kinds_that_cross() {
+        let list = |crosses: &str| {
+            parse_list(&format!(
+                r#"
+                reason = "kinds"
+                positions = [
+                    {{ item = "a::b", at = "dyn", marker = "Send", crosses = "{crosses}" }},
+                    {{ item = "a::c", at = "dyn", marker = "Send" }},
+                ]
+                "#
+            ))
+        };
+        for kind in ["panic-payload", "waker", "worker-result", "handle"] {
+            let listed = list(kind).unwrap_or_else(|error| panic!("{kind}: {error}"));
+            assert_eq!(listed.len(), 2, "{kind}");
+        }
+        let error = list("convenience").expect_err("a kind ADR-0136 does not name is an error");
+        assert!(format!("{error:#}").contains("convenience"), "{error:#}");
     }
 
     #[test]

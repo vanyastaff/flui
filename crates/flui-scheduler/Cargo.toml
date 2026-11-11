@@ -52,6 +52,8 @@ criterion = { workspace = true }
 # the test support built on it.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
+# `CountingWaker` and `panicking_waker`, the wakers whose wakes a scheduler test counts.
+flui-foundation = { workspace = true, features = ["testing"] }
 
 [lib]
 name = "flui_scheduler"

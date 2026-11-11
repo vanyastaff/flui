@@ -257,9 +257,9 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
         &mut self,
         core: &mut ElementCore<LayoutBuilder, Variable>,
         owner: &mut ElementOwner<'_>,
-    ) -> Vec<Box<dyn View>> {
+    ) -> crate::view::ChildViews {
         if !should_build_with_trace(core, "LayoutBuilderBehavior") {
-            return Vec::new();
+            return crate::view::ChildViews::none();
         }
 
         // No layout pass has run yet, so no constraints exist. Build no child
@@ -272,7 +272,7 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
                  to this frame's next fixpoint pass"
             );
             core.clear_dirty();
-            return Vec::new();
+            return crate::view::ChildViews::none();
         };
 
         let ctx_choice = make_build_ctx(core, owner);

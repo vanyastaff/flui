@@ -552,21 +552,21 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // Running out of parents is the **only** way to learn that `ancestor` is
         // not an ancestor. Everything below this loop is then guaranteed by
         // the tree's own invariants.
-        let mut path = super::transform_path::TransformPath::new(&self.transform_paths);
+        let mut path = self.transform_paths.checkout(0);
         let mut current = descendant;
         loop {
-            path.nodes.push(current);
+            path.push(current);
             let parent = self.render_tree.parent(current)?;
             if parent == ancestor {
                 break;
             }
             current = parent;
         }
-        path.nodes.reverse();
+        path.reverse();
 
         let mut transform = Matrix4::IDENTITY;
         let mut parent = ancestor;
-        for &child in &path.nodes {
+        for &child in path.iter() {
             let parent_node = self
                 .render_tree
                 .get(parent)

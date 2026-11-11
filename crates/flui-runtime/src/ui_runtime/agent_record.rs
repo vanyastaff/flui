@@ -561,7 +561,7 @@ impl AgentRecordings {
 
     /// Ends every recording: the runtime goes. A recording whose reader went is removed with no
     /// row. The first panic is returned once every one has ended.
-    pub(crate) fn end_all(&self) -> Option<Box<dyn std::any::Any + Send>> {
+    pub(crate) fn end_all(&self) -> FirstPanic {
         let mut first = FirstPanic::new();
         for held in self.take(|_| true) {
             if held.queue.abandoned.load(Ordering::Acquire) {
@@ -570,7 +570,7 @@ impl AgentRecordings {
                 first.contain(|| held.end());
             }
         }
-        first.into_payload()
+        first
     }
 }
 
@@ -691,7 +691,7 @@ impl UiRuntime {
 
     /// Ends the recordings whose reader asked to stop, with their `end` rows, and removes the
     /// ones whose reader went. The first panic is returned once every one has run.
-    pub(super) fn sweep_agent_recordings(&self) -> Option<Box<dyn std::any::Any + Send>> {
+    pub(super) fn sweep_agent_recordings(&self) -> FirstPanic {
         let gone = self
             .agent_recordings
             .take(|held| held.queue.abandoned.load(Ordering::Acquire));
@@ -705,15 +705,12 @@ impl UiRuntime {
         for held in stopped {
             first.contain(|| held.end());
         }
-        first.into_payload()
+        first
     }
 
     /// Ends the recordings started on `presentation`, which closed, with their `end` rows. The
     /// first panic is returned once every one has ended.
-    pub(super) fn end_agent_recordings_of(
-        &self,
-        presentation: PresentationId,
-    ) -> Option<Box<dyn std::any::Any + Send>> {
+    pub(super) fn end_agent_recordings_of(&self, presentation: PresentationId) -> FirstPanic {
         let mut first = FirstPanic::new();
         for held in self
             .agent_recordings
@@ -721,7 +718,7 @@ impl UiRuntime {
         {
             first.contain(|| held.end());
         }
-        first.into_payload()
+        first
     }
 }
 

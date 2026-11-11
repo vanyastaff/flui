@@ -302,15 +302,6 @@ impl Drop for PanicOnDrop {
     }
 }
 
-/// Counts its wakes.
-struct CountingWaker(std::sync::atomic::AtomicUsize);
-
-impl std::task::Wake for CountingWaker {
-    fn wake(self: Arc<Self>) {
-        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
 #[test]
 fn a_capture_panicking_at_retirement_leaves_the_others_retired() {
     let owner = Owner::new();
@@ -327,7 +318,7 @@ fn a_capture_panicking_at_retirement_leaves_the_others_retired() {
         let _ = &flag;
     });
 
-    let woken = Arc::new(CountingWaker(std::sync::atomic::AtomicUsize::new(0)));
+    let woken = flui_foundation::testing::CountingWaker::new().shared();
     let waker = Waker::from(Arc::clone(&woken));
     let mut future = pin!(polled.into_future());
     assert_eq!(
@@ -344,7 +335,7 @@ fn a_capture_panicking_at_retirement_leaves_the_others_retired() {
         Some("capture dropped at retirement")
     );
     assert_eq!(
-        woken.0.load(std::sync::atomic::Ordering::SeqCst),
+        woken.count(),
         1,
         "a later completion's future is still woken"
     );
@@ -423,16 +414,8 @@ thread_local! {
     static ON_WAKER_DROP: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
 }
 
-/// A waker whose destructor runs user code, as an executor's may.
+/// A waker capture whose destructor runs user code, as an executor's may.
 struct ReenterOnDrop;
-
-#[expect(
-    clippy::manual_noop_waker,
-    reason = "the waker's Drop re-enters the owner; Waker::noop has none"
-)]
-impl std::task::Wake for ReenterOnDrop {
-    fn wake(self: Arc<Self>) {}
-}
 
 impl Drop for ReenterOnDrop {
     fn drop(&mut self) {
@@ -448,7 +431,9 @@ fn a_replaced_waker_may_reenter_the_owner_when_it_drops() {
     let (completion, resolver) = owner.source.pending::<u32>();
     let mut future = pin!(completion.into_future());
 
-    let reentering = Waker::from(Arc::new(ReenterOnDrop));
+    let reentering = flui_foundation::testing::CountingWaker::new()
+        .shared()
+        .retiring_waker(|| {}, ReenterOnDrop);
     assert_eq!(
         future.as_mut().poll(&mut Context::from_waker(&reentering)),
         Poll::Pending
@@ -459,7 +444,7 @@ fn a_replaced_waker_may_reenter_the_owner_when_it_drops() {
     let turning = Rc::clone(&owner);
     ON_WAKER_DROP.with(|hook| *hook.borrow_mut() = Some(Box::new(move || turning.turn())));
 
-    let woken = Arc::new(CountingWaker(std::sync::atomic::AtomicUsize::new(0)));
+    let woken = flui_foundation::testing::CountingWaker::new().shared();
     let next = Waker::from(Arc::clone(&woken));
     assert_eq!(
         future.as_mut().poll(&mut Context::from_waker(&next)),

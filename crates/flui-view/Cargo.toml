@@ -81,6 +81,8 @@ flui-view = { path = ".", features = ["testing"] }
 # can use the test support built on it.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
+# `CountingWaker`, the waker whose wakes a lifecycle test counts.
+flui-foundation = { workspace = true, features = ["testing"] }
 criterion = { workspace = true }
 # The `serde` round trip of `Revision`.
 serde_json = { workspace = true }

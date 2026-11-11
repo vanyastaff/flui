@@ -127,8 +127,8 @@ enum Command {
     PanicBoundary(panic_boundary::PanicBoundaryArgs),
     /// Check that every `unsafe impl Send`/`Sync` is listed and the list only shrinks (ADR-0136).
     SendImpls(send_impls::SendImplsArgs),
-    /// Check that every place the public API names `Send` or `Sync` is listed and the list
-    /// only shrinks (ADR-0136).
+    /// Check that every place the public API names `Send` or `Sync` is listed under
+    /// ADR-0136 §3.
     SendPositions(send_positions::SendPositionsArgs),
     /// Check that every `new` returning `Result` or `Option` is listed and the list only
     /// shrinks: such a constructor is `try_new` (AGENTS.md).
