@@ -1295,10 +1295,7 @@ impl WidgetsBinding {
         &self,
         pipeline: &PipelineCell,
         writer: &mut flui_rendering::layer::SceneWriter<'_>,
-    ) -> Result<
-        bool,
-        flui_foundation::TreeError<flui_rendering::error::RenderError>,
-    > {
+    ) -> Result<bool, flui_foundation::TreeError<flui_rendering::error::RenderError>> {
         let mut inner = self.inner.write_in(TreePhase::Building);
         let WidgetsBindingInner {
             ref mut build_owner,

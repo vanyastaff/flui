@@ -17,7 +17,7 @@ use flui_interaction::{
     FocusManager, GestureBinding, InteractionDispatchHandle, TextInputBackend, TextInputHandle,
     TextInputOwner,
 };
-use flui_layer::{LayerTree, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};
+use flui_layer::{PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};
 #[cfg(any(test, feature = "testing"))]
 use flui_platform::PlatformTextInput;
 use flui_platform::TextStoreHost;
@@ -393,6 +393,8 @@ pub struct PresentationState {
     pub(super) keyboard: Cell<flui_platform::KeyboardInset>,
     /// The system-bar overlay style its frames ask for, delivered on change.
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
+    /// The retained scene its frames patch and its sink draws (ADR-0304 §8).
+    pub(crate) scene: RefCell<crate::presentation_scene::PresentationScene>,
     /// External textures its widgets register; the raster lane drains it.
     textures: flui_layer::TextureRegistry,
     lifecycle: Cell<PresentationLifecycle>,
@@ -1067,6 +1069,7 @@ impl PresentationState {
             window_execution: Cell::new(snapshot.execution),
             closing_requested: Cell::new(false),
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
+            scene: RefCell::default(),
             textures,
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
@@ -1201,6 +1204,7 @@ impl PresentationState {
             window_execution: Cell::new(snapshot.execution),
             closing_requested: Cell::new(false),
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
+            scene: RefCell::default(),
             textures,
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
@@ -2086,12 +2090,12 @@ impl PresentationState {
         self.performance_overlay.set(enabled);
     }
 
-    /// Record this frame and append the overlay layer to `layer_tree`.
+    /// Record this frame and the overlay layer it composes above the
+    /// presentation's content, `None` while the overlay is off.
     ///
-    /// No-op when the overlay is off, or when the tree has no root to parent
-    /// the overlay under (a frame that painted nothing). The overlay is
-    /// added as the root's LAST child so it composites above the
-    /// presentation's own content.
+    /// The layer is published at a scene node of its own, slotted after the
+    /// pipeline's frame node, so it composites above the content and no
+    /// boundary of the pipeline repaints for it.
     ///
     /// # The overlay is inside what it measures
     ///
@@ -2103,15 +2107,13 @@ impl PresentationState {
     /// it lands *inside* the frames the overlay subsequently reports: read the
     /// displayed percentiles as the cost of running with the overlay on, not
     /// as the app's cost without it.
-    pub(crate) fn attach_performance_overlay(
+    pub(crate) fn performance_overlay_layer(
         &self,
-        layer_tree: &mut LayerTree,
         text: &flui_rendering::TextContextHandle,
-    ) {
+    ) -> Option<flui_layer::Layer> {
         if !self.performance_overlay.get() {
-            return;
+            return None;
         }
-        let root = layer_tree.root();
 
         let snapshots = self.clock.frames_since(None);
         let pace = frame_pace(&snapshots);
@@ -2148,18 +2150,18 @@ impl PresentationState {
             )
         }) else {
             tracing::warn!("performance overlay skipped: the ui_runtime's text context is lent");
-            return;
+            return None;
         };
 
         let overlay = match overlay {
             Ok(overlay) => overlay,
             Err(error) => {
                 tracing::warn!(%error, "performance overlay skipped: label layout failed");
-                return;
+                return None;
             }
         };
 
-        let _overlay_id = layer_tree.push_child(root, flui_layer::Layer::from(overlay));
+        Some(flui_layer::Layer::from(overlay))
     }
 
     fn attach_surface(&self) {
@@ -2216,6 +2218,20 @@ impl PresentationState {
         Ok(())
     }
 
+    /// Renews the scene's lineage before a reload: the code that painted
+    /// every retained content may have changed, so the next frame repaints
+    /// from the root into a new lineage and is published in full
+    /// (ADR-0304 §10).
+    #[cfg(feature = "hot-reload")]
+    fn renew_scene(&self) {
+        let released = self
+            .scene
+            .borrow_mut()
+            .renew(flui_layer::ResyncReason::Rebuilt);
+        // Dropped with the scene free: an annotation's `Drop` is user code.
+        drop(released);
+    }
+
     /// Apply a hot-reload tier to this presentation's own element tree.
     /// Returns whether a redraw is required.
     #[cfg(feature = "hot-reload")]
@@ -2224,6 +2240,7 @@ impl PresentationState {
 
         match tier {
             ReloadTier::Reassemble => {
+                self.renew_scene();
                 self.widgets.perform_reassemble();
                 self.pipeline
                     .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
@@ -2234,6 +2251,7 @@ impl PresentationState {
                 true
             }
             ReloadTier::Restart => {
+                self.renew_scene();
                 tracing::warn!(
                     { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
                     "HotRestart root remount is not implemented; applying reassemble"
@@ -2711,17 +2729,15 @@ mod tests {
         let presentation = presentation();
         presentation.set_performance_overlay(true);
         let text = flui_rendering::TextContextHandle::standalone();
-        let mut tree = LayerTree::new(flui_layer::Layer::from(flui_layer::OffsetLayer::zero()));
 
-        text.with(|_| presentation.attach_performance_overlay(&mut tree, &text));
-        assert_eq!(tree.len(), 1, "a lent context attaches no overlay");
+        let lent = text.with(|_| presentation.performance_overlay_layer(&text));
+        assert!(lent.is_none(), "a lent context attaches no overlay");
 
-        presentation.attach_performance_overlay(&mut tree, &text);
-        assert_eq!(tree.len(), 2, "a free context attaches the overlay");
+        let free = presentation.performance_overlay_layer(&text);
         assert!(
-            tree.iter()
-                .any(|(_, node)| node.layer().as_performance_overlay().is_some()),
-            "the attached child is the overlay"
+            free.as_ref()
+                .is_some_and(|layer| layer.as_performance_overlay().is_some()),
+            "a free context yields the overlay"
         );
     }
 }

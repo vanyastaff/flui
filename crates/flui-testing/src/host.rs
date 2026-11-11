@@ -28,6 +28,7 @@
 //! raised by the next pump, before it frames. A lifecycle panic the tree recovered from (an `ErrorView`
 //! substitution) is not raised: the frame it happened in completed.
 
+use std::cell::OnceCell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -45,7 +46,7 @@ use flui_platform::{
     Unsupported, UnsupportedReason, WindowId, WindowIdMint,
 };
 use flui_platform::{SessionEndAnswer, SessionEndPhase, TextStoreHost};
-use flui_rendering::layer::{LayerTree, Scene};
+use flui_rendering::layer::{LayerTree, ScenePublication, SceneVersion};
 use flui_runtime::dev_agent::DevAgentHost;
 use flui_runtime::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
@@ -630,11 +631,15 @@ impl PlatformAccessibility for HeadlessAccessibility {
 }
 
 /// The frame sink of a [`HeadlessHost`]: a surface of fixed size that
-/// presents every scene and keeps the last one, unless told to defer some.
+/// presents every scene and keeps the last version, unless told to defer
+/// some.
+///
+/// The version is flattened into a layer tree only when a test reads it, so a
+/// frame costs the sink nothing that grows with the tree.
 #[derive(Debug)]
 pub struct HeadlessSink {
     size: (u32, u32),
-    last_scene: Option<Scene>,
+    last: Option<(SceneVersion, OnceCell<Option<LayerTree>>)>,
     submits: u64,
     deferred: u32,
 }
@@ -645,17 +650,30 @@ impl HeadlessSink {
     pub(crate) fn new(width: u32, height: u32) -> Self {
         Self {
             size: (width, height),
-            last_scene: None,
+            last: None,
             submits: 0,
             deferred: 0,
         }
     }
 
-    /// The layer tree of the last scene submitted, retained across frames
-    /// that painted nothing.
+    /// The layer tree the pipeline's frame node paints in the last version
+    /// submitted, rooted at its device-pixel-ratio layer and retained across
+    /// frames that painted nothing.
     #[must_use]
     pub fn layer_tree(&self) -> Option<&LayerTree> {
-        self.last_scene.as_ref().map(Scene::tree)
+        let (version, tree) = self.last.as_ref()?;
+        tree.get_or_init(|| {
+            let root = version.node(version.root())?;
+            let frame = root.content().slots().next()?;
+            version.flatten_node(frame)
+        })
+        .as_ref()
+    }
+
+    /// The last version submitted.
+    #[must_use]
+    pub fn version(&self) -> Option<&SceneVersion> {
+        self.last.as_ref().map(|(version, _)| version)
     }
 
     /// How many scenes have been submitted, not counting deferred ones.
@@ -670,12 +688,12 @@ impl FrameSink for HeadlessSink {
         self.size
     }
 
-    fn submit(&mut self, scene: Scene) -> SubmitVerdict {
+    fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict {
         if let Some(deferred) = self.deferred.checked_sub(1) {
             self.deferred = deferred;
             return SubmitVerdict::Retry;
         }
-        self.last_scene = Some(scene);
+        self.last = Some((publication.scene, OnceCell::new()));
         self.submits = self.submits.saturating_add(1);
         SubmitVerdict::Presented
     }

@@ -306,7 +306,7 @@ pub(super) fn run_real_pipeline_frame(
         );
         owner.set_root_id(Some(render_root));
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(320.0, 80.0))));
-        let result = owner.run_frame_in_place();
+        let result = flui_rendering::testing::SceneHost::new().run_frame_in_place(owner);
         result.expect("the dense containment topology must complete a real pipeline frame");
     });
 }

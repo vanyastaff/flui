@@ -419,6 +419,7 @@ mod tests {
         owner: BuildOwner,
         tree: ElementTree,
         pipeline: PipelineCell,
+        scene: flui_rendering::testing::SceneHost,
         root_render: RenderId,
     }
 
@@ -466,14 +467,25 @@ mod tests {
                 tree,
                 pipeline,
                 root_render,
+                scene: flui_rendering::testing::SceneHost::new(),
             }
         }
 
         /// One frame, exactly as `HeadlessBinding::pump_frame` drives it.
         fn frame(&mut self) {
             self.owner.build_scope(&mut self.tree);
-            self.owner
-                .run_frame_with_layout_builders(&mut self.tree, &self.pipeline)
+            let Self {
+                owner,
+                tree,
+                pipeline,
+                scene,
+                ..
+            } = self;
+            scene
+                .drive_cell(pipeline, |writer| {
+                    owner.run_frame_with_layout_builders(tree, pipeline, writer)
+                })
+                .0
                 .expect("frame must succeed");
         }
 

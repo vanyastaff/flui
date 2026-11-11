@@ -841,10 +841,14 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
         fn surface_size(&mut self) -> (u32, u32) {
             (400, 400)
         }
-        fn submit(&mut self, scene: flui_layer::Scene) -> flui_runtime::sink::SubmitVerdict {
+        fn submit(
+            &mut self,
+            scene: flui_layer::ScenePublication,
+        ) -> flui_runtime::sink::SubmitVerdict {
+            let tree = scene.scene.flatten();
             let mut registry = flui_painting::glyphs::FontRegistry::with_owned_sources();
             let mut painted = Vec::new();
-            for (_, node) in scene.tree().iter() {
+            for (_, node) in tree.iter() {
                 let flui_layer::Layer::Picture(picture) = node.layer() else {
                     continue;
                 };

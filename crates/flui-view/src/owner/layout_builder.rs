@@ -529,10 +529,7 @@ impl BuildOwner {
         tree: &mut ElementTree,
         pipeline: &PipelineCell,
         writer: &mut flui_rendering::layer::SceneWriter<'_>,
-    ) -> Result<
-        bool,
-        flui_foundation::TreeError<flui_rendering::error::RenderError>,
-    > {
+    ) -> Result<bool, flui_foundation::TreeError<flui_rendering::error::RenderError>> {
         self.settle_layout_with_builders(tree, pipeline)?;
         pipeline.run_frame(writer)
     }

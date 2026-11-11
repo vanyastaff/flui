@@ -381,9 +381,10 @@ fn a_boundary_holding_a_leader_is_retained() {
     assert_eq!(follower_transform(&second), follower_transform(&fresh));
 }
 
-/// A paint anchor inside the replayed region still governs the nested boundary that repaints.
+/// A boundary painted alone reads the paint anchor its parent's region gave it: the anchor in
+/// the kept parent content still governs the nested boundary that repaints (ADR-0304 §8).
 #[test]
-fn an_anchor_inside_the_replayed_region_reaches_the_repainted_boundary() {
+fn a_boundary_painted_alone_reads_the_anchor_its_parent_gave_it() {
     let tally = PaintTally::new();
     let (owner, registry) = mount(
         box_node(RenderFlex::row())

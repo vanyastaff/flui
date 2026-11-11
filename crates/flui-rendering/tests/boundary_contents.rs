@@ -294,3 +294,103 @@ fn pipeline_frames_diff_to_the_changed_boundary_rect() {
         expected(&scene, &owner, a)
     );
 }
+
+/// A leaf whose paint panics while it is armed.
+#[derive(Debug)]
+struct PanicsWhenArmed(Arc<std::sync::atomic::AtomicBool>);
+
+impl flui_foundation::inspect::Inspect for PanicsWhenArmed {
+    fn kind(&self) -> &'static str {
+        "PanicsWhenArmed"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
+
+impl flui_rendering::traits::RenderBox for PanicsWhenArmed {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_foundation::Leaf,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(ctx.constrain(Size::new(10.0, 10.0)))
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
+        assert!(
+            !self.0.load(std::sync::atomic::Ordering::Relaxed),
+            "PanicsWhenArmed: armed, failing this paint on purpose",
+        );
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<
+            '_,
+            flui_foundation::Leaf,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> bool {
+        false
+    }
+}
+
+/// A paint that panics applies nothing: the scene keeps the version it held, every boundary keeps
+/// its content, and the next frame paints what was owed into that version (ADR-0304 §10).
+#[test]
+fn a_paint_panic_applies_no_patch_and_keeps_the_presented_version() {
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (owner, registry) = mount(
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderRepaintBoundary::new())
+                    .label("failing")
+                    .child(box_node(PanicsWhenArmed(Arc::clone(&armed))).label("leaf")),
+            )
+            .child(
+                box_node(RenderRepaintBoundary::new())
+                    .label("other")
+                    .child(leaf()),
+            ),
+    );
+    let failing = registry.get("failing").expect("labelled");
+    let leaf_id = registry.get("leaf").expect("labelled");
+    let other = registry.get("other").expect("labelled");
+    let mut scene = SceneHost::new();
+    let mut owner = frame(&mut scene, owner);
+    let presented = scene.version().id();
+    let (failing_before, other_before) = (
+        content(&scene, &owner, failing),
+        content(&scene, &owner, other),
+    );
+
+    armed.store(true, std::sync::atomic::Ordering::Relaxed);
+    owner.mark_needs_paint(leaf_id);
+    owner.mark_needs_paint(other);
+    let (owner, result) = scene.run_frame(owner);
+    assert!(
+        result.is_err(),
+        "precondition: the armed leaf fails the paint"
+    );
+    assert_eq!(scene.version().id(), presented, "no patch was applied");
+    assert!(Arc::ptr_eq(
+        &failing_before,
+        &content(&scene, &owner, failing)
+    ));
+    assert!(Arc::ptr_eq(&other_before, &content(&scene, &owner, other)));
+
+    armed.store(false, std::sync::atomic::Ordering::Relaxed);
+    let (owner, result) = scene.run_frame(owner);
+    result.expect("the retry paints").expect("a patch");
+    assert_ne!(scene.version().id(), presented);
+    assert!(
+        !Arc::ptr_eq(&other_before, &content(&scene, &owner, other)),
+        "the retry paints the boundary the failed pass owed"
+    );
+}

@@ -447,7 +447,7 @@ mod flatten {
     use crate::layer::{Layer, OffsetLayer, PictureLayer};
     use crate::scene::content::Entry;
     use crate::scene::id::SceneNodeId;
-    use crate::tree::LayerTree;
+    use crate::tree::{LayerNode, LayerTree};
 
     impl SceneVersion {
         /// The layer tree the version paints from its root: each node an
@@ -475,18 +475,29 @@ mod flatten {
         /// content sits under when there is one, else at an [`OffsetLayer`]
         /// at its placement: a pipeline's frame node flattens to the tree its
         /// paint built before the scene was retained, rooted at its
-        /// device-pixel-ratio layer. `None` when the version holds no such
-        /// node.
+        /// device-pixel-ratio layer. `None` when the version holds no such node.
         #[must_use]
         pub fn flatten_node(&self, node: SceneNodeId) -> Option<LayerTree> {
             let held = self.node(node)?;
             let entries = held.content().entries();
             let enclosing = matches!(entries.first(), Some(Entry::Effect { .. }))
                 && entries.iter().skip(1).all(|entry| entry.parent().is_some());
-            if enclosing && let Some(Entry::Effect { layer, .. }) = entries.first() {
-                let mut tree = LayerTree::new(layer.clone()).with_scene(self.id().seq());
+            if enclosing && let Some(Entry::Effect { layer, owner, .. }) = entries.first() {
+                let mut tree = LayerTree::new(LayerNode::new(layer.clone()).with_render(*owner))
+                    .with_scene(self.id().seq());
                 let at = tree.root();
-                self.fill(&mut tree, node, at, 1);
+                // An effect over one child at its origin holds that child's
+                // content directly: the root boundary under a frame's
+                // device-pixel-ratio layer.
+                if let [_, Entry::Slot { node: child, .. }] = entries
+                    && self.node(*child).is_some_and(|child| {
+                        child.placement().offset() == flui_foundation::geometry::Offset::ZERO
+                    })
+                {
+                    self.fill(&mut tree, *child, at, 0);
+                } else {
+                    self.fill(&mut tree, node, at, 1);
+                }
                 return Some(tree);
             }
             let mut tree = LayerTree::new(Layer::from(OffsetLayer::new(held.placement().offset())))
@@ -512,12 +523,14 @@ mod flatten {
                     }
                     let parent = entry.parent().map_or(at, |index| placed[index.get()]);
                     let layer = match entry {
-                        Entry::Effect { layer, .. } => tree.push_child(parent, layer.clone()),
+                        Entry::Effect { layer, owner, .. } => tree
+                            .push_child(parent, LayerNode::new(layer.clone()).with_render(*owner)),
                         Entry::Chunk { chunk, .. } => tree.push_child(
                             parent,
-                            Layer::from(PictureLayer::from_shared(Arc::clone(
+                            LayerNode::new(Layer::from(PictureLayer::from_shared(Arc::clone(
                                 chunk.shared_commands(),
-                            ))),
+                            ))))
+                            .with_render(chunk.owner()),
                         ),
                         Entry::Slot { node: child, .. } => {
                             let placement = self

@@ -178,6 +178,11 @@ impl PluginPipeline {
             // exit, a panic included, and returns the frame's
             // `Option<LayerTree>` or its error. On error we log and emit an
             // empty Scene so the host's opaque pointer stays valid.
+            // A scene of its own each frame: the host draws the frame whole, so
+            // nothing is retained across the plugin boundary, and the pipeline
+            // repaints from the root into the new lineage. It drops after the
+            // pipeline's borrow ends: an annotation's `Drop` is user code.
+            let mut scene = flui_rendering::layer::SceneOwner::new();
             let layer_tree = pipeline_owner.with_mut(|guard| {
                 if let Some(root_id) = guard.root_id() {
                     guard.mark_needs_paint(root_id);
@@ -190,13 +195,30 @@ impl PluginPipeline {
                 // unmeasured tree; constraints set once at mount would keep the
                 // first size after a resize.
                 guard.set_root_constraints(Some(BoxConstraints::tight(Size::new(width, height))));
-                match guard.run_frame_in_place() {
-                    Ok(layer_tree) => layer_tree,
+                let painted = match guard.run_frame_in_place(&mut scene.writer()) {
+                    Ok(painted) => painted,
                     Err(e) => {
                         log(&format!("draw_frame: pipeline failed: {e:?}"));
-                        None
+                        false
                     }
+                };
+                if !painted {
+                    return None;
                 }
+                let surface = flui_rendering::layer::SurfaceKey {
+                    size: (width.ceil() as u32, height.ceil() as u32),
+                    generation: flui_foundation::SurfaceGeneration::ZERO,
+                };
+                if let Err(error) = scene.apply(surface) {
+                    log(&format!(
+                        "draw_frame: BUG: the pipeline's patch was refused: {error}"
+                    ));
+                    return None;
+                }
+                guard.scene_applied(scene.current());
+                guard
+                    .scene_frame_node()
+                    .and_then(|node| scene.current().flatten_node(node))
             });
 
             // Phase 3: freeze the LayerTree into a Scene (an empty one when

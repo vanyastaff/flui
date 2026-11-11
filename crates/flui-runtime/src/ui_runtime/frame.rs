@@ -8,7 +8,6 @@ use crate::held_input::HeldPointerReplay;
 use crate::presentation::PresentationState;
 use flui_foundation::PresentationId;
 use flui_foundation::geometry::Size;
-use flui_layer::Scene;
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
@@ -34,11 +33,12 @@ impl UiRuntime {
     // Frame production (moved from the retired `AppBinding`)
     // ========================================================================
 
-    /// Draw a frame and return the produced `Scene`, if any. Test-only —
+    /// Draw a frame and return the version it produced, flattened into a
+    /// `Scene`, if any. Test-only —
     /// production drives frames through [`Self::pump`].
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
-    pub fn draw_frame(&self, constraints: BoxConstraints) -> Option<Scene> {
+    pub fn draw_frame(&self, constraints: BoxConstraints) -> Option<flui_layer::Scene> {
         match self
             .enter(|ui_runtime| ui_runtime.draw_frame_entered(constraints))
             .1
@@ -46,7 +46,9 @@ impl UiRuntime {
             // (the third tuple element, `any_retry_needed`, is a retry-arming
             // concern for `render_frame`; this test helper only
             // reports what was painted)
-            FramePaintOutcome::Painted(scene) => Some(scene),
+            FramePaintOutcome::Painted(publication) => {
+                Some(flui_layer::Scene::new(publication.scene.flatten()))
+            }
             FramePaintOutcome::Idle | FramePaintOutcome::Errored { .. } => None,
         }
     }
@@ -633,9 +635,30 @@ impl UiRuntime {
             widgets.settle_layout_with_builders(presentation.pipeline())?;
             phases.lap(FramePhase::Layout);
         }
-        // Paint commits the layer tree (which carries its own leader index)
-        // before semantics runs; a semantics error retains it for the retry.
-        let layer_tree = presentation.pipeline().run_frame()?;
+        // Paint buffers its patch in the presentation's scene, and the root
+        // around the pipeline's frame node and the debug overlay joins it in
+        // the same patch. A semantics error drops the patch: the pipeline,
+        // finding it never applied, repaints from the root on the retry.
+        let painted = {
+            let pipeline = presentation.pipeline();
+            let mut scene = presentation.scene.borrow_mut();
+            scene.produce(
+                |writer| pipeline.run_frame(writer),
+                || {
+                    let overlay = presentation.performance_overlay_layer(text).map(|layer| {
+                        crate::presentation_scene::OverlayFrame {
+                            layer,
+                            device_pixel_ratio: pipeline
+                                .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio),
+                            owner: pipeline
+                                .with(flui_rendering::pipeline::PipelineOwner::root_id)
+                                .expect("BUG: a frame that painted has a root"),
+                        }
+                    });
+                    (pipeline.scene_frame_node(), overlay)
+                },
+            )?
+        };
 
         presentation.enter_segment_phase(SegmentPhase::Tail);
 
@@ -648,25 +671,44 @@ impl UiRuntime {
             w.service_child_requests(presentation.pipeline());
         }
 
-        // Phase 4: freeze the LayerTree into a Scene.
-        if let Some(mut layer_tree) = layer_tree {
-            presentation.enter_segment_phase(SegmentPhase::Scene);
-            // Probe before the debug overlay joins the scene: it is not content.
-            presentation
-                .overlay_style
-                .stage(&layer_tree, constraints.max_width);
-            presentation.attach_performance_overlay(&mut layer_tree, text);
-            presentation.stage_input_regions();
-
-            // By value, not `Arc<Scene>` — see `FramePaintOutcome::Painted`'s
-            // own doc for why.
-            let scene = Scene::new(layer_tree);
+        if !painted {
             phases.lap(FramePhase::Paint);
-            Ok(FramePaintOutcome::Painted(scene))
-        } else {
-            phases.lap(FramePhase::Paint);
-            Ok(FramePaintOutcome::Idle)
+            return Ok(FramePaintOutcome::Idle);
         }
+
+        // Phase 4: apply the patch and publish the version.
+        presentation.enter_segment_phase(SegmentPhase::Scene);
+        let dpr = presentation
+            .pipeline()
+            .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio);
+        let surface = (
+            device_extent(constraints.max_width, dpr),
+            device_extent(constraints.max_height, dpr),
+        );
+        let produced = presentation.scene.borrow_mut().apply(surface);
+        let outcome = match produced {
+            crate::presentation_scene::Produced::Applied { version, released } => {
+                // The pipeline's probes, input regions, leader watches and
+                // follower hit-testing read the applied version.
+                presentation.pipeline().scene_applied(&version);
+                presentation
+                    .overlay_style
+                    .stage(&version, constraints.max_width);
+                presentation.stage_input_regions();
+                // What the patch replaced drops with no borrow held: an
+                // annotation's `Drop` is user code.
+                drop(released);
+                drop(version);
+                let publication = presentation.scene.borrow().publication();
+                FramePaintOutcome::Painted(publication)
+            }
+            crate::presentation_scene::Produced::Refused { released } => {
+                drop(released);
+                FramePaintOutcome::Errored { retry: true }
+            }
+        };
+        phases.lap(FramePhase::Paint);
+        Ok(outcome)
     }
 
     /// Move `presentation`'s focus off a node this frame removed; whether the
@@ -941,17 +983,15 @@ impl UiRuntime {
         // The first panic of a layer read's reply, resumed with the rest of this tail's panics.
         let mut hover_panic = None;
         use crate::sink::SubmitVerdict;
-        if should_send && let FramePaintOutcome::Painted(scene) = outcome {
+        if should_send && let FramePaintOutcome::Painted(publication) = outcome {
             // The frame this scene will become once presented.
             let frame_number = producer.frames_rendered() + 1;
-            // The scene is handed over BY VALUE: on the raster-lane path it
-            // crosses the raster boundary as an owned, stamped
-            // `SceneSnapshot` (the mailbox seam's own no-`Arc<Scene>`
-            // contract); the direct path borrows it internally and drops it
-            // when the render returns.
+            // The version the sink is handed, acknowledged once it is shown so
+            // the next publication's damage starts from it (ADR-0304 §7).
+            let shown = publication.scene.id();
             // The layer reads parked for this scene read it now and are answered once the sink
             // shows it. A sink that panics leaves them parked, with a repaint owed.
-            producer.stage_agent_layer_reads(scene.tree());
+            producer.stage_agent_layer_reads(&publication.scene);
             // The verdict is kept apart from the span's teardown: a subscriber that panics when
             // the `submit` span exits must not lose a verdict the sink already returned.
             let mut submitted = None;
@@ -962,7 +1002,7 @@ impl UiRuntime {
             let span_outcome = catch_unwind(AssertUnwindSafe(|| {
                 let _presentation = presentation_span(producer.id()).entered();
                 let _submit = tracing::debug_span!(target: "flui.frame", "submit").entered();
-                submitted = Some(sink.submit(scene));
+                submitted = Some(sink.submit(publication));
             }));
             let render_verdict = match (submitted, span_outcome) {
                 (Some(verdict), Ok(())) => verdict,
@@ -999,6 +1039,14 @@ impl UiRuntime {
                     unreachable!("BUG: the submit closure returns only after the sink answered")
                 }
             };
+            // A shown version is the raster side's new base: the log before it is let go.
+            // What the log held drops at the end of this block, after the replies and the
+            // commit, with no borrow held: an annotation's `Drop` is user code.
+            let _released = matches!(
+                render_verdict,
+                SubmitVerdict::Presented | SubmitVerdict::NoPresent
+            )
+            .then(|| producer.scene.borrow_mut().completed(shown));
             // Before anything else that can panic: the staged layer reads are answered if the
             // window showed the scene, and parked again if it did not.
             super::input::preserve_first_input_panic(
@@ -1753,5 +1801,23 @@ impl<'a> PhaseStopwatch<'a> {
         };
         *slot = slot.saturating_add(spent);
         self.presentation.record_segment_phases(self.phases);
+    }
+}
+
+/// A logical extent in whole device pixels, for the surface a patch is
+/// applied against: an unbounded or non-finite extent is no surface.
+fn device_extent(logical: f64, device_pixel_ratio: f64) -> u32 {
+    let device = (logical * device_pixel_ratio).ceil();
+    if device.is_finite() && device > 0.0 {
+        // In range: checked finite and positive, and clamped below.
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "finite, positive and clamped to u32::MAX before the cast"
+        )]
+        let pixels = device.min(f64::from(u32::MAX)) as u32;
+        pixels
+    } else {
+        0
     }
 }

@@ -18,7 +18,7 @@ use flui_layer::{
 };
 
 use crate::error::RenderError;
-use crate::pipeline::{Idle, PipelineOwner, PipelinePhase};
+use crate::pipeline::{Idle, PipelineCell, PipelineOwner, PipelinePhase};
 
 /// A scene owner a test runs pipeline frames into.
 #[derive(Debug)]
@@ -151,6 +151,41 @@ impl SceneHost {
         }
         pipeline.scene_applied(self.owner.current());
         let tree = self.frame_tree(pipeline);
+        (answer, tree)
+    }
+
+    /// [`Self::drive`] for a pipeline its `cell` holds, which `paint` reaches
+    /// through the cell itself (a frame that services layout builders
+    /// between passes).
+    ///
+    /// # Panics
+    ///
+    /// When the patch is refused, or a borrow from `cell` is live after
+    /// `paint` returns.
+    pub fn drive_cell<R>(
+        &mut self,
+        cell: &PipelineCell,
+        paint: impl FnOnce(&mut SceneWriter<'_>) -> R,
+    ) -> (R, Option<LayerTree>) {
+        let staged = || cell.with(PipelineOwner::scene_staged);
+        let answer = {
+            let mut writer = self.owner.writer();
+            let answer = paint(&mut writer);
+            if staged() {
+                compose_root(&mut writer, cell.scene_frame_node());
+            }
+            answer
+        };
+        if !staged() {
+            return (answer, None);
+        }
+        if let Err(error) = self.owner.apply(self.surface) {
+            panic!("BUG: the pipeline's patch was refused: {error}");
+        }
+        cell.scene_applied(self.owner.current());
+        let tree = cell
+            .scene_frame_node()
+            .and_then(|node| self.owner.current().flatten_node(node));
         (answer, tree)
     }
 

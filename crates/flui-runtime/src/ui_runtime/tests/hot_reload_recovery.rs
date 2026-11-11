@@ -106,3 +106,44 @@ pub(crate) fn reassemble_failure_keeps_priority_over_a_failed_rearm() {
 pub(crate) fn reassemble_failure_rearms_the_accepted_tail() {
     reload_failure(0, true);
 }
+
+/// A hot reload renews the presentation's scene: the next frame repaints
+/// from the root into a new lineage and is published in full, with no base
+/// the raster side could apply a region to.
+pub(crate) fn a_hot_reload_publishes_the_next_frame_in_full() {
+    let ui_runtime = new_runtime(Arc::new(|| {})).expect("runtime");
+    ui_runtime
+        .attach_root_widget_to_for_test(ui_runtime.presentation_id(), &SizedBox::square(20.0))
+        .expect("root");
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let mut sink = {
+        let seen = Arc::clone(&seen);
+        crate::testing::ScriptedSink::new(move |_, publication| {
+            seen.lock()
+                .push((publication.scene.id(), publication.base, publication.damage));
+            crate::sink::SubmitVerdict::Presented
+        })
+    };
+    ui_runtime.render_frame(&mut sink);
+    ui_runtime
+        .command_sender()
+        .request_hot_reload(crate::reload::ReloadTier::Reassemble)
+        .expect("reload accepted");
+    let _ = ui_runtime.drain_commands();
+    ui_runtime.render_frame(&mut sink);
+
+    let seen = seen.lock();
+    assert_eq!(seen.len(), 2, "the reloaded tree is painted");
+    assert_ne!(
+        seen[1].0.lineage(),
+        seen[0].0.lineage(),
+        "the reload starts a new lineage"
+    );
+    assert_eq!(seen[1].1, None, "nothing on screen is a base of it");
+    assert_eq!(
+        seen[1].2,
+        flui_layer::DamageRegion::Full(flui_layer::FullReason::Resync(
+            flui_layer::ResyncReason::Rebuilt
+        ))
+    );
+}
