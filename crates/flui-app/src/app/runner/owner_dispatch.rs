@@ -7,7 +7,6 @@ use flui_runtime::owner::RuntimeOperation;
 use flui_scheduler::AppLifecycleState;
 
 use super::host::APP_RUNTIME;
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
 pub(in crate::app) struct PresentationDispatcher {
     pub(super) owner_thread: std::thread::ThreadId,

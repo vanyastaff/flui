@@ -11,6 +11,11 @@ use std::{rc::Rc, sync::Arc};
     not(target_arch = "wasm32")
 ))]
 use crate::app::close_request::CloseRequestHandler;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 use flui_foundation::panic::FirstPanic;
 
 #[cfg(all(
