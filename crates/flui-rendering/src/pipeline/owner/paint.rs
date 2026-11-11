@@ -808,19 +808,34 @@ impl PipelineOwner<PaintPhase> {
             anchor
         };
         let debug_name = render_node.debug_name();
-        let mut recorder = FragmentRecorder::new(origin, self.device_pixel_ratio)
-            .with_paint_anchor(anchor.map(|frame| frame.at(origin)));
+        // The node records after its ancestors' unreplayed operations in the
+        // pass's one buffer, and its children record after its own, so a
+        // node that paints only its child allocates nothing.
+        let mut recorder = FragmentRecorder::appending(
+            std::mem::take(&mut composer.work.fragment_ops),
+            origin,
+            self.device_pixel_ratio,
+        )
+        .with_paint_anchor(anchor.map(|frame| frame.at(origin)));
         #[expect(
             clippy::disallowed_methods,
             reason = "ADR-0287: a render object's paint runs contained; a panic poisons the node"
         )]
-        let own_effects = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let painted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             render_node.paint_raw(&mut recorder, child_ids.len());
             own_effect_layers(render_node.paint_effects(), origin)
-        }))
-        .map_err(|_| crate::error::RenderError::poisoned(debug_name, PoisonPhase::Paint))?;
+        }));
+        let Ok(own_effects) = painted else {
+            composer.work.fragment_ops = recorder.abandon();
+            return Err(crate::error::RenderError::poisoned(
+                debug_name,
+                PoisonPhase::Paint,
+            ));
+        };
         composer.note_painted();
-        let fragment = recorder.finish();
+        let (ops, start) = recorder.finish_appended();
+        let end = ops.len();
+        composer.work.fragment_ops = ops;
 
         debug_assert!(
             !render_node.needs_paint(),
@@ -846,7 +861,14 @@ impl PipelineOwner<PaintPhase> {
         // The group opacity of each scope the fragment has open, so a child painted inside
         // one (a flow delegate's `paint_child_with_opacity`) records what it is drawn at.
         let mut scope_opacity: SmallVec<[f64; 4]> = SmallVec::new();
-        for op in fragment.ops {
+        for at in start..end {
+            // Taken out one at a time: a child painted below appends after
+            // `end` and leaves the buffer as long as it found it.
+            let Some(slot) = composer.work.fragment_ops.get_mut(at) else {
+                debug_assert!(false, "BUG: a child shortened its parent's fragment");
+                break;
+            };
+            let op = std::mem::replace(slot, FragmentOp::Pop);
             match op {
                 FragmentOp::Run(list) => composer.append_run(node_id, list),
                 FragmentOp::Push(scope) => {
@@ -943,6 +965,14 @@ impl PipelineOwner<PaintPhase> {
                     }
                 }
             }
+        }
+        // Every child returned to `end`; what is left is this node's
+        // replayed operations. A pass that fails above leaves the rest for
+        // the next pass's `clear`.
+        let ops = &mut composer.work.fragment_ops;
+        ops.truncate(start);
+        if start == 0 && ops.capacity() > KEPT_FRAGMENT_OPS {
+            *ops = Vec::new();
         }
 
         // The children that went down, in the order they lie over each other and at the
@@ -1625,6 +1655,12 @@ impl PaintScratch {
 /// have room for.
 const KEPT_CAPACITY: usize = 1024;
 
+/// The most fragment operations the pass's shared buffer keeps room for
+/// between passes (an operation is 176 bytes): enough for the path down a
+/// deep tree, not the child list of a long column, which the next pass
+/// allocates again.
+const KEPT_FRAGMENT_OPS: usize = 64;
+
 fn recycle_map<K, V>(map: &mut FxHashMap<K, V>) {
     if map.capacity() > KEPT_CAPACITY {
         *map = FxHashMap::default();
@@ -1674,6 +1710,9 @@ struct ComposerScratch {
     /// The orphan list the owner held before the last applied patch
     /// replaced it, emptied, for the next pass to collect into.
     orphans: Vec<SceneNodeId>,
+    /// The fragments of the nodes on the path being painted, each after
+    /// its parent's: one buffer for the pass instead of one per node.
+    fragment_ops: Vec<FragmentOp>,
 }
 
 impl ComposerScratch {
@@ -1698,6 +1737,7 @@ impl ComposerScratch {
         self.records.clear();
         self.placed.clear();
         self.stale.clear();
+        self.fragment_ops.clear();
     }
 }
 
