@@ -629,10 +629,6 @@ pub struct DefaultFocusTraversalState {
     /// The node the bindings' key handler lives on, which the focus owner
     /// starts a key's walk at while nothing is focused.
     keys: Rc<FocusNode>,
-    /// The platform whose clipboard chords are bound, resolved once in
-    /// `create_state` — the same single injection point `EditableText`'s
-    /// word-jump modifier uses.
-    platform: TargetPlatform,
 }
 
 /// Which clipboard intent a default binding carries.
@@ -792,7 +788,15 @@ fn same_modifiers(a: &SingleActivator, b: &SingleActivator) -> bool {
 }
 
 fn command_activator(platform: TargetPlatform, key: &str) -> SingleActivator {
-    let activator = SingleActivator::character(key);
+    with_command_modifier(platform, SingleActivator::character(key))
+}
+
+/// `activator` with `platform`'s command modifier: Cmd on macOS and iOS,
+/// Control elsewhere.
+pub(crate) fn with_command_modifier(
+    platform: TargetPlatform,
+    activator: SingleActivator,
+) -> SingleActivator {
     match platform {
         TargetPlatform::MacOS | TargetPlatform::iOS => activator.meta(),
         _ => activator.control(),
@@ -804,7 +808,6 @@ impl std::fmt::Debug for DefaultFocusTraversalState {
         f.debug_struct("DefaultFocusTraversalState")
             .field("initialized", &self.focus_owner.is_some())
             .field("keys", &self.keys.id())
-            .field("platform", &self.platform)
             .finish()
     }
 }
@@ -816,7 +819,6 @@ impl StatefulView for DefaultFocusTraversal {
         DefaultFocusTraversalState {
             focus_owner: None,
             keys: FocusNode::with_debug_label("Shortcuts"),
-            platform: TargetPlatform::current(),
         }
     }
 }
@@ -859,7 +861,8 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
         self.release_unfocused_keys();
     }
 
-    fn build(&self, view: &DefaultFocusTraversal, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &DefaultFocusTraversal, ctx: &dyn BuildContext) -> impl IntoView {
+        let platform = flui_view::environment::PlatformConvention::of(ctx);
         let focus_owner = self
             .focus_owner
             .as_ref()
@@ -887,11 +890,11 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
                 once(SingleActivator::named(NamedKey::Escape)),
                 DismissIntent,
             )
-            .shortcut(command_activator(self.platform, "a"), SelectAllTextIntent);
-        for activator in back_activators(self.platform) {
+            .shortcut(command_activator(platform, "a"), SelectAllTextIntent);
+        for activator in back_activators(platform) {
             shortcuts = shortcuts.shortcut(once(activator), BackIntent);
         }
-        for activator in ShowContextMenuIntent::default_keys(self.platform) {
+        for activator in ShowContextMenuIntent::default_keys(platform) {
             shortcuts = shortcuts.shortcut(activator, ShowContextMenuIntent);
         }
         for (key, direction) in [
@@ -908,7 +911,7 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
                 DirectionalFocusIntent(direction),
             );
         }
-        for (activator, binding) in clipboard_activators(self.platform) {
+        for (activator, binding) in clipboard_activators(platform) {
             shortcuts = match binding {
                 ClipboardBinding::Copy => {
                     shortcuts.shortcut(activator, CopySelectionTextIntent::Copy)

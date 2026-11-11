@@ -6,7 +6,7 @@
 //! of its kind when its navigator installs it. This module owns the policy:
 //! [`MaterialApp`](crate::MaterialApp) installs the page builder
 //! [`ThemeData::page_transitions_theme`](crate::ThemeData::page_transitions_theme)
-//! names for [`ThemeData::platform`](crate::ThemeData::platform), and the
+//! names for the tree's [`PlatformConvention`](flui_sdk::view::environment::PlatformConvention), and the
 //! Material dialog fade as the popup builder, which is how
 //! [`show_dialog`](crate::show_dialog) fades.
 //!

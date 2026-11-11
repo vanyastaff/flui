@@ -336,6 +336,7 @@ fn text_editing() {
             ("editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed", crate::editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed),
             ("editable_text_clipboard::paste_rechecks_focus_after_committing_composition", crate::editable_text_clipboard::paste_rechecks_focus_after_committing_composition),
             ("editable_text_clipboard::copy_then_paste_round_trips_text_in_an_editable_text", crate::editable_text_clipboard::copy_then_paste_round_trips_text_in_an_editable_text),
+            ("editable_text_clipboard::a_field_follows_the_platform_convention_it_is_built_under", crate::editable_text_clipboard::a_field_follows_the_platform_convention_it_is_built_under),
             ("editable_text_clipboard::a_field_selection_is_offered_lazily_as_the_primary_selection", crate::editable_text_clipboard::a_field_selection_is_offered_lazily_as_the_primary_selection),
             ("editable_text_clipboard::a_middle_press_pastes_the_primary_selection_where_it_lands", crate::editable_text_clipboard::a_middle_press_pastes_the_primary_selection_where_it_lands),
             ("editable_text_clipboard::a_selection_held_before_mounting_is_offered", crate::editable_text_clipboard::a_selection_held_before_mounting_is_offered),

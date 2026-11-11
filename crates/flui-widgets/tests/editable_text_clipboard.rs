@@ -14,11 +14,8 @@ use flui_widgets::{EditableText, TextEditingController};
 
 /// The platform's command modifier, as `DefaultFocusTraversal` binds it.
 fn command() -> Modifiers {
-    if cfg!(any(target_os = "macos", target_os = "ios")) {
-        Modifiers::META
-    } else {
-        Modifiers::CONTROL
-    }
+    // A tree outside a runtime follows the platform-neutral conventions.
+    Modifiers::CONTROL
 }
 
 fn chord(character: &str, modifiers: Modifiers) -> KeyEvent {
@@ -575,4 +572,94 @@ pub(crate) fn the_harness_releases_the_button_it_pressed() {
             format!("up {:?}", PointerButton::SECONDARY),
         ]
     );
+}
+
+/// A field follows the platform convention it is built under, never the
+/// machine that runs it: on a window that names macOS it jumps by word with
+/// Alt and copies with Cmd, on one that names Linux with Control. The nearest
+/// convention wins, so a macOS wrapper on a Linux window jumps with Alt.
+///
+/// Fails without the change: the field and the app-root bindings read the
+/// compile target, so on a Linux host the macOS rows jumped and copied with
+/// Control.
+pub(crate) fn a_field_follows_the_platform_convention_it_is_built_under() {
+    use flui_interaction::events::NamedKey;
+    use flui_platform::TargetPlatform;
+    use flui_view::environment::PlatformConvention;
+
+    /// Where a word jump from the start of "one two" lands: past the word
+    /// and its trailing space; a character step lands at 1.
+    const WORD: usize = 4;
+    let arrow = |modifiers: Modifiers| {
+        KeyEventBuilder::new(Code::ArrowRight)
+            .with_key(Key::Named(NamedKey::ArrowRight))
+            .with_state(KeyState::Down)
+            .with_modifiers(modifiers)
+            .build()
+    };
+    let mount = |window: TargetPlatform, wrapped: Option<TargetPlatform>| {
+        let controller = TextEditingController::with_text("one two");
+        let focus_node = FocusNode::with_debug_label("convention field");
+        let field = EditableText::new(controller.clone(), Rc::clone(&focus_node));
+        let harness = match wrapped {
+            Some(platform) => {
+                crate::common::harness::mount_on(PlatformConvention::new(platform, field), window)
+            }
+            None => crate::common::harness::mount_on(field, window),
+        };
+        let _ = focus_node.request_focus();
+        assert!(focus_node.has_primary_focus(), "precondition: focused");
+        (harness, controller)
+    };
+    for (window, wrapped, word, other, command) in [
+        (
+            TargetPlatform::MacOS,
+            None,
+            Modifiers::ALT,
+            Modifiers::CONTROL,
+            Some(Modifiers::META),
+        ),
+        (
+            TargetPlatform::Linux,
+            None,
+            Modifiers::CONTROL,
+            Modifiers::META,
+            Some(Modifiers::CONTROL),
+        ),
+        (
+            TargetPlatform::Linux,
+            Some(TargetPlatform::MacOS),
+            Modifiers::ALT,
+            Modifiers::CONTROL,
+            None,
+        ),
+    ] {
+        let row = format!("window {window:?}, wrapped {wrapped:?}");
+        let (harness, controller) = mount(window, wrapped);
+        controller.set_caret_byte_offset(0);
+        let _ = harness.focus_manager().dispatch_key_event(&arrow(word));
+        assert_eq!(
+            controller.caret_byte_offset(),
+            WORD,
+            "{row}: the word-jump modifier moves past the word"
+        );
+        controller.set_caret_byte_offset(0);
+        let _ = harness.focus_manager().dispatch_key_event(&arrow(other));
+        assert_ne!(
+            controller.caret_byte_offset(),
+            WORD,
+            "{row}: the other platform's modifier does not jump by word"
+        );
+        if let Some(command) = command {
+            controller.set_selection(0, 3);
+            assert!(
+                harness
+                    .focus_manager()
+                    .dispatch_key_event(&chord("c", command))
+                    .is_handled(),
+                "{row}: the platform's command chord copies"
+            );
+            assert_eq!(harness.clipboard().text().as_deref(), Some("one"), "{row}");
+        }
+    }
 }

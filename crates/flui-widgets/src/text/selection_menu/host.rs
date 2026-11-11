@@ -70,6 +70,9 @@ pub(crate) struct MenuHost {
     /// The reading direction at the owner, which its toolbar keeps though
     /// it is built in the overlay.
     direction: Cell<TextDirection>,
+    /// The platform whose conventions the owner followed as of its last
+    /// build, which picks the toolbar policy when none is given.
+    platform: Cell<Option<flui_platform::TargetPlatform>>,
     /// Where a secondary press went down, and the source offset there, until
     /// its tap wins the arena (or the next press replaces it).
     secondary: Cell<Option<(Offset<f64>, Option<usize>)>>,
@@ -94,6 +97,8 @@ impl MenuHost {
         owner: &'static str,
     ) {
         let controls = DefaultSelectionControls::controls_of(ctx);
+        self.platform
+            .set(Some(flui_view::environment::PlatformConvention::of(ctx)));
         self.direction
             .set(Directionality::maybe_of(ctx).unwrap_or_default());
         let decided = settings.look.is_some()
@@ -178,7 +183,13 @@ impl MenuHost {
 
     /// When a touch shows the toolbar.
     pub(crate) fn policy(&self) -> SelectionMenuPolicy {
-        self.policy.get().unwrap_or_default()
+        self.policy.get().unwrap_or_else(|| {
+            SelectionMenuPolicy::for_platform(
+                self.platform
+                    .get()
+                    .unwrap_or(flui_platform::TargetPlatform::Unknown),
+            )
+        })
     }
 
     /// What the menu looks like, when the owner shows one.

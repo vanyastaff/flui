@@ -176,7 +176,7 @@ pub(crate) fn navigation_keys_reach_back_and_dismiss_once() {
     assert_eq!(dismissals.get(), 2, "Escape dismisses once per press");
 
     let apple = matches!(
-        TargetPlatform::current(),
+        TargetPlatform::Unknown,
         TargetPlatform::MacOS | TargetPlatform::iOS
     );
     let (back, back_modifiers, foreign, foreign_modifiers) = if apple {

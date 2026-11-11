@@ -921,6 +921,10 @@ pub struct EditableTextState {
     /// The touch handles: shown by a touch, taken by a key, a mouse, the
     /// focus leaving or a change they did not make.
     touch_handles: Rc<FieldHandles>,
+    /// The platform whose conventions the field followed as of its last
+    /// build, which the key handler reads at dispatch: the word-jump
+    /// modifier and the chords left to the route.
+    platform: Rc<Cell<TargetPlatform>>,
     /// The touch long press that selects a word and shows its handles.
     long_press: FieldLongPress,
 }
@@ -964,6 +968,7 @@ impl StatefulView for EditableText {
             cursor_area_alive: Rc::new(RefCell::new(None)),
             writer: None,
             touch_handles: FieldHandles::new(),
+            platform: Rc::new(Cell::new(TargetPlatform::Unknown)),
             long_press: FieldLongPress::new(),
             on_submitted: Rc::new(RefCell::new(self.on_submitted.clone())),
             on_changed: Rc::new(RefCell::new(self.on_changed.clone())),
@@ -1362,6 +1367,7 @@ impl EditableTextState {
             Rc::clone(node),
             Rc::clone(&self.on_submitted),
             self.writer(),
+            Rc::clone(&self.platform),
         );
         let edits = self.edit_observer();
         let store = self.text_store.clone();
@@ -2243,15 +2249,17 @@ impl ViewState<EditableText> for EditableTextState {
                 },
                 Look::Given,
             );
+        let platform = flui_view::environment::PlatformConvention::of(ctx);
+        self.platform.set(platform);
         let caret_handle = view
             .caret_handle
             .or_else(|| DefaultSelectionControls::caret_handle_of(ctx))
-            .unwrap_or_default();
+            .unwrap_or_else(|| CaretHandle::for_platform(platform));
         self.touch_handles.set_look(look, caret_handle);
         (self.touch_handles).set_long_press(
             view.long_press
                 .or_else(|| DefaultSelectionControls::long_press_of(ctx))
-                .unwrap_or_default(),
+                .unwrap_or_else(|| LongPressSelection::for_platform(platform)),
         );
         (self.touch_handles).set_magnifier(DefaultSelectionControls::magnifier_of(
             ctx,
@@ -2479,21 +2487,12 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 /// Whether these modifiers request WORD-granularity movement on
 /// `platform` — see [`word_jump_modifier`]'s doc for the table.
 ///
-/// # Platform source is a known limitation
+/// # Platform source
 ///
-/// Every caller in this file resolves `platform` from
-/// [`TargetPlatform::current()`] (compile-time `cfg(target_os)`) once,
-/// in [`build_key_handler`] — a single injection point rather than each
-/// call site re-resolving it, so a future runtime override has one place
-/// to change. That source is already known wrong for at least one real
-/// target: `wasm32` matches none of `current()`'s `cfg(target_os)` arms
-/// and falls to `Unknown` → Control, but a macOS browser tab needs Alt
-/// too (native Ctrl+Arrow is the OS's own Spaces-switch shortcut there,
-/// so Control would never even reach this handler). Web and embedded
-/// targets need `TargetPlatform` resolved at RUNTIME instead — the same
-/// gap `GestureSettings::preset` closes for gestures by taking the
-/// platform as a value (`flui-interaction/src/gesture/settings.rs`). Tracked, not fixed here — see
-/// `flui-widgets/ARCHITECTURE.md`'s Mapping decision #19.
+/// `platform` is the [`PlatformConvention`](flui_view::environment::PlatformConvention)
+/// the field or area followed at its last build, which the runtime installs
+/// from the platform its runner names. The web runner names the compile
+/// target for now, not the browser's OS (`docs/gaps.md`).
 ///
 /// # DEFERRED
 ///
@@ -2559,16 +2558,14 @@ fn build_key_handler(
     focus_node: Rc<FocusNode>,
     on_submitted: Rc<RefCell<Option<SubmitCallback>>>,
     writer: WriterSource,
+    platform: Rc<Cell<TargetPlatform>>,
 ) -> KeyEventHandler {
-    // Resolved once, at handler-construction time, not per keystroke — the
-    // one place a future runtime-resolved platform would be injected
-    // instead of `TargetPlatform::current()`. See `is_word_jump_modifier`'s
-    // doc for why the compile-time source itself is a known limitation.
-    let platform = TargetPlatform::current();
     Rc::new(move |event| {
         // Cloned out, so no borrow of the cell is held while the edit's
         // listeners run: one may rebuild the field onto another controller.
         let controller = controller.borrow().clone();
+        // The platform the field followed at its last build.
+        let platform = platform.get();
         if !focus_node.can_request_focus() {
             return KeyEventResult::Ignored;
         }
