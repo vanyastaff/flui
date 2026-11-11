@@ -92,18 +92,21 @@ struct HookOrderView {
 struct HookOrderState {
     config: &'static str,
     log: HookLog,
+    /// A slot the element owns, so a failed initialization has one to release.
+    _created: flui_view::Signal<u32>,
 }
 
 impl StatefulView for HookOrderView {
     type State = HookOrderState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         self.log
             .lock()
             .expect("the hook log is never poisoned")
             .push(format!("create {}", self.config));
         HookOrderState {
             config: self.config,
+            _created: flui_view::BuildContextExt::signal(ctx, 0u32),
             log: Arc::clone(&self.log),
         }
     }
@@ -212,6 +215,11 @@ pub(crate) fn a_retry_after_a_failed_init_state_creates_the_state_from_the_newes
         ["create fails", "init"],
         "the first build created the state and its init_state failed"
     );
+    assert_eq!(
+        owner.signal_graph().live_slot_count(),
+        0,
+        "the dropped state's signal is released with it"
+    );
 
     tree.update(root, &view("b"), &mut owner.element_owner_mut());
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
@@ -220,6 +228,11 @@ pub(crate) fn a_retry_after_a_failed_init_state_creates_the_state_from_the_newes
         *log.lock().expect("the hook log is never poisoned"),
         ["create fails", "init", "create b", "init", "apply_view b"],
         "the retry creates the state from the newest view instead of reusing the failed one"
+    );
+    assert_eq!(
+        owner.signal_graph().live_slot_count(),
+        1,
+        "the failed state's signal is released; only the retry's is live"
     );
 }
 

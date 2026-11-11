@@ -868,6 +868,20 @@ where
                         payload.as_ref(),
                         "initializing StatefulElement",
                     );
+                    // The dropped state's signals are slots the element owns:
+                    // release them, so a retry does not stack a second set.
+                    // Before a state exists the element owns no other slot.
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: a released value's destructor panic must not replace the initialization panic"
+                    )]
+                    if let Some(element) = core.self_id()
+                        && let Err(release) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                            owner.release_reactive(element);
+                        }))
+                    {
+                        flui_foundation::panic::discard_payload(release);
+                    }
                     std::panic::resume_unwind(payload);
                 }
             }
