@@ -1,4 +1,19 @@
-//! `Scene` — a [`LayerTree`] frozen for the raster side.
+//! The scene: the frozen per-frame [`Scene`], and the retained scene that
+//! replaces it (ADR-0304): a persistent [`SceneVersion`] its [`SceneOwner`]
+//! changes by typed patches.
+
+mod content;
+mod id;
+mod owner;
+mod table;
+mod version;
+
+pub use content::{BoundaryContent, Bounds, Chunk, ContentBuilder, Entry, EntryIndex};
+pub use id::{ContentVersion, Lineage, SceneNodeId, SceneNodeMarker, SceneVersionId};
+pub use owner::{
+    Placement, SceneError, SceneOp, SceneOwner, ScenePublication, SceneWriter, SurfaceKey,
+};
+pub use version::{EntryAddress, SceneNode, SceneVersion};
 
 use flui_foundation::LayerId;
 

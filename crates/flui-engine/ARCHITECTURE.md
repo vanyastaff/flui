@@ -17,7 +17,7 @@ order it paints; the reference for everything below the `Scene` is wgpu itself.
 Cross-crate contracts carry an ADR; crate-local shapes are recorded under
 [Mapping decisions](#mapping-decisions).
 
-[`flui_layer::Scene`]: ../flui-layer/src/scene.rs
+[`flui_layer::Scene`]: ../flui-layer/src/scene/mod.rs
 [`RasterBackend`]: src/raster.rs
 
 ---

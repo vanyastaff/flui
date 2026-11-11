@@ -2033,8 +2033,11 @@ dependencies = [
  "bitflags",
  "criterion",
  "flui-foundation",
+ "flui-layer",
  "flui-painting",
  "parking_lot",
+ "proptest",
+ "smallvec",
  "thiserror 2.0.21",
  "tracing",
 ]

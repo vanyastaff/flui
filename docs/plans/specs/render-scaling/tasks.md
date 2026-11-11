@@ -1,6 +1,6 @@
 # render-scaling: задачи
 
-- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS3, RS14. Следующие: RS5, RS15 (не
+- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS3, RS5, RS14. Следующие: RS6, RS15 (не
   зависят друг от друга); RS4 сливается в одной серии с RS8.
 - **Design:** [design.md](design.md); требования и ворота G1–G7: [requirements.md](requirements.md)
 - **База:** `main` @ `da69efa`. Пути и строки в ADR даны на `e5ba8fe8f`; перед правкой сверить.
@@ -91,21 +91,35 @@
   `SceneVersion`, `SceneNodeId`, `BoundaryContent`, `Entry`, `Chunk`, `ContentVersion`, `Lineage`,
   `Placement::try_new`, `SceneOp`, `SceneWriter`, `SceneOwner::apply` с проверкой «всё или ничего»
   и `SceneError`; три индекса (ссылки, пользователи текстур, узлы с фильтрами);
-  `SceneVersion::flatten()` за фичей `testing`. Damage в этой задаче всегда `Full(FirstFrame)`.
-- **Где:** новые модули `crates/flui-layer/src/scene/`; `Cargo.toml` (`globals` для `Lineage`).
+  `SceneVersion::flatten()` за фичей `testing`. Damage в этой задаче всегда `Full(FirstFrame)`, после
+  `renew` `Full(Resync(_))`. Корень сцены владелец создаёт сам, `Retire` корня отказывает.
+  Границы (`BoundaryContent::bounds`, `subtree_bounds`), `filters` и `Chunk::reads_destination`
+  нужны только следу и `read_closure` и приходят с RS6.
+- **Где:** новые модули `crates/flui-layer/src/scene/`; `Lineage` минтит `AtomicIdMint` со строкой
+  `counter` в `globals` манифеста `flui-layer`.
 - **Тесты:** модельная проверка таблицы против `BTreeMap` и разделение поддеревьев по
   `Arc::ptr_eq`; из `scene_apply_contract`: `a_slot_naming_its_own_ancestor_is_refused`,
   `a_stale_generation_is_refused`, `a_node_named_by_two_slots_is_refused`,
-  `a_refused_patch_leaves_the_version_and_log_unchanged`; из `content_version_contract`:
+  `a_refused_patch_leaves_the_version_and_log_unchanged`, `a_node_of_another_owner_is_refused`; из
+  `content_version_contract`:
   `a_replaced_owner_never_reports_unchanged`,
   `an_exhausted_mint_renews_the_lineage_and_publishes_full`.
-- **Ворота:** `apply` патча из k операций на версии из 100 и из 100 000 узлов копирует одинаковое
-  число узлов таблицы (счётчик в тесте); `cargo xtask globals` и `send-impls` без новых строк.
+- **Ворота:** стоимость `apply` зависит от патча, а не от размера сцены (`scene_table_cost`, счётчик
+  копий в тесте): (1) патч из k операций копирует не больше k × высота узлов таблицы, где высота
+  равна ceil(log32(ёмкость)), на 100, 1 100, 30 000 и 100 000 узлах; (2) на одной высоте те же
+  операции копируют одно и то же число узлов при любом числе узлов (1 100 против 30 000,
+  равенство); (3) k операций в одном листе копируют один путь, то есть высоту узлов; (4) высота не
+  фиксируется, рост на границе ёмкости (1 024 → 1 025 слотов) добавляет по одному новому узлу на
+  уровень и ничего не копирует; (5) `Publish` родителя с теми же слотами и одним новым копирует
+  одно и то же число узлов при 40 и 1 000 детях; (6) перерисовка с теми же ссылками и текстурами не
+  пишет индексы; (7) новая граница над поддеревом из n узлов обновляет n + 1 глубину
+  (`depth_updates`). `send-impls` без новых строк.
 - **Зависит:** нет. **Размер:** L. **Ревью сильной модели.**
 
 ### RS6. Damage как след патча, `read_closure`, последователи
 
-- **Что:** ADR-0304 §4 и §6: след `Publish`, `Place`, `Retire`; `subtree_bounds` с ростом вверх;
+- **Что:** ADR-0304 §4 и §6: след `Publish`, `Place`, `Retire`; `BoundaryContent::bounds`,
+  `subtree_bounds` с ростом вверх, `filters` и `Chunk::reads_destination`;
   разрешение последователей после операций; одна функция `read_closure` с замыканием до
   неподвижной точки; правила `differ.rs:480-507` и `frame_protocol.rs:215-300` удаляются, оба
   места зовут `read_closure`.
@@ -152,7 +166,11 @@
   `a_hot_reload_renews_every_scene_lineage`, `a_base_mismatch_renders_full`;
   `retained_frames_match_a_full_repaint_over_random_trees_and_marks` сравнивает `flatten()`.
 - **Ворота:** сценарий `caret_blink_in_10k_list`: `nodes_painted` и `scene_ops` равны на 1 000 и
-  10 000 элементов; `damage_rects`, `damage_full`, `scene_nodes_visited` введены; readback-наборы
+  10 000 элементов; `damage_rects`, `damage_full`, `scene_nodes_visited` введены;
+  `scene_depth_updates` показан на кадре, где начало opacity или slide вставляет границу над
+  большим поддеревом (заметный скачок возвращает вопрос о хранении глубины автору спеки); счётчик
+  аллокаций кадра показывает, что `apply` с N записями на одну текстуру или одну ссылку аллоцирует
+  столько же, сколько с одной (корзина индекса расширяется на месте); readback-наборы
   без правки ожиданий.
 - **Зависит:** RS4 (в той же серии), RS7. **Размер:** XL. **Ревью сильной модели.** Если PR выходит за 3 000 строк
   диффа, первым отдельным PR уходит `FrameSink::submit(ScenePublication)` с публикацией
@@ -208,7 +226,7 @@
 - **Что:** ADR-0304 §8 (конец) и §9 (конец): кадр текстуры повреждает только своих пользователей;
   display list canvas-слоя и оверлей производительности версионируются; input regions, наблюдение
   за лидерами и hit-test последователей читают применённую версию; ссылка инспектора называет узел
-  парой `(Lineage, SceneNodeId)`.
+  его `SceneNodeId`, в котором уже есть lineage.
 - **Тесты:** `a_texture_frame_damages_only_its_users`; строка сценария: оверлей без изменения чисел
   даёт `damage_rects = 0`.
 - **Ворота:** пункт ADR-0304 в `docs/gaps.md` пуст и удалён.
@@ -282,5 +300,6 @@
 |---|---|---|---|
 | RS1 | #2384 | готова | `painting_it recording_contract::a_non_finite_op_is_refused_by_kind`, `…a_destructor_that_panics_during_reset_leaves_the_canvas_empty` (падает без порядка `reset`); `a_non_finite_op_is_omitted_and_the_frame_draws`, `inline_picture_replay_owns_its_root_clips` на lavapipe; `.snap` не тронуты; `rg draw_picture crates packages` пуст |
 | RS3 | #2383 | готова | `layer_it region_contract` (четыре строки), `union_table`, `bounds_round_outward_with_aa_margin`; `damage_readback_tests` на lavapipe без правки ожиданий; `_ =>` над `DamageRegion`, `FullReason`, `ResyncReason` нет |
+| RS5 | #2392 | готова | `layer_it scene_apply_contract` (десять строк), `content_version_contract` (две), `scene_table_cost` (четыре): копий 4 / 5 / 5 / 6 на 100 / 1 100 / 30 000 / 100 000 узлах при одних слотах, k = 8 операций в одном листе копируют 2 / 3 / 3 / 4 узла; `scene::table::tests` (модель против `BTreeMap`, `Arc::ptr_eq`, рост 1 024 → 1 025 создаёт 3 узла и 0 копий); `Publish` корня с теми же слотами копирует 3 узла при 40 и при 1 000 детях (до разности слотов 3 и 33); новая граница над 10 и 100 узлами даёт 11 и 101 `depth_updates`; `xtask globals` со строкой `scene::id::NEXT_LINEAGE`, `send-impls` без строк |
 | RS14 | #2382 | готова; `RasterExecutor` переходит в RS15 вместе с командами, его единственный API это ход по ним | `every_slot_shares_one_device_one_glyph_atlas_and_one_pipeline_per_format` (lavapipe): 3 слота в двух форматах дают 1 instance, 1 device, 1 атлас, 2 набора пайплайнов, 0 сборок на перерисовке; до: 3/3/3/3 |
-| RS2, RS4–RS13, RS15–RS19 | | не начата | |
+| RS2, RS4, RS6–RS13, RS15–RS19 | | не начата | |
