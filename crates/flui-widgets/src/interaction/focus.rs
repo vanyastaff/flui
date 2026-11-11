@@ -421,18 +421,34 @@ pub(crate) fn request_autofocus(
     }
 }
 
-/// Record the `Actions` chain visible at a widget and the platform convention
-/// it is built under on its focus `node`, and depend on both, so a changed
-/// one is recorded again (ADR-0079). Shared by `Focus` and `FocusScope`:
-/// either widget's node can hold the primary focus, and a `Shortcuts` above
-/// resolves its intent from that node's record.
-pub(super) fn record_action_chain(
+/// The record of a widget at `ctx` whose bindings are the `Actions` chain
+/// above it: the chain and the platform convention it is built under, with a
+/// dependency on both, so a changed one is recorded again (ADR-0079).
+pub(super) fn ambient_focus_record(ctx: &dyn BuildContext) -> Option<FocusRecord> {
+    EnclosingActions::depend_on(ctx).map(|chain| FocusRecord::at(ctx, chain))
+}
+
+/// [`record_focus_context`] of the [`ambient_focus_record`]: what `Focus`
+/// and `FocusScope` record.
+fn record_action_chain(
     ctx: &dyn BuildContext,
     node: &Rc<FocusNode>,
     held: &mut Option<FocusRecord>,
     registration: &mut Option<FocusNodeRegistration>,
 ) {
-    let chain = EnclosingActions::depend_on(ctx).map(|chain| FocusRecord::at(ctx, chain));
+    record_focus_context(node, ambient_focus_record(ctx), held, registration);
+}
+
+/// Record `chain` on the focus `node`, where a `Shortcuts` above resolves an
+/// intent while the node holds the primary focus. `held` and `registration`
+/// are the caller's memory of what it recorded last; an unchanged record
+/// that is still the node's current one is left alone.
+pub(super) fn record_focus_context(
+    node: &Rc<FocusNode>,
+    chain: Option<FocusRecord>,
+    held: &mut Option<FocusRecord>,
+    registration: &mut Option<FocusNodeRegistration>,
+) {
     let unchanged = match (&chain, &*held) {
         (Some(new), Some(held)) => new.same_as(held),
         (None, None) => true,
@@ -458,11 +474,13 @@ impl ViewState<Focus> for FocusState {
             None if self.sliver => sliver_rect_provider(&self.anchor, ctx),
             None => box_rect_provider(&self.anchor, ctx),
         };
-        self.host.init(ctx, rect_provider);
+        self.host
+            .init(ctx, rect_provider, ambient_focus_record(ctx));
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.host.dependencies_changed(ctx);
+        self.host
+            .dependencies_changed(ctx, ambient_focus_record(ctx));
     }
 
     fn did_update_view(&mut self, _old_view: &Focus, new_view: &Focus) {
@@ -526,15 +544,24 @@ impl ViewState<Focus> for FocusState {
     }
 }
 
-/// The rect of `anchor`'s render node: measured lazily at traversal time
-/// against committed layout — `box_size` + `transform_to` the render root,
-/// the `HeroHandle::bounding_box_in` shape. `None` (fall back to the stored
-/// rect) while unmounted, checked out, or awaiting complete layout.
+/// The rect of `anchor`'s render node.
 fn box_rect_provider(anchor: &SubtreeAnchor, ctx: &dyn LifecycleContext) -> RectProvider {
     let anchor = anchor.clone();
+    render_box_rect_provider(move || anchor.get(), ctx)
+}
+
+/// The rect of the box render node `render_id` names: measured lazily at
+/// traversal time against committed layout — `box_size` + `transform_to` the
+/// render root, the `HeroHandle::bounding_box_in` shape. `None` (fall back to
+/// the stored rect) while unmounted, checked out, or awaiting complete
+/// layout.
+pub(super) fn render_box_rect_provider(
+    render_id: impl Fn() -> Option<flui_foundation::RenderId> + 'static,
+    ctx: &dyn LifecycleContext,
+) -> RectProvider {
     let owner = ctx.pipeline_owner();
     Rc::new(move || {
-        let render_id = anchor.get()?;
+        let render_id = render_id()?;
         let owner = owner.as_ref()?;
         owner
             .try_with_layout(|owner| {

@@ -79,6 +79,9 @@ use flui_testing::backend_conformance::{
 };
 
 const PEN: PointerKind = PointerKind::Pen { tool: PenTool::Tip };
+/// Why the Linux input-method rows do not run on another host's build: the
+/// `zwp_text_input_v3` path is compiled for Linux only.
+const NO_LINUX_HOST: &str = "built without a Linux host";
 const GESTURE: NativeContact = NativeContact(u64::MAX - 1);
 /// Where every backend's event epoch starts, so no stamp saturates at zero.
 const EPOCH: EventTime = EventTime::from_nanos(1_000_000_000);
@@ -202,7 +205,7 @@ impl ImeDriver {
             #[cfg(all(target_os = "linux", any(feature = "wayland", feature = "x11")))]
             Ime::TextInputV3 => ImeField::TextInputV3(TextInputV3::focus(store)),
             #[cfg(not(all(target_os = "linux", any(feature = "wayland", feature = "x11"))))]
-            Ime::TextInputV3 => return TextInputPath::None("built without a Linux host"),
+            Ime::TextInputV3 => return TextInputPath::None(NO_LINUX_HOST),
             Ime::AppKit | Ime::UiKit => ImeField::Apple(AppKitClient::focus(store)),
             Ime::Android => {
                 let mirror = AndroidMirror::focus(store);
@@ -1917,7 +1920,7 @@ fn each_input_method_path_holds_the_ime_rows_or_names_its_gap() {
     )) {
         RowOutcome::Held
     } else {
-        RowOutcome::NotApplicable("built without a Linux host")
+        RowOutcome::NotApplicable(NO_LINUX_HOST)
     };
     let backends: [(&str, Profile, RowOutcome); 7] = [
         ("win32", win32(), RowOutcome::Held),
@@ -2155,6 +2158,11 @@ fn each_conformance_row_fails_against_a_broken_backend() {
     let mut failures = Vec::new();
     for &(row, fault, profile) in BROKEN {
         let healthy = run_backend_conformance(&mut SharedAssembly::new(profile()));
+        // The Linux input method's rows run where it is built; Linux CI
+        // holds them to their faults.
+        if healthy.outcome(row) == Some(&RowOutcome::NotApplicable(NO_LINUX_HOST)) {
+            continue;
+        }
         if healthy.outcome(row) != Some(&RowOutcome::Held) {
             failures.push(format!(
                 "{row}: does not hold unbroken: {:?}",

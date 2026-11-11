@@ -573,12 +573,16 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             .map(
                 |(component, (((&position, &velocity), &target), &threshold))| {
                     let tolerance = if matches!(segment_motion.get(), MotionSpec::Spring(_)) {
-                        crate::simulation::Tolerance::try_new(threshold, f64::INFINITY).map_err(
-                            |error| AnimationError::ComponentSimulation {
+                        crate::simulation::Tolerance::try_new(
+                            threshold,
+                            crate::simulation::SpeedLimit::Derived,
+                        )
+                        .map_err(|error| {
+                            AnimationError::ComponentSimulation {
                                 component,
                                 source: error,
-                            },
-                        )?
+                            }
+                        })?
                     } else {
                         crate::simulation::Tolerance::DEFAULT
                     };

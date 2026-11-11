@@ -1156,12 +1156,16 @@ round trips, unreachable queries and the remaining-glide rest.
   tolerance. `rest_time_is_conservative_and_tight`,
   `spring_run_is_independent_of_frame_partition`,
   `simulation_time_domain_edges`.
-- A tolerance with an infinite velocity limit derives one from the motion's
+- A tolerance with `SpeedLimit::Derived` takes its speed limit from the motion's
   own time scale (`distance·ω`, or the remaining glide for friction). Scroll
   physics use `Tolerance::for_device_pixel_ratio`, half a device pixel, with
   the ratio read from the presentation's pipeline at release
-  (`ScrollMetrics::device_pixel_ratio`).
-  `scroll_fling_rest_scales_with_device_pixel_ratio`.
+  (`ScrollMetrics::device_pixel_ratio`). Flutter's counterpart,
+  `Tolerance.velocity`, is one `double`; `SpeedLimit` makes "derive it" a
+  variant instead of a sentinel float, so a match covers both cases and an
+  infinite fixed limit is refused (ADR-0200).
+  `scroll_fling_rest_scales_with_device_pixel_ratio`,
+  `tolerance_constructors_validate_and_scale_with_dpr`.
 - `BouncingScrollSimulation` hands friction to the edge spring at the moment
   the friction reaches the edge, with the friction's velocity, so position and
   velocity are continuous. `bouncing_simulation_hands_friction_to_spring_at_the_edge`.

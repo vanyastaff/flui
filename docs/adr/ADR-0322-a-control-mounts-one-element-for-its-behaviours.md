@@ -102,18 +102,24 @@ padding, size, shape or per-state style and never will: appearance belongs to th
 widgets and the theme (`ButtonStyle`, `WidgetStateProperty`, `Theme`).
 
 The node mounts one element (§4) and one render object, `RenderInteractive` in `flui-objects`: a
-single-child box of its child's size that answers the hit test, routes pointer events to the
-recognizers, registers the mouse region, describes one `SemanticsConfiguration` and paints the
-focus ring as a foreground. A part that is absent allocates nothing and registers nothing. The
-element's state holds what the wrappers' states hold today: the `FocusNode` and its attachment,
-the recognizers, the action chain, the states controller.
+single-child box of its child's size. It is made of parts, each the value of the render object
+that carries the behaviour alone: a `RenderListener` (always present: where the object is hit and
+its pointer targets), an optional `RenderMouseRegion`, an optional `RenderSemanticsAnnotations`
+and an optional `FocusRingStyle` painted as a foreground. The views that configure those objects
+configure the parts (`Listener` and `Semantics` through their own `RenderView` impls), and the
+object forwards each question of `RenderBox` to the part that answers it, so no rule of a wrapper
+is written twice. A part that is absent registers nothing, describes nothing and paints nothing.
+The object publishes its identity into a `SubtreeAnchor` while mounted, which is how its focus
+node is measured. The element's state holds what the wrappers' states hold: the `FocusNode` and
+its attachment, the recognizers, the action chain, the states controller.
 
 The focus logic (node, configuration, attachment, reparenting, replacement, autofocus, the rule
 that only the current attachment may focus the node from assistive technology) is one
 `FocusHost` (`crates/flui-widgets/src/interaction/focus_host.rs`) that `Focus` and the node both
 own an instance of. Its owner forwards the lifecycle hooks and says how the node is measured: an
-anchor over the child for `Focus`, the render object itself for the node. Recognizer mounting
-does the same with the body of `RawGestureDetector`. One implementation, two hosts.
+anchor over the child for `Focus`, the render object itself for the node. Recognizer mounting is
+one `RecognizerHost` (`interaction/raw_gesture_detector.rs`) in the same way, owned by
+`RawGestureDetector` and by the node. One implementation, two hosts.
 
 ### §2 Enablement has one source
 
@@ -178,6 +184,7 @@ pub trait StatefulRenderView: Clone + 'static + Sized {
     type State: RenderViewState<Self>;
     fn create_state(&self /* the arguments `StatefulView::create_state` takes */) -> Self::State;
     fn create_render_object(&self, cx: &RenderObjectContext<'_>) -> Self::RenderObject;
+    fn did_unmount_render_object(&self, cx: &RenderObjectContext<'_>, object: &mut Self::RenderObject) {}
 }
 
 pub trait RenderViewState<V: StatefulRenderView>: 'static {
@@ -204,6 +211,11 @@ and `init_state` runs at the element's first build, so at mount the state holds 
 acquires there. Putting the constructor on the view makes that order a signature instead of a
 rule to remember. The first build runs `init_state` and then `update_render_object` in the
 same frame, before layout, so the object never lays out without its state's configuration.
+
+The view also releases it. What the object holds in the owner's runtime is data: the targets
+registered for it (ADR-0027). `did_unmount_render_object` unregisters them from the object
+after the state's `dispose`, and for an element whose state never initialized, so a target
+registered at any point is released on every way out.
 
 A build runs `update_render_object`, `provide` and `child`, in that order, so the child mounts
 under what is published and next to an object that is already configured. A state change that
@@ -321,7 +333,7 @@ render object or already owns the element the value comes from.
 
 ### Confirmation
 
-- `crates/flui-widgets/tests/perf.rs`, scenario `raw_button_over_text`: the counted elements,
+- `crates/flui-widgets/tests/perf.rs`, `perf_raw_button_over_text`: the counted elements,
   render nodes, allocations and bytes a `RawButton` adds to its `Text` are within the entry's
   numbers.
 - `raw_button_a11y_tree_matches_wrappers`: `a11y_tree()` of `RawButton` equals, byte for byte, the

@@ -45,6 +45,9 @@ impl TextPainter {
         sizing: super::TextSizing,
     ) -> Result<(), TextLayoutError> {
         let fonts = Self::font_key(text_cx);
+        if let Some(spare) = self.spare_layout.take() {
+            text_cx.recycle(spare);
+        }
 
         // One layout measures and paints: the paragraph the display list
         // carries is built from the layout the metrics are read from.

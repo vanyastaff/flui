@@ -96,22 +96,22 @@ impl SelectionModel {
     pub(super) fn action_chain(self: &Rc<Self>, enclosing: Option<ActionChain>) -> ActionChain {
         if let Some(held) = self.chain.held.borrow().as_ref() {
             let same_enclosing = match (&held.enclosing, &enclosing) {
-                (Some(old), Some(new)) => Rc::ptr_eq(old, new),
+                (Some(old), Some(new)) => old.is(new),
                 (None, None) => true,
                 _ => false,
             };
             if same_enclosing {
-                return Rc::clone(&held.chain);
+                return held.chain.clone();
             }
         }
         let area = || AreaAction(Rc::downgrade(self));
         let enclosing_answer = |intent: TypeId| {
             enclosing
                 .as_ref()
-                .and_then(|chain| chain.get(&intent))
+                .and_then(|chain| chain.get(intent))
                 .cloned()
         };
-        let own = [
+        let own = vec![
             erased_action::<SelectAllTextIntent>(area()),
             erased_action::<CopySelectionTextIntent>(area()),
             erased_action::<ShowContextMenuIntent>(ShowSelectionMenu::new(
@@ -123,10 +123,10 @@ impl SelectionModel {
                 enclosing: enclosing_answer(TypeId::of::<DismissIntent>()),
             }),
         ];
-        let chain = layered_chain(enclosing.clone(), &own);
+        let chain = layered_chain(enclosing.clone(), Rc::new(own));
         *self.chain.held.borrow_mut() = Some(HeldChain {
             enclosing,
-            chain: Rc::clone(&chain),
+            chain: chain.clone(),
         });
         chain
     }
