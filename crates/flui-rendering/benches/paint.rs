@@ -237,7 +237,7 @@ fn bench_effect_change(
 ) {
     for (layered, name) in [(false, "inline"), (true, "layered")] {
         let mut bench_group = c.benchmark_group(format!("{group}/{name}"));
-        for &subtree in &[1_usize, 10, 100, 1_000] {
+        for &subtree in &[1_usize, 10, 100, 1_000, 10_000] {
             bench_group.bench_with_input(
                 BenchmarkId::new("update", subtree),
                 &subtree,
