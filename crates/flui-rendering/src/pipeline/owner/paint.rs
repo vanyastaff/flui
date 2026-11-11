@@ -1236,6 +1236,9 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
         }
         if let Some(frame) = frame {
             self.scene_frame = Some(frame);
+            // A patch with a frame retired every abandoned node it could
+            // still find.
+            self.abandoned_nodes.clear();
         }
         self.orphaned_nodes = orphans;
 
@@ -1300,12 +1303,17 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
 
     /// Drops every record of the scene: the next paint repaints from the
     /// root into new nodes.
+    ///
+    /// The nodes the records named stay owed a retirement: the scene the
+    /// writer patches may still hold them, and only a `Retire` frees a node.
     pub(super) fn forget_scene(&mut self) {
-        self.boundary_records.clear();
+        let frame = self.scene_frame.take().map(|frame| frame.node);
+        let boundaries = self.boundary_records.drain().map(|(_, record)| record.node);
+        self.abandoned_nodes
+            .extend(frame.into_iter().chain(boundaries));
+        self.abandoned_nodes.append(&mut self.orphaned_nodes);
         self.follower_boundaries.clear();
-        self.scene_frame = None;
         self.staged_scene = None;
-        self.orphaned_nodes.clear();
     }
 }
 
@@ -1943,8 +1951,26 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
                 }
             }
         }
-        // Removed boundaries: retired once no unchanged parent names them.
+        // Nodes of a scene whose records the owner dropped: retired while the
+        // version this patch applies to still holds them. The frame this pass
+        // published replaces the one the host slotted; a pass without one
+        // leaves them for the pass that has.
         let current = self.writer.current();
+        let abandoned = if self.staged.frame.is_some() {
+            &owner.abandoned_nodes[..]
+        } else {
+            &[]
+        };
+        for &node in abandoned {
+            if node.lineage() == lineage
+                && current.node(node).is_some()
+                && !self.work.slotted.contains(&node)
+                && retired_set.insert(node)
+            {
+                retired.push(node);
+            }
+        }
+        // Removed boundaries: retired once no unchanged parent names them.
         let mut orphans: Vec<SceneNodeId> = owner
             .orphaned_nodes
             .iter()

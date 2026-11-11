@@ -303,6 +303,11 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// Nodes of removed boundaries, retired by the paint that republishes
     /// the parent that named them.
+
+    /// Nodes of a scene the owner dropped its records of while keeping the
+    /// lineage (a new pixel ratio, a staged patch never applied): the next
+    /// patch retires each one still in the version it patches.
+    abandoned_nodes: Vec<flui_layer::SceneNodeId>,
     orphaned_nodes: Vec<flui_layer::SceneNodeId>,
 
     /// The device pixel ratio the recorded output above was recorded under.
@@ -449,6 +454,7 @@ where
         staged_scene: from.staged_scene,
         paint_scratch: from.paint_scratch,
         orphaned_nodes: from.orphaned_nodes,
+        abandoned_nodes: from.abandoned_nodes,
         retained_pixel_ratio: from.retained_pixel_ratio,
         last_hidden_follower_ids: from.last_hidden_follower_ids,
         device_pixel_ratio: from.device_pixel_ratio,

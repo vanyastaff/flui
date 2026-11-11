@@ -496,3 +496,26 @@ fn a_boundary_placed_at_a_non_finite_offset_keeps_its_last_placement() {
         );
     }
 }
+
+/// A new pixel ratio repaints the scene into new nodes and retires the old
+/// ones: the scene holds as many nodes after each change as after the first
+/// frame.
+///
+/// Red-check: drop the records without keeping their nodes for retirement
+/// (each change leaves a whole old scene in the table).
+#[test]
+fn a_pixel_ratio_change_retires_the_nodes_it_replaces() {
+    let (owner, _root, _a, _b) = two_boundaries();
+    let mut scene = SceneHost::new();
+    let mut owner = frame(&mut scene, owner);
+    let first = scene.version().len();
+    for ratio in [2.0, 1.5, 3.0] {
+        owner.set_device_pixel_ratio(ratio);
+        owner = frame(&mut scene, owner);
+        assert_eq!(
+            scene.version().len(),
+            first,
+            "the scene after the change to {ratio} holds no old node"
+        );
+    }
+}
