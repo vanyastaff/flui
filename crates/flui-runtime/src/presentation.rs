@@ -394,7 +394,7 @@ pub struct PresentationState {
     /// The system-bar overlay style its frames ask for, delivered on change.
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
     /// The retained scene its frames patch and its sink draws (ADR-0304 §8).
-    pub(crate) scene: RefCell<crate::presentation_scene::PresentationScene>,
+    pub(crate) scene: crate::presentation_scene::SceneSlot,
     /// External textures its widgets register; the raster lane drains it.
     textures: flui_layer::TextureRegistry,
     lifecycle: Cell<PresentationLifecycle>,
@@ -1069,7 +1069,7 @@ impl PresentationState {
             window_execution: Cell::new(snapshot.execution),
             closing_requested: Cell::new(false),
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
-            scene: RefCell::default(),
+            scene: crate::presentation_scene::SceneSlot::default(),
             textures,
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
@@ -1204,7 +1204,7 @@ impl PresentationState {
             window_execution: Cell::new(snapshot.execution),
             closing_requested: Cell::new(false),
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
-            scene: RefCell::default(),
+            scene: crate::presentation_scene::SceneSlot::default(),
             textures,
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
@@ -2224,10 +2224,7 @@ impl PresentationState {
     /// (ADR-0304 §10).
     #[cfg(feature = "hot-reload")]
     fn renew_scene(&self) {
-        let released = self
-            .scene
-            .borrow_mut()
-            .renew(flui_layer::ResyncReason::Rebuilt);
+        let released = self.scene.renew(flui_layer::ResyncReason::Rebuilt);
         // Dropped with the scene free: an annotation's `Drop` is user code.
         drop(released);
     }

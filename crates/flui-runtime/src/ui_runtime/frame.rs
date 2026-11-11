@@ -639,9 +639,16 @@ impl UiRuntime {
         // around the pipeline's frame node and the debug overlay joins it in
         // the same patch. A semantics error drops the patch: the pipeline,
         // finding it never applied, repaints from the root on the retry.
+        //
+        // The scene is lent out of its slot from here to the publication:
+        // the code the frame runs meanwhile (paint bodies, callbacks, a
+        // subscriber) finds it lent and is refused, never a borrow error.
+        let mut scene = presentation
+            .scene
+            .lend()
+            .expect("BUG: one frame at a time produces a presentation's scene");
         let painted = {
             let pipeline = presentation.pipeline();
-            let mut scene = presentation.scene.borrow_mut();
             scene.produce(
                 |writer| pipeline.run_frame(writer),
                 || {
@@ -685,7 +692,7 @@ impl UiRuntime {
             device_extent(constraints.max_width, dpr),
             device_extent(constraints.max_height, dpr),
         );
-        let produced = presentation.scene.borrow_mut().apply(surface);
+        let produced = scene.apply(surface);
         let outcome = match produced {
             crate::presentation_scene::Produced::Applied { version, released } => {
                 // The pipeline's probes, input regions, leader watches and
@@ -697,12 +704,15 @@ impl UiRuntime {
                 presentation.stage_input_regions();
                 // What the patch replaced drops with no borrow held: an
                 // annotation's `Drop` is user code.
+                let publication = scene.publication();
+                // Back in its slot before anything it released drops.
+                drop(scene);
                 drop(released);
                 drop(version);
-                let publication = presentation.scene.borrow().publication();
                 FramePaintOutcome::Painted(publication)
             }
             crate::presentation_scene::Produced::Refused { released } => {
+                drop(scene);
                 drop(released);
                 FramePaintOutcome::Errored { retry: true }
             }
@@ -1046,7 +1056,9 @@ impl UiRuntime {
                 render_verdict,
                 SubmitVerdict::Presented | SubmitVerdict::NoPresent
             )
-            .then(|| producer.scene.borrow_mut().completed(shown));
+            // A scene lent to a frame still producing it misses this acknowledgement:
+            // the next publication then over-reports damage, never under-reports it.
+            .then(|| producer.scene.completed(shown).ok());
             // Before anything else that can panic: the staged layer reads are answered if the
             // window showed the scene, and parked again if it did not.
             super::input::preserve_first_input_panic(

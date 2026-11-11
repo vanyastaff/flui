@@ -13,6 +13,7 @@
 //! applied, repaints from the root into the new lineage on the next frame
 //! (ADR-0304 §10).
 
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
@@ -173,6 +174,116 @@ impl PresentationScene {
     }
 }
 
+/// A presentation's scene, lent out whole for the span of a frame that
+/// paints and applies it, so the code that frame runs (paint bodies, visual
+/// update callbacks, a `tracing` subscriber) never meets it borrowed: a
+/// re-entry finds it lent and gets [`SceneLent`] (ADR-0266).
+#[derive(Debug)]
+pub(crate) struct SceneSlot {
+    scene: RefCell<Option<PresentationScene>>,
+    /// A renewal asked for while the scene was lent, run when it returns.
+    renew_owed: Cell<Option<ResyncReason>>,
+}
+
+impl Default for SceneSlot {
+    fn default() -> Self {
+        Self {
+            scene: RefCell::new(Some(PresentationScene::default())),
+            renew_owed: Cell::new(None),
+        }
+    }
+}
+
+/// The presentation's scene is lent to the frame producing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the presentation's scene is lent to the frame producing it")]
+pub(crate) struct SceneLent;
+
+impl SceneSlot {
+    /// Takes the scene out for the frame; it returns when the guard drops,
+    /// panic or not. `Err` when a frame already holds it.
+    pub(crate) fn lend(&self) -> Result<LentScene<'_>, SceneLent> {
+        let scene = self.scene.borrow_mut().take().ok_or(SceneLent)?;
+        Ok(LentScene {
+            slot: self,
+            scene: Some(scene),
+        })
+    }
+
+    /// The current version with the damage since the acknowledged one.
+    #[cfg(test)]
+    pub(crate) fn publication(&self) -> Result<ScenePublication, SceneLent> {
+        self.scene
+            .borrow()
+            .as_ref()
+            .map(PresentationScene::publication)
+            .ok_or(SceneLent)
+    }
+
+    /// The raster side shows `rastered`; see [`PresentationScene::completed`].
+    pub(crate) fn completed(
+        &self,
+        rastered: SceneVersionId,
+    ) -> Result<ReleasedContents, SceneLent> {
+        let mut scene = self.scene.borrow_mut();
+        Ok(scene.as_mut().ok_or(SceneLent)?.completed(rastered))
+    }
+
+    /// Starts a new lineage now, or, while a frame holds the scene, when it
+    /// returns: the renewal is owed, never dropped.
+    #[cfg(feature = "hot-reload")]
+    pub(crate) fn renew(&self, reason: ResyncReason) -> ReleasedContents {
+        let mut scene = self.scene.borrow_mut();
+        match scene.as_mut() {
+            Some(scene) => scene.renew(reason),
+            None => {
+                self.renew_owed.set(Some(reason));
+                ReleasedContents::default()
+            }
+        }
+    }
+}
+
+/// A frame's hold on its presentation's scene; see [`SceneSlot::lend`].
+pub(crate) struct LentScene<'s> {
+    slot: &'s SceneSlot,
+    scene: Option<PresentationScene>,
+}
+
+impl std::ops::Deref for LentScene<'_> {
+    type Target = PresentationScene;
+
+    fn deref(&self) -> &PresentationScene {
+        self.scene
+            .as_ref()
+            .expect("BUG: a lent scene is held until the guard drops")
+    }
+}
+
+impl std::ops::DerefMut for LentScene<'_> {
+    fn deref_mut(&mut self) -> &mut PresentationScene {
+        self.scene
+            .as_mut()
+            .expect("BUG: a lent scene is held until the guard drops")
+    }
+}
+
+impl Drop for LentScene<'_> {
+    fn drop(&mut self) {
+        let Some(mut scene) = self.scene.take() else {
+            return;
+        };
+        // A renewal owed while the frame held the scene runs before it is
+        // back; what it releases drops with the slot free.
+        let released = self.slot.renew_owed.take().map(|reason| {
+            scene.overlay = None;
+            scene.owner.renew(reason)
+        });
+        *self.slot.scene.borrow_mut() = Some(scene);
+        drop(released);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use flui_layer::{DamageRegion, FullReason, SceneOwner};
@@ -195,6 +306,60 @@ mod tests {
         );
         assert_eq!(painted, Ok(true));
         scene.apply((800, 600))
+    }
+
+    /// While a frame holds the scene, code it runs that reaches the slot is
+    /// refused with `SceneLent`, never a borrow error, and a renewal asked
+    /// for meanwhile runs when the scene returns, panic or not.
+    #[test]
+    #[cfg(feature = "hot-reload")]
+    fn a_lent_scene_refuses_a_reentry_and_owes_a_renewal() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let slot = SceneSlot::default();
+        let lineage = |slot: &SceneSlot| {
+            slot.publication()
+                .expect("the scene is back")
+                .scene
+                .id()
+                .lineage()
+        };
+        let first = lineage(&slot);
+        {
+            let mut scene = slot.lend().expect("free");
+            assert!(matches!(frame(&mut scene, None), Produced::Applied { .. }));
+            assert_eq!(slot.lend().err(), Some(SceneLent));
+            assert_eq!(slot.publication().err(), Some(SceneLent));
+            let shown = scene.publication().scene.id();
+            assert!(slot.completed(shown).is_err());
+            drop(slot.renew(ResyncReason::Rebuilt));
+            assert_eq!(
+                scene.publication().scene.id().lineage(),
+                first,
+                "owed, not run"
+            );
+        }
+        let renewed = lineage(&slot);
+        assert_ne!(
+            renewed, first,
+            "the owed renewal ran when the scene returned"
+        );
+
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the test unwinds through a lent scene"
+        )]
+        let unwound = catch_unwind(AssertUnwindSafe(|| {
+            let _scene = slot.lend().expect("free");
+            drop(slot.renew(ResyncReason::Rebuilt));
+            panic!("paint failed");
+        }));
+        flui_foundation::panic::discard_payload(unwound.expect_err("the frame panicked"));
+        assert_ne!(
+            lineage(&slot),
+            renewed,
+            "a panicking frame returns the scene and runs the renewal"
+        );
     }
 
     /// A refused patch renews the lineage: the version on screen is not a

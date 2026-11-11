@@ -525,10 +525,12 @@ impl PipelineOwner<PaintPhase> {
         targets: &[RenderId],
         patches: &mut Vec<(EntryIndex, Layer)>,
     ) -> crate::error::RenderResult<Option<SmallVec<[RenderId; 2]>>> {
-        if targets
-            .iter()
-            .any(|target| !record.effect_slots.iter().any(|(owner, _)| owner == target))
-        {
+        if targets.iter().any(|target| {
+            !record
+                .effect_slots()
+                .iter()
+                .any(|(owner, _)| owner == target)
+        }) {
             return Ok(None);
         }
         patches.clear();
@@ -537,7 +539,7 @@ impl PipelineOwner<PaintPhase> {
         let mut consumed: SmallVec<[RenderId; 2]> = SmallVec::new();
         // In record order, so a target resolves in the sequence a full
         // repaint's paint walk would visit it in.
-        for (render_id, slots) in &record.effect_slots {
+        for (render_id, slots) in record.effect_slots() {
             let render_id = *render_id;
             let Some(node) = self.render_tree.get(render_id) else {
                 // The node is gone but its layers are still in the content.
@@ -1070,8 +1072,9 @@ pub(super) struct BoundaryRecord {
     placed: Placed,
     /// Each node whose own effect layers this content holds, the entries of
     /// those layers, and the origin they were built at: what a
-    /// composited-layer update rebuilds.
-    effect_slots: Vec<(RenderId, EffectSlots)>,
+    /// composited-layer update rebuilds; shared by the record a
+    /// composited-layer update makes, and `None` when there are none.
+    effect_slots: Option<Arc<[(RenderId, EffectSlots)]>>,
     /// Each follower effect in the content, with the origin its subtree paints
     /// at, for hit-testing and input regions.
     followers: SmallVec<[(RenderId, EntryIndex, Offset); 1]>,
@@ -1086,6 +1089,12 @@ impl BoundaryRecord {
     /// The node the boundary is published at.
     pub(super) fn node(&self) -> SceneNodeId {
         self.node
+    }
+
+    /// Each node whose own effect layers the content holds, with their
+    /// entries and origin.
+    fn effect_slots(&self) -> &[(RenderId, EffectSlots)] {
+        self.effect_slots.as_deref().unwrap_or_default()
     }
 }
 
@@ -1414,7 +1423,7 @@ impl BoundaryBuild {
             node,
             content: Arc::new(self.builder.finish()),
             placed,
-            effect_slots: self.effect_slots,
+            effect_slots: (!self.effect_slots.is_empty()).then(|| Arc::from(self.effect_slots)),
             followers: self.followers,
             children: self.children,
             stale: false,

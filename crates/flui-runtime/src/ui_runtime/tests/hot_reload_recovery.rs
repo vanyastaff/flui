@@ -139,8 +139,8 @@ pub(crate) fn a_hot_reload_renews_every_scene_lineage() {
             .get(id)
             .expect("presentation")
             .scene
-            .borrow()
             .publication()
+            .expect("no frame holds the scene")
             .scene
             .id()
             .lineage()
@@ -163,8 +163,8 @@ pub(crate) fn a_hot_reload_renews_every_scene_lineage() {
             .get(id)
             .expect("presentation")
             .scene
-            .borrow()
-            .publication();
+            .publication()
+            .expect("no frame holds the scene");
         assert_ne!(
             publication.scene.id().lineage(),
             old,

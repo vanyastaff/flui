@@ -15,7 +15,7 @@ use flui_painting::DamageExtent;
 use flui_painting::paint::ImageFilter;
 use smallvec::SmallVec;
 
-use super::content::{BoundaryContent, Bounds, Entry, EntryIndex};
+use super::content::{BoundaryContent, Bounds, Entry, EntryIndex, LinkRole};
 use super::id::NodeKey;
 use super::version::{Address, NodeRecord, VersionInner};
 use crate::damage::closure::{device_spread, footprint, moved};
@@ -532,12 +532,12 @@ impl<'v> Geometry<'v> {
         self,
         key: NodeKey,
         start: Option<EntryIndex>,
-        mut filters: Option<&mut Vec<(EntryIndex, Scope)>>,
+        filters: Option<&mut Vec<(EntryIndex, Scope)>>,
     ) -> Scope {
         let content = self.record(key).content();
         let entries = content.entries();
         let all = content.structural();
-        let (structural, first_effect, mut whole, floor) = match start {
+        let (structural, first_effect, whole, floor) = match start {
             None => (
                 all,
                 0,
@@ -566,6 +566,50 @@ impl<'v> Geometry<'v> {
                 }
             },
         };
+        self.fold(key, structural, first_effect, whole, floor, filters)
+    }
+
+    /// What the effect `entry` of `key` holds, in the space under its own
+    /// map: its direct chunks and every entry under it. The scope of the
+    /// effect is this taken through the effect's own links, so two versions
+    /// whose effect differs and whose inside does not fold it once.
+    pub(crate) fn effect_inside(self, key: NodeKey, entry: EntryIndex) -> Scope {
+        let content = self.record(key).content();
+        let position = content
+            .effect_position(entry)
+            .expect("BUG: an effect entry is among its content's effects");
+        let scope = content.effect_scope(position);
+        let all = content.structural();
+        let from = all.partition_point(|index| *index <= entry);
+        let to = all.partition_point(|index| index.get() < scope.end);
+        self.fold(
+            key,
+            &all[from..to],
+            position + 1,
+            Scope {
+                local: scope.chunks,
+                kernel: 0.0,
+            },
+            entry.get() + 1,
+            None,
+        )
+    }
+
+    /// Folds `structural`, the effects and slots of one scope, into `whole`:
+    /// an entry whose parent is at or after `floor` joins its parent's
+    /// inside, any other joins `whole`. `first_effect` is the position of the
+    /// first effect among them.
+    fn fold(
+        self,
+        key: NodeKey,
+        structural: &[EntryIndex],
+        first_effect: usize,
+        mut whole: Scope,
+        floor: usize,
+        mut filters: Option<&mut Vec<(EntryIndex, Scope)>>,
+    ) -> Scope {
+        let content = self.record(key).content();
+        let entries = content.entries();
         // Each structural entry's inside, and an effect's position among the
         // content's effects: those of the scope are consecutive.
         let mut inside: SmallVec<[Scope; 16]> = SmallVec::with_capacity(structural.len());
@@ -636,6 +680,20 @@ impl<'v> Geometry<'v> {
         }
     }
 
+    /// Whether the child boundary `child` draws the same in its parent's
+    /// space under both versions: its placement, its subtree bounds and its
+    /// kernel, from which its slot's scope is read.
+    pub(crate) fn same_slot(self, other: Geometry<'_>, child: NodeKey) -> bool {
+        match (self.version.record(child), other.version.record(child)) {
+            (Some(one), Some(two)) => {
+                one.placement() == two.placement()
+                    && one.subtree() == two.subtree()
+                    && one.kernel().to_bits() == two.kernel().to_bits()
+            }
+            _ => false,
+        }
+    }
+
     /// What `key`'s content and subtree change, in its own space, from its
     /// children's stored bounds, and its filters' device kernel.
     pub(crate) fn subtree_scope(self, key: NodeKey) -> Scope {
@@ -652,6 +710,51 @@ impl<'v> Geometry<'v> {
         self.content_links(key, entry, &mut links, 0);
         let scope = self.scope(key, Some(entry), None);
         map_out_spread(&links, scope.local, scope.kernel)
+    }
+
+    /// The links from the surface into the space that holds `entry` of
+    /// `key`: the node's chain, then the effects above the entry; `None`
+    /// when the node is not attached.
+    pub(crate) fn entry_chain(self, key: NodeKey, entry: EntryIndex) -> Option<Links<'v>> {
+        let mut links = Links::new();
+        self.node_links(key, &mut links, 0).ok()?;
+        self.content_links(key, entry, &mut links, 0);
+        Some(links)
+    }
+
+    /// Where the effect `entry` of `key` and its scope land on the surface,
+    /// given what it holds under its own map ([`Self::effect_inside`]) and
+    /// the chain into the space that holds it ([`Self::entry_chain`]).
+    pub(crate) fn effect_reach(
+        self,
+        chain: &[Link<'_>],
+        key: NodeKey,
+        entry: EntryIndex,
+        inside: Scope,
+    ) -> Reach {
+        let mut own = Links::new();
+        if let Some(layer) = self.record(key).content().effect_layer(entry) {
+            self.effect_links(layer, Address { node: key, entry }, &mut own, 0);
+        }
+        let scope = inside.through(&own);
+        map_out_spread(chain, scope.local, scope.kernel)
+    }
+
+    /// The node whose content slots `key`.
+    pub(crate) fn parent(self, key: NodeKey) -> Option<NodeKey> {
+        self.version.record(key).and_then(NodeRecord::parent)
+    }
+
+    /// Whether `key`'s content holds a follower, whose transform each
+    /// version resolves on its own.
+    pub(crate) fn holds_followers(self, key: NodeKey) -> bool {
+        self.version.record(key).is_some_and(|record| {
+            record
+                .content()
+                .links()
+                .iter()
+                .any(|(_, role, _)| *role == LinkRole::Follower)
+        })
     }
 
     /// Where `key`'s subtree lands on the surface, from its stored bounds;

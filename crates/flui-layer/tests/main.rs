@@ -475,6 +475,14 @@ fn scene_effect_update() {
                 "an_effect_update_equals_a_content_built_afresh",
                 u::an_effect_update_equals_a_content_built_afresh,
             ),
+            (
+                "an_update_of_an_effect_and_its_descendant_folds_each_inside",
+                u::an_update_of_an_effect_and_its_descendant_folds_each_inside,
+            ),
+            (
+                "an_effect_update_of_a_reparented_boundary_reads_each_versions_chain",
+                u::an_effect_update_of_a_reparented_boundary_reads_each_versions_chain,
+            ),
         ],
     );
 }

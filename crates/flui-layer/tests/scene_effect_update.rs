@@ -371,3 +371,96 @@ pub(crate) fn an_effect_update_equals_a_content_built_afresh() {
         );
     }
 }
+
+/// An update that changes an effect and one nested under it damages the
+/// nested chunk under both old layers and both new ones: the outer effect's
+/// inside differs between the versions, so it is folded under each.
+pub(crate) fn an_update_of_an_effect_and_its_descendant_folds_each_inside() {
+    let mut outer = None;
+    let mut inner = None;
+    let (mut owner, node, content) = scene_with(|writer| {
+        let node = writer.mint_node();
+        let version = writer.next_content_version().expect("a version");
+        let mut content = BoundaryContent::builder();
+        outer = Some(content.push_effect(translate(0.0, 0.0), RenderId::new(1), 0));
+        inner = Some(content.push_effect(translate(0.0, 0.0), RenderId::new(2), 0));
+        content.chunk(chunk(3, version, Rect::from_xywh(10.0, 10.0, 10.0, 10.0)));
+        content.pop_effect();
+        content.pop_effect();
+        (node, Arc::new(content.finish()))
+    });
+    let (outer, inner) = (outer.expect("the outer"), inner.expect("the inner"));
+
+    let updated = content
+        .with_effects([
+            (outer, translate(100.0, 0.0)),
+            (inner, translate(0.0, 50.0)),
+        ])
+        .expect("effect entries");
+    let mut writer = owner.writer();
+    writer.push(publish(node, Arc::new(updated)));
+    owner.apply(SURFACE).expect("both effects change");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(10.0, 10.0, 20.0, 20.0)),
+        "the chunk under both old layers: {damage:?}"
+    );
+    assert!(
+        covered(&damage, covering(110.0, 60.0, 120.0, 70.0)),
+        "the chunk under both new layers: {damage:?}"
+    );
+}
+
+/// An effect update in the patch that also moves its boundary under another
+/// parent damages the effect's scope through the old parent's chain under
+/// the old version and the new parent's under the new one.
+pub(crate) fn an_effect_update_of_a_reparented_boundary_reads_each_versions_chain() {
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let (left, right, node) = (writer.mint_node(), writer.mint_node(), writer.mint_node());
+    let version = writer.next_content_version().expect("a version");
+    let mut moving = BoundaryContent::builder();
+    let effect = moving.push_effect(translate(0.0, 0.0), RenderId::new(1), 0);
+    moving.chunk(chunk(2, version, Rect::from_xywh(0.0, 0.0, 10.0, 10.0)));
+    moving.pop_effect();
+    let moving = Arc::new(moving.finish());
+    writer.push(publish(node, Arc::clone(&moving)));
+    let mut holder = BoundaryContent::builder();
+    holder.slot(node);
+    writer.push(publish(left, Arc::new(holder.finish())));
+    writer.push(publish(
+        right,
+        Arc::new(BoundaryContent::builder().finish()),
+    ));
+    let mut top = BoundaryContent::builder();
+    top.slot(left);
+    top.slot(right);
+    writer.push(publish(root, Arc::new(top.finish())));
+    writer.push(place(right, 400.0, 300.0));
+    owner
+        .apply(SURFACE)
+        .expect("two parents, the boundary under the left");
+
+    let updated = moving
+        .with_effects([(effect, translate(20.0, 0.0))])
+        .expect("an effect entry");
+    let mut writer = owner.writer();
+    writer.push(publish(node, Arc::new(updated)));
+    writer.push(publish(left, Arc::new(BoundaryContent::builder().finish())));
+    let mut holder = BoundaryContent::builder();
+    holder.slot(node);
+    writer.push(publish(right, Arc::new(holder.finish())));
+    owner
+        .apply(SURFACE)
+        .expect("the effect changes as the boundary moves to the right parent");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(0.0, 0.0, 10.0, 10.0)),
+        "under the left parent with the old layer: {damage:?}"
+    );
+    assert!(
+        covered(&damage, covering(420.0, 300.0, 430.0, 310.0)),
+        "under the right parent with the new layer: {damage:?}"
+    );
+}

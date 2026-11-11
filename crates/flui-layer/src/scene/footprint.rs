@@ -177,6 +177,7 @@ pub(crate) fn patch_damage(
             new,
             &mut footprints,
             content,
+            facts,
         );
     }
     for &key in facts.placed {
@@ -531,9 +532,10 @@ fn content_damage(
     new: Geometry<'_>,
     footprints: &mut Footprints<'_>,
     scratch: &mut ContentScratch,
+    facts: &PatchFacts<'_>,
 ) {
     if before.shares_stream(after) {
-        effects_damage(key, before, after, old, new, footprints);
+        effects_damage(key, before, after, old, new, footprints, facts);
         return;
     }
     let ContentScratch {
@@ -631,6 +633,7 @@ fn effects_damage(
     old: Geometry<'_>,
     new: Geometry<'_>,
     footprints: &mut Footprints<'_>,
+    facts: &PatchFacts<'_>,
 ) {
     let (entries, effects) = (after.entries(), after.effects());
     let (old_layers, new_layers) = (before.layers(), after.layers());
@@ -650,12 +653,99 @@ fn effects_damage(
             tops.push(index);
         }
     }
+    // An effect none of whose descendants changed, over slots that draw the
+    // same in both versions, holds the same inside under both: it is folded
+    // once and taken through each version's own effect. The chain into the
+    // space that holds it is read once when the patch left every node above
+    // the boundary, and the boundary's placement, as they were and no
+    // follower sits on it.
+    let chain_kept = same_chain(key, after, new, facts);
+    let structural = after.structural();
+    let mut reaches: SmallVec<[(Reach, Reach); 4]> = SmallVec::with_capacity(tops.len());
     for &index in &tops {
-        footprints.add(new.entry_reach(key, index));
+        let position = after
+            .effect_position(index)
+            .expect("BUG: a changed effect is among its content's effects");
+        let end = after.effect_scope(position).end;
+        let under_changed = effects[position + 1..]
+            .iter()
+            .zip(&changed[position + 1..])
+            .take_while(|(entry, _)| entry.get() < end)
+            .any(|(_, &changed)| changed);
+        let from = structural.partition_point(|entry| *entry <= index);
+        let to = structural.partition_point(|entry| entry.get() < end);
+        let slots_same = structural[from..to]
+            .iter()
+            .all(|entry| match &entries[entry.get()] {
+                Entry::Slot { node, .. } => new.same_slot(old, node.key()),
+                Entry::Effect { .. } | Entry::Chunk { .. } => true,
+            });
+        reaches.push(if !under_changed && slots_same {
+            let inside = new.effect_inside(key, index);
+            let new_chain = new.entry_chain(key, index);
+            let old_chain = if chain_kept {
+                None
+            } else {
+                old.entry_chain(key, index)
+            };
+            let reach = |geometry: Geometry<'_>, chain: Option<&Links<'_>>| {
+                chain.map_or(Reach::Nothing, |chain| {
+                    geometry.effect_reach(chain, key, index, inside)
+                })
+            };
+            (
+                reach(new, new_chain.as_ref()),
+                reach(
+                    old,
+                    if chain_kept {
+                        new_chain.as_ref()
+                    } else {
+                        old_chain.as_ref()
+                    },
+                ),
+            )
+        } else {
+            (new.entry_reach(key, index), old.entry_reach(key, index))
+        });
     }
-    for &index in &tops {
-        footprints.add(old.entry_reach(key, index));
+    for &(reach, _) in &reaches {
+        footprints.add(reach);
     }
+    for &(_, reach) in &reaches {
+        footprints.add(reach);
+    }
+}
+
+/// Whether both versions read one chain from the surface into `key`'s
+/// content: the patch placed neither `key` nor any node above it,
+/// republished none above it, and no follower is on the way (a follower's
+/// transform is resolved in each version on its own). `after` is `key`'s
+/// content in `new`.
+fn same_chain(
+    key: NodeKey,
+    after: &BoundaryContent,
+    new: Geometry<'_>,
+    facts: &PatchFacts<'_>,
+) -> bool {
+    if facts.placed_marks.contains(key.slot())
+        || after
+            .links()
+            .iter()
+            .any(|(_, role, _)| *role == LinkRole::Follower)
+    {
+        return false;
+    }
+    let mut at = key;
+    while let Some(parent) = new.parent(at) {
+        if facts.touched_marks.contains(parent.slot())
+            || facts.placed_marks.contains(parent.slot())
+            || new.holds_followers(parent)
+        {
+            return false;
+        }
+        at = parent;
+    }
+    true
 }
 
 /// Fills `pair` so `pair[j]` is the old entry new entry `j` continues, by
