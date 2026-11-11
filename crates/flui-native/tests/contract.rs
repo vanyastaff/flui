@@ -446,6 +446,10 @@ mod native_windows {
             "focus_loss_and_minimising_end_the_held_press",
             focus_loss_and_minimising_end_the_held_press,
         ),
+        (
+            "diag_real_alt_f4_closes_the_foreground_window",
+            diag_real_alt_f4_closes_the_foreground_window,
+        ),
         // The mouse's hover rows run before the first injected touch. On a
         // hosted `windows-latest` runner that touch starts the touch keyboard's
         // host (`TabTip.exe`), and from then on the same rows fail where they
@@ -1510,6 +1514,68 @@ mod native_windows {
                 let _ = unsafe { SetKeyboardState(&self.original) };
             }
         }
+    }
+
+    /// FLUI_DIAG (temporary): a real Alt+F4 through `SendInput` to the
+    /// foreground FLUI window closes it.
+    #[expect(unsafe_code, reason = "temporary diagnostic of real keyboard input")]
+    fn diag_real_alt_f4_closes_the_foreground_window() {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
+            SendInput, VIRTUAL_KEY, VK_F4, VK_MENU,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
+        let platform = WindowsPlatform::try_new().expect("native Windows platform");
+        let window = open_shown(&platform);
+        let hwnd = hwnd_of(&window);
+        let closes = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&closes);
+        window.handler.react_to_close(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        });
+        // SAFETY: the fixture's own live window.
+        let _ = unsafe { SetForegroundWindow(hwnd) };
+        for _ in 0..25 {
+            pump_pointer_thread();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // SAFETY: reads the foreground handle only.
+        let foreground = unsafe { GetForegroundWindow() } == hwnd;
+        let key = |vk: VIRTUAL_KEY, up: bool| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    dwFlags: if up {
+                        KEYEVENTF_KEYUP
+                    } else {
+                        KEYBD_EVENT_FLAGS(0)
+                    },
+                    ..Default::default()
+                },
+            },
+        };
+        let inputs = [
+            key(VK_MENU, false),
+            key(VK_F4, false),
+            key(VK_F4, true),
+            key(VK_MENU, true),
+        ];
+        // SAFETY: initialized keyboard inputs.
+        let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
+        for _ in 0..100 {
+            pump_pointer_thread();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        eprintln!(
+            "FLUI_DIAG real Alt+F4: foreground={foreground} sent={sent} closes={}",
+            closes.load(Ordering::SeqCst)
+        );
+        assert_eq!(
+            closes.load(Ordering::SeqCst),
+            1,
+            "a real Alt+F4 closes the window"
+        );
     }
 
     #[expect(

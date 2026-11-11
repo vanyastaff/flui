@@ -1,0 +1,75 @@
+name: Windows input diagnostics (temporary)
+
+# Temporary: flui-native's Windows suite as the nightly runs it, on this
+# branch and on main, each on a fresh runner. Removed before the pull request
+# merges.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-input-diagnostics.yml"
+      - "crates/flui-native/**"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  RUST_BACKTRACE: 1
+  RUSTUP_HOME: ${{ github.workspace }}/../flui-diag-rustup
+
+jobs:
+  branch:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9
+      - name: Build
+        run: cargo nextest run -p flui-native --locked --test platform_it --no-run
+      - name: A real Alt+F4 and the rows with TabTip running, then after killing it
+        run: |
+          set +e
+          one() {
+            echo "::group::$1"
+            FLUI_NATIVE_WINDOW_CONTRACT_CHILD=$1 cargo nextest run -p flui-native --locked --test platform_it --no-capture -E 'test(=contract::test_window_lifecycle_contract)' 2>&1 | grep -E "panicked|assertion|left:|right:|CANNOT_VERIFY|PASS|FAIL|FLUI_DIAG"
+            echo "::endgroup::"
+          }
+          tabtip() { echo "TabTip: $(tasklist //fi 'imagename eq TabTip.exe' //fo csv //nh)"; }
+          six() {
+            for row in unhandled_system_key_closes_window allowed_system_key_closes_window system_key_close_honours_veto a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once a_pointer_routed_mouse_hovers_the_window a_leave_callback_that_hovers_again_keeps_the_hover; do one $row; done
+          }
+          tabtip
+          one diag_real_alt_f4_closes_the_foreground_window
+          one two_injected_touches_arrive_as_one_pointer_frame
+          sleep 15
+          tabtip
+          one diag_real_alt_f4_closes_the_foreground_window
+          six
+          taskkill //F //IM TabTip.exe
+          sleep 3
+          tabtip
+          one diag_real_alt_f4_closes_the_foreground_window
+          six
+          sleep 15
+          tabtip
+          exit 0
