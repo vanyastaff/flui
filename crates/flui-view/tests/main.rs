@@ -25,10 +25,10 @@ mod async_snapshot_recovery;
 mod binding_observer_retirement;
 #[path = "build_owner_tests.rs"]
 mod build_owner_tests;
-#[path = "child_views.rs"]
-mod child_views;
 #[path = "support/child_payload_recovery.rs"]
 mod child_payload_recovery;
+#[path = "child_views.rs"]
+mod child_views;
 #[path = "creation_site.rs"]
 mod creation_site;
 #[path = "dense_reconcile_containment.rs"]

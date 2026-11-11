@@ -39,7 +39,11 @@ fn types(views: &ChildViews) -> Vec<TypeId> {
 fn child_views_keep_the_order_they_were_given() {
     let cases: [(&str, ChildViews, Vec<TypeId>); 5] = [
         ("none", ChildViews::none(), Vec::new()),
-        ("one", ChildViews::one(Box::new(First)), vec![TypeId::of::<First>()]),
+        (
+            "one",
+            ChildViews::one(Box::new(First)),
+            vec![TypeId::of::<First>()],
+        ),
         (
             "pushed onto none",
             {
