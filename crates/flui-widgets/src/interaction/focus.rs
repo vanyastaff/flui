@@ -368,7 +368,7 @@ impl View for Focus {
 impl StatefulView for Focus {
     type State = FocusState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FocusState {
             host: FocusHost::new(&self.config),
             anchor: SubtreeAnchor::new(),
@@ -693,7 +693,7 @@ impl View for FocusScope {
 impl StatefulView for FocusScope {
     type State = FocusScopeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let scope = match &self.external_scope {
             Some(scope) => Rc::clone(scope),
             None => widget_owned_scope(),

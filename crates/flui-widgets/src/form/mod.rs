@@ -554,7 +554,7 @@ impl FormState {
 impl StatefulView for Form {
     type State = FormState;
 
-    fn create_state(&self) -> FormState {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> FormState {
         FormState::attach(self)
     }
 }

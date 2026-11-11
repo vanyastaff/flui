@@ -110,7 +110,7 @@ struct ListAState {
 
 impl StatefulView for ListA {
     type State = ListAState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ListAState {
             values: self.values.clone(),
         }
@@ -145,7 +145,7 @@ struct FormAState {
 
 impl StatefulView for FormA {
     type State = FormAState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FormAState {
             fields: self.fields.clone(),
         }
@@ -179,7 +179,7 @@ struct AppAState {
 
 impl StatefulView for AppA {
     type State = AppAState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AppAState {
             unit: self.unit.clone(),
         }

@@ -76,7 +76,7 @@ struct InboxState {
 impl StatefulView for Inbox {
     type State = InboxState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         InboxState {
             mailbox: self.mailbox.clone(),
             menu: self.menu.clone(),
@@ -298,7 +298,7 @@ struct SwipeInboxState {
 impl StatefulView for SwipeInbox {
     type State = SwipeInboxState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SwipeInboxState {
             mailbox: self.mailbox.clone(),
             menu: self.menu.clone(),
@@ -1123,7 +1123,7 @@ struct MailboxRootState {
 impl StatefulView for MailboxRoot {
     type State = MailboxRootState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         MailboxRootState {
             mailbox: self.mailbox.clone(),
         }
@@ -1435,7 +1435,7 @@ struct PageButtonsState {
 impl StatefulView for PageButtons {
     type State = PageButtonsState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let (previous, next) = (SemanticsAnchor::new(), SemanticsAnchor::new());
         let (named_previous, named_next) = (previous.clone(), next.clone());
         PageButtonsState {

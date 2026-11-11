@@ -18,11 +18,11 @@
 //! subscribed to and removing through the cache, so `listenable()` is never
 //! called again on the removal path at all.
 //!
-//! Also pins the `initialized` gate: `dispose` runs only for a state whose
+//! Also pins the state gate: `dispose` runs only for a state whose
 //! `init_state` actually completed. Mount and build are split, so an element
 //! can be mounted and removed again before its first `build_scope` drain ever
-//! reaches it; `create_state` must not itself acquire lifecycle resources, so
-//! skipping `dispose` there costs nothing a well-behaved state depends on.
+//! reaches it; such an element has no state, since `create_state` runs at the
+//! first build, so there is nothing to dispose.
 
 use std::{any::TypeId, cell::Cell, rc::Rc};
 
@@ -123,7 +123,7 @@ struct InitStatePanicChildState {
 impl StatefulView for InitStatePanicChild {
     type State = InitStatePanicChildState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         InitStatePanicChildState {
             failed_id: self.failed_id.clone(),
             init_calls: self.init_calls.clone(),
@@ -226,7 +226,7 @@ struct DisposeCounterState {
 impl StatefulView for DisposeCounter {
     type State = DisposeCounterState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DisposeCounterState {
             armed: self.armed.clone(),
             disposed: self.disposed.clone(),
@@ -572,7 +572,7 @@ pub(crate) fn a_dispose_panic_on_a_global_keyed_element_still_clears_the_registr
 }
 
 // ============================================================================
-// The `initialized` gate: an element removed before its first `build_scope`
+// The state gate: an element removed before its first `build_scope`
 // drain never had `init_state` run, so `dispose` must not run for it
 // either.
 // ============================================================================
@@ -635,7 +635,7 @@ struct DeactivateCounterState {
 impl StatefulView for DeactivateCounter {
     type State = DeactivateCounterState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DeactivateCounterState {
             armed: self.armed.clone(),
             deactivated: self.deactivated.clone(),
@@ -853,7 +853,7 @@ pub(crate) fn a_deactivate_panic_is_contained_and_the_element_is_still_parked_in
     owner.build_scope(&mut tree);
 
     // End-of-frame finalize drains the inactive queue: `dispose` runs
-    // cleanly (it is not armed to panic) because `initialized` is true.
+    // cleanly (it is not armed to panic) because the element holds an initialized state.
     owner.finalize_tree(&mut tree);
 
     assert!(

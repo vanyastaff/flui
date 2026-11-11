@@ -208,7 +208,7 @@ struct GlobalKeyedPanicsOnActivateState {
 impl crate::StatefulView for GlobalKeyedPanicsOnActivate {
     type State = GlobalKeyedPanicsOnActivateState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
         GlobalKeyedPanicsOnActivateState {
             armed: Arc::clone(&self.armed),
         }

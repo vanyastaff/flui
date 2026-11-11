@@ -1,5 +1,6 @@
 //! [`AnimatedBuilder`] — rebuilds a subtree each time a [`Listenable`] changes.
 
+use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_foundation::Listenable;
@@ -65,7 +66,7 @@ impl ViewState<AnimatedBuilder> for AnimatedBuilderState {
 impl StatefulView for AnimatedBuilder {
     type State = AnimatedBuilderState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AnimatedBuilderState
     }
 }

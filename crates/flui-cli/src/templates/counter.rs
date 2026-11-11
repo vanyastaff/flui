@@ -85,7 +85,6 @@ impl StatelessView for CounterApp {
 #[derive(Clone, StatefulView)]
 struct CounterView;
 
-#[derive(Default)]
 struct CounterState {
     count: Signal<usize>,
 }
@@ -93,16 +92,14 @@ struct CounterState {
 impl StatefulView for CounterView {
     type State = CounterState;
 
-    fn create_state(&self) -> Self::State {
-        CounterState::default()
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        CounterState {
+            count: ctx.signal(0),
+        }
     }
 }
 
 impl ViewState<CounterView> for CounterState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.count = ctx.signal(0);
-    }
-
     fn build(&self, _view: &CounterView, ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count;
 

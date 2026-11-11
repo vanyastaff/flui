@@ -969,7 +969,7 @@ struct ShownState {
 impl StatefulView for Shown {
     type State = ShownState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ShownState {
             shown: self.shown.clone(),
         }

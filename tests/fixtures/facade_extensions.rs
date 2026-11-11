@@ -515,7 +515,7 @@ struct CapabilityView {
 struct CapabilityState(CapabilityView);
 impl StatefulView for CapabilityView {
     type State = CapabilityState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         CapabilityState(self.clone())
     }
 }
@@ -684,7 +684,7 @@ struct InteractionCapabilities {
 struct FocusCapabilityState(FocusCapabilityView);
 impl StatefulView for FocusCapabilityView {
     type State = FocusCapabilityState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FocusCapabilityState(self.clone())
     }
 }
@@ -744,7 +744,7 @@ struct LifecycleProbeState {
 }
 impl StatefulView for LifecycleProbe {
     type State = LifecycleProbeState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         LifecycleProbeState {
             view: self.clone(),
             subscription: None,

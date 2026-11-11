@@ -84,7 +84,7 @@ struct AskerState {
 
 impl StatefulView for Asker {
     type State = AskerState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AskerState {
             taken: Rc::clone(&self.taken),
         }

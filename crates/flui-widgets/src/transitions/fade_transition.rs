@@ -1,5 +1,6 @@
 //! [`FadeTransition`] — animates its child's opacity without rebuilding its child.
 
+use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_animation::{Animation, ProxyAnimation};
@@ -85,7 +86,7 @@ impl ViewState<FadeTransition> for FadeTransitionState {
 impl StatefulView for FadeTransition {
     type State = FadeTransitionState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FadeTransitionState {
             proxy: ProxyAnimation::new(Rc::clone(&self.opacity)),
             opacity: Rc::clone(&self.opacity),

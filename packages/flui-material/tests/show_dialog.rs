@@ -72,7 +72,7 @@ impl StatefulView for HomePage {
     /// (rather than relying on a hypothetical rebuild hook) is what makes
     /// `created.get() == 1` after a dialog's push/dismiss round-trip prove
     /// the page's element was never torn down and recreated.
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         self.created.set(self.created.get() + 1);
         HomePageState
     }

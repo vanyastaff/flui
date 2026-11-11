@@ -484,7 +484,7 @@ struct ReplacingRenderRootState {
 impl StatefulView for ReplacingRenderRoot {
     type State = ReplacingRenderRootState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ReplacingRenderRootState {
             rebuild: Rc::clone(&self.rebuild),
         }

@@ -63,7 +63,7 @@ impl std::fmt::Debug for FocusTreeRootState {
 impl StatefulView for FocusTreeRoot {
     type State = FocusTreeRootState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         FocusTreeRootState { manager: None }
     }
 }

@@ -688,7 +688,6 @@ struct Root {
 struct RootState {
     documents: Option<Documents>,
     attempt: Signal<u32>,
-    first_attempt: u32,
     /// Set by Start over: the next load starts from the initial notes, which
     /// the data document is storing over the unreadable ones.
     fresh: Rc<Cell<bool>>,
@@ -737,11 +736,10 @@ type Read = (Rc<Saved>, Rc<Session>);
 impl StatefulView for Root {
     type State = RootState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         RootState {
             documents: None,
-            attempt: Signal::default(),
-            first_attempt: self.first_attempt,
+            attempt: ctx.signal(self.first_attempt),
             fresh: Rc::new(Cell::new(false)),
             _kept: plant(self.planter.as_ref(), Kept::State),
         }
@@ -750,7 +748,6 @@ impl StatefulView for Root {
 
 impl ViewState<Root> for RootState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        self.attempt = cx.signal(self.first_attempt);
         self.documents = Some(Documents {
             data: Persisted::<Saved>::open(cx),
             session: Persisted::<Session>::open(cx),
@@ -899,7 +896,7 @@ struct LoadedState {
 impl StatefulView for Loaded {
     type State = LoadedState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         LoadedState {
             start: Some((self.read.clone(), self.documents.clone())),
             shared: None,
@@ -1020,7 +1017,7 @@ struct ScreenState {
 impl StatefulView for Screen {
     type State = ScreenState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ScreenState {
             router: None,
             form: FormHandle::new(),

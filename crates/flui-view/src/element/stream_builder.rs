@@ -158,7 +158,7 @@ where
 {
     type State = StreamBuilderState<K, T, E>;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // `ViewState::init_state` is handed a `BuildContext` but NOT the view, so
         // the configuration the first subscription needs is copied here.
         StreamBuilderState {

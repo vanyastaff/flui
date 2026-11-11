@@ -1166,7 +1166,7 @@ impl View for DisappearingHero {
 
 impl StatefulView for DisappearingHero {
     type State = DisappearingHeroState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         DisappearingHeroState {
             rebuild: Rc::clone(&self.rebuild),
         }

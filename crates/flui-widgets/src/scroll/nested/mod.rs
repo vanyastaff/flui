@@ -409,7 +409,7 @@ impl std::fmt::Debug for NestedScrollState {
 impl StatefulView for NestedScroll {
     type State = NestedScrollState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         NestedScrollState::default()
     }
 }

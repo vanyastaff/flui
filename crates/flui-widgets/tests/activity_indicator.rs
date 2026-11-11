@@ -4,6 +4,7 @@
 //! four 90° steps of 300 ms every 1.5 s), the controller's registration over
 //! the indicator's life, and the static frame without ticks.
 
+use flui_view::LifecycleContext;
 use std::f64::consts::{FRAC_PI_2, TAU};
 use std::time::Duration;
 
@@ -318,7 +319,7 @@ impl flui_view::View for KeyedIndicator {
 
 impl flui_view::StatefulView for KeyedIndicator {
     type State = KeyedIndicatorState;
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         KeyedIndicatorState {
             registry: self.registry.clone(),
             inits: self.inits.clone(),

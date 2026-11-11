@@ -40,7 +40,7 @@ struct GuardedState {
 impl StatefulView for Guarded {
     type State = GuardedState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         GuardedState {
             view: self.clone(),
             observation: None,

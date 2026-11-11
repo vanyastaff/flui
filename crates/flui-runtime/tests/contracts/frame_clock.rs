@@ -95,7 +95,7 @@ struct SamplingState {
 impl StatefulView for SamplingView {
     type State = SamplingState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         SamplingState {
             driven: None,
             mounted: Rc::clone(&self.mounted),
@@ -239,7 +239,7 @@ struct ChangingProbeTextState(Arc<Mutex<Option<flui_view::RebuildHandle>>>);
 impl StatefulView for ChangingProbeText {
     type State = ChangingProbeTextState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ChangingProbeTextState(Arc::clone(&self.rebuild))
     }
 }

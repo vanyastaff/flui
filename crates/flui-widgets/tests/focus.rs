@@ -1210,7 +1210,7 @@ impl std::fmt::Debug for MountProbe {
 impl StatefulView for MountProbe {
     type State = MountProbeState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         MountProbeState {
             mounts: Rc::clone(&self.mounts),
         }

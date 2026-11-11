@@ -48,7 +48,7 @@ struct AcquirerState<C: Capability> {
 impl<C: Capability> StatefulView for Acquirer<C> {
     type State = AcquirerState<C>;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AcquirerState {
             acquired: Rc::clone(&self.acquired),
         }

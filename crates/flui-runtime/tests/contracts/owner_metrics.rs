@@ -3458,7 +3458,7 @@ struct AuthoredGestureTimingState {
 impl flui_view::StatefulView for AuthoredGestureTiming {
     type State = AuthoredGestureTimingState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AuthoredGestureTimingState { arena: None }
     }
 }

@@ -36,7 +36,7 @@ use super::stateful::StatefulView;
 ///         self.opacity.clone() as Rc<dyn Listenable>
 ///     }
 ///
-///     fn create_state(&self) -> Self::State {
+///     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
 ///         FadeTransitionState
 ///     }
 /// }

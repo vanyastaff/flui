@@ -166,7 +166,7 @@ pub(crate) struct MediaQueryRootState {
 impl flui_view::StatefulView for MediaQueryRoot {
     type State = MediaQueryRootState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         MediaQueryRootState {
             source: Rc::clone(&self.source),
             registration: None,

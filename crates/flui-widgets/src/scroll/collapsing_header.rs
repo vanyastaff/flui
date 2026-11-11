@@ -522,7 +522,7 @@ impl std::fmt::Debug for CollapsingHeaderState {
 impl StatefulView for CollapsingHeader {
     type State = CollapsingHeaderState;
 
-    fn create_state(&self) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         let settle = AnimationController::builder(Duration::from_millis(1))
             .debug_label("CollapsingHeader.settle")
             .behavior(flui_animation::AnimationBehavior::Preserve)
