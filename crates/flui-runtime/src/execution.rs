@@ -1378,29 +1378,16 @@ mod tests {
         );
     }
 
-    /// Counts its wakes, and panics on the first when told to.
-    struct CountingWaker {
-        wakes: AtomicUsize,
-        panics: bool,
-    }
-
-    impl std::task::Wake for CountingWaker {
-        fn wake(self: Arc<Self>) {
-            self.wake_by_ref();
-        }
-
-        fn wake_by_ref(self: &Arc<Self>) {
-            let wakes = self.wakes.fetch_add(1, Ordering::SeqCst);
-            assert!(!self.panics || wakes > 0, "a waiter's waker panicked");
-        }
-    }
-
-    fn counting_waker(panics: bool) -> (Arc<CountingWaker>, Waker) {
-        let count = Arc::new(CountingWaker {
-            wakes: AtomicUsize::new(0),
-            panics,
-        });
-        (Arc::clone(&count), Waker::from(count))
+    /// A waker that counts its wakes, and panics on the first when told to.
+    fn counting_waker(panics: bool) -> (Arc<flui_foundation::testing::CountingWaker>, Waker) {
+        let first = std::sync::atomic::AtomicBool::new(true);
+        let count = flui_foundation::testing::CountingWaker::calling(move || {
+            let first = first.swap(false, Ordering::SeqCst);
+            assert!(!panics || !first, "a waiter's waker panicked");
+        })
+        .shared();
+        let waker = count.waker();
+        (count, waker)
     }
 
     fn poll(wait: &mut RoomFuture, waker: &Waker) -> Poll<Result<(), SpawnError>> {
@@ -1438,12 +1425,8 @@ mod tests {
             deterministic.run_until_idle()
         }));
         assert!(drove.is_err(), "the first waker's panic is raised");
-        assert_eq!(panicking.wakes.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            waiting.wakes.load(Ordering::SeqCst),
-            1,
-            "woken once past the panic"
-        );
+        assert_eq!(panicking.count(), 1);
+        assert_eq!(waiting.count(), 1, "woken once past the panic");
         assert_eq!(poll(&mut second, &waiting_waker), Poll::Ready(Ok(())));
     }
 
@@ -1479,7 +1462,7 @@ mod tests {
         assert!(poll(&mut wait, &waker).is_pending());
 
         drop(services);
-        assert_eq!(waiting.wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(waiting.count(), 1);
         assert_eq!(
             poll(&mut wait, &waker),
             Poll::Ready(Err(SpawnError::ShuttingDown))
@@ -1520,8 +1503,8 @@ mod tests {
         );
 
         services.shutdown(std::time::Instant::now());
-        assert_eq!(on_window.wakes.load(Ordering::SeqCst), 1);
-        assert_eq!(on_host.wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(on_window.count(), 1);
+        assert_eq!(on_host.count(), 1);
         assert_eq!(
             poll(&mut window_wait, &window_waker),
             Poll::Ready(Err(SpawnError::ShuttingDown))
