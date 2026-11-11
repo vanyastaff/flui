@@ -10,7 +10,7 @@ pub fn generate(
     ProjectPlan::new()
         .file("Cargo.toml", cargo_toml(name, source))
         .file("src/lib.rs", LIB)
-        .file("src/main.rs", super::main_rs(&lib_name, "CounterApp"))
+        .file("src/main.rs", super::main_rs(&lib_name, "CounterView"))
         .file("flui.toml", flui_toml(name, app_id, platforms))
         .file("README.md", readme(name))
         .dir("assets")
@@ -59,7 +59,7 @@ strip = "debuginfo"
 
 const LIB: &str = r#"//! The application, and the entry points the platforms call.
 //!
-//! `src/main.rs` mounts [`CounterApp`] on the desktop; `android_main` below
+//! `src/main.rs` mounts [`CounterView`] on the desktop; `android_main` below
 //! is what Android's `NativeActivity` calls once it has loaded this crate as
 //! a `cdylib` (`flui build android`).
 
@@ -70,22 +70,13 @@ use flui::widgets::SafeArea;
 #[unsafe(no_mangle)]
 fn android_main(app: flui::android_activity::AndroidApp) {
     // `run_app_android` logs why it could not start.
-    let _started = flui::run_app_android(app, CounterApp, flui::AppLaunch::new());
-}
-
-#[derive(Clone, StatelessView)]
-pub struct CounterApp;
-
-impl StatelessView for CounterApp {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        SafeArea::new().child(CounterView)
-    }
+    let _started = flui::run_app_android(app, CounterView, flui::AppLaunch::new());
 }
 
 #[derive(Clone, StatefulView)]
-struct CounterView;
+pub struct CounterView;
 
-struct CounterState {
+pub struct CounterState {
     count: Signal<usize>,
 }
 
@@ -103,16 +94,18 @@ impl ViewState<CounterView> for CounterState {
     fn build(&self, _view: &CounterView, ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count;
 
-        Center::new().child(
-            Column::new((
-                Text::new("You have pushed the button this many times:"),
-                SizedBox::height(16.0),
-                Text::new(count.get(ctx).to_string()),
-                SizedBox::height(16.0),
-                RawButton::new(Text::new("Increment"))
-                    .on_press(move |cx| count.update(cx, |n| *n += 1)),
-            ))
-            .main_axis_alignment(MainAxisAlignment::Center),
+        SafeArea::new().child(
+            Center::new().child(
+                Column::new((
+                    Text::new("You have pushed the button this many times:"),
+                    SizedBox::height(16.0),
+                    Text::new(count.get(ctx).to_string()),
+                    SizedBox::height(16.0),
+                    RawButton::new(Text::new("Increment"))
+                        .on_press(move |cx| count.update(cx, |n| *n += 1)),
+                ))
+                .main_axis_alignment(MainAxisAlignment::Center),
+            ),
         )
     }
 }
@@ -143,7 +136,7 @@ mod tests {
                 size: Size::new(width, height),
                 ..MediaQueryData::default()
             },
-            CounterApp,
+            CounterView,
         )
     }
 

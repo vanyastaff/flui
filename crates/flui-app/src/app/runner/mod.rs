@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use flui_view::{StatelessView, View};
+use flui_view::View;
 
 use super::{AppLaunch, LaunchError};
 
@@ -348,7 +348,7 @@ pub fn request_presentation_close(
 /// once. On Android, which this entry point cannot start.
 pub fn run_app_impl<V>(root: V, launch: AppLaunch) -> Result<(), LaunchError>
 where
-    V: View + StatelessView + Clone + 'static,
+    V: View + Clone + 'static,
 {
     #[cfg(all(
         not(target_os = "android"),
