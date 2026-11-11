@@ -170,7 +170,7 @@ pub(crate) struct InteractiveNodeState {
 impl InteractiveNodeState {
     fn layer_actions(&mut self) {
         self.chain = (!self.own_actions.is_empty())
-            .then(|| layered_chain(self.ambient_actions.clone(), &self.own_actions));
+            .then(|| layered_chain(self.ambient_actions.clone(), Rc::clone(&self.own_actions)));
     }
 
     /// What the hosted focus node records: the chain in force at the node
@@ -354,7 +354,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
             focus.provide(values);
         }
         if let Some(chain) = &self.chain {
-            values.value(EnclosingActions::new(Rc::clone(chain)));
+            values.value(EnclosingActions::new(chain.clone()));
         }
     }
 

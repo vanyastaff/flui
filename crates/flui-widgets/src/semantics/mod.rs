@@ -52,7 +52,7 @@ use flui_view::{
     RenderObjectContextError, RenderView, WriterSource, impl_render_view,
 };
 
-use crate::support::{ValueCallback, event_callback, ref_callback, value_callback};
+use crate::support::{ValueCallback, ref_callback, value_callback};
 
 #[derive(Clone, Copy, Debug, Default)]
 struct SemanticsOptions {
@@ -1199,8 +1199,8 @@ impl Semantics {
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        let handler = event_callback(handler);
-        let handler: EventActionHandler = Rc::new(move |cx, _call| handler(cx));
+        let handler: EventActionHandler =
+            Rc::new(move |cx: &mut EventCx<'_>, _call| handler(cx).report());
         let entry = CustomEntry {
             label,
             handler,
@@ -1251,9 +1251,12 @@ impl Semantics {
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        let handler = event_callback(handler);
-        self.event_actions
-            .insert(action, Rc::new(move |cx, _call| handler(cx)));
+        // One allocation: the outcome is reported here, as `event_callback`
+        // reports it (ADR-0086).
+        self.event_actions.insert(
+            action,
+            Rc::new(move |cx: &mut EventCx<'_>, _call| handler(cx).report()),
+        );
         self
     }
 
