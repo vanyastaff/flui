@@ -53,7 +53,7 @@ impl RenderView for KeyedLeafBox {
 }
 
 impl View for KeyedLeafBox {
-    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
         flui_sdk::view::element::ElementKind::render_variable(self)
     }
 
@@ -110,7 +110,7 @@ impl RenderView for MultiBox {
 }
 
 impl View for MultiBox {
-    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
         flui_sdk::view::element::ElementKind::render_variable(self)
     }
 }

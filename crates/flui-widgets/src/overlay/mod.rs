@@ -582,7 +582,7 @@ impl fmt::Debug for Overlay {
 }
 
 impl View for Overlay {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -755,7 +755,7 @@ impl OverlayEntryView {
 }
 
 impl View for OverlayEntryView {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 

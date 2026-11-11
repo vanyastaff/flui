@@ -37,13 +37,16 @@ is (`BoxedView::new`, `ViewExt::boxed`, `From<Box<dyn View>>`), so a view keeps
 its identity through however many wrappers pass it along. The field is private;
 `BoxedView::new` and `BoxedView::as_view` replace constructing and reading it.
 
-An element remembers, weakly, the shared view it last took its configuration
-from: `BoxedView::create_element` records it at creation, and an update that
-takes a view from a `BoxedView` records that one, an update from anything else
-clears it. An update offering the shared view the element already holds
-returns before cloning, replacing or marking anything: no `did_update_view`,
-no render-object update, no dirty flag. What changed for the element reaches
-it by its own schedule (a state change, an inherited value, a signal).
+An element keeps its configuration in the shared view itself: `View::create_element`
+takes the view as `Rc<Self>`, so `BoxedView::create_element` hands the element
+its allocation, and an update that takes a view from a `BoxedView` takes that
+allocation. A view offered by reference alone is copied into an allocation of
+its own. The element holds no second copy of the view, and since it holds the
+allocation, no other view can take its address. An update offering the shared
+view the element already holds returns before replacing or marking anything:
+no `did_update_view`, no render-object update, no dirty flag. What changed for
+the element reaches it by its own schedule (a state change, an inherited value,
+a signal).
 
 `Child` and `Children` lend their `BoxedView`s as views, not the views inside
 them, so the reconciler sees the identity.

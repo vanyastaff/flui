@@ -50,7 +50,7 @@ macro_rules! __generic_render_view_element {
         where
             C: ::flui_view::seq::ViewSeq + ::core::clone::Clone + 'static,
         {
-            fn create_element(&self) -> ::flui_view::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> ::flui_view::element::ElementKind {
                 ::flui_view::element::ElementKind::render_variable(self)
             }
         }
@@ -60,7 +60,7 @@ macro_rules! __generic_render_view_element {
         where
             C: ::flui_view::seq::ViewSeq + ::core::clone::Clone + 'static,
         {
-            fn create_element(&self) -> ::flui_view::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> ::flui_view::element::ElementKind {
                 ::flui_view::element::ElementKind::render_variable(self)
             }
 

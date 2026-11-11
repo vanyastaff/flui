@@ -20,6 +20,7 @@ mod animated;
 mod error;
 mod inherited;
 mod into_view;
+pub(crate) use into_view::create_element_of;
 pub mod memo;
 mod parent_data;
 mod proxy;

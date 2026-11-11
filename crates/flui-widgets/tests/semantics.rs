@@ -2850,7 +2850,7 @@ pub(crate) fn semantics_turned_on_later_publish_the_tree_of_semantics_on_from_th
         presses: Clicks,
     }
     impl flui_view::View for Scene {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateless(self)
         }
     }

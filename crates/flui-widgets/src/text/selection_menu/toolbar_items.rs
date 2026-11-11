@@ -190,7 +190,7 @@ impl fmt::Debug for ToolbarItems {
 }
 
 impl View for ToolbarItems {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 
@@ -348,7 +348,7 @@ impl fmt::Debug for ToolbarRow {
 }
 
 impl View for ToolbarRow {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::render_variable(self)
     }
 }

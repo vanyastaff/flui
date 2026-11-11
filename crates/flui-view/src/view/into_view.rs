@@ -119,7 +119,7 @@ pub trait IntoElement {
 impl<V: View> IntoElement for V {
     #[inline]
     fn into_element(self) -> ElementKind {
-        self.create_element()
+        Rc::new(self).create_element()
     }
 }
 
@@ -127,7 +127,17 @@ impl<V: View> IntoElement for V {
 impl IntoElement for Box<dyn View> {
     #[inline]
     fn into_element(self) -> ElementKind {
-        self.create_element()
+        Rc::<dyn View>::from(self).create_element()
+    }
+}
+
+/// Create the element of a view the caller holds by reference: a
+/// [`BoxedView`] hands the element its shared allocation, any other view is
+/// copied into one.
+pub(crate) fn create_element_of(view: &dyn View) -> ElementKind {
+    match view.as_any().downcast_ref::<BoxedView>() {
+        Some(boxed) => Rc::clone(boxed.shared()).create_element(),
+        None => Rc::<dyn View>::from(dyn_clone::clone_box(view)).create_element(),
     }
 }
 
@@ -246,15 +256,11 @@ impl std::fmt::Debug for BoxedView {
 }
 
 impl View for BoxedView {
-    /// Creates the element and remembers which shared view it came from, so
-    /// the first time its parent offers the same view again is already known
-    /// to be a no-op.
-    fn create_element(&self) -> crate::element::ElementKind {
-        let mut element = self.0.create_element();
-        element
-            .element_mut()
-            .note_source_view(Rc::downgrade(&self.0));
-        element
+    /// Creates the element of the view inside, which keeps this very shared
+    /// allocation as its configuration: the first time its parent offers the
+    /// same view again is known to be a no-op, and the element copies nothing.
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
+        Rc::clone(&self.0).create_element()
     }
 
     fn view_type_id(&self) -> std::any::TypeId {

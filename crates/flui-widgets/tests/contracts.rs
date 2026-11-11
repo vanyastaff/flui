@@ -1589,6 +1589,7 @@ fn layout_and_render_object_wiring() {
             ("child_type_swap::a_replaced_root_render_object_is_laid_out_in_the_frame_it_is_mounted", crate::child_type_swap::a_replaced_root_render_object_is_laid_out_in_the_frame_it_is_mounted),
             ("unchanged_child::a_child_handed_back_unchanged_is_built_only_when_something_it_reads_changes", crate::unchanged_child::a_child_handed_back_unchanged_is_built_only_when_something_it_reads_changes),
             ("unchanged_child::a_lazily_mounted_item_handed_back_unchanged_is_not_built_again", crate::unchanged_child::a_lazily_mounted_item_handed_back_unchanged_is_not_built_again),
+            ("unchanged_child::an_element_keeps_the_view_it_is_offered_without_copying_it", crate::unchanged_child::an_element_keeps_the_view_it_is_offered_without_copying_it),
             ("component_child_ordering::component_child_keeps_slot_order_before_a_render_sibling", crate::component_child_ordering::component_child_keeps_slot_order_before_a_render_sibling),
             ("component_child_ordering::an_array_of_children_lays_out_in_array_order", crate::component_child_ordering::an_array_of_children_lays_out_in_array_order),
             ("component_child_ordering::a_lazy_list_item_keeps_its_containers_children_in_slot_order", crate::component_child_ordering::a_lazy_list_item_keeps_its_containers_children_in_slot_order),

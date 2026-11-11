@@ -35,7 +35,7 @@ impl crate::ViewState<DependencyPanicView> for DependencyPanicState {
 }
 
 impl View for DependencyPanicView {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::stateful(self)
     }
 }
@@ -71,7 +71,7 @@ impl crate::ViewState<InitPanicView> for InitPanicState {
 }
 
 impl View for InitPanicView {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::stateful(self)
     }
 }

@@ -63,7 +63,7 @@ impl StatelessView for DummyChild {
 }
 
 impl View for DummyChild {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -99,7 +99,7 @@ impl<N: Notification> Clone for NotificationListener<N> {
 }
 
 impl<N: Notification> View for NotificationListener<N> {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::Notification(Box::new(NotificationListenerElement {
             on_notification: Arc::clone(&self.on_notification),
             depth: 0,

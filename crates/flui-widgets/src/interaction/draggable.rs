@@ -725,7 +725,7 @@ struct FeedbackAnchor {
 }
 
 impl View for FeedbackAnchor {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

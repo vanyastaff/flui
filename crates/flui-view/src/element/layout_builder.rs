@@ -179,7 +179,7 @@ impl RenderView for LayoutBuilder {
 }
 
 impl View for LayoutBuilder {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         // Custom behavior (not the generic `RenderBehavior`) so `on_mount`
         // registers the cell in `BuildOwner::layout_builder_registry` and
         // `build_into_views` builds from the published constraints.
@@ -277,7 +277,7 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
 
         let ctx_choice = make_build_ctx(core, owner);
         let ctx = ctx_choice.as_ctx();
-        let view = core.view().clone();
+        let view = std::rc::Rc::clone(core.shared_view());
         let child_view = build_or_recover(core, owner, "LayoutBuilderElement", move || {
             (view.builder)(ctx, constraints)
         });
@@ -407,7 +407,7 @@ mod tests {
     }
 
     impl View for FixedBox {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
         }
     }

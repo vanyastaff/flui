@@ -616,7 +616,7 @@ impl<T: Clone + 'static> FormField<T> {
 }
 
 impl<T: Clone + 'static> View for FormField<T> {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

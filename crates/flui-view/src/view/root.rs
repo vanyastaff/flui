@@ -56,8 +56,8 @@ impl<V: View + Clone> RootRenderView<V> {
 }
 
 impl<V: View + Clone + 'static> View for RootRenderView<V> {
-    fn create_element(&self) -> crate::element::ElementKind {
-        crate::element::ElementKind::Root(Box::new(RootRenderElement::new(self)))
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
+        crate::element::ElementKind::Root(Box::new(RootRenderElement::new(&self)))
     }
 }
 

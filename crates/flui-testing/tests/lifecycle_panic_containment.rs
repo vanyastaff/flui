@@ -62,7 +62,7 @@ impl RenderView for DenseRow {
 }
 
 impl View for DenseRow {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -108,7 +108,7 @@ impl RenderView for HealthyLeaf {
 }
 
 impl View for HealthyLeaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -155,7 +155,7 @@ impl ViewState<PanicsInInitState> for PanickingState {
 }
 
 impl View for PanicsInInitState {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }

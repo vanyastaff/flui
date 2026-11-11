@@ -203,7 +203,7 @@ impl View for ErrorView {
     /// subtree that failed to build, and every place that subtree could sit
     /// — a lazy sliver child in particular, which must carry a render node to
     /// be laid out at all — needs something with size and paint there.
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::render_variable(self)
     }
 }
@@ -248,7 +248,7 @@ impl StatelessView for UnkeyedRecovery {
 }
 
 impl View for UnkeyedRecovery {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::stateless(self)
     }
 }

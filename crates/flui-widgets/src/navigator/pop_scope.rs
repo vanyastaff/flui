@@ -243,7 +243,7 @@ impl std::fmt::Debug for PopScope {
 }
 
 impl View for PopScope {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

@@ -52,7 +52,7 @@ impl RenderView for OrphanProbeLeaf {
 }
 
 impl View for OrphanProbeLeaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -70,7 +70,7 @@ impl StatelessView for OrphanProbeRoot {
 }
 
 impl View for OrphanProbeRoot {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }

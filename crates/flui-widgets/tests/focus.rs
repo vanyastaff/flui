@@ -291,7 +291,7 @@ struct Host {
 }
 
 impl View for Host {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }
@@ -397,7 +397,7 @@ impl Field {
 }
 
 impl View for Field {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
@@ -421,7 +421,7 @@ impl StatelessView for Field {
 struct Fields(Vec<&'static str>);
 
 impl View for Fields {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }

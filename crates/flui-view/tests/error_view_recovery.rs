@@ -65,7 +65,7 @@ impl StatelessView for PanickingView {
 }
 
 impl View for PanickingView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -85,7 +85,7 @@ impl<C: View + Clone + 'static> StatelessView for WrapperView<C> {
 }
 
 impl<C: View + Clone + 'static> View for WrapperView<C> {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -121,7 +121,7 @@ impl ViewState<InitPanicView> for InitPanicState {
 }
 
 impl View for InitPanicView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }

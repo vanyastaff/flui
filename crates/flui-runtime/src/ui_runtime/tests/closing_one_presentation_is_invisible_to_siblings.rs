@@ -111,7 +111,7 @@ impl View for CloseObserver {
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
         Some(&self.key)
     }
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -274,7 +274,7 @@ impl View for KeyedCloseView {
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
         Some(&self.0)
     }
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -447,7 +447,7 @@ impl ViewState<SiblingProbe> for SiblingProbe {
 }
 
 impl View for SiblingProbe {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }

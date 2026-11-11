@@ -427,7 +427,7 @@ impl std::fmt::Debug for Actions {
 }
 
 impl View for Actions {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }
@@ -601,7 +601,7 @@ impl std::fmt::Debug for ActionScope {
 }
 
 impl View for ActionScope {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }

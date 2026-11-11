@@ -142,7 +142,7 @@ where
         // author wrote runs, so the phase `publish_provided` arms is always
         // handed to `build_or_recover_begun`. The child mounts under what is
         // published here.
-        let view = core.view().clone();
+        let view = std::rc::Rc::clone(core.shared_view());
         publish_provided(&mut self.publication, core, owner, |values| {
             state.provide(&view, ctx, values);
         });

@@ -146,15 +146,19 @@ where
         return ViewUpdate::Equal;
     }
 
-    // The element takes its own copy of the offered view: `V::clone` on the
-    // reference the guard above produced, so the copy costs no box of its
-    // own. The downcast is fallible on principle: should an override ever
-    // break `as_any().type_id() == TypeId::of::<V>() ⇒ downcastable to V`,
-    // the element is replaced instead of the dispatch panicking.
-    match nv {
-        Some(new_ref) => {
-            let previous = core.replace_view_for_dispatch(new_ref.clone());
-            core.note_source_view(shared.map(Rc::downgrade));
+    // The element takes the offered view's shared allocation when it came in
+    // a `BoxedView`, so the update copies nothing; a view offered by
+    // reference alone is copied into an allocation of its own. The downcast
+    // is fallible on principle: should an override ever break
+    // `as_any().type_id() == TypeId::of::<V>() ⇒ downcastable to V`, the
+    // element is replaced instead of the dispatch panicking.
+    let next = match shared {
+        Some(shared) => Rc::clone(shared).downcast_rc::<V>().ok(),
+        None => nv.map(|new_ref| Rc::new(new_ref.clone())),
+    };
+    match next {
+        Some(next) => {
+            let previous = core.replace_view_for_dispatch(next);
             core.mark_dirty_for_dispatch();
             tracing::debug!(
                 "dispatch_view_update succeeded for view_type={:?}",
@@ -181,7 +185,7 @@ pub(crate) enum ViewUpdate<V> {
     /// the view it held before.
     Replaced {
         /// The configuration the element held before the update.
-        previous: V,
+        previous: Rc<V>,
     },
 }
 

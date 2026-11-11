@@ -53,7 +53,7 @@ impl RenderView for LeafView {
 }
 
 impl View for LeafView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -102,7 +102,7 @@ impl ViewState<LifecycleTrackingView> for LifecycleTrackingState {
 }
 
 impl View for LifecycleTrackingView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
