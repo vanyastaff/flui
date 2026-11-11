@@ -178,6 +178,7 @@ pub trait StatefulRenderView: Clone + 'static + Sized {
     type State: RenderViewState<Self>;
     fn create_state(&self /* the arguments `StatefulView::create_state` takes */) -> Self::State;
     fn create_render_object(&self, cx: &RenderObjectContext<'_>) -> Self::RenderObject;
+    fn did_unmount_render_object(&self, cx: &RenderObjectContext<'_>, object: &mut Self::RenderObject) {}
 }
 
 pub trait RenderViewState<V: StatefulRenderView>: 'static {
@@ -204,6 +205,11 @@ and `init_state` runs at the element's first build, so at mount the state holds 
 acquires there. Putting the constructor on the view makes that order a signature instead of a
 rule to remember. The first build runs `init_state` and then `update_render_object` in the
 same frame, before layout, so the object never lays out without its state's configuration.
+
+The view also releases it. What the object holds in the owner's runtime is data: the targets
+registered for it (ADR-0027). `did_unmount_render_object` unregisters them from the object
+after the state's `dispose`, and for an element whose state never initialized, so a target
+registered at any point is released on every way out.
 
 A build runs `update_render_object`, `provide` and `child`, in that order, so the child mounts
 under what is published and next to an object that is already configured. A state change that

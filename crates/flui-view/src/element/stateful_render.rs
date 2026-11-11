@@ -180,7 +180,9 @@ where
             core,
             owner,
             "StatefulRenderBehavior",
-            |_cx, _render_object: &mut V::RenderObject| {},
+            |cx, render_object: &mut V::RenderObject| {
+                core.view().did_unmount_render_object(cx, render_object);
+            },
         );
     }
 
