@@ -989,6 +989,7 @@ fn semantics_translation_and_routing() {
             ("raw_button::disabled_raw_button_is_disabled_in_every_part", crate::raw_button::disabled_raw_button_is_disabled_in_every_part),
             ("raw_button::raw_button_writes_its_states_to_the_controller", crate::raw_button::raw_button_writes_its_states_to_the_controller),
             ("raw_button::hover_repaints_without_rebuilding", crate::raw_button::hover_repaints_without_rebuilding),
+            ("raw_button::a_panicking_focus_edge_still_reports_the_shown_focus", crate::raw_button::a_panicking_focus_edge_still_reports_the_shown_focus),
         ],
     );
 }

@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use crate::widget_state::{WidgetState, WidgetStatesController};
+use crate::widget_state::WidgetStatesController;
 use flui_foundation::geometry::Offset;
 use flui_objects::RenderMouseRegion;
 use flui_platform::pointer::PointerInfo;
@@ -155,18 +155,15 @@ impl MouseRegion {
         self
     }
 
-    /// The region a control tracks the pointer with: it writes
-    /// [`WidgetState::Hovered`] to `states` when a pointer enters and when
-    /// it leaves, and asks for no cursor.
+    /// The region a control tracks the pointer with: `states` counts the
+    /// pointers inside and holds [`Hovered`](crate::WidgetState::Hovered) from the first in
+    /// to the last out (a mouse and a hovering pen are two). It asks for no
+    /// cursor.
     pub(crate) fn hovering(states: &WidgetStatesController) -> Self {
         let (entered, left) = (states.clone(), states.clone());
         Self::new()
-            .on_enter(move |_cx: &mut EventCx<'_>, _pointer, _position| {
-                entered.update(WidgetState::Hovered, true);
-            })
-            .on_exit(move |_cx: &mut EventCx<'_>, _pointer, _position| {
-                left.update(WidgetState::Hovered, false);
-            })
+            .on_enter(move |_cx: &mut EventCx<'_>, _pointer, _position| entered.pointer_entered())
+            .on_exit(move |_cx: &mut EventCx<'_>, _pointer, _position| left.pointer_left())
     }
 
     fn configure(&self, render_object: &mut RenderMouseRegion) {

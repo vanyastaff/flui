@@ -282,13 +282,15 @@ pub(crate) struct InteractiveNodeState {
 }
 
 impl InteractiveNodeState {
-    /// Bring the controller to what the node is now. `carried` is what the
-    /// controller this one replaces held of the states an edge writes: a
-    /// press and a hover follow their contact and their pointer to the new
-    /// one. The focus states come from the focus node, so a controller
-    /// given to a control that already holds focus starts right; a control
-    /// with no tap has no contact, so nothing of it is pressed, and a
-    /// disabled one tracks no pointer, so nothing hovers it.
+    /// Bring the controller to what the node is now: all five states are
+    /// the node's, so a controller that arrives holding one of them keeps
+    /// only what is true of this control. `carried` is what the node's
+    /// controller held before, the same one or the one this replaces: a
+    /// press and a hover follow their contact and their pointer. The focus
+    /// states come from the focus node, so a controller given to a control
+    /// that already holds focus starts right; a control with no tap has no
+    /// contact, so nothing of it is pressed, and a disabled one tracks no
+    /// pointer, so nothing hovers it.
     fn write_states(&self, carried: WidgetStates) {
         let Some(states) = &self.states else {
             return;
@@ -306,23 +308,13 @@ impl InteractiveNodeState {
         if node.is_some_and(|node| node.has_visible_focus()) {
             values |= WidgetStates::FOCUS_VISIBLE;
         }
-        let edges = WidgetStates::PRESSED.union(WidgetStates::HOVERED);
-        let mut mask = WRITTEN.difference(edges);
         if carried.contains(WidgetStates::PRESSED) && self.tap.is_set() {
-            mask |= WidgetStates::PRESSED;
             values |= WidgetStates::PRESSED;
         }
-        if !self.tap.is_set() {
-            mask |= WidgetStates::PRESSED;
-        }
         if carried.contains(WidgetStates::HOVERED) && self.enabled {
-            mask |= WidgetStates::HOVERED;
             values |= WidgetStates::HOVERED;
         }
-        if !self.enabled {
-            mask |= WidgetStates::HOVERED;
-        }
-        states.write(mask, values);
+        states.write(WRITTEN, values);
     }
 
     fn layer_actions(&mut self) {
@@ -448,6 +440,10 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
                 record,
             );
         }
+        // A controller that arrives counts no pointer of another control.
+        if let Some(states) = &self.states {
+            states.set_pointers_inside(0);
+        }
         self.write_states(WidgetStates::NONE);
     }
 
@@ -481,16 +477,27 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
         }
         // A controller the node stops writing to keeps none of its states;
         // a controller's listener is user code.
+        let carried = self
+            .states
+            .as_ref()
+            .map_or(WidgetStates::NONE, WidgetStatesController::value);
+        // The count of pointers inside follows the hover to the controller
+        // given, and starts over when the mouse part goes: its exits are
+        // not waited for.
+        let inside = self
+            .states
+            .as_ref()
+            .map_or(0, WidgetStatesController::take_pointers_inside);
         let replaced = self.states.take().filter(|old| {
             !new.states
                 .as_ref()
                 .is_some_and(|states| states.is_same(old))
         });
-        let carried = replaced
-            .as_ref()
-            .map_or(WidgetStates::NONE, WidgetStatesController::value);
         if let Some(replaced) = replaced {
             failure.contain(|| replaced.write(WRITTEN, WidgetStates::NONE));
+        }
+        if let Some(states) = &new.states {
+            states.set_pointers_inside(if new.enabled { inside } else { 0 });
         }
         self.states.clone_from(&new.states);
         self.enabled = new.enabled;
@@ -590,6 +597,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
         }
         // A shared controller keeps no state of a control that is gone.
         if let Some(states) = self.states.take() {
+            let _inside: u32 = states.take_pointers_inside();
             failure.contain(|| states.write(WRITTEN, WidgetStates::NONE));
         }
         failure.resume();

@@ -730,9 +730,10 @@ pub(crate) fn raw_button_writes_its_states_to_the_controller() {
     let enabled = flui_testing::widgets::SharedSignal::new(true);
     let shown = flui_testing::widgets::SharedSignal::new(true);
     let first = flui_testing::widgets::SharedSignal::new(true);
+    // The second arrives holding states of some other control.
     let controllers = [
         WidgetStatesController::default(),
-        WidgetStatesController::default(),
+        WidgetStatesController::new(WidgetStates::PRESSED | WidgetStates::HOVERED),
     ];
     let [one, other] = controllers.clone();
     let mut app = lay_out(
@@ -761,6 +762,39 @@ pub(crate) fn raw_button_writes_its_states_to_the_controller() {
         one.value(),
         WidgetStates::NONE,
         "and leaving ends the hover"
+    );
+    app.dispatch_pointer_hover(20.0, 20.0);
+    // A pen is a second pointer: it hovers beside the mouse.
+    let pen_hover = |app: &LaidOut, x: f64, y: f64| {
+        use flui_interaction::events::{PointerEvent, make_move_event_for_id};
+        use flui_platform::pointer::{PenTool, PointerButtons, PointerId, PointerKind};
+        let mut event = make_move_event_for_id(
+            PointerId::try_from(2_u64).expect("non-zero"),
+            flui_foundation::geometry::Offset::new(x, y),
+            PointerKind::Pen { tool: PenTool::Tip },
+        )
+        .expect("finite");
+        let PointerEvent::Move(update) = &mut event else {
+            unreachable!("a move event");
+        };
+        update.buttons = PointerButtons::NONE;
+        app.dispatch_pointer_event(&event);
+    };
+    pen_hover(&app, 30.0, 30.0);
+    app.pump();
+    app.dispatch_pointer_hover(300.0, 300.0);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::HOVERED,
+        "a pen still over the button keeps it hovered when the mouse leaves"
+    );
+    pen_hover(&app, 300.0, 300.0);
+    app.pump();
+    assert_eq!(
+        one.value(),
+        WidgetStates::NONE,
+        "the last pointer out ends it"
     );
     app.dispatch_pointer_hover(20.0, 20.0);
     app.pump();
@@ -826,7 +860,7 @@ pub(crate) fn raw_button_writes_its_states_to_the_controller() {
     assert_eq!(
         other.value(),
         focus_states,
-        "and the one it is given starts at what the button is"
+        "and the one it is given starts at what the button is, whatever it held"
     );
 
     app.dispatch_pointer_down(20.0, 20.0);
@@ -936,5 +970,39 @@ pub(crate) fn hover_repaints_without_rebuilding() {
     assert_eq!(
         work.nodes_painted, 2,
         "the reader and its repaint boundary paint, the button and its neighbour do not: {work:#?}"
+    );
+}
+
+/// A focus edge handler that panics does not cost the other edge
+/// (ADR-0281): `on_visible_focus_change` still reports the shown focus, and
+/// the first failure is the one that surfaces.
+///
+/// Red-check: call the handlers in `FocusHost::add_focus_listener` bare.
+pub(crate) fn a_panicking_focus_edge_still_reports_the_shown_focus() {
+    use crate::keyboard_focus::tab;
+
+    let shown = Rc::new(RefCell::new(Vec::<bool>::new()));
+    let seen = Rc::clone(&shown);
+    let mut app = lay_out(
+        Focus::new(flui_widgets::SizedBox::new(120.0, 60.0))
+            .on_focus_change(move |_cx, held| {
+                // Only the edge in: the tree's teardown runs the edge out.
+                assert!(!held, "focus edge handler");
+            })
+            .on_visible_focus_change(move |_cx, now| seen.borrow_mut().push(now)),
+        loose(400.0),
+    );
+    let manager = app.focus_manager();
+
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _moved: bool = app.enter_owner_scope(|| tab(&manager));
+        app.pump();
+    }));
+
+    assert_eq!(*shown.borrow(), [true], "the shown focus is reported");
+    let payload = failure.expect_err("the handler's panic surfaces");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("focus edge handler")
     );
 }

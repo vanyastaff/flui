@@ -354,6 +354,9 @@ pub struct WidgetStatesController {
 struct SharedStates {
     value: Cell<WidgetStates>,
     notifier: ChangeNotifier,
+    /// How many pointers are inside the control that writes `Hovered` here,
+    /// counted by its enters and exits.
+    pointers_inside: Cell<u32>,
 }
 
 impl WidgetStatesController {
@@ -365,6 +368,7 @@ impl WidgetStatesController {
             shared: Rc::new(SharedStates {
                 value: Cell::new(initial),
                 notifier: ChangeNotifier::new(),
+                pointers_inside: Cell::new(0),
             }),
         }
     }
@@ -418,6 +422,36 @@ impl WidgetStatesController {
         if after != before {
             self.shared.notifier.notify_listeners();
         }
+    }
+
+    /// A pointer entered the control that writes here: it is hovered.
+    pub(crate) fn pointer_entered(&self) {
+        let inside = &self.shared.pointers_inside;
+        inside.set(inside.get().saturating_add(1));
+        self.update(WidgetState::Hovered, true);
+    }
+
+    /// A pointer left it: the hover ends with the last one, so a mouse that
+    /// leaves while a pen still hovers changes nothing.
+    pub(crate) fn pointer_left(&self) {
+        let inside = &self.shared.pointers_inside;
+        let remaining = inside.get().saturating_sub(1);
+        inside.set(remaining);
+        if remaining == 0 {
+            self.update(WidgetState::Hovered, false);
+        }
+    }
+
+    /// Takes the count of pointers inside, leaving none: the control stopped
+    /// tracking them (its exits are not waited for), or hands the count to
+    /// the controller that replaces this one.
+    pub(crate) fn take_pointers_inside(&self) -> u32 {
+        self.shared.pointers_inside.replace(0)
+    }
+
+    /// Starts the count at what the replaced controller held.
+    pub(crate) fn set_pointers_inside(&self, inside: u32) {
+        self.shared.pointers_inside.set(inside);
     }
 }
 

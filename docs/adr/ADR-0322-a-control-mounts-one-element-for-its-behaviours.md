@@ -155,7 +155,8 @@ five states of `WidgetStates` to it and no other part of the tree writes them fo
 node given no controller writes none and keeps none: its only reader would be its own focus ring,
 which reads the focus node.
 
-- `Hovered`: a pointer is inside the mouse region;
+- `Hovered`: a pointer is inside the mouse region, from the first one in to the last one out (a
+  mouse and a hovering pen are two);
 - `Pressed`: a contact a recognizer tracks is down and not yet rejected;
 - `Focused`: the node or a descendant of it holds the primary focus, as `Focus::on_focus_change`
   reports it;
@@ -175,7 +176,12 @@ value it was notified of stays committed.
 
 When the element unmounts, or the control hands the node another controller, the node clears the
 states it wrote from the one it stops writing to, so a shared controller keeps no state of a
-control that is gone. A controller given later starts at what the node is.
+control that is gone. A controller given later starts at what the node is: the five states are the
+node's, so one that arrives holding any of them keeps only what is true of this control, and a
+press or a hover under way follows its contact or its pointers to it.
+
+The two focus edges are delivered each on its own: a handler of one that panics does not cost the
+other, and the first failure is the one resumed (ADR-0281).
 
 The node may be built first with the states written and the wrappers' rebuild-on-change readers
 kept; moving a reader to paint does not change this shape.
