@@ -257,6 +257,7 @@ fn lifecycle_panic_containment_matrix() {
             ("lifecycle_hook_payload_retirement::deactivate_payload_cannot_replace_incoming_unwind", lifecycle_hook_payload_retirement::deactivate_payload_cannot_replace_incoming_unwind as fn()),
             ("lifecycle_hook_payload_retirement::render_unmount_payload_cannot_replace_incoming_unwind", lifecycle_hook_payload_retirement::render_unmount_payload_cannot_replace_incoming_unwind as fn()),
             ("lifecycle_panic_containment::child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues", lifecycle_panic_containment::child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues as fn()),
+            ("lifecycle_panic_containment::a_child_init_state_panic_payload_is_destroyed_under_containment", lifecycle_panic_containment::a_child_init_state_panic_payload_is_destroyed_under_containment),
             ("lifecycle_panic_containment::a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed", lifecycle_panic_containment::a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed as fn()),
             ("lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry", lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry as fn()),
             ("lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive", lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive as fn()),
