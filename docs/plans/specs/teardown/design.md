@@ -56,7 +56,7 @@ Teardown **владеет** общим контрактом закрытия и 
   `report_frame_failure` (`crates/flui-runtime/src/ui_realm/construct.rs:357`), в фасаде
   `flui::app::FrameFailureKind`.
 - **Удержание.** `retain_opaque_payload` (`crates/flui-foundation/src/panic.rs:58`),
-  `preserve_first_lifecycle_panic`, `TaskToken::drop` (`crates/flui-scheduler/src/async_driver.rs:300-330`).
+  `FirstPanic` (`flui_foundation::panic`), `TaskToken::drop` (`crates/flui-scheduler/src/async_driver.rs:300-330`).
 - **Observer.** `BuildOwner::drop` только возвращает claims ключей
   (`crates/flui-view/src/owner/build_owner.rs:2921-2933`); `detached()` шлют лишь
   `set_/clear_tree_observer` (`:1326-1344`).

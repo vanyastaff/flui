@@ -1,6 +1,5 @@
 //! Frame production: draw, paint, commit, render and frame telemetry.
 
-use super::input::preserve_first_input_panic;
 use super::{EpochDisposition, FramePaintOutcome, MAX_NOT_SHOWN_RETRIES, UiRuntime};
 use crate::epoch::FrameCommitState;
 use crate::frame_failure::{FrameFailureKind, SegmentPhase};
@@ -8,6 +7,7 @@ use crate::held_input::HeldPointerReplay;
 use crate::presentation::PresentationState;
 use flui_foundation::PresentationId;
 use flui_foundation::geometry::Size;
+use flui_foundation::panic::FirstPanic;
 use flui_layer::Scene;
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_rendering::constraints::BoxConstraints;
@@ -414,11 +414,8 @@ impl UiRuntime {
         // A callback that panics after the frame presented unwinds out of the drive, but the
         // frame happened: what an agent is owed for it is still delivered below, and the panic
         // continues after.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a callback's panic after the presented frame is held and resumed"
-        )]
-        let driven = catch_unwind(AssertUnwindSafe(|| {
+        let mut first_panic = FirstPanic::new();
+        let result = first_panic.contain(|| {
             self.owner_frame.drive_frame(
                 now,
                 deadline,
@@ -428,33 +425,23 @@ impl UiRuntime {
                 },
                 pipeline,
             )
-        }));
+        });
         drop(commits_closed);
         // A frame has passed: the readings the actions an agent ran owe are taken from the tree it
         // left, the events it produced are emitted, and the waits an agent parked see the window as
         // the frame left it, events included.
-        let (result, mut first_panic) = match driven {
-            Ok(result) => (Some(result), None),
-            Err(payload) => (None, Some(payload)),
-        };
         if result.is_some() || frames_seen() != seen_before {
             // Contained: the platform's wake is user code, and the drive's own failure, when
             // there is one, is the one that continues.
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: the platform's wake runs contained after the drive"
-            )]
-            let reported = catch_unwind(AssertUnwindSafe(|| {
+            first_panic.contain(|| {
                 for presentation in self.presentations.iter() {
                     Self::complete_agent_reads(presentation);
                 }
                 self.publish_agent_events();
                 self.evaluate_agent_waits(true);
-            }))
-            .err();
-            preserve_first_input_panic(&mut first_panic, reported, "agent frame report");
+            });
         }
-        if let Some(payload) = first_panic {
+        if let Some(payload) = first_panic.into_payload() {
             resume_unwind(payload);
         }
         let result = result
@@ -480,7 +467,7 @@ impl UiRuntime {
     /// failure, or with a presentation's commits still closed (its native
     /// text preparation waits), the next owner turn runs it again.
     fn run_commit_anchor(&self) {
-        let mut first = None;
+        let mut first = FirstPanic::new();
         let mut paid = true;
         for presentation in self.presentations.iter() {
             if presentation.text_input().is_transaction_open() {
@@ -489,24 +476,17 @@ impl UiRuntime {
                 paid = false;
                 continue;
             }
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: deferred text-input grants run contained so others still run"
-            )]
-            let ran = catch_unwind(AssertUnwindSafe(|| {
-                let _ran = presentation.text_input().run_deferred_grants();
-            }))
-            .err();
-            paid &= ran.is_none() && !presentation.text_input().is_transaction_open();
-            crate::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first,
-                ran,
-                "commit anchor",
-            );
+            // Deferred text-input grants run contained so others still run.
+            let completed = first
+                .contain(|| {
+                    let _ran = presentation.text_input().run_deferred_grants();
+                })
+                .is_some();
+            paid &= completed && !presentation.text_input().is_transaction_open();
             presentation.rearm_completion();
         }
         self.anchor_owed.set(!paid);
-        if let Some(failure) = first {
+        if let Some(failure) = first.into_payload() {
             resume_unwind(failure);
         }
     }
@@ -683,36 +663,26 @@ impl UiRuntime {
     ///
     /// Returns the first panic a tracing subscriber raised for the `commit` span, for the caller to
     /// resume once the verdict's own obligations have run.
-    fn commit_painted_frame(
-        &self,
-        presentation: &PresentationState,
-    ) -> Option<Box<dyn std::any::Any + Send>> {
+    fn commit_painted_frame(&self, presentation: &PresentationState) -> FirstPanic {
         debug_assert!(
             self.presentations.get(presentation.id()).is_some(),
             "commit target must belong to this ui_runtime"
         );
         // The scene is already accepted, so the commit happens whatever a subscriber does with the
         // span: a failure to open it is held, the commit runs, and the first failure resumes after.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a subscriber's panic opening the span is held; the commit runs"
-        )]
-        let opened = catch_unwind(AssertUnwindSafe(|| {
+        let mut subscriber_panic = FirstPanic::new();
+        let (scope_span, commit_span) = match subscriber_panic.contain(|| {
             let scope = presentation_span(presentation.id()).entered();
             let commit = tracing::debug_span!(target: "flui.frame", "commit").entered();
             (scope, commit)
-        }));
-        let ((scope_span, commit_span), mut subscriber_panic) = match opened {
-            Ok((scope, commit)) => ((Some(scope), Some(commit)), None),
-            Err(payload) => ((None, None), Some(payload)),
+        }) {
+            Some((scope, commit)) => (Some(scope), Some(commit)),
+            None => (None, None),
         };
         let committed_revision = presentation.commit_tree_revision();
         presentation.publish_input_regions();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a commit event subscriber's panic is held; the commit completes"
-        )]
-        let event = catch_unwind(AssertUnwindSafe(|| {
+        // A commit event subscriber's panic is held; the commit completes.
+        subscriber_panic.contain(|| {
             tracing::trace!(
                 target: "flui.frame",
                 event = "tree_revision_committed",
@@ -721,20 +691,13 @@ impl UiRuntime {
                 presented_revision = committed_revision.as_u64(),
                 "Presentation tree revision committed"
             );
-        }))
-        .err();
-        super::input::preserve_first_input_panic(&mut subscriber_panic, event, "commit event");
-        // The commit span exits before the presentation span it nests in.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the commit span's drop runs contained so the commit completes"
-        )]
-        let closed = catch_unwind(AssertUnwindSafe(|| {
+        });
+        // The commit span exits before the presentation span it nests in, and its
+        // drop runs contained so the commit completes.
+        subscriber_panic.contain(|| {
             drop(commit_span);
             drop(scope_span);
-        }))
-        .err();
-        super::input::preserve_first_input_panic(&mut subscriber_panic, closed, "commit span");
+        });
         subscriber_panic
     }
 
@@ -818,7 +781,7 @@ impl UiRuntime {
     /// retried, respectively.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn render_frame<S: crate::sink::FrameSink + ?Sized>(&self, sink: &mut S) -> bool {
-        let mut input_panic = None;
+        let mut input_panic = FirstPanic::new();
         let frame_time = self
             .frame_time
             .get()
@@ -827,30 +790,18 @@ impl UiRuntime {
             presentation.watch_redraw_requests();
         }
         for presentation in self.presentations.iter() {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: deferred arena resolutions run contained for each presentation"
-            )]
-            let deferred = catch_unwind(AssertUnwindSafe(|| {
+            // Deferred arena resolutions run contained for each presentation.
+            input_panic.contain(|| {
                 presentation.gestures().drain_deferred_arena_resolutions();
-            }))
-            .err();
-            super::input::preserve_first_input_panic(
-                &mut input_panic,
-                deferred,
-                "frame deferred arena resolution",
-            );
+            });
             // A delivered frame's vsync, when the host reported one, anchors
             // motion sampling on the event timeline (ADR-0207 §2).
             let vsync = presentation
                 .frame_request
                 .take()
                 .map(|request| request.vsync);
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: gesture motion runs contained so the frame's obligations run"
-            )]
-            let motion = catch_unwind(AssertUnwindSafe(|| {
+            // Gesture motion runs contained so the frame's obligations run.
+            input_panic.contain(|| {
                 let gestures = presentation.gestures();
                 if gestures.is_resampling_enabled() {
                     let frame_time = vsync
@@ -869,21 +820,10 @@ impl UiRuntime {
                 } else {
                     gestures.flush_pending_moves();
                 }
-            }))
-            .err();
-            super::input::preserve_first_input_panic(
-                &mut input_panic,
-                motion,
-                "frame pointer motion",
-            );
+            });
         }
-        let pending_wake = self.wake_pending_pointer_samples();
-        super::input::preserve_first_input_panic(
-            &mut input_panic,
-            pending_wake,
-            "pending pointer sample wake",
-        );
-        if let Some(payload) = input_panic {
+        input_panic.absorb(self.wake_pending_pointer_samples());
+        if let Some(payload) = input_panic.into_payload() {
             resume_unwind(payload);
         }
 
@@ -939,7 +879,7 @@ impl UiRuntime {
         // change the system bars; a withheld one keeps its style staged.
         let mut deliver_overlay_style = false;
         // The first panic of a layer read's reply, resumed with the rest of this tail's panics.
-        let mut hover_panic = None;
+        let mut hover_panic = FirstPanic::new();
         use crate::sink::SubmitVerdict;
         if should_send && let FramePaintOutcome::Painted(scene) = outcome {
             // The frame this scene will become once presented.
@@ -969,11 +909,7 @@ impl UiRuntime {
                 // The sink answered and only the subscriber failed: settle what the verdict owes,
                 // then resume that failure with the first panic of the frame.
                 (Some(verdict), Err(payload)) => {
-                    super::input::preserve_first_input_panic(
-                        &mut hover_panic,
-                        Some(payload),
-                        "submit span",
-                    );
+                    hover_panic.record(payload);
                     verdict
                 }
                 // The sink panicked, or the span failed before it was called. Either way the scene
@@ -1001,21 +937,14 @@ impl UiRuntime {
             };
             // Before anything else that can panic: the staged layer reads are answered if the
             // window showed the scene, and parked again if it did not.
-            super::input::preserve_first_input_panic(
-                &mut hover_panic,
-                producer.settle_agent_layer_reads(matches!(
-                    render_verdict,
-                    SubmitVerdict::Presented | SubmitVerdict::NoPresent
-                )),
-                "agent layer read reply",
-            );
+            hover_panic.absorb(producer.settle_agent_layer_reads(matches!(
+                render_verdict,
+                SubmitVerdict::Presented | SubmitVerdict::NoPresent
+            )));
             // The first panic of the work that follows the submit is kept beside a layer read's
             // reply panic (`hover_panic`), so neither replaces the other.
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: post-submit work runs contained beside a layer read's panic"
-            )]
-            let post_submit = catch_unwind(AssertUnwindSafe(|| {
+            let mut post_submit = FirstPanic::new();
+            post_submit.contain(|| {
                 // Telemetry: sampled AFTER the submit returns, never before
                 // it -- a `Presented` verdict means the backend called
                 // `output.present()`, and whatever pacing block that call carries
@@ -1046,11 +975,7 @@ impl UiRuntime {
                 let submit_at = producer.clock().now();
                 match render_verdict {
                     SubmitVerdict::Presented => {
-                        super::input::preserve_first_input_panic(
-                            &mut hover_panic,
-                            self.commit_painted_frame(producer),
-                            "commit span",
-                        );
+                        hover_panic.absorb(self.commit_painted_frame(producer));
                         // The frame reached `present()`: frame-aligned haptics
                         // play with it (ADR-0210 §4). Only this arm plays them;
                         // the others leave the queue to its deadline.
@@ -1077,11 +1002,7 @@ impl UiRuntime {
                         replay_committed_input = true;
                     }
                     SubmitVerdict::NoPresent => {
-                        super::input::preserve_first_input_panic(
-                            &mut hover_panic,
-                            self.commit_painted_frame(producer),
-                            "commit span",
-                        );
+                        hover_panic.absorb(self.commit_painted_frame(producer));
                         // No frame-aligned haptics: the backend found no damage,
                         // so the screen kept the previous frame and the change a
                         // queued request confirms never showed. A request queued
@@ -1143,11 +1064,7 @@ impl UiRuntime {
                         // The frame never reached the screen, so frame-aligned
                         // haptics wait: a retry that presents before their
                         // deadline plays them, otherwise they resolve `Suppressed`.
-                        super::input::preserve_first_input_panic(
-                            &mut hover_panic,
-                            self.commit_painted_frame(producer),
-                            "commit span",
-                        );
+                        hover_panic.absorb(self.commit_painted_frame(producer));
                         producer.record_frame_dropped();
                         let streak = producer.record_frame_withheld();
                         replay_committed_input = true;
@@ -1253,19 +1170,14 @@ impl UiRuntime {
                         tracing::error!("Render error (non-recoverable this frame)");
                     }
                 }
-            }))
-            .err();
-            if let Some(payload) = post_submit {
+            });
+            if post_submit.is_held() {
                 // A panic here must not drop the first panic of a layer read's reply: the first
                 // one is the one resumed.
-                super::input::preserve_first_input_panic(
-                    &mut hover_panic,
-                    Some(payload),
-                    "frame post-submit work",
-                );
+                hover_panic.absorb(post_submit);
                 resume_unwind(
                     hover_panic
-                        .take()
+                        .into_payload()
                         .expect("BUG: the post-submit panic was just stored"),
                 );
             }
@@ -1280,12 +1192,11 @@ impl UiRuntime {
             // Hover holds while a scroll is latched (ADR-0208 rule 6).
             .filter(|presentation| !presentation.gestures().is_hover_frozen())
         {
-            let hit_panic = std::cell::Cell::new(None);
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: hover refresh runs contained so the frame's obligations run"
-            )]
-            let refresh = catch_unwind(AssertUnwindSafe(|| {
+            let hit_panic = std::cell::Cell::new(FirstPanic::new());
+            // Hover refresh runs contained so the frame's obligations run; its
+            // failure joins `hover_panic` after the hit tests' own.
+            let mut refresh = FirstPanic::new();
+            refresh.contain(|| {
                 presentation
                     .gestures()
                     .mouse_tracker()
@@ -1299,27 +1210,16 @@ impl UiRuntime {
                             .hit_test_in_view(&mut result, position, kind, 0)
                         {
                             let mut held = hit_panic.take();
-                            super::input::preserve_first_input_panic(
-                                &mut held,
-                                panic,
-                                "frame ambient hover hit test",
-                            );
+                            if let Some(payload) = panic {
+                                held.record(payload);
+                            }
                             hit_panic.set(held);
                         }
                         result
                     });
-            }))
-            .err();
-            super::input::preserve_first_input_panic(
-                &mut hover_panic,
-                hit_panic.into_inner(),
-                "frame ambient hover hit test",
-            );
-            super::input::preserve_first_input_panic(
-                &mut hover_panic,
-                refresh,
-                "frame ambient hover refresh",
-            );
+            });
+            hover_panic.absorb(hit_panic.into_inner());
+            hover_panic.absorb(refresh);
         }
 
         // The one place a frame decides whether the loop continues itself.
@@ -1333,11 +1233,9 @@ impl UiRuntime {
         // What the verdict owes (the retry, or the rendered mark) runs before a held failure of the
         // layer-read reply or of the sink's own span resumes; the work is contained so that it
         // cannot replace that failure.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the verdict's debt runs contained so it cannot replace a failure"
-        )]
-        let settle_panic = catch_unwind(AssertUnwindSafe(|| {
+        // The verdict's debt runs contained so it cannot replace a failure.
+        let mut settle_panic = FirstPanic::new();
+        settle_panic.contain(|| {
             tracing::trace!(
                 target: "flui.pace",
                 event = "frame_tail",
@@ -1404,17 +1302,11 @@ impl UiRuntime {
             } else {
                 self.mark_rendered();
             }
-        }))
-        .err();
+        });
         // A subscriber or waker that failed while the frame settled what the sink's verdict owes
         // is secondary to the failure that came first.
-        if let Some(payload) = hover_panic {
-            if let Some(later) = settle_panic {
-                flui_foundation::panic::discard_payload(later);
-            }
-            resume_unwind(payload);
-        }
-        if let Some(payload) = settle_panic {
+        hover_panic.absorb(settle_panic);
+        if let Some(payload) = hover_panic.into_payload() {
             resume_unwind(payload);
         }
 
@@ -1466,29 +1358,18 @@ impl UiRuntime {
         // Last, so a panicking chrome callback skips none of the frame's own
         // obligations; this frame's mark_rendered must not erase accepted
         // sampling debt either, so the wakes still run before it resumes.
-        let delivery_panic = if deliver_overlay_style {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a chrome callback's panic is held so the frame's obligations run"
-            )]
-            catch_unwind(AssertUnwindSafe(|| {
+        let mut delivery_panic = FirstPanic::new();
+        if deliver_overlay_style {
+            // A chrome callback's panic is held so the frame's obligations run.
+            delivery_panic.contain(|| {
                 producer.with_window(|window| producer.overlay_style.deliver(window));
-            }))
-            .err()
-        } else {
-            None
-        };
+            });
+        }
         let wake_panic = self.wake_pending_pointer_samples();
         self.wake_for_late_demand(retry_needed);
-        match (delivery_panic, wake_panic) {
-            (Some(first), later) => {
-                if let Some(later) = later {
-                    flui_foundation::panic::discard_payload(later);
-                }
-                resume_unwind(first);
-            }
-            (None, Some(payload)) => resume_unwind(payload),
-            (None, None) => {}
+        delivery_panic.absorb(wake_panic);
+        if let Some(payload) = delivery_panic.into_payload() {
+            resume_unwind(payload);
         }
         presented
     }
@@ -1522,21 +1403,12 @@ impl UiRuntime {
         }
     }
 
-    fn wake_pending_pointer_samples(&self) -> Option<Box<dyn std::any::Any + Send>> {
-        let mut first = None;
+    fn wake_pending_pointer_samples(&self) -> FirstPanic {
+        let mut first = FirstPanic::new();
         for presentation in self.presentations.iter() {
             if presentation.gestures().has_pending_pointer_samples() {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: a redraw request runs contained so the other presentations run"
-                )]
-                let wake =
-                    catch_unwind(AssertUnwindSafe(|| self.request_redraw_for(presentation))).err();
-                super::input::preserve_first_input_panic(
-                    &mut first,
-                    wake,
-                    "pointer sample presentation wake",
-                );
+                // A redraw request runs contained so the other presentations run.
+                first.contain(|| self.request_redraw_for(presentation));
             }
         }
         first

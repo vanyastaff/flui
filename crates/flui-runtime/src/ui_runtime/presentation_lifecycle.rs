@@ -8,9 +8,7 @@ use flui_scheduler::AppLifecycleState;
 use flui_view::__runtime::BindingRuntime as _;
 
 use super::UiRuntime;
-use crate::lifecycle_state::{
-    derive_lifecycle_state, lifecycle_ladder, preserve_first_lifecycle_panic,
-};
+use crate::lifecycle_state::{derive_lifecycle_state, lifecycle_ladder};
 
 /// The close mode for the next terminal step of a lifecycle pass: preserving
 /// once a failure is held (ADR-0123). Unwinding is no reason to retain
@@ -28,17 +26,11 @@ fn terminal_close_mode(failure_held: bool) -> flui_interaction::__runtime::Close
 /// lifecycle pass (pointer cancellation included) before it propagates.
 fn forget_pressed_keys(
     presentation: &crate::presentation::PresentationState,
-    first: &mut Option<Box<dyn std::any::Any + Send>>,
+    first: &mut FirstPanic,
 ) {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: forgetting pressed keys runs contained so the first failure is kept"
-    )]
-    let failure = catch_unwind(AssertUnwindSafe(|| {
+    first.contain(|| {
         presentation.focus_manager().forget_pressed_keys();
-    }))
-    .err();
-    preserve_first_lifecycle_panic(first, failure, "held key cancellation");
+    });
 }
 
 /// An observed Detached state is reversible; terminal lifetime is explicit.
@@ -87,7 +79,7 @@ impl UiRuntime {
         presentation.window_visible.set(visible);
         presentation.window_focused.set(focused);
         let mut cancel = Vec::new();
-        let mut first = None;
+        let mut first = FirstPanic::new();
         if focused {
             for other in self.presentations.iter() {
                 if other.id() != id && other.window_focused.replace(false) {
@@ -147,7 +139,7 @@ impl UiRuntime {
             return;
         }
         let mut cancel = Vec::new();
-        let mut first = None;
+        let mut first = FirstPanic::new();
         if focused {
             for other in self.presentations.iter() {
                 if other.id() != id && other.window_focused.replace(false) {
@@ -389,13 +381,10 @@ impl UiRuntime {
     /// Begin closing every presentation: each is told it is detached and
     /// drops its held input, and later lifecycle updates are ignored.
     pub fn stop_presentations(&self) {
-        self.stop_presentations_after_failure(None);
+        self.stop_presentations_after_failure(FirstPanic::new());
     }
 
-    pub(crate) fn stop_presentations_after_failure(
-        &self,
-        failure: Option<Box<dyn std::any::Any + Send>>,
-    ) {
+    pub(crate) fn stop_presentations_after_failure(&self, failure: FirstPanic) {
         self.host_lifecycle.set(HostLifecycle::Stopping);
         for presentation in self.presentations.iter() {
             presentation.closing_requested.set(true);
@@ -407,18 +396,14 @@ impl UiRuntime {
 
     /// Begin closing presentation `id` alone: it is told it is detached and
     /// drops its held input.
-    pub(super) fn stop_presentation_after_failure(
-        &self,
-        id: PresentationId,
-        failure: Option<Box<dyn std::any::Any + Send>>,
-    ) {
+    pub(super) fn stop_presentation_after_failure(&self, id: PresentationId, failure: FirstPanic) {
         if let Some(presentation) = self.presentations.get(id) {
             presentation.closing_requested.set(true);
             presentation.widgets().lifecycle_source().begin_close();
             presentation.held_pointer_input().borrow_mut().clear();
             self.reconcile_lifecycle_after_failure(Vec::new(), failure);
-        } else if let Some(failure) = failure {
-            resume_unwind(failure);
+        } else if let Some(payload) = failure.into_payload() {
+            resume_unwind(payload);
         }
     }
 
@@ -428,7 +413,7 @@ impl UiRuntime {
     /// stops and removes it in one step.
     #[cfg(any(test, feature = "testing"))]
     pub fn stop_presentation_for_test(&self, id: PresentationId) {
-        self.stop_presentation_after_failure(id, None);
+        self.stop_presentation_after_failure(id, FirstPanic::new());
     }
 
     fn execution_lifecycle(
@@ -497,29 +482,26 @@ impl UiRuntime {
         }
     }
 
-    /// Keeps the first failure of a lifecycle pass. Once any failure is held,
-    /// every closing presentation's lifecycle source switches to preserving
-    /// mode (ADR-0123).
-    fn record_lifecycle_failure(
-        &self,
-        first_panic: &mut Option<Box<dyn std::any::Any + Send>>,
-        failure: Option<Box<dyn std::any::Any + Send>>,
-        phase: &'static str,
-    ) {
-        if first_panic.is_some() || failure.is_some() {
+    /// Runs one step of a lifecycle pass contained and keeps the first failure
+    /// of the pass. Once any failure is held, every closing presentation's
+    /// lifecycle source switches to preserving mode (ADR-0123).
+    fn contain_lifecycle_step(&self, first_panic: &mut FirstPanic, step: impl FnOnce()) {
+        let mut failure = FirstPanic::new();
+        failure.contain(step);
+        if first_panic.is_held() || failure.is_held() {
             self.seed_terminal_lifecycle_recovery();
         }
-        preserve_first_lifecycle_panic(first_panic, failure, phase);
+        first_panic.absorb(failure);
     }
 
     fn reconcile_lifecycle(&self, cancel: Vec<PresentationId>) {
-        self.reconcile_lifecycle_after_failure(cancel, None);
+        self.reconcile_lifecycle_after_failure(cancel, FirstPanic::new());
     }
 
     fn reconcile_lifecycle_after_failure(
         &self,
         mut cancel: Vec<PresentationId>,
-        mut first_panic: Option<Box<dyn std::any::Any + Send>>,
+        mut first_panic: FirstPanic,
     ) {
         // A closing presentation's terminal recovery spans this whole pass;
         // its preserving policy ends when the pass returns (ADR-0123).
@@ -529,7 +511,7 @@ impl UiRuntime {
             .filter(|presentation| presentation.closing_requested.get())
             .map(|presentation| presentation.widgets().lifecycle_source().close_window())
             .collect();
-        if first_panic.is_some() {
+        if first_panic.is_held() {
             self.seed_terminal_lifecycle_recovery();
         }
         let transitions: Vec<_> = self
@@ -603,17 +585,10 @@ impl UiRuntime {
                 {
                     continue;
                 }
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: cancelling pointer sequences runs contained so others are cancelled"
-                )]
-                let failure =
-                    catch_unwind(AssertUnwindSafe(|| self.cancel_pointer_sequences_for(id))).err();
-                self.record_lifecycle_failure(
-                    &mut first_panic,
-                    failure,
-                    "presentation input cancellation",
-                );
+                // Cancelling pointer sequences runs contained so others are cancelled.
+                self.contain_lifecycle_step(&mut first_panic, || {
+                    self.cancel_pointer_sequences_for(id);
+                });
                 if let Some(presentation) = self.presentations.get(id)
                     && matches!(
                         self.execution_lifecycle(presentation),
@@ -625,19 +600,10 @@ impl UiRuntime {
                     // Focus loss still delivers Cancel and preserves hovering.
                     // Suspension also discards motion queued before the pause;
                     // this phase must run even when Cancel delivery panicked.
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "ADR-0287: the pause handler runs contained so later phases still run"
-                    )]
-                    let failure = catch_unwind(AssertUnwindSafe(|| {
+                    // The pause handler runs contained so later phases still run.
+                    self.contain_lifecycle_step(&mut first_panic, || {
                         presentation.gestures().handle_lifecycle_pause();
-                    }))
-                    .err();
-                    self.record_lifecycle_failure(
-                        &mut first_panic,
-                        failure,
-                        "presentation paused input drain",
-                    );
+                    });
                 }
             }
             // Resource eligibility is plain owner-local state. Commit it before
@@ -661,38 +627,20 @@ impl UiRuntime {
             let aggregate = self.aggregate_lifecycle();
             if self.scheduler().lifecycle_state() != aggregate {
                 let step = aggregate;
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: the scheduler's lifecycle handler runs contained so the rest run"
-                )]
-                let failure = catch_unwind(AssertUnwindSafe(|| {
+                // The scheduler's lifecycle handler runs contained so the rest run.
+                self.contain_lifecycle_step(&mut first_panic, || {
                     self.scheduler().handle_app_lifecycle_state_change(step);
-                }))
-                .err();
-                self.record_lifecycle_failure(
-                    &mut first_panic,
-                    failure,
-                    "ui_runtime lifecycle scheduler",
-                );
+                });
             }
             for presentation in restored {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: re-dirtying a pipeline root runs contained for each presentation"
-                )]
-                let failure = catch_unwind(AssertUnwindSafe(|| {
+                // Re-dirtying a pipeline root runs contained for each presentation.
+                self.contain_lifecycle_step(&mut first_panic, || {
                     crate::renderer_binding::redirty_pipeline_root(
                         presentation.renderer().root_pipeline_owner(),
                     );
                     self.request_redraw_for(presentation);
                     self.wake_frame();
-                }))
-                .err();
-                self.record_lifecycle_failure(
-                    &mut first_panic,
-                    failure,
-                    "presentation redraw restoration",
-                );
+                });
             }
             for (presentation, _, step) in changed {
                 // Every path to Detached (an accepted close, the window
@@ -707,55 +655,28 @@ impl UiRuntime {
                         && terminal_close_mode(failed)
                             == flui_interaction::__runtime::CloseMode::PreservingFailure
                 };
-                if step == AppLifecycleState::Detached && !preserving(first_panic.is_some()) {
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "ADR-0287: completing a composition runs contained on detach"
-                    )]
-                    let failure = catch_unwind(AssertUnwindSafe(|| {
+                if step == AppLifecycleState::Detached && !preserving(first_panic.is_held()) {
+                    // Completing a composition runs contained on detach.
+                    self.contain_lifecycle_step(&mut first_panic, || {
                         presentation.text_input().complete_composition();
-                    }))
-                    .err();
-                    self.record_lifecycle_failure(
-                        &mut first_panic,
-                        failure,
-                        "presentation composition commit",
-                    );
+                    });
                 }
-                if preserving(first_panic.is_some()) {
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "ADR-0287: lifecycle cleanup runs contained so the other steps run"
-                    )]
-                    let failure = catch_unwind(AssertUnwindSafe(|| {
+                if preserving(first_panic.is_held()) {
+                    // Lifecycle cleanup runs contained so the other steps run.
+                    self.contain_lifecycle_step(&mut first_panic, || {
                         presentation
                             .widgets()
                             .lifecycle_source()
                             .begin_close_with_mode(
                                 flui_interaction::__runtime::CloseMode::PreservingFailure,
                             );
-                    }))
-                    .err();
-                    self.record_lifecycle_failure(
-                        &mut first_panic,
-                        failure,
-                        "terminal lifecycle withdrawal",
-                    );
+                    });
                     continue;
                 }
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: lifecycle notification runs contained so the other steps run"
-                )]
-                let failure = catch_unwind(AssertUnwindSafe(|| {
+                // Lifecycle notification runs contained so the other steps run.
+                self.contain_lifecycle_step(&mut first_panic, || {
                     presentation.widgets().notify_committed_lifecycle(step);
-                }))
-                .err();
-                self.record_lifecycle_failure(
-                    &mut first_panic,
-                    failure,
-                    "presentation lifecycle observers",
-                );
+                });
             }
         }
         // Terminal notification precedes root disposal. Observed Detached alone
@@ -765,44 +686,19 @@ impl UiRuntime {
             .iter()
             .filter(|p| p.closing_requested.get())
         {
-            let mode = terminal_close_mode(first_panic.is_some());
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a presentation's close runs contained so the others still close"
-            )]
-            let failure = catch_unwind(AssertUnwindSafe(|| {
+            let mode = terminal_close_mode(first_panic.is_held());
+            // A presentation's close runs contained so the others still close.
+            self.contain_lifecycle_step(&mut first_panic, || {
                 presentation
                     .widgets()
                     .lifecycle_source()
                     .finish_close_with_mode(mode);
-            }))
-            .err();
-            self.record_lifecycle_failure(
-                &mut first_panic,
-                failure,
-                "lifecycle subscription close",
-            );
-            let mode = terminal_close_mode(first_panic.is_some());
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a presentation's close runs contained so the others still close"
-            )]
-            let failure =
-                catch_unwind(AssertUnwindSafe(|| presentation.close_with_mode(mode))).err();
-            self.record_lifecycle_failure(
-                &mut first_panic,
-                failure,
-                "terminal presentation cleanup",
-            );
+            });
+            let mode = terminal_close_mode(first_panic.is_held());
+            self.contain_lifecycle_step(&mut first_panic, || presentation.close_with_mode(mode));
         }
         drop(lifecycle_windows);
-        if let Some(payload) = first_panic {
-            if std::thread::panicking() {
-                flui_foundation::panic::discard_payload(payload);
-            } else {
-                resume_unwind(payload);
-            }
-        }
+        first_panic.resume();
     }
 }
 

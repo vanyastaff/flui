@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use flui_animation::{FrameTick, MotionClock, Vsync};
-use flui_foundation::PresentationId;
+use flui_foundation::{PresentationId, panic::FirstPanic};
 use flui_interaction::{
     FocusManager, GestureBinding, InteractionDispatchHandle, TextInputBackend, TextInputHandle,
     TextInputOwner,
@@ -1951,18 +1951,14 @@ impl PresentationState {
     /// could finish them: a reading an action owes is failed (the action ran), a wait is `gone`,
     /// and every event stream ends after a last `window` event.
     pub(crate) fn abandon_agent_jobs(&self) {
-        use crate::ui_runtime::{deliver_each, first_panic_of};
+        use crate::ui_runtime::deliver_each;
         // Every stage runs to the end whatever an earlier one did: a reply goes to a receiver
         // whose drop or trace is user code, and a job left unanswered here is never answered.
         // The first panic resumes after all of them.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: every end-of-agent stage runs; the first panic resumes after all"
-        )]
-        let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut ended = FirstPanic::new();
+        ended.contain(|| {
             self.end_agent_events();
-        }))
-        .err();
+        });
         let owed = std::mem::take(&mut *self.agent_reads.borrow_mut());
         let reads = deliver_each(owed, crate::ui_runtime::PendingActRead::abandon);
         let injected = self.agent_input.borrow_mut().abandon();
@@ -1970,7 +1966,10 @@ impl PresentationState {
         let waits = std::mem::take(&mut *self.agent_waits.borrow_mut());
         let waited = deliver_each(waits, crate::ui_runtime::PendingWait::abandon);
         let layers = self.abandon_agent_layer_reads();
-        if let Some(payload) = first_panic_of([ended, reads, inputs, waited, layers]) {
+        for stage in [reads, inputs, waited, layers] {
+            ended.absorb(stage);
+        }
+        if let Some(payload) = ended.into_payload() {
             std::panic::resume_unwind(payload);
         }
     }
@@ -2567,7 +2566,7 @@ impl PresentationState {
 }
 
 struct PresentationCloseRecovery<'a> {
-    first: Option<Box<dyn std::any::Any + Send>>,
+    first: FirstPanic,
     terminal: &'a Cell<flui_interaction::__runtime::CloseMode>,
     window: flui_interaction::__runtime::CloseWindow,
 }
@@ -2589,7 +2588,7 @@ impl<'a> PresentationCloseRecovery<'a> {
             window.preserve();
         }
         Self {
-            first: None,
+            first: FirstPanic::new(),
             terminal,
             window,
         }
@@ -2604,28 +2603,20 @@ impl<'a> PresentationCloseRecovery<'a> {
         let _ = self.invoke_with(callback);
     }
     fn invoke_with<T>(&mut self, callback: impl FnOnce() -> T) -> Option<T> {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a close callback's panic is held so later callbacks still run"
-        )]
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)) {
-            Ok(value) => Some(value),
-            Err(payload) => {
-                if self.preserving() {
-                    flui_foundation::panic::discard_payload(payload);
-                } else {
-                    crate::lifecycle_state::preserve_first_lifecycle_panic(
-                        &mut self.first,
-                        Some(payload),
-                        "presentation terminal cleanup",
-                    );
-                }
-                self.terminal
-                    .set(flui_interaction::__runtime::CloseMode::PreservingFailure);
-                self.window.preserve();
-                None
+        // A close callback's panic is held so later callbacks still run.
+        let mut caught = FirstPanic::new();
+        let value = caught.contain(callback);
+        if value.is_none() {
+            if self.preserving() {
+                drop(caught);
+            } else {
+                self.first.absorb(caught);
             }
+            self.terminal
+                .set(flui_interaction::__runtime::CloseMode::PreservingFailure);
+            self.window.preserve();
         }
+        value
     }
     fn run(&mut self, callback: impl FnOnce()) {
         if !self.preserving() {
@@ -2638,13 +2629,7 @@ impl<'a> PresentationCloseRecovery<'a> {
         self.invoke(|| drop(value));
     }
     fn finish(self) {
-        if let Some(payload) = self.first {
-            if std::thread::panicking() {
-                flui_foundation::panic::discard_payload(payload);
-            } else {
-                std::panic::resume_unwind(payload);
-            }
-        }
+        self.first.resume();
     }
 }
 

@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use flui_foundation::panic::FirstPanic;
 use flui_runtime::HostInput;
 use flui_runtime::owner::RuntimeOperation;
 #[cfg(any(test, not(target_arch = "wasm32")))]
@@ -7,8 +8,6 @@ use flui_scheduler::AppLifecycleState;
 
 use super::host::APP_RUNTIME;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::app::lifecycle_state::preserve_first_lifecycle_panic;
-
 #[derive(Clone, Copy, Debug)]
 pub(in crate::app) struct PresentationDispatcher {
     pub(super) owner_thread: std::thread::ThreadId,
@@ -278,21 +277,12 @@ impl RuntimeEvent {
     /// subscriber's, say) does not keep the facts after it from their
     /// presentation. The first panic resumes once all were delivered.
     pub(in crate::app) fn deliver_each(events: Vec<Self>, mut deliver: impl FnMut(Self)) {
-        let mut first = None;
+        let mut first = FirstPanic::new();
         for event in events {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: each event's delivery is contained; the first panic resumes last"
-            )]
-            let failure =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| deliver(event))).err();
-            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first,
-                failure,
-                "window state delivery",
-            );
+            // Each event's delivery is contained; the first panic resumes last.
+            first.contain(|| deliver(event));
         }
-        if let Some(payload) = first {
+        if let Some(payload) = first.into_payload() {
             std::panic::resume_unwind(payload);
         }
     }
@@ -970,24 +960,12 @@ pub(super) fn drain_quit_notification() {
     if !ready {
         return;
     }
-    let mut first_panic = None;
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: pending window cancellation is contained; the first failure is kept"
-    )]
-    let cancel = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-        super::secondary_window::cancel_pending_secondary_windows,
-    ))
-    .err();
-    preserve_first_lifecycle_panic(&mut first_panic, cancel, "pending window cancellation");
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: runtime stop cleanup is contained; the exit's first failure is kept"
-    )]
-    let notification =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(stop_installed_ui_runtimes)).err();
-    preserve_first_lifecycle_panic(&mut first_panic, notification, "runtime stop cleanup");
-    if let Some(payload) = first_panic {
+    let mut first_panic = FirstPanic::new();
+    // Pending window cancellation is contained; the first failure is kept.
+    first_panic.contain(super::secondary_window::cancel_pending_secondary_windows);
+    // Runtime stop cleanup is contained; the exit's first failure is kept.
+    first_panic.contain(stop_installed_ui_runtimes);
+    if let Some(payload) = first_panic.into_payload() {
         std::panic::resume_unwind(payload);
     }
 }
@@ -1128,28 +1106,18 @@ impl ExitWatchdog {
 /// slot. The first panic, the runtimes' destructors included, is kept in
 /// `first_panic`.
 #[cfg(not(target_arch = "wasm32"))]
-fn retire_installed_host(first_panic: &mut Option<Box<dyn std::any::Any + Send>>) {
+fn retire_installed_host(first_panic: &mut FirstPanic) {
     let displaced = APP_RUNTIME.with(|slot| {
         std::mem::replace(
             &mut slot.borrow_mut().installed_host,
             super::InstalledHost::new(),
         )
     });
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a displaced host's shutdown runs contained after the swap"
-    )]
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    // A displaced host's shutdown and drop run contained after the swap.
+    first_panic.contain(|| {
         displaced.shutdown();
-    }))
-    .err();
-    preserve_first_lifecycle_panic(first_panic, failure, "installed host retirement");
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a displaced host's drop runs contained after the swap"
-    )]
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(displaced))).err();
-    preserve_first_lifecycle_panic(first_panic, failure, "installed host retirement");
+    });
+    first_panic.contain(|| drop(displaced));
 }
 
 /// Whether a hosted UI runtime is checked out: its code is on the stack.
@@ -1178,7 +1146,7 @@ pub(super) fn any_runtime_checked_out() -> bool {
 /// finds an empty host.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn end_session_teardown(tear_down: bool) {
-    let mut first_panic = None;
+    let mut first_panic = FirstPanic::new();
     if tear_down {
         retire_installed_host(&mut first_panic);
     }
@@ -1186,33 +1154,21 @@ pub(super) fn end_session_teardown(tear_down: bool) {
     // service shutdown still closes execution admission and the pools before
     // the platform may end the process.
     let now = std::time::Instant::now();
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: service shutdown is contained so the session-end steps all run"
-    )]
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    first_panic.contain(|| {
         APP_RUNTIME.with(|slot| {
             if let Ok(mut state) = slot.try_borrow_mut() {
                 drop(state.shutdown_lifecycles(now));
             }
         });
-    }))
-    .err();
-    preserve_first_lifecycle_panic(&mut first_panic, failure, "session-end service shutdown");
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: pool shutdown is contained so the session-end steps all run"
-    )]
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    });
+    first_panic.contain(|| {
         APP_RUNTIME.with(|slot| {
             if let Ok(mut state) = slot.try_borrow_mut() {
                 state.shutdown_execution(now);
             }
         });
-    }))
-    .err();
-    preserve_first_lifecycle_panic(&mut first_panic, failure, "session-end execution shutdown");
-    if let Some(payload) = first_panic {
+    });
+    if let Some(payload) = first_panic.into_payload() {
         super::terminal::hold_terminal(payload, "session end");
     }
 }
@@ -1272,7 +1228,7 @@ pub(super) fn teardown_platform_ui_runtime() {
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownStep)) {
     APP_RUNTIME.with(|slot| slot.borrow_mut().owner_thread = None);
-    let mut first_panic = None;
+    let mut first_panic = FirstPanic::new();
     retire_installed_host(&mut first_panic);
     log(TeardownStep::UiRuntimes);
 
@@ -1281,11 +1237,7 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // registry is written first, whether or not a failure is held: the
     // services and the pools after it may abandon the IO pool's writes.
     let exit = ExitDeadline::start(std::time::Instant::now());
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: the flush step is contained; the exit's first failure is kept"
-    )]
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    first_panic.contain(|| {
         let flush = APP_RUNTIME.with(|slot| slot.borrow().flush_host.clone());
         if let Some(flush) = flush {
             let report = flush.flush_within(exit.services());
@@ -1297,9 +1249,7 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
                 );
             }
         }
-    }))
-    .err();
-    preserve_first_lifecycle_panic(&mut first_panic, failure, "exit flush");
+    });
     log(TeardownStep::Flush);
 
     // Service-lifecycle shutdown (issue #558) BEFORE the pools close: the
@@ -1309,11 +1259,7 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // execution shutdown below cancels the pools' root token and
     // hard-drops any future still running at its next await point, so a
     // service joined AFTER that would lose its flush window every time.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: service shutdown is contained; the exit's first failure is kept"
-    )]
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    first_panic.contain(|| {
         let report =
             APP_RUNTIME.with(|slot| slot.borrow_mut().shutdown_lifecycles(exit.services()));
         let incomplete: Vec<&'static str> = report
@@ -1336,9 +1282,7 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
                 "some application services did not complete by the shutdown deadline"
             );
         }
-    }))
-    .err();
-    preserve_first_lifecycle_panic(&mut first_panic, failure, "service shutdown");
+    });
     log(TeardownStep::Services);
 
     // Execution-services shutdown (issue #557): the whole loop is exiting,
@@ -1352,17 +1296,11 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // ui_runtime keeps its pools. A teardown path that skips this (panic
     // mid-teardown) still tears the pools down non-blockingly via
     // `ExecutionServices`' own `Drop`.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: pool shutdown is contained; the exit's first failure is kept"
-    )]
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    first_panic.contain(|| {
         APP_RUNTIME.with(|slot| {
             slot.borrow_mut().shutdown_execution(exit.end());
         });
-    }))
-    .err();
-    preserve_first_lifecycle_panic(&mut first_panic, failure, "execution shutdown");
+    });
     log(TeardownStep::Execution);
 
     // ADR-0312 §6's install/teardown symmetry: the event loop has exited (this
@@ -1373,11 +1311,7 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // process's life. `Drop for AppRuntime` is the last-resort third clear
     // if this explicit path is ever skipped (a panic mid-teardown, for
     // instance) — see that impl's doc.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: the clipboard release is contained; the exit's first failure is kept"
-    )]
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    first_panic.contain(|| {
         let released = APP_RUNTIME.with(|slot| {
             let mut state = slot.borrow_mut();
             state.clear_platform_clipboard();
@@ -1390,12 +1324,10 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
         // outside the TLS borrow for the paths that never closed a window (an
         // OS-level quit with the window still open).
         drop(released);
-    }))
-    .err();
-    preserve_first_lifecycle_panic(&mut first_panic, failure, "native shutdown");
+    });
     log(TeardownStep::NativeResources);
     // Terminal (ADR-0258 §2): held for the exit's end, after the flush above.
-    if let Some(payload) = first_panic {
+    if let Some(payload) = first_panic.into_payload() {
         super::terminal::hold_terminal(payload, "loop exit");
     }
 }

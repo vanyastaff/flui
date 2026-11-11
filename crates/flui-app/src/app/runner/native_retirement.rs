@@ -3,7 +3,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::app::close_request::CloseRequestHandler;
-use crate::app::lifecycle_state::preserve_first_lifecycle_panic;
+use flui_foundation::panic::FirstPanic;
 
 use super::frame_driver::FrameDriver;
 
@@ -39,20 +39,15 @@ impl NativeRetirement {
     }
 
     /// Every owner is released independently, outside registry and store guards.
-    pub(super) fn drain(&self, first_panic: &mut Option<Box<dyn std::any::Any + Send>>) {
+    pub(super) fn drain(&self, first_panic: &mut FirstPanic) {
         let owners = std::mem::take(&mut *self.0.borrow_mut());
         for owner in owners {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: each retired owner drops contained; the first panic is kept"
-            )]
-            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match owner {
+            // Each retired owner drops contained; the first panic is kept.
+            first_panic.contain(|| match owner {
                 RetiredNativeOwner::TextSizing(sizing) => drop(sizing),
                 RetiredNativeOwner::Frame(driver) => drop(driver),
                 RetiredNativeOwner::CloseHandler(handler) => drop(handler),
-            }))
-            .err();
-            preserve_first_lifecycle_panic(first_panic, failure, "retired native owner");
+            });
         }
     }
 }
