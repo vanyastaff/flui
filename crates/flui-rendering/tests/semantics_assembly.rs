@@ -23,7 +23,7 @@ use flui_rendering::{
         AccessibilityNodeId, AttributedString, SemanticsAction, SemanticsConfiguration,
         SemanticsNode, SemanticsRole, States,
     },
-    testing::{FrameRun, Probe, RenderTester, box_node},
+    testing::{FrameRun, Probe, RenderTester, SceneHost, box_node},
     traits::RenderBox,
 };
 
@@ -88,7 +88,9 @@ pub(crate) fn a_panicking_semantics_callback_leaves_the_phase() {
     let mut owner = owner.into_compositing();
     owner.run_compositing().expect("compositing");
     let mut owner = owner.into_paint();
-    owner.run_paint().expect("paint");
+    let mut scene = SceneHost::new();
+    let (painted, _) = scene.drive(&mut owner, |owner, writer| owner.run_paint(writer));
+    painted.expect("paint");
     let mut owner = owner.into_semantics();
     let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.run_semantics()))
         .expect_err("the callback's panic propagates");
@@ -157,6 +159,7 @@ pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
     /// list.
     fn painted(
         teardown: &Arc<AtomicBool>,
+        scene: &mut SceneHost,
     ) -> (flui_rendering::PipelineOwner, Arc<Mutex<Vec<usize>>>) {
         let published = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&published);
@@ -171,7 +174,7 @@ pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
         ));
         owner.set_root_render_object(Box::new(ActionLeaf(Arc::clone(teardown))));
         owner.set_root_constraints(Some(constraints()));
-        let (owner, frame) = owner.run_frame();
+        let (owner, frame) = scene.run_frame(owner);
         frame.expect("the first frame paints");
         assert!(
             !owner.has_dirty_nodes(),
@@ -196,7 +199,8 @@ pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
     }
 
     for wake_panics in [false, true] {
-        let (mut owner, published) = painted(&Arc::new(AtomicBool::new(false)));
+        let mut scene = SceneHost::new();
+        let (mut owner, published) = painted(&Arc::new(AtomicBool::new(false)), &mut scene);
         let wakes = counter(&mut owner, wake_panics.then_some("wake failed"));
         owner.set_on_semantics_owner_created(|| std::panic::panic_any("created hook failed"));
         let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -220,7 +224,7 @@ pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
         );
 
         let _ = counter(&mut owner, None);
-        let (_, frame) = owner.run_frame();
+        let (_, frame) = scene.run_frame(owner);
         frame.expect("the next frame runs");
         assert!(
             published
@@ -233,9 +237,10 @@ pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
     }
 
     let teardown = Arc::new(AtomicBool::new(false));
-    let (mut owner, _) = painted(&teardown);
+    let mut scene = SceneHost::new();
+    let (mut owner, _) = painted(&teardown, &mut scene);
     owner.set_semantics_enabled(true);
-    let (mut owner, frame) = owner.run_frame();
+    let (mut owner, frame) = scene.run_frame(owner);
     frame.expect("the frame assembles semantics");
     let disposed = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&disposed);

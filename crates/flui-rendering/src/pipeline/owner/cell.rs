@@ -235,9 +235,31 @@ impl PipelineCell {
     /// owner is back in place.
     pub fn run_frame(
         &self,
-    ) -> Result<Option<flui_layer::LayerTree>, flui_foundation::TreeError<crate::error::RenderError>>
-    {
-        self.with_mut(PipelineOwner::run_frame_in_place)
+        writer: &mut flui_layer::SceneWriter<'_>,
+    ) -> Result<bool, flui_foundation::TreeError<crate::error::RenderError>> {
+        self.with_mut(|owner| owner.run_frame_in_place(writer))
+    }
+
+    /// Reports the version the patch of the last frame was applied as
+    /// ([`PipelineOwner::scene_applied`]).
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::with_mut`]: when a `with`/`with_mut` borrow from this cell
+    /// is live.
+    pub fn scene_applied(&self, version: &flui_layer::SceneVersion) {
+        self.with_mut(|owner| owner.scene_applied(version));
+    }
+
+    /// The node the owner publishes its frame at
+    /// ([`PipelineOwner::scene_frame_node`]).
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::with`]: when a `with_mut` borrow from this cell is live.
+    #[must_use]
+    pub fn scene_frame_node(&self) -> Option<flui_layer::SceneNodeId> {
+        self.with(PipelineOwner::scene_frame_node)
     }
 
     /// Drains the dirty channel and lays out whatever is dirty, without

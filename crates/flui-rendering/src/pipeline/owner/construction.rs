@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use flui_layer::LayerTree;
+use flui_layer::SceneWriter;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 #[cfg(any(test, feature = "testing"))]
@@ -143,14 +143,15 @@ impl PipelineOwner<Idle> {
             unchecked_semantics_diagnostics: Vec::new(),
             semantics_update_callback: None,
             semantics_route_change_sink: None,
-            last_layer_tree: None,
-            scenes_painted: 0,
             last_follower_transforms: FxHashMap::default(),
             last_child_paint_orders: FxHashMap::default(),
             leader_watches,
-            retained_boundaries: FxHashMap::default(),
+            boundary_records: FxHashMap::default(),
+            follower_boundaries: FxHashSet::default(),
+            scene_frame: None,
+            staged_scene: None,
+            orphaned_nodes: Vec::new(),
             retained_pixel_ratio: 1.0,
-            root_content: None,
             last_hidden_follower_ids: FxHashSet::default(),
             device_pixel_ratio: 1.0,
             dirty_sender,
@@ -202,8 +203,9 @@ impl PipelineOwner<Idle> {
     // ========================================================================
 
     /// Runs a full frame: layout -> compositing-bits -> paint -> semantics.
-    /// Consumes `self`, returns the owner back at [`Idle`] plus a
-    /// [`RenderResult`](crate::RenderResult) indicating whether the frame produced a layer
+    /// Consumes `self`, returns the owner back at [`Idle`] plus whether the
+    /// frame painted: buffered a patch in `writer`, which the caller applies
+    /// and reports with [`scene_applied`](Self::scene_applied).
     /// tree or failed mid-phase.
     ///
     /// The phase transitions are the load-bearing mechanism here -- each
@@ -216,10 +218,10 @@ impl PipelineOwner<Idle> {
     /// If any phase returns [`crate::error::RenderError`] (most notably
     /// [`crate::error::RenderError::Poisoned`] from a panicking render
     /// object), the owner is returned at [`Idle`] and the second element of
-    /// the tuple is `Err(...)`. A paint tree already committed before a
-    /// semantics error remains in the owner's `last_layer_tree`; it is not
-    /// returned from this failed call, but a retry can repaint or submit the
-    /// retained visual result.
+    /// the tuple is `Err(...)`. A patch paint buffered before a semantics
+    /// error stays staged: applying it and reporting it with
+    /// `scene_applied` presents the paint, and a patch never reported makes
+    /// the next paint repaint from the root.
     ///
     /// # Panics
     ///
@@ -232,11 +234,12 @@ impl PipelineOwner<Idle> {
     #[must_use = "dropping the returned PipelineOwner<Idle> discards the pipeline handle; thread it back into the next frame"]
     pub fn run_frame(
         self,
+        writer: &mut SceneWriter<'_>,
     ) -> (
         PipelineOwner<Idle>,
-        Result<Option<LayerTree>, flui_foundation::TreeError<crate::error::RenderError>>,
+        Result<bool, flui_foundation::TreeError<crate::error::RenderError>>,
     ) {
-        let (owner, ended) = self.run_frame_contained();
+        let (owner, ended) = self.run_frame_contained(writer);
         match ended {
             Ok(result) => (owner, result),
             Err(payload) => {
@@ -264,11 +267,12 @@ impl PipelineOwner<Idle> {
     /// [`PipelineCell`]: crate::pipeline::PipelineCell
     pub fn run_frame_in_place(
         &mut self,
-    ) -> Result<Option<LayerTree>, flui_foundation::TreeError<crate::error::RenderError>> {
+        writer: &mut SceneWriter<'_>,
+    ) -> Result<bool, flui_foundation::TreeError<crate::error::RenderError>> {
         // Drained on `&mut self`, so a callback that unwinds here leaves the
         // owner where it is; the drain keeps every request it accepted.
         self.drain_pending_dirty();
-        self.in_place(Self::run_frame_contained)
+        self.in_place(|owner| owner.run_frame_contained(writer))
     }
 
     /// Drains the dirty channel and runs the layout phase alone, on the owner
@@ -309,7 +313,10 @@ impl PipelineOwner<Idle> {
     /// only typestate moves, `Option::take` and a counter, none of which can
     /// panic. Anything that can (user code, `tracing`) runs inside a
     /// contained phase.
-    fn run_frame_contained(mut self) -> (Self, Result<FrameAnswer, Unwind>) {
+    fn run_frame_contained(
+        mut self,
+        writer: &mut SceneWriter<'_>,
+    ) -> (Self, Result<FrameAnswer, Unwind>) {
         // Observe node-bound cross-thread invalidation before any phase runs — an
         // async decode that finished while the app idled lands in this
         // frame, not never.
@@ -327,27 +334,27 @@ impl PipelineOwner<Idle> {
         let mut owner = self.into_layout();
         match contain_phase(&mut owner, PipelineOwner::run_layout) {
             Ok(Ok(())) => {}
-            ended => return (owner.into_idle(), ended.map(|r| r.map(|()| None))),
+            ended => return (owner.into_idle(), ended.map(|r| r.map(|()| false))),
         }
 
         // Compositing
         let mut owner = owner.into_compositing();
         match contain_phase(&mut owner, PipelineOwner::run_compositing) {
             Ok(Ok(())) => {}
-            ended => return (owner.into_idle(), ended.map(|r| r.map(|()| None))),
+            ended => return (owner.into_idle(), ended.map(|r| r.map(|()| false))),
         }
 
         // Paint
         let mut owner = owner.into_paint();
-        match contain_phase(&mut owner, PipelineOwner::run_paint) {
+        match contain_phase(&mut owner, |owner| owner.run_paint(writer)) {
             Ok(Ok(())) => {}
-            ended => return (owner.into_idle(), ended.map(|r| r.map(|()| None))),
+            ended => return (owner.into_idle(), ended.map(|r| r.map(|()| false))),
         }
 
         // Semantics. The phase has no `into_idle`: the transition to <Idle>
-        // goes via `finish`. On an error the painted tree remains in
-        // `last_layer_tree`; this failed call returns no tree, while a retry
-        // can reuse the retained visual result.
+        // goes via `finish`. On an error the patch paint buffered stays in
+        // `writer` and staged: the caller may still apply it and report it
+        // with `scene_applied`; this failed call answers no frame.
         let mut owner = owner.into_semantics();
         #[cfg(any(test, feature = "testing"))]
         let injected = owner.semantics_error_once_for_test.take();
@@ -359,14 +366,14 @@ impl PipelineOwner<Idle> {
         });
         match semantics {
             Ok(Ok(())) => {}
-            ended => return (owner.finish(), ended.map(|r| r.map(|()| None))),
+            ended => return (owner.finish(), ended.map(|r| r.map(|()| false))),
         }
 
-        let layer_tree = owner.take_layer_tree();
-        if layer_tree.is_some() {
+        let painted = owner.staged_scene.is_some();
+        if painted {
             owner.counters.frames_produced += 1;
         }
-        (owner.finish(), Ok(Ok(layer_tree)))
+        (owner.finish(), Ok(Ok(painted)))
     }
 }
 
@@ -375,7 +382,7 @@ impl PipelineOwner<Idle> {
 type Unwind = Box<dyn std::any::Any + Send>;
 
 /// What a frame answers when no phase unwinds.
-type FrameAnswer = Result<Option<LayerTree>, flui_foundation::TreeError<crate::error::RenderError>>;
+type FrameAnswer = Result<bool, flui_foundation::TreeError<crate::error::RenderError>>;
 
 /// Runs one phase under containment: its error is placed in the tree (the
 /// path to the node it names, whose `debug_name` is user code, so inside the

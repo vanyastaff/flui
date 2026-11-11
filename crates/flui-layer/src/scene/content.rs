@@ -265,6 +265,30 @@ impl BoundaryContent {
         !self.closure_entries.is_empty()
     }
 
+    /// The same stream with the effects at the given entries replaced by
+    /// new layers, every other entry shared: how a composited-layer update
+    /// republishes a boundary without repainting it.
+    ///
+    /// # Errors
+    ///
+    /// The first index that names no effect; nothing is built.
+    pub fn with_effects(
+        &self,
+        replaced: impl IntoIterator<Item = (EntryIndex, Layer)>,
+    ) -> Result<Self, EntryIndex> {
+        let mut entries = self.entries.to_vec();
+        for (index, layer) in replaced {
+            match entries.get_mut(index.get()) {
+                Some(Entry::Effect { layer: held, .. }) => *held = layer,
+                _ => return Err(index),
+            }
+        }
+        Ok(ContentBuilder {
+            entries,
+            open: Vec::new(),
+        }
+        .finish())
+    }
     /// Whether `other` puts the same entries into the three indexes.
     pub(crate) fn same_indexes(&self, other: &Self) -> bool {
         self.links == other.links

@@ -9,6 +9,7 @@
 
 use flui_objects::RenderColoredBox;
 use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::testing::SceneHost;
 
 use crate::common::BoxedRenderObject;
 
@@ -491,7 +492,8 @@ pub(crate) fn a_destructor_that_panics_during_removal_still_commits_the_owner() 
         .insert_child_render_object(parent, panics_when_dropped("child destructor"))
         .expect("the child attaches");
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(40.0, 40.0))));
-    let (mut owner, frame) = owner.run_frame();
+    let mut scene = SceneHost::new();
+    let (mut owner, frame) = scene.run_frame(owner);
     frame.expect("the first frame runs");
     assert!(
         !owner.has_dirty_nodes(),

@@ -7,9 +7,9 @@ use std::sync::Arc;
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use flui_layer::{
-    AnnotatedRegionLayer, BoundaryContent, Chunk, ClipRectLayer, ContentVersion, FollowerLayer, Layer, LayerLink,
-    LeaderClip, LeaderLayer, OffsetLayer, Placement, SceneNodeId, SceneOp, SceneOwner, SurfaceKey,
-    TransformLayer, leader_origin, resolve_follower_transform,
+    AnnotatedRegionLayer, BoundaryContent, Chunk, ClipRectLayer, ContentVersion, FollowerLayer,
+    Layer, LayerLink, LeaderClip, LeaderLayer, OffsetLayer, Placement, SceneNodeId, SceneOp,
+    SceneOwner, SurfaceKey, TransformLayer, leader_origin, resolve_follower_transform,
 };
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
@@ -208,6 +208,17 @@ fn first_disagreement(cases: u64) -> Option<String> {
                     "case {case}: leader origin {from_version:?} against the tree's {from_tree:?}"
                 ));
             }
+            let size_from_tree = tree
+                .leaders()
+                .filter(|(led, _)| *led == link)
+                .filter_map(|(_, id)| Some(tree.get_layer(id)?.as_leader()?.size()))
+                .last();
+            if size_from_tree != version.leader_size(link) {
+                return Some(format!(
+                    "case {case}: leader size {:?} against the tree's {size_from_tree:?}",
+                    version.leader_size(link)
+                ));
+            }
             let Some(at) = version.followers(link).next() else {
                 continue;
             };
@@ -255,10 +266,7 @@ fn matrices_agree(a: Option<Matrix4>, b: Option<Matrix4>) -> bool {
     }
 }
 
-fn points_agree(
-    a: Option<Point<f64>>,
-    b: Option<Point<f64>>,
-) -> bool {
+fn points_agree(a: Option<Point<f64>>, b: Option<Point<f64>>) -> bool {
     match (a, b) {
         (None, None) => true,
         (Some(a), Some(b)) => (a.x - b.x).abs() <= 1e-9 && (a.y - b.y).abs() <= 1e-9,

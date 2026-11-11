@@ -528,12 +528,13 @@ impl BuildOwner {
         &mut self,
         tree: &mut ElementTree,
         pipeline: &PipelineCell,
+        writer: &mut flui_rendering::layer::SceneWriter<'_>,
     ) -> Result<
-        Option<flui_rendering::layer::LayerTree>,
+        bool,
         flui_foundation::TreeError<flui_rendering::error::RenderError>,
     > {
         self.settle_layout_with_builders(tree, pipeline)?;
-        pipeline.run_frame()
+        pipeline.run_frame(writer)
     }
 
     /// The build-during-layout fixpoint of

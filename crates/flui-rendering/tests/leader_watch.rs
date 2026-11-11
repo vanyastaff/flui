@@ -1,7 +1,7 @@
 //! A `LeaderWatch` hears its leader's geometry change after the frame that
 //! painted it, and only then: a steady layout delivers nothing.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_foundation::geometry::Size;
@@ -11,7 +11,7 @@ use flui_objects::{RenderFlex, RenderLeaderLayer, RenderSizedBox};
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::{LeaderWatch, PipelineCell, PipelineOwner},
-    testing::{box_node, tree, update_render_object},
+    testing::{SceneHost, box_node, tree, update_render_object},
 };
 use flui_scheduler::{IdleDeadline, Instant, OwnerFrame, UpdateScheduler};
 // Lower-crate test drives a frame through the composition-root seam
@@ -23,6 +23,7 @@ use flui_scheduler::__runtime::DriveFrame as _;
 /// scheduler whose post-frame lane its watches deliver through.
 struct Scene {
     cell: PipelineCell,
+    host: RefCell<SceneHost>,
     scheduler: UpdateScheduler,
     frame: OwnerFrame,
     sized: flui_foundation::RenderId,
@@ -50,6 +51,7 @@ impl Scene {
         let frame = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
         Self {
             cell: PipelineCell::new(owner),
+            host: RefCell::new(SceneHost::new()),
             scheduler,
             frame,
             sized: registry.get("sized").expect("labelled"),
@@ -64,7 +66,10 @@ impl Scene {
 
     /// Lays out and paints whatever is dirty.
     fn paint(&self) {
-        self.cell.run_frame().expect("the frame runs");
+        self.host
+            .borrow_mut()
+            .run_cell_frame(&self.cell)
+            .expect("the frame runs");
     }
 
     /// Completes a frame of the scheduler, which runs its post-frame lane.

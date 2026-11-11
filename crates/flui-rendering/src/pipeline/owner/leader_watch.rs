@@ -18,9 +18,8 @@ use std::rc::{Rc, Weak};
 use flui_foundation::ListenerCallback;
 use flui_foundation::geometry::{Point, Size};
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerObserver};
-use flui_layer::{LayerLink, LayerTree, leader_origin};
+use flui_layer::{LayerLink, SceneVersion};
 use flui_scheduler::PostFrameHandle;
-use rustc_hash::FxHashMap;
 
 /// A leader's geometry in a committed frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -95,19 +94,24 @@ impl Listenable for LeaderWatch {
 }
 
 /// The live watches of one pipeline, shared by its cell (which registers
-/// them) and its owner (which checks them after paint), with the leaders of
-/// the last committed frame, so a watch made later starts from them.
+/// them) and its owner (which checks them against each applied scene), with
+/// the last applied version, so a watch made later starts from its leaders.
 #[derive(Default)]
 pub(crate) struct LeaderWatches {
     entries: RefCell<Vec<Weak<WatchEntry>>>,
-    committed: RefCell<FxHashMap<LayerLink, LeaderGeometry>>,
+    committed: RefCell<Option<SceneVersion>>,
 }
 
 impl LeaderWatches {
     pub(crate) fn watch(&self, link: LayerLink, lane: PostFrameHandle) -> LeaderWatch {
         let entry = Rc::new(WatchEntry {
             link,
-            geometry: Cell::new(self.committed.borrow().get(&link).copied()),
+            geometry: Cell::new(
+                self.committed
+                    .borrow()
+                    .as_ref()
+                    .and_then(|version| leader_geometry(version, link)),
+            ),
             queued: Cell::new(false),
             lane,
             notifier: ChangeNotifier::new(),
@@ -118,30 +122,17 @@ impl LeaderWatches {
         LeaderWatch(entry)
     }
 
-    /// Records the leaders of `tree`, the layer tree a frame's paint just
-    /// committed, and queues a delivery for each live watch whose geometry
+    /// Reads the leaders of `version`, the scene a frame's paint was just
+    /// applied as, and queues a delivery for each live watch whose geometry
     /// changed. Runs no user code: listeners run in the post-frame lane.
-    pub(crate) fn check(&self, tree: &LayerTree) {
-        let committed: FxHashMap<LayerLink, LeaderGeometry> = tree
-            .leaders()
-            .filter_map(|(link, id)| {
-                let leader = tree.get_layer(id)?.as_leader()?;
-                Some((
-                    link,
-                    LeaderGeometry {
-                        size: leader.size(),
-                        origin: leader_origin(tree, link),
-                    },
-                ))
-            })
-            .collect();
+    pub(crate) fn check(&self, version: &SceneVersion) {
         let live: Vec<Rc<WatchEntry>> = {
             let mut entries = self.entries.borrow_mut();
             entries.retain(|entry| entry.strong_count() > 0);
             entries.iter().filter_map(Weak::upgrade).collect()
         };
         for entry in live {
-            let geometry = committed.get(&entry.link).copied();
+            let geometry = leader_geometry(version, entry.link);
             if entry.geometry.get() == geometry {
                 continue;
             }
@@ -165,6 +156,18 @@ impl LeaderWatches {
                 );
             }
         }
-        *self.committed.borrow_mut() = committed;
+        // The version replaced drops once the cell is free: an annotation's
+        // `Drop` is user code.
+        let replaced = self.committed.replace(Some(version.clone()));
+        drop(replaced);
     }
+}
+
+/// The geometry `version` gives the leader publishing `link`, `None` without
+/// an attached one.
+fn leader_geometry(version: &SceneVersion, link: LayerLink) -> Option<LeaderGeometry> {
+    version.leader_size(link).map(|size| LeaderGeometry {
+        size,
+        origin: version.leader_origin(link),
+    })
 }

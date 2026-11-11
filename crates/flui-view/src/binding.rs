@@ -1294,8 +1294,9 @@ impl WidgetsBinding {
     pub fn run_frame_with_layout_builders(
         &self,
         pipeline: &PipelineCell,
+        writer: &mut flui_rendering::layer::SceneWriter<'_>,
     ) -> Result<
-        Option<flui_rendering::layer::LayerTree>,
+        bool,
         flui_foundation::TreeError<flui_rendering::error::RenderError>,
     > {
         let mut inner = self.inner.write_in(TreePhase::Building);
@@ -1304,7 +1305,7 @@ impl WidgetsBinding {
             ref mut element_tree,
             ..
         } = *inner;
-        build_owner.run_frame_with_layout_builders(element_tree, pipeline)
+        build_owner.run_frame_with_layout_builders(element_tree, pipeline, writer)
     }
 
     /// [`Self::run_frame_with_layout_builders`]'s build-during-layout
