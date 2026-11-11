@@ -263,7 +263,7 @@ pub(crate) fn is_projective(transform: &Matrix4) -> bool {
 
 /// Where `filter` draws what it takes from `input` (surface pixels) under
 /// `transform`: spread by a kernel's reach, or moved where a transform
-/// sends it, a texel past for a bilinear read. `None` when that has no
+/// sends it, the sampling's reach before the map and a pixel after it. `None` when that has no
 /// bound, under a projective ancestor.
 pub(crate) fn footprint(
     filter: &ImageFilter,
@@ -271,7 +271,10 @@ pub(crate) fn footprint(
     transform: &Matrix4,
 ) -> Option<Rect<f64>> {
     match filter {
-        ImageFilter::Transform { transform: map, .. } => {
+        ImageFilter::Transform {
+            transform: map,
+            sampling,
+        } => {
             if is_projective(transform) {
                 return None;
             }
@@ -284,7 +287,11 @@ pub(crate) fn footprint(
             shown_to_source.m[12] = x0;
             shown_to_source.m[13] = y0;
             let moved = *transform * shown_to_source.try_inverse()? * transform.try_inverse()?;
-            Some(moved.transform_rect(&input).expand(1.0)).filter(Rect::is_finite)
+            // A read reaches past its sample point before the map spreads it,
+            // as the renderer inflates its input support (a 10× linear
+            // magnifier draws five device pixels past the mapped source).
+            let read = input.expand(sampling.reach());
+            Some(moved.transform_rect(&read).expand(1.0)).filter(Rect::is_finite)
         }
         ImageFilter::Compose(filters) => filters
             .iter()

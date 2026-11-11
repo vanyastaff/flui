@@ -311,7 +311,7 @@ impl<'v> Geometry<'v> {
     ) {
         match layer {
             Layer::Transform(transform) => out.push(Link::Matrix(*transform.transform())),
-            Layer::Follower(_) => out.push(match self.resolve(at, nesting + 1) {
+            Layer::Follower(_) => out.push(match self.resolve(at, nesting) {
                 Ok(transform) => Link::Matrix(transform),
                 Err(Unresolved::Hidden | Unresolved::TooDeep) => Link::Hidden,
             }),
@@ -459,6 +459,9 @@ impl<'v> Geometry<'v> {
         if nesting > MAX_FOLLOWER_NESTING {
             return Err(Unresolved::TooDeep);
         }
+        // A follower on either chain resolves one level deeper, as
+        // `resolve_follower_transform` counts it.
+        let chains = nesting + 1;
         let Entry::Effect {
             layer: Layer::Follower(follower),
             ..
@@ -493,17 +496,17 @@ impl<'v> Geometry<'v> {
         }
         let mut leader_links = Links::new();
         if self
-            .node_links(leader_at.node, &mut leader_links, nesting)
+            .node_links(leader_at.node, &mut leader_links, chains)
             .is_err()
         {
             return unlinked();
         }
-        self.content_links(leader_at.node, leader_at.entry, &mut leader_links, nesting);
-        self.effect_links(leader_layer, leader_at, &mut leader_links, nesting);
+        self.content_links(leader_at.node, leader_at.entry, &mut leader_links, chains);
+        self.effect_links(leader_layer, leader_at, &mut leader_links, chains);
         let mut follower_links = Links::new();
-        self.node_links(at.node, &mut follower_links, nesting)
+        self.node_links(at.node, &mut follower_links, chains)
             .map_err(|Unattached| Unresolved::Hidden)?;
-        self.content_links(at.node, at.entry, &mut follower_links, nesting);
+        self.content_links(at.node, at.entry, &mut follower_links, chains);
         let leader_ctm = product(&leader_links)?;
         let follower_ctm = product(&follower_links)?;
         let linked = follower.linked_offset(leader.size());

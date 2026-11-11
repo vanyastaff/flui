@@ -537,7 +537,8 @@ fn damage_meeting_a_foreground_blur_takes_its_footprint() {
 
 /// A foreground transform filter draws its children where the transform
 /// sends them: moved 100 px right, a child over 100..150 shows over
-/// 200..250, a texel past for a bilinear read. Damage there takes that
+/// 200..250, with half a source pixel of bilinear read and a pixel past it.
+/// Damage there takes that
 /// footprint; damage over the child's own place, which no longer shows it,
 /// stays small.
 #[test]
@@ -569,7 +570,7 @@ fn a_foreground_transforms_footprint_follows_its_moved_content() {
     differ.diff(&build(&moving, Offset::new(220.0, 120.0)), SURFACE);
     assert_eq!(
         partial(differ.diff(&build(&moving, Offset::new(220.0, 124.0)), SURFACE)),
-        covering(199.0, 99.0, 251.0, 151.0)
+        covering(198.5, 98.5, 251.5, 151.5)
     );
 }
 

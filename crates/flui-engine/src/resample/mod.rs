@@ -126,12 +126,12 @@ impl ResampleFilter {
         }
     }
 
-    /// How far past a sample point the texels it reads reach: half a texel
-    /// for a bilinear read, none for a nearest one.
+    /// How far past a sample point the texels it reads reach, as
+    /// [`ImageSampling::reach`] gives it.
     pub(crate) fn reach(self) -> f64 {
         match self {
-            Self::Nearest => 0.0,
-            Self::Linear => 0.5,
+            Self::Nearest => ImageSampling::Nearest.reach(),
+            Self::Linear => ImageSampling::Linear.reach(),
         }
     }
 

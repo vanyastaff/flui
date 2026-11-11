@@ -334,6 +334,14 @@ fn scene_patch_damage() {
                 d::an_unattached_leader_never_shadows_the_attached_one,
             ),
             (
+                "a_magnifier_damages_its_sampling_fringe",
+                d::a_magnifier_damages_its_sampling_fringe,
+            ),
+            (
+                "a_follower_at_the_nesting_limit_damages_what_it_draws",
+                d::a_follower_at_the_nesting_limit_damages_what_it_draws,
+            ),
+            (
                 "a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it",
                 d::a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it,
             ),

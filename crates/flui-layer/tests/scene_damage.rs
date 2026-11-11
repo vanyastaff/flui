@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use flui_foundation::{LayerId, RenderId, SurfaceGeneration};
 use flui_layer::{
     BackdropFilterLayer, BoundaryContent, Chunk, ClipRectLayer, Closure, ContentToken,
@@ -285,6 +285,101 @@ pub(crate) fn an_unattached_leader_never_shadows_the_attached_one() {
     let mut writer = owner.writer();
     writer.push(place(p, 300.0, 300.0));
     owner.apply(SURFACE).expect("the attached leader moves");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(100.0, 100.0, 120.0, 120.0)),
+        "{damage:?}"
+    );
+    assert!(
+        covered(&damage, covering(300.0, 300.0, 320.0, 320.0)),
+        "{damage:?}"
+    );
+}
+
+/// A magnifier's bilinear read reaches half a source pixel past its source
+/// before the map spreads it: a 10× linear magnifier over 10..20 draws
+/// 95..205, and moving it damages all of that.
+pub(crate) fn a_magnifier_damages_its_sampling_fringe() {
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let lens = writer.mint_node();
+    let version = writer.next_content_version().expect("a version");
+    let mut content = BoundaryContent::builder();
+    content.push_effect(
+        Layer::from(ImageFilterLayer::new(
+            ImageFilter::try_magnify(Point::new(0.0, 0.0), 10.0).expect("a finite magnifier"),
+        )),
+        RenderId::new(1),
+        0,
+    );
+    content.chunk(chunk(1, version, Rect::from_ltrb(10.0, 10.0, 20.0, 20.0)));
+    writer.push(publish(lens, content.finish()));
+    let mut top = BoundaryContent::builder();
+    top.slot(lens);
+    writer.push(publish(root, top.finish()));
+    owner.apply(SURFACE).expect("a magnifier at the origin");
+
+    let mut writer = owner.writer();
+    writer.push(place(lens, 300.0, 0.0));
+    owner.apply(SURFACE).expect("the magnifier moves");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(95.0, 95.0, 205.0, 205.0)),
+        "{damage:?}"
+    );
+    assert!(
+        covered(&damage, covering(395.0, 95.0, 505.0, 205.0)),
+        "{damage:?}"
+    );
+}
+
+/// Footprints count follower nesting as the renderer does: the follower
+/// that draws resolves at depth 0, so a chain of seventeen followers, each
+/// leader after the first inside the follower before it, still draws, and
+/// moving the first leader damages it.
+pub(crate) fn a_follower_at_the_nesting_limit_damages_what_it_draws() {
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let (p, anchor) = (writer.mint_node(), writer.mint_node());
+    let links: Vec<LayerLink> = (0..17).map(|_| LayerLink::new()).collect();
+    let leader = |link: LayerLink| Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0)));
+    let mut first = BoundaryContent::builder();
+    first.push_effect(leader(links[0]), RenderId::new(1), 0);
+    writer.push(publish(anchor, first.finish()));
+    let mut holding = BoundaryContent::builder();
+    holding.slot(anchor);
+    writer.push(publish(p, holding.finish()));
+    let version = writer.next_content_version().expect("a version");
+    let mut top = BoundaryContent::builder();
+    top.slot(p);
+    for (ordinal, pair) in (0_u32..).step_by(2).zip(links.windows(2)) {
+        top.push_effect(
+            Layer::from(FollowerLayer::new(pair[0])),
+            RenderId::new(2),
+            ordinal,
+        );
+        top.push_effect(leader(pair[1]), RenderId::new(2), ordinal + 1);
+        top.pop_effect();
+        top.pop_effect();
+    }
+    top.push_effect(
+        Layer::from(FollowerLayer::new(links[16])),
+        RenderId::new(2),
+        100,
+    );
+    top.chunk(chunk(2, version, Rect::from_xywh(0.0, 0.0, 20.0, 20.0)));
+    top.pop_effect();
+    writer.push(publish(root, top.finish()));
+    writer.push(place(p, 100.0, 100.0));
+    owner
+        .apply(SURFACE)
+        .expect("seventeen followers chained through their leaders");
+
+    let mut writer = owner.writer();
+    writer.push(place(p, 300.0, 300.0));
+    owner.apply(SURFACE).expect("the first leader moves");
     let damage = rects(owner.patch_damage());
     assert!(
         covered(&damage, covering(100.0, 100.0, 120.0, 120.0)),
