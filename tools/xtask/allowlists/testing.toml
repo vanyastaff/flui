@@ -6,16 +6,6 @@ reason = "written before the testing gate: each helper moves into its layer's ki
 exit = "ADR-0243"
 
 [[allow]]
-path = "crates/flui-animation/src/run_future_recovery.rs"
-kind = "double"
-names = ["ProbeWake"]
-
-[[allow]]
-path = "crates/flui-animation/tests/contracts/animated_value.rs"
-kind = "double"
-names = ["ProbeWake"]
-
-[[allow]]
 path = "crates/flui-animation/tests/support/motion_trace.rs"
 kind = "pump"
 names = ["advance"]
@@ -184,11 +174,6 @@ names = ["RecordingBridge"]
 path = "crates/flui-scheduler/tests/async_driver_unwind.rs"
 kind = "double"
 names = ["ProbeFuture"]
-
-[[allow]]
-path = "crates/flui-scheduler/tests/frame_completion_recovery.rs"
-kind = "double"
-names = ["Probe"]
 
 [[allow]]
 path = "crates/flui-view/benches/shared/mock_node.rs"

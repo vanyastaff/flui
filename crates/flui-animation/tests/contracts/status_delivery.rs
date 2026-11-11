@@ -12,7 +12,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use crate::child_process;
@@ -20,6 +20,7 @@ use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
     DrivenController, ProxyAnimation, StatusCallback, StatusSubscription, Vsync, curve::Curve,
 };
+use flui_foundation::testing::CountingWaker;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
 enum Subscription {
     Value(flui_foundation::Subscription),
@@ -1340,21 +1341,6 @@ fn completed_run_capture_custody(explicit: bool) {
     lifecycle.dispose();
 }
 
-struct CapturingWaiter {
-    _captures: Captures,
-    calls: Arc<AtomicUsize>,
-}
-
-impl Wake for CapturingWaiter {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
 fn status_failure_drops_completed_run_waiter() {
     completed_run_waiter_custody(false);
 }
@@ -1365,16 +1351,18 @@ fn completed_run_waiter_custody(explicit: bool) {
     let controller = lifecycle.controller().clone();
     fail_on_completion(&controller);
     let drops = Arc::new(AtomicUsize::new(0));
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = CountingWaker::new().shared();
     let mut run = Box::pin(controller.forward().expect("waited run starts"));
     {
-        let waker = Waker::from(Arc::new(CapturingWaiter {
-            _captures: Captures {
+        // The count is its own waker so the test reads it once the capturing waker is gone.
+        let count = calls.waker();
+        let waker = CountingWaker::calling(move || count.wake_by_ref())
+            .holding(Captures {
                 _first: DropCount(Arc::clone(&drops)),
                 _second: DropCount(Arc::clone(&drops)),
-            },
-            calls: Arc::clone(&calls),
-        }));
+            })
+            .shared()
+            .waker();
         assert!(matches!(
             run.as_mut().poll(&mut Context::from_waker(&waker)),
             Poll::Pending
@@ -1389,14 +1377,14 @@ fn completed_run_waiter_custody(explicit: bool) {
     }))
     .expect_err("status failure");
     assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.count(), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 2);
     assert!(matches!(
         run.as_mut().poll(&mut Context::from_waker(Waker::noop())),
         Poll::Ready(Ok(()))
     ));
     controller.tick_at(std::time::Duration::from_secs_f64(2.0));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.count(), 1);
     lifecycle.dispose();
 }
 

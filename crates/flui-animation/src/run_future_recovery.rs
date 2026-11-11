@@ -1,12 +1,13 @@
 //! Consumer-visible continuation ownership and terminal waiter recovery.
 use super::AnimationRunFuture;
+use flui_foundation::testing::CountingWaker;
 use std::future::Future;
 use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 struct Bomb(Arc<AtomicUsize>);
@@ -21,27 +22,6 @@ impl Drop for Counted {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::Relaxed);
     }
-}
-struct ProbeWake {
-    calls: Arc<AtomicUsize>,
-    action: Box<dyn Fn() + Send + Sync>,
-    _retirement: Option<Bomb>,
-}
-impl Wake for ProbeWake {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.calls.fetch_add(1, Ordering::Relaxed);
-        (self.action)();
-    }
-}
-fn waker(calls: &Arc<AtomicUsize>, action: impl Fn() + Send + Sync + 'static) -> Waker {
-    Waker::from(Arc::new(ProbeWake {
-        calls: Arc::clone(calls),
-        action: Box::new(action),
-        _retirement: None,
-    }))
 }
 fn register(future: &mut AnimationRunFuture, waker: &Waker) {
     assert!(
@@ -60,11 +40,11 @@ fn assert_failure(result: std::thread::Result<()>, expected: &str) {
 }
 fn assert_next_run() {
     let (completer, mut future) = AnimationRunFuture::pending();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let wake = waker(&calls, || {});
+    let calls = CountingWaker::new().shared();
+    let wake = calls.waker();
     register(&mut future, &wake);
     completer.complete().deliver();
-    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(calls.count(), 1);
     assert_eq!(
         Pin::new(&mut future).poll(&mut Context::from_waker(&wake)),
         Poll::Ready(Ok(()))
@@ -82,8 +62,8 @@ fn competing_payloads(mode: &str) {
     future.when_complete_or_cancel(move |_| {
         tail_calls.fetch_add(1, Ordering::Relaxed);
     });
-    let wakes = Arc::new(AtomicUsize::new(0));
-    let wake = waker(&wakes, || {});
+    let wakes = CountingWaker::new().shared();
+    let wake = wakes.waker();
     register(&mut future, &wake);
     let result = catch_unwind(AssertUnwindSafe(|| match mode {
         "complete" => completer.complete().deliver(),
@@ -105,7 +85,7 @@ fn competing_payloads(mode: &str) {
         },
     );
     assert_eq!(tail.load(Ordering::Relaxed), 1);
-    assert_eq!(wakes.load(Ordering::Relaxed), 1);
+    assert_eq!(wakes.count(), 1);
     let terminal = Pin::new(&mut future).poll(&mut Context::from_waker(&wake));
     if matches!(mode, "complete" | "drop delivery") {
         assert_eq!(terminal, Poll::Ready(Ok(())));
@@ -173,17 +153,24 @@ fn waiter_failure_keeps_later_waiters_live(primary: bool, retirement: bool) {
     if primary {
         first.when_complete_or_cancel(|_| panic!("primary continuation"));
     }
-    let first_calls = Arc::new(AtomicUsize::new(0));
-    let later_calls = Arc::new(AtomicUsize::new(0));
+    // The test reads the count after the waker's retirement ran, so the counter is a second
+    // waker the probe forwards to: the probe itself is held by nothing but its `Waker`.
+    let first_calls = CountingWaker::new().shared();
+    let later_calls = CountingWaker::new().shared();
     let drops = Arc::new(AtomicUsize::new(0));
-    let first_waker = Waker::from(Arc::new(ProbeWake {
-        calls: Arc::clone(&first_calls),
-        action: Box::new(move || {
-            assert!(retirement, "waker failure");
-        }),
-        _retirement: retirement.then(|| Bomb(Arc::clone(&drops))),
-    }));
-    let later_waker = waker(&later_calls, || {});
+    let first_count = first_calls.waker();
+    let probe = CountingWaker::calling(move || {
+        first_count.wake_by_ref();
+        assert!(retirement, "waker failure");
+    });
+    let first_waker = if retirement {
+        probe.holding(Bomb(Arc::clone(&drops)))
+    } else {
+        probe
+    }
+    .shared()
+    .waker();
+    let later_waker = later_calls.waker();
     register(&mut first, &first_waker);
     register(&mut later, &later_waker);
     drop(first_waker);
@@ -197,8 +184,8 @@ fn waiter_failure_keeps_later_waiters_live(primary: bool, retirement: bool) {
             "waker failure"
         },
     );
-    assert_eq!(first_calls.load(Ordering::Relaxed), 1);
-    assert_eq!(later_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(first_calls.count(), 1);
+    assert_eq!(later_calls.count(), 1);
     assert_eq!(drops.load(Ordering::Relaxed), usize::from(retirement));
     assert_eq!(
         Pin::new(&mut later).poll(&mut Context::from_waker(&later_waker)),
@@ -211,13 +198,13 @@ fn independent_replaced_and_dropped_waiters() {
     let (completer, mut first) = AnimationRunFuture::pending();
     let mut second = first.clone();
     let mut dropped = first.clone();
-    let old_calls = Arc::new(AtomicUsize::new(0));
-    let new_calls = Arc::new(AtomicUsize::new(0));
-    let second_calls = Arc::new(AtomicUsize::new(0));
-    let dropped_calls = Arc::new(AtomicUsize::new(0));
-    let old = waker(&old_calls, || {});
-    let replacement = waker(&new_calls, || {});
-    let sibling = waker(&second_calls, || {});
+    let old_calls = CountingWaker::new().shared();
+    let new_calls = CountingWaker::new().shared();
+    let second_calls = CountingWaker::new().shared();
+    let dropped_calls = CountingWaker::new().shared();
+    let old = old_calls.waker();
+    let replacement = new_calls.waker();
+    let sibling = second_calls.waker();
     struct ReleasedResource(Arc<AtomicUsize>);
     impl Drop for ReleasedResource {
         fn drop(&mut self) {
@@ -226,9 +213,13 @@ fn independent_replaced_and_dropped_waiters() {
     }
     let released = Arc::new(AtomicUsize::new(0));
     let resource = ReleasedResource(Arc::clone(&released));
-    let canceled = waker(&dropped_calls, move || {
-        let _keep = &resource;
-    });
+    // The resource goes with the waker the future drops; the counter is a separate waker it
+    // forwards to, so the test can read it after that waker is gone.
+    let dropped_count = dropped_calls.waker();
+    let canceled = CountingWaker::calling(move || dropped_count.wake_by_ref())
+        .holding(resource)
+        .shared()
+        .waker();
     register(&mut first, &old);
     register(&mut first, &replacement);
     register(&mut first, &replacement);
@@ -242,10 +233,10 @@ fn independent_replaced_and_dropped_waiters() {
         "a dropped waiter releases its registration immediately"
     );
     completer.complete().deliver();
-    assert_eq!(old_calls.load(Ordering::Relaxed), 0);
-    assert_eq!(new_calls.load(Ordering::Relaxed), 1);
-    assert_eq!(second_calls.load(Ordering::Relaxed), 1);
-    assert_eq!(dropped_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(old_calls.count(), 0);
+    assert_eq!(new_calls.count(), 1);
+    assert_eq!(second_calls.count(), 1);
+    assert_eq!(dropped_calls.count(), 0);
     assert_next_run();
 }
 
@@ -257,8 +248,7 @@ fn inline_wake_can_poll_and_drop_its_future() {
     let (completer, future) = AnimationRunFuture::pending();
     FUTURE.with(|slot| *slot.borrow_mut() = Some(future));
     let owner_thread = std::thread::current().id();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let wake = waker(&calls, move || {
+    let calls = CountingWaker::calling(move || {
         assert_eq!(owner_thread, std::thread::current().id());
         let mut future = FUTURE
             .with(|slot| slot.borrow_mut().take())
@@ -268,10 +258,12 @@ fn inline_wake_can_poll_and_drop_its_future() {
             Poll::Ready(Ok(()))
         );
         drop(future);
-    });
+    })
+    .shared();
+    let wake = calls.waker();
     FUTURE.with(|slot| register(slot.borrow_mut().as_mut().expect("live future"), &wake));
     completer.complete().deliver();
-    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(calls.count(), 1);
     FUTURE.with(|slot| assert!(slot.borrow().is_none()));
     assert_next_run();
 }
@@ -303,10 +295,7 @@ fn replaced_waker_retirement_can_reenter_registration() {
         owner_thread: std::thread::current().id(),
         calls: Arc::clone(&retired),
     };
-    let calls = Arc::new(AtomicUsize::new(0));
-    let old = waker(&calls, move || {
-        let _keep = &capture;
-    });
+    let old = CountingWaker::new().holding(capture).shared().waker();
     register(&mut future, &old);
     drop(old);
     register(&mut future, Waker::noop());
@@ -319,8 +308,8 @@ fn replaced_waker_retirement_can_reenter_registration() {
 fn publication_and_registration_orderings() {
     for publish_first in [false, true] {
         let (completer, mut future) = AnimationRunFuture::pending();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let wake = waker(&calls, || {});
+        let calls = CountingWaker::new().shared();
+        let wake = calls.waker();
         let mut completer = Some(completer);
         if publish_first {
             completer
@@ -334,7 +323,7 @@ fn publication_and_registration_orderings() {
             completer.cancel().deliver();
         }
         if initial.is_pending() {
-            assert_eq!(calls.load(Ordering::Relaxed), 1);
+            assert_eq!(calls.count(), 1);
         }
         assert!(matches!(
             Pin::new(&mut future).poll(&mut Context::from_waker(&wake)),

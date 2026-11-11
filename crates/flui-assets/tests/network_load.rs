@@ -262,28 +262,14 @@ impl Drop for PanicsOnDrop {
 
 /// Counts its wakes, and panics on each when told to, with a payload that
 /// panics again when dropped.
-struct CountingWaker {
-    wakes: std::sync::atomic::AtomicUsize,
-    panics: bool,
-}
-
-impl std::task::Wake for CountingWaker {
-    fn wake(self: std::sync::Arc<Self>) {
-        self.wake_by_ref();
+fn counting_waker(panics: bool) -> std::sync::Arc<flui_foundation::testing::CountingWaker> {
+    use flui_foundation::testing::CountingWaker;
+    if panics {
+        CountingWaker::calling(|| std::panic::panic_any(PanicsOnDrop))
+    } else {
+        CountingWaker::new()
     }
-    fn wake_by_ref(self: &std::sync::Arc<Self>) {
-        self.wakes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if self.panics {
-            std::panic::panic_any(PanicsOnDrop);
-        }
-    }
-}
-
-fn counting_waker(panics: bool) -> std::sync::Arc<CountingWaker> {
-    std::sync::Arc::new(CountingWaker {
-        wakes: std::sync::atomic::AtomicUsize::new(0),
-        panics,
-    })
+    .shared()
 }
 
 /// A held request keeps only the waker of its last poll, and lets it go
@@ -351,11 +337,7 @@ fn a_release_wakes_every_held_request_past_a_panicking_waker() {
     // Its destructor panics: destroyed under containment, as `release` does
     // with the later ones.
     flui_foundation::panic::discard_payload(first);
-    assert_eq!(
-        waker.wakes.load(std::sync::atomic::Ordering::SeqCst),
-        3,
-        "every held request is woken"
-    );
+    assert_eq!(waker.count(), 3, "every held request is woken");
     drop(requests);
 }
 

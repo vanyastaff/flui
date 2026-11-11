@@ -3,12 +3,13 @@
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+
 use std::sync::{Arc, mpsc};
-use std::task::{Context, RawWaker, RawWakerVTable, Wake, Waker};
+use std::task::{Context, RawWaker, RawWakerVTable, Waker};
 use std::thread;
 use std::time::Duration;
 
+use flui_foundation::testing::{CountingWaker, panicking_waker};
 use flui_platform::{Storage, StorageName};
 use flui_testing::storage::MemoryStorage;
 
@@ -74,33 +75,14 @@ fn a_held_copy_polled_with_a_waker_that_reads_the_storage_answers() {
     );
 }
 
-/// A waker that panics when woken.
-struct PanicsOnWake;
-
-impl Wake for PanicsOnWake {
-    fn wake(self: Arc<Self>) {
-        panic!("the first waiting copy's waker panics");
-    }
-}
-
-/// A waker that records being woken.
-#[derive(Default)]
-struct Woken(AtomicBool);
-
-impl Wake for Woken {
-    fn wake(self: Arc<Self>) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-}
-
 #[test]
 fn a_panicking_waker_leaves_the_other_held_copies_woken() {
     let storage = MemoryStorage::new();
     storage.put(&NOTES, "old");
     let held = storage.hold_copies();
-    let panics = Waker::from(Arc::new(PanicsOnWake));
-    let woken = Arc::new(Woken::default());
-    let told = Waker::from(Arc::clone(&woken));
+    let panics = panicking_waker("the first waiting copy's waker panics");
+    let woken = CountingWaker::new().shared();
+    let told = woken.waker();
     let mut first = pin!(storage.copy_aside(&NOTES));
     let mut second = pin!(storage.copy_aside(&NOTES));
     assert!(
@@ -118,10 +100,7 @@ fn a_panicking_waker_leaves_the_other_held_copies_woken() {
 
     let released = catch_unwind(AssertUnwindSafe(|| drop(held)));
     assert!(released.is_err(), "the waker's panic reaches the release");
-    assert!(
-        woken.0.load(Ordering::SeqCst),
-        "the second copy is woken all the same"
-    );
+    assert!(woken.was_woken(), "the second copy is woken all the same");
     assert!(
         second
             .as_mut()
@@ -130,24 +109,17 @@ fn a_panicking_waker_leaves_the_other_held_copies_woken() {
     );
 }
 
-/// A waker that panics with a payload of its own when woken.
-struct PanicsSecond;
-
-impl Wake for PanicsSecond {
-    fn wake(self: Arc<Self>) {
-        panic!("the second waiting copy's waker panics");
-    }
-}
-
 #[test]
 fn competing_waker_panics_keep_the_first_and_wake_the_rest() {
     let storage = MemoryStorage::new();
     storage.put(&NOTES, "old");
     let held = storage.hold_copies();
-    let first_waker = Waker::from(Arc::new(PanicsOnWake));
-    let second_waker = Waker::from(Arc::new(PanicsSecond));
-    let woken = Arc::new(Woken::default());
-    let third_waker = Waker::from(Arc::clone(&woken));
+    let first_waker = CountingWaker::calling(|| panic!("the first waiting copy's waker panics"))
+        .shared()
+        .waker();
+    let second_waker = panicking_waker("the second waiting copy's waker panics");
+    let woken = CountingWaker::new().shared();
+    let third_waker = woken.waker();
     let mut first = pin!(storage.copy_aside(&NOTES));
     let mut second = pin!(storage.copy_aside(&NOTES));
     let mut third = pin!(storage.copy_aside(&NOTES));
@@ -166,8 +138,5 @@ fn competing_waker_panics_keep_the_first_and_wake_the_rest() {
         Some(&"the first waiting copy's waker panics"),
         "the first failure is the one resumed"
     );
-    assert!(
-        woken.0.load(Ordering::SeqCst),
-        "the third copy is woken all the same"
-    );
+    assert!(woken.was_woken(), "the third copy is woken all the same");
 }

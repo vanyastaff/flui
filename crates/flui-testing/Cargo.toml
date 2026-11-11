@@ -119,6 +119,8 @@ rustc-hash = { workspace = true }
 
 [dev-dependencies]
 static_assertions.workspace = true
+# `CountingWaker` and `panicking_waker` for tests that count or fail a waker.
+flui-foundation = { workspace = true, features = ["testing"] }
 # The headless backend whose windows the conformance checks run against.
 flui-native = { workspace = true }
 # Enable flui-view's `testing` feature in test builds so the layout-builder

@@ -533,17 +533,8 @@ impl Drop for PanicOnDrop {
     }
 }
 
-/// Counts its wakes.
-struct CountingWaker(std::sync::atomic::AtomicUsize);
-
-impl std::task::Wake for CountingWaker {
-    fn wake(self: std::sync::Arc<Self>) {
-        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
 pub(crate) fn a_capture_panicking_at_teardown_reaches_the_runtime_owner() {
-    use std::task::{Context, Poll, Waker};
+    use std::task::{Context, Poll};
 
     let mut host = HeadlessHost::new(window());
     host.clipboard().hold_reads();
@@ -552,8 +543,8 @@ pub(crate) fn a_capture_panicking_at_teardown_reaches_the_runtime_owner() {
     clipboard.read_text().on_complete(move |_| {
         let _ = &capture;
     });
-    let woken = std::sync::Arc::new(CountingWaker(std::sync::atomic::AtomicUsize::new(0)));
-    let waker = Waker::from(std::sync::Arc::clone(&woken));
+    let woken = flui_foundation::testing::CountingWaker::new().shared();
+    let waker = woken.waker();
     let mut later = std::pin::pin!(clipboard.read_text().into_future());
     assert_eq!(
         later.as_mut().poll(&mut Context::from_waker(&waker)),
@@ -567,7 +558,7 @@ pub(crate) fn a_capture_panicking_at_teardown_reaches_the_runtime_owner() {
         Some(&"capture dropped at teardown")
     );
     assert_eq!(
-        woken.0.load(std::sync::atomic::Ordering::SeqCst),
+        woken.count(),
         1,
         "the read after the panicking one is still woken"
     );

@@ -1,4 +1,5 @@
 //! Public transport delivery, cancellation and executor recovery contracts.
+use flui_foundation::testing::CountingWaker;
 use flui_platform::data_transfer::{
     TransferCompleter, TransferError, TransferPayload, TransferRequest,
 };
@@ -94,30 +95,22 @@ impl Drop for Bomb {
         panic!("capture retirement");
     }
 }
-struct Executor {
-    calls: Arc<AtomicUsize>,
-    fail: bool,
-    _captures: Vec<Bomb>,
-}
-impl Wake for Executor {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        assert!(!self.fail, "wake secondary");
-    }
-}
-fn executor(calls: &Arc<AtomicUsize>, fail: bool, captures: Vec<Bomb>) -> Waker {
-    Waker::from(Arc::new(Executor {
-        calls: Arc::clone(calls),
-        fail,
-        _captures: captures,
-    }))
+/// A waker that counts into `calls`, panics when `fail`, and keeps `captures` until it is
+/// dropped. The count is a waker of its own, so a test reads it after the captures'
+/// destructors ran.
+fn executor(calls: &Arc<CountingWaker>, fail: bool, captures: Vec<Bomb>) -> Waker {
+    let count = calls.waker();
+    CountingWaker::calling(move || {
+        count.wake_by_ref();
+        assert!(!fail, "wake secondary");
+    })
+    .holding(captures)
+    .shared()
+    .waker()
 }
 fn clone_failure_preserves_registration() {
     let (mut request, completer) = TransferRequest::pending();
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = CountingWaker::new().shared();
     let previous = executor(&calls, false, vec![]);
     assert!(poll(&mut request, &previous).is_pending());
     let failing = cloning_waker(|| panic!("clone primary"));
@@ -128,14 +121,14 @@ fn clone_failure_preserves_registration() {
         "clone primary",
     );
     completer.complete(Ok(TransferPayload::Text("survived".into())));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.count(), 1);
     assert_text(&mut request, "survived");
     next_request();
 }
 fn wake_failure_destroys_the_waker_and_keeps_delivery() {
     let (mut request, completer) = TransferRequest::pending();
     let drops = Arc::new(AtomicUsize::new(0));
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = CountingWaker::new().shared();
     let waker = executor(&calls, true, vec![Bomb(Arc::clone(&drops))]);
     assert!(poll(&mut request, &waker).is_pending());
     drop(waker);
@@ -145,7 +138,7 @@ fn wake_failure_destroys_the_waker_and_keeps_delivery() {
         })),
         "wake secondary",
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.count(), 1);
     assert_eq!(
         drops.load(Ordering::SeqCst),
         1,
@@ -156,7 +149,7 @@ fn wake_failure_destroys_the_waker_and_keeps_delivery() {
 }
 fn owner_disconnect_during_unwind_preserves_primary() {
     let (mut request, completer) = TransferRequest::pending();
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = CountingWaker::new().shared();
     let waker = executor(&calls, true, vec![]);
     assert!(poll(&mut request, &waker).is_pending());
     drop(waker);
@@ -167,7 +160,7 @@ fn owner_disconnect_during_unwind_preserves_primary() {
         })),
         "producer primary",
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.count(), 1);
     assert!(matches!(
         poll(&mut request, Waker::noop()),
         Poll::Ready(Err(TransferError::SourceGone))
@@ -176,7 +169,7 @@ fn owner_disconnect_during_unwind_preserves_primary() {
 }
 fn cancellation_during_unwind_preserves_primary() {
     let (mut request, completer) = TransferRequest::pending();
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = CountingWaker::new().shared();
     let waker = executor(&calls, true, vec![]);
     assert!(poll(&mut request, &waker).is_pending());
     drop(waker);
@@ -194,7 +187,7 @@ fn cancellation_during_unwind_preserves_primary() {
 fn cancellation_wake_failure_preserves_cancelled_state() {
     let (mut request, completer) = TransferRequest::pending();
     let drops = Arc::new(AtomicUsize::new(0));
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = CountingWaker::new().shared();
     let waker = executor(&calls, true, vec![Bomb(Arc::clone(&drops))]);
     assert!(poll(&mut request, &waker).is_pending());
     drop(waker);
@@ -203,7 +196,7 @@ fn cancellation_wake_failure_preserves_cancelled_state() {
         "wake secondary",
     );
     assert!(completer.is_cancelled());
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.count(), 1);
     assert_eq!(
         drops.load(Ordering::SeqCst),
         1,

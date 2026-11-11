@@ -1014,21 +1014,6 @@ impl Drop for TerminalResult {
     }
 }
 
-struct TerminalWake(
-    #[expect(
-        dead_code,
-        reason = "the waker owns this destructor probe without reading it"
-    )]
-    TerminalResult,
-);
-#[expect(
-    clippy::manual_noop_waker,
-    reason = "this waker owns a hostile destructor probe that Waker::noop cannot carry"
-)]
-impl std::task::Wake for TerminalWake {
-    fn wake(self: Arc<Self>) {}
-}
-
 struct TerminalRoute {
     settings: flui_widgets::RouteSettings,
     _retirement: TerminalBomb,
@@ -1048,7 +1033,7 @@ impl flui_widgets::NavigatorRoute for TerminalRoute {
 fn terminal_route_record_destroys_pending_waker() {
     use std::future::Future as _;
     use std::pin::Pin;
-    use std::task::{Context, Poll, Waker};
+    use std::task::{Context, Poll};
     let navigator = NavigatorHandle::new();
     let route = TerminalBomb::new("route owner");
     let route_calls = Rc::clone(&route.calls);
@@ -1058,7 +1043,10 @@ fn terminal_route_record_destroys_pending_waker() {
     });
     let wake = TerminalResult::new("pending waker", false);
     let wake_calls = Arc::clone(&wake.calls);
-    let waker = Waker::from(Arc::new(TerminalWake(wake)));
+    let waker = flui_foundation::testing::CountingWaker::new()
+        .holding(wake)
+        .shared()
+        .waker();
     assert_eq!(
         Pin::new(&mut result).poll(&mut Context::from_waker(&waker)),
         Poll::Pending
@@ -2264,17 +2252,10 @@ pub(crate) fn a_page_left_without_a_value_resolves_to_none() {
 /// A result still awaited when its router unmounts resolves to `Ok(None)` and
 /// wakes its task, so no caller waits for a page that can no longer leave.
 pub(crate) fn an_unmounted_router_resolves_its_pending_results_to_none() {
+    use flui_foundation::testing::CountingWaker;
     use std::future::Future;
     use std::pin::Pin;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::task::{Context, Poll, Wake, Waker};
-
-    struct CountWakes(AtomicUsize);
-    impl Wake for CountWakes {
-        fn wake(self: Arc<Self>) {
-            self.0.fetch_add(1, Ordering::Relaxed);
-        }
-    }
+    use std::task::{Context, Poll};
 
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
@@ -2282,17 +2263,13 @@ pub(crate) fn an_unmounted_router_resolves_its_pending_results_to_none() {
         .push_for_result::<u32>(AppRoute::Note { id: 1 })
         .expect("mounted router");
     settle(&mut laid);
-    let wakes = Arc::new(CountWakes(AtomicUsize::new(0)));
-    let waker = Waker::from(Arc::clone(&wakes));
+    let wakes = CountingWaker::new().shared();
+    let waker = wakes.waker();
     let mut context = Context::from_waker(&waker);
     assert_eq!(Pin::new(&mut result).poll(&mut context), Poll::Pending);
 
     drop((router, home, laid));
-    assert_eq!(
-        wakes.0.load(Ordering::Relaxed),
-        1,
-        "the awaiting task is woken"
-    );
+    assert_eq!(wakes.count(), 1, "the awaiting task is woken");
     assert_eq!(
         Pin::new(&mut result).poll(&mut context),
         Poll::Ready(Ok(None))
@@ -2302,21 +2279,10 @@ pub(crate) fn an_unmounted_router_resolves_its_pending_results_to_none() {
 /// A waker that panics while its router unmounts leaves the other pending
 /// results delivered, and its panic is the one the unmount raises.
 fn a_panicking_waker_leaves_the_other_unmount_results_delivered() {
+    use flui_foundation::testing::CountingWaker;
     use std::future::Future;
     use std::pin::Pin;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::task::{Context, Poll, Wake, Waker};
-
-    struct Wakes {
-        count: AtomicUsize,
-        panics: bool,
-    }
-    impl Wake for Wakes {
-        fn wake(self: Arc<Self>) {
-            self.count.fetch_add(1, Ordering::Relaxed);
-            assert!(!self.panics, "waker failure");
-        }
-    }
+    use std::task::{Context, Poll};
 
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
@@ -2327,16 +2293,10 @@ fn a_panicking_waker_leaves_the_other_unmount_results_delivered() {
         .push_for_result::<u32>(AppRoute::Note { id: 2 })
         .expect("mounted router");
     settle(&mut laid);
-    let failing = Arc::new(Wakes {
-        count: AtomicUsize::new(0),
-        panics: true,
-    });
-    let healthy = Arc::new(Wakes {
-        count: AtomicUsize::new(0),
-        panics: false,
-    });
-    let failing_waker = Waker::from(Arc::clone(&failing));
-    let healthy_waker = Waker::from(Arc::clone(&healthy));
+    let failing = CountingWaker::calling(|| panic!("waker failure")).shared();
+    let healthy = CountingWaker::new().shared();
+    let failing_waker = failing.waker();
+    let healthy_waker = healthy.waker();
     assert_eq!(
         Pin::new(&mut first).poll(&mut Context::from_waker(&failing_waker)),
         Poll::Pending
@@ -2353,12 +2313,8 @@ fn a_panicking_waker_leaves_the_other_unmount_results_delivered() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("waker failure")
     );
-    assert_eq!(failing.count.load(Ordering::Relaxed), 1);
-    assert_eq!(
-        healthy.count.load(Ordering::Relaxed),
-        1,
-        "the other task is woken"
-    );
+    assert_eq!(failing.count(), 1);
+    assert_eq!(healthy.count(), 1, "the other task is woken");
     assert_eq!(first.try_take(), Some(Ok(None)));
     assert_eq!(second.try_take(), Some(Ok(None)));
 }

@@ -5,12 +5,12 @@ use flui_animation::simulation::Simulation;
 use flui_animation::{Animation, AnimationController, DrivenController, MotionClock, Vsync};
 use flui_foundation::Listenable;
 use flui_foundation::panic::{FailureClass, PanicRecovery};
+use flui_foundation::testing::CountingWaker;
 use std::cell::Cell;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 struct FailingCurve(Rc<Cell<bool>>);
@@ -250,18 +250,6 @@ fn reduced_policy_source_failure_preserves_the_run_and_healthy_peer() {
     assert_eq!(healthy.controller().value(), 0.5);
 }
 
-struct FailingWake;
-
-impl Wake for FailingWake {
-    fn wake(self: Arc<Self>) {
-        panic!("terminal delivery");
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        panic!("terminal delivery");
-    }
-}
-
 #[derive(Clone, Copy)]
 enum TerminalDelivery {
     Status,
@@ -291,7 +279,9 @@ fn terminal_delivery(stage: TerminalDelivery) {
             panic!("terminal delivery");
         }),
         TerminalDelivery::Waiter => {
-            let waker = Waker::from(Arc::new(FailingWake));
+            let waker = CountingWaker::calling(|| panic!("terminal delivery"))
+                .shared()
+                .waker();
             assert_eq!(
                 Pin::new(&mut run).poll(&mut Context::from_waker(&waker)),
                 Poll::Pending
