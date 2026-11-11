@@ -75,6 +75,6 @@ impl<V: View, const N: usize> ViewSeq for [V; N] {
 
     #[inline]
     fn into_boxed_vec(self) -> Vec<BoxedView> {
-        self.into_iter().map(ViewExt::boxed).collect()
+        self.into_iter().map(ViewExt::boxed).collect::<Vec<BoxedView>>()
     }
 }
