@@ -9,7 +9,8 @@
   at once.
 - An Android read of a dropped URI's bytes gets five seconds, as on Wayland and X11: past them it
   answers `TransferError::TimedOut`, and the view cancels the provider's open and closes the
-  stream. At most 64 requests wait for one of the four reads; a request past them is refused
+  stream from a thread of its own, so the owner thread never waits on a provider. At most 64
+  requests wait for one of the four reads; a request past them is refused
   `TransferError::Busy`, and a dropped request gives its place in the queue back at once.
 
 ### Added

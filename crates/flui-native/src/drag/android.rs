@@ -332,12 +332,13 @@ mod drops {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use flui_foundation::{DataTransferId, IdMint, geometry::Point};
+    use flui_foundation::{DataTransferId, IdMint, geometry::Point, panic::FirstPanic};
     use flui_platform::DragDropEvent;
     use flui_platform::data_transfer::{
         DataTransferOffer, DropFeedback, RepresentationDescriptor, RepresentationIndex,
         TransferActions, TransferCompleter, TransferError, TransferLimits, TransferRequest,
     };
+    use parking_lot::Mutex;
 
     use super::clip::{ClipSource, ViewRead, delivered, incoming_allowed, offered};
     use crate::drag::offers::OfferTable;
@@ -421,10 +422,10 @@ mod drops {
         /// Requests to answer [`TransferError::TimedOut`]: their read passed
         /// [`READ_TIMEOUT`].
         pub(super) timed_out: Vec<TransferCompleter>,
-        /// Reads whose blocked Java read to unblock (`FluiView.cancelDropRead`):
-        /// they timed out or their offer retired. Each keeps its place until
-        /// its thread ends.
-        pub(super) cancel: Vec<NonZeroU64>,
+        /// Whether the cancel worker must start, which unblocks the Java reads
+        /// queued for it ([`Drops::next_cancel`]) off the owner thread and the
+        /// watch.
+        pub(super) cancel_worker: bool,
         /// Whether a watch must start, which ends the reads that pass their
         /// deadline ([`Drops::expire`]).
         pub(super) watch: bool,
@@ -437,7 +438,7 @@ mod drops {
             self.start.is_empty()
                 && self.gone.is_empty()
                 && self.timed_out.is_empty()
-                && self.cancel.is_empty()
+                && !self.cancel_worker
                 && !self.watch
         }
     }
@@ -468,13 +469,13 @@ mod drops {
     }
 
     impl Reading {
-        /// Stop the read: a thread inside the Java read is unblocked, and one
-        /// that has not entered it finds nothing wanted.
-        fn stop(&mut self, ticket: NonZeroU64, after: &mut After) {
-            if self.entered && !self.cancelled {
-                after.cancel.push(ticket);
-            }
+        /// Stop the read: `true` when its thread is inside the Java read, which
+        /// must be unblocked; one that has not entered it finds nothing
+        /// wanted.
+        fn stop(&mut self) -> bool {
+            let unblock = self.entered && !self.cancelled;
             self.cancelled = true;
+            unblock
         }
     }
 
@@ -503,6 +504,11 @@ mod drops {
         /// The reads waiting for a place, in the order they were asked for, at
         /// most [`MAX_WAITING`].
         waiting: VecDeque<Wanted>,
+        /// Reads whose Java read the cancel worker is to unblock, at most one
+        /// per read holding a place.
+        cancels: VecDeque<NonZeroU64>,
+        /// Whether the cancel worker runs ([`Self::next_cancel`]).
+        cancelling: bool,
         /// Whether a watch runs ([`Self::expire`]).
         watching: bool,
     }
@@ -783,6 +789,8 @@ mod drops {
             after: &mut After,
         ) -> Option<TransferCompleter> {
             let reading = self.reading.remove(&ticket);
+            // Its thread is out of the Java read: nothing is left to unblock.
+            self.cancels.retain(|queued| *queued != ticket);
             self.start_waiting(now, after);
             reading.and_then(|reading| reading.completer)
         }
@@ -794,19 +802,51 @@ mod drops {
         /// next read to start starts another.
         pub(super) fn expire(&mut self, now: Instant, after: &mut After) -> Option<Instant> {
             let mut next: Option<Instant> = None;
+            let mut unblock = Vec::new();
             for (ticket, reading) in &mut self.reading {
                 if reading.cancelled {
                     continue;
                 }
                 if reading.deadline <= now {
                     after.timed_out.extend(reading.completer.take());
-                    reading.stop(*ticket, after);
+                    if reading.stop() {
+                        unblock.push(*ticket);
+                    }
                 } else {
                     next = Some(next.map_or(reading.deadline, |next| next.min(reading.deadline)));
                 }
             }
             self.watching = next.is_some();
+            self.queue_cancels(unblock, after);
             next
+        }
+
+        /// Queue `tickets` for the cancel worker, starting it through `after`
+        /// when none runs.
+        fn queue_cancels(&mut self, tickets: Vec<NonZeroU64>, after: &mut After) {
+            self.cancels.extend(tickets);
+            if !self.cancelling && !self.cancels.is_empty() {
+                self.cancelling = true;
+                after.cancel_worker = true;
+            }
+        }
+
+        /// The cancel worker's next read to unblock; `None` ends the worker,
+        /// and the next read stopped inside its Java read starts another.
+        pub(super) fn next_cancel(&mut self) -> Option<NonZeroU64> {
+            let next = self.cancels.pop_front();
+            self.cancelling = next.is_some();
+            next
+        }
+
+        /// The cancel worker could not start: the next read stopped tries
+        /// again.
+        #[cfg_attr(
+            not(target_os = "android"),
+            expect(dead_code, reason = "the JNI side starts the cancel worker")
+        )]
+        pub(super) fn uncancel(&mut self) {
+            self.cancelling = false;
         }
 
         /// The watch could not start: the next read to start tries again.
@@ -834,10 +874,13 @@ mod drops {
         pub(super) fn conclude(&mut self, id: DataTransferId, after: &mut After) -> bool {
             let taken = self.dropped.contains_key(&id);
             self.close(id);
+            let mut unblock = Vec::new();
             for (ticket, reading) in &mut self.reading {
                 if reading.id == id {
                     after.gone.extend(reading.completer.take());
-                    reading.stop(*ticket, after);
+                    if reading.stop() {
+                        unblock.push(*ticket);
+                    }
                 }
             }
             let (gone, kept): (VecDeque<Wanted>, VecDeque<Wanted>) =
@@ -848,6 +891,7 @@ mod drops {
             after
                 .gone
                 .extend(gone.into_iter().map(|wanted| wanted.completer));
+            self.queue_cancels(unblock, after);
             taken
         }
 
@@ -861,6 +905,50 @@ mod drops {
         pub(super) fn take_local_drop(&mut self) -> Option<TransferActions> {
             self.local_drop.take()
         }
+    }
+
+    /// The watch over the running reads, on a thread of its own: at each
+    /// deadline the reads past it time out ([`Drops::expire`]), `run` does
+    /// what that left with the drops unlocked, and `sleep` waits for the next
+    /// deadline read from `now`. It ends when no read is left to time, which
+    /// clears the watch's flag under the lock. A panic in `run` (a waker's,
+    /// a subscriber's) is held while the watch goes on, so no later deadline
+    /// is missed, and raised once it has ended.
+    pub(super) fn watch(
+        drops: &Mutex<Drops>,
+        now: impl Fn() -> Instant,
+        sleep: impl Fn(Instant),
+        mut run: impl FnMut(After),
+    ) {
+        let mut failure = FirstPanic::new();
+        loop {
+            let mut after = After::default();
+            let next = drops.lock().expire(now(), &mut after);
+            failure.contain(|| run(after));
+            let Some(next) = next else {
+                break;
+            };
+            sleep(next);
+        }
+        failure.resume();
+    }
+
+    /// The cancel worker, on a thread of its own: `cancel` unblocks each read
+    /// queued for it ([`Drops::next_cancel`]), with the drops unlocked, so a
+    /// cancellation that blocks in a content provider delays neither the
+    /// owner thread nor the watch. It ends when the queue is empty, which
+    /// clears its flag under the lock; a panic in `cancel` is held while the
+    /// rest are unblocked and raised once it has ended.
+    pub(super) fn cancel_all(drops: &Mutex<Drops>, mut cancel: impl FnMut(NonZeroU64)) {
+        let mut failure = FirstPanic::new();
+        loop {
+            let next = drops.lock().next_cancel();
+            let Some(ticket) = next else {
+                break;
+            };
+            failure.contain(|| cancel(ticket));
+        }
+        failure.resume();
     }
 
     #[cfg(test)]
@@ -1053,7 +1141,8 @@ impl DragTransport for AndroidTransfer {
 }
 
 /// Do what a change of `drops` left, with them unlocked: answer the requests
-/// whose offer retired or whose read timed out, unblock their Java reads,
+/// whose offer retired or whose read timed out, start the cancel worker that
+/// unblocks their Java reads,
 /// start each read that found a place on a thread of its own (giving back the
 /// place of one no thread could be started for), and start the watch when one
 /// is wanted. A waker's panic is raised once everything is done.
@@ -1067,11 +1156,19 @@ fn run(drops: &Arc<Mutex<Drops>>, view: &Weak<JavaView>, mut after: After) {
         for completer in std::mem::take(&mut after.timed_out) {
             failure.contain(|| completer.complete(Err(TransferError::TimedOut)));
         }
-        let cancel = std::mem::take(&mut after.cancel);
-        if !cancel.is_empty()
-            && let Some(view) = view.upgrade()
-        {
-            failure.contain(|| cancel_reads(&view, &cancel));
+        if std::mem::take(&mut after.cancel_worker) {
+            let (cancel_drops, cancel_view) = (Arc::clone(drops), Weak::clone(view));
+            let spawned = std::thread::Builder::new()
+                .name("flui-drop-cancel".into())
+                .spawn(move || {
+                    drops::cancel_all(&cancel_drops, |ticket| cancel_read(&cancel_view, ticket));
+                });
+            if let Err(error) = spawned {
+                failure.contain(|| {
+                    tracing::warn!(target: "flui_native::android", %error, "no thread to cancel dropped URI reads");
+                });
+                drops.lock().uncancel();
+            }
         }
         if std::mem::take(&mut after.watch) {
             let (watch_drops, watch_view) = (Arc::clone(drops), Weak::clone(view));
@@ -1103,40 +1200,36 @@ fn run(drops: &Arc<Mutex<Drops>>, view: &Weak<JavaView>, mut after: After) {
     failure.resume();
 }
 
-/// The watch over the running reads: at each deadline the reads past it are
-/// answered `TimedOut` and their Java reads unblocked; it ends when no read
-/// is left to time.
+/// The watch over the running reads ([`drops::watch`]), on the real clock.
 #[cfg(target_os = "android")]
 fn watch(drops: &Arc<Mutex<Drops>>, view: &Weak<JavaView>) {
-    loop {
-        let mut after = After::default();
-        let next = drops.lock().expire(Instant::now(), &mut after);
-        run(drops, view, after);
-        let Some(next) = next else {
-            return;
-        };
-        std::thread::sleep(next.saturating_duration_since(Instant::now()));
-    }
+    drops::watch(
+        drops,
+        Instant::now,
+        |next| std::thread::sleep(next.saturating_duration_since(Instant::now())),
+        |after| run(drops, view, after),
+    );
 }
 
-/// Unblock the Java reads under `tickets` (`FluiView.cancelDropRead`): an
-/// open in progress is cancelled and an open stream closed, which makes a
-/// blocked read throw.
+/// Unblock the Java read under `ticket` (`FluiView.cancelDropRead`): an open
+/// in progress is cancelled and an open stream closed, which makes a blocked
+/// read throw. On the cancel worker, which may block here.
 #[cfg(target_os = "android")]
-fn cancel_reads(view: &JavaView, tickets: &[NonZeroU64]) {
+fn cancel_read(view: &Weak<JavaView>, ticket: NonZeroU64) {
+    let Some(view) = view.upgrade() else {
+        return;
+    };
     let Some(target) = view.view() else {
         return;
     };
     let cancelled = view.attached(|env| {
-        for ticket in tickets {
-            env.call_method(
-                target.as_ref(),
-                jni_str!("cancelDropRead"),
-                jni_sig!("(J)V"),
-                &[JValue::Long(ticket.get().cast_signed())],
-            )?;
-        }
-        Ok(())
+        env.call_method(
+            target.as_ref(),
+            jni_str!("cancelDropRead"),
+            jni_sig!("(J)V"),
+            &[JValue::Long(ticket.get().cast_signed())],
+        )
+        .map(drop)
     });
     if let Err(error) = cancelled {
         tracing::warn!(target: "flui_native::android", %error, "a dropped URI read was not cancelled");

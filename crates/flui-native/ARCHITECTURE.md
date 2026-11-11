@@ -4678,7 +4678,8 @@ feedback. `FluiView` holds a taken drop's `ClipData` and URI permissions under t
 representation from it under its limits (`clip::delivered`): text, HTML and the URI list on the
 requesting thread, a URI's bytes on a thread of their own, at most `drops::MAX_READS` at once,
 answered `SourceGone` when the offer retires first and `TimedOut` past `drops::READ_TIMEOUT`, when
-the view cancels the open and closes the stream (`cancelDropRead`) and the read keeps its place
+the view cancels the open and closes the stream (`cancelDropRead`, on a cancel worker of the
+transport's, so neither the owner thread nor the watch waits on it) and the read keeps its place
 until its thread ends; at most `drops::MAX_WAITING` wait, and past them a request is `Busy`. The view lets go of a refused drop at once,
 and of every held one when it leaves the window. Requests are completed, and reading threads
 started, with the drops unlocked (`drops::After`).

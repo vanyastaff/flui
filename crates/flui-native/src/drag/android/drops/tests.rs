@@ -434,15 +434,16 @@ fn a_read_past_its_deadline_times_out() {
 
     let due = start + READ_TIMEOUT;
     assert_eq!(drops.expire(due, &mut after), Some(later + READ_TIMEOUT));
-    assert_eq!(
-        after.cancel,
-        [running[0].ticket],
-        "its Java read is unblocked"
+    assert!(
+        std::mem::take(&mut after.cancel_worker),
+        "its Java read is unblocked by the cancel worker"
     );
+    assert_eq!(drops.next_cancel(), Some(running[0].ticket));
+    assert_eq!(drops.next_cancel(), None, "the worker ends");
     for completer in std::mem::take(&mut after.timed_out) {
         completer.complete(Err(TransferError::TimedOut));
     }
-    after.cancel.clear();
+
     assert!(matches!(
         poll(&mut first),
         Poll::Ready(Err(TransferError::TimedOut))
@@ -460,10 +461,7 @@ fn a_read_past_its_deadline_times_out() {
         "the watch ends"
     );
     assert_eq!(after.timed_out.len(), MAX_READS - 1);
-    assert!(
-        after.cancel.is_empty(),
-        "no thread entered those Java reads"
-    );
+    assert!(!after.cancel_worker, "no thread entered those Java reads");
     for completer in std::mem::take(&mut after.timed_out) {
         completer.complete(Err(TransferError::TimedOut));
     }
@@ -492,6 +490,164 @@ fn a_read_past_its_deadline_times_out() {
     assert_eq!(drops.expire(late, &mut after), Some(late + READ_TIMEOUT));
     assert!(drops.begin_read(next.ticket));
     assert!(poll(&mut queued).is_pending());
+}
+
+/// Two reads that entered their Java reads, `MAX_READS` placed in all: the
+/// handle the tests keep of them.
+fn entered_reads(
+    drops: &mut Drops,
+    start: Instant,
+    after: &mut After,
+) -> (Vec<TransferRequest>, Vec<UriRead>) {
+    let id = hovering(drops, &["image/png"]);
+    dropped(drops, id);
+    let requests: Vec<TransferRequest> = (0..MAX_READS)
+        .map(|at| {
+            let at = u32::try_from(at).expect("BUG: four reads");
+            wanted(drops, id, start + Duration::from_secs(at.into()), after)
+        })
+        .collect();
+    let running = std::mem::take(&mut after.start);
+    after.watch = false;
+    for read in &running {
+        assert!(drops.begin_read(read.ticket));
+    }
+    (requests, running)
+}
+
+/// A cancellation goes to the cancel worker's queue, never to the thread
+/// that timed the read out or concluded its drop: while the worker is stuck
+/// in one, later deadlines still pass and queue theirs behind it, one worker
+/// at a time. A read whose thread ended takes its cancellation out of the
+/// queue, so the queue holds at most one per place.
+fn a_stalled_cancel_delays_no_deadline() {
+    let mut drops = Drops::default();
+    let start = Instant::now();
+    let mut after = After::default();
+    let (mut requests, running) = entered_reads(&mut drops, start, &mut after);
+
+    drops.expire(start + READ_TIMEOUT, &mut after);
+    assert!(
+        std::mem::take(&mut after.cancel_worker),
+        "the worker starts"
+    );
+    for completer in std::mem::take(&mut after.timed_out) {
+        completer.complete(Err(TransferError::TimedOut));
+    }
+    assert_eq!(
+        drops.next_cancel(),
+        Some(running[0].ticket),
+        "and is stuck in it"
+    );
+
+    let later = start + READ_TIMEOUT + Duration::from_secs(2);
+    drops.expire(later, &mut after);
+    assert!(!after.cancel_worker, "one worker at a time");
+    assert_eq!(after.timed_out.len(), 2, "the later deadlines still pass");
+    for completer in std::mem::take(&mut after.timed_out) {
+        completer.complete(Err(TransferError::TimedOut));
+    }
+    for request in &mut requests[..3] {
+        assert!(matches!(
+            poll(request),
+            Poll::Ready(Err(TransferError::TimedOut))
+        ));
+    }
+
+    drops.finish_read(running[1].ticket, later, &mut after);
+    assert_eq!(
+        drops.next_cancel(),
+        Some(running[2].ticket),
+        "an ended read is not cancelled"
+    );
+    assert_eq!(drops.next_cancel(), None);
+    drops.expire(start + READ_TIMEOUT + Duration::from_secs(3), &mut after);
+    assert!(after.cancel_worker, "the next stop starts the worker again");
+}
+
+/// A panic where the watch runs user code (a waker's, as `run` stands in for
+/// here) does not end the watch: the later deadline still passes, the watch
+/// ends with nothing left to time, its flag is clear for the next read, and
+/// the panic is raised after.
+fn a_panic_in_the_watch_misses_no_deadline() {
+    let drops = std::sync::Arc::new(parking_lot::Mutex::new(Drops::default()));
+    let start = Instant::now();
+    let mut after = After::default();
+    let (mut requests, _running) = entered_reads(&mut drops.lock(), start, &mut after);
+    let watched = std::sync::Arc::clone(&drops);
+    let ended = std::thread::spawn(move || {
+        let clock = std::cell::Cell::new(start);
+        let turns = std::cell::Cell::new(0_u32);
+        super::watch(
+            &watched,
+            || clock.get(),
+            |next| clock.set(next),
+            |mut after| {
+                for completer in std::mem::take(&mut after.timed_out) {
+                    completer.complete(Err(TransferError::TimedOut));
+                }
+                turns.set(turns.get() + 1);
+                assert!(turns.get() != 2, "a waker panics");
+            },
+        );
+    })
+    .join();
+    assert!(ended.is_err(), "the panic is raised once the watch ends");
+    for request in &mut requests {
+        assert!(
+            matches!(poll(request), Poll::Ready(Err(TransferError::TimedOut))),
+            "every deadline passed, those after the panic too"
+        );
+    }
+    let id = hovering(&mut drops.lock(), &["image/png"]);
+    dropped(&mut drops.lock(), id);
+    let mut fresh = After::default();
+    let reading = drops.lock().reading.keys().copied().collect::<Vec<_>>();
+    for ticket in reading {
+        drops.lock().finish_read(ticket, start, &mut fresh);
+    }
+    let _request = wanted(&mut drops.lock(), id, start, &mut fresh);
+    assert!(fresh.watch, "the watch's flag was cleared");
+}
+
+/// A panic in one cancellation does not stop the rest, and the worker's flag
+/// is clear when it ends.
+fn a_panic_in_one_cancel_unblocks_the_rest() {
+    let drops = parking_lot::Mutex::new(Drops::default());
+    let start = Instant::now();
+    let mut after = After::default();
+    let (_requests, running) = entered_reads(&mut drops.lock(), start, &mut after);
+    drops.lock().expire(start + READ_TIMEOUT * 2, &mut after);
+    assert!(after.cancel_worker);
+    let cancelled = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        let ended = scope
+            .spawn(|| {
+                super::cancel_all(&drops, |ticket| {
+                    cancelled.lock().expect("BUG: not poisoned").push(ticket);
+                    assert!(ticket != running[0].ticket, "the first cancel panics");
+                });
+            })
+            .join();
+        assert!(ended.is_err(), "the panic is raised once the worker ends");
+    });
+    let mut cancelled = cancelled.into_inner().expect("BUG: not poisoned");
+    cancelled.sort_unstable();
+    let mut expected: Vec<_> = running.iter().map(|read| read.ticket).collect();
+    expected.sort_unstable();
+    assert_eq!(cancelled, expected, "every read was unblocked");
+    let mut again = After::default();
+    let id = hovering(&mut drops.lock(), &["image/png"]);
+    dropped(&mut drops.lock(), id);
+    for read in &running {
+        drops.lock().finish_read(read.ticket, start, &mut again);
+    }
+    let _request = wanted(&mut drops.lock(), id, start, &mut again);
+    for read in std::mem::take(&mut again.start) {
+        assert!(drops.lock().begin_read(read.ticket));
+    }
+    drops.lock().expire(start + READ_TIMEOUT * 3, &mut again);
+    assert!(again.cancel_worker, "the worker's flag was cleared");
 }
 
 /// FLUI's own drag dropped on its own target reports the action the target
@@ -535,6 +691,18 @@ fn android_drop_state() {
             ),
             ("uri_reads_wait_for_a_place", uri_reads_wait_for_a_place),
             ("waiting_reads_are_bounded", waiting_reads_are_bounded),
+            (
+                "a_stalled_cancel_delays_no_deadline",
+                a_stalled_cancel_delays_no_deadline,
+            ),
+            (
+                "a_panic_in_the_watch_misses_no_deadline",
+                a_panic_in_the_watch_misses_no_deadline,
+            ),
+            (
+                "a_panic_in_one_cancel_unblocks_the_rest",
+                a_panic_in_one_cancel_unblocks_the_rest,
+            ),
             (
                 "a_read_past_its_deadline_times_out",
                 a_read_past_its_deadline_times_out,
