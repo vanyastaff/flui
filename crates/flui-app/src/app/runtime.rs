@@ -183,7 +183,7 @@ pub enum ExitPolicy {
 
 /// What a second top-level window shares with the windows already open on
 /// this thread. Chosen when the window opens
-/// ([`super::runner::open_secondary_window`]); nothing in its widget tree or
+/// (`open_secondary_window`, under `unstable-windows`); nothing in its widget tree or
 /// its `BuildContext` names the policy afterwards.
 ///
 /// FLUI calls the unit a window belongs to a *UI runtime*: its own widget state,

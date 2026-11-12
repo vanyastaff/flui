@@ -113,7 +113,7 @@ await its returned request or poll `try_result` to obtain the window result."
 //!
 #![cfg_attr(not(feature = "unstable-windows"), doc = "```compile_fail,E0432")]
 #![cfg_attr(feature = "unstable-windows", doc = "```no_run")]
-//! use flui::app::WindowPolicy;
+//! use flui::WindowPolicy;
 //! ```
 //!
 //! # Using a design system
