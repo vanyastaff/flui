@@ -25,7 +25,7 @@ platform). `find` builds the same locators the driver and an agent use, over the
 so the test reads what a screen reader reads. A tap lands at the centre of the element's visible
 part through the window's own input path, after the tester checked it is visible, enabled and
 not covered; it returns once the frame after the input ran. An expectation waits while the
-application has a frame or work due, and fails at once, listing what the window shows, when the
+application has a frame or work due now, and fails at once, listing what the window shows, when the
 application is idle: advance the clock yourself with `pump_for` to reach a timer.
 
 A failure names what was looked for and what the window showed instead. A widget that publishes

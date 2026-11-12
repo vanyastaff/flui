@@ -27,7 +27,7 @@ struct in `crates/`.
   screen is composed rather than to what it shows. A widget that publishes no semantics is found
   by the identifier its author gives it (`Semantics::identifier`) and `find::id`. Actions wait for
   their input to land and their frame to run, and an expectation waits while the application has
-  a frame or work due, then fails at once with the window's outline; nothing waits on a clock
+  a frame or work due now, then fails at once with the window's outline; nothing waits on a clock
   the test did not move with `pump_for`. An ambiguous locator fails with its candidates instead
   of tapping the first.
 - **`Router` is the primary navigation API.** Routes are values: a `#[derive(Routable)]` enum

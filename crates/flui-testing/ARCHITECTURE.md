@@ -124,10 +124,15 @@ substrate driver over raw owners, which the raw-owner suites still use.
   holds a `HeadlessHost`, its window's `AgentWindow` and one `InputLease`, and
   nothing else: it finds with `semantics.locate`, checks with
   `element.actionability` and delivers input with `input.inject`, so it
-  hit-tests and walks no tree itself and proves what the driver would. An
-  expectation pumps a frame only while `time_to_next_frame` is within one
-  frame; an idle application fails it at once, so a timer of the application
-  never elapses inside an expectation. `flui::testing` re-exports `Tester`,
+  hit-tests and walks no tree itself and proves what the driver would. Each
+  read first runs the frames due now at zero duration, so its answer comes
+  from the tree that work committed. An expectation pumps a frame only while
+  `time_to_next_frame` is zero (a scheduled frame or pending work); with
+  nothing due now the application is idle and the expectation fails at once,
+  so a timer of the application, however close, never elapses inside an
+  expectation. Tests: `an_expectation_does_not_fire_a_timer_due_within_a_frame`,
+  `an_expectation_does_not_pass_on_the_tree_a_ready_completion_replaced`.
+  `flui::testing` re-exports `Tester`,
   `find`, the protocol's locator and node types and `rendering`, and none of
   this crate's other harnesses.
 - **A headless root is the root a runner attaches.** `HeadlessHost::attach`
