@@ -1,8 +1,11 @@
 # Held by packages/flui-material/tests/perf.rs, which fails when a run costs
-# more; counts, not timings. Lower it by hand from a FLUI_PERF_OUT record.
+# more; counts, not timings. Lower it by hand from a FLUI_PERF_OUT record of
+# the features CI tests with, which change the counts:
+# `FLUI_PERF_OUT=<dir> cargo test --locked --workspace --exclude flui-native
+# --features flui/material,flui/cupertino,flui/native --test perf`.
 
 [ink_well_over_text]
 allocations = 83
-bytes = 11689
+bytes = 11691
 elements = 3
 render_nodes = 2
