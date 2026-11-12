@@ -750,6 +750,21 @@ pub(crate) mod configure {
             assert_eq!(protocol_extent(f64::INFINITY), 0);
             assert_eq!(protocol_extent(-3.0), 0);
         }
+
+        proptest::proptest! {
+            /// A configure's states array and a capabilities announcement read
+            /// as the whole values they hold, whatever the compositor wrote: a
+            /// trailing partial value is ignored and an unknown one skipped,
+            /// without a panic.
+            #[test]
+            fn any_array_reads_as_its_whole_values(
+                raw in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..128),
+            ) {
+                let whole = &raw[..raw.len() / 4 * 4];
+                proptest::prop_assert_eq!(ToplevelStates::decode(&raw), ToplevelStates::decode(whole));
+                proptest::prop_assert_eq!(WmCapabilities::decode(&raw), WmCapabilities::decode(whole));
+            }
+        }
     }
 }
 

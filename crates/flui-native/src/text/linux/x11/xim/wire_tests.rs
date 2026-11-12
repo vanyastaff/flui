@@ -1,3 +1,5 @@
+use proptest::prelude::*;
+
 use super::*;
 
 /// One of each message this client reads or writes.
@@ -187,31 +189,52 @@ fn a_message_longer_than_any_read_is_refused() {
     assert_eq!(Message::decode(&bytes), Err(WireError::TooLong));
 }
 
-/// Bytes from nowhere decode or are refused, without a panic.
-#[test]
-fn any_bytes_decode_or_are_refused() {
-    let mut state = 0x2545_f491_4f6c_dd1d_u64;
-    let mut next = move || {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        state
-    };
-    let majors = [
-        2, 20, 31, 37, 39, 45, 51, 55, 60, 61, 62, 63, 65, 73, 75, 76, 78,
-    ];
-    for _ in 0..20_000 {
-        let len = usize::try_from(next() % 96).expect("BUG: under 96");
-        let mut bytes: Vec<u8> = (0..len).map(|_| next().to_le_bytes()[0]).collect();
-        if let Some(first) = bytes.first_mut() {
-            // Mostly opcodes this client reads.
-            *first = majors[usize::try_from(next()).unwrap_or(0) % majors.len()];
-        }
-        if bytes.len() >= 4 && next() % 4 != 0 {
-            let units = u16::try_from((bytes.len() - 4) / 4).expect("BUG: under 96 bytes");
-            bytes[2..4].copy_from_slice(&units.to_ne_bytes());
-        }
+/// The major opcodes this client reads, which arbitrary messages mostly
+/// carry so their bodies are parsed rather than skipped.
+const READ_MAJORS: [u8; 17] = [
+    2, 20, 31, 37, 39, 45, 51, 55, 60, 61, 62, 63, 65, 73, 75, 76, 78,
+];
+
+/// A message as a server could send it: mostly an opcode this client reads,
+/// mostly a length that matches the bytes, then anything.
+fn arbitrary_message() -> impl Strategy<Value = Vec<u8>> {
+    (
+        proptest::sample::select(READ_MAJORS.to_vec()),
+        any::<bool>(),
+        any::<bool>(),
+        proptest::collection::vec(any::<u8>(), 0..256),
+    )
+        .prop_map(|(major, steer_major, steer_length, mut bytes)| {
+            if steer_major && let Some(first) = bytes.first_mut() {
+                *first = major;
+            }
+            if steer_length && bytes.len() >= 4 {
+                let units = u16::try_from((bytes.len() - 4) / 4).expect("BUG: under 256 bytes");
+                bytes[2..4].copy_from_slice(&units.to_ne_bytes());
+            }
+            bytes
+        })
+}
+
+proptest! {
+    /// Bytes from the X server decode or are refused with a `WireError`,
+    /// without a panic: every length a message names is read against the
+    /// bytes it came in, so no list or string outgrows them.
+    #[test]
+    fn any_bytes_decode_or_are_refused(bytes in arbitrary_message()) {
         let _ = Message::decode(&bytes);
+    }
+
+    /// COMPOUND_TEXT from the server reads as UTF-8 or as `None`, without a
+    /// panic, whatever escapes it carries.
+    #[test]
+    fn any_compound_text_reads_or_is_refused(
+        bytes in proptest::collection::vec(
+            prop_oneof![Just(0x1b_u8), Just(0x24), Just(0x25), Just(0x28), Just(0x29), any::<u8>()],
+            0..64,
+        ),
+    ) {
+        let _ = text_of(&bytes);
     }
 }
 

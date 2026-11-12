@@ -317,3 +317,60 @@ fn ole_drag_drop_contracts() {
         ],
     );
 }
+
+/// Bytes another process put in a clipboard format: anything, or for
+/// `CF_HTML` an offset header with arbitrary offsets ahead of anything.
+fn foreign_bytes() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
+    use proptest::prelude::*;
+    let html = (any::<u32>(), any::<u32>(), any::<u32>(), any::<u32>(), proptest::collection::vec(any::<u8>(), 0..128))
+        .prop_map(|(start_html, end_html, start, end, body)| {
+            let mut bytes = format!(
+                "Version:0.9\r\nStartHTML:{start_html}\r\nEndHTML:{end_html}\r\nStartFragment:{}\r\nEndFragment:{}\r\n",
+                start % 256,
+                end % 256,
+            )
+            .into_bytes();
+            bytes.extend_from_slice(&body);
+            bytes
+        });
+    prop_oneof![proptest::collection::vec(any::<u8>(), 0..256), html]
+}
+
+proptest::proptest! {
+    /// What another process put in each clipboard format decodes to a
+    /// payload or to `TransferError::Decode`, without a panic, and the
+    /// payload is no larger than those bytes make: UTF-16 grows by at most
+    /// half again as it becomes UTF-8, everything else not at all.
+    #[test]
+    fn foreign_bytes_decode_within_their_size_or_fail_typed(bytes in foreign_bytes()) {
+        let formats = [
+            (NativeFormat::UnicodeText, TransferFormat::Text),
+            (NativeFormat::Html, TransferFormat::Html),
+            (NativeFormat::FileDrop, TransferFormat::UriList),
+            (
+                NativeFormat::Named("image/png".to_owned()),
+                TransferFormat::Image { mime: Mime::new("image/png") },
+            ),
+            (
+                NativeFormat::Named("application/x-test".to_owned()),
+                TransferFormat::Custom { mime: Mime::new("application/x-test") },
+            ),
+        ];
+        for (native, format) in formats {
+            match decode(&native, &format, &bytes) {
+                Ok(TransferPayload::Text(text) | TransferPayload::Html(text)) => {
+                    proptest::prop_assert!(text.len() <= bytes.len() / 2 * 3, "{:?}", native);
+                }
+                Ok(TransferPayload::Custom { bytes: made, .. }) => {
+                    // A file list is the paths' URIs, each percent-escaped.
+                    let grown = if native == NativeFormat::FileDrop { 12 * bytes.len() + 64 } else { bytes.len() };
+                    proptest::prop_assert!(made.len() <= grown, "{:?}", native);
+                }
+                Err(error) => {
+                    proptest::prop_assert!(matches!(error, TransferError::Decode { .. }), "{:?}", error);
+                }
+            }
+        }
+        let _ = identity_descriptor(&bytes);
+    }
+}

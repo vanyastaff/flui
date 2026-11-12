@@ -634,6 +634,10 @@ cfg_aliases = { workspace = true }
 flui-testing = { path = "../flui-testing" }
 # `fonts::android`'s parse, which runs on every host over recorded files.
 roxmltree.workspace = true
+# Arbitrary bytes into the parsers of what another process sends (the XIM
+# codec, clipboard and drag payloads, Wayland arrays); the nightly run raises
+# `PROPTEST_CASES`.
+proptest = { workspace = true }
 # The host's own test support, the `testing` module, and the `http` client its
 # tests run against a loopback server. Checkout-only test edge:
 # versionless, so Cargo drops it from the published manifest.

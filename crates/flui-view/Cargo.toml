@@ -86,6 +86,8 @@ flui-foundation = { workspace = true, features = ["testing"] }
 criterion = { workspace = true }
 # The `serde` round trip of `Revision`.
 serde_json = { workspace = true }
+# Arbitrary stored bytes for the persisted-document load.
+proptest = { workspace = true }
 # Enable flui-rendering's `testing` feature for unit tests so the
 # layout-builder tests can read committed geometry back off the pipeline
 # (`testing::box_geometry`). Dev-only; stays out of release builds.

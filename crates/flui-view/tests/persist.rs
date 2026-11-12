@@ -24,6 +24,7 @@ use flui_view::persist::{
 };
 use flui_view::prelude::*;
 use flui_view::{CloseGuard, CloseReason};
+use proptest::prelude::*;
 
 /// The document under test: one line of text.
 #[derive(Debug, PartialEq)]
@@ -489,6 +490,89 @@ fn a_load_reports_each_stored_state() {
             bytes,
             "{case}: a load writes nothing"
         );
+    }
+}
+
+/// Stored bytes another program, an older build or a damaged disk could
+/// leave: raw bytes, and headers whose every field is steered toward the
+/// edges (another magic, another name, a version or revision that is
+/// negative, past `u64`, or not a number, odd separators).
+fn foreign_document() -> impl Strategy<Value = Vec<u8>> {
+    let field = || {
+        prop_oneof![
+            any::<u64>().prop_map(|value| value.to_string()),
+            Just("0".to_owned()),
+            Just("-1".to_owned()),
+            Just("18446744073709551616".to_owned()),
+            "[0-9a-z+. ]{0,6}",
+        ]
+    };
+    let header = (
+        prop_oneof![
+            Just("flui-document"),
+            Just("flui-documen"),
+            Just("FLUI-DOCUMENT")
+        ],
+        prop_oneof![Just(" "), Just("  "), Just("\t"), Just("")],
+        prop_oneof![
+            Just("notes".to_owned()),
+            Just("drafts".to_owned()),
+            "[^\n]{0,6}"
+        ],
+        field(),
+        field(),
+        prop_oneof![Just("\n"), Just("\r\n"), Just("")],
+        proptest::collection::vec(any::<u8>(), 0..24),
+    )
+        .prop_map(|(magic, gap, name, version, revision, end, body)| {
+            let mut bytes = format!("{magic}{gap}{name} {version} {revision}{end}").into_bytes();
+            bytes.extend(body);
+            bytes
+        });
+    prop_oneof![proptest::collection::vec(any::<u8>(), 0..80), header]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: ProptestConfig::default().cases / 4,
+        ..ProptestConfig::default()
+    })]
+
+    /// Whatever bytes are stored, a load ends in the document or a typed
+    /// error, never a panic; it writes nothing, and its status follows its
+    /// outcome.
+    #[test]
+    fn any_stored_bytes_load_or_fail_typed(bytes in foreign_document()) {
+        let storage = MemoryStorage::new();
+        storage.put(&Note::NAME, bytes.clone());
+        let (mut laid, notes) = mount(&storage);
+        let loaded = drive(&mut laid, notes.load()).map(|note| note.0.clone());
+        let status = notes.status();
+        match &loaded {
+            Ok(_) => prop_assert_eq!(status, SaveStatus::Clean),
+            Err(PersistError::NewerVersion { found, supported }) => {
+                prop_assert!(found > supported);
+                prop_assert_eq!(
+                    status,
+                    SaveStatus::ReadOnly(ReadOnlyReason::NewerVersion {
+                        found: *found,
+                        supported: *supported,
+                    })
+                );
+            }
+            Err(PersistError::Storage(StorageError::TooLarge { len, limit })) => {
+                prop_assert!(len > limit);
+                prop_assert_eq!(*limit, Note::MAX_BYTES);
+            }
+            Err(PersistError::Corrupt { .. } | PersistError::Decode(_)) => {
+                prop_assert_eq!(status, SaveStatus::NotLoaded(loaded.clone().err()));
+            }
+            Err(PersistError::Panicked { during: CodecStep::Decode, .. }) => {
+                prop_assert!(bytes.ends_with(b"\npanic"), "only the test codec's own panic");
+            }
+            Err(other) => prop_assert!(false, "an unexpected error: {other:?}"),
+        }
+        prop_assert_eq!(storage.contents(&Note::NAME), Some(bytes), "a load writes nothing");
     }
 }
 

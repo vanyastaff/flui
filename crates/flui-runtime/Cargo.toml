@@ -95,6 +95,9 @@ flui-foundation = { workspace = true, features = ["testing"] }
 # The widget catalog, for the tests that drive a presentation through real
 # widgets; the runtime itself names no widget.
 flui-widgets = { workspace = true }
+# Arbitrary bytes on the agent's wire (`agent_service`); the nightly run
+# raises `PROPTEST_CASES`.
+proptest = { workspace = true }
 # `flui_interaction::events::make_*_event`, the synthetic pointer events the
 # held-input tests queue.
 flui-interaction = { workspace = true, features = ["testing"] }

@@ -292,4 +292,25 @@ mod tests {
             }
         }
     }
+
+    proptest::proptest! {
+        /// What an owner sends decodes in every form to exactly the length
+        /// `decoded_len` measured, the figure a reader refuses an oversized
+        /// text by before decoding it: ill-formed UTF-8 and ISO 8859-1 grow
+        /// as they decode, and the measure has to grow with them.
+        #[test]
+        fn the_measured_length_is_the_decoded_length(
+            bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..256),
+        ) {
+            for form in TextForm::OFFERED {
+                proptest::prop_assert_eq!(
+                    form.decoded_len(&bytes),
+                    form.decode(bytes.clone()).len(),
+                    "{:?} {:?}",
+                    form,
+                    bytes
+                );
+            }
+        }
+    }
 }
