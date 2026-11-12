@@ -699,7 +699,7 @@ where
         // mutable `owner` reborrow for `build_or_recover` is still free.
         let ctx_choice = make_build_ctx(core, owner);
         let ctx = ctx_choice.as_ctx();
-        // One clone of the view serves `provide` and `build`, taken before the
+        // One handle on the shared view serves `provide` and `build`, taken before the
         // reactive phase is armed: between the two hooks nothing the author
         // wrote runs (no `Clone`, no `Drop`), so the phase `publish_provided`
         // arms is always handed to `build_or_recover_begun`. The children
@@ -977,7 +977,7 @@ where
             );
             self.apply_pending = false;
         }
-        // One clone of the view serves `provide` and `build`, taken before the
+        // One handle on the shared view serves `provide` and `build`, taken before the
         // reactive phase is armed: between the two hooks nothing the author
         // wrote runs (no `Clone`, no `Drop`), so the phase `publish_provided`
         // arms is always handed to `build_or_recover_begun`. The children
@@ -1421,7 +1421,7 @@ where
     }
 
     fn provided(&self, type_id: TypeId) -> Option<crate::element::ProvidedRef<'_>> {
-        // The cached view-clone is the value: the caller's typed downcast
+        // The shared view is the value: the caller's typed downcast
         // (`.downcast_ref::<V>()`) succeeds inside `BuildContextExt::depend_on`.
         (type_id == TypeId::of::<V>()).then_some(crate::element::ProvidedRef {
             value: &*self.view_cache as &dyn std::any::Any,
@@ -1504,7 +1504,7 @@ where
         old_view: &V,
         owner: &mut crate::ElementOwner<'_>,
     ) {
-        // Refresh cached data + view-clone each update.
+        // Refresh cached data and the shared view each update.
         self.data = core.view().data().clone();
         self.view_cache = std::rc::Rc::clone(core.shared_view());
 
