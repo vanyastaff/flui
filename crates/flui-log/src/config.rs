@@ -1,9 +1,10 @@
 //! What to log, as whom, and in what shape.
 
 use tracing::Subscriber;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::{EnvFilter, Layer as _, Registry};
+use tracing_subscriber::{Layer as _, Registry};
 
 use crate::backend::PlatformLayer;
 use crate::filter::{FilterConfig, FilterError};
@@ -81,14 +82,14 @@ impl LogConfig {
         self.log_bridge_policy
     }
 
-    /// Resolve the filter. Equivalent to `config.filter().env_filter()`.
+    /// Resolve the filter. Equivalent to `config.filter().targets()`.
     ///
     /// # Errors
     ///
     /// Propagates the [`FilterError`] from
-    /// [`FilterConfig::env_filter`](crate::FilterConfig::env_filter).
-    pub fn env_filter(&self) -> Result<EnvFilter, FilterError> {
-        self.filter.env_filter()
+    /// [`FilterConfig::targets`](crate::FilterConfig::targets).
+    pub fn targets(&self) -> Result<Targets, FilterError> {
+        self.filter.targets()
     }
 
     pub(crate) fn without_env_override(&self) -> Self {
@@ -132,7 +133,7 @@ impl LogConfig {
         impl Subscriber + for<'lookup> LookupSpan<'lookup> + Send + Sync + 'static + use<>,
         FilterError,
     > {
-        let filter = self.env_filter()?;
+        let filter = self.targets()?;
         let platform = PlatformLayer::platform_default(self);
         Ok(Registry::default().with(platform.with_filter(filter)))
     }

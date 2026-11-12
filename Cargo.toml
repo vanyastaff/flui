@@ -314,7 +314,9 @@ tracing = "0.1"
 # set: it is what makes the `fmt` layer show a bridged record's real target
 # instead of the literal `"log"`. Left implicit, a future `default-features =
 # false` would silently relabel every `wgpu`/`naga` line in desktop output.
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi", "tracing-log"] }
+# `env-filter` stays off: it links a regex engine into every application for
+# directives FLUI does not use; `flui-log` filters with `filter::Targets`.
+tracing-subscriber = { version = "0.3", features = ["fmt", "ansi", "tracing-log"] }
 tracing-log = "0.2"
 tracing-forest = { version = "0.3", features = ["smallvec"] }
 # Native log sinks. Each is target-gated in the crates that use them.
