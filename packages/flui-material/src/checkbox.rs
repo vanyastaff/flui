@@ -116,7 +116,7 @@ const _: () = assert!(CHECKBOX_EDGE_SIZE < CHECKBOX_TAP_TARGET_SIZE);
 
 /// A value-change callback: the next tristate value. `Rc`-based
 /// (owner-local, per ADR-0027) — matches [`InkWell`]'s own callback shape.
-type CheckboxChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, Option<bool>)>;
+type CheckboxChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, Option<bool>)>;
 
 /// A Material Design tristate-capable checkbox.
 ///
@@ -235,7 +235,7 @@ impl Checkbox {
     #[must_use]
     pub fn on_changed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, Option<bool>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>, Option<bool>) -> R + 'static,
     ) -> Self {
         self.on_changed = Some(crate::event_callback::value_callback(callback));
         self

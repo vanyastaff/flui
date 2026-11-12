@@ -38,8 +38,8 @@ use flui_rendering::{
     RenderResult,
     constraints::BoxConstraints,
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
-        PaintCx,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext, PaintContext,
     },
     hit_testing::CursorRequest,
     layer::LayerLink,
@@ -237,7 +237,7 @@ impl RenderParagraph {
     /// Pushes a leader at each selection end that has a link. The start
     /// sits on the line after it (downstream) and the end on the line it
     /// ends (upstream), so an end at a soft wrap stays with its glyphs.
-    fn paint_handle_leaders(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint_handle_leaders(&self, ctx: &mut PaintContext<'_, Leaf>) {
         let Some(range) = self.selection.as_ref() else {
             return;
         };
@@ -271,7 +271,7 @@ impl RenderParagraph {
 
     /// Paints the selection's boxes behind the glyphs, each once: with a
     /// translucent colour an overlap would read darker.
-    fn paint_selection(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint_selection(&self, ctx: &mut PaintContext<'_, Leaf>) {
         let Some(range) = self.selection.as_ref() else {
             return;
         };
@@ -738,7 +738,7 @@ impl RenderBox for RenderParagraph {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> RenderResult<Size> {
         let max_width = self.layout_max_width(&constraints);
         let text_size =
@@ -752,7 +752,7 @@ impl RenderBox for RenderParagraph {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> RenderResult<Option<f64>> {
         let max_width = self.layout_max_width(&constraints);
         let painter_baseline = match baseline {
@@ -773,7 +773,7 @@ impl RenderBox for RenderParagraph {
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> RenderResult<f64> {
         Ok(ctx
             .text()?
@@ -784,7 +784,7 @@ impl RenderBox for RenderParagraph {
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> RenderResult<f64> {
         Ok(ctx
             .text()?
@@ -795,7 +795,7 @@ impl RenderBox for RenderParagraph {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> RenderResult<f64> {
         Ok(ctx
             .text()?
@@ -806,7 +806,7 @@ impl RenderBox for RenderParagraph {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> RenderResult<f64> {
         Ok(ctx
             .text()?
@@ -833,7 +833,7 @@ impl RenderBox for RenderParagraph {
         }))
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         // The recorder pre-translates the canvas to this node's origin, so the
         // text paints in local coordinates. Skipped before layout (no cache).
         if !self.painter.has_layout() {

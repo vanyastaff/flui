@@ -299,7 +299,7 @@ known scaled 3-4-5 triangles and preserves zero and unbounded results.
 ### Canvas clips belong to one fragment run
 
 Painting a child may replace the parent's canvas, so the boundary is
-deterministic: `PaintCx::canvas` state belongs to the current run; `paint_child` seals it and
+deterministic: `PaintContext::canvas` state belongs to the current run; `paint_child` seals it and
 later drawing starts with a fresh canvas. Effects covering children use the
 `with_clip_*` layer scopes.
 
@@ -380,7 +380,7 @@ stamps it onto every child it laid out (`placed_generation`); the paint driver a
 walk skip any child carrying a different value. Every multi-child object gets the property
 whether or not it remembered to ask for one.
 
-**Why it cannot live in the render object:** `PaintCx` exposes neither parent data nor a child's
+**Why it cannot live in the render object:** `PaintContext` exposes neither parent data nor a child's
 logical index, so an object cannot tell paint which of its children this pass placed. That is why
 the now-deleted eager grid carried a `laid_out_band` field of its own, and why the lazy slivers
 used to rely on the frame evicting out-of-band residents before paint runs (ADR-0017's amendment)
@@ -965,7 +965,7 @@ every skeleton under a shimmer draws its window of the same band.
 down with the origin: where the current layer space's origin sits in the
 nearest anchor's coordinates, and the anchor's size. Inline children share the
 frame; a repaint boundary rebases it to its own origin, so the offset
-`PaintCx::paint_anchor` reports is the same whether or not a boundary (a list
+`PaintContext::paint_anchor` reports is the same whether or not a boundary (a list
 item's, say) stands between the node and the anchor. Transforms are not
 applied: the offset lives in the anchor's untransformed paint space, and a
 transform in between moves the node and what it draws together.
@@ -1175,8 +1175,8 @@ The structural shape of individual components in this crate is designed for Rust
 
 ### Secondary child queries read parent data through an erased per-child accessor
 
-**Rule.** The three query contexts — `BoxDryLayoutCtx`, `BoxIntrinsicsCtx`,
-`BoxDryBaselineCtx` — expose `child_parent_data(i) -> Option<&dyn ParentData>` and
+**Rule.** The three query contexts — `BoxDryLayoutContext`, `BoxIntrinsicsContext`,
+`BoxDryBaselineContext` — expose `child_parent_data(i) -> Option<&dyn ParentData>` and
 `child_parent_data_as::<T>(i)`, backed by a per-node slice the query driver fills from each
 child's own parent data (with harness seeds overlaid in test builds). `perform_layout` keeps
 its typed `BoxLayoutContext<Arity, PD>::child_parent_data`. Multi-child containers keep sizing
@@ -1192,7 +1192,7 @@ multi-child containers); the container downcasts to the type it declared itself.
 
 ### Dry contexts query child intrinsics through the safe take-out walk
 
-**Rule.** `BoxDryLayoutCtx` and `BoxDryBaselineCtx` expose the same `child_intrinsic` /
+**Rule.** `BoxDryLayoutContext` and `BoxDryBaselineContext` expose the same `child_intrinsic` /
 `child_{min,max}_intrinsic_{width,height}` accessors as the layout context. Each context
 dispatches one `#[non_exhaustive]` request enum per context (`DryLayoutChildRequest`:
 `DryLayout`, `Intrinsic`, `Baseline`; `DryBaselineChildRequest`), because a context on the
@@ -1401,11 +1401,11 @@ context over a collection of its own. The placeholder `run_frame_in_place` keeps
 the owner is out for its typestate transitions shares the handle, and the owner is back before
 anything can observe the slot, an unwind included. The layout walk passes the
 cell to every box node it lays out or measures — leaves through `layout_leaf_only`, parents
-through `ErasedBoxLayoutCtx`, box intrinsics asked by a box or a sliver parent — and the
+through `DriverBoxLayoutContext`, box intrinsics asked by a box or a sliver parent — and the
 intrinsic, dry-layout and dry-baseline query walks construct complete mutable
 contexts for `intrinsic_raw`, `dry_layout_raw` and `dry_baseline_raw`. A render
-object receives a fallible `TextCx` loan taken from `&mut` context (`BoxLayoutContext::text`,
-`BoxIntrinsicsCtx::text`, `BoxDryLayoutCtx::text`, `BoxDryBaselineCtx::text`), so it cannot
+object receives a fallible `TextContextMut` loan taken from `&mut` context (`BoxLayoutContext::text`,
+`BoxIntrinsicsContext::text`, `BoxDryLayoutContext::text`, `BoxDryBaselineContext::text`), so it cannot
 lay out a child or query one through the same context while the loan remains in
 use. Raw query hooks receive the same complete context; erased layout exposes
 `text(&mut self)` rather than an independent source-extraction operation. Drivers
@@ -1604,7 +1604,7 @@ Tree-aware disjoint-borrow primitives. `get_two_mut(a, b)` returns `(&mut Render
 
 **Files:** [`src/pipeline/owner/layout.rs`](src/pipeline/owner/layout.rs) (`layout_dirty_root`), [`src/pipeline/owner/subtree_arena.rs`](src/pipeline/owner/subtree_arena.rs) (`layout_subtree_borrowed`).
 
-`layout_dirty_root` is the dispatcher: it obtains disjoint `&mut`s via `SubtreeArena`, constructs a typed `BoxLayoutCtx` with children + callback, and calls `perform_layout_raw` through the erased view. The pipeline-driven path was built directly into this entry point; the phantom stubs that earlier documentation described were never real functions.
+`layout_dirty_root` is the dispatcher: it obtains disjoint `&mut`s via `SubtreeArena`, constructs a typed `RawBoxLayoutContext` with children + callback, and calls `perform_layout_raw` through the erased view. The pipeline-driven path was built directly into this entry point; the phantom stubs that earlier documentation described were never real functions.
 
 ### `layout_leaf_only` — SHIPPED
 

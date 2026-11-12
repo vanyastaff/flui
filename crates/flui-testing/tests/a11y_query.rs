@@ -52,7 +52,7 @@ impl RenderBox for SemanticLeaf {
         Ok(Size::new(10.0, 10.0))
     }
 
-    fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
         config.set_label(self.label.clone());

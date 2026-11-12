@@ -11,7 +11,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::common::{lay_out, loose};
-use flui_view::{EventCx, Signal};
+use flui_view::{EventContext, Signal};
 use flui_widgets::prelude::*;
 use flui_widgets::{Column, SizedBox};
 
@@ -67,11 +67,11 @@ impl ViewState<Counter> for CounterState {
         self.flag.set(true);
         // Writes inside callback closures defined here run later, from an event.
         let tapped = Rc::clone(&self.view.tapped);
-        let _tap: Box<dyn Fn(&mut EventCx<'_>)> = Box::new(move |r| {
+        let _tap: Box<dyn Fn(&mut EventContext<'_>)> = Box::new(move |r| {
             tapped.set(tapped.get() + 1);
             let _ = count.update(r, |c| *c += 1);
         });
-        let _later: Box<dyn Fn(&mut EventCx<'_>)> = Box::new(move |r| {
+        let _later: Box<dyn Fn(&mut EventContext<'_>)> = Box::new(move |r| {
             let _ = count.update(r, |c| *c -= 1);
             let _ = other.set(r, 0);
         });

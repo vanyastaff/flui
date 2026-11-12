@@ -28,7 +28,7 @@ use parking_lot::Mutex;
 
 /// Reports a pop attempt's outcome: `true` — the route is leaving; `false` —
 /// the pop was refused (a veto, this scope's or a sibling's).
-pub type PopInvokedCallback = Rc<dyn Fn(&mut EventCx<'_>, bool)>;
+pub type PopInvokedCallback = Rc<dyn Fn(&mut EventContext<'_>, bool)>;
 
 type BoundPopCallback = Rc<dyn Fn(bool)>;
 
@@ -227,7 +227,7 @@ impl PopScope {
     #[must_use]
     pub fn on_pop_invoked<R: EventOutcome>(
         mut self,
-        callback: impl Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        callback: impl Fn(&mut EventContext<'_>, bool) -> R + 'static,
     ) -> Self {
         self.on_pop_invoked = Some(Rc::new(move |ctx, did_pop| callback(ctx, did_pop).report()));
         self

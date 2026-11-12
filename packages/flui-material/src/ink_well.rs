@@ -106,7 +106,7 @@ use crate::theme::Theme;
 
 /// A user tap handler. `Rc`-based (owner-local, per ADR-0027) — matches
 /// `GestureDetector::on_tap`'s callback shape.
-type TapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
+type TapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>;
 
 /// How an [`InkWell`] shows that it has visible keyboard focus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,7 +159,7 @@ impl InkWell {
     #[must_use]
     pub fn on_tap<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_tap = Some(crate::event_callback::press_callback(callback));
         self
@@ -450,7 +450,7 @@ impl ViewState<InkWell> for InkWellState {
             let press_states = self.states.clone();
             let vsync = self.vsync.clone();
             let activation = Rc::clone(&self.activation);
-            Rc::new(move |ctx: &mut flui_sdk::view::EventCx<'_>| {
+            Rc::new(move |ctx: &mut flui_sdk::view::EventContext<'_>| {
                 // Oracle order (`ink_well.dart` `activateOnIntent`, `:864-900`):
                 // `WidgetState.pressed` is set FIRST, THEN `widget.onTap?.call()`
                 // fires, and only after that does the hold start. A handler
@@ -467,7 +467,7 @@ impl ViewState<InkWell> for InkWellState {
                 let outgoing = activation.borrow_mut().hold.replace(hold);
                 drop(outgoing);
                 begin_press_deactivation(&activation, vsync.clone(), &rebuild);
-            }) as Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>
+            }) as Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>
         });
 
         // An idle well attaches no painter, so it records nothing; a state
@@ -534,7 +534,7 @@ struct KeyActivation {
 }
 
 impl KeyActivation {
-    fn run(&self, ctx: &mut flui_sdk::view::EventCx<'_>) -> ActionOutcome {
+    fn run(&self, ctx: &mut flui_sdk::view::EventContext<'_>) -> ActionOutcome {
         let Some(activate) = &self.activate else {
             return ActionOutcome::NotPerformed;
         };
@@ -550,7 +550,7 @@ impl KeyActivation {
 impl Action<ActivateIntent> for KeyActivation {
     fn invoke(
         &self,
-        ctx: &mut flui_sdk::view::EventCx<'_>,
+        ctx: &mut flui_sdk::view::EventContext<'_>,
         _intent: &ActivateIntent,
     ) -> ActionOutcome {
         self.run(ctx)
@@ -560,7 +560,7 @@ impl Action<ActivateIntent> for KeyActivation {
 impl Action<ButtonActivateIntent> for KeyActivation {
     fn invoke(
         &self,
-        ctx: &mut flui_sdk::view::EventCx<'_>,
+        ctx: &mut flui_sdk::view::EventContext<'_>,
         _intent: &ButtonActivateIntent,
     ) -> ActionOutcome {
         self.run(ctx)

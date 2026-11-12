@@ -79,9 +79,9 @@ struct SelectionDrag {
 /// Exported (not crate-private) so [`RawTextField`](super::text_field::RawTextField)'s
 /// own `on_submitted` passthrough and `flui_material::TextField`'s can share
 /// one canonical alias instead of each declaring their own. It receives the
-/// dispatch's [`EventCx`] first (ADR-0086), and is stored already adapted to
+/// dispatch's [`EventContext`] first (ADR-0086), and is stored already adapted to
 /// report its outcome.
-pub type SubmitCallback = Rc<dyn Fn(&mut EventCx<'_>, &str)>;
+pub type SubmitCallback = Rc<dyn Fn(&mut EventContext<'_>, &str)>;
 
 // ============================================================================
 // EditableText
@@ -478,8 +478,8 @@ pub(super) struct FieldSemantics {
 }
 
 /// Callback for [`EditableText::on_changed`], with the dispatch's
-/// [`EventCx`].
-pub(crate) type TextChanged = Rc<dyn Fn(&mut EventCx<'_>, &str)>;
+/// [`EventContext`].
+pub(crate) type TextChanged = Rc<dyn Fn(&mut EventContext<'_>, &str)>;
 
 impl EditableText {
     /// Create an `EditableText` driven by `controller` and `focus_node`.
@@ -686,13 +686,13 @@ impl EditableText {
     /// newline-insertion behavior to conflict with), so Enter has exactly
     /// one meaning here: submit.
     ///
-    /// The callback receives the dispatch's `&mut EventCx<'_>` first, so it
+    /// The callback receives the dispatch's `&mut EventContext<'_>` first, so it
     /// writes a signal directly (ADR-0086); the field opens that write from
     /// the writer source it acquired in `init_state`.
     #[must_use]
     pub fn on_submitted<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &str) -> R + 'static,
         R: EventOutcome,
     {
         self.on_submitted = Some(ref_callback(callback));
@@ -706,7 +706,7 @@ impl EditableText {
     /// (`set_text`, `clear`) does not call it, which is what keeps a form
     /// field's reset from counting as the user's input. Runs after the edit,
     /// with no borrow of the field held, inside a write the field opens: the
-    /// callback receives that `&mut EventCx<'_>` first (ADR-0086). An IME
+    /// callback receives that `&mut EventContext<'_>` first (ADR-0086). An IME
     /// commit reaches it once the frame that deferred the commit has ended.
     ///
     /// The text is the committed text
@@ -717,7 +717,7 @@ impl EditableText {
     #[must_use]
     pub fn on_changed<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &str) -> R + 'static,
         R: EventOutcome,
     {
         self.on_changed = Some(ref_callback(callback));
@@ -1051,7 +1051,7 @@ impl EditableTextState {
             let commit = self.composition_commit();
             let paste = self.clipboard_action();
             let handles = Rc::clone(&self.touch_handles);
-            move |_ctx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+            move |_ctx: &mut EventContext<'_>, dispatch: PointerDispatch<'_>| {
                 let flui_interaction::PointerEvent::Down(press) = dispatch.global else {
                     return;
                 };
@@ -1139,7 +1139,7 @@ impl EditableTextState {
         let moved = {
             let controller = Rc::clone(&controller);
             let drag_anchor = Rc::clone(&drag_anchor);
-            move |_ctx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+            move |_ctx: &mut EventContext<'_>, dispatch: PointerDispatch<'_>| {
                 let Some(drag) = drag_anchor.get() else {
                     return;
                 };
@@ -1165,7 +1165,7 @@ impl EditableTextState {
         let release = {
             let drag_anchor = Rc::clone(&drag_anchor);
             let handles = Rc::clone(&self.touch_handles);
-            move |_: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+            move |_: &mut EventContext<'_>, dispatch: PointerDispatch<'_>| {
                 let Some(drag) = drag_anchor.get().filter(|drag| {
                     Some(drag.contact)
                         == flui_interaction::PointerEventExt::pointer_id(dispatch.global)
@@ -1184,7 +1184,7 @@ impl EditableTextState {
         };
         let cancel = {
             let drag_anchor = Rc::clone(&drag_anchor);
-            move |_: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+            move |_: &mut EventContext<'_>, dispatch: PointerDispatch<'_>| {
                 if drag_anchor.get().is_some_and(|drag| {
                     Some(drag.contact)
                         == flui_interaction::PointerEventExt::pointer_id(dispatch.global)
@@ -1514,19 +1514,19 @@ impl EditableTextState {
 struct KeptByTheField;
 
 impl Action<ActivateIntent> for KeptByTheField {
-    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &ActivateIntent) -> ActionOutcome {
         ActionOutcome::Performed
     }
 }
 
 impl Action<ActivationPressIntent> for KeptByTheField {
-    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+    fn invoke(&self, _: &mut EventContext<'_>, _: &ActivationPressIntent) -> ActionOutcome {
         ActionOutcome::Performed
     }
 }
 
 impl Action<DismissIntent> for KeptByTheField {
-    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &DismissIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &DismissIntent) -> ActionOutcome {
         ActionOutcome::Performed
     }
 }
@@ -1561,7 +1561,7 @@ impl FieldSemanticsActions {
         (self.enabled.get() && attachment.is_attached()).then_some(node)
     }
 
-    fn focus(&self, ctx: &EventCx<'_>) {
+    fn focus(&self, ctx: &EventContext<'_>) {
         if self.edits.writer.check_context(ctx).is_err() {
             return;
         }
@@ -1571,14 +1571,19 @@ impl FieldSemanticsActions {
         }
     }
 
-    fn set_text(&self, ctx: &EventCx<'_>, text: &str) {
+    fn set_text(&self, ctx: &EventContext<'_>, text: &str) {
         self.edit(ctx, false, |controller| controller.set_text(text));
     }
 
     /// The selection a platform set, in bytes of the published value: the
     /// mask's on an obscured field, mapped back to the source here. The
     /// controller snaps both ends to its grapheme boundaries.
-    fn set_selection(&self, ctx: &EventCx<'_>, selection: TextSelection, obscuring: Option<char>) {
+    fn set_selection(
+        &self,
+        ctx: &EventContext<'_>,
+        selection: TextSelection,
+        obscuring: Option<char>,
+    ) {
         self.edit(ctx, true, |controller| {
             let source = |offset: usize| match obscuring {
                 Some(mask) => source_offset_for_masked_offset(&controller.text(), offset, mask),
@@ -1590,7 +1595,7 @@ impl FieldSemanticsActions {
 
     /// Replaces the selection with `text`, as a paste does: line breaks
     /// dropped, the caret after the inserted text.
-    fn replace_selected_text(&self, ctx: &EventCx<'_>, text: &str) {
+    fn replace_selected_text(&self, ctx: &EventContext<'_>, text: &str) {
         let line: String = text
             .chars()
             .filter(|&character| character != '\n' && character != '\r')
@@ -1604,7 +1609,7 @@ impl FieldSemanticsActions {
     /// the text store told after it. Each step runs though an earlier one
     /// failed: the platform hears of the edit before the first failure is
     /// resumed.
-    fn edit(&self, ctx: &EventCx<'_>, commit: bool, edit: impl FnOnce(&TextEditingController)) {
+    fn edit(&self, ctx: &EventContext<'_>, commit: bool, f: impl FnOnce(&TextEditingController)) {
         if self.edits.writer.check_context(ctx).is_err() || self.live_node().is_none() {
             return;
         }
@@ -1621,7 +1626,7 @@ impl FieldSemanticsActions {
         }
         if self.edits.writer.check_context(ctx).is_ok() && self.live_node().is_some() {
             let controller = self.edits.controller.borrow().clone();
-            calls.run(|| self.edits.around(|| edit(&controller)));
+            calls.run(|| self.edits.around(|| f(&controller)));
             if let Some(store) = &self.store {
                 calls.run(|| store.controller_changed());
             }
@@ -1635,7 +1640,7 @@ impl Action<SelectAllTextIntent> for SelectAllTextAction {
         self.focus_node.borrow().can_request_focus() && !self.controller.borrow().is_composing()
     }
 
-    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &SelectAllTextIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &SelectAllTextIntent) -> ActionOutcome {
         let controller = self.controller.borrow().clone();
         controller.set_selection(0, controller.text().len());
         ActionOutcome::Performed

@@ -1,7 +1,7 @@
 //! Writes opened through a captured `WriterSource` (ADR-0086). A listener, an
 //! animation-status listener and a post-frame callback each write from the
 //! owner and the reader rebuilds on the next frame. A nested
-//! `write` inside a live `EventCx` opens its own writer, applies at once and is
+//! `write` inside a live `EventContext` opens its own writer, applies at once and is
 //! not a transaction with the outer one, and a panic inside it reaches the
 //! outer callback with the writes before it still applied.
 
@@ -10,7 +10,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use flui_view::{BuildOwner, SignalWriteExt};
 
-pub(crate) fn nested_writer_source_inside_an_event_cx() {
+pub(crate) fn nested_writer_source_inside_an_event_ctx() {
     let owner = BuildOwner::new();
     let graph = owner.signal_graph();
     let source = owner.writer_source();
@@ -36,7 +36,7 @@ pub(crate) fn nested_writer_source_inside_an_event_cx() {
     assert_eq!(b.peek(graph, |n| *n), Ok(2));
 }
 
-pub(crate) fn nested_write_panics_inside_an_event_cx() {
+pub(crate) fn nested_write_panics_inside_an_event_ctx() {
     let owner = BuildOwner::new();
     let graph = owner.signal_graph();
     let source = owner.writer_source();

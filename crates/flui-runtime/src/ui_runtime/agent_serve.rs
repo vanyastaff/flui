@@ -44,7 +44,7 @@ const STRICT_CANDIDATES: u32 = 10;
 pub(super) enum Answer<T> {
     /// The answer, sent at this drain.
     Now(Result<T, AgentError>),
-    /// The handler kept the reply ([`ServeCx::park`]) and answers later.
+    /// The handler kept the reply ([`ServeContext::park`]) and answers later.
     Later,
 }
 
@@ -64,7 +64,7 @@ impl PanicAnswer {
 }
 
 /// What a handler serves one request with. Owner thread only.
-pub(super) struct ServeCx<'a, T> {
+pub(super) struct ServeContext<'a, T> {
     pub(super) runtime: &'a UiRuntime,
     pub(super) state: &'a PresentationState,
     pub(super) window: WindowId,
@@ -82,7 +82,7 @@ pub(super) struct ServeCx<'a, T> {
     wake_after: bool,
 }
 
-impl<T> ServeCx<'_, T> {
+impl<T> ServeContext<'_, T> {
     /// The reply, for a handler that answers later. The context keeps a clone, so a panic
     /// after this still answers; the first answer sent is the one taken.
     pub(super) fn park(&self) -> ReplySender<T> {
@@ -110,7 +110,10 @@ pub(super) trait Serve: WindowMethod {
     fn record(_output: &Self::Output, _issued: &mut IssuedHandles) {}
 
     /// Serve `params` in `ctx`'s presentation.
-    fn serve(ctx: &mut ServeCx<'_, Self::Output>, params: Self::Params) -> Answer<Self::Output>;
+    fn serve(
+        ctx: &mut ServeContext<'_, Self::Output>,
+        params: Self::Params,
+    ) -> Answer<Self::Output>;
 }
 
 impl UiRuntime {
@@ -131,7 +134,7 @@ impl UiRuntime {
             return;
         };
         let issued = super::agent::issued_of(state);
-        let mut ctx = ServeCx {
+        let mut ctx = ServeContext {
             runtime: self,
             state,
             window,
@@ -147,7 +150,7 @@ impl UiRuntime {
             reason = "ADR-0287: a method's serve runs contained so its caller is answered"
         )]
         let served = catch_unwind(AssertUnwindSafe(|| M::serve(&mut ctx, params)));
-        let ServeCx {
+        let ServeContext {
             reply,
             if_panics,
             caught,
@@ -241,7 +244,7 @@ macro_rules! not_answered {
         impl Serve for method::$ty {
             const ANSWERS: bool = false;
 
-            fn serve(_: &mut ServeCx<'_, Self::Output>, _: Self::Params) -> Answer<Self::Output> {
+            fn serve(_: &mut ServeContext<'_, Self::Output>, _: Self::Params) -> Answer<Self::Output> {
                 Answer::Now(Err(AgentError::NotSupported {
                     capability: Self::NAME,
                     reason: "this app's windows do not answer it yet",
@@ -267,7 +270,7 @@ impl Serve for method::SemanticsRead {
         record_issued(tree, issued);
     }
 
-    fn serve(ctx: &mut ServeCx<'_, Tree>, params: ReadParams) -> Answer<Tree> {
+    fn serve(ctx: &mut ServeContext<'_, Tree>, params: ReadParams) -> Answer<Tree> {
         let query = params.query;
         let issued = query.root.is_none_or(|root| ctx.was_issued(root));
         Answer::Now(agent::read_tree(ctx.state, ctx.window, &query, issued))
@@ -281,7 +284,7 @@ impl Serve for method::InputInject {
 
     /// Plays the actions through the call's lease, one tick per frame boundary, and answers once
     /// a frame has passed since the last one, with the reading the call asks for.
-    fn serve(ctx: &mut ServeCx<'_, ActOutcome>, params: InputParams) -> Answer<ActOutcome> {
+    fn serve(ctx: &mut ServeContext<'_, ActOutcome>, params: InputParams) -> Answer<ActOutcome> {
         let Some(lease) = ctx.lease else {
             return Answer::Now(Err(AgentError::InvalidArgument {
                 reason: "input.inject is asked through an input lease",
@@ -311,7 +314,7 @@ impl Serve for method::InputInject {
 
 impl Serve for method::InputRelease {
     /// Lets go what the call's lease holds once the work queued before it has run.
-    fn serve(ctx: &mut ServeCx<'_, Released>, _: WindowParams) -> Answer<Released> {
+    fn serve(ctx: &mut ServeContext<'_, Released>, _: WindowParams) -> Answer<Released> {
         let Some(lease) = ctx.lease else {
             return Answer::Now(Err(AgentError::InvalidArgument {
                 reason: "input.release is asked through an input lease",
@@ -327,7 +330,7 @@ impl Serve for method::SemanticsLocate {
         record_issued_matches(matches, issued);
     }
 
-    fn serve(ctx: &mut ServeCx<'_, Matches>, params: LocateParams) -> Answer<Matches> {
+    fn serve(ctx: &mut ServeContext<'_, Matches>, params: LocateParams) -> Answer<Matches> {
         Answer::Now(agent::locate(ctx.state, ctx.window, &params))
     }
 }
@@ -339,7 +342,7 @@ impl Serve for method::SemanticsAct {
 
     /// The target is resolved and the action run in this one turn, so the element acted on is
     /// the one the locator matched on the tree the action starts on.
-    fn serve(ctx: &mut ServeCx<'_, ActOutcome>, params: ActParams) -> Answer<ActOutcome> {
+    fn serve(ctx: &mut ServeContext<'_, ActOutcome>, params: ActParams) -> Answer<ActOutcome> {
         let (element, issued) = match params.target {
             Target::Element(element) => (element.element, ctx.was_issued(element.element)),
             // The element comes from the tree the action runs on.
@@ -384,7 +387,7 @@ impl Serve for method::SemanticsAct {
 
 /// The one element `locator` matches in `ctx`'s tree now, as its pick says.
 fn resolve<T>(
-    ctx: &ServeCx<'_, T>,
+    ctx: &ServeContext<'_, T>,
     locator: &Locator,
 ) -> Result<flui_protocol::ElementId, AgentError> {
     let strict = locator.pick == Pick::Strict;
@@ -411,7 +414,7 @@ fn resolve<T>(
 
 impl Serve for method::ElementActionability {
     fn serve(
-        ctx: &mut ServeCx<'_, flui_protocol::Actionability>,
+        ctx: &mut ServeContext<'_, flui_protocol::Actionability>,
         params: ActionabilityParams,
     ) -> Answer<flui_protocol::Actionability> {
         let element = params.element.element;
@@ -431,7 +434,7 @@ impl Serve for method::WaitUntil {
     }
 
     /// It answers itself: now if the condition holds, else after a frame or at its deadline.
-    fn serve(ctx: &mut ServeCx<'_, WaitOutcome>, params: WaitParams) -> Answer<WaitOutcome> {
+    fn serve(ctx: &mut ServeContext<'_, WaitOutcome>, params: WaitParams) -> Answer<WaitOutcome> {
         ctx.if_panics.set(AgentError::Malformed);
         ctx.runtime.park_agent_wait(ctx.state, params, ctx.park());
         Answer::Later
@@ -440,7 +443,7 @@ impl Serve for method::WaitUntil {
 
 /// Serves a read of the element or render tree at the owner's turn.
 fn inspect_now(
-    ctx: &ServeCx<'_, InspectReading>,
+    ctx: &ServeContext<'_, InspectReading>,
     target: InspectTarget,
     params: &InspectParams,
 ) -> Answer<InspectReading> {
@@ -451,7 +454,7 @@ fn inspect_now(
 
 impl Serve for method::InspectWidgets {
     fn serve(
-        ctx: &mut ServeCx<'_, InspectReading>,
+        ctx: &mut ServeContext<'_, InspectReading>,
         params: InspectParams,
     ) -> Answer<InspectReading> {
         inspect_now(ctx, InspectTarget::Widgets, &params)
@@ -460,7 +463,7 @@ impl Serve for method::InspectWidgets {
 
 impl Serve for method::InspectRender {
     fn serve(
-        ctx: &mut ServeCx<'_, InspectReading>,
+        ctx: &mut ServeContext<'_, InspectReading>,
         params: InspectParams,
     ) -> Answer<InspectReading> {
         inspect_now(ctx, InspectTarget::Render, &params)
@@ -470,7 +473,7 @@ impl Serve for method::InspectRender {
 impl Serve for method::InspectLayers {
     /// Parked for the next scene the window shows.
     fn serve(
-        ctx: &mut ServeCx<'_, InspectReading>,
+        ctx: &mut ServeContext<'_, InspectReading>,
         params: InspectParams,
     ) -> Answer<InspectReading> {
         ctx.runtime
@@ -480,7 +483,7 @@ impl Serve for method::InspectLayers {
 }
 
 impl Serve for method::MotionSet {
-    fn serve(ctx: &mut ServeCx<'_, MotionState>, params: MotionParams) -> Answer<MotionState> {
+    fn serve(ctx: &mut ServeContext<'_, MotionState>, params: MotionParams) -> Answer<MotionState> {
         let applied = ctx.state.apply_motion(params.request);
         let result = match applied {
             Ok((state, demand)) => {
@@ -503,7 +506,7 @@ impl Serve for method::MotionSet {
 
 impl Serve for method::SemanticsAnnouncements {
     fn serve(
-        ctx: &mut ServeCx<'_, AnnouncementJournal>,
+        ctx: &mut ServeContext<'_, AnnouncementJournal>,
         params: AnnouncementsParams,
     ) -> Answer<AnnouncementJournal> {
         Answer::Now(Ok(ctx.state.pipeline().with(|pipeline| {
@@ -516,7 +519,7 @@ impl Serve for method::SemanticsAnnouncements {
 }
 
 impl Serve for method::InputJournal {
-    fn serve(ctx: &mut ServeCx<'_, Journal>, params: JournalParams) -> Answer<Journal> {
+    fn serve(ctx: &mut ServeContext<'_, Journal>, params: JournalParams) -> Answer<Journal> {
         Answer::Now(Ok(agent_journal::read(ctx.state, &params)))
     }
 }

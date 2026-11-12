@@ -125,7 +125,7 @@ impl RenderBox for LifecycleProbe {
         let _prev = self.log.captured_handle.borrow_mut().replace(handle);
     }
 
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Leaf>) {
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, Leaf>) {
         self.log.paint_count.fetch_add(1, Ordering::SeqCst);
         if self.log.relayout_from_paint.get() {
             self.log

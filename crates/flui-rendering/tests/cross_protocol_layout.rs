@@ -14,7 +14,7 @@
 //!
 //! Refs:
 //!   * `crates/flui-rendering/src/pipeline/owner/subtree_arena.rs` `layout_sliver_subtree_borrowed`
-//!   * `crates/flui-rendering/src/protocol/box_protocol.rs` `BoxLayoutCtxErased::layout_sliver_child`
+//!   * `crates/flui-rendering/src/protocol/box_protocol.rs` `ErasedBoxLayoutContext::layout_sliver_child`
 
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report

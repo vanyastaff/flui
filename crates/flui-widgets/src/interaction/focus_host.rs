@@ -38,7 +38,7 @@ use super::focus_reveal::{FocusRevealScope, SharedRevealTarget};
 
 /// A key handler as a focus widget stores it: it decides the event's
 /// routing, and may write signals through the `ctx` it receives.
-pub(crate) type FocusKeyHandler = Rc<dyn Fn(&mut EventCx<'_>, &KeyEvent) -> KeyEventResult>;
+pub(crate) type FocusKeyHandler = Rc<dyn Fn(&mut EventContext<'_>, &KeyEvent) -> KeyEventResult>;
 
 /// What the callbacks a [`FocusHost`] installs on its node read, and the
 /// host writes: one allocation shared by the host, the node's listener and

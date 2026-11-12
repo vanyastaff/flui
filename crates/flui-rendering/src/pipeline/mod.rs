@@ -38,7 +38,7 @@ pub use owner::{
 pub use owner::{PresentedKind, PresentedNode};
 pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics};
 pub(crate) use text_context::lend as lend_text;
-pub use text_context::{TextContextHandle, TextCx, TextSource};
+pub use text_context::{TextContextHandle, TextContextMut, TextSource};
 pub(crate) use text_context::{TextLender, TextMeasurers};
 
 // Re-export contexts from context module (canonical location)

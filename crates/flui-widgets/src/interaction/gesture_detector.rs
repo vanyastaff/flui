@@ -132,7 +132,7 @@ impl DragSlot {
     /// movement threshold is met.
     pub fn on_down<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, DragDownDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, DragDownDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.callbacks.down = Some(value_callback(callback));
@@ -142,7 +142,7 @@ impl DragSlot {
     /// Called once when the drag begins (the contact crosses the slop).
     pub fn on_start<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, DragStartDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, DragStartDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.callbacks.start = Some(value_callback(callback));
@@ -154,7 +154,7 @@ impl DragSlot {
     /// smooths the positions reported after recognition.
     pub fn on_update<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, DragUpdateDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, DragUpdateDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.callbacks.update = Some(value_callback(callback));
@@ -166,7 +166,7 @@ impl DragSlot {
     /// set to [`flui_interaction::GestureEndReason::Cancelled`].
     pub fn on_end<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, DragEndDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, DragEndDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.callbacks.end = Some(value_callback(callback));
@@ -178,7 +178,7 @@ impl DragSlot {
     /// was cancelled.
     pub fn on_cancel<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.callbacks.cancel = Some(event_callback(callback));
@@ -251,7 +251,7 @@ impl TransformSlot {
     /// Called when a multi-contact or native trackpad scale begins.
     pub fn on_start<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ScaleStartDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ScaleStartDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.callbacks.start = Some(value_callback(callback));
@@ -261,7 +261,7 @@ impl TransformSlot {
     /// Called with the gesture's cumulative scale and incremental focal motion.
     pub fn on_update<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ScaleUpdateDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ScaleUpdateDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.callbacks.update = Some(value_callback(callback));
@@ -271,7 +271,7 @@ impl TransformSlot {
     /// Called when the scale ends, with its scalar and focal velocities.
     pub fn on_end<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ScaleEndDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ScaleEndDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.callbacks.end = Some(value_callback(callback));
@@ -281,7 +281,7 @@ impl TransformSlot {
     /// Called when an admitted scale is cancelled.
     pub fn on_cancel<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.callbacks.cancel = Some(event_callback(callback));
@@ -375,7 +375,7 @@ impl ForcePressSlot {
     /// Called when the press passes the start pressure and wins its arena.
     pub fn on_start<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ForcePressDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ForcePressDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.callbacks.start = Some(value_callback(callback));
@@ -385,7 +385,7 @@ impl ForcePressSlot {
     /// Called for each measured sample of a press in progress.
     pub fn on_update<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ForcePressDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ForcePressDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.callbacks.update = Some(value_callback(callback));
@@ -395,7 +395,7 @@ impl ForcePressSlot {
     /// Called once when the press first reaches the peak pressure.
     pub fn on_peak<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ForcePressDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ForcePressDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.callbacks.peak = Some(value_callback(callback));
@@ -405,7 +405,7 @@ impl ForcePressSlot {
     /// Called when a started press ends.
     pub fn on_end<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ForcePressDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ForcePressDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.callbacks.end = Some(value_callback(callback));
@@ -564,13 +564,13 @@ struct MultiTapSlot {
 /// ancestor node, which for a Material button is the button's own node.
 ///
 /// The platform's request runs the current callback inside its own
-/// [`EventCx`], in the dispatch that resolved it, the way a key's
+/// [`EventContext`], in the dispatch that resolved it, the way a key's
 /// activation does, so its signal writes are accepted there. A request that
 /// arrives after the detector is disposed runs nothing.
 ///
 /// # Event context
 ///
-/// Every callback receives the dispatch's `&mut EventCx<'_>` first, so it
+/// Every callback receives the dispatch's `&mut EventContext<'_>` first, so it
 /// writes a signal directly (ADR-0086):
 ///
 /// ```rust
@@ -690,7 +690,7 @@ impl GestureDetector {
     #[must_use]
     pub fn on_tap<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.press.tap = Some(event_callback(callback));
@@ -706,7 +706,7 @@ impl GestureDetector {
     #[must_use]
     pub fn on_tap_down<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, TapDownDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, TapDownDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.press.tap_down = Some(value_callback(callback));
@@ -718,7 +718,7 @@ impl GestureDetector {
     #[must_use]
     pub fn on_tap_up<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, TapUpDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, TapUpDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.press.tap_up = Some(value_callback(callback));
@@ -737,7 +737,7 @@ impl GestureDetector {
     #[must_use]
     pub fn on_tap_cancel<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, TapDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, TapDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.press.tap_cancel = Some(value_callback(callback));
@@ -748,7 +748,7 @@ impl GestureDetector {
     #[must_use]
     pub fn on_secondary_tap<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.press.secondary_tap = Some(event_callback(callback));
@@ -760,7 +760,7 @@ impl GestureDetector {
     #[must_use]
     pub fn on_long_press<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.press.long_press = Some(event_callback(callback));
@@ -776,7 +776,7 @@ impl GestureDetector {
     #[must_use]
     pub fn on_double_tap<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.press.double_tap = Some(event_callback(callback));
@@ -795,7 +795,7 @@ impl GestureDetector {
     #[must_use]
     pub fn on_double_tap_down<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, DoubleTapDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, DoubleTapDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.press.double_tap_down = Some(value_callback(callback));
@@ -807,7 +807,7 @@ impl GestureDetector {
     #[must_use]
     pub fn on_multi_tap<F, R>(mut self, pointers: MultiTapCount, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, MultiTapDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, MultiTapDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.multi_tap = Some(MultiTapSlot {
@@ -827,7 +827,7 @@ impl GestureDetector {
     #[must_use]
     pub fn on_smart_zoom<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, SmartZoomDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, SmartZoomDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.smart_zoom = Some(value_callback(callback));
@@ -943,7 +943,7 @@ fn deliver<T>(
 fn activate(
     live: &LiveCallbacks,
     mounted: &Cell<bool>,
-    ctx: &mut EventCx<'_>,
+    ctx: &mut EventContext<'_>,
     read: impl FnOnce(&PressCallbacks) -> Option<EventCallback>,
 ) {
     if !mounted.get() {
@@ -1339,7 +1339,7 @@ impl TapSlot {
     /// The activation assistive technology invokes: the callback the slot
     /// holds when the request arrives, run inside that request's dispatch.
     /// The slot borrow ends before the callback runs.
-    pub(super) fn click(&self) -> impl Fn(&mut EventCx<'_>) + 'static + use<> {
+    pub(super) fn click(&self) -> impl Fn(&mut EventContext<'_>) + 'static + use<> {
         let live = Rc::clone(&self.live);
         move |ctx| {
             let callback = live
@@ -1880,7 +1880,7 @@ impl GestureDetectorState {
     /// assistive technology, or `None` when it has nothing to advertise.
     ///
     /// Each handler runs the current callback inside the platform request's
-    /// own [`EventCx`], as a pointer or a key would.
+    /// own [`EventContext`], as a pointer or a key would.
     /// The tap and long-press actions assistive technology can invoke. A
     /// detector with neither still gets the (empty, contributing nothing)
     /// annotation, so that setting or clearing `on_tap` keeps the subtree's

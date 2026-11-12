@@ -20,7 +20,7 @@ use flui_platform::text_store::{
     LockGrant, LockOutcome, LockTiming, TextStoreError, TextStoreRead, Utf16Offset,
 };
 use flui_rendering::hit_testing::CursorIcon;
-use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
+use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
 use flui_scheduler::SchedulerPhase;
 use flui_testing::widgets::{ProbeSignals, SignalProbe, lay_out, loose, tight};
 use flui_testing::{A11yTree, Action, ActionRequest, TreeId};
@@ -285,7 +285,7 @@ impl RenderBox for TripwireBox {
         Ok(Size::new(40.0, 24.0))
     }
 
-    fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {
         assert!(!self.armed.load(Ordering::SeqCst), "tripwire paint fired");
     }
 }

@@ -22,7 +22,7 @@
   go through `SignalWriteExt`); its §5 removes the `signals` feature. The write signature is
   ADR-0086's.
 - **Amended-by:** [ADR-0086](ADR-0086-signal-writes-through-event-context.md) — writes take any
-  `WriteTarget` (in a callback, the `&mut EventCx` it receives) beside the `&Reactive` of §5.1,
+  `WriteTarget` (in a callback, the `&mut EventContext` it receives) beside the `&Reactive` of §5.1,
   which stays a target until ADR-0086 §8 step 3 replaces §5.1; the run-time guard of §5.2 stays
   authoritative.
 

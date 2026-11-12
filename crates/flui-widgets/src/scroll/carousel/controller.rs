@@ -8,7 +8,7 @@ use std::time::Duration;
 use flui_animation::{SharedCurve, curves};
 use flui_foundation::{ChangeNotifier, MutatedDuringBuild};
 use flui_objects::{CarouselGeometry, CarouselItemFrames, CarouselLayout};
-use flui_view::{EventCx, EventOutcome};
+use flui_view::{EventContext, EventOutcome};
 
 use crate::scroll::ScrollController;
 use crate::support::{ValueCallback, value_callback};
@@ -181,7 +181,7 @@ impl CarouselController {
     /// replaces any callback set before.
     pub fn on_index_changed<F, R>(&self, callback: F)
     where
-        F: Fn(&mut EventCx<'_>, usize) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, usize) -> R + 'static,
         R: EventOutcome,
     {
         *self.inner.callback.borrow_mut() = Some(value_callback(callback));

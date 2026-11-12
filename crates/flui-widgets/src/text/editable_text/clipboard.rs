@@ -11,7 +11,7 @@ use flui_interaction::focus::{FocusAttachment, FocusNode};
 use flui_platform::ClipboardRead;
 use flui_platform::capability::Abandoned;
 use flui_platform::text_store::OwnerCalls;
-use flui_view::EventCx;
+use flui_view::EventContext;
 
 use super::{CompositionCommit, EditObserver};
 use crate::interaction::actions::{
@@ -70,7 +70,11 @@ impl Action<CopySelectionTextIntent> for ClipboardTextAction {
             && self.controller.borrow().has_selection()
     }
 
-    fn invoke(&self, _ctx: &mut EventCx<'_>, intent: &CopySelectionTextIntent) -> ActionOutcome {
+    fn invoke(
+        &self,
+        _ctx: &mut EventContext<'_>,
+        intent: &CopySelectionTextIntent,
+    ) -> ActionOutcome {
         let Some(clipboard) = &self.clipboard else {
             return ActionOutcome::NotPerformed;
         };
@@ -97,7 +101,7 @@ impl Action<PasteTextIntent> for ClipboardTextAction {
     /// Commits an active composition first, keeping its text, so the paste
     /// lands after it (ADR-0142 item 4); the paste runs though the commit's
     /// owner code failed, and that failure is resumed after it.
-    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &PasteTextIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &PasteTextIntent) -> ActionOutcome {
         let Some(clipboard) = &self.clipboard else {
             return ActionOutcome::NotPerformed;
         };

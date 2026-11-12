@@ -14,7 +14,8 @@ use flui_foundation::geometry::{Offset, Size};
 use flui_rendering::{
     constraints::{BoxConstraints, Constraints},
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext,
     },
     delegates::SingleChildLayoutDelegate,
     parent_data::BoxParentData,
@@ -179,7 +180,7 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.intrinsic_width(height))
     }
@@ -187,7 +188,7 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.intrinsic_width(height))
     }
@@ -195,7 +196,7 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.intrinsic_height(width))
     }
@@ -203,7 +204,7 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.intrinsic_height(width))
     }
@@ -211,7 +212,7 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut BoxDryLayoutCtx<'_>,
+        _ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         Ok(self.get_size(constraints))
     }
@@ -220,7 +221,7 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
             return Ok(None);

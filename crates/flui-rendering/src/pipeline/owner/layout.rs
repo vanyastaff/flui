@@ -435,7 +435,7 @@ impl PipelineOwner<Layout> {
     ///
     /// Lays out the subtree rooted at `id` with the supplied
     /// `constraints`, running `RenderObject::perform_layout_raw` against a
-    /// typed [`crate::protocol::BoxLayoutCtx`] populated with the parent's
+    /// typed [`crate::protocol::RawBoxLayoutContext`] populated with the parent's
     /// direct children. Returns the parent's computed `Size` on success.
     ///
     /// Replaces the recursion shape of `layout_node_with_children`
@@ -458,12 +458,12 @@ impl PipelineOwner<Layout> {
     ///    `LayoutCycleGuard::enter` has refused a cycle or an id that is not a
     ///    child of the frame asking. The leaf path delegates to
     ///    [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only).
-    ///    The non-leaf path constructs a Direct-storage `BoxLayoutCtx`
-    ///    via the erased driver context ([`crate::protocol::ErasedBoxLayoutCtx`]) with a closure
+    ///    The non-leaf path constructs a Direct-storage `RawBoxLayoutContext`
+    ///    via the erased driver context ([`crate::protocol::DriverBoxLayoutContext`]) with a closure
     ///    that captures `&SubtreeArena` (Sync via `NodePtr`'s
     ///    `unsafe impl`) and re-enters `layout_subtree_borrowed` for
     ///    each child. The bridge in `traits/render_box.rs` reconstructs
-    ///    a typed `BoxLayoutCtx<T::Arity, T::ParentData>` (Proxy
+    ///    a typed `RawBoxLayoutContext<T::Arity, T::ParentData>` (Proxy
     ///    variant) and forwards to `RenderBox::perform_layout`.
     ///    Synchronous `ctx.layout_child(i, c)` calls dispatch through
     ///    the callback, recursing into the child's subtree via its
@@ -539,13 +539,13 @@ impl PipelineOwner<Layout> {
     ///
     /// # ParentData scope (current limitation)
     ///
-    /// The pipeline-side Direct `BoxLayoutCtx` is parameterised over
+    /// The pipeline-side Direct `RawBoxLayoutContext` is parameterised over
     /// [`crate::parent_data::BoxParentData`], so widgets whose `T::ParentData` is the default
     /// (`RenderPadding`, `RenderCenter`, `RenderColoredBox`,
     /// `RenderOpacity`, `RenderTransform`, `RenderSizedBox`) drive
     /// through correctly. Non-default parent-data types (e.g.,
     /// `FlexParentData` on `RenderFlex`) trigger a
-    /// `BoxLayoutCtx::from_erased` debug-assert mismatch in debug builds
+    /// `RawBoxLayoutContext::from_erased` debug-assert mismatch in debug builds
     /// and silently fail to downcast in release builds. Pipeline-driven
     /// flex layout is out of scope for this method; per-render-object
     /// `T::ParentData` dispatch lands as a Core.1 follow-up alongside the

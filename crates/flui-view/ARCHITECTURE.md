@@ -439,7 +439,7 @@ table in `crates/flui-widgets/tests/contracts.rs`.
 ### Build contexts are live during build; there is no detached fallback context
 
 **Rule.** During a `BuildOwner::build_scope` drain, the element being built is taken out of its
-slot and built against a borrowed, read-only view of the real tree (`BuildCtx`), then put back.
+slot and built against a borrowed, read-only view of the real tree (`LiveBuildContext`), then put back.
 Node fields that survive the take (parent, depth, inherited scope, children) stay readable; only
 the element itself is a hole. A component build outside a drain is a framework bug and panics
 with a `BUG:` message — there is no inert "minimal" context to fall back to.
@@ -525,7 +525,7 @@ with `LifecycleHook::Update` (ADR-0287); the element is not requeued.
 `flui_foundation::read_scope::ReadGraph` — pure reads, enough for `Signal::peek` — and never
 `ReaderSink`. `BuildContext` has `ReadScope` as a supertrait, so `sig.get(ctx)` resolves through
 the context's scope. The scope pairs the graph with `ElementReads`, a crate-private sink bound
-to one element: `make_build_ctx` mints it for the element about to build (`BuildCtx` always
+to one element: `make_build_ctx` mints it for the element about to build (`LiveBuildContext` always
 subscribes), and `ElementBuildContext` captures one for its own element and subscribes only while
 marked as building. `begin_element_build`/`end_element_build` bracket every build in
 `build_or_recover` and `release_element` runs on every unmount, in every build: there is no
@@ -548,9 +548,9 @@ A local invariant (ADR-0086).
 
 **Rule.** `SignalWriteExt::set`/`update`/`set_if_changed` take `&W` where `W: WriteTarget`, a
 sealed trait whose graph accessor takes a token only this crate can make
-(`reactive/writer.rs`). Application code meets one target: the `&mut EventCx<'_>` an event
+(`reactive/writer.rs`). Application code meets one target: the `&mut EventContext<'_>` an event
 callback receives, which derefs to a `Writer`. `Writer` has no public constructor and is neither
-`Clone` nor `Send`; an `EventCx` exists only inside `WriterSource::write`. Stateful widgets acquire
+`Clone` nor `Send`; an `EventContext` exists only inside `WriterSource::write`. Stateful widgets acquire
 their `WriterSource` through `LifecycleContext::writer_source`; render views acquire it through
 `RenderObjectContext::writer_source` while registering owner-local interaction handlers.
 Neither capability is exposed by `build`'s `&dyn BuildContext`. A detached render context
@@ -572,7 +572,7 @@ return `()` or a write's `Result`; `EventOutcome::report` logs a refused write o
 `flui.signals` rather than dropping it silently. A state creates its signals in
 `StatefulView::create_state`, so no handle exists before its graph slot does.
 
-The borrowed `Writer` and `EventCx` also implement pure `ReadGraph`: an event's
+The borrowed `Writer` and `EventContext` also implement pure `ReadGraph`: an event's
 `peek` observes current values without creating a build subscription. Owner-bound
 non-signal mutations use `WriterSource::check_context` before changing state;
 it refuses foreign presentation contexts and a build in progress. It cannot prove

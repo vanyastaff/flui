@@ -429,7 +429,7 @@ impl flui_rendering::traits::RenderBox for RunLocalClipParent {
         Ok(ctx.constraints().biggest())
     }
 
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Self::Arity>) {
         use flui_foundation::geometry::Rect;
         use flui_painting::Paint;
         use flui_painting::styling::Color;

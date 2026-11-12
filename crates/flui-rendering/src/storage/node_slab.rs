@@ -404,7 +404,7 @@ mod tests {
         ) -> crate::RenderResult<Size> {
             Ok(Size::new(10.0, 10.0))
         }
-        fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {}
+        fn paint(&self, _ctx: &mut crate::context::PaintContext<'_, Leaf>) {}
     }
 
     fn node() -> RenderNode {

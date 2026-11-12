@@ -12,20 +12,20 @@ use flui_rendering::hit_testing::{
 };
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    Child, EventCx, EventOutcome, IntoView, RenderView, WriterSource, impl_render_view,
+    Child, EventContext, EventOutcome, IntoView, RenderView, WriterSource, impl_render_view,
 };
 
 /// An enter, hover or exit callback, stored already adapted to report its
 /// outcome.
-type MouseCallback = Rc<dyn Fn(&mut EventCx<'_>, PointerInfo, Offset)>;
+type MouseCallback = Rc<dyn Fn(&mut EventContext<'_>, PointerInfo, Offset)>;
 
 /// Store a mouse callback, adapted to report its outcome.
 fn mouse_callback<F, R>(callback: F) -> MouseCallback
 where
-    F: Fn(&mut EventCx<'_>, PointerInfo, Offset) -> R + 'static,
+    F: Fn(&mut EventContext<'_>, PointerInfo, Offset) -> R + 'static,
     R: EventOutcome,
 {
-    Rc::new(move |ctx: &mut EventCx<'_>, pointer, position| {
+    Rc::new(move |ctx: &mut EventContext<'_>, pointer, position| {
         callback(ctx, pointer, position).report();
     })
 }
@@ -42,7 +42,7 @@ fn in_write(writer: &WriterSource, callback: &MouseCallback) -> Rc<dyn Fn(Pointe
 /// The widget over `RenderMouseRegion`. Layout and paint are pass-through when a child exists;
 /// without a child the region grows to the incoming biggest constraint.
 ///
-/// Each callback receives the dispatch's `&mut EventCx<'_>` first, so it
+/// Each callback receives the dispatch's `&mut EventContext<'_>` first, so it
 /// writes a signal directly (ADR-0086):
 /// `.on_enter(move |ctx, _pointer, _position| hovered.set(ctx, true))`. The
 /// pointer metadata preserves kind, role and the optional hardware device identity.
@@ -98,7 +98,7 @@ impl MouseRegion {
     #[must_use]
     pub fn on_enter<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, PointerInfo, Offset) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerInfo, Offset) -> R + 'static,
         R: EventOutcome,
     {
         self.on_enter = Some(mouse_callback(callback));
@@ -109,7 +109,7 @@ impl MouseRegion {
     #[must_use]
     pub fn on_hover<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, PointerInfo, Offset) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerInfo, Offset) -> R + 'static,
         R: EventOutcome,
     {
         self.on_hover = Some(mouse_callback(callback));
@@ -120,7 +120,7 @@ impl MouseRegion {
     #[must_use]
     pub fn on_exit<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, PointerInfo, Offset) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerInfo, Offset) -> R + 'static,
         R: EventOutcome,
     {
         self.on_exit = Some(mouse_callback(callback));
@@ -162,8 +162,10 @@ impl MouseRegion {
     pub(crate) fn hovering(states: &WidgetStatesController) -> Self {
         let (entered, left) = (states.clone(), states.clone());
         Self::new()
-            .on_enter(move |_ctx: &mut EventCx<'_>, _pointer, _position| entered.pointer_entered())
-            .on_exit(move |_ctx: &mut EventCx<'_>, _pointer, _position| left.pointer_left())
+            .on_enter(move |_ctx: &mut EventContext<'_>, _pointer, _position| {
+                entered.pointer_entered();
+            })
+            .on_exit(move |_ctx: &mut EventContext<'_>, _pointer, _position| left.pointer_left())
     }
 
     fn configure(&self, render_object: &mut RenderMouseRegion) {

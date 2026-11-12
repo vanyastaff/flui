@@ -23,7 +23,7 @@ use std::{cell::Cell, rc::Rc};
 
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
     traits::{RenderBox, SemanticsClip},
@@ -1195,8 +1195,8 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
         result
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        let paint_children = |ctx: &mut PaintCx<'_, Variable>| match self.paint_order {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
+        let paint_children = |ctx: &mut PaintContext<'_, Variable>| match self.paint_order {
             SliverPaintOrder::FirstIsTop => ctx.paint_children_reverse(),
             SliverPaintOrder::LastIsTop => ctx.paint_children(),
         };
@@ -1970,8 +1970,8 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
         result
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        let paint_children = |ctx: &mut PaintCx<'_, Variable>| match self.paint_order {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
+        let paint_children = |ctx: &mut PaintContext<'_, Variable>| match self.paint_order {
             SliverPaintOrder::FirstIsTop => ctx.paint_children_reverse(),
             SliverPaintOrder::LastIsTop => ctx.paint_children(),
         };

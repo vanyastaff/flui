@@ -12,7 +12,7 @@ use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -94,7 +94,7 @@ impl RenderBox for RenderRepaintBoundary {
         }
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         // No visual effect of its own — splice the child in order. The
         // boundary split (OffsetLayer + rebase to ZERO) is the paint
         // walk's job, keyed off `is_repaint_boundary()`.

@@ -146,7 +146,7 @@ impl RenderBox for RenderSizedBox {
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.width.unwrap_or(0.0))
     }
@@ -154,7 +154,7 @@ impl RenderBox for RenderSizedBox {
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.width.unwrap_or(0.0))
     }
@@ -162,7 +162,7 @@ impl RenderBox for RenderSizedBox {
     fn compute_min_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.height.unwrap_or(0.0))
     }
@@ -170,7 +170,7 @@ impl RenderBox for RenderSizedBox {
     fn compute_max_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.height.unwrap_or(0.0))
     }
@@ -178,7 +178,7 @@ impl RenderBox for RenderSizedBox {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         Ok(self.resolved_size(&constraints))
     }

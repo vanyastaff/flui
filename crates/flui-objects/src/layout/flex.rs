@@ -9,7 +9,8 @@ use crate::VerticalDirection;
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext,
     },
     parent_data::{FlexFit, FlexParentData},
     traits::{RenderBox, TextBaseline},
@@ -376,10 +377,10 @@ impl RenderFlex {
     /// per-flex-unit size; inflexible children sum directly.
     fn fold_main_axis_intrinsics(
         &self,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
         cross_extent: f64,
         mut child_size: impl FnMut(
-            &mut BoxIntrinsicsCtx<'_>,
+            &mut BoxIntrinsicsContext<'_>,
             usize,
             f64,
         ) -> flui_rendering::RenderResult<f64>,
@@ -410,10 +411,10 @@ impl RenderFlex {
 
     /// Folds child intrinsics along the cross axis (max of child cross sizes).
     fn intrinsic_cross(
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
         main_extent: f64,
         mut child_cross: impl FnMut(
-            &mut BoxIntrinsicsCtx<'_>,
+            &mut BoxIntrinsicsContext<'_>,
             usize,
             f64,
         ) -> flui_rendering::RenderResult<f64>,
@@ -919,7 +920,7 @@ impl RenderBox for RenderFlex {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         let child_count = ctx.child_count();
 
@@ -976,7 +977,7 @@ impl RenderBox for RenderFlex {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         let child_count = ctx.child_count();
         if child_count == 0 {
@@ -1044,14 +1045,14 @@ impl RenderBox for RenderFlex {
         Ok(reported)
     }
 
-    // Closure is load-bearing: a `BoxIntrinsicsCtx::child_*` method path is rejected
+    // Closure is load-bearing: a `BoxIntrinsicsContext::child_*` method path is rejected
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
     #[expect(clippy::redundant_closure_for_method_calls)]
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             FlexDirection::Horizontal => {
@@ -1065,14 +1066,14 @@ impl RenderBox for RenderFlex {
         }
     }
 
-    // Closure is load-bearing: a `BoxIntrinsicsCtx::child_*` method path is rejected
+    // Closure is load-bearing: a `BoxIntrinsicsContext::child_*` method path is rejected
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
     #[expect(clippy::redundant_closure_for_method_calls)]
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             FlexDirection::Horizontal => {
@@ -1086,14 +1087,14 @@ impl RenderBox for RenderFlex {
         }
     }
 
-    // Closure is load-bearing: a `BoxIntrinsicsCtx::child_*` method path is rejected
+    // Closure is load-bearing: a `BoxIntrinsicsContext::child_*` method path is rejected
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
     #[expect(clippy::redundant_closure_for_method_calls)]
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             FlexDirection::Vertical => self.fold_main_axis_intrinsics(ctx, width, |ctx, i, e| {
@@ -1105,14 +1106,14 @@ impl RenderBox for RenderFlex {
         }
     }
 
-    // Closure is load-bearing: a `BoxIntrinsicsCtx::child_*` method path is rejected
+    // Closure is load-bearing: a `BoxIntrinsicsContext::child_*` method path is rejected
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
     #[expect(clippy::redundant_closure_for_method_calls)]
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             FlexDirection::Vertical => self.fold_main_axis_intrinsics(ctx, width, |ctx, i, e| {

@@ -2,7 +2,7 @@
 //!
 //! - every context shape a view author writes accepts `sig.get(ctx)`;
 //! - a read in `build` subscribes the building element through the context
-//!   production builds with (`BuildCtx`, reached by a real mount), and a write
+//!   production builds with (`LiveBuildContext`, reached by a real mount), and a write
 //!   rebuilds exactly that element;
 //! - a handle of the wrong type is a typed error on every path, never a panic,
 //!   and a write through one marks no reader.

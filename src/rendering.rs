@@ -8,8 +8,8 @@
 pub use flui_foundation::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
 pub use flui_rendering::constraints::{BoxConstraints, SliverConstraints, SliverGeometry};
 pub use flui_rendering::context::{
-    BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
-    PaintCx, SliverHitTestContext, SliverLayoutContext,
+    BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+    BoxLayoutContext, PaintContext, SliverHitTestContext, SliverLayoutContext,
 };
 pub use flui_rendering::hit_testing::{
     CursorIcon, HitMetadata, HitTestBehavior, MouseTrackerAnnotation, PanZoomTarget, PointerTarget,

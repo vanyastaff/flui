@@ -10,8 +10,8 @@ use flui_rendering::constraints::{
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
-        PaintCx,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext, PaintContext,
     },
     parent_data::ListBodyParentData,
     traits::{RenderBox, TextBaseline},
@@ -142,10 +142,10 @@ impl RenderListBody {
 
     fn horizontal_intrinsic(
         &self,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
         extent: f64,
         mut child_query: impl FnMut(
-            &mut BoxIntrinsicsCtx<'_>,
+            &mut BoxIntrinsicsContext<'_>,
             usize,
             f64,
         ) -> flui_rendering::RenderResult<f64>,
@@ -162,10 +162,10 @@ impl RenderListBody {
 
     fn vertical_intrinsic(
         &self,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
         extent: f64,
         mut child_query: impl FnMut(
-            &mut BoxIntrinsicsCtx<'_>,
+            &mut BoxIntrinsicsContext<'_>,
             usize,
             f64,
         ) -> flui_rendering::RenderResult<f64>,
@@ -249,7 +249,7 @@ impl RenderBox for RenderListBody {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         self.dry_size(constraints, ctx.child_count(), |i, c| {
             ctx.child_dry_layout(i, c)
@@ -259,7 +259,7 @@ impl RenderBox for RenderListBody {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.horizontal_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_min_intrinsic_width(i, extent)
@@ -269,7 +269,7 @@ impl RenderBox for RenderListBody {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.horizontal_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_max_intrinsic_width(i, extent)
@@ -279,7 +279,7 @@ impl RenderBox for RenderListBody {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.vertical_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_min_intrinsic_height(i, extent)
@@ -289,7 +289,7 @@ impl RenderBox for RenderListBody {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.vertical_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_max_intrinsic_height(i, extent)
@@ -300,7 +300,7 @@ impl RenderBox for RenderListBody {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         self.debug_check_constraints(constraints);
         let child_constraints = self.child_constraints(constraints);
@@ -352,7 +352,7 @@ impl RenderBox for RenderListBody {
         Ok(self.reported_baselines[baseline_kind_index(baseline)])
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         ctx.paint_children();
     }
 

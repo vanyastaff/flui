@@ -257,7 +257,7 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
         assert_eq!(
             probe.value(),
             Ok(expected.len() as u32),
-            "each update has a writable EventCx"
+            "each update has a writable EventContext"
         );
         drop(actual);
         if matches!(
