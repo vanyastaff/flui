@@ -49,16 +49,6 @@
 //! let maybe_id = ViewId::new_checked(0); // None
 //! let valid_id = ViewId::new_checked(1); // Some(ViewId(1))
 //! ```
-// `#[expect]` over `#[allow]` (edition-2024 idiom): this module
-// still contains genuine `unsafe` (the `*_unchecked` zip/new
-// constructors wrap `NonZeroUsize::new_unchecked`, a documented
-// caller-guarantees-non-zero contract). The `expect` will fire an
-// "unfulfilled expectation" lint the day the last `unsafe` block is
-// removed, prompting deletion of this attribute.
-#![expect(
-    unsafe_code,
-    reason = "RawId/Id `*_unchecked` constructors use NonZeroUsize::new_unchecked"
-)]
 
 use core::{
     cmp::Ordering,
@@ -130,24 +120,6 @@ impl RawId {
     #[must_use]
     pub const fn unzip(self) -> Index {
         self.0.get()
-    }
-
-    /// Creates a `RawId` without checking for zero.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `index` is not 0.
-    ///
-    /// Staging: zero workspace callers. This exists to unblock future
-    /// slab/arena hot paths that genuinely benefit from skipping the
-    /// zero-check. Until a call site lands, the unsafe surface surface
-    /// is dead code.
-    #[doc(hidden)]
-    #[inline]
-    #[must_use]
-    pub const unsafe fn zip_unchecked(index: Index) -> Self {
-        // SAFETY: Caller guarantees index is non-zero
-        unsafe { Self(NonZeroUsize::new_unchecked(index)) }
     }
 
     /// Creates a `RawId`, returning `None` if index is 0.
@@ -307,21 +279,6 @@ impl<T: Marker> Id<T> {
         self.0.unzip()
     }
 
-    /// Creates an ID without checking for zero.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `index` is not 0.
-    ///
-    /// Staging: zero workspace callers. See [`RawId::zip_unchecked`].
-    #[doc(hidden)]
-    #[inline]
-    #[must_use]
-    pub const unsafe fn zip_unchecked(index: Index) -> Self {
-        // SAFETY: Caller guarantees index is non-zero
-        unsafe { Self(RawId::zip_unchecked(index), PhantomData) }
-    }
-
     /// Creates an ID, returning `None` if index is 0.
     #[inline]
     #[must_use]
@@ -356,21 +313,6 @@ impl<T: Marker> Id<T> {
     #[must_use]
     pub const fn new_checked(index: Index) -> Option<Self> {
         Self::try_zip(index)
-    }
-
-    /// Alias for `zip_unchecked`.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `index` is not 0.
-    ///
-    /// Staging: zero workspace callers. See [`RawId::zip_unchecked`].
-    #[doc(hidden)]
-    #[inline]
-    #[must_use]
-    pub const unsafe fn new_unchecked(index: Index) -> Self {
-        // SAFETY: Caller guarantees index is non-zero
-        unsafe { Self::zip_unchecked(index) }
     }
 }
 

@@ -53,7 +53,7 @@ impl ViewState<Counter> for CounterState {
             Text::new("Done").into_view().boxed()
         } else {
             RawButton::new(Text::new("Increment"))
-                .on_press(move |ctx| {
+                .on_pressed(move |ctx| {
                     presses.fetch_add(1, Ordering::Relaxed);
                     count.update(ctx, |n| *n += 1)
                 })
