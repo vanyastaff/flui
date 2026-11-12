@@ -522,12 +522,12 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
     );
     let root = GestureArenaScope::new(
         binding.arena().clone(),
-        FocusTreeRoot::new(app_root(Align::new(Alignment::TOP_LEFT).child(
-            SlideTransition::new(
-                position,
-                SizedBox::new(40.0, 40.0).child(ColoredBox::new(Color::rgb(255, 0, 0))),
-            ),
-        ))),
+        FocusTreeRoot::new(app_root(
+            Align::new(Alignment::TOP_LEFT)
+                .child(SlideTransition::new(position).child(
+                    SizedBox::new(40.0, 40.0).child(ColoredBox::new(Color::rgb(255, 0, 0))),
+                )),
+        )),
     );
     let _mounted = binding.mount_root(
         &root,
