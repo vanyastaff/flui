@@ -1715,7 +1715,7 @@ that quietly never released what it held.
 (`tests/navigator_public.rs`) counts `dispose()` calls on a probe route and
 asserts exactly one. Deleting `impl Drop for GeneratedRoute` fails it.
 
-### 8. `RouteSettings::with_arguments_shared` relays a payload without changing its identity
+### 8. `RouteSettings::arguments_shared` relays a payload without changing its identity
 
 **Rule:** as §4 above.
 
@@ -1723,26 +1723,26 @@ asserts exactly one. Deleting `impl Drop for GeneratedRoute` fails it.
 equality, so relaying one settings object's arguments onto another must keep
 the same payload.
 
-**Choice:** `with_arguments<T>(value)` keeps taking the value and minting a
+**Choice:** `arguments<T>(value)` keeps taking the value and minting a
 fresh `Arc` (it is the construction case), and a second constructor
-`with_arguments_shared(RouteArguments)` forwards an existing payload untouched.
+`arguments_shared(RouteArguments)` forwards an existing payload untouched.
 
 **Why:** `RouteSettings`' own `PartialEq` compares the payload by `Arc::ptr_eq`,
-so a relay through `with_arguments` silently changes the answer to the exact
+so a relay through `arguments` silently changes the answer to the exact
 question identity-based assertions ask — and the two constructors are one character apart at
 the call site with no type error between them.
 
 **What it does *not* claim.** It is not the only way to move a payload: a caller
 holding a `RouteSettings` can already `clone()` the `Arc` out of
-[`arguments`](RouteSettings::arguments) and carry it by hand, and the test that
+its `arguments` field and carry it by hand, and the test that
 motivated this constructor could have done exactly that. What the constructor
 buys is that the identity-preserving relay is *expressible as a builder call*,
 so the safe form is as short as the unsafe one — rather than a fact about
-`with_arguments` that every relay site has to remember. That is a real but
+`arguments` that every relay site has to remember. That is a real but
 modest gain, and it is stated here as such.
 
 **Replacement tests:** the identity-preserving relay through
-`RouteSettings::with_arguments_shared` (and the contrast: `with_arguments` on an
+`RouteSettings::arguments_shared` (and the contrast: `arguments` on an
 identical value is *not* `ptr_eq`), and through the keyed counterpart
 `RouteKey::with_arguments_shared`, which exists because `RouteKey::with_arguments`
 takes its payload by value and would wrap an `Arc` in another `Arc` — making the
@@ -1926,7 +1926,7 @@ into the builder, which is a typed capture.
 trap.** The first read path added — an observer reporting route names, a
 `ModalRoute::of`, a name-based route finder — makes the empty `settings`
 silently wrong, and `with_settings` on `SimpleRoute` / `PageRoute` / `PopupRoute`
-must land **in that same change**, not after it. `RouteSettings::with_arguments_shared`
+must land **in that same change**, not after it. `RouteSettings::arguments_shared`
 (§8) already exists as the identity-preserving half such a builder needs.
 
 **Test:** none, and deliberately — there is no behavior to pin, only

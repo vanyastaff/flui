@@ -23,6 +23,7 @@ mod source_tree;
 mod android_dex;
 mod api_closure;
 mod bench;
+mod builder_names;
 mod change_scope;
 mod changelog;
 mod context_names;
@@ -136,6 +137,9 @@ enum Command {
     TryNew(try_new::TryNewArgs),
     /// Check that a context is bound as `ctx`, never as `cx` (ADR-0325).
     ContextNames(context_names::ContextNamesArgs),
+    /// Check that a description type's builder method has no `with_` prefix; the list of
+    /// the ones that still have it only shrinks (ADR-0325).
+    BuilderNames(builder_names::BuilderNamesArgs),
     /// Check that every production `expect` and `panic!` names its invariant (`BUG: `) or its
     /// `try_` twin; the counts of the ones that do not only go down (docs/PANIC-POLICY.md).
     PanicMessages(panic_messages::PanicMessagesArgs),
@@ -224,6 +228,7 @@ fn main() -> ExitCode {
         Command::SendPositions(args) => send_positions::send_positions(&args),
         Command::TryNew(args) => try_new::try_new(&args),
         Command::ContextNames(args) => context_names::context_names(&args),
+        Command::BuilderNames(args) => builder_names::builder_names(&args),
         Command::PanicMessages(args) => panic_messages::panic_messages(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),

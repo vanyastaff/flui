@@ -79,7 +79,7 @@ pub(crate) fn child() {
             handle: handle.clone(),
             asked: Arc::new(AtomicBool::new(false)),
         })
-        .with_config(AppConfig::new().with_title("native linux"))
+        .config(AppConfig::new().title("native linux"))
         .run()
     });
     result.expect("the application runs, paints and quits");

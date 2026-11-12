@@ -76,7 +76,7 @@ pub(crate) fn tab_moves_focus_in_every_window_a_runner_installs() {
     let main_root = main.root();
     let secondary_root = secondary.root();
     let application = Application::new(move |_| main_root.clone())
-        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed))
+        .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed))
         .on_ready(move |_| {
             drop(
                 flui_app::open_window(AppConfig::new(), WindowPolicy::Isolated, secondary_root)

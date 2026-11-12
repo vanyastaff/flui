@@ -73,7 +73,7 @@ an async worker, and sent the result down a oneshot. Five defects followed from 
    those the last frame did not draw, critical pressure evicts all and releases the image atlas texture. The
    registry's `ReclaimMemory` trims decoded images to half the budget (moderate) or drops them
    (critical). The application owns its registry and registers it with
-   `AppConfig::with_memory_reclaim`, as it already registers the registry's typed caches; the host
+   `AppConfig::memory_reclaim`, as it already registers the registry's typed caches; the host
    does not own a registry it could reclaim unasked.
 
 ## Consequences

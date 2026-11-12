@@ -638,10 +638,10 @@ impl SymbolEffectHostState {
                 layers.push(
                     Positioned::fill(
                         OverflowBox::new()
-                            .with_min_width(0.0)
-                            .with_max_width(f64::INFINITY)
-                            .with_min_height(0.0)
-                            .with_max_height(f64::INFINITY)
+                            .min_width(0.0)
+                            .max_width(f64::INFINITY)
+                            .min_height(0.0)
+                            .max_height(f64::INFINITY)
                             .child(
                                 ExcludeSemantics::new()
                                     .child(FadeTransition::new(fade_out).child(leaving.clone())),

@@ -21,7 +21,7 @@ The application setting is `flui_animation::MotionOverride`, re-exported by
 `flui-runtime` and `flui-app` under that name. Its variants keep their meaning:
 `FollowSystem` resolves the host preference as ADR-0195 describes, `Reduce` and
 `Full` override it. The setters follow the type: `MotionClock::set_override`,
-`UiRuntime::set_motion_override`, `AppConfig::with_motion_override` and the
+`UiRuntime::set_motion_override`, `AppConfig::motion_override` and the
 `motion_override` configuration field. The platform type keeps its name, which
 mirrors the platforms' own "preference" vocabulary.
 

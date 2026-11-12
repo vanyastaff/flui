@@ -28,7 +28,7 @@ and put `serde` on the Stable contract crate.
    runtime emits on its owner thread in the order it applied them; the writer serialises exactly
    that sequence. The tap and its registry live beside the emitting runtime in `flui-runtime`
    (`UiRuntime::input_taps`, so a headless host records what a runner does); an application
-   installs one per runtime through `flui-app`'s `AppConfig::with_input_tap`, which re-exports
+   installs one per runtime through `flui-app`'s `AppConfig::input_tap`, which re-exports
    the tap and record types. An `Input` row holds the `InputSurface`/`WindowId` it addressed
    (the window, or a surface embedded in it, ADR-0207 §5), `t` (the `EventTime`), the arrival
    time, the dispatch result and the `InputSequenceId` dispatch placed it in. Pointer input a

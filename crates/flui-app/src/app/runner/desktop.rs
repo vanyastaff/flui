@@ -394,7 +394,7 @@ where
         config,
         capabilities,
     } = launch;
-    let mut application = crate::app::Application::new(move |_| root.clone()).with_config(config);
+    let mut application = crate::app::Application::new(move |_| root.clone()).config(config);
     application.capabilities = capabilities;
     match application.run() {
         Ok(()) => Ok(()),

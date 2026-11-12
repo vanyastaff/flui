@@ -95,12 +95,12 @@ transaction in IndexedDB), and returns the version of the bytes it copied; `NotF
 is stored. A `StorageName` cannot hold `.`, so no value is ever written over a copy. A bad name in
 a constant is a compile error. Storage reaches a
 UI runtime as a built-in capability of the seam (ADR-0152), and `LifecycleContext::storage` is
-removed. The directory is `AppConfig::with_storage_dir`, else the application's identifier
+removed. The directory is `AppConfig::storage_dir`, else the application's identifier
 (`AppIdentity::with_app_id`), else a fixed name where the data roots belong to the application
 alone (Android, iOS, the Web); without one, or on a platform without files, the capability is
 absent and a document is `Unavailable`.
 
-No cargo feature gates persistence: an application identifier or `AppConfig::with_storage_dir` is
+No cargo feature gates persistence: an application identifier or `AppConfig::storage_dir` is
 the one switch, and the types above build with the facade's default features. An application that persists depends, among
 FLUI's crates, on `flui` alone, with the features its widgets need (`material` for the acceptance
 app, `testing` for its headless rows), and on its own codec (`serde_json` in the acceptance app). A

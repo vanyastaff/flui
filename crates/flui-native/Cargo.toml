@@ -291,7 +291,7 @@ libc.workspace = true
 # Native-only async dependencies (not available on wasm32)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
-# The file store behind `flui::AppConfig::with_storage_dir`: the per-user data directories, and
+# The file store behind `flui::AppConfig::storage_dir`: the per-user data directories, and
 # the uniquely named temporary file each write is staged in before it
 # replaces the target. wasm32 keeps values in the page's IndexedDB
 # instead, so neither is there.

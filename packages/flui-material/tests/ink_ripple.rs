@@ -358,9 +358,9 @@ pub fn a_huge_well_publishes_only_finite_ink() {
     let huge = 1.5e308;
     let mut laid = mount(tinted(
         OverflowBox::new()
-            .with_alignment(Alignment::TOP_LEFT)
-            .with_max_width(huge)
-            .with_max_height(huge)
+            .alignment(Alignment::TOP_LEFT)
+            .max_width(huge)
+            .max_height(huge)
             .child(InkWell::new(SizedBox::new(huge, huge)).on_tap(|_| {})),
     ));
     laid.dispatch_pointer_down(10.0, 10.0);

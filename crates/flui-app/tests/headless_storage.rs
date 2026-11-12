@@ -51,7 +51,7 @@ fn start(
         acquired: Rc::clone(&acquired),
     };
     let application = Application::new(move |_| root.clone())
-        .with_config(config.with_executors(executors.host_executors()));
+        .config(config.executors(executors.host_executors()));
     let run = HeadlessRun::start_on(application, platform);
     run.run_owner_turn();
     let storage = acquired
@@ -111,18 +111,18 @@ fn selected_memory_reaches_app() {
     let cases = [
         (
             AppConfig::new()
-                .with_application_identity(identity())
-                .with_storage_dir(explicit.clone()),
+                .application_identity(identity())
+                .storage_dir(explicit.clone()),
             explicit.clone(),
         ),
         (
-            AppConfig::new().with_application_identity(identity().with_app_id(app_id.clone())),
+            AppConfig::new().application_identity(identity().with_app_id(app_id.clone())),
             identified.clone(),
         ),
         (
             AppConfig::new()
-                .with_application_identity(identity().with_app_id(app_id))
-                .with_storage_dir(explicit.clone()),
+                .application_identity(identity().with_app_id(app_id))
+                .storage_dir(explicit.clone()),
             explicit,
         ),
     ];
@@ -180,8 +180,8 @@ fn memory_isolated_across_runs() {
     let previous = platform.data_store(&app).expect("headless storage");
     let executors = DeterministicExecutors::new();
     let config = AppConfig::new()
-        .with_application_identity(identity())
-        .with_storage_dir(app);
+        .application_identity(identity())
+        .storage_dir(app);
     let (run, storage) = start(config.clone(), platform, &executors);
     let retired = storage.expect("first app storage");
     complete(
@@ -219,7 +219,7 @@ fn memory_isolated_across_runs() {
     );
 
     let (run, unconfigured) = start(
-        AppConfig::new().with_application_identity(identity()),
+        AppConfig::new().application_identity(identity()),
         HeadlessPlatform::new(),
         &executors,
     );
@@ -239,8 +239,8 @@ fn disk_survives_fresh_platform() {
     let root = tempfile::tempdir().expect("temporary disk root");
     let app = directory("disk-storage");
     let config = AppConfig::new()
-        .with_application_identity(identity())
-        .with_storage_dir(app.clone());
+        .application_identity(identity())
+        .storage_dir(app.clone());
     let executors = DeterministicExecutors::new();
     let (run, storage) = start(
         config.clone(),
