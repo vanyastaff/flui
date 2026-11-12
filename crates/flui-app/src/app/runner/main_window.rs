@@ -689,6 +689,39 @@ pub(super) fn shutdown_main_window() {
     }
 }
 
+/// The execution services a starting platform may resolve, before any
+/// teardown is armed: dropped armed (a refused platform, an unwind out of
+/// the host's start), it shuts them down and clears the executors the run
+/// stashed, so the next run on this thread resolves its own (ADR-0327 §3).
+struct StartupExecution {
+    armed: bool,
+}
+
+impl StartupExecution {
+    /// The platform is up: the loop's teardown owns the services from here.
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StartupExecution {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let shut = APP_RUNTIME.with(|slot| {
+            slot.try_borrow_mut()
+                .map(|mut runtime| runtime.shutdown_execution(std::time::Instant::now()))
+                .is_ok()
+        });
+        if !shut {
+            tracing::warn!(
+                "the runtime was borrowed when the platform failed to start; its execution services stay"
+            );
+        }
+    }
+}
+
 /// Retires the loop's main window and UI runtimes when dropped: after
 /// `Platform::run` returns, or while a panic unwinds out of it. Held inside
 /// the [`OwnerHostClearGuard`], so the windows go before the owner platform
@@ -875,22 +908,15 @@ where
         .map_err(AppRunError::CapabilityConflict)?;
     let _logging = super::super::logging::init_managed_logging(&application.config);
     // Before the platform: a host that runs IO on the application's runtime
-    // takes it while it starts (ADR-0327 §3).
+    // takes it while it starts (ADR-0327 §3). Until the platform is up no
+    // teardown is armed, so the guard takes the services down with a
+    // refusal or an unwind out of the host's start.
+    let startup = StartupExecution { armed: true };
     if let Some(executors) = application.config.executors.clone() {
         APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_executors(executors));
     }
-    let platform = match platform() {
-        Ok(platform) => platform,
-        Err(error) => {
-            // No teardown is armed yet: the services the host may have
-            // started go with the refusal.
-            APP_RUNTIME.with(|slot| {
-                slot.borrow_mut()
-                    .shutdown_execution(std::time::Instant::now());
-            });
-            return Err(error);
-        }
-    };
+    let platform = platform()?;
+    startup.disarm();
     let fatal = Rc::new(RefCell::new(None));
     let disconnect = Arc::new(Disconnect::default());
     // The loop's handle on it: the loop arms it and installs the agent.
@@ -1394,6 +1420,26 @@ mod tests {
         assert!(
             APP_RUNTIME.with(|slot| slot.borrow().execution().is_none()),
             "a refused platform leaves no execution services behind"
+        );
+
+        // A host whose start unwinds after the services resolved leaves none
+        // behind either, and the next run resolves the executors it names.
+        let app = Application::new(|_| -> flui_widgets::Text {
+            panic!("never built when the platform's start unwinds");
+        })
+        .config(crate::app::AppConfig::default().executors(executors.host_executors()));
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with_platform_factory(app, || {
+                APP_RUNTIME.with(|slot| {
+                    slot.borrow_mut().ensure_execution();
+                });
+                panic!("the host's start unwinds");
+            })
+        }));
+        assert!(unwound.is_err(), "the start's panic resumes to the caller");
+        assert!(
+            APP_RUNTIME.with(|slot| slot.borrow().execution().is_none()),
+            "an unwind out of the platform's start leaves no execution services behind"
         );
     }
 
