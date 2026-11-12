@@ -492,9 +492,9 @@ async fn poll_until_loading<F: std::future::Future>(
     loads: &AtomicUsize,
     count: usize,
 ) {
-    std::future::poll_fn(|cx| {
+    std::future::poll_fn(|ctx| {
         assert!(
-            future.as_mut().poll(cx).is_pending(),
+            future.as_mut().poll(ctx).is_pending(),
             "gate must hold the load"
         );
         if loads.load(Ordering::Relaxed) >= count {
@@ -507,9 +507,9 @@ async fn poll_until_loading<F: std::future::Future>(
 }
 
 async fn poll_waiter<F: std::future::Future>(mut future: std::pin::Pin<&mut F>) {
-    std::future::poll_fn(|cx| {
+    std::future::poll_fn(|ctx| {
         assert!(
-            future.as_mut().poll(cx).is_pending(),
+            future.as_mut().poll(ctx).is_pending(),
             "waiter must await the held load"
         );
         std::task::Poll::Ready(())
@@ -1326,9 +1326,9 @@ fn public_cache_waiters_recover_after_cancellation_or_panic() {
             assert_eq!(loads.load(Ordering::Relaxed), 2);
             if panic_first {
                 gate.add_permits(1);
-                std::future::poll_fn(|cx| {
+                std::future::poll_fn(|ctx| {
                     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        first.as_mut().poll(cx)
+                        first.as_mut().poll(ctx)
                     }));
                     match outcome {
                         Err(payload) => {

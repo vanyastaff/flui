@@ -31,7 +31,7 @@ fn button(label: &str, width: f64, tap: impl Fn() + 'static) -> BoxedView {
         .child(
             GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)
-                .on_tap(move |_cx| tap())
+                .on_tap(move |_ctx| tap())
                 .child(SizedBox::new(width, 20.0)),
         )
         .boxed()

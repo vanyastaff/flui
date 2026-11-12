@@ -143,8 +143,8 @@ enum Turn {
 /// Drive `conversation` over `peer` until it ends: the task a connection runs on the page's
 /// executor.
 pub(super) async fn converse(conversation: Rc<Conversation>, peer: impl Peer) {
-    poll_fn(|cx| {
-        let (lines, deadline) = match conversation.turn(cx.waker()) {
+    poll_fn(|ctx| {
+        let (lines, deadline) = match conversation.turn(ctx.waker()) {
             Turn::Ended => return Poll::Ready(()),
             Turn::Open { lines, deadline } => (lines, Some(deadline)),
             Turn::Closing { lines } => (lines, None),

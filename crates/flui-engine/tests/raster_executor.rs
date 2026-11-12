@@ -45,10 +45,13 @@ fn rig() -> Rig {
     let wakes = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&wakes);
     let clock = ManualClock::new();
-    let (executor, sender) =
-        RasterExecutor::new(backend.clone(), Arc::new(clock.clone()), move || {
+    let (executor, sender) = RasterExecutor::new(
+        backend.clone(),
+        std::rc::Rc::new(clock.clone()),
+        move || {
             counted.fetch_add(1, Ordering::SeqCst);
-        });
+        },
+    );
     Rig {
         executor,
         sender,
@@ -466,7 +469,7 @@ fn a_command_sent_during_the_stop_comes_back_gone() {
         std::rc::Rc::default();
     let (mut executor, sender) = RasterExecutor::new(
         ScriptedSlots::new(),
-        Arc::new(flui_foundation::SystemClock),
+        std::rc::Rc::new(flui_foundation::SystemClock),
         {
             let owner = std::rc::Rc::clone(&owner);
             let answers = std::rc::Rc::clone(&answers);
@@ -908,7 +911,7 @@ fn a_panicking_host_wake_is_resumed_after_the_turn_committed() {
     let counted = Arc::clone(&wakes);
     let (executor, sender) = RasterExecutor::new(
         backend.clone(),
-        Arc::new(flui_foundation::SystemClock),
+        std::rc::Rc::new(flui_foundation::SystemClock),
         move || {
             assert!(
                 counted.fetch_add(1, Ordering::SeqCst) != 0,
@@ -1275,7 +1278,7 @@ impl flui_engine::SlotBackend for PanicsAtAttach {
 fn an_untaken_panic_payload_is_dropped_outside_the_slot_table() {
     let (mut executor, sender) = RasterExecutor::new(
         PanicsAtAttach,
-        Arc::new(flui_foundation::SystemClock),
+        std::rc::Rc::new(flui_foundation::SystemClock),
         || {},
     );
     let slot = sender.mint_slot().expect("a slot id is left");

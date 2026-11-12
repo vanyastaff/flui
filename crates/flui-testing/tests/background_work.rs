@@ -150,10 +150,10 @@ impl Executor for Saturated {
 
 pub(crate) fn a_refused_spawn_answers_refused_at_the_next_pump() {
     let mut registrar = CapabilityRegistrar::new();
-    registrar.provide::<BackgroundCapability>(|cx: &ProviderContext<'_>| {
+    registrar.provide::<BackgroundCapability>(|ctx: &ProviderContext<'_>| {
         Ok(Background::new(
             Arc::new(Saturated),
-            cx.completions().clone(),
+            ctx.completions().clone(),
         ))
     });
     let registry = CapabilityRegistry::builder()
@@ -199,10 +199,10 @@ impl Executor for Handed {
 fn host_over(executor: &Handed) -> HeadlessHost {
     let executor = executor.clone();
     let mut registrar = CapabilityRegistrar::new();
-    registrar.provide::<BackgroundCapability>(move |cx: &ProviderContext<'_>| {
+    registrar.provide::<BackgroundCapability>(move |ctx: &ProviderContext<'_>| {
         Ok(Background::new(
             Arc::new(executor.clone()),
-            cx.completions().clone(),
+            ctx.completions().clone(),
         ))
     });
     let registry = CapabilityRegistry::builder()
@@ -343,7 +343,7 @@ impl std::future::Future for PanicsWhilePolled {
 
     fn poll(
         self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
+        _ctx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<()> {
         panic!("read failed");
     }

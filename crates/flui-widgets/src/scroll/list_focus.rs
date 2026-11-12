@@ -784,7 +784,7 @@ impl ViewState<FocusableList> for FocusableListState {
                         .focus_node(Rc::clone(&self.controller.inner.node))
                         .include_semantics(empty)
                         .debug_label("list")
-                        .on_key_event(move |_cx, event| keys.handle_key(event)),
+                        .on_key_event(move |_ctx, event| keys.handle_key(event)),
                 )
                 .boxed();
         }
@@ -805,7 +805,7 @@ impl ViewState<FocusableList> for FocusableListState {
             .focus_node(Rc::clone(&self.controller.inner.node))
             .include_semantics(empty)
             .debug_label("list")
-            .on_key_event(move |_cx, event| keys.handle_key(event)),
+            .on_key_event(move |_ctx, event| keys.handle_key(event)),
         )
         .boxed()
     }

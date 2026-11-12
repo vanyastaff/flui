@@ -44,13 +44,13 @@ impl StatefulView for Sleeper {
 }
 
 impl ViewState<Sleeper> for SleeperState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let view = &self.view;
-        let timer: TimerHandle = cx.timer().expect("a hosted tree has a timer");
+        let timer: TimerHandle = ctx.timer().expect("a hosted tree has a timer");
         let sleep = timer.sleep(view.after);
         let done = Rc::clone(&view.done);
         let guard = SetOnDrop(Rc::clone(&view.dropped));
-        self.task = cx.async_driver().map(|driver| {
+        self.task = ctx.async_driver().map(|driver| {
             driver.spawn_local(Box::pin(async move {
                 let _guard = guard;
                 sleep.await;
@@ -59,7 +59,7 @@ impl ViewState<Sleeper> for SleeperState {
         });
     }
 
-    fn build(&self, _view: &Sleeper, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Sleeper, _ctx: &dyn BuildContext) -> impl IntoView {
         flui_widgets::SizedBox::new(10.0, 10.0)
     }
 }

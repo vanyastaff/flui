@@ -2327,7 +2327,7 @@ put it on something the widget owns — reached through ADR-0086's lane payload.
 **Consequences, named rather than left to be discovered:**
 
 - **The ordinary "activation toggles this control's own state" closure is a
-  signal write.** `on_increment(move |cx| value.update(cx, |v| *v += 1))`
+  signal write.** `on_increment(move |ctx| value.update(ctx, |v| *v += 1))`
   (`an_action_handler_writes_a_signal_and_rebuilds_its_reader`); a refused
   write is reported, not panicked
   (`a_refused_write_in_an_action_handler_is_reported_not_panicked`).
@@ -3141,8 +3141,8 @@ would delete the wrong one. The callback takes one `DragOutcome`, the shape
 
 ### 39. Actions are invoked with the key event's `EventCx`; `maybe_invoke` has no counterpart
 
-**Choice:** `Action::invoke(&self, cx: &mut EventCx<'_>, intent: &T)`; the
-`Shortcuts` key handler passes its own `cx`, as `CallbackShortcuts` passes it
+**Choice:** `Action::invoke(&self, ctx: &mut EventCx<'_>, intent: &T)`; the
+`Shortcuts` key handler passes its own `ctx`, as `CallbackShortcuts` passes it
 to its bindings (ADR-0086, amending ADR-0023). `Actions::maybe_invoke` is
 removed: its only caller could hold a `BuildContext` only in `build`, which
 has no event context, and a write there is refused. The one invoker resolved

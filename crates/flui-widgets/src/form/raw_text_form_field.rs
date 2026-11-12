@@ -205,7 +205,7 @@ impl ViewState<RawTextFormField> for RawTextFormFieldState {
                 field = field.focus_node(Rc::clone(node));
             }
             if let Some(on_submitted) = input.on_submitted.clone() {
-                field = field.on_submitted(move |cx, text| on_submitted(cx, text));
+                field = field.on_submitted(move |ctx, text| on_submitted(ctx, text));
             }
             with_error_line(field.boxed(), error)
         })

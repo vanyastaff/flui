@@ -1299,7 +1299,7 @@ mod tests {
         };
         let (mut executor, sender) = RasterExecutor::new(
             context,
-            std::sync::Arc::new(flui_foundation::SystemClock),
+            std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
         );
         let targets = [
@@ -1423,7 +1423,7 @@ mod tests {
         };
         let (mut executor, sender) = RasterExecutor::new(
             context,
-            std::sync::Arc::new(flui_foundation::SystemClock),
+            std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
         );
         let slots = [(); 2].map(|()| {
@@ -1545,7 +1545,7 @@ mod tests {
         };
         let clock = ManualClock::new();
         let (mut executor, sender) =
-            RasterExecutor::new(context, std::sync::Arc::new(clock.clone()), || {});
+            RasterExecutor::new(context, std::rc::Rc::new(clock.clone()), || {});
         let slots = [(32, 16), (48, 16)].map(|(width, height)| {
             let slot = sender.mint_slot().expect("a slot id is left");
             let address = PresentationAddress {
@@ -1664,7 +1664,7 @@ mod tests {
         };
         let (mut executor, sender) = RasterExecutor::new(
             context,
-            std::sync::Arc::new(flui_foundation::SystemClock),
+            std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
         );
         let slot = sender.mint_slot().expect("a slot id is left");
@@ -1750,7 +1750,7 @@ mod tests {
             .expect("the no-op backend makes a surface for any window");
         let (_executor, sender) = RasterExecutor::new(
             crate::testing::ScriptedSlots::new(),
-            std::sync::Arc::new(flui_foundation::SystemClock),
+            std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
         );
         let slot = sender.mint_slot().expect("a slot id is left");
@@ -1806,7 +1806,7 @@ mod tests {
         );
         let (_executor, sender) = RasterExecutor::new(
             crate::testing::ScriptedSlots::new(),
-            std::sync::Arc::new(flui_foundation::SystemClock),
+            std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
         );
         let slot = sender.mint_slot().expect("a slot id is left");
@@ -1858,7 +1858,7 @@ mod tests {
             WindowSlot::configured_without_capabilities(surface, (32, 16), ScriptedAcquire::Lost);
         let (_executor, sender) = RasterExecutor::new(
             crate::testing::ScriptedSlots::new(),
-            std::sync::Arc::new(flui_foundation::SystemClock),
+            std::rc::Rc::new(flui_foundation::SystemClock),
             || {},
         );
         let slot = sender.mint_slot().expect("a slot id is left");

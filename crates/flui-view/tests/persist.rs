@@ -148,15 +148,15 @@ impl StatefulView for NoteOpener {
 }
 
 impl ViewState<NoteOpener> for NoteOpenerState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         *self.opened.borrow_mut() = Some(Opened {
-            document: Persisted::open(cx),
-            guard: cx.close_guard(),
-            driver: cx.async_driver(),
+            document: Persisted::open(ctx),
+            guard: ctx.close_guard(),
+            driver: ctx.async_driver(),
         });
     }
 
-    fn build(&self, _view: &NoteOpener, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &NoteOpener, _ctx: &dyn BuildContext) -> impl IntoView {
         Leaf
     }
 }
@@ -180,11 +180,11 @@ impl StatefulView for TwoOpeners {
 }
 
 impl ViewState<TwoOpeners> for TwoOpenersState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        *self.0.outer.borrow_mut() = Some(Persisted::open(cx));
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.0.outer.borrow_mut() = Some(Persisted::open(ctx));
     }
 
-    fn build(&self, _view: &TwoOpeners, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &TwoOpeners, _ctx: &dyn BuildContext) -> impl IntoView {
         NoteOpener {
             opened: Rc::clone(&self.0.inner),
         }
@@ -233,9 +233,9 @@ fn mount_opened(storage: &MemoryStorage) -> (LaidOut, Opened) {
 /// Poll `future` between frames until it completes.
 fn drive<F: Future>(laid: &mut LaidOut, future: F) -> F::Output {
     let mut future = pin!(future);
-    let mut cx = Context::from_waker(Waker::noop());
+    let mut ctx = Context::from_waker(Waker::noop());
     for _ in 0..20 {
-        if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut ctx) {
             return output;
         }
         laid.pump();

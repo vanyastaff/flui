@@ -2410,11 +2410,11 @@ mod native_windows {
                 keydown_observations.fetch_add(1, Ordering::SeqCst);
                 if pump {
                     let mut message = MSG::default();
+                    let hwnd = HWND(pumped_window as *mut _);
                     // SAFETY: the handler runs on the window's creating
                     // thread; only that HWND's queue is pumped. A WM_SYSCHAR
                     // the pump reaches is recorded instead of dispatched, so
                     // it cannot open a modal menu.
-                    let hwnd = HWND(pumped_window as *mut _);
                     while unsafe { PeekMessageW(&raw mut message, Some(hwnd), 0, 0, PM_REMOVE) }
                         .as_bool()
                     {
@@ -3269,8 +3269,8 @@ mod native_windows {
                 windows::Win32::UI::WindowsAndMessaging::SW_SHOWMINNOACTIVE,
             )
         };
-        // SAFETY: a query of the fixture's live window.
         assert!(
+            // SAFETY: a query of the fixture's live window.
             unsafe { IsIconic(hwnd) }.as_bool(),
             "the window is minimised"
         );
@@ -3659,6 +3659,7 @@ mod native_windows {
         // SAFETY: the live shown owner window and initialized point.
         assert!(unsafe { ClientToScreen(hwnd, &raw mut target) }.as_bool());
         // Injection uses actual hit testing, never hwndTarget as an override.
+        // SAFETY: a hit test of a screen point; no handle is retained.
         if unsafe { WindowFromPoint(target) } != hwnd {
             eprintln!(
                 "CANNOT_VERIFY synthetic pointer delivery: shown target is occluded or the desktop is unavailable"
@@ -3791,9 +3792,10 @@ mod native_windows {
                         },
                     }
                 };
-                // SAFETY: initialized union arm matches type and device; the
-                // packet slice remains alive for the synchronous native copy.
                 if let Err(error) =
+                    // SAFETY: initialized union arm matches type and device;
+                    // the packet slice remains alive for the synchronous
+                    // native copy.
                     unsafe { InjectSyntheticPointerInput(device.handle(), &[packet]) }
                 {
                     assert!(
@@ -3811,8 +3813,8 @@ mod native_windows {
                     pump_pointer_thread();
                     std::thread::sleep(Duration::from_millis(2));
                 }
-                // SAFETY: read the actual hit target after native queue pumping.
                 assert_eq!(
+                    // SAFETY: read the actual hit target after native queue pumping.
                     unsafe { WindowFromPoint(target) },
                     hwnd,
                     "owned target must remain hit-testable after native dispatch"
@@ -3978,9 +3980,9 @@ mod native_windows {
             x: left.x + 80,
             y: left.y,
         };
-        // SAFETY: hit tests of screen points; no handle is retained.
         if [left, right]
             .into_iter()
+            // SAFETY: hit tests of screen points; no handle is retained.
             .any(|at| unsafe { WindowFromPoint(at) } != hwnd)
         {
             eprintln!("CANNOT_VERIFY pointer frame: the shown target is occluded");
@@ -4707,6 +4709,7 @@ mod native_windows {
             GetCursorPos(&raw mut original).expect("capture cursor for restoration");
         }
         let _restore = Cursor(original);
+        // SAFETY: a hit test of a screen point; no handle is retained.
         if unsafe { WindowFromPoint(target) } != hwnd {
             eprintln!(
                 "CANNOT_VERIFY native wheel: shown target is occluded or desktop unavailable"
@@ -4747,8 +4750,8 @@ mod native_windows {
                     },
                 },
             };
-            // SAFETY: initialized mouse union arm; cursor is over owned target.
             assert_eq!(
+                // SAFETY: initialized mouse union arm; cursor is over owned target.
                 unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) },
                 1,
                 "native wheel injection accepted"

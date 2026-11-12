@@ -134,8 +134,8 @@ fn handed_over() {
     assert_eq!(http.requests_to(URL), 1, "the lead's request is in flight");
     let mut second =
         Box::pin(registry.load_network_image(URL, LoadServices::new().with_http(http.handle())));
-    let mut cx = Context::from_waker(Waker::noop());
-    assert!(second.as_mut().poll(&mut cx).is_pending());
+    let mut ctx = Context::from_waker(Waker::noop());
+    assert!(second.as_mut().poll(&mut ctx).is_pending());
     assert_eq!(
         http.requests_to(URL),
         1,
@@ -146,7 +146,7 @@ fn handed_over() {
     http.respond(URL, ScriptedResponse::ok(PNG.to_vec()));
     http.release(URL);
     let image = (0..64)
-        .find_map(|_| match second.as_mut().poll(&mut cx) {
+        .find_map(|_| match second.as_mut().poll(&mut ctx) {
             Poll::Ready(answered) => Some(answered),
             Poll::Pending => None,
         })

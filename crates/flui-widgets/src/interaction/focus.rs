@@ -255,7 +255,7 @@ impl Focus {
     /// Called with `true`/`false` as this widget's node gains/loses the
     /// primary focus, and the
     /// dispatch's `&mut EventCx<'_>`, so it writes a signal directly
-    /// (ADR-0086): `.on_focus_change(move |cx, focused| has_focus.set(cx, focused))`.
+    /// (ADR-0086): `.on_focus_change(move |ctx, focused| has_focus.set(ctx, focused))`.
     ///
     /// Framework autofocus and reconfiguration run in lifecycle hooks outside
     /// the signal build guard, so their focus edges can write too. An application
@@ -528,7 +528,7 @@ impl ViewState<Focus> for FocusState {
                 .focused(self.host.node().has_primary_focus());
             // Absent once another owner adopted the node (`FocusHost`).
             match self.host.assistive_focus_request() {
-                Some(request) => semantics.on_focus(move |_cx| request()),
+                Some(request) => semantics.on_focus(move |_ctx| request()),
                 None => semantics,
             }
         } else {

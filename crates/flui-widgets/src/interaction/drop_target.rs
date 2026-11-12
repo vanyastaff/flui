@@ -200,8 +200,8 @@ impl DropTarget {
         F: Fn(&mut EventCx<'_>, &DragView<'_>, DragPoint, TransferActions) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_drop = Some(Rc::new(move |cx, drag, at, action| {
-            callback(cx, drag, at, action).report();
+        self.on_drop = Some(Rc::new(move |ctx, drag, at, action| {
+            callback(ctx, drag, at, action).report();
         }));
         self
     }
@@ -223,7 +223,7 @@ impl DropTarget {
         R: EventOutcome,
     {
         self.spring_loading = Some(policy);
-        self.on_spring_loaded = Some(Rc::new(move |cx, drag| callback(cx, drag).report()));
+        self.on_spring_loaded = Some(Rc::new(move |ctx, drag| callback(ctx, drag).report()));
         self
     }
 }
@@ -338,7 +338,7 @@ impl DropReceiver for TargetReceiver {
         self.forget(drag);
         let on_drop = self.config.borrow().on_drop.clone();
         if let Some(on_drop) = on_drop {
-            self.write(|cx| on_drop(cx, drag, at, action));
+            self.write(|ctx| on_drop(ctx, drag, at, action));
         }
     }
 
@@ -349,7 +349,7 @@ impl DropReceiver for TargetReceiver {
     fn spring_loaded(&self, drag: &DragView<'_>) {
         let callback = self.config.borrow().on_spring_loaded.clone();
         if let Some(callback) = callback {
-            self.write(|cx| callback(cx, drag));
+            self.write(|ctx| callback(ctx, drag));
         }
     }
 }
@@ -472,7 +472,7 @@ struct Paste {
 }
 
 impl Action<PasteTextIntent> for Paste {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &PasteTextIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &PasteTextIntent) -> ActionOutcome {
         let drag_and_drop = self.place.drag_and_drop.borrow().clone();
         let (Some(drag_and_drop), Some(ticket)) = (drag_and_drop, self.place.ticket.get()) else {
             return ActionOutcome::NotPerformed;

@@ -523,7 +523,7 @@ with `LifecycleHook::Update` (ADR-0287); the element is not requeued.
 
 **Rule.** The reactive graph (`reactive/mod.rs`, one `Reactive` per `BuildOwner`) implements
 `flui_foundation::read_scope::ReadGraph` — pure reads, enough for `Signal::peek` — and never
-`ReaderSink`. `BuildContext` has `ReadScope` as a supertrait, so `sig.get(cx)` resolves through
+`ReaderSink`. `BuildContext` has `ReadScope` as a supertrait, so `sig.get(ctx)` resolves through
 the context's scope. The scope pairs the graph with `ElementReads`, a crate-private sink bound
 to one element: `make_build_ctx` mints it for the element about to build (`BuildCtx` always
 subscribes), and `ElementBuildContext` captures one for its own element and subscribes only while

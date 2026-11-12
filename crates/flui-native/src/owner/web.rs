@@ -508,6 +508,7 @@ impl WebState {
 // SAFETY: the page has one thread (`owner::web` refuses `+atomics`), so the
 // value is never reached from another.
 unsafe impl Send for WebLoop {}
+// SAFETY: one thread, as for `Send` above: no second thread can share it.
 unsafe impl Sync for WebLoop {}
 
 impl std::fmt::Debug for WebLoop {

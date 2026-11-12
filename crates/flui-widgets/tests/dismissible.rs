@@ -80,7 +80,7 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
                     crate::common::dismiss_alternatives(),
                 )
                 .direction(DismissDirection::Horizontal)
-                .on_update(move |cx, details| {
+                .on_update(move |ctx, details| {
                     let _keep_alive = &capture;
                     assert!(
                         !first.replace(false) || !matches!(delivery, UpdateDelivery::Panicking),
@@ -88,7 +88,7 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
                     );
                     delivered.borrow_mut().push((generation, details.progress));
                     count
-                        .update(cx, |value| *value += 1)
+                        .update(ctx, |value| *value += 1)
                         .expect("update callback has a live writable signal");
                 })
                 .boxed()

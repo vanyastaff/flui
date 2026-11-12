@@ -213,21 +213,21 @@ impl<T: Clone + 'static> FieldInner<T> {
         }
     }
 
-    fn did_change(&self, cx: &mut EventCx<'_>, value: T) -> Result<(), EventContextError> {
-        self.check_context(cx)?;
+    fn did_change(&self, ctx: &mut EventCx<'_>, value: T) -> Result<(), EventContextError> {
+        self.check_context(ctx)?;
         *self.value.borrow_mut() = Some(value.clone());
         self.interacted.set(true);
         self.push_to_sink(&value, ValueWrite::Change);
         self.autovalidate();
         self.schedule_rebuild();
         if let Some(form) = self.form() {
-            form.field_did_change(cx);
+            form.field_did_change(ctx);
         }
         Ok(())
     }
 
-    fn reset(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
-        self.check_context(cx)?;
+    fn reset(&self, ctx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        self.check_context(ctx)?;
         let initial = self.initial.borrow().clone();
         self.value.borrow_mut().clone_from(&initial);
         self.interacted.set(false);
@@ -242,24 +242,24 @@ impl<T: Clone + 'static> FieldInner<T> {
         }
         let on_reset = self.on_reset.borrow().clone();
         if let Some(on_reset) = on_reset {
-            on_reset(cx);
+            on_reset(ctx);
         }
         if let Some(form) = self.form() {
-            form.field_did_change(cx);
+            form.field_did_change(ctx);
         }
         Ok(())
     }
 }
 
 impl<T: Clone + 'static> FormFieldEntry for FieldInner<T> {
-    fn check_context(&self, cx: &EventCx<'_>) -> Result<(), EventContextError> {
+    fn check_context(&self, ctx: &EventCx<'_>) -> Result<(), EventContextError> {
         self.writer
             .borrow()
             .as_ref()
             .ok_or(EventContextError::Detached)?
-            .check_context(cx)?;
+            .check_context(ctx)?;
         if let Some(form) = self.form() {
-            form.check_context(cx)?;
+            form.check_context(ctx)?;
         }
         Ok(())
     }
@@ -268,17 +268,17 @@ impl<T: Clone + 'static> FormFieldEntry for FieldInner<T> {
         self.error.borrow().is_none()
     }
 
-    fn save(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
-        self.check_context(cx)?;
+    fn save(&self, ctx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        self.check_context(ctx)?;
         let on_saved = self.on_saved.borrow().clone();
         if let (Some(on_saved), Some(value)) = (on_saved, self.current()) {
-            on_saved(cx, &value);
+            on_saved(ctx, &value);
         }
         Ok(())
     }
 
-    fn reset(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
-        Self::reset(self, cx)
+    fn reset(&self, ctx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        Self::reset(self, ctx)
     }
 
     fn has_interacted_by_user(&self) -> bool {
@@ -430,8 +430,8 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
     /// # Errors
     /// Refuses a detached field, foreign presentation or build-time call
     /// before changing the value or invoking callbacks.
-    pub fn did_change(&self, cx: &mut EventCx<'_>, value: T) -> Result<(), EventContextError> {
-        self.inner.did_change(cx, value)
+    pub fn did_change(&self, ctx: &mut EventCx<'_>, value: T) -> Result<(), EventContextError> {
+        self.inner.did_change(ctx, value)
     }
 
     /// Set the value without marking interaction, validating or rebuilding.
@@ -455,8 +455,8 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
     /// # Errors
     /// Refuses a detached field, foreign presentation or build-time call
     /// before changing the value or invoking callbacks.
-    pub fn reset(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
-        self.inner.reset(cx)
+    pub fn reset(&self, ctx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        self.inner.reset(ctx)
     }
 
     /// Whether `self` and `other` name the same field.
@@ -815,7 +815,7 @@ impl<T: Clone + 'static> ViewState<FormField<T>> for FormFieldState<T> {
             .can_request_focus(false)
             .include_semantics(false)
             .debug_label("FormField")
-            .on_focus_change(move |_cx, focused| {
+            .on_focus_change(move |_ctx, focused| {
                 if !focused && inner.validates_on_unfocus() {
                     inner.run_validate();
                 }

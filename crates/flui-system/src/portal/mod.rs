@@ -220,14 +220,14 @@ pub(crate) fn parent_window(window: &WindowRef) -> String {
 /// `address`.
 pub(crate) fn register(registrar: &mut CapabilityRegistrar, address: Option<Arc<str>>) {
     let launcher_address = address.clone();
-    registrar.provide::<LauncherCapability>(move |cx: &ProviderContext<'_>| {
-        let portal = cx.runtime_local::<Portal>();
+    registrar.provide::<LauncherCapability>(move |ctx: &ProviderContext<'_>| {
+        let portal = ctx.runtime_local::<Portal>();
         portal.use_address(launcher_address.clone());
-        Ok::<_, Unsupported>(Launcher::new(PortalLauncher::new(portal), cx))
+        Ok::<_, Unsupported>(Launcher::new(PortalLauncher::new(portal), ctx))
     });
-    registrar.provide::<FileDialogCapability>(move |cx: &ProviderContext<'_>| {
-        let portal = cx.runtime_local::<Portal>();
+    registrar.provide::<FileDialogCapability>(move |ctx: &ProviderContext<'_>| {
+        let portal = ctx.runtime_local::<Portal>();
         portal.use_address(address.clone());
-        FileDialogs::try_new(PortalDialogs::new(portal), cx)
+        FileDialogs::try_new(PortalDialogs::new(portal), ctx)
     });
 }

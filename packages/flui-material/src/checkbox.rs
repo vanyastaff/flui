@@ -133,7 +133,7 @@ type CheckboxChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, Option
 /// ```rust
 /// use flui_material::Checkbox;
 ///
-/// let _off = Checkbox::new(false).on_changed(|_cx, _next| { /* ... */ });
+/// let _off = Checkbox::new(false).on_changed(|_ctx, _next| { /* ... */ });
 /// let _tristate = Checkbox::tristate(None);
 /// let _disabled = Checkbox::new(true);
 /// ```
@@ -429,9 +429,9 @@ impl ViewState<Checkbox> for CheckboxState {
         .states_controller(self.states.clone())
         .focus_indicator(FocusIndicator::Halo);
         if interactive {
-            ink_well = ink_well.on_tap(move |cx| {
+            ink_well = ink_well.on_tap(move |ctx| {
                 if let Some(handler) = &on_changed {
-                    handler(cx, next_value);
+                    handler(ctx, next_value);
                 }
             });
         }

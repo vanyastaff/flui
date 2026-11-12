@@ -9,7 +9,7 @@ use flui_platform::{
     CopiedAside, Storage, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
 };
 
-/// The storage capability: `cx.capability::<StorageCapability>()` hands out
+/// The storage capability: `ctx.capability::<StorageCapability>()` hands out
 /// a [`StorageHandle`].
 ///
 /// The framework provides it wherever the application has a data directory;

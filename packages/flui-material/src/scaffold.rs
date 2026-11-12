@@ -699,14 +699,14 @@ impl ScaffoldState {
             .panel_width(drawer.configured_width())
             .is_open(is_open)
             .enable_open_drag_gesture(view.enable_open_drag_gesture)
-            .on_open_changed(move |cx, opened| {
+            .on_open_changed(move |ctx, opened| {
                 let reorder = can_reorder && handle.is_end_drawer_open() != opened;
                 set_opened(&handle, opened);
                 if reorder {
                     rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
                 }
                 if let Some(callback) = &on_changed {
-                    callback(cx, opened);
+                    callback(ctx, opened);
                 }
             });
         if let Some(color) = view.drawer_scrim_color {

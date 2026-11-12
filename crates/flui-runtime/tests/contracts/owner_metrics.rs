@@ -3089,7 +3089,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         let polls = Rc::new(Cell::new(0));
         let observed_polls = Rc::clone(&polls);
         let observed_window = Rc::clone(&window);
-        let task = driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
+        let task = driver.spawn_local(Box::pin(std::future::poll_fn(move |ctx| {
             assert_eq!(
                 observed_window.calls.load(Ordering::Relaxed),
                 calls_before + 2,
@@ -3097,7 +3097,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             );
             observed_polls.set(observed_polls.get() + 1);
             if observed_polls.get() == 1 {
-                cx.waker().wake_by_ref();
+                ctx.waker().wake_by_ref();
                 std::task::Poll::Pending
             } else {
                 std::task::Poll::Ready(())

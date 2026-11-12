@@ -367,7 +367,7 @@ pub(super) fn source_offset_for_masked_offset(
 /// empty.
 ///
 /// The clipboard is acquired in `init_state` through
-/// `cx.capability::<ClipboardCapability>()` (ADR-0152); a refusal leaves
+/// `ctx.capability::<ClipboardCapability>()` (ADR-0152); a refusal leaves
 /// copy, cut and paste disabled.
 ///
 /// # Primary selection
@@ -1051,7 +1051,7 @@ impl EditableTextState {
             let commit = self.composition_commit();
             let paste = self.clipboard_action();
             let handles = Rc::clone(&self.touch_handles);
-            move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+            move |_ctx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 let flui_interaction::PointerEvent::Down(press) = dispatch.global else {
                     return;
                 };
@@ -1139,7 +1139,7 @@ impl EditableTextState {
         let moved = {
             let controller = Rc::clone(&controller);
             let drag_anchor = Rc::clone(&drag_anchor);
-            move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+            move |_ctx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 let Some(drag) = drag_anchor.get() else {
                     return;
                 };
@@ -1262,7 +1262,7 @@ impl EditableTextState {
         // ancestor's own tap and letting this no-op recognizer compete to
         // win a contact it does nothing with.
         if view.enabled {
-            detector = detector.on_double_tap_down(move |_cx, details| {
+            detector = detector.on_double_tap_down(move |_ctx, details| {
                 let Some(owner) = owner.as_ref() else {
                     return;
                 };
@@ -1514,19 +1514,19 @@ impl EditableTextState {
 struct KeptByTheField;
 
 impl Action<ActivateIntent> for KeptByTheField {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
         ActionOutcome::Performed
     }
 }
 
 impl Action<ActivationPressIntent> for KeptByTheField {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
         ActionOutcome::Performed
     }
 }
 
 impl Action<DismissIntent> for KeptByTheField {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &DismissIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &DismissIntent) -> ActionOutcome {
         ActionOutcome::Performed
     }
 }
@@ -1561,8 +1561,8 @@ impl FieldSemanticsActions {
         (self.enabled.get() && attachment.is_attached()).then_some(node)
     }
 
-    fn focus(&self, cx: &EventCx<'_>) {
-        if self.edits.writer.check_context(cx).is_err() {
+    fn focus(&self, ctx: &EventCx<'_>) {
+        if self.edits.writer.check_context(ctx).is_err() {
             return;
         }
         if let Some(node) = self.live_node().filter(|node| node.can_request_focus()) {
@@ -1571,15 +1571,15 @@ impl FieldSemanticsActions {
         }
     }
 
-    fn set_text(&self, cx: &EventCx<'_>, text: &str) {
-        self.edit(cx, false, |controller| controller.set_text(text));
+    fn set_text(&self, ctx: &EventCx<'_>, text: &str) {
+        self.edit(ctx, false, |controller| controller.set_text(text));
     }
 
     /// The selection a platform set, in bytes of the published value: the
     /// mask's on an obscured field, mapped back to the source here. The
     /// controller snaps both ends to its grapheme boundaries.
-    fn set_selection(&self, cx: &EventCx<'_>, selection: TextSelection, obscuring: Option<char>) {
-        self.edit(cx, true, |controller| {
+    fn set_selection(&self, ctx: &EventCx<'_>, selection: TextSelection, obscuring: Option<char>) {
+        self.edit(ctx, true, |controller| {
             let source = |offset: usize| match obscuring {
                 Some(mask) => source_offset_for_masked_offset(&controller.text(), offset, mask),
                 None => offset,
@@ -1590,12 +1590,12 @@ impl FieldSemanticsActions {
 
     /// Replaces the selection with `text`, as a paste does: line breaks
     /// dropped, the caret after the inserted text.
-    fn replace_selected_text(&self, cx: &EventCx<'_>, text: &str) {
+    fn replace_selected_text(&self, ctx: &EventCx<'_>, text: &str) {
         let line: String = text
             .chars()
             .filter(|&character| character != '\n' && character != '\r')
             .collect();
-        self.edit(cx, true, |controller| controller.insert_str(&line));
+        self.edit(ctx, true, |controller| controller.insert_str(&line));
     }
 
     /// Runs `edit` on the current controller through the keyboard's edit
@@ -1604,8 +1604,8 @@ impl FieldSemanticsActions {
     /// the text store told after it. Each step runs though an earlier one
     /// failed: the platform hears of the edit before the first failure is
     /// resumed.
-    fn edit(&self, cx: &EventCx<'_>, commit: bool, edit: impl FnOnce(&TextEditingController)) {
-        if self.edits.writer.check_context(cx).is_err() || self.live_node().is_none() {
+    fn edit(&self, ctx: &EventCx<'_>, commit: bool, edit: impl FnOnce(&TextEditingController)) {
+        if self.edits.writer.check_context(ctx).is_err() || self.live_node().is_none() {
             return;
         }
         let mut calls = OwnerCalls::new();
@@ -1619,7 +1619,7 @@ impl FieldSemanticsActions {
         if let Some(store) = &self.store {
             calls.run(|| store.run_deferred_before_app_edit());
         }
-        if self.edits.writer.check_context(cx).is_ok() && self.live_node().is_some() {
+        if self.edits.writer.check_context(ctx).is_ok() && self.live_node().is_some() {
             let controller = self.edits.controller.borrow().clone();
             calls.run(|| self.edits.around(|| edit(&controller)));
             if let Some(store) = &self.store {
@@ -1635,7 +1635,7 @@ impl Action<SelectAllTextIntent> for SelectAllTextAction {
         self.focus_node.borrow().can_request_focus() && !self.controller.borrow().is_composing()
     }
 
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &SelectAllTextIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &SelectAllTextIntent) -> ActionOutcome {
         let controller = self.controller.borrow().clone();
         controller.set_selection(0, controller.text().len());
         ActionOutcome::Performed
@@ -1713,7 +1713,7 @@ impl EditObserver {
     /// or removed the callback since (a rebuild) left the snapshot its last
     /// owner, which retires inside `calls`.
     pub(super) fn deliver(&self, on_changed: TextChanged, committed: &str, calls: &mut OwnerCalls) {
-        calls.run(|| self.writer.write(|cx| on_changed(cx, committed)));
+        calls.run(|| self.writer.write(|ctx| on_changed(ctx, committed)));
         calls.retire(on_changed);
     }
 }
@@ -2737,7 +2737,7 @@ fn build_key_handler(
                 if event.repeat() == KeyRepeat::First {
                     let text = controller.text();
                     drop(controller);
-                    writer.write(|cx| callback(cx, &text));
+                    writer.write(|ctx| callback(ctx, &text));
                 }
                 KeyEventResult::Handled
             }
@@ -2927,26 +2927,26 @@ fn build_field_view(
     }
     if enabled {
         let edit = actions.clone();
-        semantics = semantics.on_set_value(move |cx, text| edit.set_text(cx, text));
+        semantics = semantics.on_set_value(move |ctx, text| edit.set_text(ctx, text));
         let obscuring = appearance
             .obscure_text
             .then_some(appearance.obscuring_character);
         let select = actions.clone();
-        semantics = semantics.on_set_text_selection(move |cx, selection| {
-            select.set_selection(cx, selection, obscuring);
+        semantics = semantics.on_set_text_selection(move |ctx, selection| {
+            select.set_selection(ctx, selection, obscuring);
         });
         let replace = actions.clone();
         semantics = semantics
-            .on_replace_selected_text(move |cx, text| replace.replace_selected_text(cx, text));
+            .on_replace_selected_text(move |ctx, text| replace.replace_selected_text(ctx, text));
         // Focus eligibility is independent of the enabled document's value
         // mutability. A queued focus request rechecks eligibility at delivery.
         if focus_node.can_request_focus() {
             let focus = actions.clone();
-            semantics = semantics.on_focus(move |cx| focus.focus(cx));
+            semantics = semantics.on_focus(move |ctx| focus.focus(ctx));
         }
         let focus = actions.clone();
         semantics =
-            crate::text::show_menu_action(semantics, handles.menu(), move |cx| focus.focus(cx));
+            crate::text::show_menu_action(semantics, handles.menu(), move |ctx| focus.focus(ctx));
     }
     let field = crate::__private::AnchoredBox::new(
         inner_anchor,

@@ -189,7 +189,7 @@ fn deliver_assistive_focus(target: LocalPayloadTarget, within: bool) {
     let Some(handler) = cell.actions.assistive_focus.clone() else {
         return;
     };
-    cell.writer.write(|cx| handler(cx, within));
+    cell.writer.write(|ctx| handler(ctx, within));
 }
 
 fn deliver(target: LocalPayloadTarget, call: ActionCall) {
@@ -233,7 +233,7 @@ fn deliver(target: LocalPayloadTarget, call: ActionCall) {
         );
         return;
     };
-    cell.writer.write(|cx| handler(cx, call));
+    cell.writer.write(|ctx| handler(ctx, call));
 }
 
 /// Annotates a subtree with accessibility semantics.
@@ -841,11 +841,11 @@ impl Semantics {
         let handler = value_callback(handler);
         self.event_actions.insert(
             action,
-            Rc::new(move |cx, call| match call {
+            Rc::new(move |ctx, call| match call {
                 ActionCall::ScrollUp(unit)
                 | ActionCall::ScrollDown(unit)
                 | ActionCall::ScrollLeft(unit)
-                | ActionCall::ScrollRight(unit) => handler(cx, unit),
+                | ActionCall::ScrollRight(unit) => handler(ctx, unit),
                 _ => {}
             }),
         );
@@ -880,13 +880,13 @@ impl Semantics {
     /// state:
     ///
     /// ```compile_fail
-    /// let _ = flui_widgets::Semantics::new().on_expand(|_cx| {});
+    /// let _ = flui_widgets::Semantics::new().on_expand(|_ctx| {});
     /// ```
     ///
     /// Register the expanded state and both transition handlers together:
     ///
     /// ```
-    /// let _ = flui_widgets::Semantics::new().expandable(false, |_cx| {}, |_cx| {});
+    /// let _ = flui_widgets::Semantics::new().expandable(false, |_ctx| {}, |_ctx| {});
     /// ```
     #[must_use]
     pub fn expandable<E, RE, C, RC>(self, expanded: bool, on_expand: E, on_collapse: C) -> Self
@@ -912,9 +912,9 @@ impl Semantics {
         let handler = value_callback(handler);
         self.event_actions.insert(
             SemanticsAction::SetNumericValue,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::SetNumericValue(value) = call {
-                    handler(cx, value);
+                    handler(ctx, value);
                 }
             }),
         );
@@ -962,9 +962,9 @@ impl Semantics {
         let handler = value_callback(handler);
         self.event_actions.insert(
             SemanticsAction::ScrollIntoView,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::ScrollIntoView(reveal) = call {
-                    handler(cx, reveal);
+                    handler(ctx, reveal);
                 }
             }),
         );
@@ -1009,9 +1009,9 @@ impl Semantics {
         let handler = ref_callback::<str, _, _>(handler);
         self.event_actions.insert(
             SemanticsAction::SetValue,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::SetValue(text) = call {
-                    handler(cx, &text);
+                    handler(ctx, &text);
                 }
             }),
         );
@@ -1031,9 +1031,9 @@ impl Semantics {
         let handler = value_callback(handler);
         self.event_actions.insert(
             SemanticsAction::SetTextSelection,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::SetTextSelection(selection) = call {
-                    handler(cx, selection);
+                    handler(ctx, selection);
                 }
             }),
         );
@@ -1077,9 +1077,9 @@ impl Semantics {
         let handler = value_callback(handler);
         self.event_actions.insert(
             SemanticsAction::SetTextSelection,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::SetDocumentSelection(selection) = call {
-                    handler(cx, selection);
+                    handler(ctx, selection);
                 }
             }),
         );
@@ -1113,9 +1113,9 @@ impl Semantics {
         let handler = ref_callback::<str, _, _>(handler);
         self.event_actions.insert(
             SemanticsAction::ReplaceSelectedText,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::ReplaceSelectedText(text) = call {
-                    handler(cx, &text);
+                    handler(ctx, &text);
                 }
             }),
         );
@@ -1133,9 +1133,9 @@ impl Semantics {
         let handler = value_callback(handler);
         self.event_actions.insert(
             SemanticsAction::SetScrollOffset,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::SetScrollOffset(offset) = call {
-                    handler(cx, offset);
+                    handler(ctx, offset);
                 }
             }),
         );
@@ -1202,7 +1202,7 @@ impl Semantics {
         R: EventOutcome,
     {
         let handler: EventActionHandler =
-            Rc::new(move |cx: &mut EventCx<'_>, _call| handler(cx).report());
+            Rc::new(move |ctx: &mut EventCx<'_>, _call| handler(ctx).report());
         let entry = CustomEntry {
             label,
             handler,
@@ -1257,7 +1257,7 @@ impl Semantics {
         // reports it (ADR-0086).
         self.event_actions.insert(
             action,
-            Rc::new(move |cx: &mut EventCx<'_>, _call| handler(cx).report()),
+            Rc::new(move |ctx: &mut EventCx<'_>, _call| handler(ctx).report()),
         );
         self
     }

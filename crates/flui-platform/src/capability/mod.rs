@@ -54,14 +54,14 @@ pub trait Capability: 'static {
 /// cache, so a handle that holds an operating-system subscription ends it
 /// when its last clone drops. A provider may share state internally.
 pub trait CapabilityProvider<C: Capability>: 'static {
-    /// The handle for the widget acquiring it in `cx`.
+    /// The handle for the widget acquiring it in `ctx`.
     ///
     /// # Errors
     ///
     /// [`Unsupported`] when this platform, device or context cannot provide
     /// `C`; a capability that needs a window answers
     /// [`NoWindow`](crate::UnsupportedReason::NoWindow) itself.
-    fn provide(&self, cx: &ProviderContext<'_>) -> Result<C::Handle, Unsupported>;
+    fn provide(&self, ctx: &ProviderContext<'_>) -> Result<C::Handle, Unsupported>;
 }
 
 impl<C, F> CapabilityProvider<C> for F
@@ -69,8 +69,8 @@ where
     C: Capability,
     F: Fn(&ProviderContext<'_>) -> Result<C::Handle, Unsupported> + 'static,
 {
-    fn provide(&self, cx: &ProviderContext<'_>) -> Result<C::Handle, Unsupported> {
-        self(cx)
+    fn provide(&self, ctx: &ProviderContext<'_>) -> Result<C::Handle, Unsupported> {
+        self(ctx)
     }
 }
 

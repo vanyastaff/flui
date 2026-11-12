@@ -210,7 +210,7 @@ impl CupertinoTabBar {
         mut self,
         on_tap: impl Fn(&mut flui_sdk::view::EventCx<'_>, usize) -> R + 'static,
     ) -> Self {
-        self.on_tap = Some(Rc::new(move |cx, index| on_tap(cx, index).report()));
+        self.on_tap = Some(Rc::new(move |ctx, index| on_tap(ctx, index).report()));
         self
     }
 
@@ -363,7 +363,7 @@ impl StatelessView for CupertinoTabBar {
 
                 let mut detector = GestureDetector::new().behavior(HitTestBehavior::Opaque);
                 if let Some(on_tap) = self.on_tap.clone() {
-                    detector = detector.on_tap(move |cx| on_tap(cx, index));
+                    detector = detector.on_tap(move |ctx| on_tap(ctx, index));
                 }
 
                 // `selected` is set; the localized `hint` is deferred (no

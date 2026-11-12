@@ -30,7 +30,7 @@ mod inbox;
 mod sender;
 mod slot;
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use crossbeam_channel::{Receiver, bounded};
 use flui_foundation::{
@@ -108,7 +108,7 @@ pub struct RasterExecutor<B: SlotBackend = crate::GpuContext> {
     wake: Box<dyn Fn()>,
     /// The time the device's rebuilds are paced on: the UI runtime's clock,
     /// so a manual one walks the backoff without sleeping.
-    clock: Arc<dyn MonotonicClock>,
+    clock: Rc<dyn MonotonicClock>,
     /// The context's device rebuilds (ADR-0305 §8).
     rebuilds: DeviceRebuilds,
     slots: Vec<Option<ExecSlot>>,
@@ -132,7 +132,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
     /// health, with no lock held and contained.
     pub fn new(
         backend: B,
-        clock: Arc<dyn MonotonicClock>,
+        clock: Rc<dyn MonotonicClock>,
         wake: impl Fn() + 'static,
     ) -> (Self, RasterSender) {
         let (lifecycle_tx, lifecycle) = bounded(LIFECYCLE_CAPACITY);

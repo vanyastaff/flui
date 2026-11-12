@@ -1,8 +1,8 @@
 error[E0631]: type mismatch in closure arguments
   --> tests/ui/let_bound_event_closure_without_helper.rs:10:26
    |
- 9 |     let press = move |cx| count.set(cx, 1);
-   |                 --------- found signature defined here
+ 9 |     let press = move |ctx| count.set(ctx, 1);
+   |                 ---------- found signature defined here
 10 |     let _ = source.write(press);
    |                    ----- ^^^^^ expected due to this
    |                    |

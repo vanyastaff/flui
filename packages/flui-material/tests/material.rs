@@ -35,7 +35,7 @@ const CORNER_PROBE: (f64, f64) = (2.0, 2.0);
 fn tap_counter() -> (Arc<AtomicUsize>, impl Fn(&mut EventCx<'_>) + 'static) {
     let taps = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&taps);
-    (taps, move |_cx: &mut EventCx<'_>| {
+    (taps, move |_ctx: &mut EventCx<'_>| {
         counted.fetch_add(1, Ordering::SeqCst);
     })
 }

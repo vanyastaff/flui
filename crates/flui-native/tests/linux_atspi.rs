@@ -193,12 +193,12 @@ mod cases {
             let wayland = available("weston");
             // Set before the session bus starts, so a program it activates
             // runs in this session too.
-            // SAFETY: no thread has started; nothing reads the environment
-            // while it is set.
             #[expect(
                 unsafe_code,
                 reason = "the environment is set before any thread exists"
             )]
+            // SAFETY: no thread has started; nothing reads the environment
+            // while it is set.
             unsafe {
                 std::env::set_var("DISPLAY", &display);
                 if wayland {

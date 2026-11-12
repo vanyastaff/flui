@@ -596,10 +596,12 @@ impl ViewState<InputDecorator> for InputDecoratorState {
         let hover_on_exit = self.hover.clone();
 
         let container = MouseRegion::new()
-            .on_enter(move |_cx, _device, _offset| {
+            .on_enter(move |_ctx, _device, _offset| {
                 hover_on_enter.update(WidgetState::Hovered, true);
             })
-            .on_exit(move |_cx, _device, _offset| hover_on_exit.update(WidgetState::Hovered, false))
+            .on_exit(move |_ctx, _device, _offset| {
+                hover_on_exit.update(WidgetState::Hovered, false);
+            })
             .child(DecoratedBox::new(box_decoration).child(content))
             .boxed();
 

@@ -72,7 +72,7 @@ impl Scene {
         let hears = Rc::clone(&heard);
         let area = area(
             SelectionArea::new(Column::new((Text::new(WORDS).style(style()),)))
-                .on_selection_changed(move |_cx, change| {
+                .on_selection_changed(move |_ctx, change| {
                     *hears.borrow_mut() = change
                         .selected
                         .as_ref()
@@ -86,14 +86,14 @@ impl Scene {
         };
         let (shout, whisper, menu) = (Rc::clone(&log), Rc::clone(&log), Rc::clone(&log));
         let home = Actions::new(content)
-            .action(CallbackAction::new(move |_cx, _: &Shout| {
+            .action(CallbackAction::new(move |_ctx, _: &Shout| {
                 shout.borrow_mut().push("shout");
             }))
-            .action(CallbackAction::new(move |_cx, _: &Whisper| {
+            .action(CallbackAction::new(move |_ctx, _: &Whisper| {
                 whisper.borrow_mut().push("whisper");
             }))
             .action(CallbackAction::new(
-                move |_cx, _: &ShowContextMenuIntent| {
+                move |_ctx, _: &ShowContextMenuIntent| {
                     menu.borrow_mut().push("menu");
                 },
             ));
@@ -437,7 +437,7 @@ pub(crate) fn an_area_rebuilt_without_its_menu_takes_its_toolbar_away() {
             count.replace(Some(signals.count));
             let hears = Rc::clone(&hears);
             let area = SelectionArea::new(Column::new((Text::new(WORDS).style(style()),)))
-                .on_selection_changed(move |_cx, change| {
+                .on_selection_changed(move |_ctx, change| {
                     *hears.borrow_mut() = change
                         .selected
                         .as_ref()
@@ -465,7 +465,7 @@ pub(crate) fn an_area_rebuilt_without_its_menu_takes_its_toolbar_away() {
     off.set(true);
     let signal = count.borrow().expect("the probe built");
     probe
-        .write(|cx| signal.set(cx, 1))
+        .write(|ctx| signal.set(ctx, 1))
         .expect("the probe's signal takes it");
     scene.settle();
     assert_eq!(scene.toolbar(), Vec::<String>::new());

@@ -42,7 +42,7 @@ fn section(
     match proposals {
         Some(proposals) => {
             let proposals = Rc::clone(proposals);
-            view.on_changed(move |_cx, state| proposals.borrow_mut().push(state))
+            view.on_changed(move |_ctx, state| proposals.borrow_mut().push(state))
         }
         None => view,
     }
@@ -711,7 +711,7 @@ fn drop_case(header_fails: bool, body_fails: bool, callback_fails: bool) {
             clone_fails: false,
         },
     )
-    .on_changed(move |_cx, _state| callback.observe());
+    .on_changed(move |_ctx, _state| callback.observe());
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(view)));
     assert_eq!(
         failure.is_err(),
@@ -769,7 +769,7 @@ fn geometry(constraints: BoxConstraints, ambient: TextDirection, explicit: Optio
                     .child(ColoredBox::new(Color::RED)),
             ),
     )
-    .on_changed(move |_cx, target| changed.borrow_mut().push(target))
+    .on_changed(move |_ctx, target| changed.borrow_mut().push(target))
     .indicator_color(Color::BLUE);
     if let Some(explicit) = explicit {
         view = view.text_direction(explicit);

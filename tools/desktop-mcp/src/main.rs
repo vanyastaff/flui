@@ -162,11 +162,11 @@ struct ShutdownOnEof<R>(R);
 impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for ShutdownOnEof<R> {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        ctx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         let before = buf.filled().len();
-        let read = std::pin::Pin::new(&mut self.0).poll_read(cx, buf);
+        let read = std::pin::Pin::new(&mut self.0).poll_read(ctx, buf);
         if matches!(read, std::task::Poll::Ready(Ok(()))) && buf.filled().len() == before {
             desktop::stop_input();
         }

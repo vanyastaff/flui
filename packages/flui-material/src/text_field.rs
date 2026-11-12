@@ -162,7 +162,7 @@ where
     F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
     R: EventOutcome,
 {
-    Rc::new(move |cx: &mut EventCx<'_>, text: &str| callback(cx, text).report())
+    Rc::new(move |ctx: &mut EventCx<'_>, text: &str| callback(ctx, text).report())
 }
 
 // Hand-written rather than derived: `on_submitted`'s `Rc<dyn Fn(&str)>` has
@@ -516,10 +516,10 @@ impl ViewState<TextField> for MaterialTextFieldState {
             editable = editable.text_style(text_style);
         }
         if let Some(on_submitted) = view.on_submitted.clone() {
-            editable = editable.on_submitted(move |cx, text| on_submitted(cx, text));
+            editable = editable.on_submitted(move |ctx, text| on_submitted(ctx, text));
         }
         if let Some(on_changed) = view.on_changed.clone() {
-            editable = editable.on_changed(move |cx, text| on_changed(cx, text));
+            editable = editable.on_changed(move |ctx, text| on_changed(ctx, text));
         }
 
         let focus_node = Rc::clone(&self.focus_node);
@@ -529,7 +529,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
         // time, and a focus it requested then would take the focus back from
         // wherever the keyboard moved it meanwhile.
         Listener::new()
-            .on_pointer_down(move |_cx, _dispatch| {
+            .on_pointer_down(move |_ctx, _dispatch| {
                 let _ = focus_node.request_focus();
             })
             .child(

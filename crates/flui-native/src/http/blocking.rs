@@ -329,8 +329,8 @@ struct HeadFuture {
 impl Future for HeadFuture {
     type Output = Result<HttpResponse, HttpError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let answer = std::task::ready!(Pin::new(&mut self.head).poll(cx));
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        let answer = std::task::ready!(Pin::new(&mut self.head).poll(ctx));
         self.answered = true;
         // A thread that left unanswered is one that died.
         Poll::Ready(answer.unwrap_or(Err(HttpError::Cancelled)))
@@ -353,10 +353,10 @@ struct Chunks {
 impl BodySource for Chunks {
     fn poll_chunk(
         self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        ctx: &mut Context<'_>,
     ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
         // Cloned before the lock: a waker's clone is the caller's code.
-        let waker = cx.waker().clone();
+        let waker = ctx.waker().clone();
         let (answer, replaced) = {
             let mut state = self.exchange.lock();
             if let Some(chunk) = state.chunks.pop_front() {

@@ -728,9 +728,9 @@ impl StatelessView for Follower {
         let signal = self.x;
         Listener::new()
             .behavior(HitTestBehavior::Opaque)
-            .on_pointer_move(move |cx, event| {
+            .on_pointer_move(move |ctx, event| {
                 if let PointerEvent::Move(event) = event.global {
-                    let _ = signal.set(cx, event.current().position.get().x);
+                    let _ = signal.set(ctx, event.current().position.get().x);
                 }
             })
             .child(

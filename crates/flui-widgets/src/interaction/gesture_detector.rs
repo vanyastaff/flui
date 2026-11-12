@@ -582,9 +582,9 @@ struct MultiTapSlot {
 ///     let count = ctx.signal(0_u32);
 ///     let offset = ctx.signal(Offset::<f64>::ZERO);
 ///     GestureDetector::new()
-///         .on_tap(move |cx| count.update(cx, |n| *n += 1))
-///         .drag(DragSlot::pan().on_update(move |cx, details| {
-///             offset.update(cx, |o| *o += details.delta)
+///         .on_tap(move |ctx| count.update(ctx, |n| *n += 1))
+///         .drag(DragSlot::pan().on_update(move |ctx, details| {
+///             offset.update(ctx, |o| *o += details.delta)
 ///         }))
 /// }
 /// ```
@@ -933,17 +933,17 @@ fn deliver<T>(
     value: T,
 ) {
     if let Some(callback) = read(live) {
-        writer.write(|cx| callback(cx, value));
+        writer.write(|ctx| callback(ctx, value));
     }
 }
 
-/// Run the press callback `read` takes from the live slots inside `cx`, an
+/// Run the press callback `read` takes from the live slots inside `ctx`, an
 /// assistive-technology request's dispatch, while the detector is mounted.
 /// The slot borrow ends before the callback runs.
 fn activate(
     live: &LiveCallbacks,
     mounted: &Cell<bool>,
-    cx: &mut EventCx<'_>,
+    ctx: &mut EventCx<'_>,
     read: impl FnOnce(&PressCallbacks) -> Option<EventCallback>,
 ) {
     if !mounted.get() {
@@ -951,7 +951,7 @@ fn activate(
     }
     let callback = read(&live.press.borrow());
     if let Some(callback) = callback {
-        callback(cx);
+        callback(ctx);
     }
 }
 
@@ -962,7 +962,7 @@ fn deliver_event(
     read: impl FnOnce(&LiveCallbacks) -> Option<EventCallback>,
 ) {
     if let Some(callback) = read(live) {
-        writer.write(|cx| callback(cx));
+        writer.write(|ctx| callback(ctx));
     }
 }
 
@@ -1019,7 +1019,7 @@ fn deliver_press<T>(
 ) {
     let callback = read(&live.press());
     if let Some(callback) = callback {
-        writer.write(|cx| callback(cx, value));
+        writer.write(|ctx| callback(ctx, value));
     }
 }
 
@@ -1031,7 +1031,7 @@ fn deliver_press_event(
 ) {
     let callback = read(&live.press());
     if let Some(callback) = callback {
-        writer.write(|cx| callback(cx));
+        writer.write(|ctx| callback(ctx));
     }
 }
 
@@ -1046,7 +1046,7 @@ fn deliver_press_event(
 struct PressRecognizers {
     shape: PressShape,
     live: Rc<dyn PressLive>,
-    cx: RecognizerContext,
+    ctx: RecognizerContext,
     members: OnceCell<PressMembers>,
 }
 
@@ -1058,9 +1058,9 @@ struct PressMembers {
 }
 
 impl PressMembers {
-    fn build(shape: PressShape, live: &Rc<dyn PressLive>, cx: &RecognizerContext) -> Self {
-        let arena = cx.arena();
-        let settings = cx.settings();
+    fn build(shape: PressShape, live: &Rc<dyn PressLive>, ctx: &RecognizerContext) -> Self {
+        let arena = ctx.arena();
+        let settings = ctx.settings();
         let (double_tap_arena, tap_arena) = if shape.is_composed() {
             match arena.compose(GestureComposition::RequireFailure) {
                 Ok(branches) => branches.into_branches(),
@@ -1074,10 +1074,10 @@ impl PressMembers {
         };
         let tap = shape.tap.then(|| {
             let (primary, secondary) = (Rc::clone(live), Rc::clone(live));
-            let (primary_writer, secondary_writer) = (cx.writer().clone(), cx.writer().clone());
-            let (cancel, cancel_writer) = (Rc::clone(live), cx.writer().clone());
-            let (down, down_writer) = (Rc::clone(live), cx.writer().clone());
-            let (up, up_writer) = (Rc::clone(live), cx.writer().clone());
+            let (primary_writer, secondary_writer) = (ctx.writer().clone(), ctx.writer().clone());
+            let (cancel, cancel_writer) = (Rc::clone(live), ctx.writer().clone());
+            let (down, down_writer) = (Rc::clone(live), ctx.writer().clone());
+            let (up, up_writer) = (Rc::clone(live), ctx.writer().clone());
             TapGestureRecognizer::builder(tap_arena)
                 .settings(settings.clone())
                 .on_tap(move |_| {
@@ -1114,7 +1114,7 @@ impl PressMembers {
         });
         let long_press = shape.long_press.then(|| {
             let live = Rc::clone(live);
-            let writer = cx.writer().clone();
+            let writer = ctx.writer().clone();
             LongPressGestureRecognizer::builder(arena.clone())
                 .settings(settings.clone())
                 .on_long_press(move || {
@@ -1124,7 +1124,7 @@ impl PressMembers {
         });
         let double_tap = shape.double_tap.then(|| {
             let (done, down) = (Rc::clone(live), Rc::clone(live));
-            let (done_writer, down_writer) = (cx.writer().clone(), cx.writer().clone());
+            let (done_writer, down_writer) = (ctx.writer().clone(), ctx.writer().clone());
             DoubleTapGestureRecognizer::builder(double_tap_arena)
                 .settings(settings.clone())
                 .on_double_tap(move |_| {
@@ -1176,7 +1176,7 @@ impl PressRecognizers {
     /// The members, built now if no contact was offered before.
     fn members(&self) -> &PressMembers {
         self.members
-            .get_or_init(|| PressMembers::build(self.shape, &self.live, &self.cx))
+            .get_or_init(|| PressMembers::build(self.shape, &self.live, &self.ctx))
     }
 }
 
@@ -1213,11 +1213,11 @@ struct PressFactory {
 impl GestureRecognizerFactory for PressFactory {
     type Recognizer = PressRecognizers;
 
-    fn create(&self, cx: &RecognizerContext) -> Rc<PressRecognizers> {
+    fn create(&self, ctx: &RecognizerContext) -> Rc<PressRecognizers> {
         let recognizers = Rc::new(PressRecognizers {
             shape: self.shape,
             live: Rc::clone(&self.live),
-            cx: cx.clone(),
+            ctx: ctx.clone(),
             members: OnceCell::new(),
         });
         if self.shape.is_composed() {
@@ -1283,11 +1283,11 @@ impl ErasedFactory for TapLive {
         TypeId::of::<Self>()
     }
 
-    fn create_live(self: Rc<Self>, cx: &RecognizerContext) -> Rc<dyn LiveRecognizer> {
+    fn create_live(self: Rc<Self>, ctx: &RecognizerContext) -> Rc<dyn LiveRecognizer> {
         Rc::new(PressRecognizers {
             shape: PressShape::TAP,
             live: self,
-            cx: cx.clone(),
+            ctx: ctx.clone(),
             members: OnceCell::new(),
         })
     }
@@ -1341,7 +1341,7 @@ impl TapSlot {
     /// The slot borrow ends before the callback runs.
     pub(super) fn click(&self) -> impl Fn(&mut EventCx<'_>) + 'static + use<> {
         let live = Rc::clone(&self.live);
-        move |cx| {
+        move |ctx| {
             let callback = live
                 .0
                 .borrow()
@@ -1349,7 +1349,7 @@ impl TapSlot {
                 .as_deref()
                 .and_then(|source| source.callbacks().tap);
             if let Some(callback) = callback {
-                callback(cx);
+                callback(ctx);
             }
         }
     }
@@ -1370,11 +1370,11 @@ struct MultiTapFactory {
 impl GestureRecognizerFactory for MultiTapFactory {
     type Recognizer = MultiTapGestureRecognizer;
 
-    fn create(&self, cx: &RecognizerContext) -> Rc<MultiTapGestureRecognizer> {
+    fn create(&self, ctx: &RecognizerContext) -> Rc<MultiTapGestureRecognizer> {
         let live = Rc::clone(&self.live);
-        let writer = cx.writer().clone();
-        MultiTapGestureRecognizer::builder(cx.arena().clone(), self.pointers)
-            .settings(cx.settings().clone())
+        let writer = ctx.writer().clone();
+        MultiTapGestureRecognizer::builder(ctx.arena().clone(), self.pointers)
+            .settings(ctx.settings().clone())
             .on_multi_tap(move |details| {
                 deliver(
                     &live,
@@ -1399,7 +1399,7 @@ struct ForcePressFactory {
 impl GestureRecognizerFactory for ForcePressFactory {
     type Recognizer = ForcePressGestureRecognizer;
 
-    fn create(&self, cx: &RecognizerContext) -> Rc<ForcePressGestureRecognizer> {
+    fn create(&self, ctx: &RecognizerContext) -> Rc<ForcePressGestureRecognizer> {
         let (start, update, peak, end) = (
             Rc::clone(&self.live),
             Rc::clone(&self.live),
@@ -1407,13 +1407,13 @@ impl GestureRecognizerFactory for ForcePressFactory {
             Rc::clone(&self.live),
         );
         let (start_writer, update_writer, peak_writer, end_writer) = (
-            cx.writer().clone(),
-            cx.writer().clone(),
-            cx.writer().clone(),
-            cx.writer().clone(),
+            ctx.writer().clone(),
+            ctx.writer().clone(),
+            ctx.writer().clone(),
+            ctx.writer().clone(),
         );
-        ForcePressGestureRecognizer::builder(cx.arena().clone())
-            .settings(cx.settings().clone())
+        ForcePressGestureRecognizer::builder(ctx.arena().clone())
+            .settings(ctx.settings().clone())
             .start_pressure(self.start_pressure)
             .peak_pressure(self.peak_pressure)
             .on_start(move |details| {
@@ -1466,7 +1466,7 @@ struct DragFactory {
 impl GestureRecognizerFactory for DragFactory {
     type Recognizer = DragGestureRecognizer;
 
-    fn create(&self, cx: &RecognizerContext) -> Rc<DragGestureRecognizer> {
+    fn create(&self, ctx: &RecognizerContext) -> Rc<DragGestureRecognizer> {
         let (down, start, update, end, cancel) = (
             Rc::clone(&self.live),
             Rc::clone(&self.live),
@@ -1475,17 +1475,17 @@ impl GestureRecognizerFactory for DragFactory {
             Rc::clone(&self.live),
         );
         let (down_writer, start_writer, update_writer, end_writer, cancel_writer) = (
-            cx.writer().clone(),
-            cx.writer().clone(),
-            cx.writer().clone(),
-            cx.writer().clone(),
-            cx.writer().clone(),
+            ctx.writer().clone(),
+            ctx.writer().clone(),
+            ctx.writer().clone(),
+            ctx.writer().clone(),
+            ctx.writer().clone(),
         );
-        DragGestureRecognizer::builder(cx.arena().clone(), self.axis)
+        DragGestureRecognizer::builder(ctx.arena().clone(), self.axis)
             .allowed_devices(self.devices)
             .pointer_strategy(self.strategy)
             .axis_lock(self.axis_lock)
-            .settings(cx.settings().clone())
+            .settings(ctx.settings().clone())
             .on_down(move |details| {
                 deliver(
                     &down,
@@ -1546,7 +1546,7 @@ struct TransformFactory {
 impl GestureRecognizerFactory for TransformFactory {
     type Recognizer = ScaleGestureRecognizer;
 
-    fn create(&self, cx: &RecognizerContext) -> Rc<ScaleGestureRecognizer> {
+    fn create(&self, ctx: &RecognizerContext) -> Rc<ScaleGestureRecognizer> {
         let (start, update, end, cancel) = (
             Rc::clone(&self.live),
             Rc::clone(&self.live),
@@ -1554,13 +1554,13 @@ impl GestureRecognizerFactory for TransformFactory {
             Rc::clone(&self.live),
         );
         let (start_writer, update_writer, end_writer, cancel_writer) = (
-            cx.writer().clone(),
-            cx.writer().clone(),
-            cx.writer().clone(),
-            cx.writer().clone(),
+            ctx.writer().clone(),
+            ctx.writer().clone(),
+            ctx.writer().clone(),
+            ctx.writer().clone(),
         );
-        let recognizer = ScaleGestureRecognizer::builder(cx.arena().clone())
-            .settings(cx.settings().clone())
+        let recognizer = ScaleGestureRecognizer::builder(ctx.arena().clone())
+            .settings(ctx.settings().clone())
             .start_mode(self.start_mode)
             .axis_lock(self.axis_lock)
             .transform_lock(self.transform_lock)
@@ -1889,14 +1889,14 @@ impl GestureDetectorState {
         let mut semantics = Semantics::new();
         if view.press.tap.is_some() {
             let (live, mounted) = (Rc::clone(&self.live), Rc::clone(&self.mounted));
-            semantics = semantics.on_click(move |cx| {
-                activate(&live, &mounted, cx, |press| press.tap.clone());
+            semantics = semantics.on_click(move |ctx| {
+                activate(&live, &mounted, ctx, |press| press.tap.clone());
             });
         }
         if view.press.long_press.is_some() {
             let (live, mounted) = (Rc::clone(&self.live), Rc::clone(&self.mounted));
-            semantics = semantics.on_show_context_menu(move |cx| {
-                activate(&live, &mounted, cx, |press| press.long_press.clone());
+            semantics = semantics.on_show_context_menu(move |ctx| {
+                activate(&live, &mounted, ctx, |press| press.long_press.clone());
             });
         }
         semantics
@@ -2006,7 +2006,7 @@ impl GestureDetectorState {
                     return EventPropagation::Continue;
                 };
                 let details = SmartZoomDetails::from_platform(dispatch);
-                writer.write(|cx| callback(cx, details));
+                writer.write(|ctx| callback(ctx, details));
                 EventPropagation::Stop
             });
         }

@@ -31,7 +31,7 @@ impl Action<BackIntent> for PopOnBack {
             .any(|navigator| navigator.can_pop())
     }
 
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &BackIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &BackIntent) -> ActionOutcome {
         if self
             .0
             .self_and_enclosing()
@@ -48,7 +48,7 @@ impl Action<BackIntent> for PopOnBack {
 struct PopOnDismiss(NavigatorHandle);
 
 impl Action<DismissIntent> for PopOnDismiss {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &DismissIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &DismissIntent) -> ActionOutcome {
         if self.0.maybe_pop() {
             ActionOutcome::Performed
         } else {

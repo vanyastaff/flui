@@ -30,7 +30,7 @@ fn rig() -> Rig {
     let backend = ScriptedSlots::new();
     let (executor, sender) = RasterExecutor::new(
         backend.clone(),
-        Arc::new(flui_foundation::SystemClock),
+        std::rc::Rc::new(flui_foundation::SystemClock),
         || {},
     );
     let display: Arc<dyn DisplayConnection> = Arc::new(FakeDisplay);
@@ -454,8 +454,11 @@ fn a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation() {
         inner: inner.clone(),
         restore: std::rc::Rc::clone(&restore),
     };
-    let (executor, sender) =
-        RasterExecutor::new(backend, Arc::new(flui_foundation::SystemClock), || {});
+    let (executor, sender) = RasterExecutor::new(
+        backend,
+        std::rc::Rc::new(flui_foundation::SystemClock),
+        || {},
+    );
     let display: Arc<dyn DisplayConnection> = Arc::new(FakeDisplay);
     let factory = noop_surface_factory(display);
     let surface = || {

@@ -50,9 +50,11 @@ where
     F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
     R: EventOutcome,
 {
-    Rc::new(move |cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
-        callback(cx, dispatch).report();
-    })
+    Rc::new(
+        move |ctx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+            callback(ctx, dispatch).report();
+        },
+    )
 }
 
 /// An arbitrated scroll-signal handler: returns
@@ -113,11 +115,11 @@ impl RecognizerInput {
 ///
 /// Each `on_pointer_*` callback receives the dispatch's `&mut EventCx<'_>`
 /// first, so it writes a signal directly (ADR-0086):
-/// `.on_pointer_down(move |cx, _dispatch| presses.update(cx, |n| *n += 1))`.
+/// `.on_pointer_down(move |ctx, _dispatch| presses.update(ctx, |n| *n += 1))`.
 /// The listener has no `init_state`; it takes the owner's [`WriterSource`]
 /// from the [`RenderObjectContext`] that registers its handler, and opens one
 /// write per event. The two claim callbacks decide during routing and receive
-/// no `cx` (ADR-0086 §6).
+/// no `ctx` (ADR-0086 §6).
 ///
 /// Then it is handed a [`PointerDispatch`], which carries
 /// the event in two spaces: `local` (this listener's own box, the value to
@@ -199,14 +201,14 @@ impl RawCallbacks {
                 if let Some(callback) = &self.pan_zoom_update
                     && matches!(pan_zoom.phase, PanZoomPhase::Update(_))
                 {
-                    writer.write(|cx| callback(cx, pan_zoom));
+                    writer.write(|ctx| callback(ctx, pan_zoom));
                 }
                 return;
             }
             _ => return,
         };
         if let Some(callback) = callback {
-            writer.write(|cx| callback(cx, dispatch));
+            writer.write(|ctx| callback(ctx, dispatch));
         }
     }
 }

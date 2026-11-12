@@ -43,6 +43,7 @@ impl std::fmt::Debug for WebClipboard {
 // SAFETY: the page has one thread (the module refuses `+atomics`), so the value
 // is never reached from another.
 unsafe impl Send for WebClipboard {}
+// SAFETY: one thread, as for `Send` above: no second thread can share it.
 unsafe impl Sync for WebClipboard {}
 
 impl WebClipboard {

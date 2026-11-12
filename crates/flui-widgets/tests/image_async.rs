@@ -102,14 +102,14 @@ impl Future for ControlledFuture {
 
     fn poll(
         self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        ctx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         let mut state = self.state.lock().expect("controlled state is not poisoned");
         if let Some(result) = state.result.take() {
             state.completed = true;
             return std::task::Poll::Ready(result);
         }
-        state.waker = Some(cx.waker().clone());
+        state.waker = Some(ctx.waker().clone());
         std::task::Poll::Pending
     }
 }
