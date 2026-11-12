@@ -1101,8 +1101,9 @@ reaches what the check reads. `plan` decides this in its outputs, and each job i
     `compile_fail` path names;
   - a runner of the suites;
   - the source of a workspace procedural macro (its diagnostics are copied into expectations);
-  - a changed line that holds a message an expectation copies (a `deprecated` note, an
-    `on_unimplemented` message, a `compile_error!`), in a crate a suite compiles;
+  - a changed line, in a crate a suite compiles, that writes a message the compiler copies: a
+    line of a diagnostic attribute (`#[diagnostic::on_unimplemented]`, `#[deprecated]`, its
+    `message`, `label` or `note`), a `compile_error!`, or prose an expectation quotes;
   - the toolchain file, `Cargo.lock` or `.config/nextest.toml`.
 
   The cited files are read from the expectations on each run.

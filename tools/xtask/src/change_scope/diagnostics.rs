@@ -173,9 +173,13 @@ pub(super) fn changed_input<'f>(
     {
         return Ok(Some(found));
     }
-    // a message the compiler copies from the source: a `deprecated` note, an
-    // `on_unimplemented` message, a `compile_error!`
-    let quotes = |text: &str| prose(text).any(|fragment| messages.contains(fragment));
+    // a message the compiler copies from the source, which no location names:
+    // a line of a diagnostic attribute or `compile_error!` ([`writes_a_message`]),
+    // or prose an expectation quotes (a proc macro's or a panic's text)
+    let quotes = |text: &str| {
+        text.lines().any(writes_a_message)
+            || prose(text).any(|fragment| messages.contains(fragment))
+    };
     let found = match changed_lines {
         Some(diff) => diff_lines(diff)
             .filter(|(_, line)| quotes(line))
@@ -185,6 +189,26 @@ pub(super) fn changed_input<'f>(
         }),
     };
     Ok(found.map(|(f, _)| *f))
+}
+
+/// Whether `line` writes a compiler message: a diagnostic attribute
+/// (`#[diagnostic::on_unimplemented]`, `#[deprecated]`, `#[must_use = …]`), one
+/// of their `message`, `label` or `note` keys on a line of its own, or
+/// `compile_error!`. Its text may be a short or formatted one (`no {P} for
+/// {Self}`) that no prose match finds.
+fn writes_a_message(line: &str) -> bool {
+    let line = line.trim_start();
+    [
+        "#[diagnostic::",
+        "#[deprecated",
+        "#[must_use =",
+        "compile_error!",
+    ]
+    .iter()
+    .any(|mark| line.contains(mark))
+        || ["message =", "label =", "note ="]
+            .iter()
+            .any(|key| line.starts_with(key))
 }
 
 /// The message lines of an expectation: the error, warning, note and help
@@ -359,24 +383,31 @@ note: required because it appears within the type `X`
     /// through the changed line that holds it, removed or added; another
     /// line of the same file does not.
     fn a_changed_message_reaches_the_suites() {
-        let value = "crates/flui-foundation/src/inspect/value.rs";
-        let files = [value.to_owned()];
-        let diff = |line: &str| {
-            format!(
-                "diff --git a/{value} b/{value}\n--- a/{value}\n+++ b/{value}\n@@ -77 +77 @@\n{line}\n"
-            )
-        };
-        let reaches = |line: &str| {
-            changed_input(repo(), &files, Some(&diff(line)))
+        let reaches = |file: &str, line: &str| {
+            let diff = format!(
+                "diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -1 +1 @@\n{line}\n"
+            );
+            changed_input(repo(), &[file.to_owned()], Some(&diff))
                 .expect("reading the expectations")
                 .map(str::to_owned)
         };
+        let value = "crates/flui-foundation/src/inspect/value.rs";
         // the `deprecated` note `inspect_untyped_is_deprecated.stderr` copies
         let note = "-        note = \"map the field to a typed `Value` (ADR-0242); a site that cannot yet carries `#[expect(deprecated, reason = \\\"…\\\")]` (ADR-0303 §7)\"";
-        assert_eq!(reaches(note).as_deref(), Some(value));
+        assert_eq!(reaches(value, note).as_deref(), Some(value));
         assert_eq!(
-            reaches("+    pub const fn new(value: &'a dyn fmt::Debug) -> Self {"),
+            reaches(
+                value,
+                "+    pub const fn new(value: &'a dyn fmt::Debug) -> Self {"
+            ),
             None
+        );
+        // a short formatted label, which `not_a_render_box.stderr` copies
+        let render_object = "crates/flui-rendering/src/traits/render_object.rs";
+        let label = "+    label = \"missing `RenderObject<{P}>` for `{Self}`\",";
+        assert_eq!(
+            reaches(render_object, label).as_deref(),
+            Some(render_object)
         );
         // the message lines, not the quoted source, are what a change must name
         let expectation = "error: use of deprecated function: the message text here\n  --> a.rs:1:1\n   |\n 1 | let quoted = \"source text, not a message\";\n   |     ^^^^^^ the label under the carets\n";

@@ -203,9 +203,11 @@ of its own.
   - a runner of the suites;
   - the source of a workspace procedural macro, whose diagnostics point at the invocation and
     are copied into the expectations;
-  - a changed line, added or removed, that holds a message an expectation copies: a `deprecated`
-    note, an `on_unimplemented` message, a `compile_error!` (a run of 20 or more characters of
-    prose matched against the expectations' message lines, in a crate a suite compiles);
+  - a changed line, added or removed, in a crate a suite compiles, that writes a message the
+    compiler copies with no location: a line of a diagnostic attribute
+    (`#[diagnostic::on_unimplemented]`, `#[deprecated]`, `#[must_use = …]`, a `message`,
+    `label` or `note` key), a `compile_error!`, or a run of 20 or more characters of prose that
+    an expectation's message lines quote (a proc macro's or a panic's text);
   - the toolchain file, `Cargo.lock` or the nextest groups.
 
   No list of these files is stored, so there is none to keep in step with the expectations.
