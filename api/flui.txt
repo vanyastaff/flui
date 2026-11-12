@@ -503,7 +503,7 @@ impl<C: flui::animation::Curve> core::fmt::Debug for flui::animation::CurvedAnim
 impl<C: flui::animation::Curve> flui::foundation::Listenable for flui::animation::CurvedAnimation<C>
 pub fn flui::animation::CurvedAnimation::new(parent: alloc::rcs::rc::Rc<dyn flui::animation::Animation<f64>>, curve: C) -> Self // impl<C: flui::animation::Curve> flui::animation::CurvedAnimation<C>
 pub fn flui::animation::CurvedAnimation::with_reverse_curve(self, reverse_curve: C) -> Self // impl<C: flui::animation::Curve> flui::animation::CurvedAnimation<C>
-pub struct flui::animation::Decelerate
+pub struct flui::animation::Decelerate;
 impl Clone for flui::animation::Decelerate
 impl Copy for flui::animation::Decelerate
 impl Default for flui::animation::Decelerate
@@ -678,7 +678,7 @@ variant flui::animation::KeyframesError::ZeroTotal
 pub trait flui::animation::Lerp: Clone
 fn flui::animation::Lerp::lerp_to(&self, other: &Self, t: f64) -> Self
 impl flui::animation::Lerp for f64
-pub struct flui::animation::Linear
+pub struct flui::animation::Linear;
 impl Clone for flui::animation::Linear
 impl Copy for flui::animation::Linear
 impl Default for flui::animation::Linear
@@ -865,7 +865,7 @@ variant flui::animation::Rounding::Ceil
 variant flui::animation::Rounding::Floor
 variant flui::animation::Rounding::Nearest
 variant flui::animation::Rounding::TowardZero
-#[non_exhaustive] pub struct flui::animation::RunCanceled
+#[non_exhaustive] pub struct flui::animation::RunCanceled;
 impl Clone for flui::animation::RunCanceled
 impl Copy for flui::animation::RunCanceled
 impl Eq for flui::animation::RunCanceled
@@ -2419,7 +2419,7 @@ impl PartialEq for flui::app::testing::ExitReport
 impl core::fmt::Debug for flui::app::testing::ExitReport
 impl core::marker::StructuralPartialEq for flui::app::testing::ExitReport
 pub fn flui::app::testing::ExitReport::code(&self) -> i32
-#[non_exhaustive] pub struct flui::app::testing::HeadlessRun
+#[non_exhaustive] pub struct flui::app::testing::HeadlessRun;
 impl core::fmt::Debug for flui::app::testing::HeadlessRun
 pub fn flui::app::testing::HeadlessRun::start<V, F>(application: flui::Application<V, F>) -> flui::app::testing::HeadlessRunHandle where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
 pub fn flui::app::testing::HeadlessRun::start_on<V, F>(application: flui::Application<V, F>, platform: flui_native::hosts::headless::HeadlessPlatform) -> flui::app::testing::HeadlessRunHandle where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
@@ -2464,7 +2464,7 @@ variant flui::app::testing::TeardownStep::Services
 variant flui::app::testing::TeardownStep::UiRuntimes
 pub fn flui::app::window_handle(address: flui::foundation::PresentationAddress) -> Option<flui::view::WindowHandle>
 pub mod flui::cupertino
-pub struct flui::cupertino::CupertinoActivityIndicator
+pub struct flui::cupertino::CupertinoActivityIndicator {}
 impl Clone for flui::cupertino::CupertinoActivityIndicator
 impl Default for flui::cupertino::CupertinoActivityIndicator
 impl core::fmt::Debug for flui::cupertino::CupertinoActivityIndicator
@@ -2536,7 +2536,7 @@ impl core::marker::StructuralPartialEq for flui::cupertino::CupertinoColor
 pub fn flui::cupertino::CupertinoColor::resolve(&self, ctx: &dyn flui::app::BuildContext) -> flui::prelude::Color
 variant flui::cupertino::CupertinoColor::Dynamic(flui::cupertino::CupertinoDynamicColor)
 variant flui::cupertino::CupertinoColor::Static(flui::prelude::Color)
-#[non_exhaustive] pub struct flui::cupertino::CupertinoColors
+#[non_exhaustive] pub struct flui::cupertino::CupertinoColors;
 impl core::fmt::Debug for flui::cupertino::CupertinoColors
 pub const flui::cupertino::CupertinoColors::ACTIVE_BLUE: flui::cupertino::CupertinoDynamicColor = Self::SYSTEM_BLUE
 pub const flui::cupertino::CupertinoColors::BLACK: flui::prelude::Color = _
@@ -3164,7 +3164,7 @@ pub fn flui::foundation::AsyncSnapshot::in_state(self, state: flui::foundation::
 pub fn flui::foundation::AsyncSnapshot::initial(initial_data: Option<T>) -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
 pub fn flui::foundation::AsyncSnapshot::into_data(self) -> Option<T> // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
 pub fn flui::foundation::AsyncSnapshot::into_error(self) -> Option<E> // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub struct flui::foundation::AtLeast<const N: usize>
+pub struct flui::foundation::AtLeast<const N: usize>;
 impl<const N: usize> Clone for flui::foundation::AtLeast<N>
 impl<const N: usize> Copy for flui::foundation::AtLeast<N>
 impl<const N: usize> Default for flui::foundation::AtLeast<N>
@@ -3303,7 +3303,7 @@ pub fn flui::foundation::ElementId::generation(self) -> flui::foundation::genera
 pub fn flui::foundation::ElementId::index(self) -> u32
 pub fn flui::foundation::ElementId::new(n: usize) -> Self
 pub fn flui::foundation::ElementId::new_gen(index: u32, generation: flui::foundation::generation::Generation) -> Self
-pub struct flui::foundation::Exact<const N: usize>
+pub struct flui::foundation::Exact<const N: usize>;
 impl<const N: usize> Clone for flui::foundation::Exact<N>
 impl<const N: usize> Copy for flui::foundation::Exact<N>
 impl<const N: usize> Default for flui::foundation::Exact<N>
@@ -3404,7 +3404,7 @@ pub const fn flui::foundation::Id::try_zip(index: usize) -> Option<Self> // impl
 pub const fn flui::foundation::Id::unzip(self) -> usize // impl<T: flui::foundation::Marker> flui::foundation::Id<T>
 pub fn flui::foundation::Id::new(index: usize) -> Self // impl<T: flui::foundation::Marker> flui::foundation::Id<T>
 pub fn flui::foundation::Id::zip(index: usize) -> Self // impl<T: flui::foundation::Marker> flui::foundation::Id<T>
-pub struct flui::foundation::IdExhausted
+pub struct flui::foundation::IdExhausted;
 impl Clone for flui::foundation::IdExhausted
 impl Copy for flui::foundation::IdExhausted
 impl Eq for flui::foundation::IdExhausted
@@ -3499,7 +3499,7 @@ pub fn flui::foundation::Keyed::into_inner(self) -> V // impl<V> flui::foundatio
 pub fn flui::foundation::Keyed::key(&self) -> &dyn flui::foundation::ViewKey // impl<V> flui::foundation::Keyed<V>
 pub fn flui::foundation::Keyed::new(view: V, key: impl flui::foundation::ViewKey) -> Self // impl<V> flui::foundation::Keyed<V>
 pub type flui::foundation::LayerId = flui::foundation::Id<flui::foundation::markers::Layer>
-pub struct flui::foundation::Leaf
+pub struct flui::foundation::Leaf;
 impl Clone for flui::foundation::Leaf
 impl Copy for flui::foundation::Leaf
 impl Default for flui::foundation::Leaf
@@ -3552,7 +3552,7 @@ impl core::fmt::Debug for flui::foundation::MutatedDuringBuild
 impl core::fmt::Display for flui::foundation::MutatedDuringBuild
 impl core::marker::StructuralPartialEq for flui::foundation::MutatedDuringBuild
 pub fn flui::foundation::MutatedDuringBuild::check(building: bool, controller: &'static str) -> Result<(), Self>
-pub struct flui::foundation::Never
+pub struct flui::foundation::Never;
 impl Clone for flui::foundation::Never
 impl Copy for flui::foundation::Never
 impl Default for flui::foundation::Never
@@ -3583,7 +3583,7 @@ pub fn flui::foundation::Notifier::remove_all(&self) // impl<Arg> flui::foundati
 pub fn flui::foundation::Notifier::remove_even_if_disposed(&self, id: flui::foundation::ListenerId) // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::retire_after_delivery<T: 'static>(&self, capture: T) -> Option<T> // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::take_callback(&self, id: flui::foundation::ListenerId) -> Option<alloc::rcs::rc::Rc<flui::foundation::notifier_generic::NotificationCallback<Arg>>> // impl<Arg> flui::foundation::Notifier<Arg>
-pub struct flui::foundation::Optional
+pub struct flui::foundation::Optional;
 impl Clone for flui::foundation::Optional
 impl Copy for flui::foundation::Optional
 impl Default for flui::foundation::Optional
@@ -3641,7 +3641,7 @@ pub fn flui::foundation::PresentationId::generation(self) -> flui::foundation::g
 pub fn flui::foundation::PresentationId::index(self) -> u32
 pub fn flui::foundation::PresentationId::new(n: usize) -> Self
 pub fn flui::foundation::PresentationId::new_gen(index: u32, generation: flui::foundation::generation::Generation) -> Self
-pub struct flui::foundation::Range<const MIN: usize, const MAX: usize>
+pub struct flui::foundation::Range<const MIN: usize, const MAX: usize>;
 impl<const MIN: usize, const MAX: usize> Clone for flui::foundation::Range<MIN, MAX>
 impl<const MIN: usize, const MAX: usize> Copy for flui::foundation::Range<MIN, MAX>
 impl<const MIN: usize, const MAX: usize> Default for flui::foundation::Range<MIN, MAX>
@@ -3778,7 +3778,7 @@ impl core::marker::StructuralPartialEq for flui::foundation::SurfaceGeneration
 pub const flui::foundation::SurfaceGeneration::ZERO: Self = _
 pub const fn flui::foundation::SurfaceGeneration::get(self) -> u64
 pub const fn flui::foundation::SurfaceGeneration::next(self) -> Self
-pub struct flui::foundation::SystemClock
+pub struct flui::foundation::SystemClock;
 impl Clone for flui::foundation::SystemClock
 impl Copy for flui::foundation::SystemClock
 impl Default for flui::foundation::SystemClock
@@ -3970,7 +3970,7 @@ pub fn flui::foundation::ValueNotifier::set_value(&mut self, new_value: T) where
 pub fn flui::foundation::ValueNotifier::set_value_force(&mut self, new_value: T) // impl<T> flui::foundation::ValueNotifier<T>
 pub fn flui::foundation::ValueNotifier::take(&mut self) -> T where T: Default // impl<T> flui::foundation::ValueNotifier<T>
 pub fn flui::foundation::ValueNotifier::update<F>(&mut self, f: F) where F: FnOnce(&mut T) // impl<T> flui::foundation::ValueNotifier<T>
-pub struct flui::foundation::Variable
+pub struct flui::foundation::Variable;
 impl Clone for flui::foundation::Variable
 impl Copy for flui::foundation::Variable
 impl Default for flui::foundation::Variable
@@ -4126,7 +4126,7 @@ reexport flui::foundation::id::UiRuntimeId => flui::foundation::UiRuntimeId
 reexport flui::foundation::id::ViewId => flui::foundation::ViewId
 reexport flui::foundation::id::markers => flui::foundation::markers
 pub mod flui::foundation::inspect
-pub struct flui::foundation::inspect::Ansi
+pub struct flui::foundation::inspect::Ansi;
 impl Clone for flui::foundation::inspect::Ansi
 impl Copy for flui::foundation::inspect::Ansi
 impl Default for flui::foundation::inspect::Ansi
@@ -4384,7 +4384,7 @@ impl<'a> Clone for flui::foundation::inspect::Payload<'a>
 impl<'a> Copy for flui::foundation::inspect::Payload<'a>
 variant flui::foundation::inspect::Payload::One(flui::foundation::inspect::Value<'a>)
 variant flui::foundation::inspect::Payload::Seq(&'a dyn flui::foundation::inspect::Seq)
-pub struct flui::foundation::inspect::Plain
+pub struct flui::foundation::inspect::Plain;
 impl Clone for flui::foundation::inspect::Plain
 impl Copy for flui::foundation::inspect::Plain
 impl Default for flui::foundation::inspect::Plain
@@ -8172,7 +8172,7 @@ impl core::fmt::Debug for flui::interaction::PrimarySelectionHandle
 pub fn flui::interaction::PrimarySelectionHandle::claim(&self, text: impl flui::interaction::SelectionText) -> flui::interaction::PrimaryClaim
 pub fn flui::interaction::PrimarySelectionHandle::new(backend: impl flui::interaction::PrimarySelectionBackend, cx: &flui::platform::capability::ProviderContext<'_>) -> Self
 pub fn flui::interaction::PrimarySelectionHandle::read_text(&self) -> flui::platform::capability::Completion<flui::platform::ClipboardRead>
-pub struct flui::interaction::ReadingOrderPolicy
+pub struct flui::interaction::ReadingOrderPolicy;
 impl Clone for flui::interaction::ReadingOrderPolicy
 impl Copy for flui::interaction::ReadingOrderPolicy
 impl Default for flui::interaction::ReadingOrderPolicy
@@ -8800,7 +8800,7 @@ pub fn flui::material::AlertDialog::actions(self, actions: Vec<flui::prelude::Bo
 pub fn flui::material::AlertDialog::content(self, content: impl flui::prelude::IntoView) -> Self
 pub fn flui::material::AlertDialog::new() -> Self
 pub fn flui::material::AlertDialog::title(self, title: impl flui::prelude::IntoView) -> Self
-pub struct flui::material::AnimatedIcons
+pub struct flui::material::AnimatedIcons;
 impl Clone for flui::material::AnimatedIcons
 impl Copy for flui::material::AnimatedIcons
 impl core::fmt::Debug for flui::material::AnimatedIcons
@@ -11771,7 +11771,7 @@ pub const fn flui::painting::styling::DecorationImage::with_opacity(self, opacit
 pub const fn flui::painting::styling::DecorationImage::with_repeat(self, repeat: flui::prelude::ImageRepeat) -> Self
 pub fn flui::painting::styling::DecorationImage::new(image: flui::painting::paint::Image) -> Self
 pub fn flui::painting::styling::DecorationImage::with_fit(self, fit: flui::painting::BoxFit) -> Self
-pub struct flui::painting::styling::Elevation
+pub struct flui::painting::styling::Elevation;
 impl core::fmt::Debug for flui::painting::styling::Elevation
 pub const flui::painting::styling::Elevation::LEVEL_0: f64 = 0.0
 pub const flui::painting::styling::Elevation::LEVEL_1: f64 = 1.0
@@ -12940,7 +12940,7 @@ impl core::fmt::Debug for flui::platform::DisplayId
 impl core::hash::Hash for flui::platform::DisplayId
 impl core::marker::StructuralPartialEq for flui::platform::DisplayId
 pub const fn flui::platform::DisplayId::get(self) -> u64
-pub struct flui::platform::DisplayIdsExhausted
+pub struct flui::platform::DisplayIdsExhausted;
 impl Clone for flui::platform::DisplayIdsExhausted
 impl Copy for flui::platform::DisplayIdsExhausted
 impl Eq for flui::platform::DisplayIdsExhausted
@@ -13019,7 +13019,7 @@ impl core::fmt::Debug for flui::platform::DisplayRevision
 impl core::hash::Hash for flui::platform::DisplayRevision
 impl core::marker::StructuralPartialEq for flui::platform::DisplayRevision
 pub const fn flui::platform::DisplayRevision::get(self) -> u64
-pub struct flui::platform::DisplayRevisionExhausted
+pub struct flui::platform::DisplayRevisionExhausted;
 impl Clone for flui::platform::DisplayRevisionExhausted
 impl Copy for flui::platform::DisplayRevisionExhausted
 impl Eq for flui::platform::DisplayRevisionExhausted
@@ -13089,7 +13089,7 @@ impl core::hash::Hash for flui::platform::DynamicRange
 impl core::marker::StructuralPartialEq for flui::platform::DynamicRange
 variant flui::platform::DynamicRange::High
 variant flui::platform::DynamicRange::Standard
-pub struct flui::platform::EmptyPointerFrame
+pub struct flui::platform::EmptyPointerFrame;
 impl Clone for flui::platform::EmptyPointerFrame
 impl Copy for flui::platform::EmptyPointerFrame
 impl Eq for flui::platform::EmptyPointerFrame
@@ -13335,7 +13335,7 @@ impl core::fmt::Debug for flui::platform::InvalidAppDataDir
 impl core::fmt::Display for flui::platform::InvalidAppDataDir
 impl core::marker::StructuralPartialEq for flui::platform::InvalidAppDataDir
 pub fn flui::platform::InvalidAppDataDir::name(&self) -> &str
-pub struct flui::platform::InvalidControlsOffset
+pub struct flui::platform::InvalidControlsOffset;
 impl Clone for flui::platform::InvalidControlsOffset
 impl Copy for flui::platform::InvalidControlsOffset
 impl Eq for flui::platform::InvalidControlsOffset
@@ -13344,7 +13344,7 @@ impl core::error::Error for flui::platform::InvalidControlsOffset
 impl core::fmt::Debug for flui::platform::InvalidControlsOffset
 impl core::fmt::Display for flui::platform::InvalidControlsOffset
 impl core::marker::StructuralPartialEq for flui::platform::InvalidControlsOffset
-pub struct flui::platform::InvalidHeadroom
+pub struct flui::platform::InvalidHeadroom;
 impl Clone for flui::platform::InvalidHeadroom
 impl Copy for flui::platform::InvalidHeadroom
 impl Eq for flui::platform::InvalidHeadroom
@@ -13366,7 +13366,7 @@ variant flui::platform::InvalidInsets::InvalidCurve
 variant flui::platform::InvalidInsets::Negative
 variant flui::platform::InvalidInsets::NonFinite
 variant flui::platform::InvalidInsets::ZeroDuration
-pub struct flui::platform::InvalidLocale
+pub struct flui::platform::InvalidLocale;
 impl Clone for flui::platform::InvalidLocale
 impl Copy for flui::platform::InvalidLocale
 impl Eq for flui::platform::InvalidLocale
@@ -13392,7 +13392,7 @@ variant flui::platform::InvalidPreference::GestureArea
 variant flui::platform::InvalidPreference::PixelRatio
 variant flui::platform::InvalidPreference::Speed
 variant flui::platform::InvalidPreference::TextScale
-pub struct flui::platform::InvalidRefreshPeriod
+pub struct flui::platform::InvalidRefreshPeriod;
 impl Clone for flui::platform::InvalidRefreshPeriod
 impl Copy for flui::platform::InvalidRefreshPeriod
 impl Eq for flui::platform::InvalidRefreshPeriod
@@ -13532,7 +13532,7 @@ pub const fn flui::platform::NativeTouchGeometry::min_fling(self) -> i32
 pub const fn flui::platform::NativeTouchGeometry::pixel_ratio(self) -> flui::geometry::DevicePixelRatio
 pub const fn flui::platform::NativeTouchGeometry::touch_slop(self) -> i32
 pub fn flui::platform::NativeTouchGeometry::try_new(touch_slop: i32, double_tap_slop: i32, min_fling: i32, max_fling: i32, pixel_ratio: flui::geometry::DevicePixelRatio) -> Result<Self, flui::platform::InvalidPreference>
-pub struct flui::platform::NullDragTransport
+pub struct flui::platform::NullDragTransport;
 impl Clone for flui::platform::NullDragTransport
 impl Copy for flui::platform::NullDragTransport
 impl Default for flui::platform::NullDragTransport
@@ -14473,7 +14473,7 @@ pub const flui::platform::WindowRevision::LAST: Self = _
 pub const flui::platform::WindowRevision::ZERO: Self = _
 pub const fn flui::platform::WindowRevision::get(self) -> u64
 pub const fn flui::platform::WindowRevision::next(self) -> Option<Self>
-pub struct flui::platform::WindowRevisionExhausted
+pub struct flui::platform::WindowRevisionExhausted;
 impl Clone for flui::platform::WindowRevisionExhausted
 impl Copy for flui::platform::WindowRevisionExhausted
 impl Eq for flui::platform::WindowRevisionExhausted
@@ -14607,7 +14607,7 @@ impl Clone for flui::platform::capability::OwnerPoster
 impl core::fmt::Debug for flui::platform::capability::OwnerPoster
 pub fn flui::platform::capability::OwnerPoster::new(sink: impl Fn(flui::platform::capability::OwnerJob) -> Result<(), flui::platform::capability::OwnerRetired> + Send + Sync + 'static) -> Self
 pub fn flui::platform::capability::OwnerPoster::post(&self, f: impl FnMut() + Send + 'static) -> Result<(), flui::platform::capability::OwnerRetired>
-pub struct flui::platform::capability::OwnerRetired
+pub struct flui::platform::capability::OwnerRetired;
 impl Clone for flui::platform::capability::OwnerRetired
 impl Copy for flui::platform::capability::OwnerRetired
 impl Eq for flui::platform::capability::OwnerRetired
@@ -15524,7 +15524,7 @@ impl core::fmt::Debug for flui::platform::pointer::InvalidButtonNumber
 impl core::fmt::Display for flui::platform::pointer::InvalidButtonNumber
 impl core::hash::Hash for flui::platform::pointer::InvalidButtonNumber
 impl core::marker::StructuralPartialEq for flui::platform::pointer::InvalidButtonNumber
-pub struct flui::platform::pointer::MismatchedPointerInfo
+pub struct flui::platform::pointer::MismatchedPointerInfo;
 impl Clone for flui::platform::pointer::MismatchedPointerInfo
 impl Copy for flui::platform::pointer::MismatchedPointerInfo
 impl Eq for flui::platform::pointer::MismatchedPointerInfo
@@ -15602,7 +15602,7 @@ impl core::fmt::Debug for flui::platform::pointer::PointerSignal
 impl core::marker::StructuralPartialEq for flui::platform::pointer::PointerSignal
 pub const fn flui::platform::pointer::PointerSignal::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime) -> Self
 pub const fn flui::platform::pointer::PointerSignal::with_position(self, position: flui::interaction::PointerPosition) -> Self
-pub struct flui::platform::pointer::Press
+pub struct flui::platform::pointer::Press;
 impl Clone for flui::platform::pointer::Press
 impl Copy for flui::platform::pointer::Press
 impl Eq for flui::platform::pointer::Press
@@ -15641,7 +15641,7 @@ variant flui::platform::pointer::Quantity::Scale
 variant flui::platform::pointer::Quantity::ScrollDelta
 variant flui::platform::pointer::Quantity::TangentialPressure
 variant flui::platform::pointer::Quantity::Twist
-pub struct flui::platform::pointer::Release
+pub struct flui::platform::pointer::Release;
 impl Clone for flui::platform::pointer::Release
 impl Copy for flui::platform::pointer::Release
 impl Eq for flui::platform::pointer::Release
@@ -15713,7 +15713,7 @@ variant flui::platform::testing::LaunchRequest::OpenPath(std::path::PathBuf)
 variant flui::platform::testing::LaunchRequest::OpenUri(flui::platform::launch::ExternalUri)
 variant flui::platform::testing::LaunchRequest::RevealPath(std::path::PathBuf)
 variant flui::platform::testing::LaunchRequest::TrashPath(std::path::PathBuf)
-pub struct flui::platform::testing::NoNativeSurface
+pub struct flui::platform::testing::NoNativeSurface;
 impl Clone for flui::platform::testing::NoNativeSurface
 impl Copy for flui::platform::testing::NoNativeSurface
 impl Default for flui::platform::testing::NoNativeSurface
@@ -16045,7 +16045,7 @@ impl flui::app::StatelessView for flui::prelude::Actions
 impl flui::app::View for flui::prelude::Actions
 pub fn flui::prelude::Actions::action<T: flui::prelude::Intent>(self, action: impl flui::prelude::Action<T> + 'static) -> Self
 pub fn flui::prelude::Actions::new(child: impl flui::prelude::IntoView) -> Self
-pub struct flui::prelude::ActivateIntent
+pub struct flui::prelude::ActivateIntent;
 impl Clone for flui::prelude::ActivateIntent
 impl Copy for flui::prelude::ActivateIntent
 impl Default for flui::prelude::ActivateIntent
@@ -16269,7 +16269,7 @@ reexport flui::prelude::Brightness => flui::platform::Brightness
 reexport flui::prelude::BuildContext => flui::app::BuildContext
 reexport flui::prelude::BuildContextExt => flui::app::BuildContextExt
 reexport flui::prelude::BuildOwner => flui::app::BuildOwner
-pub struct flui::prelude::ButtonActivateIntent
+pub struct flui::prelude::ButtonActivateIntent;
 impl Clone for flui::prelude::ButtonActivateIntent
 impl Copy for flui::prelude::ButtonActivateIntent
 impl Default for flui::prelude::ButtonActivateIntent
@@ -16299,7 +16299,7 @@ pub fn flui::prelude::Center::child(self, child: impl flui::prelude::IntoView) -
 pub fn flui::prelude::Center::height_factor(self, factor: f64) -> Self
 pub fn flui::prelude::Center::new() -> Self
 pub fn flui::prelude::Center::width_factor(self, factor: f64) -> Self
-pub struct flui::prelude::CenterLayoutDelegate
+pub struct flui::prelude::CenterLayoutDelegate;
 impl Clone for flui::prelude::CenterLayoutDelegate
 impl Copy for flui::prelude::CenterLayoutDelegate
 impl Default for flui::prelude::CenterLayoutDelegate
@@ -16657,13 +16657,13 @@ impl flui::prelude::InheritedView for flui::prelude::DefaultTextStyle { type Dat
 pub fn flui::prelude::DefaultTextStyle::max_lines(self, max_lines: u32) -> Self
 pub fn flui::prelude::DefaultTextStyle::new(style: flui::painting::typography::TextStyle, child: impl flui::prelude::IntoView) -> Self
 pub fn flui::prelude::DefaultTextStyle::text_align(self, text_align: flui::painting::typography::TextAlign) -> Self
-pub struct flui::prelude::DefaultWidgetsLocalizations
+pub struct flui::prelude::DefaultWidgetsLocalizations;
 impl Clone for flui::prelude::DefaultWidgetsLocalizations
 impl Copy for flui::prelude::DefaultWidgetsLocalizations
 impl Default for flui::prelude::DefaultWidgetsLocalizations
 impl core::fmt::Debug for flui::prelude::DefaultWidgetsLocalizations
 impl flui::prelude::WidgetsLocalizations for flui::prelude::DefaultWidgetsLocalizations
-pub struct flui::prelude::DefaultWidgetsLocalizationsDelegate
+pub struct flui::prelude::DefaultWidgetsLocalizationsDelegate;
 impl Clone for flui::prelude::DefaultWidgetsLocalizationsDelegate
 impl Copy for flui::prelude::DefaultWidgetsLocalizationsDelegate
 impl Default for flui::prelude::DefaultWidgetsLocalizationsDelegate
@@ -17501,7 +17501,7 @@ impl flui::app::View for flui::prelude::LayoutBuilder
 impl flui::prelude::RenderView for flui::prelude::LayoutBuilder { type Protocol = flui::rendering::BoxProtocol; type RenderObject = flui_objects::layout::layout_builder::RenderLayoutBuilder; }
 impl flui::view::element::ElementBehavior<flui::prelude::LayoutBuilder, flui::foundation::Variable> for flui_view::element::layout_builder::LayoutBuilderBehavior
 pub fn flui::prelude::LayoutBuilder::new<F, R>(builder: F) -> Self where F: Fn(&dyn flui::app::BuildContext, flui::prelude::BoxConstraints) -> R + 'static, R: flui::prelude::IntoView
-pub struct flui::prelude::LayoutChangedNotification
+pub struct flui::prelude::LayoutChangedNotification;
 impl Clone for flui::prelude::LayoutChangedNotification
 impl core::fmt::Debug for flui::prelude::LayoutChangedNotification
 impl flui::prelude::Notification for flui::prelude::LayoutChangedNotification
@@ -17829,7 +17829,7 @@ impl Clone for flui::prelude::NextFocusAction
 impl core::fmt::Debug for flui::prelude::NextFocusAction
 impl flui::prelude::Action<flui::prelude::NextFocusIntent> for flui::prelude::NextFocusAction
 pub fn flui::prelude::NextFocusAction::new(focus_manager: alloc::rcs::rc::Rc<flui::interaction::FocusManager>) -> Self
-pub struct flui::prelude::NextFocusIntent
+pub struct flui::prelude::NextFocusIntent;
 impl Clone for flui::prelude::NextFocusIntent
 impl Copy for flui::prelude::NextFocusIntent
 impl Default for flui::prelude::NextFocusIntent
@@ -18028,7 +18028,7 @@ fn flui::prelude::ParentDataView::debug_type_name(&self) -> &'static str { .. }
 fn flui::prelude::ParentDataView::parent_data_type_name(&self) -> &'static str { .. }
 fn flui::prelude::ParentDataView::typical_ancestor_description(&self) -> &'static str { .. }
 type flui::prelude::ParentDataView::ParentData: flui::prelude::ParentDataConfig
-pub struct flui::prelude::PasteTextIntent
+pub struct flui::prelude::PasteTextIntent;
 impl Clone for flui::prelude::PasteTextIntent
 impl Copy for flui::prelude::PasteTextIntent
 impl Default for flui::prelude::PasteTextIntent
@@ -18122,7 +18122,7 @@ impl Clone for flui::prelude::PreviousFocusAction
 impl core::fmt::Debug for flui::prelude::PreviousFocusAction
 impl flui::prelude::Action<flui::prelude::PreviousFocusIntent> for flui::prelude::PreviousFocusAction
 pub fn flui::prelude::PreviousFocusAction::new(focus_manager: alloc::rcs::rc::Rc<flui::interaction::FocusManager>) -> Self
-pub struct flui::prelude::PreviousFocusIntent
+pub struct flui::prelude::PreviousFocusIntent;
 impl Clone for flui::prelude::PreviousFocusIntent
 impl Copy for flui::prelude::PreviousFocusIntent
 impl Default for flui::prelude::PreviousFocusIntent
@@ -18479,7 +18479,7 @@ pub fn flui::prelude::Scrollbar::thumb_visibility(self, visible: bool) -> Self
 pub fn flui::prelude::Scrollbar::time_to_fade(self, duration: core::time::Duration) -> Self
 pub fn flui::prelude::Scrollbar::track_color(self, color: flui::prelude::Color) -> Self
 pub fn flui::prelude::Scrollbar::track_visibility(self, visible: bool) -> Self
-pub struct flui::prelude::SelectAllTextIntent
+pub struct flui::prelude::SelectAllTextIntent;
 impl Clone for flui::prelude::SelectAllTextIntent
 impl Copy for flui::prelude::SelectAllTextIntent
 impl Default for flui::prelude::SelectAllTextIntent
@@ -19845,7 +19845,7 @@ pub const fn flui::rendering::BoxParentData::with_offset(self, offset: flui::geo
 pub const fn flui::rendering::BoxParentData::zero() -> Self
 pub fn flui::rendering::BoxParentData::is_zero(&self) -> bool
 pub fn flui::rendering::BoxParentData::reset(&mut self)
-pub struct flui::rendering::BoxProtocol
+pub struct flui::rendering::BoxProtocol;
 impl Clone for flui::rendering::BoxProtocol
 impl Copy for flui::rendering::BoxProtocol
 impl Default for flui::rendering::BoxProtocol
@@ -20448,7 +20448,7 @@ pub const fn flui::rendering::SliverPhysicalParentData::new(paint_offset: flui::
 pub const fn flui::rendering::SliverPhysicalParentData::with_paint_offset(self, offset: flui::geometry::Offset) -> Self
 pub const fn flui::rendering::SliverPhysicalParentData::zero() -> Self
 pub fn flui::rendering::SliverPhysicalParentData::is_zero(&self) -> bool
-pub struct flui::rendering::SliverProtocol
+pub struct flui::rendering::SliverProtocol;
 impl Clone for flui::rendering::SliverProtocol
 impl Copy for flui::rendering::SliverProtocol
 impl Default for flui::rendering::SliverProtocol
@@ -20574,7 +20574,7 @@ macro flui::rendering::forward_single_child_intrinsics!
 pub fn flui::run_app<V>(root: V, launch: flui::AppLaunch) -> Result<(), flui::LaunchError> where V: flui::app::View + Clone + 'static
 pub mod flui::services
 pub mod flui::services::system
-#[non_exhaustive] pub struct flui::services::system::SystemPlugin
+#[non_exhaustive] pub struct flui::services::system::SystemPlugin;
 impl Clone for flui::services::system::SystemPlugin
 impl Copy for flui::services::system::SystemPlugin
 impl Default for flui::services::system::SystemPlugin
@@ -20891,7 +20891,7 @@ variant flui::testing::a11y::InvokeActionError::Decode(flui_semantics::action::A
 variant flui::testing::a11y::InvokeActionError::Resolution(flui_semantics::owner::SemanticsActionError)
 reexport flui::testing::a11y::Live => accesskit::Live
 reexport flui::testing::a11y::NodeId => accesskit::NodeId
-pub struct flui::testing::a11y::NotTreeBound
+pub struct flui::testing::a11y::NotTreeBound;
 impl Clone for flui::testing::a11y::NotTreeBound
 impl Copy for flui::testing::a11y::NotTreeBound
 impl Eq for flui::testing::a11y::NotTreeBound
@@ -21425,7 +21425,7 @@ impl flui::app::View for flui::testing::widgets::StateCreations
 impl flui::prelude::ViewState<flui::testing::widgets::StateCreations> for flui::testing::widgets::StateCreationsState
 pub fn flui::testing::widgets::StateCreations::count(&self) -> usize
 pub fn flui::testing::widgets::StateCreations::counting(creations: &alloc::rcs::arc::Arc<core::sync::atomic::AtomicUsize>) -> Self
-pub struct flui::testing::widgets::StateCreationsState
+pub struct flui::testing::widgets::StateCreationsState;
 impl core::fmt::Debug for flui::testing::widgets::StateCreationsState
 impl flui::prelude::ViewState<flui::testing::widgets::StateCreations> for flui::testing::widgets::StateCreationsState
 pub mod flui::testing::widgets::harness
@@ -21822,7 +21822,7 @@ variant flui::view::KeyLookup::NotMounted
 variant flui::view::KeyLookup::RegistryBusy
 reexport flui::view::LayoutChangedNotification => flui::prelude::LayoutChangedNotification
 reexport flui::view::Lifecycle => flui::prelude::Lifecycle
-pub struct flui::view::LifecycleClosed
+pub struct flui::view::LifecycleClosed;
 impl Clone for flui::view::LifecycleClosed
 impl Copy for flui::view::LifecycleClosed
 impl Eq for flui::view::LifecycleClosed
@@ -22123,7 +22123,7 @@ impl Eq for flui::view::SlotInfo
 impl PartialEq for flui::view::SlotInfo
 impl core::fmt::Debug for flui::view::SlotInfo
 impl core::marker::StructuralPartialEq for flui::view::SlotInfo
-pub struct flui::view::StaleClose
+pub struct flui::view::StaleClose;
 impl Clone for flui::view::StaleClose
 impl Copy for flui::view::StaleClose
 impl Eq for flui::view::StaleClose
@@ -22180,7 +22180,7 @@ reexport flui::view::ViewFocusState => flui::prelude::ViewFocusState
 reexport flui::view::ViewState => flui::prelude::ViewState
 reexport flui::view::WidgetsBinding => flui::app::WidgetsBinding
 reexport flui::view::WidgetsBindingObserver => flui::prelude::WidgetsBindingObserver
-pub struct flui::view::WindowClosed
+pub struct flui::view::WindowClosed;
 impl Clone for flui::view::WindowClosed
 impl Copy for flui::view::WindowClosed
 impl Eq for flui::view::WindowClosed
@@ -22530,7 +22530,7 @@ reexport flui::view::element::NotifiableElement => flui::prelude::NotifiableElem
 reexport flui::view::element::Notification => flui::prelude::Notification
 pub trait flui::view::element::NotificationElementBase: flui::app::ElementBase
 reexport flui::view::element::Optional => flui::foundation::Optional
-pub struct flui::view::element::ParentDataBehavior
+pub struct flui::view::element::ParentDataBehavior;
 impl Clone for flui::view::element::ParentDataBehavior
 impl Copy for flui::view::element::ParentDataBehavior
 impl core::fmt::Debug for flui::view::element::ParentDataBehavior
@@ -22549,7 +22549,7 @@ pub type flui::view::element::PinnedPersistentHeaderView = flui::view::element::
 reexport flui::view::element::Provided => flui::view::Provided
 reexport flui::view::element::ProvidedRef => flui::view::ProvidedRef
 reexport flui::view::element::ProvidedValue => flui::view::ProvidedValue
-pub struct flui::view::element::ProxyBehavior
+pub struct flui::view::element::ProxyBehavior;
 impl Clone for flui::view::element::ProxyBehavior
 impl Copy for flui::view::element::ProxyBehavior
 impl Default for flui::view::element::ProxyBehavior
@@ -23126,14 +23126,14 @@ variant flui::widgets::ActionCall::ShowTooltip
 reexport flui::widgets::ActionOutcome => flui::prelude::ActionOutcome
 reexport flui::widgets::Actions => flui::prelude::Actions
 reexport flui::widgets::ActivateIntent => flui::prelude::ActivateIntent
-pub struct flui::widgets::ActivateLinkIntent
+pub struct flui::widgets::ActivateLinkIntent;
 impl Clone for flui::widgets::ActivateLinkIntent
 impl Copy for flui::widgets::ActivateLinkIntent
 impl Default for flui::widgets::ActivateLinkIntent
 impl core::fmt::Debug for flui::widgets::ActivateLinkIntent
 impl flui::prelude::Action<flui::widgets::ActivateLinkIntent> for flui_widgets::text::linked_paragraph::OpenLink
 impl flui::prelude::Intent for flui::widgets::ActivateLinkIntent
-pub struct flui::widgets::ActivationPressIntent
+pub struct flui::widgets::ActivationPressIntent;
 impl Clone for flui::widgets::ActivationPressIntent
 impl Copy for flui::widgets::ActivationPressIntent
 impl Default for flui::widgets::ActivationPressIntent
@@ -23294,7 +23294,7 @@ impl flui::app::View for flui::widgets::AnimatedBuilder
 impl flui::prelude::AnimatedView for flui::widgets::AnimatedBuilder
 impl flui::prelude::ViewState<flui::widgets::AnimatedBuilder> for flui::widgets::AnimatedBuilderState
 pub fn flui::widgets::AnimatedBuilder::new<V, F>(listenable: alloc::rcs::rc::Rc<dyn flui::foundation::Listenable>, builder: F) -> Self where V: flui::prelude::IntoView, F: Fn() -> V + 'static
-pub struct flui::widgets::AnimatedBuilderState
+pub struct flui::widgets::AnimatedBuilderState;
 impl core::fmt::Debug for flui::widgets::AnimatedBuilderState
 impl flui::prelude::ViewState<flui::widgets::AnimatedBuilder> for flui::widgets::AnimatedBuilderState
 pub struct flui::widgets::AnimatedContainer { .. }
@@ -23552,7 +23552,7 @@ variant flui::widgets::AutoComplete::Both
 variant flui::widgets::AutoComplete::Inline
 variant flui::widgets::AutoComplete::List
 reexport flui::widgets::AutovalidateMode => flui::prelude::AutovalidateMode
-pub struct flui::widgets::BackIntent
+pub struct flui::widgets::BackIntent;
 impl Clone for flui::widgets::BackIntent
 impl Copy for flui::widgets::BackIntent
 impl Default for flui::widgets::BackIntent
@@ -23876,7 +23876,7 @@ pub fn flui::widgets::DefaultFocusRingStyle::new(style: flui::widgets::FocusRing
 pub fn flui::widgets::DefaultFocusRingStyle::of(ctx: &dyn flui::app::BuildContext) -> flui::widgets::FocusRingStyle
 reexport flui::widgets::DefaultFocusTraversal => flui::prelude::DefaultFocusTraversal
 reexport flui::widgets::DefaultFocusTraversalState => flui::prelude::DefaultFocusTraversalState
-pub struct flui::widgets::DefaultScrollBehavior
+pub struct flui::widgets::DefaultScrollBehavior;
 impl Clone for flui::widgets::DefaultScrollBehavior
 impl Copy for flui::widgets::DefaultScrollBehavior
 impl Default for flui::widgets::DefaultScrollBehavior
@@ -23945,7 +23945,7 @@ variant flui::widgets::DismissDirection::None
 variant flui::widgets::DismissDirection::StartToEnd
 variant flui::widgets::DismissDirection::Up
 variant flui::widgets::DismissDirection::Vertical
-pub struct flui::widgets::DismissIntent
+pub struct flui::widgets::DismissIntent;
 impl Clone for flui::widgets::DismissIntent
 impl Copy for flui::widgets::DismissIntent
 impl Default for flui::widgets::DismissIntent
@@ -24212,7 +24212,7 @@ pub fn flui::widgets::ForcePressSlot::start_pressure(self, pressure: f64) -> Sel
 reexport flui::widgets::Form => flui::prelude::Form
 reexport flui::widgets::FormField => flui::prelude::FormField
 reexport flui::widgets::FormFieldHandle => flui::prelude::FormFieldHandle
-pub struct flui::widgets::FormFieldHandleAlreadyAttached
+pub struct flui::widgets::FormFieldHandleAlreadyAttached;
 impl Clone for flui::widgets::FormFieldHandleAlreadyAttached
 impl Copy for flui::widgets::FormFieldHandleAlreadyAttached
 impl Eq for flui::widgets::FormFieldHandleAlreadyAttached
@@ -24227,7 +24227,7 @@ impl<T: Clone + 'static> core::fmt::Debug for flui::widgets::FormFieldState<T>
 impl<T: Clone + 'static> flui::prelude::ViewState<flui::prelude::FormField<T>> for flui::widgets::FormFieldState<T>
 pub type flui::widgets::FormFieldValidator<T> = alloc::rcs::rc::Rc<dyn Fn(&T) -> Option<String>>
 reexport flui::widgets::FormHandle => flui::prelude::FormHandle
-pub struct flui::widgets::FormHandleAlreadyAttached
+pub struct flui::widgets::FormHandleAlreadyAttached;
 impl Clone for flui::widgets::FormHandleAlreadyAttached
 impl Copy for flui::widgets::FormHandleAlreadyAttached
 impl Eq for flui::widgets::FormHandleAlreadyAttached
@@ -24301,7 +24301,7 @@ impl core::fmt::Debug for flui::widgets::GlobalWidgetsLocalizations
 impl flui::prelude::WidgetsLocalizations for flui::widgets::GlobalWidgetsLocalizations
 pub fn flui::widgets::GlobalWidgetsLocalizations::for_locale(locale: &flui::platform::Locale) -> Self
 pub fn flui::widgets::GlobalWidgetsLocalizations::is_rtl_language(language: &str) -> bool
-pub struct flui::widgets::GlobalWidgetsLocalizationsDelegate
+pub struct flui::widgets::GlobalWidgetsLocalizationsDelegate;
 impl Clone for flui::widgets::GlobalWidgetsLocalizationsDelegate
 impl Copy for flui::widgets::GlobalWidgetsLocalizationsDelegate
 impl Default for flui::widgets::GlobalWidgetsLocalizationsDelegate
@@ -24566,7 +24566,7 @@ impl core::error::Error for flui::widgets::InvalidMagnifierScale
 impl core::fmt::Debug for flui::widgets::InvalidMagnifierScale
 impl core::fmt::Display for flui::widgets::InvalidMagnifierScale
 impl core::marker::StructuralPartialEq for flui::widgets::InvalidMagnifierScale
-pub struct flui::widgets::InvalidSliverCrossAxisExtent
+pub struct flui::widgets::InvalidSliverCrossAxisExtent;
 impl Clone for flui::widgets::InvalidSliverCrossAxisExtent
 impl Copy for flui::widgets::InvalidSliverCrossAxisExtent
 impl Eq for flui::widgets::InvalidSliverCrossAxisExtent
@@ -24743,7 +24743,7 @@ variant flui::widgets::NamedRouteError::NotAddressable { name: String }
 variant flui::widgets::NamedRouteError::ResultType { name: String, expected: &'static str, actual: &'static str }
 variant flui::widgets::NamedRouteError::Unresolved { name: String }
 reexport flui::widgets::Navigator => flui::prelude::Navigator
-pub struct flui::widgets::NavigatorForm
+pub struct flui::widgets::NavigatorForm;
 impl Clone for flui::widgets::NavigatorForm
 impl Copy for flui::widgets::NavigatorForm
 impl Default for flui::widgets::NavigatorForm
@@ -24941,7 +24941,7 @@ variant flui::widgets::PanIntent::Left
 variant flui::widgets::PanIntent::Right
 variant flui::widgets::PanIntent::Up
 reexport flui::widgets::PanZoomEvent => flui::interaction::PanZoomEvent
-pub struct flui::widgets::ParallaxPageTransition
+pub struct flui::widgets::ParallaxPageTransition;
 impl Clone for flui::widgets::ParallaxPageTransition
 impl Copy for flui::widgets::ParallaxPageTransition
 impl Default for flui::widgets::ParallaxPageTransition
@@ -24993,7 +24993,7 @@ pub fn flui::widgets::PlainMagnifier::for_platform(platform: flui::platform::Tar
 pub fn flui::widgets::PlainMagnifier::rounded() -> Self
 pub fn flui::widgets::PlainMagnifier::scale(self, scale: flui::widgets::MagnifierScale) -> Self
 pub fn flui::widgets::PlainMagnifier::size(self, size: flui::geometry::Size<f64>) -> Self
-pub struct flui::widgets::PlainSelectionMenu
+pub struct flui::widgets::PlainSelectionMenu;
 impl Clone for flui::widgets::PlainSelectionMenu
 impl Copy for flui::widgets::PlainSelectionMenu
 impl Default for flui::widgets::PlainSelectionMenu
@@ -25106,7 +25106,7 @@ impl core::fmt::Debug for flui::widgets::RefreshIndicatorStyle
 impl flui::app::View for flui::widgets::RefreshIndicatorStyle
 impl flui::prelude::InheritedView for flui::widgets::RefreshIndicatorStyle { type Data = alloc::rcs::rc::Rc<dyn Fn(flui::widgets::RefreshIndicatorPhase) -> Option<flui::prelude::BoxedView>>; }
 pub fn flui::widgets::RefreshIndicatorStyle::new(builder: impl Fn(flui::widgets::RefreshIndicatorPhase) -> Option<flui::prelude::BoxedView> + 'static, child: impl flui::prelude::IntoView) -> Self
-pub struct flui::widgets::RefreshIntent
+pub struct flui::widgets::RefreshIntent;
 impl Clone for flui::widgets::RefreshIntent
 impl Copy for flui::widgets::RefreshIntent
 impl Default for flui::widgets::RefreshIntent
@@ -25375,7 +25375,7 @@ variant flui::widgets::RouterError::Disposed
 variant flui::widgets::RouterError::EmptyStack
 variant flui::widgets::RouterError::NoRouter { route_type: &'static str }
 variant flui::widgets::RouterError::Parse(flui::widgets::RouteParseError)
-pub struct flui::widgets::RouterForm
+pub struct flui::widgets::RouterForm;
 impl Clone for flui::widgets::RouterForm
 impl Copy for flui::widgets::RouterForm
 impl Default for flui::widgets::RouterForm
@@ -25694,7 +25694,7 @@ reexport flui::widgets::Shortcuts => flui::prelude::Shortcuts
 pub struct flui::widgets::ShortcutsState { .. }
 impl core::fmt::Debug for flui::widgets::ShortcutsState
 impl flui::prelude::ViewState<flui::prelude::Shortcuts> for flui::widgets::ShortcutsState
-pub struct flui::widgets::ShowContextMenuIntent
+pub struct flui::widgets::ShowContextMenuIntent;
 impl Clone for flui::widgets::ShowContextMenuIntent
 impl Copy for flui::widgets::ShowContextMenuIntent
 impl Default for flui::widgets::ShowContextMenuIntent
@@ -27387,7 +27387,7 @@ impl PartialEq for flui_interaction::binding::DispatchOutcome
 impl core::fmt::Debug for flui_interaction::binding::DispatchOutcome
 impl core::marker::StructuralPartialEq for flui_interaction::binding::DispatchOutcome
 pub const fn flui_interaction::binding::DispatchOutcome::sequence(&self) -> Option<flui::foundation::InputSequenceId>
-pub struct flui_interaction::binding::InvalidSamplingWindow
+pub struct flui_interaction::binding::InvalidSamplingWindow;
 impl Clone for flui_interaction::binding::InvalidSamplingWindow
 impl Copy for flui_interaction::binding::InvalidSamplingWindow
 impl Eq for flui_interaction::binding::InvalidSamplingWindow
@@ -27712,7 +27712,7 @@ impl core::hash::Hash for flui_interaction::ids::InputSurface
 impl core::marker::StructuralPartialEq for flui_interaction::ids::InputSurface
 variant flui_interaction::ids::InputSurface::Embedded(flui_interaction::ids::EmbeddedSurfaceId)
 variant flui_interaction::ids::InputSurface::Window
-pub struct flui_interaction::ids::SurfaceIdsExhausted
+pub struct flui_interaction::ids::SurfaceIdsExhausted;
 impl Clone for flui_interaction::ids::SurfaceIdsExhausted
 impl Copy for flui_interaction::ids::SurfaceIdsExhausted
 impl Eq for flui_interaction::ids::SurfaceIdsExhausted
@@ -28554,7 +28554,7 @@ variant flui_layer::scene_snapshot::FullReason::NonFinite
 variant flui_layer::scene_snapshot::FullReason::Resync(flui_layer::scene_snapshot::ResyncReason)
 variant flui_layer::scene_snapshot::FullReason::SurfaceChanged
 variant flui_layer::scene_snapshot::FullReason::Unbounded
-pub struct flui_layer::scene_snapshot::NonFinite
+pub struct flui_layer::scene_snapshot::NonFinite;
 impl Clone for flui_layer::scene_snapshot::NonFinite
 impl Copy for flui_layer::scene_snapshot::NonFinite
 impl Eq for flui_layer::scene_snapshot::NonFinite
@@ -28586,7 +28586,7 @@ impl core::marker::StructuralPartialEq for flui_layer::scene_snapshot::ResyncRea
 variant flui_layer::scene_snapshot::ResyncReason::BaseMismatch
 variant flui_layer::scene_snapshot::ResyncReason::RasterReset
 variant flui_layer::scene_snapshot::ResyncReason::Rebuilt
-pub struct flui_layer::texture_registry::TextureIdsExhausted
+pub struct flui_layer::texture_registry::TextureIdsExhausted;
 impl Clone for flui_layer::texture_registry::TextureIdsExhausted
 impl Copy for flui_layer::texture_registry::TextureIdsExhausted
 impl Eq for flui_layer::texture_registry::TextureIdsExhausted
@@ -28766,12 +28766,12 @@ pub trait flui_native::host_window::sealed::Sealed
 fn flui_native::host_window::sealed::Sealed::any(&self) -> &dyn core::any::Any
 fn flui_native::host_window::sealed::Sealed::delivery(&self) -> &flui_native::owner::window_delivery::WindowDelivery
 impl<W: flui_native::host_window::sealed::CoreHostWindow> flui_native::host_window::sealed::Sealed for W
-pub struct flui_native::hosts::headless::Headless
+pub struct flui_native::hosts::headless::Headless;
 impl core::fmt::Debug for flui_native::hosts::headless::Headless
 pub type flui_native::hosts::headless::HeadlessPlatform = flui_native::platform::HostPlatform<flui_native::hosts::headless::Headless>
-pub struct flui_native::hosts::linux::wayland::Wayland
+pub struct flui_native::hosts::linux::wayland::Wayland;
 impl core::fmt::Debug for flui_native::hosts::linux::wayland::Wayland
-pub struct flui_native::hosts::linux::x11::X11
+pub struct flui_native::hosts::linux::x11::X11;
 impl core::fmt::Debug for flui_native::hosts::linux::x11::X11
 pub struct flui_native::lifecycle::headless::HeadlessHostEvents { .. }
 impl Clone for flui_native::lifecycle::headless::HeadlessHostEvents
@@ -29780,7 +29780,7 @@ pub fn flui_objects::proxy::error_box::RenderErrorBox::details(&self) -> Option<
 pub fn flui_objects::proxy::error_box::RenderErrorBox::message(&self) -> &str
 pub fn flui_objects::proxy::error_box::RenderErrorBox::new(message: impl Into<String>, details: Option<String>) -> Self
 pub fn flui_objects::proxy::error_box::RenderErrorBox::set_error(&mut self, message: impl Into<String>, details: Option<String>) -> flui::prelude::RenderUpdateImpact
-pub struct flui_objects::proxy::ignore_baseline::RenderIgnoreBaseline
+pub struct flui_objects::proxy::ignore_baseline::RenderIgnoreBaseline;
 impl Clone for flui_objects::proxy::ignore_baseline::RenderIgnoreBaseline
 impl Default for flui_objects::proxy::ignore_baseline::RenderIgnoreBaseline
 impl core::fmt::Debug for flui_objects::proxy::ignore_baseline::RenderIgnoreBaseline
@@ -30009,21 +30009,21 @@ impl core::fmt::Debug for flui_objects::sliver::sliver_cross_axis_group::RenderS
 impl flui::Inspect for flui_objects::sliver::sliver_cross_axis_group::RenderSliverCrossAxisGroup
 impl flui::rendering::RenderSliver for flui_objects::sliver::sliver_cross_axis_group::RenderSliverCrossAxisGroup { type Arity = flui::foundation::Variable; type ParentData = flui_rendering::parent_data::sliver_cross_axis::SliverCrossAxisParentData; }
 pub fn flui_objects::sliver::sliver_cross_axis_group::RenderSliverCrossAxisGroup::new() -> Self
-pub struct flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemaining
+pub struct flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemaining;
 impl Clone for flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemaining
 impl Default for flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemaining
 impl core::fmt::Debug for flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemaining
 impl flui::Inspect for flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemaining
 impl flui::rendering::RenderSliver for flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemaining { type Arity = flui::foundation::Exact<1>; type ParentData = flui::rendering::SliverPhysicalParentData; }
 pub const fn flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemaining::new() -> Self
-pub struct flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemainingAndOverscroll
+pub struct flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemainingAndOverscroll;
 impl Clone for flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemainingAndOverscroll
 impl Default for flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemainingAndOverscroll
 impl core::fmt::Debug for flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemainingAndOverscroll
 impl flui::Inspect for flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemainingAndOverscroll
 impl flui::rendering::RenderSliver for flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemainingAndOverscroll { type Arity = flui::foundation::Exact<1>; type ParentData = flui::rendering::SliverPhysicalParentData; }
 pub const fn flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemainingAndOverscroll::new() -> Self
-pub struct flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemainingWithScrollable
+pub struct flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemainingWithScrollable;
 impl Clone for flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemainingWithScrollable
 impl Default for flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemainingWithScrollable
 impl core::fmt::Debug for flui_objects::sliver::sliver_fill_remaining::RenderSliverFillRemainingWithScrollable
@@ -30142,7 +30142,7 @@ pub fn flui_objects::sliver::sliver_padding::RenderSliverPadding::symmetric(hori
 pub trait flui_objects::sliver::sliver_persistent_header::FloatingHeaderMode: flui_objects::sliver::sliver_persistent_header::sealed::Sealed + Send + Sync + 'static
 const flui_objects::sliver::sliver_persistent_header::FloatingHeaderMode::DIAGNOSTIC_NAME: &'static str
 fn flui_objects::sliver::sliver_persistent_header::FloatingHeaderMode::update_geometry(core: &flui_objects::sliver::sliver_persistent_header::PersistentHeaderCoreView<'_>, constraints: &flui::rendering::SliverConstraints, effective_scroll_offset: f64, child_extent: f64) -> (flui::rendering::SliverGeometry, f64)
-pub struct flui_objects::sliver::sliver_persistent_header::FloatingMode
+pub struct flui_objects::sliver::sliver_persistent_header::FloatingMode;
 impl Clone for flui_objects::sliver::sliver_persistent_header::FloatingMode
 impl Copy for flui_objects::sliver::sliver_persistent_header::FloatingMode
 impl Eq for flui_objects::sliver::sliver_persistent_header::FloatingMode
@@ -30151,7 +30151,7 @@ impl core::fmt::Debug for flui_objects::sliver::sliver_persistent_header::Floati
 impl core::marker::StructuralPartialEq for flui_objects::sliver::sliver_persistent_header::FloatingMode
 impl flui_objects::sliver::sliver_persistent_header::FloatingHeaderMode for flui_objects::sliver::sliver_persistent_header::FloatingMode
 impl flui_objects::sliver::sliver_persistent_header::sealed::Sealed for flui_objects::sliver::sliver_persistent_header::FloatingMode
-pub struct flui_objects::sliver::sliver_persistent_header::FloatingPinnedMode
+pub struct flui_objects::sliver::sliver_persistent_header::FloatingPinnedMode;
 impl Clone for flui_objects::sliver::sliver_persistent_header::FloatingPinnedMode
 impl Copy for flui_objects::sliver::sliver_persistent_header::FloatingPinnedMode
 impl Eq for flui_objects::sliver::sliver_persistent_header::FloatingPinnedMode
@@ -30239,7 +30239,7 @@ impl flui::rendering::RenderSliver for flui_objects::sliver::sliver_semantics::R
 pub fn flui_objects::sliver::sliver_semantics::RenderSliverSemanticsAnnotations::from_configuration(configuration: flui::prelude::SemanticsConfiguration) -> Self
 pub fn flui_objects::sliver::sliver_semantics::RenderSliverSemanticsAnnotations::set_configuration(&mut self, configuration: flui::prelude::SemanticsConfiguration) -> flui::prelude::RenderUpdateImpact
 pub fn flui_objects::sliver::sliver_semantics::RenderSliverSemanticsAnnotations::set_exclude_descendants(&mut self, exclude: bool) -> flui::prelude::RenderUpdateImpact
-pub struct flui_objects::sliver::sliver_to_box_adapter::RenderSliverToBoxAdapter
+pub struct flui_objects::sliver::sliver_to_box_adapter::RenderSliverToBoxAdapter;
 impl Clone for flui_objects::sliver::sliver_to_box_adapter::RenderSliverToBoxAdapter
 impl Default for flui_objects::sliver::sliver_to_box_adapter::RenderSliverToBoxAdapter
 impl core::fmt::Debug for flui_objects::sliver::sliver_to_box_adapter::RenderSliverToBoxAdapter
@@ -30351,7 +30351,7 @@ pub fn flui_painting::display_list::paragraph::ShapedRun::coords(&self) -> &'a [
 pub fn flui_painting::display_list::paragraph::ShapedRun::face(&self) -> &'a flui_painting::display_list::paragraph::FontFace // impl<'a> flui_painting::display_list::paragraph::ShapedRun<'a>
 pub fn flui_painting::display_list::paragraph::ShapedRun::glyphs(&self) -> &'a [flui_painting::display_list::paragraph::ShapedGlyph] // impl<'a> flui_painting::display_list::paragraph::ShapedRun<'a>
 pub fn flui_painting::display_list::paragraph::ShapedRun::placed_glyphs(&self, key: flui_painting::glyphs::registry::RunKey, origin: (f32, f32), scale: f32) -> impl Iterator<Item = flui_painting::glyphs::PlacedGlyph> + 'a // impl<'a> flui_painting::display_list::paragraph::ShapedRun<'a>
-pub struct flui_painting::error::RegisterFontError
+pub struct flui_painting::error::RegisterFontError;
 impl Clone for flui_painting::error::RegisterFontError
 impl Copy for flui_painting::error::RegisterFontError
 impl Eq for flui_painting::error::RegisterFontError
@@ -34019,28 +34019,28 @@ impl core::fmt::Display for flui_rendering::pipeline::owner::relocation::Release
 pub fn flui_rendering::pipeline::owner::relocation::ReleaseDetachedRenderSubtreesFailure::into_parts(self) -> (flui_rendering::pipeline::owner::relocation::ReleaseDetachedRenderSubtreesError, flui_rendering::pipeline::owner::relocation::DetachedRenderSubtrees)
 pub fn flui_rendering::pipeline::owner::relocation::ReleaseDetachedRenderSubtreesFailure::into_token(self) -> flui_rendering::pipeline::owner::relocation::DetachedRenderSubtrees
 pub fn flui_rendering::pipeline::owner::relocation::ReleaseDetachedRenderSubtreesFailure::kind(&self) -> &flui_rendering::pipeline::owner::relocation::ReleaseDetachedRenderSubtreesError
-pub struct flui_rendering::pipeline::phase::Compositing
+pub struct flui_rendering::pipeline::phase::Compositing;
 impl Clone for flui_rendering::pipeline::phase::Compositing
 impl Copy for flui_rendering::pipeline::phase::Compositing
 impl Default for flui_rendering::pipeline::phase::Compositing
 impl core::fmt::Debug for flui_rendering::pipeline::phase::Compositing
 impl flui_rendering::pipeline::phase::PipelinePhase for flui_rendering::pipeline::phase::Compositing
 impl flui_rendering::pipeline::phase::sealed::Sealed for flui_rendering::pipeline::phase::Compositing
-pub struct flui_rendering::pipeline::phase::Idle
+pub struct flui_rendering::pipeline::phase::Idle;
 impl Clone for flui_rendering::pipeline::phase::Idle
 impl Copy for flui_rendering::pipeline::phase::Idle
 impl Default for flui_rendering::pipeline::phase::Idle
 impl core::fmt::Debug for flui_rendering::pipeline::phase::Idle
 impl flui_rendering::pipeline::phase::PipelinePhase for flui_rendering::pipeline::phase::Idle
 impl flui_rendering::pipeline::phase::sealed::Sealed for flui_rendering::pipeline::phase::Idle
-pub struct flui_rendering::pipeline::phase::Layout
+pub struct flui_rendering::pipeline::phase::Layout;
 impl Clone for flui_rendering::pipeline::phase::Layout
 impl Copy for flui_rendering::pipeline::phase::Layout
 impl Default for flui_rendering::pipeline::phase::Layout
 impl core::fmt::Debug for flui_rendering::pipeline::phase::Layout
 impl flui_rendering::pipeline::phase::PipelinePhase for flui_rendering::pipeline::phase::Layout
 impl flui_rendering::pipeline::phase::sealed::Sealed for flui_rendering::pipeline::phase::Layout
-pub struct flui_rendering::pipeline::phase::PaintPhase
+pub struct flui_rendering::pipeline::phase::PaintPhase;
 impl Clone for flui_rendering::pipeline::phase::PaintPhase
 impl Copy for flui_rendering::pipeline::phase::PaintPhase
 impl Default for flui_rendering::pipeline::phase::PaintPhase
@@ -34049,7 +34049,7 @@ impl flui_rendering::pipeline::phase::PipelinePhase for flui_rendering::pipeline
 impl flui_rendering::pipeline::phase::sealed::Sealed for flui_rendering::pipeline::phase::PaintPhase
 pub trait flui_rendering::pipeline::phase::PipelinePhase: flui_rendering::pipeline::phase::sealed::Sealed + 'static
 const flui_rendering::pipeline::phase::PipelinePhase::NAME: &'static str
-pub struct flui_rendering::pipeline::phase::Semantics
+pub struct flui_rendering::pipeline::phase::Semantics;
 impl Clone for flui_rendering::pipeline::phase::Semantics
 impl Copy for flui_rendering::pipeline::phase::Semantics
 impl Default for flui_rendering::pipeline::phase::Semantics
@@ -34085,7 +34085,7 @@ impl core::fmt::Debug for flui_rendering::protocol::box_protocol::BoxConstraints
 impl core::hash::Hash for flui_rendering::protocol::box_protocol::BoxConstraintsCacheKey
 impl core::marker::StructuralPartialEq for flui_rendering::protocol::box_protocol::BoxConstraintsCacheKey
 pub fn flui_rendering::protocol::box_protocol::BoxConstraintsCacheKey::from_constraints(c: &flui::prelude::BoxConstraints) -> Option<Self>
-pub struct flui_rendering::protocol::box_protocol::BoxHitTest
+pub struct flui_rendering::protocol::box_protocol::BoxHitTest;
 impl Clone for flui_rendering::protocol::box_protocol::BoxHitTest
 impl Copy for flui_rendering::protocol::box_protocol::BoxHitTest
 impl Default for flui_rendering::protocol::box_protocol::BoxHitTest
@@ -34114,7 +34114,7 @@ pub fn flui_rendering::protocol::box_protocol::BoxHitTestResult::clear(&mut self
 pub fn flui_rendering::protocol::box_protocol::BoxHitTestResult::is_empty(&self) -> bool
 pub fn flui_rendering::protocol::box_protocol::BoxHitTestResult::len(&self) -> usize
 pub fn flui_rendering::protocol::box_protocol::BoxHitTestResult::new() -> Self
-pub struct flui_rendering::protocol::box_protocol::BoxLayout
+pub struct flui_rendering::protocol::box_protocol::BoxLayout;
 impl Clone for flui_rendering::protocol::box_protocol::BoxLayout
 impl Copy for flui_rendering::protocol::box_protocol::BoxLayout
 impl Default for flui_rendering::protocol::box_protocol::BoxLayout
@@ -34245,7 +34245,7 @@ impl core::fmt::Debug for flui_rendering::protocol::sliver_protocol::SliverConst
 impl core::hash::Hash for flui_rendering::protocol::sliver_protocol::SliverConstraintsCacheKey
 impl core::marker::StructuralPartialEq for flui_rendering::protocol::sliver_protocol::SliverConstraintsCacheKey
 pub fn flui_rendering::protocol::sliver_protocol::SliverConstraintsCacheKey::from_constraints(c: &flui::rendering::SliverConstraints) -> Option<Self>
-pub struct flui_rendering::protocol::sliver_protocol::SliverHitTest
+pub struct flui_rendering::protocol::sliver_protocol::SliverHitTest;
 impl Clone for flui_rendering::protocol::sliver_protocol::SliverHitTest
 impl Copy for flui_rendering::protocol::sliver_protocol::SliverHitTest
 impl Default for flui_rendering::protocol::sliver_protocol::SliverHitTest
@@ -34272,7 +34272,7 @@ pub fn flui_rendering::protocol::sliver_protocol::SliverHitTestResult::add(&mut 
 pub fn flui_rendering::protocol::sliver_protocol::SliverHitTestResult::is_empty(&self) -> bool
 pub fn flui_rendering::protocol::sliver_protocol::SliverHitTestResult::len(&self) -> usize
 pub fn flui_rendering::protocol::sliver_protocol::SliverHitTestResult::new() -> Self
-pub struct flui_rendering::protocol::sliver_protocol::SliverLayout
+pub struct flui_rendering::protocol::sliver_protocol::SliverLayout;
 impl Clone for flui_rendering::protocol::sliver_protocol::SliverLayout
 impl Copy for flui_rendering::protocol::sliver_protocol::SliverLayout
 impl Default for flui_rendering::protocol::sliver_protocol::SliverLayout
@@ -35633,7 +35633,7 @@ impl PartialOrd for flui_scheduler::scheduler::IdleDeadline
 impl core::fmt::Debug for flui_scheduler::scheduler::IdleDeadline
 impl core::marker::StructuralPartialEq for flui_scheduler::scheduler::IdleDeadline
 pub fn flui_scheduler::scheduler::IdleDeadline::far_future(now: std::time::Instant) -> Self
-pub struct flui_scheduler::scheduler::SchedulerClosed
+pub struct flui_scheduler::scheduler::SchedulerClosed;
 impl Clone for flui_scheduler::scheduler::SchedulerClosed
 impl Copy for flui_scheduler::scheduler::SchedulerClosed
 impl Eq for flui_scheduler::scheduler::SchedulerClosed

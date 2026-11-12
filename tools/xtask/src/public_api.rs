@@ -581,10 +581,16 @@ impl Surface {
                     }
                     format!(
                         "{head}{where_clause}{}",
-                        if private { " { .. }" } else { "" }
+                        if private {
+                            " { .. }"
+                        } else if members.is_empty() {
+                            " {}"
+                        } else {
+                            ""
+                        }
                     )
                 } else {
-                    format!("{head}{where_clause}")
+                    format!("{head}{where_clause};")
                 };
                 members.extend(self.render_impls(key, path, &inner["impls"], written));
                 declaration
@@ -1243,7 +1249,7 @@ mod tests {
             "pub fn lib::Point::direction(self) // impl lib::Point<f64>",
             // A type only an alias reaches, with its methods.
             "pub type lib::Context = lib::hidden::Inner",
-            "pub struct lib::hidden::Inner",
+            "pub struct lib::hidden::Inner;",
             "pub fn lib::hidden::Inner::layout_child(self)",
         ] {
             assert!(
