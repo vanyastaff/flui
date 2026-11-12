@@ -270,6 +270,10 @@ impl SparseChildren {
     /// mounted.
     ///
     /// `host` is the adaptor element's own id (the parent for fresh mounts).
+    #[expect(
+        clippy::disallowed_types,
+        reason = "indexed by view keys, whose hashes an application derives from its own data, so the table keeps SipHash's random seed against chosen collisions"
+    )]
     pub(crate) fn reconcile(
         &mut self,
         source: ReconcileSource<'_>,
@@ -373,7 +377,8 @@ impl SparseChildren {
         // residents are bucketed by key hash (decided by `key_eq` inside the
         // bucket, as the dense reconciler does) and keyless ones by index, so
         // each built view costs O(1) expected rather than a scan of the band.
-        let mut keyed_by_hash: FxHashMap<u64, Vec<usize>> = FxHashMap::default();
+        let mut keyed_by_hash: std::collections::HashMap<u64, Vec<usize>> =
+            std::collections::HashMap::new();
         let mut keyless_by_index: FxHashMap<usize, usize> = FxHashMap::default();
         for (pos, resident) in residents.iter().enumerate() {
             match &resident.key {

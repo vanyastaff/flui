@@ -69,8 +69,6 @@
 //! over the type-erased [`ElementBase`] accessors plus the typed
 //! [`View`] surface.
 
-use rustc_hash::FxHashMap;
-
 use smallvec::SmallVec;
 
 use flui_foundation::ElementId;
@@ -124,6 +122,10 @@ const INLINE_CHILDREN: usize = 8;
 // Five phases + per-disposition ReconcileEvent emission push the body past 100
 // lines; splitting would scramble the phase-by-phase reading of the keyed
 // reconcile algorithm.
+#[expect(
+    clippy::disallowed_types,
+    reason = "indexed by view keys, whose hashes an application derives from its own data, so the table keeps SipHash's random seed against chosen collisions"
+)]
 pub(crate) fn reconcile_children_by_id(
     tree: &mut ElementTree,
     parent_id: ElementId,
@@ -235,7 +237,8 @@ pub(crate) fn reconcile_children_by_id(
     // `can_update_by_id`, and clears a claim by index in O(1) (indexing
     // the bucket by slot, not id, is what keeps phase 4 linear rather than
     // O(n*m) — no per-claim scan of `old_slots`).
-    let mut old_keyed: FxHashMap<u64, Vec<usize>> = FxHashMap::default();
+    let mut old_keyed: std::collections::HashMap<u64, Vec<usize>> =
+        std::collections::HashMap::new();
     for (idx, slot) in old_slots
         .iter_mut()
         .enumerate()
@@ -543,10 +546,14 @@ fn slot_of(tree: &ElementTree, old_id: ElementId) -> Option<usize> {
 /// accepts — non-matching candidates stay in the bucket for a later view.
 /// Returns `None` for a keyless new view (those only match positionally,
 /// already handled by the top/bottom scans) or when no candidate matches.
+#[expect(
+    clippy::disallowed_types,
+    reason = "indexed by view keys, whose hashes an application derives from its own data, so the table keeps SipHash's random seed against chosen collisions"
+)]
 fn claim_old_for_new(
     tree: &ElementTree,
     new_view: &dyn View,
-    old_keyed: &mut FxHashMap<u64, Vec<usize>>,
+    old_keyed: &mut std::collections::HashMap<u64, Vec<usize>>,
     old_slots: &[Option<ElementId>],
 ) -> Option<usize> {
     let key_hash = new_view.key()?.key_hash();
