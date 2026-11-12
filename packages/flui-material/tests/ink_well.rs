@@ -21,7 +21,9 @@ use flui_sdk::geometry::Offset;
 use flui_sdk::interaction::FocusNode;
 use flui_sdk::view::SignalWriteExt;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{FocusRingStyle, SizedBox, WidgetState, WidgetStatesController};
+use flui_sdk::widgets::{
+    FocusRingStyle, SizedBox, WidgetState, WidgetStates, WidgetStatesController,
+};
 use flui_testing::replay::MouseScript;
 
 pub fn press_highlight_lasts_its_delay_under_reduced_motion() {
@@ -609,4 +611,140 @@ fn canonical_ids(tree: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// A well whose test turns it off and on, rebuilds it with a new tap closure
+/// on every change of `generation`, and hands it the first or the second of
+/// `states`.
+#[derive(Clone, StatefulView)]
+struct ToggledWell {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+    generation: flui_testing::widgets::SharedSignal<u32>,
+    first: flui_testing::widgets::SharedSignal<bool>,
+    states: [WidgetStatesController; 2],
+}
+
+struct ToggledWellState {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+    generation: flui_testing::widgets::SharedSignal<u32>,
+    first: flui_testing::widgets::SharedSignal<bool>,
+}
+
+impl StatefulView for ToggledWell {
+    type State = ToggledWellState;
+    fn create_state(&self, _cx: &dyn LifecycleContext) -> Self::State {
+        ToggledWellState {
+            enabled: self.enabled.clone(),
+            generation: self.generation.clone(),
+            first: self.first.clone(),
+        }
+    }
+}
+
+impl ViewState<ToggledWell> for ToggledWellState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.enabled.bind(ctx);
+        self.generation.bind(ctx);
+        self.first.bind(ctx);
+    }
+
+    fn build(&self, view: &ToggledWell, ctx: &dyn BuildContext) -> impl IntoView {
+        let generation = self.generation.get(ctx);
+        let [first, second] = &view.states;
+        let states = if self.first.get(ctx) { first } else { second };
+        let well = InkWell::new(SizedBox::new(80.0, 40.0)).states_controller(states.clone());
+        if self.enabled.get(ctx) {
+            well.on_tap(move |_cx| {
+                let _ = generation;
+            })
+        } else {
+            well
+        }
+    }
+}
+
+/// The well's activation holds `Pressed` for its delay past the contact
+/// (ADR-0322 §3): through a rebuild of the well with a new view, and to the
+/// controller handed to it under the hold, where it ends with its delay;
+/// disabling the well under the hold ends the press at once, and the hold's
+/// late end breaks nothing.
+///
+/// Red-check: leave the hold on the first controller in `did_update_view`
+/// (the second stays pressed after the delay).
+pub fn the_press_hold_survives_a_rebuild_and_a_disable_ends_it() {
+    let enabled = flui_testing::widgets::SharedSignal::new(true);
+    let generation = flui_testing::widgets::SharedSignal::new(0_u32);
+    let first = flui_testing::widgets::SharedSignal::new(true);
+    let [states, second] = [
+        WidgetStatesController::default(),
+        WidgetStatesController::default(),
+    ];
+    let mut laid = lay_out(
+        ToggledWell {
+            enabled: enabled.clone(),
+            generation: generation.clone(),
+            first: first.clone(),
+            states: [states.clone(), second.clone()],
+        },
+        tight(80.0, 40.0),
+    );
+    let pressed =
+        |states: &WidgetStatesController| states.value().contains_state(WidgetState::Pressed);
+
+    laid.pump_for(Duration::from_millis(16));
+    laid.dispatch_pointer_down(40.0, 20.0);
+    laid.dispatch_pointer_up(40.0, 20.0);
+    assert!(pressed(&states), "the tap's activation holds the press");
+    generation.set(1);
+    laid.pump_for(Duration::from_millis(40));
+    assert!(pressed(&states), "a rebuild with a new view keeps the hold");
+    laid.pump_for(Duration::from_millis(100));
+    assert!(!pressed(&states), "the hold ends with its delay");
+
+    laid.dispatch_pointer_down(40.0, 20.0);
+    laid.dispatch_pointer_up(40.0, 20.0);
+    laid.pump_for(Duration::from_millis(40));
+    laid.dispatch_pointer_down(40.0, 20.0);
+    laid.pump_for(Duration::from_millis(100));
+    assert!(
+        pressed(&states),
+        "the first tap's delay ending leaves the next contact's press"
+    );
+    laid.dispatch_pointer_up(40.0, 20.0);
+    laid.pump_for(Duration::from_millis(40));
+    assert!(pressed(&states), "the second tap holds the press");
+    laid.pump_for(Duration::from_millis(100));
+    assert!(
+        !pressed(&states),
+        "the second tap's hold ends with its delay"
+    );
+
+    laid.dispatch_pointer_down(40.0, 20.0);
+    laid.dispatch_pointer_up(40.0, 20.0);
+    first.set(false);
+    laid.pump_for(Duration::from_millis(40));
+    assert!(
+        pressed(&second) && !pressed(&states),
+        "the hold follows the activation to the controller handed over under it"
+    );
+    laid.pump_for(Duration::from_millis(100));
+    assert!(!pressed(&second), "and ends there with its delay");
+    first.set(true);
+    laid.pump();
+
+    laid.dispatch_pointer_down(40.0, 20.0);
+    laid.dispatch_pointer_up(40.0, 20.0);
+    assert!(pressed(&states));
+    enabled.set(false);
+    laid.pump();
+    assert!(
+        !pressed(&states),
+        "a well disabled under its hold is not pressed"
+    );
+    laid.pump_for(Duration::from_millis(200));
+    assert_eq!(
+        states.value(),
+        WidgetStates::DISABLED,
+        "and the hold's end changes nothing"
+    );
 }

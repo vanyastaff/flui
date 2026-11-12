@@ -35,7 +35,7 @@ use super::raw_gesture_detector::{
 };
 use crate::Semantics;
 use crate::support::{EventCallback, ValueCallback, event_callback, value_callback};
-use crate::widget_state::{WidgetState, WidgetStatesController};
+use crate::widget_state::WidgetStatesController;
 
 /// Whether an unadmitted native update would act: the event, and how far its
 /// focal point moved since the session's start (the pinch's translation).
@@ -434,7 +434,7 @@ pub(super) struct PressCallbacks {
     long_press: Option<EventCallback>,
     double_tap: Option<EventCallback>,
     double_tap_down: Option<ValueCallback<DoubleTapDetails>>,
-    /// Where the tap writes [`WidgetState::Pressed`]: set at its down,
+    /// Where the tap writes [`WidgetState::Pressed`](crate::WidgetState::Pressed): set at its down,
     /// cleared at its up or cancel, before the callback of that edge runs.
     pressed: Option<WidgetStatesController>,
 }
@@ -1005,7 +1005,7 @@ impl PressLive for LiveCallbacks {
 fn mark_pressed(live: &dyn PressLive, pressed: bool) {
     let states = live.press().pressed.clone();
     if let Some(states) = states {
-        states.update(WidgetState::Pressed, pressed);
+        states.set_contact_pressed(pressed);
     }
 }
 

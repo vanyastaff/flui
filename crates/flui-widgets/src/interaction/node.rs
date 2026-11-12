@@ -492,9 +492,8 @@ impl InteractiveNodeState {
     /// controller held before, the same one or the one this replaces: a
     /// press and a hover follow their contact and their pointer. The focus
     /// states come from the focus node, so a controller given to a control
-    /// that already holds focus starts right; a control with no tap has no
-    /// contact, so nothing of it is pressed, and a disabled one tracks no
-    /// pointer, so nothing hovers it.
+    /// that already holds focus starts right; a disabled control has no
+    /// contact and tracks no pointer, so nothing of it is pressed or hovers it.
     fn write_states(&self, carried: WidgetStates) {
         let Some(states) = &self.states else {
             return;
@@ -512,7 +511,10 @@ impl InteractiveNodeState {
         if node.is_some_and(|node| node.has_visible_focus()) {
             values |= WidgetStates::FOCUS_VISIBLE;
         }
-        if carried.contains(WidgetStates::PRESSED) && self.tap.is_set() {
+        // `Pressed` follows its sources (the contact and the activation
+        // holds, which the controller counts) at their edges; a write here
+        // keeps it, and a disabled control is not pressed.
+        if self.enabled && (carried.contains(WidgetStates::PRESSED) || states.held_pressed()) {
             values |= WidgetStates::PRESSED;
         }
         if carried.contains(WidgetStates::HOVERED) && self.enabled {
@@ -650,9 +652,11 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
                 record,
             );
         }
-        // A controller that arrives counts no pointer of another control.
+        // A controller that arrives counts no pointer and no contact of
+        // another control.
         if let Some(states) = &self.states {
             states.set_pointers_inside(0);
+            let _contact: bool = states.take_contact_pressed();
         }
         self.write_states(WidgetStates::NONE);
     }
@@ -698,6 +702,11 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
             .states
             .as_ref()
             .map_or(0, WidgetStatesController::take_pointers_inside);
+        // So does a contact that is down, which its up ends on the new one.
+        let contact = self
+            .states
+            .as_ref()
+            .is_some_and(WidgetStatesController::take_contact_pressed);
         let replaced = self.states.take().filter(|old| {
             !new.states
                 .as_ref()
@@ -708,6 +717,9 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
         }
         if let Some(states) = &new.states {
             states.set_pointers_inside(if new.enabled { inside } else { 0 });
+            if contact && new.enabled {
+                failure.contain(|| states.set_contact_pressed(true));
+            }
         }
         self.states.clone_from(&new.states);
         self.enabled = new.enabled;
@@ -808,6 +820,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
         // A shared controller keeps no state of a control that is gone.
         if let Some(states) = self.states.take() {
             let _inside: u32 = states.take_pointers_inside();
+            let _contact: bool = states.take_contact_pressed();
             failure.contain(|| states.write(WRITTEN, WidgetStates::NONE));
         }
         failure.resume();

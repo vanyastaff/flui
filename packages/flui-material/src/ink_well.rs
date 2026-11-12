@@ -58,10 +58,13 @@
 //! `_activationDuration` (100 ms, `ink_well.dart` `:864`, `:897`): the oracle
 //! does so for a synthetic activation with no down/up pair, and this well
 //! does so for every activation, so a quick tap under reduced motion, where
-//! no wave shows it, still shows a pressed state. The well sets `Pressed`,
-//! then runs `on_tap`, then starts the hold, which a one-shot
+//! no wave shows it, still shows a pressed state. The well takes a hold on
+//! `Pressed` from its controller (`WidgetStatesController::hold_pressed`,
+//! which counts it beside the node's contact), runs `on_tap`, then starts the
+//! timer that drops the hold: a one-shot
 //! [`flui_sdk::animation::AnimationController`] on the ambient
-//! [`flui_sdk::view::environment::VsyncScope`] times. Standalone (no
+//! [`flui_sdk::view::environment::VsyncScope`]. A controller handed over
+//! under the hold gets a hold of its own. Standalone (no
 //! `VsyncScope` above this `InkWell`) there is no clock to time it against,
 //! so the hold ends at once.
 //!
@@ -93,7 +96,7 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::interaction::node::{ControlTap, InteractiveNode};
 use flui_sdk::widgets::{
     Action, ActionOutcome, ActivateIntent, ButtonActivateIntent, ButtonChange, CustomPaint,
-    HitTestBehavior, PointerDispatch, PointerEvent, WidgetState, WidgetStateProperty,
+    HitTestBehavior, PointerDispatch, PointerEvent, PressHold, WidgetState, WidgetStateProperty,
     WidgetStatesController,
 };
 
@@ -222,6 +225,16 @@ impl std::fmt::Debug for InkWell {
     }
 }
 
+/// An activation's hold on [`WidgetState::Pressed`] and the
+/// [`PRESS_DEACTIVATION_DELAY`] timer that ends it (ADR-0322 §3): live from
+/// the activation until the timer settles, the next activation restarts it,
+/// or the well is unmounted.
+#[derive(Default)]
+struct Activation {
+    timer: Option<DrivenController>,
+    hold: Option<PressHold>,
+}
+
 /// Persistent state behind [`InkWell`] — see [`StatefulView`]/[`ViewState`].
 pub struct InkWellState {
     states: WidgetStatesController,
@@ -235,7 +248,9 @@ pub struct InkWellState {
     vsync: Option<Vsync>,
     /// `Some` once `init_state` has run — always the case by `build`.
     rebuild: Option<RebuildHandle>,
-    pending_deactivation: Rc<RefCell<Option<DrivenController>>>,
+    /// The last activation: its hold on `Pressed` and the timer that ends
+    /// it, shared with the activation closure and the timer's listener.
+    activation: Rc<RefCell<Activation>>,
     /// The state layer and ripple, shared with the pointer callbacks and the
     /// painter.
     indication: Rc<Indication>,
@@ -247,7 +262,7 @@ impl std::fmt::Debug for InkWellState {
             .field("states", &self.states)
             .field(
                 "has_pending_deactivation",
-                &self.pending_deactivation.borrow().is_some(),
+                &self.activation.borrow().timer.is_some(),
             )
             .finish_non_exhaustive()
     }
@@ -256,8 +271,15 @@ impl std::fmt::Debug for InkWellState {
 impl InkWellState {
     /// Cancels and disposes any in-flight press-deactivation timer.
     /// Idempotent (a no-op when nothing is pending).
-    fn cancel_pending_deactivation(pending: &Rc<RefCell<Option<DrivenController>>>) {
-        let taken = pending.borrow_mut().take();
+    fn cancel_pending_deactivation(activation: &RefCell<Activation>) {
+        let taken = activation.borrow_mut().timer.take();
+        drop(taken);
+    }
+
+    /// Ends the activation's hold on `Pressed`, if one is live. The slot
+    /// borrow ends before the controller's listeners run.
+    fn release_press_hold(activation: &RefCell<Activation>) {
+        let taken = activation.borrow_mut().hold.take();
         drop(taken);
     }
 
@@ -313,7 +335,7 @@ impl StatefulView for InkWell {
             tap_slot: Rc::new(RefCell::new(self.on_tap.clone())),
             vsync: None,
             rebuild: None,
-            pending_deactivation: Rc::new(RefCell::new(None)),
+            activation: Rc::default(),
             indication,
         }
     }
@@ -346,13 +368,13 @@ impl ViewState<InkWell> for InkWellState {
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.read_ambient(ctx);
-        let pending = self.pending_deactivation.borrow_mut().take();
+        let pending = self.activation.borrow_mut().timer.take();
         if let Some(mut owner) = pending {
             if let Err(error) = owner.rebind(self.vsync.as_ref()) {
                 tracing::error!(%error, "InkWell lost its frame registry");
             }
             let displaced = {
-                let mut slot = self.pending_deactivation.borrow_mut();
+                let slot = &mut self.activation.borrow_mut().timer;
                 if slot.is_none() {
                     slot.replace(owner)
                 } else {
@@ -380,6 +402,12 @@ impl ViewState<InkWell> for InkWellState {
 
             self.states = new_view.states_controller.clone().unwrap_or_default();
             self.indication.set_states(self.states.clone());
+            // A hold under way follows the activation to the new controller.
+            if self.activation.borrow().hold.is_some() {
+                let moved = self.states.hold_pressed();
+                let outgoing = self.activation.borrow_mut().hold.replace(moved);
+                drop(outgoing);
+            }
 
             // Seeded before the listener, as in `init_state` (oracle:
             // `initStatesController` runs again on a controller swap,
@@ -426,24 +454,24 @@ impl ViewState<InkWell> for InkWellState {
             let tap_slot = Rc::clone(&self.tap_slot);
             let press_states = self.states.clone();
             let vsync = self.vsync.clone();
-            let pending_deactivation = Rc::clone(&self.pending_deactivation);
+            let activation = Rc::clone(&self.activation);
             Rc::new(move |cx: &mut flui_sdk::view::EventCx<'_>| {
                 // Oracle order (`ink_well.dart` `activateOnIntent`, `:864-900`):
                 // `WidgetState.pressed` is set FIRST, THEN `widget.onTap?.call()`
                 // fires, and only after that does the hold start. A handler
                 // that reads the states set (e.g. to resolve its own overlay)
                 // observes `Pressed`.
-                press_states.update(WidgetState::Pressed, true);
-                if let Some(handler) = tap_slot.borrow().clone() {
+                let hold = press_states.hold_pressed();
+                let handler = tap_slot.borrow().clone();
+                if let Some(handler) = handler {
                     handler(cx);
                 }
-                InkWellState::cancel_pending_deactivation(&pending_deactivation);
-                begin_press_deactivation(
-                    &pending_deactivation,
-                    &press_states,
-                    vsync.clone(),
-                    &rebuild,
-                );
+                InkWellState::cancel_pending_deactivation(&activation);
+                // The new hold is taken before the old one goes, so `Pressed`
+                // stays set across a second activation.
+                let outgoing = activation.borrow_mut().hold.replace(hold);
+                drop(outgoing);
+                begin_press_deactivation(&activation, vsync.clone(), &rebuild);
             }) as Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>
         });
 
@@ -496,7 +524,8 @@ impl ViewState<InkWell> for InkWellState {
 
     fn dispose(&mut self) {
         drop(self.states_listener.take());
-        Self::cancel_pending_deactivation(&self.pending_deactivation);
+        Self::cancel_pending_deactivation(&self.activation);
+        Self::release_press_hold(&self.activation);
         self.indication.dispose();
     }
 }
@@ -605,14 +634,15 @@ fn press_feedback(indication: &Rc<Indication>, activate: TapCallback) -> Control
 }
 
 /// Starts (or, if one is already in flight, restarts) the
-/// [`PRESS_DEACTIVATION_DELAY`] timer that clears [`WidgetState::Pressed`] —
+/// [`PRESS_DEACTIVATION_DELAY`] timer that ends the activation's hold on
+/// [`WidgetState::Pressed`] —
 /// see the module doc's "Press-state timing" section.
 ///
-/// `pending` must already be empty (the caller cancels any previous timer
+/// The activation's timer must already be empty (the caller cancels any
+/// previous timer
 /// first) — this only ever *installs*, never itself cancels.
 fn begin_press_deactivation(
-    pending: &Rc<RefCell<Option<DrivenController>>>,
-    states: &WidgetStatesController,
+    activation: &Rc<RefCell<Activation>>,
     vsync: Option<Vsync>,
     rebuild: &RebuildHandle,
 ) {
@@ -621,7 +651,7 @@ fn begin_press_deactivation(
         // simplest available degrade is immediate deactivation — documented
         // in the module doc, the same shape `GestureDetector` already uses
         // for its own deadline-driven gestures without a binding.
-        states.update(WidgetState::Pressed, false);
+        InkWellState::release_press_hold(activation);
         return;
     };
 
@@ -633,13 +663,15 @@ fn begin_press_deactivation(
 
     // Completion changes the pressed state. The next press withdraws and
     // disposes the pending timer through cancel_pending_deactivation.
-    let states_for_listener = states.clone();
+    let activation_for_listener = Rc::downgrade(activation);
     let rebuild_for_listener = rebuild.clone();
     // This callback lives until its owned timer is canceled or retired.
     controller
         .subscribe_status(std::rc::Rc::new(move |status| {
             if status == AnimationStatus::ForwardSettled {
-                states_for_listener.update(WidgetState::Pressed, false);
+                if let Some(activation) = activation_for_listener.upgrade() {
+                    InkWellState::release_press_hold(&activation);
+                }
                 rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             }
         }))
@@ -647,10 +679,10 @@ fn begin_press_deactivation(
 
     if let Err(error) = controller.forward_from(Some(0.0)) {
         tracing::debug!(?error, "InkWell press-deactivation timer failed to start");
-        states.update(WidgetState::Pressed, false);
+        InkWellState::release_press_hold(activation);
         return;
     }
 
-    let outgoing = pending.borrow_mut().replace(owner);
+    let outgoing = activation.borrow_mut().timer.replace(owner);
     drop(outgoing);
 }

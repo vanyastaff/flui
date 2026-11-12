@@ -2,7 +2,7 @@
 # more; counts, not timings. Lower it by hand from a FLUI_PERF_OUT record.
 
 [ink_well_over_text]
-allocations = 87
-bytes = 11587
+allocations = 88
+bytes = 11697
 elements = 3
 render_nodes = 2

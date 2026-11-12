@@ -357,6 +357,14 @@ struct SharedStates {
     /// How many pointers are inside the control that writes `Hovered` here,
     /// counted by its enters and exits.
     pointers_inside: Cell<u32>,
+    /// How many [`PressHold`]s are live: the activations a control holds
+    /// `Pressed` for past their contact. Bounded far below `u8::MAX` (a
+    /// control holds one at a time), so it sits in the padding beside
+    /// `value` and `pointers_inside`.
+    holds: Cell<u8>,
+    /// Whether the contact a recognizer of the writing control tracks is
+    /// down: the other source of `Pressed`.
+    contact: Cell<bool>,
 }
 
 impl WidgetStatesController {
@@ -369,6 +377,8 @@ impl WidgetStatesController {
                 value: Cell::new(initial),
                 notifier: ChangeNotifier::new(),
                 pointers_inside: Cell::new(0),
+                holds: Cell::new(0),
+                contact: Cell::new(false),
             }),
         }
     }
@@ -452,6 +462,85 @@ impl WidgetStatesController {
     /// Starts the count at what the replaced controller held.
     pub(crate) fn set_pointers_inside(&self, inside: u32) {
         self.shared.pointers_inside.set(inside);
+    }
+
+    /// The contact a recognizer of the writing control tracks went down or
+    /// ended. `Pressed` follows it unless an activation still holds it.
+    pub(crate) fn set_contact_pressed(&self, down: bool) {
+        self.shared.contact.set(down);
+        self.publish_pressed();
+    }
+
+    /// Takes whether a contact is down, leaving none: the control stopped
+    /// writing here, or hands the contact to the controller that replaces
+    /// this one.
+    pub(crate) fn take_contact_pressed(&self) -> bool {
+        self.shared.contact.replace(false)
+    }
+
+    /// Hold `Pressed` past the contact, for the activation a control runs
+    /// (Flutter's `InkWell` holds it for `_activationDuration`): `Pressed` is
+    /// set while any hold is live or the writing control's contact is down,
+    /// and not while the control is disabled. Dropping the hold releases it.
+    ///
+    /// For the official catalogs (ADR-0322 §3); an application writes its
+    /// own states with [`update`](Self::update).
+    #[doc(hidden)]
+    #[must_use = "the hold ends when it is dropped"]
+    pub fn hold_pressed(&self) -> PressHold {
+        let holds = &self.shared.holds;
+        holds.set(
+            holds
+                .get()
+                .checked_add(1)
+                .expect("BUG: a control holds one activation at a time, far below u8::MAX"),
+        );
+        self.publish_pressed();
+        PressHold {
+            states: self.clone(),
+        }
+    }
+
+    /// Whether a source of `Pressed` is live: the writing control's contact
+    /// or an activation hold.
+    pub(crate) fn held_pressed(&self) -> bool {
+        self.shared.contact.get() || self.shared.holds.get() > 0
+    }
+
+    /// Writes `Pressed` from its sources: committed before the listeners
+    /// run (ADR-0287).
+    fn publish_pressed(&self) {
+        let pressed = !self.value().contains_state(WidgetState::Disabled) && self.held_pressed();
+        self.update(WidgetState::Pressed, pressed);
+    }
+}
+
+/// An activation's hold on [`WidgetState::Pressed`], from
+/// [`WidgetStatesController::hold_pressed`]. Dropping it releases the hold;
+/// the last one released clears `Pressed` unless a contact is still down.
+#[doc(hidden)]
+#[must_use = "the hold ends when it is dropped"]
+pub struct PressHold {
+    states: WidgetStatesController,
+}
+
+impl fmt::Debug for PressHold {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PressHold").finish_non_exhaustive()
+    }
+}
+
+impl Drop for PressHold {
+    /// The count is committed before the listeners run (ADR-0287).
+    fn drop(&mut self) {
+        let holds = &self.states.shared.holds;
+        holds.set(
+            holds
+                .get()
+                .checked_sub(1)
+                .expect("BUG: every hold was counted when it was taken"),
+        );
+        self.states.publish_pressed();
     }
 }
 
