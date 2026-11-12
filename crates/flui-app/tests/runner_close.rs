@@ -111,12 +111,12 @@ impl std::future::Future for GatedLoad {
 
     fn poll(
         self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        ctx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         if self.gate.open.get() {
             return std::task::Poll::Ready(Ok(()));
         }
-        self.gate.waker.replace(Some(cx.waker().clone()));
+        self.gate.waker.replace(Some(ctx.waker().clone()));
         std::task::Poll::Pending
     }
 }

@@ -19,11 +19,11 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
     let waker = flui_foundation::testing::CountingWaker::calling(move || thread.unpark())
         .shared()
         .waker();
-    let mut cx = Context::from_waker(&waker);
+    let mut ctx = Context::from_waker(&waker);
     let mut future = std::pin::pin!(future);
     let until = Instant::now() + Duration::from_secs(5);
     loop {
-        if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut ctx) {
             return output;
         }
         assert!(Instant::now() < until, "timed out waiting for a future");

@@ -741,7 +741,7 @@ pub(crate) fn a_signal_read_in_provide_republishes_on_write() {
         assert_eq!(probe.seen.get(), Some(1), "{name}: published");
 
         for next in [2, 3] {
-            writer.write(|cx| tone.set(cx, next)).expect("live");
+            writer.write(|ctx| tone.set(ctx, next)).expect("live");
             frames.drain();
             assert_eq!(probe.seen.get(), Some(next), "{name}: after the write");
         }
@@ -789,6 +789,6 @@ pub(crate) fn a_failure_after_provide_ends_the_build_phase() {
     assert!(!armed.get(), "the authored failure fired");
     drop(mounted);
     writer
-        .write(|cx| signal.set(cx, 1))
+        .write(|ctx| signal.set(ctx, 1))
         .expect("no build is in progress");
 }

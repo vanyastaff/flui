@@ -37,7 +37,7 @@ pub fn whole_tile_tap_fires_from_a_point_inside_the_content_padding() {
             ThemeData::light(),
             ListTile::new()
                 .title(Text::new("Inbox"))
-                .on_tap(move |_cx| {
+                .on_tap(move |_ctx| {
                     counted.fetch_add(1, Ordering::SeqCst);
                 }),
         ),
@@ -85,9 +85,9 @@ pub fn merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button() {
             ThemeData::light(),
             MergeSemantics::new().child(
                 ListTile::new()
-                    .leading(Radio::new("spring", Some("spring")).on_changed(|_cx, _| {}))
+                    .leading(Radio::new("spring", Some("spring")).on_changed(|_ctx, _| {}))
                     .title(Text::new("Spring"))
-                    .on_tap(|_cx| {}),
+                    .on_tap(|_ctx| {}),
             ),
         ),
         tight(400.0, 56.0),
@@ -138,7 +138,7 @@ pub fn a_selectable_tile_is_an_option_whether_or_not_selected() {
                             .title(Text::new("Inbox"))
                             .selectable(selectable)
                             .selected(selected)
-                            .on_tap(|_cx| {}),
+                            .on_tap(|_ctx| {}),
                     ),
             ),
             tight(400.0, 56.0),

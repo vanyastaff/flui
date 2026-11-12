@@ -96,9 +96,9 @@ fn a_sleep_outliving_its_owner_stays_pending_without_a_waker() {
     let timer = owner.async_driver().timer();
     let counted = CountingWaker::new().shared();
     let waker = Waker::from(Arc::clone(&counted));
-    let mut cx = Context::from_waker(&waker);
+    let mut ctx = Context::from_waker(&waker);
     let mut sleep = pin!(timer.sleep(Duration::from_millis(5)));
-    assert_eq!(sleep.as_mut().poll(&mut cx), Poll::Pending);
+    assert_eq!(sleep.as_mut().poll(&mut ctx), Poll::Pending);
     assert_eq!(Arc::strong_count(&counted), 3, "the deadline holds a waker");
 
     assert!(owner.retire().is_none(), "retirement runs no failing code");
@@ -110,14 +110,14 @@ fn a_sleep_outliving_its_owner_stays_pending_without_a_waker() {
         "dropping the owner wakes nothing"
     );
     assert_eq!(counted.count(), 0, "without waking it");
-    assert_eq!(sleep.as_mut().poll(&mut cx), Poll::Pending);
+    assert_eq!(sleep.as_mut().poll(&mut ctx), Poll::Pending);
     assert_eq!(
         Arc::strong_count(&counted),
         2,
         "a poll after teardown keeps no waker"
     );
     assert_eq!(
-        pin!(timer.sleep(Duration::ZERO)).poll(&mut cx),
+        pin!(timer.sleep(Duration::ZERO)).poll(&mut ctx),
         Poll::Pending,
         "a sleep made after teardown never resolves"
     );

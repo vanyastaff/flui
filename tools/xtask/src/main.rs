@@ -25,6 +25,7 @@ mod api_closure;
 mod bench;
 mod change_scope;
 mod changelog;
+mod context_names;
 mod doc_strict;
 mod docs_links;
 mod docs_paths;
@@ -133,6 +134,8 @@ enum Command {
     /// Check that every `new` returning `Result` or `Option` is listed and the list only
     /// shrinks: such a constructor is `try_new` (AGENTS.md).
     TryNew(try_new::TryNewArgs),
+    /// Check that a context is bound as `ctx`, never as `cx` (ADR-0324).
+    ContextNames(context_names::ContextNamesArgs),
     /// Check that every production `expect` and `panic!` names its invariant (`BUG: `) or its
     /// `try_` twin; the counts of the ones that do not only go down (docs/PANIC-POLICY.md).
     PanicMessages(panic_messages::PanicMessagesArgs),
@@ -220,6 +223,7 @@ fn main() -> ExitCode {
         Command::SendImpls(args) => send_impls::send_impls(&args),
         Command::SendPositions(args) => send_positions::send_positions(&args),
         Command::TryNew(args) => try_new::try_new(&args),
+        Command::ContextNames(args) => context_names::context_names(&args),
         Command::PanicMessages(args) => panic_messages::panic_messages(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),

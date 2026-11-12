@@ -276,7 +276,7 @@ where
                 // `futures-core` gives the trait only — no `StreamExt::next()` —
                 // so the stream is polled by hand through `poll_fn`. That is the
                 // whole reason the dependency is trait-only.
-                let event = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await;
+                let event = std::future::poll_fn(|ctx| stream.as_mut().poll_next(ctx)).await;
                 let is_end = event.is_none();
 
                 // `StreamBuilder` never opens an inline window, so `false` here

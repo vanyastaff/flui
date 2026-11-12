@@ -104,11 +104,11 @@ impl<T> Unpin for Task<T> {}
 impl<T> Future for Task<T> {
     type Output = T;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         // `TaskState::Spawned` — the only arm that consults the waker — does not
         // exist on wasm32, where every Task is already `Ready`.
         #[cfg(target_arch = "wasm32")]
-        let _ = cx;
+        let _ = ctx;
 
         let this = self.get_mut();
         match &mut this.0 {
@@ -125,7 +125,7 @@ impl<T> Future for Task<T> {
                 // a borrow into `T` itself. `Pin::new` (safe) replaces what
                 // used to be a justified `Pin::new_unchecked`.
                 let handle = Pin::new(handle);
-                match handle.poll(cx) {
+                match handle.poll(ctx) {
                     Poll::Ready(Ok(val)) => Poll::Ready(val),
                     Poll::Ready(Err(join_error)) => {
                         // Task panicked or was cancelled

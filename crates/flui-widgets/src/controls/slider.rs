@@ -77,7 +77,7 @@ impl Slider {
         R: EventOutcome,
     {
         let callback = Terminal::new(callback);
-        let incoming = Terminal::new(Some(value_callback(move |cx, value| callback(cx, value))));
+        let incoming = Terminal::new(Some(value_callback(move |ctx, value| callback(ctx, value))));
         let old = std::mem::replace(&mut self.on_changed, incoming);
         drop(old);
         self
@@ -141,33 +141,33 @@ impl Live {
             && size.height.is_finite()
             && size.height > 0.0
     }
-    fn admits_context(&self, cx: &EventCx<'_>) -> bool {
+    fn admits_context(&self, ctx: &EventCx<'_>) -> bool {
         self.writer
             .borrow()
             .as_ref()
-            .is_some_and(|writer| writer.check_context(cx).is_ok())
+            .is_some_and(|writer| writer.check_context(ctx).is_ok())
     }
-    fn propose(&self, cx: &mut EventCx<'_>, value: f64) {
-        if !self.usable() || !self.admits_context(cx) || !self.range.get().contains(value) {
+    fn propose(&self, ctx: &mut EventCx<'_>, value: f64) {
+        if !self.usable() || !self.admits_context(ctx) || !self.range.get().contains(value) {
             return;
         }
         let callback = Terminal::new(self.callback.borrow().as_ref().map(Rc::clone));
         if let Some(callback) = callback.as_ref() {
-            callback(cx, value);
+            callback(ctx, value);
         }
     }
-    fn request_focus(&self, cx: &EventCx<'_>) {
-        if self.usable() && self.admits_context(cx) {
+    fn request_focus(&self, ctx: &EventCx<'_>) {
+        if self.usable() && self.admits_context(ctx) {
             let _ = self.focus.request_focus();
         }
     }
-    fn at_pointer(&self, cx: &mut EventCx<'_>, x: f64) {
-        if !self.pointer_usable() || !self.admits_context(cx) || !x.is_finite() {
+    fn at_pointer(&self, ctx: &mut EventCx<'_>, x: f64) {
+        if !self.pointer_usable() || !self.admits_context(ctx) || !x.is_finite() {
             return;
         }
-        self.request_focus(cx);
+        self.request_focus(ctx);
         // Focus notification may update this control or close its focus manager.
-        if !self.pointer_usable() || !self.admits_context(cx) || !self.focus.is_attached() {
+        if !self.pointer_usable() || !self.admits_context(ctx) || !self.focus.is_attached() {
             return;
         }
         let size = self.size.get();
@@ -176,9 +176,9 @@ impl Live {
         if self.direction.get() == TextDirection::Rtl {
             fraction = 1.0 - fraction;
         }
-        self.propose(cx, interpolate(self.range.get(), fraction));
+        self.propose(ctx, interpolate(self.range.get(), fraction));
     }
-    fn stepped(&self, cx: &mut EventCx<'_>, increase: bool) {
+    fn stepped(&self, ctx: &mut EventCx<'_>, increase: bool) {
         let range = self.range.get();
         let sum = if increase {
             range.value() + range.step()
@@ -194,7 +194,7 @@ impl Live {
         } else {
             range.min()
         };
-        self.propose(cx, value);
+        self.propose(ctx, value);
     }
 }
 
@@ -289,23 +289,23 @@ impl ViewState<Slider> for SliderState {
                 let update = Terminal::new(Rc::clone(&live));
                 let end = Terminal::new(Rc::clone(&live));
                 detector
-                    .on_tap(move |cx| {
+                    .on_tap(move |ctx| {
                         if let Some(x) = tap.down_x.take() {
-                            tap.at_pointer(cx, x);
+                            tap.at_pointer(ctx, x);
                         }
                     })
                     .drag(
                         DragSlot::horizontal()
-                            .on_down(move |_cx, details| {
+                            .on_down(move |_ctx, details| {
                                 down.down_x.set(Some(details.local_position.dx));
                             })
-                            .on_start(move |cx, details| {
-                                start.at_pointer(cx, details.local_position.dx);
+                            .on_start(move |ctx, details| {
+                                start.at_pointer(ctx, details.local_position.dx);
                             })
-                            .on_update(move |cx, details| {
-                                update.at_pointer(cx, details.local_position.dx);
+                            .on_update(move |ctx, details| {
+                                update.at_pointer(ctx, details.local_position.dx);
                             })
-                            .on_end(move |_cx, _details| end.down_x.set(None)),
+                            .on_end(move |_ctx, _details| end.down_x.set(None)),
                     )
                     .boxed()
             } else {
@@ -330,9 +330,9 @@ impl ViewState<Slider> for SliderState {
             let decrease = Terminal::new(Rc::clone(&self.live));
             let set = Terminal::new(Rc::clone(&self.live));
             semantics = semantics
-                .on_increment(move |cx| increase.stepped(cx, true))
-                .on_decrement(move |cx| decrease.stepped(cx, false))
-                .on_set_numeric_value(move |cx, value| set.propose(cx, value));
+                .on_increment(move |ctx| increase.stepped(ctx, true))
+                .on_decrement(move |ctx| decrease.stepped(ctx, false))
+                .on_set_numeric_value(move |ctx, value| set.propose(ctx, value));
         }
         let key = Terminal::new(Rc::clone(&self.live));
         let focus_live = Terminal::new(Rc::clone(&self.live));
@@ -345,25 +345,25 @@ impl ViewState<Slider> for SliderState {
             .focus_node(Rc::clone(&self.live.focus))
             .can_request_focus(self.live.usable())
             .skip_traversal(!self.live.usable())
-            .on_focus_change(move |_cx, _focused| {
+            .on_focus_change(move |_ctx, _focused| {
                 if focus_live.mounted.get() {
                     rebuild.schedule(RebuildReason::StateChange);
                 }
             })
-            .on_key_event(move |cx, event| {
+            .on_key_event(move |ctx, event| {
                 if event.state() != KeyState::Down
                     || event.composition == ImeComposition::Active
                     || !key.usable()
-                    || !key.admits_context(cx)
+                    || !key.admits_context(ctx)
                 {
                     return KeyEventResult::Ignored;
                 }
                 if crate::SingleActivator::character_ignoring_shift("+").matches(event) {
-                    key.stepped(cx, true);
+                    key.stepped(ctx, true);
                     return KeyEventResult::Handled;
                 }
                 if crate::SingleActivator::character_ignoring_shift("-").matches(event) {
-                    key.stepped(cx, false);
+                    key.stepped(ctx, false);
                     return KeyEventResult::Handled;
                 }
                 if !command_modifiers(event.modifiers).is_empty() {
@@ -371,15 +371,15 @@ impl ViewState<Slider> for SliderState {
                 }
                 match event.key {
                     Key::Named(NamedKey::ArrowRight) => {
-                        key.stepped(cx, key.direction.get() != TextDirection::Rtl);
+                        key.stepped(ctx, key.direction.get() != TextDirection::Rtl);
                     }
                     Key::Named(NamedKey::ArrowLeft) => {
-                        key.stepped(cx, key.direction.get() == TextDirection::Rtl);
+                        key.stepped(ctx, key.direction.get() == TextDirection::Rtl);
                     }
-                    Key::Named(NamedKey::ArrowUp) => key.stepped(cx, true),
-                    Key::Named(NamedKey::ArrowDown) => key.stepped(cx, false),
-                    Key::Named(NamedKey::Home) => key.propose(cx, key.range.get().min()),
-                    Key::Named(NamedKey::End) => key.propose(cx, key.range.get().max()),
+                    Key::Named(NamedKey::ArrowUp) => key.stepped(ctx, true),
+                    Key::Named(NamedKey::ArrowDown) => key.stepped(ctx, false),
+                    Key::Named(NamedKey::Home) => key.propose(ctx, key.range.get().min()),
+                    Key::Named(NamedKey::End) => key.propose(ctx, key.range.get().max()),
                     _ => return KeyEventResult::Ignored,
                 }
                 KeyEventResult::Handled

@@ -174,10 +174,10 @@ fn a_saturated_lane_decodes_on_the_owner_thread() {
     use flui_view::background::{Background, BackgroundCapability};
 
     let mut registrar = CapabilityRegistrar::new();
-    registrar.provide::<BackgroundCapability>(|cx: &ProviderContext<'_>| {
+    registrar.provide::<BackgroundCapability>(|ctx: &ProviderContext<'_>| {
         Ok(Background::new(
             Arc::new(Saturated),
-            cx.completions().clone(),
+            ctx.completions().clone(),
         ))
     });
     let registry = CapabilityRegistry::builder()

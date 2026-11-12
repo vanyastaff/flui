@@ -32,7 +32,7 @@ fn device(
 
 fn button(width: f64) -> impl View {
     GestureDetector::new()
-        .on_tap(|_cx: &mut EventCx<'_>| {})
+        .on_tap(|_ctx: &mut EventCx<'_>| {})
         .child(SizedBox::new(width, 20.0).child(ColoredBox::new(Color::rgb(0, 0, 200))))
 }
 

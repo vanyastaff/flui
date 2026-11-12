@@ -122,7 +122,7 @@ fn select_all_replacement(obscured: bool) {
     let (harness, _node) = mount_field(&controller, move |field| {
         field
             .obscure_text(obscured)
-            .on_changed(move |_cx, _text| counted.set(counted.get() + 1))
+            .on_changed(move |_ctx, _text| counted.set(counted.get() + 1))
     });
     let text = "A😀e\u{301}東京";
     for scalar in text.chars() {
@@ -243,7 +243,7 @@ pub(crate) fn paste_rechecks_focus_after_committing_composition() {
     let retiring = node.clone();
     let mut harness = crate::common::harness::mount_with_ime(
         EditableText::new(controller.clone(), node.clone())
-            .on_changed(move |_cx, _text| retiring.unfocus()),
+            .on_changed(move |_ctx, _text| retiring.unfocus()),
     );
     let _ = node.request_focus();
     harness.clipboard().set_text("paste");
@@ -407,10 +407,10 @@ impl flui_view::View for PrimaryAcquirer {
 }
 
 impl flui_view::ViewState<PrimaryAcquirer> for PrimaryAcquirerState {
-    fn init_state(&mut self, cx: &dyn flui_view::LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
         use flui_view::LifecycleContextExt as _;
         self.handle.replace(
-            cx.capability::<flui_interaction::PrimarySelectionCapability>()
+            ctx.capability::<flui_interaction::PrimarySelectionCapability>()
                 .ok(),
         );
     }
@@ -418,7 +418,7 @@ impl flui_view::ViewState<PrimaryAcquirer> for PrimaryAcquirerState {
     fn build(
         &self,
         _view: &PrimaryAcquirer,
-        _cx: &dyn flui_view::BuildContext,
+        _ctx: &dyn flui_view::BuildContext,
     ) -> impl flui_view::IntoView {
         flui_widgets::SizedBox::new(10.0, 10.0)
     }

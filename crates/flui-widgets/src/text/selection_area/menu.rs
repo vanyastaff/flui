@@ -214,7 +214,7 @@ impl SelectionModel {
     /// and the selection is cleared on the others, as their own text does.
     /// The popup opens though a listener of that change panics; the first
     /// failure resumes after.
-    pub(super) fn secondary_tapped(self: &Rc<Self>, cx: &mut EventCx<'_>, global: Offset<f64>) {
+    pub(super) fn secondary_tapped(self: &Rc<Self>, ctx: &mut EventCx<'_>, global: Offset<f64>) {
         let mut failure = FirstPanic::new();
         self.hide_handles(&mut failure);
         if !self.focus.has_primary_focus() {
@@ -242,12 +242,12 @@ impl SelectionModel {
             } else {
                 None
             };
-            failure.contain(|| self.select(cx, replacement.as_ref(), SelectionInput::Pointer));
+            failure.contain(|| self.select(ctx, replacement.as_ref(), SelectionInput::Pointer));
         }
         failure.contain(|| {
             self.handles
                 .menu
-                .open(cx, MenuCause::SecondaryClick, Some(global));
+                .open(ctx, MenuCause::SecondaryClick, Some(global));
         });
         failure.resume();
     }

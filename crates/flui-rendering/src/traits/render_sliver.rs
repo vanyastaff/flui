@@ -563,8 +563,8 @@ where
         // RenderSliver::paint. `size` is the sliver's absolute paint size
         // (`get_absolute_size(paint_extent)`), resolved by the driver
         // from `RenderState` so paint reads `ctx.size()` (2B field dedup).
-        let mut cx = crate::context::PaintCx::<T::Arity>::new(recorder, child_count, size);
-        T::paint(self, &mut cx);
+        let mut ctx = crate::context::PaintCx::<T::Arity>::new(recorder, child_count, size);
+        T::paint(self, &mut ctx);
     }
 
     fn hit_test_raw(

@@ -409,8 +409,8 @@ impl FragmentRecorder {
 /// use flui_rendering::context::PaintCx;
 /// use flui_foundation::{Leaf, Single};
 ///
-/// fn paint(cx: &mut PaintCx<'_, Leaf>) {
-///     cx.paint_child();
+/// fn paint(ctx: &mut PaintCx<'_, Leaf>) {
+///     ctx.paint_child();
 /// }
 /// ```
 ///
@@ -420,8 +420,8 @@ impl FragmentRecorder {
 /// use flui_rendering::context::PaintCx;
 /// use flui_foundation::{Leaf, Single};
 ///
-/// fn paint(cx: &mut PaintCx<'_, Single>) {
-///     cx.paint_child();
+/// fn paint(ctx: &mut PaintCx<'_, Single>) {
+///     ctx.paint_child();
 /// }
 /// ```
 pub struct PaintCx<'a, A: Arity> {
@@ -789,13 +789,13 @@ mod tests {
 
     fn draws_between_child_markers_split_into_ordered_runs() {
         let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
-        let mut cx = PaintCx::<Variable>::new(&mut rec, 2, Size::ZERO);
+        let mut ctx = PaintCx::<Variable>::new(&mut rec, 2, Size::ZERO);
 
-        cx.canvas().draw_rect(rect(10.0, 10.0), &fill()); // background
-        cx.paint_child(0);
-        cx.canvas().draw_rect(rect(5.0, 5.0), &fill()); // between
-        cx.paint_child(1);
-        cx.canvas().draw_rect(rect(2.0, 2.0), &fill()); // foreground
+        ctx.canvas().draw_rect(rect(10.0, 10.0), &fill()); // background
+        ctx.paint_child(0);
+        ctx.canvas().draw_rect(rect(5.0, 5.0), &fill()); // between
+        ctx.paint_child(1);
+        ctx.canvas().draw_rect(rect(2.0, 2.0), &fill()); // foreground
 
         let frag = rec.finish();
         let kinds: Vec<&str> = frag
@@ -827,8 +827,8 @@ mod tests {
 
     fn origin_is_baked_into_run_transforms() {
         let mut rec = FragmentRecorder::new(Offset::new(7.0, 3.0), 1.0);
-        let mut cx = PaintCx::<Leaf>::new(&mut rec, 0, Size::ZERO);
-        cx.canvas().draw_rect(rect(10.0, 10.0), &fill());
+        let mut ctx = PaintCx::<Leaf>::new(&mut rec, 0, Size::ZERO);
+        ctx.canvas().draw_rect(rect(10.0, 10.0), &fill());
 
         let frag = rec.finish();
         let FragmentOp::Run(list) = &frag.ops[0] else {

@@ -48,7 +48,7 @@ EventOutcome`, and receives the key event's `EventCx` from the `Focus` key handl
 Flutter keys by `Type`; the downcast happens inside a typed wrapper, never against a view.
 `Action<T: Intent>` has `is_enabled`, `invoke(&T) -> ActionOutcome` and a defaulted
 `to_key_event_result` (ADR-0026 §4); `CallbackAction<T>` wraps a closure. *Amended by ADR-0086:*
-`invoke` is `invoke(&self, cx: &mut EventCx<'_>, intent: &T)` — the action runs inside the key
+`invoke` is `invoke(&self, ctx: &mut EventCx<'_>, intent: &T)` — the action runs inside the key
 event's dispatch and writes through its `EventCx` — and `CallbackAction::new` takes
 `Fn(&mut EventCx<'_>, &T) -> R`. `Actions::maybe_invoke` is removed: its only caller could be
 `build`, which has no event context; `is_enabled` and `to_key_event_result` stay queries. Each

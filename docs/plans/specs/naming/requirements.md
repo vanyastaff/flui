@@ -92,7 +92,7 @@
 | 34 | `Notifier<Arg>`, модуль `notifier_generic` | `flui-foundation/src/lib.rs:213` | Модуль назван по устройству реализации, а не по смыслу | В `notifier` рядом с `ChangeNotifier` | да (путь) | 21 |
 | 35 | `TickerCanceled`, `DraggableCanceledDetails`, варианты `Canceled` (`ticker.rs:1343,1395`) при 305 вхождениях `Cancelled` | `flui-scheduler/src/ticker.rs`, `flui-widgets/…/draggable` | Два написания одного слова | `Cancelled` везде (как `tokio_util::sync::CancellationToken::is_cancelled`) | да | 106 |
 | 36 | `SliverMultiBoxAdaptor`, `SliverMultiBoxAdaptorParentData`, `element/sliver_adaptor.rs` и `SliverToBoxAdapter`, `RenderViewAdapter` | `flui-rendering/src/parent_data/sliver_variants.rs:159`, `flui-view/src/element/sliver_adaptor.rs` | Два написания (непоследовательность Flutter перенесена как есть) | `Adapter` везде | да | 242 |
-| 37 | `PaintCx`, `EventCx`, `TextCx` и `BoxIntrinsicsCtx`, `BoxDryLayoutCtx`, `BoxDryBaselineCtx`, `ErasedBoxLayoutCtx`, `ErasedSliverLayoutCtx` и 15 `*Context` | `flui-rendering/src/context/{paint_cx,intrinsics}.rs`, `flui-view/src/reactive/writer.rs:95`, `flui-rendering/src/pipeline/text_context.rs:255` | Три написания одного понятия, у модулей тоже (`paint_cx.rs`, `pub mod event_cx` ×4) | Одно написание для типов (В5). Привязки везде `cx`, как в std (`cx: &mut Context<'_>`) | да | 190, 495, 26, 211, 95, 70, 11, 9 |
+| 37 | `PaintCx`, `EventCx`, `TextCx` и `BoxIntrinsicsCtx`, `BoxDryLayoutCtx`, `BoxDryBaselineCtx`, `ErasedBoxLayoutCtx`, `ErasedSliverLayoutCtx` и 15 `*Context` | `flui-rendering/src/context/{paint_cx,intrinsics}.rs`, `flui-view/src/reactive/writer.rs:95`, `flui-rendering/src/pipeline/text_context.rs:255` | Три написания одного понятия, у модулей тоже (`paint_cx.rs`, `pub mod event_cx` ×4) | Одно написание для типов (В5). Привязки везде `ctx` (N1) | да | 190, 495, 26, 211, 95, 70, 11, 9 |
 | 38 | `BoxDryBaselineCtx`, `DryBaselineChildRequest/Response`, `ActualBaselineChildCallback` | `flui-rendering/src/context/intrinsics.rs:28-101`, `protocol/box_protocol.rs:344` | Входит в строку 37. `Actual` — слово Flutter (`getDistanceToActualBaseline`) | `BaselineChildCallback` | да | 70 |
 | 39 | `RRect`, `ClipRRect`, `RenderClipRRect`, `ClipRRectLayer`, `DRRect`; `RSuperellipse` | `flui-foundation/src/geometry/…`, `flui-painting`, `flui-objects`, `flui-layer` | Аббревиатура Skia. По C-CASE `RRect` — два слова «R»+«Rect» и непрозрачно. kurbo: `RoundedRect` | `RoundedRect`, `ClipRoundedRect`, …, `RoundedSuperellipse`, по решению В4 | да | 283, 42, 51 |
 | 40 | `BlendMode::SrcATop`, `DstATop`, `ScaleXY` | `flui-painting` | C-CASE (`atop` — одно слово) | `SrcAtop`, `DstAtop`, `ScaleXy` | да | — |
@@ -178,8 +178,8 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
   Суффикс `Trait` запрещён. [RFC 445; std `std::os::unix::fs::PermissionsExt`, `OsStrExt`; `futures::StreamExt`].
   (`names`: item-word для `ExtTrait`; остальное — review по В2)
 - **N6. Одно понятие — одно слово.** Колбэк — `*Callback`, контекст — одно написание (В5), `Cancelled`, `Adapter`, привязка
-  контекста — `cx`. Одно имя у двух публичных сущностей одного крейта запрещено. [C-CASE «consistent»; std
-  `task::Context` + `cx`]. (`names`: dup-name; `typos.toml` `extend-words` для написаний)
+  контекста — `ctx` (N1). Одно имя у двух публичных сущностей одного крейта запрещено. [C-CASE «consistent»].
+  (`names`: dup-name; `typos.toml` `extend-words` для написаний; привязку держит `xtask context-names`)
 - **N7. Один канонический путь.** Публичный модуль существует, если по нему ищут (`flui_widgets::scroll`). Модуль ради одного
   типа приватный и реэкспортируется. Элемент публичного модуля не повторяет его имя (`io::Error`, не `io::IoError`).
   [std; `clippy::module_name_repetitions`]. (clippy на выбранных крейтах, см. ниже)
@@ -313,7 +313,7 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
 - Имена крейтов (`flui-objects` и др.) — решение уровня 0, сейчас не предлагаются.
 - Дедупликация трёх `child_process.rs` и нескольких раннеров таблиц (строка 71) — только отметка.
 - Маркеры процесса в doc-комментариях (`FR-019`, `Phase 1` в `element/kind.rs`) — гейт `markers`.
-- Имена приватных локальных привязок и полей (кроме `cx`).
+- Имена приватных локальных привязок и полей (кроме привязок контекста, N1).
 - Документы `docs/plans`, [`docs/research`](https://github.com/vanyastaff/flui/tree/083b0f75da003030e908d107825e9f4db4e54437/docs/research) (архив).
 
 ## Открытые вопросы (решает владелец)
@@ -331,15 +331,15 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
 - **В4. Словарь Flutter/Skia, который оставляем:** `*ThemeData`/`MediaQueryData`/`IconData` (пара «значение — виджет»),
   `RRect`/`RSuperellipse`, `Diagnosticable`, `Listenable`/`ChangeNotifier`, `*Delegate` (14). Предложение: оставить `*Data`
   как устоявшуюся пару, `RRect` → `RoundedRect` (kurbo) решить до 0.2.0, `VoidCallback`/`Disposable`/`Curves` убрать.
-- **В5. Одно написание контекста:** `Context` (std `task::Context`, привязка `cx`) или `Cx` (GPUI/Xilem, короче,
-  `EventCx` = 495 ссылок). Предложение: типы `*Context`, привязки `cx`. `PaintCx`/`EventCx` переименовываются вместе с
-  `*Ctx`-типами одним PR на крейт.
+- **В5. Одно написание контекста:** типы `*Context`, привязки `ctx` (решение N1). `PaintCx`/`EventCx`
+  переименовываются вместе с `*Ctx`-типами одним механическим PR.
 
 ## Решения владельца (2026-10-06)
 
-- **N1. Контексты.** Типы называются `…Context` (как `std::task::Context`), привязки — `cx`:
-  `EventContext`, `BoxLayoutContext`, `BuildContext`. Написания `Ctx` и `Cx` в именах типов
-  уходят. Гейт `names` закрепляет одно написание.
+- **N1. Контексты.** Типы называются `…Context` (как `std::task::Context`), привязка любого
+  контекста — `ctx`, включая `EventContext` и `std::task::Context`: `ctx: &dyn BuildContext`,
+  `move |ctx| …`. Написания `Ctx` и `Cx` в именах типов уходят. Привязку держит гейт
+  `xtask context-names` ([ADR-0324](../../../adr/ADR-0324-a-context-is-bound-as-ctx-and-its-type-is-named-context.md)).
 - **N2. Имена из Flutter/Dart/Skia — всё по-растовски.** Пересматриваются не только артефакты Dart
   (`Mixin`, `Base`, статический `Curves`, бессмысленный `Data`, сокращения Skia вроде `RRect`), но
   и предметные имена виджетов и типов (`Container`, `ThemeData` и т. п.) — под стиль экосистемы

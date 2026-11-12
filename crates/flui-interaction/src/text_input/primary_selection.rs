@@ -4,7 +4,7 @@
 //! without it register no provider, so an acquisition there is refused.
 //!
 //! A widget acquires a [`PrimarySelectionHandle`] through
-//! `cx.capability::<PrimarySelectionCapability>()` in a lifecycle hook. A
+//! `ctx.capability::<PrimarySelectionCapability>()` in a lifecycle hook. A
 //! selection is offered lazily: [`claim`](PrimarySelectionHandle::claim)
 //! hands the platform a [`SelectionText`], which is asked for its text only
 //! when another application reads the selection, so selecting with a drag
@@ -23,7 +23,7 @@ use flui_platform::capability::{
 use super::shared_read::SharedRead;
 
 /// The primary selection capability:
-/// `cx.capability::<PrimarySelectionCapability>()` hands out a
+/// `ctx.capability::<PrimarySelectionCapability>()` hands out a
 /// [`PrimarySelectionHandle`].
 #[derive(Debug)]
 #[allow(
@@ -204,15 +204,15 @@ pub struct PrimarySelectionHandle {
 }
 
 impl PrimarySelectionHandle {
-    /// A handle over `backend` for the acquisition `cx`: its reads settle
+    /// A handle over `backend` for the acquisition `ctx`: its reads settle
     /// through the UI runtime's completions, and share the read in flight
     /// with every other handle of that runtime.
     #[must_use]
-    pub fn new(backend: impl PrimarySelectionBackend, cx: &ProviderContext<'_>) -> Self {
+    pub fn new(backend: impl PrimarySelectionBackend, ctx: &ProviderContext<'_>) -> Self {
         Self {
             backend: Rc::new(backend),
-            completions: cx.completions().clone(),
-            reads: cx.runtime_local::<PrimaryReads>(),
+            completions: ctx.completions().clone(),
+            reads: ctx.runtime_local::<PrimaryReads>(),
         }
     }
 

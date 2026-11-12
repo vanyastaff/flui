@@ -338,7 +338,7 @@ type RefreshCallback = Rc<dyn Fn(&mut EventCx<'_>) -> BoxedTask>;
 ///     SingleChildScrollView::new().child(SizedBox::new(300.0, 1400.0)),
 ///     alternatives,
 /// )
-/// .on_refresh(|_cx| async { /* fetch the messages */ });
+/// .on_refresh(|_ctx| async { /* fetch the messages */ });
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct RefreshIndicator {
@@ -369,7 +369,7 @@ impl RefreshIndicator {
             child: child.into_view().boxed(),
             alternatives,
             controller: None,
-            on_refresh: Rc::new(|_cx| Box::pin(std::future::ready(()))),
+            on_refresh: Rc::new(|_ctx| Box::pin(std::future::ready(()))),
             threshold_px: DEFAULT_THRESHOLD_PX,
             axis: Axis::Vertical,
         }
@@ -382,7 +382,7 @@ impl RefreshIndicator {
     where
         F: Future<Output = ()> + 'static,
     {
-        self.on_refresh = Rc::new(move |cx| Box::pin(on_refresh(cx)));
+        self.on_refresh = Rc::new(move |ctx| Box::pin(on_refresh(ctx)));
         self
     }
 
@@ -590,12 +590,12 @@ impl Refresher {
         let command = self.command.borrow().clone();
         let writer = self.writer.borrow().clone();
         if let (Some(command), Some(writer)) = (command, writer) {
-            writer.write(|cx| command.perform(cx));
+            writer.write(|ctx| command.perform(ctx));
         }
     }
 
     /// Start one refresh, unless one runs.
-    fn start(&self, cx: &mut EventCx<'_>) -> ActionOutcome {
+    fn start(&self, ctx: &mut EventCx<'_>) -> ActionOutcome {
         let controller = self.controller();
         if !self.mounted.get() || controller.is_refreshing() {
             return ActionOutcome::NotPerformed;
@@ -604,7 +604,7 @@ impl Refresher {
         controller.set_refreshing(true, &mut recovery);
         let on_refresh = Rc::clone(&*self.on_refresh.borrow());
         let mut future = None;
-        recovery.run(|| future = Some(on_refresh(cx)));
+        recovery.run(|| future = Some(on_refresh(ctx)));
         let driver = self.driver.borrow().clone();
         match (future, driver) {
             (Some(future), Some(driver)) if self.mounted.get() => {
@@ -725,10 +725,12 @@ struct RefreshAction {
 }
 
 impl Action<RefreshIntent> for RefreshAction {
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &RefreshIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &RefreshIntent) -> ActionOutcome {
         self.refresher
             .upgrade()
-            .map_or(ActionOutcome::NotPerformed, |refresher| refresher.start(cx))
+            .map_or(ActionOutcome::NotPerformed, |refresher| {
+                refresher.start(ctx)
+            })
     }
 }
 

@@ -361,7 +361,7 @@ struct CompletionFuture<T: 'static> {
 impl<T: 'static> Future for CompletionFuture<T> {
     type Output = Result<T, Abandoned>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let Some(inner) = self.inner.as_ref() else {
             return Poll::Pending;
         };
@@ -371,7 +371,7 @@ impl<T: 'static> Future for CompletionFuture<T> {
         // The new waker is cloned before the borrow, and the replaced one is
         // destroyed after it ends: either may re-enter the owner and settle
         // this completion, so the outcome is read again after both.
-        let waker = cx.waker().clone();
+        let waker = ctx.waker().clone();
         commit(&inner.local.state, |state, out| {
             if let Some(replaced) = state.waker.replace(waker) {
                 out.release(replaced);

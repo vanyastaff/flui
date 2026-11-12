@@ -650,7 +650,7 @@ impl AppConfig {
     /// after its identifier.
     ///
     /// Every widget acquires the application's storage as the
-    /// `StorageCapability` (`cx.capability::<StorageCapability>()`). It lives
+    /// `StorageCapability` (`ctx.capability::<StorageCapability>()`). It lives
     /// in one directory under the platform's data roots: the current user's
     /// data directories on desktop and iOS, the app's private `files` and
     /// `no_backup` directories on Android, and the page's IndexedDB on the

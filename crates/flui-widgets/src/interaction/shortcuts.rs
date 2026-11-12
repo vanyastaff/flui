@@ -355,7 +355,7 @@ impl CallbackShortcuts {
 
     /// Fire `callback` whenever `activator` matches a key the focused subtree
     /// ignored. It runs inside the key event's dispatch and receives its
-    /// `cx`, so it writes signals like any other event callback (ADR-0086).
+    /// `ctx`, so it writes signals like any other event callback (ADR-0086).
     #[must_use]
     pub fn binding<F, R>(mut self, activator: SingleActivator, callback: F) -> Self
     where
@@ -396,11 +396,11 @@ impl StatelessView for CallbackShortcuts {
         Focus::new(self.child.clone())
             .can_request_focus(false)
             .debug_label("CallbackShortcuts")
-            .on_key_event(move |cx, event| {
+            .on_key_event(move |ctx, event| {
                 let mut handled = false;
                 for (activator, callback) in &bindings {
                     if activator.matches(event) {
-                        callback(cx);
+                        callback(ctx);
                         handled = true;
                     }
                 }
@@ -549,7 +549,7 @@ impl ViewState<Shortcuts> for ShortcutsState {
         focus
             .can_request_focus(false)
             .debug_label("Shortcuts")
-            .on_key_event(move |cx, event| {
+            .on_key_event(move |ctx, event| {
                 // The FIRST matching activator decides; an unresolvable
                 // intent falls through as ignored, it does not try later
                 // activators.
@@ -583,7 +583,7 @@ impl ViewState<Shortcuts> for ShortcutsState {
                     // One call: invoke and read `to_key_event_result` off what
                     // it actually did, so the key result cannot disagree with
                     // the invocation.
-                    Some(action) => action.invoke_for_key(cx, intent),
+                    Some(action) => action.invoke_for_key(ctx, intent),
                     None => KeyEventResult::Ignored,
                 }
             })

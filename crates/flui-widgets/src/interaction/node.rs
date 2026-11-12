@@ -442,10 +442,10 @@ fn writing_focus(
     then: Option<FocusChangeHandler>,
 ) -> FocusChangeHandler {
     let states = states.clone();
-    Rc::new(move |cx: &mut EventCx<'_>, on: bool| {
+    Rc::new(move |ctx: &mut EventCx<'_>, on: bool| {
         states.update(state, on);
         if let Some(then) = &then {
-            then(cx, on);
+            then(ctx, on);
         }
     })
 }
@@ -538,10 +538,10 @@ impl InteractiveNodeState {
         Some(FocusRecord::new(chain, self.platform?))
     }
 
-    fn read_dependencies(&mut self, cx: &dyn LifecycleContext) {
-        self.ambient_actions = EnclosingActions::depend_on(cx);
-        self.platform = Some(PlatformConvention::of(cx));
-        self.ring_style = DefaultFocusRingStyle::of(cx);
+    fn read_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.ambient_actions = EnclosingActions::depend_on(ctx);
+        self.platform = Some(PlatformConvention::of(ctx));
+        self.ring_style = DefaultFocusRingStyle::of(ctx);
         self.layer_actions();
     }
 
@@ -588,7 +588,7 @@ impl InteractiveNodeState {
                 .focusable(true)
                 .focused(focus.node().has_primary_focus());
             semantics = Some(match focus.assistive_focus_request() {
-                Some(request) => annotated.on_focus(move |_cx| request()),
+                Some(request) => annotated.on_focus(move |_ctx| request()),
                 None => annotated,
             });
         }
@@ -601,7 +601,7 @@ impl StatefulRenderView for InteractiveNode {
     type RenderObject = RenderInteractive;
     type State = InteractiveNodeState;
 
-    fn create_state(&self, _cx: &dyn flui_view::LifecycleContext) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         let tap = TapSlot::new(self.live_tap(), self.states.as_ref());
         InteractiveNodeState {
             recognizers: RecognizerHost::new(tap.factory().as_slice()),
@@ -620,35 +620,35 @@ impl StatefulRenderView for InteractiveNode {
 
     /// The object registers nothing here: its targets deliver to what the
     /// state acquires in `init_state`, so the first build registers them.
-    fn create_render_object(&self, _cx: &RenderObjectContext<'_>) -> Self::RenderObject {
+    fn create_render_object(&self, _ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
         RenderInteractive::new(RenderListener::new(None, self.behavior))
     }
 
     fn did_unmount_render_object(
         &self,
-        cx: &RenderObjectContext<'_>,
+        ctx: &RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) {
-        release_targets(cx, render_object.pointer_mut());
+        release_targets(ctx, render_object.pointer_mut());
         if let Some(part) = render_object.mouse_mut() {
-            super::mouse_region::release_part(cx, part);
+            super::mouse_region::release_part(ctx, part);
         }
         if let Some(part) = render_object.semantics_mut() {
-            crate::semantics::release_part(cx, part);
+            crate::semantics::release_part(ctx, part);
         }
     }
 }
 
 impl RenderViewState<InteractiveNode> for InteractiveNodeState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        self.read_dependencies(cx);
-        self.recognizers.init(cx);
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.read_dependencies(ctx);
+        self.recognizers.init(ctx);
         let record = self.focus_record();
         if let Some(focus) = &mut self.focus {
             let anchor = self.anchor.clone();
             focus.init(
-                cx,
-                render_box_rect_provider(move || anchor.get(), cx),
+                ctx,
+                render_box_rect_provider(move || anchor.get(), ctx),
                 record,
             );
         }
@@ -661,12 +661,12 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
         self.write_states(WidgetStates::NONE);
     }
 
-    fn did_change_dependencies(&mut self, cx: &dyn LifecycleContext) {
-        self.read_dependencies(cx);
-        self.recognizers.dependencies_changed(cx);
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.read_dependencies(ctx);
+        self.recognizers.dependencies_changed(ctx);
         let record = self.focus_record();
         if let Some(focus) = &mut self.focus {
-            focus.dependencies_changed(cx, record);
+            focus.dependencies_changed(ctx, record);
         }
     }
 
@@ -730,31 +730,34 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
     fn update_render_object(
         &self,
         view: &InteractiveNode,
-        cx: &RenderObjectContext<'_>,
+        ctx: &RenderObjectContext<'_>,
         render_object: &mut RenderInteractive,
     ) -> RenderUpdateImpact {
-        let mut impact =
-            RenderView::update_render_object(&self.listener(view), cx, render_object.pointer_mut());
+        let mut impact = RenderView::update_render_object(
+            &self.listener(view),
+            ctx,
+            render_object.pointer_mut(),
+        );
         // Nothing reads a description while the window collects no semantics
         // (ADR-0322 §8): the part is not built, and neither are the handlers
         // it would offer. A window that starts collecting marks every
         // element dirty, so the part is there before the tree is assembled.
-        let semantics = cx
+        let semantics = ctx
             .collects_semantics()
             .then(|| self.semantics(view))
             .flatten();
         match (semantics, render_object.semantics_mut()) {
             (Some(semantics), Some(part)) => {
-                impact |= RenderView::update_render_object(&semantics, cx, part);
+                impact |= RenderView::update_render_object(&semantics, ctx, part);
             }
             (Some(semantics), None) => {
-                let part = RenderView::create_render_object(&semantics, cx);
+                let part = RenderView::create_render_object(&semantics, ctx);
                 impact |= render_object.set_semantics(Some(part)).1;
             }
             (None, Some(_)) => {
                 let (previous, removed) = render_object.set_semantics(None);
                 if let Some(mut previous) = previous {
-                    crate::semantics::release_part(cx, &mut previous);
+                    crate::semantics::release_part(ctx, &mut previous);
                 }
                 impact |= removed;
             }
@@ -769,16 +772,16 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
             .map(MouseRegion::hovering);
         match (hover, render_object.mouse_mut()) {
             (Some(hover), Some(part)) => {
-                impact |= RenderView::update_render_object(&hover, cx, part);
+                impact |= RenderView::update_render_object(&hover, ctx, part);
             }
             (Some(hover), None) => {
-                let part = RenderView::create_render_object(&hover, cx);
+                let part = RenderView::create_render_object(&hover, ctx);
                 let replaced = render_object.set_mouse(Some(part));
                 debug_assert!(replaced.is_none(), "BUG: the mouse part was absent");
             }
             (None, Some(_)) => {
                 if let Some(mut previous) = render_object.set_mouse(None) {
-                    super::mouse_region::release_part(cx, &mut previous);
+                    super::mouse_region::release_part(ctx, &mut previous);
                 }
             }
             (None, None) => {}
@@ -792,7 +795,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
         impact
     }
 
-    fn provide(&self, _view: &InteractiveNode, _cx: &dyn BuildContext, values: &mut Provided<'_>) {
+    fn provide(&self, _view: &InteractiveNode, _ctx: &dyn BuildContext, values: &mut Provided<'_>) {
         if let Some(focus) = &self.focus {
             focus.provide(values);
         }
@@ -801,7 +804,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
         }
     }
 
-    fn child(&self, view: &InteractiveNode, _cx: &dyn BuildContext) -> impl IntoView {
+    fn child(&self, view: &InteractiveNode, _ctx: &dyn BuildContext) -> impl IntoView {
         view.child.clone()
     }
 
@@ -846,14 +849,14 @@ mod switch_tests {
     struct Willing;
 
     impl Action<ActivateIntent> for Willing {
-        fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+        fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
             ActionOutcome::Performed
         }
     }
 
     fn node(enabled: bool) -> InteractiveNode {
         InteractiveNode::new(SizedBox::new(10.0, 10.0))
-            .tap(super::ControlTap::new().on_tap(|_cx| {}))
+            .tap(super::ControlTap::new().on_tap(|_ctx| {}))
             .action::<ActivateIntent, Willing>(&Rc::new(Willing))
             .enabled(enabled)
     }

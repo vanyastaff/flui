@@ -618,7 +618,7 @@ fn password_host() -> (HeadlessHost, Rc<RefCell<Vec<String>>>) {
             FocusNode::with_debug_label("password"),
         )
         .obscure_text(true)
-        .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned())),
+        .on_changed(move |_ctx, text| sink.borrow_mut().push(text.to_owned())),
     )
     .expect("attach");
     host.enable_semantics();

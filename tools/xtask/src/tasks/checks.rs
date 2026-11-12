@@ -9,9 +9,10 @@ use anyhow::bail;
 
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
-    android_dex, change_scope, changelog, docs_links, docs_paths, file_length, fonts, globals,
-    icon_import, key_vocabulary, markers, module_dag, panic_boundary, panic_messages,
-    platform_floor, recording_vocabulary, send_impls, testing, toolchain, try_new, wgsl, workspace,
+    android_dex, change_scope, changelog, context_names, docs_links, docs_paths, file_length,
+    fonts, globals, icon_import, key_vocabulary, markers, module_dag, panic_boundary,
+    panic_messages, platform_floor, recording_vocabulary, send_impls, testing, toolchain, try_new,
+    wgsl, workspace,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -104,7 +105,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// `--self-test` is not here: it is a test of this crate
 /// (`every_self_test_reports_exactly_its_planted_findings`), so
 /// `cargo test -p xtask` runs it (ADR-0303 §4).
-fn in_process(strict: bool) -> [(&'static str, InProcess); 23] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 24] {
     [
         (
             if strict {
@@ -126,6 +127,9 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 23] {
         }),
         ("send-impls", |args| send_impls::send_impls(&parsed(args)?)),
         ("try-new", |args| try_new::try_new(&parsed(args)?)),
+        ("context-names", |args| {
+            context_names::context_names(&parsed(args)?)
+        }),
         ("panic-messages", |args| {
             panic_messages::panic_messages(&parsed(args)?)
         }),
@@ -175,7 +179,7 @@ mod tests {
 
     /// Every gate's self-test: the gate run over its planted violations,
     /// failing unless exactly the planted findings come back (ADR-0078 §4).
-    const SELF_TESTS: [(&str, InProcess); 16] = [
+    const SELF_TESTS: [(&str, InProcess); 17] = [
         ("workspace", |args| workspace::workspace(&parsed(args)?)),
         ("reach", |args| workspace::reach(&parsed(args)?)),
         ("module-dag", |args| module_dag::module_dag(&parsed(args)?)),
@@ -189,6 +193,9 @@ mod tests {
             send_positions::send_positions(&parsed(args)?)
         }),
         ("try-new", |args| try_new::try_new(&parsed(args)?)),
+        ("context-names", |args| {
+            context_names::context_names(&parsed(args)?)
+        }),
         ("panic-messages", |args| {
             panic_messages::panic_messages(&parsed(args)?)
         }),
@@ -264,6 +271,7 @@ mod tests {
                 "panic-boundary",
                 "send-impls",
                 "try-new",
+                "context-names",
                 "panic-messages",
                 "paths-filter",
                 "font-assets --package-list",

@@ -163,7 +163,7 @@ values.
 
 - A *framework* capability (rebuild, focus, post-frame, close guard, lifecycle handle,
   text-input route, flush registry) stays a method on `LifecycleContext`. A *platform*
-  capability is reached only through `cx.capability::<C>()`.
+  capability is reached only through `ctx.capability::<C>()`.
 - Providers are registered in a per-UI runtime registry passed to the UI runtime's constructor;
   never a static or thread-local. The registry is an owner-thread value: UI runtimes live on the
   owner thread whether or not the owner-thread flip lands.
@@ -189,7 +189,7 @@ is keyed by the marker, not by the implementation.
    owner-local and `!Send`. The same rule decides where a capability's marker lives when framework
    widgets name its handle (item 10).
 2. **Providers live per UI runtime, and a handle is acquired only in a lifecycle hook.**
-   `cx.capability::<C>()` exists on `LifecycleContext`, whose hooks are `init_state` and
+   `ctx.capability::<C>()` exists on `LifecycleContext`, whose hooks are `init_state` and
    `did_change_dependencies`; on a `BuildContext` it does not compile (ADR-0078). A handle that
    holds an OS subscription then has an owner, the widget's state.
 3. **No cache.** The registry calls the provider on each acquisition; a provider may share state
@@ -343,7 +343,7 @@ impl HasDisplayHandle for WindowRef { /* .. */ }
 pub trait CapabilityProvider<C: Capability>: 'static {
     /// # Errors
     /// [`Unsupported`] when this platform or context cannot provide `C`.
-    fn provide(&self, cx: &ProviderContext<'_>) -> Result<C::Handle, Unsupported>;
+    fn provide(&self, ctx: &ProviderContext<'_>) -> Result<C::Handle, Unsupported>;
 }
 const _: fn(&dyn CapabilityProvider<Probe>) = |_| {}; // dyn-compatibility pin
 
@@ -401,7 +401,7 @@ impl Capability for ClipboardCapability {
 How a provider resolves a `Completion` from an OS callback is internal to the contract crate: the
 callback's only act is to post through the owner poster.
 
-Checked failures: `cx.capability::<ClipboardCapability>()` on `&dyn BuildContext` is E0599;
+Checked failures: `ctx.capability::<ClipboardCapability>()` on `&dyn BuildContext` is E0599;
 `ClipboardHandle: Send` is E0277; a struct literal of `Unsupported` outside its crate is E0639.
 The landing adds `Completion<T>: Send` as E0277.
 
@@ -446,7 +446,7 @@ pub type ClipboardRead = Result<Option<Arc<str>>, ClipboardError>;
 pub enum ClipboardError { Unavailable, Denied, Timeout, Malformed, TooLarge }
 
 impl ClipboardHandle {
-    pub fn new(backend: impl ClipboardBackend, cx: &ProviderContext<'_>) -> Self;
+    pub fn new(backend: impl ClipboardBackend, ctx: &ProviderContext<'_>) -> Self;
     pub fn read_text(&self) -> Completion<ClipboardRead>;
 }
 pub trait ClipboardBackend { fn read_text(&self, answer: Resolver<ClipboardRead>); /* … */ }
@@ -629,7 +629,7 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
 
 ### Confirmation
 
-- The compiler, through the checked failures of §3: `cx.capability::<ClipboardCapability>()`
+- The compiler, through the checked failures of §3: `ctx.capability::<ClipboardCapability>()`
   on `&dyn BuildContext` is E0599, `ClipboardHandle: Send` is E0277, a struct literal of
   `Unsupported` outside its crate is E0639, and the landing adds `Completion<T>: Send` as E0277.
   The dyn-compatibility pin `const _: fn(&dyn CapabilityProvider<Probe>) = |_| {};` stops
@@ -679,7 +679,7 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
 
 ### 1. The revised seam decided above
 
-- Good, because one generic entry point, `cx.capability::<C>()`, lets the framework, a capability
+- Good, because one generic entry point, `ctx.capability::<C>()`, lets the framework, a capability
   crate and a package add a capability the same way (§1 and §2).
 - Good, because providers live per UI runtime and a handle is acquired only in a lifecycle hook,
   so a handle that holds an OS subscription has an owner and ends it on drop, with no process

@@ -41,7 +41,7 @@ use crate::theme::Theme;
 /// use flui_material::TextButton;
 /// use flui_sdk::widgets::Text;
 ///
-/// let _button = TextButton::new(Text::new("Learn more")).on_pressed(|_cx| {});
+/// let _button = TextButton::new(Text::new("Learn more")).on_pressed(|_ctx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct TextButton {

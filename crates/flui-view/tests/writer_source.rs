@@ -93,7 +93,8 @@ impl ViewState<Probe> for ProbeState {
         view.seen.reads.borrow_mut().push(self.count.get(ctx));
         if view.write_in_build {
             let count = self.count;
-            *view.seen.write_in_build.borrow_mut() = Some(writer.write(move |cx| count.set(cx, 9)));
+            *view.seen.write_in_build.borrow_mut() =
+                Some(writer.write(move |ctx| count.set(ctx, 9)));
         }
         Leaf
     }
@@ -124,7 +125,7 @@ pub(crate) fn writer_source_from_init_state_writes_and_rebuilds_the_reader() {
     );
     let (count, source) = seen.acquired.borrow().clone().expect("the probe built");
 
-    assert_eq!(source.write(|cx| count.set(cx, 5)), Ok(()));
+    assert_eq!(source.write(|ctx| count.set(ctx, 5)), Ok(()));
     binding.pump_frame(FRAME);
 
     assert_eq!(

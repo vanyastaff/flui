@@ -53,7 +53,7 @@ fn mount(form: Form) -> LaidOut {
     lay_out(form, tight(400.0, 300.0))
 }
 
-/// [`mount`] below a probe, whose writer source opens the `cx` that
+/// [`mount`] below a probe, whose writer source opens the `ctx` that
 /// `FormHandle::save` and `reset` take, as a submit button's press would.
 fn mount_probed(form: Form) -> (LaidOut, SignalProbe) {
     let probe = SignalProbe::new(move |_| form.clone());
@@ -149,7 +149,9 @@ pub(crate) fn reset_restores_initial_values_and_clears_errors_and_interaction() 
         "precondition: error up"
     );
 
-    probe.write(|cx| form.reset(cx)).expect("same presentation");
+    probe
+        .write(|ctx| form.reset(ctx))
+        .expect("same presentation");
     laid.tick();
 
     assert_eq!(controller.text(), "init");
@@ -243,7 +245,7 @@ pub(crate) fn a_text_form_field_validates_and_saves_the_committed_text() {
 }
 
 // ============================================================================
-// Event context (ADR-0086): the handle methods take the caller's `cx` and
+// Event context (ADR-0086): the handle methods take the caller's `ctx` and
 // hand it to the callbacks they run; a field's edit hands on its own.
 // ============================================================================
 
@@ -477,7 +479,9 @@ pub(crate) fn a_reset_mid_composition_removes_the_preedit() {
     assert_eq!(controller.text(), "abX", "precondition: composing");
     assert_eq!(field.value(), "ab");
 
-    probe.write(|cx| form.reset(cx)).expect("same presentation");
+    probe
+        .write(|ctx| form.reset(ctx))
+        .expect("same presentation");
     harness.tick();
     assert_eq!(controller.composing_range(), None, "the preedit is gone");
     assert_eq!(controller.text(), "ab", "the initial value is shown");
@@ -493,13 +497,13 @@ pub(crate) fn a_panicking_reset_callback_does_not_disable_later_form_validation(
             RawTextFormField::new(controller.clone())
                 .handle(field.clone())
                 .validator(required("Required"))
-                .on_reset(|_cx| -> () { panic!("test callback failure") }),
+                .on_reset(|_ctx| -> () { panic!("test callback failure") }),
         )
         .handle(form.clone())
         .autovalidate_mode(AutovalidateMode::OnUserInteraction),
     );
     probe
-        .write(|cx| field.did_change(cx, String::new()))
+        .write(|ctx| field.did_change(ctx, String::new()))
         .expect("same presentation");
     laid.tick();
     assert!(
@@ -508,7 +512,9 @@ pub(crate) fn a_panicking_reset_callback_does_not_disable_later_form_validation(
     );
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        probe.write(|cx| form.reset(cx)).expect("same presentation");
+        probe
+            .write(|ctx| form.reset(ctx))
+            .expect("same presentation");
     }));
     assert!(result.is_err(), "callback panic propagates");
     assert_eq!(controller.text(), "valid", "the controller was reset");
@@ -520,7 +526,7 @@ pub(crate) fn a_panicking_reset_callback_does_not_disable_later_form_validation(
     );
 
     probe
-        .write(|cx| field.did_change(cx, String::new()))
+        .write(|ctx| field.did_change(ctx, String::new()))
         .expect("same presentation");
     assert_eq!(field.error_text().as_deref(), Some("Required"));
 }
@@ -541,7 +547,7 @@ pub(crate) fn a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_
         let observed_first = Rc::clone(&observed_first);
         Form::new(RawTextFormField::with_initial_value("first").handle(mounted_field.clone()))
             .handle(mounted_form.clone())
-            .on_changed(move |_cx| observed_first.set(observed_first.get() + 1))
+            .on_changed(move |_ctx| observed_first.set(observed_first.get() + 1))
     });
     let _first_tree = lay_out(first_probe.view(), tight(400.0, 300.0));
 
@@ -552,7 +558,7 @@ pub(crate) fn a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_
         lay_out(
             Form::new(SizedBox::shrink())
                 .handle(duplicate_form)
-                .on_changed(move |_cx| {
+                .on_changed(move |_ctx| {
                     observed_duplicate.set(observed_duplicate.get() + 1);
                 }),
             tight(400.0, 300.0),
@@ -569,7 +575,7 @@ pub(crate) fn a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_
     );
 
     first_probe
-        .write(|cx| field.did_change(cx, "edited".to_owned()))
+        .write(|ctx| field.did_change(ctx, "edited".to_owned()))
         .expect("the original form remains attached");
     assert_eq!(first_changes.get(), 1);
     assert_eq!(
@@ -580,7 +586,7 @@ pub(crate) fn a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_
 
     drop(duplicate_tree);
     first_probe
-        .write(|cx| field.did_change(cx, "still attached".to_owned()))
+        .write(|ctx| field.did_change(ctx, "still attached".to_owned()))
         .expect("disposing the refused form cannot detach the original form");
     assert_eq!(first_changes.get(), 2);
 }

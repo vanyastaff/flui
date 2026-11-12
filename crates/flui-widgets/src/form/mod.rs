@@ -68,13 +68,13 @@ pub enum AutovalidateMode {
 
 /// What a [`Form`] needs from each registered field, whatever its value type.
 pub(crate) trait FormFieldEntry {
-    fn check_context(&self, cx: &EventCx<'_>) -> Result<(), EventContextError>;
+    fn check_context(&self, ctx: &EventCx<'_>) -> Result<(), EventContextError>;
     /// Run the validator, show its result, and report whether it passed.
     fn validate(&self) -> bool;
     /// Hand the current value to `on_saved`.
-    fn save(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError>;
+    fn save(&self, ctx: &mut EventCx<'_>) -> Result<(), EventContextError>;
     /// Back to the initial value, errors and interaction cleared.
-    fn reset(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError>;
+    fn reset(&self, ctx: &mut EventCx<'_>) -> Result<(), EventContextError>;
     fn has_interacted_by_user(&self) -> bool;
     fn has_error(&self) -> bool;
 }
@@ -201,7 +201,7 @@ impl FormHandle {
     ///
     /// Takes the `&mut EventCx<'_>` of the event callback that saves (a
     /// submit button's press), and hands it to each `on_saved` (ADR-0086 §6):
-    /// `.on_press(move |cx| form.save(cx))`.
+    /// `.on_press(move |ctx| form.save(ctx))`.
     ///
     /// # Errors
     /// Refuses a detached form, a foreign presentation or a build-time call
@@ -209,10 +209,10 @@ impl FormHandle {
     /// The current field snapshot is checked before dispatch; if a callback
     /// detaches a later field, that field refuses its turn. Earlier callback
     /// effects are not rolled back.
-    pub fn save(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
-        let fields = self.checked_fields(cx)?;
+    pub fn save(&self, ctx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        let fields = self.checked_fields(ctx)?;
         for field in fields {
-            field.save(cx)?;
+            field.save(ctx)?;
         }
         Ok(())
     }
@@ -225,8 +225,8 @@ impl FormHandle {
     /// # Errors
     /// Refuses a detached form, a foreign presentation or a build-time call
     /// before changing field state. User callbacks are not transactional.
-    pub fn reset(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
-        let fields = self.checked_fields(cx)?;
+    pub fn reset(&self, ctx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        let fields = self.checked_fields(ctx)?;
         struct ResetGuard<'a> {
             resetting: &'a Cell<bool>,
             previous: bool,
@@ -241,31 +241,31 @@ impl FormHandle {
             previous: self.inner.resetting.replace(true),
         };
         for field in fields {
-            field.reset(cx)?;
+            field.reset(ctx)?;
         }
         drop(guard);
         self.inner.interacted.set(false);
-        self.field_did_change(cx);
+        self.field_did_change(ctx);
         Ok(())
     }
 
-    pub(crate) fn check_context(&self, cx: &EventCx<'_>) -> Result<(), EventContextError> {
+    pub(crate) fn check_context(&self, ctx: &EventCx<'_>) -> Result<(), EventContextError> {
         self.inner
             .writer
             .borrow()
             .as_ref()
             .ok_or(EventContextError::Detached)?
-            .check_context(cx)
+            .check_context(ctx)
     }
 
     fn checked_fields(
         &self,
-        cx: &EventCx<'_>,
+        ctx: &EventCx<'_>,
     ) -> Result<Vec<Rc<dyn FormFieldEntry>>, EventContextError> {
-        self.check_context(cx)?;
+        self.check_context(ctx)?;
         let fields = self.fields();
         for field in &fields {
-            field.check_context(cx)?;
+            field.check_context(ctx)?;
         }
         Ok(fields)
     }
@@ -334,10 +334,10 @@ impl FormHandle {
 
     /// A field's value changed, or it was reset; the form's autovalidation
     /// follows.
-    pub(crate) fn field_did_change(&self, cx: &mut EventCx<'_>) {
+    pub(crate) fn field_did_change(&self, ctx: &mut EventCx<'_>) {
         let on_changed = self.inner.on_changed.borrow().clone();
         if let Some(on_changed) = on_changed {
-            on_changed(cx);
+            on_changed(ctx);
         }
         if self.inner.resetting.get() {
             return;

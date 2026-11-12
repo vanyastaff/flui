@@ -81,7 +81,7 @@ impl<'a> RuntimeHostServices<'a> {
     }
 
     /// The providers every presentation of the UI runtime acquires platform
-    /// capabilities from (`cx.capability::<C>()`, ADR-0152). Without it every
+    /// capabilities from (`ctx.capability::<C>()`, ADR-0152). Without it every
     /// acquisition answers `NotRegistered`.
     #[must_use]
     pub fn with_capabilities(mut self, registry: crate::capability::CapabilityRegistry) -> Self {

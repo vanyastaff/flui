@@ -303,7 +303,7 @@ impl Dismissible {
         mut self,
         on_resize: impl Fn(&mut EventCx<'_>) -> R + 'static,
     ) -> Self {
-        self.on_resize = Some(Rc::new(move |cx| on_resize(cx).report()));
+        self.on_resize = Some(Rc::new(move |ctx| on_resize(ctx).report()));
         self
     }
 
@@ -315,8 +315,8 @@ impl Dismissible {
         mut self,
         on_dismissed: impl Fn(&mut EventCx<'_>, DismissSide) -> R + 'static,
     ) -> Self {
-        self.on_dismissed = Some(Rc::new(move |cx, side| {
-            on_dismissed(cx, side).report();
+        self.on_dismissed = Some(Rc::new(move |ctx, side| {
+            on_dismissed(ctx, side).report();
         }));
         self
     }
@@ -328,7 +328,9 @@ impl Dismissible {
         mut self,
         on_update: impl Fn(&mut EventCx<'_>, DismissUpdateDetails) -> R + 'static,
     ) -> Self {
-        self.on_update = Some(Rc::new(move |cx, details| on_update(cx, details).report()));
+        self.on_update = Some(Rc::new(move |ctx, details| {
+            on_update(ctx, details).report();
+        }));
         self
     }
 
@@ -624,23 +626,23 @@ impl DismissEvents {
         }
         let callbacks = self.callbacks.borrow().clone();
         let command = self.command.borrow().clone();
-        self.writer.write(|cx| match event {
+        self.writer.write(|ctx| match event {
             DismissEvent::Resize => {
                 if let Some(callback) = callbacks.resize {
-                    callback(cx);
+                    callback(ctx);
                 }
             }
             DismissEvent::Dismissed(side) => {
                 if let Some(command) = command {
-                    let _ = command.perform(cx);
+                    let _ = command.perform(ctx);
                 }
                 if let Some(callback) = callbacks.dismissed {
-                    callback(cx, side);
+                    callback(ctx, side);
                 }
             }
             DismissEvent::Update(details) => {
                 if let Some(callback) = callbacks.update {
-                    callback(cx, details);
+                    callback(ctx, details);
                 }
             }
         });
@@ -1034,7 +1036,7 @@ impl DismissibleState {
         let events = self.events.as_ref().map(Rc::downgrade);
         // Every Down reaches the row before its drag captures the contact.
         let card = Listener::new()
-            .on_pointer_down(move |_cx, _dispatch| {
+            .on_pointer_down(move |_ctx, _dispatch| {
                 let events = events.as_ref().and_then(std::rc::Weak::upgrade);
                 Self::reanchor(&down, &geometry, &config, events.as_ref(), false);
                 origin_down.down(down.current());

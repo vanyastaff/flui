@@ -63,7 +63,7 @@ enum SnapChoice {
 ///
 /// ```rust,ignore
 /// CarouselView::builder(photos.len(), move |_ctx, _scope, index| Image::new(photos[index].clone()))
-///     .on_tap(move |cx, index| open.update(cx, |open| *open = Some(index)))
+///     .on_tap(move |ctx, index| open.update(ctx, |open| *open = Some(index)))
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct CarouselView {
@@ -354,7 +354,7 @@ impl CarouselCard {
                 InkWell::new(surface)
                     .shape(shape)
                     .overlay_color(overlay)
-                    .on_tap(move |cx| on_tap(cx, index))
+                    .on_tap(move |ctx| on_tap(ctx, index))
                     .boxed()
             }
             None => surface.boxed(),

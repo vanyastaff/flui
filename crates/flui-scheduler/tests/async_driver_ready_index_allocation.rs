@@ -146,9 +146,9 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
     driver.set_request_frame(|| {});
     let mut tokens = Vec::with_capacity(READY_TASKS);
     for _ in 0..READY_TASKS {
-        tokens.push(driver.spawn_local(Box::pin(std::future::poll_fn(|cx| {
+        tokens.push(driver.spawn_local(Box::pin(std::future::poll_fn(|ctx| {
             // Self-wake on every poll, forever: R stays 64 pump after pump.
-            cx.waker().wake_by_ref();
+            ctx.waker().wake_by_ref();
             Poll::<()>::Pending
         }))));
     }

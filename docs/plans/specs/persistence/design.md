@@ -73,7 +73,7 @@ impl Document for NotesData {
     fn encode(&self) -> Vec<u8> { serde_json::to_vec(self).expect("BUG: plain data encodes") }
     fn decode(version: u32, body: &[u8]) -> Result<Self, DecodeError> { /* serde_json */ }
 }
-// init_state: self.data = Some(Persisted::<NotesData>::open(cx));
+// init_state: self.data = Some(Persisted::<NotesData>::open(ctx));
 // Save: let rev = data.set(snapshot)?; «Saved note N», когда data.committed() >= Some(rev)
 ```
 
@@ -171,7 +171,7 @@ pub mod persist {
     }
     pub struct Persisted<D: Document> { /* Rc<RefCell<…>> */ }   // !Send, Clone
     impl<D: Document> Persisted<D> {
-        pub fn open(cx: &dyn LifecycleContext) -> Self;
+        pub fn open(ctx: &dyn LifecycleContext) -> Self;
         pub fn load(&self) -> impl Future<Output = Result<Rc<D>, PersistError>> + 'static;
         pub fn set(&self, value: D) -> Result<Revision, PersistError>;
         pub fn committed(&self) -> Option<Revision>;

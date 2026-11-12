@@ -96,11 +96,11 @@ pub(in super::super) fn listen(
     let task = Arc::new(ExportTask::default());
     let held = Arc::clone(&task);
     wasm_bindgen_futures::spawn_local(async move {
-        poll_fn(|cx| {
+        poll_fn(|ctx| {
             if held.stopped.load(Ordering::SeqCst) {
                 return Poll::Ready(());
             }
-            let replaced = held.waker.lock().replace(cx.waker().clone());
+            let replaced = held.waker.lock().replace(ctx.waker().clone());
             drop(replaced);
             // Read again once the waker is kept: a stop between the two reads is not lost.
             if held.stopped.load(Ordering::SeqCst) {

@@ -52,7 +52,7 @@
 //! A read or write closure runs with **no** borrow of the graph held: the
 //! slot's value is taken out on loan, the closure runs, the value is put back
 //! if the slot is still the same generation. Nested access to a *different*
-//! slot is therefore fine (`a.with(cx, |_| b.get(cx))`); nested access to the
+//! slot is therefore fine (`a.with(ctx, |_| b.get(ctx))`); nested access to the
 //! *same* slot finds the value on loan and gets [`SignalError::Reentrant`],
 //! never a `RefCell` panic.
 //!
@@ -485,7 +485,7 @@ impl Reactive {
 
     /// Create a signal that lives as long as the graph — application-level
     /// state released with the UI runtime. Widget-level state belongs to its
-    /// element: use [`Reactive::signal_owned_by`] (or `cx.signal(..)` from
+    /// element: use [`Reactive::signal_owned_by`] (or `ctx.signal(..)` from
     /// `create_state`, which does that for you) so the slot is released when
     /// the element unmounts.
     ///
@@ -1097,8 +1097,8 @@ impl<T: 'static> sealed::Sealed for Signal<T> {}
 /// (ADR-0086).
 ///
 /// In an event callback the target is the `&mut EventCx<'_>` the callback
-/// receives: `move |cx| count.update(cx, |n| *n += 1)`. Passing `cx` reborrows
-/// it, so the same `cx` serves several writes. `build` has no write target;
+/// receives: `move |ctx| count.update(ctx, |n| *n += 1)`. Passing `ctx` reborrows
+/// it, so the same `ctx` serves several writes. `build` has no write target;
 /// [`Reactive`] still is one until ADR-0086 §8 step 3 removes it.
 ///
 /// An extension trait because [`Signal`] lives in `flui-foundation`, which

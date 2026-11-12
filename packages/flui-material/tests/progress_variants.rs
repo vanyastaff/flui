@@ -497,7 +497,7 @@ pub fn material_app_refresh_shows_the_circular_indicator() {
                     alternatives,
                 )
                 .controller(refresh.clone())
-                .on_refresh(|_cx| std::future::pending::<()>()),
+                .on_refresh(|_ctx| std::future::pending::<()>()),
             )
             .theme(ThemeData::light()),
         ),
@@ -843,7 +843,7 @@ pub fn expressive_material_app_refresh_shows_the_loading_indicator() {
                     alternatives,
                 )
                 .controller(refresh.clone())
-                .on_refresh(|_cx| std::future::pending::<()>()),
+                .on_refresh(|_ctx| std::future::pending::<()>()),
             )
             .theme(theme),
         ),

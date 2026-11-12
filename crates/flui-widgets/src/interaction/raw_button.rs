@@ -25,7 +25,7 @@ type PressCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// ADR-0086, so it writes a signal directly:
 ///
 /// ```rust,ignore
-/// RawButton::new(Text::new("Increment")).on_press(move |cx| count.update(cx, |n| *n += 1))
+/// RawButton::new(Text::new("Increment")).on_press(move |ctx| count.update(ctx, |n| *n += 1))
 /// ```
 ///
 /// The callback may return `()` or the `Result` of a write; a refused write
@@ -116,10 +116,10 @@ impl RawButton {
 struct Press(Option<PressCallback>);
 
 impl Press {
-    fn run(&self, cx: &mut EventCx<'_>) -> ActionOutcome {
+    fn run(&self, ctx: &mut EventCx<'_>) -> ActionOutcome {
         match &self.0 {
             Some(on_press) => {
-                on_press(cx);
+                on_press(ctx);
                 ActionOutcome::Performed
             }
             None => ActionOutcome::NotPerformed,
@@ -128,14 +128,14 @@ impl Press {
 }
 
 impl Action<ActivateIntent> for Press {
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
-        self.run(cx)
+    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+        self.run(ctx)
     }
 }
 
 impl Action<ButtonActivateIntent> for Press {
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
-        self.run(cx)
+    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
+        self.run(ctx)
     }
 }
 
@@ -153,7 +153,7 @@ impl PressSource for Press {
 impl NodePress for Press {}
 
 impl Action<ActivationPressIntent> for Press {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
         ActionOutcome::Performed
     }
 }

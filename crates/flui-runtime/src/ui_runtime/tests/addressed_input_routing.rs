@@ -35,8 +35,8 @@ impl StatelessView for PanickingKeyReader {
         let signal = self.signal;
         Focus::new(SizedBox::square(10.0))
             .focus_node(Rc::clone(&self.node))
-            .on_key_event(move |cx, _event| {
-                let _ = signal.update(cx, |value| {
+            .on_key_event(move |ctx, _event| {
+                let _ = signal.update(ctx, |value| {
                     *value = 7;
                     panic!("keyboard updater probe");
                 });

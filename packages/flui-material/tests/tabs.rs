@@ -257,7 +257,7 @@ pub fn on_tap_runs_beside_a_panicking_position_observer() {
             ThemeData::light(),
             TabBar::secondary(two_tabs())
                 .controller(controller.clone())
-                .on_tap(move |_cx, index| record.set(Some(index))),
+                .on_tap(move |_ctx, index| record.set(Some(index))),
         ),
         tight(200.0, 48.0),
     );
@@ -773,7 +773,7 @@ impl flui_sdk::view::ViewState<SelectionReader> for SelectionReaderState {
             // An indicator reads the position too.
             let _ = heard.position().value();
             writer
-                .write(|cx| selected.set(cx, index))
+                .write(|ctx| selected.set(ctx, index))
                 .expect("the listener's write lands");
         }));
         self.selected = Some(selected);

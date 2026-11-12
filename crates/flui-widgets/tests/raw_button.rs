@@ -72,8 +72,8 @@ impl ViewState<Counter> for CounterState {
         let released = self.released;
         let button = RawButton::new(Text::new("Press"));
         let button = match view.press {
-            Press::Add(step) => button.on_press(move |cx| count.update(cx, |n| *n += step)),
-            Press::Released => button.on_press(move |cx| released.set(cx, 1)),
+            Press::Add(step) => button.on_press(move |ctx| count.update(ctx, |n| *n += step)),
+            Press::Released => button.on_press(move |ctx| released.set(ctx, 1)),
         };
         Column::new((Text::new(count.get(ctx).to_string()), button))
     }
@@ -105,7 +105,7 @@ fn press(app: &mut LaidOut) {
 fn value(seen: &Seen) -> Result<u32, SignalError> {
     let seen = seen.borrow();
     let (sig, writer) = seen.as_ref().expect("the counter built");
-    writer.write(|cx| sig.peek(cx, |v| *v))
+    writer.write(|ctx| sig.peek(ctx, |v| *v))
 }
 
 /// The node of the button: the one labelled with the button's text.
@@ -190,7 +190,7 @@ pub(crate) fn raw_button_activates_from_the_keyboard() {
         Shortcuts::new(Row::new((
             RawButton::new(SizedBox::new(40.0, 40.0)),
             RawButton::new(SizedBox::new(40.0, 40.0))
-                .on_press(move |_cx| counted.set(counted.get() + 1)),
+                .on_press(move |_ctx| counted.set(counted.get() + 1)),
         )))
         .shortcut(SingleActivator::character("b"), ButtonActivateIntent),
     );
@@ -242,10 +242,10 @@ struct WrapperButton {
 struct WrapperPress(Option<OnPress>);
 
 impl WrapperPress {
-    fn run(&self, cx: &mut EventCx<'_>) -> ActionOutcome {
+    fn run(&self, ctx: &mut EventCx<'_>) -> ActionOutcome {
         match &self.0 {
             Some(on_press) => {
-                on_press(cx);
+                on_press(ctx);
                 ActionOutcome::Performed
             }
             None => ActionOutcome::NotPerformed,
@@ -258,8 +258,8 @@ impl IntentAction<ActivateIntent> for WrapperPress {
         self.0.is_some()
     }
 
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
-        self.run(cx)
+    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+        self.run(ctx)
     }
 }
 
@@ -268,8 +268,8 @@ impl IntentAction<ButtonActivateIntent> for WrapperPress {
         self.0.is_some()
     }
 
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
-        self.run(cx)
+    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
+        self.run(ctx)
     }
 }
 
@@ -278,7 +278,7 @@ impl IntentAction<ActivationPressIntent> for WrapperPress {
         self.0.is_some()
     }
 
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
         ActionOutcome::Performed
     }
 }
@@ -299,7 +299,7 @@ impl StatelessView for WrapperButton {
             .behavior(HitTestBehavior::Opaque)
             .child(actions);
         if let Some(handler) = self.on_press.clone() {
-            detector = detector.on_tap(move |cx| handler(cx));
+            detector = detector.on_tap(move |ctx| handler(ctx));
         }
         Semantics::new()
             .container(true)
@@ -315,7 +315,7 @@ fn button(made: Made, on_press: Option<OnPress>, child: impl IntoView) -> BoxedV
         Made::Raw => {
             let button = RawButton::new(child);
             match on_press {
-                Some(on_press) => button.on_press(move |cx| on_press(cx)).boxed(),
+                Some(on_press) => button.on_press(move |ctx| on_press(ctx)).boxed(),
                 None => button.boxed(),
             }
         }
@@ -332,7 +332,7 @@ type PressLog = Rc<RefCell<Vec<&'static str>>>;
 
 fn logging(log: &PressLog, name: &'static str) -> OnPress {
     let log = Rc::clone(log);
-    Rc::new(move |_cx: &mut EventCx<'_>| {
+    Rc::new(move |_ctx: &mut EventCx<'_>| {
         log.borrow_mut().push(name);
     })
 }
@@ -530,7 +530,7 @@ struct SwitchedState {
 struct Outer(PressLog);
 
 impl IntentAction<ActivateIntent> for Outer {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
         self.0.borrow_mut().push("outer");
         ActionOutcome::Performed
     }
@@ -538,7 +538,7 @@ impl IntentAction<ActivateIntent> for Outer {
 
 impl StatefulView for Switched {
     type State = SwitchedState;
-    fn create_state(&self, _cx: &dyn flui_view::LifecycleContext) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         SwitchedState {
             enabled: self.enabled.clone(),
         }
@@ -679,7 +679,7 @@ struct StatedState {
 
 impl StatefulView for Stated {
     type State = StatedState;
-    fn create_state(&self, _cx: &dyn flui_view::LifecycleContext) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         StatedState {
             enabled: self.enabled.clone(),
             shown: self.shown.clone(),
@@ -704,7 +704,7 @@ impl ViewState<Stated> for StatedState {
             RawButton::new(flui_widgets::SizedBox::new(120.0, 60.0).child(Text::new("Press")))
                 .states_controller(controller.clone());
         if self.enabled.get(ctx) {
-            button = button.on_press(|_cx: &mut EventCx<'_>| {});
+            button = button.on_press(|_ctx: &mut EventCx<'_>| {});
         }
         button.boxed()
     }
@@ -937,7 +937,7 @@ pub(crate) fn hover_repaints_without_rebuilding() {
                 ),
             )
             .states_controller(states.clone())
-            .on_press(|_cx: &mut EventCx<'_>| {}),
+            .on_press(|_ctx: &mut EventCx<'_>| {}),
             Text::new("A neighbour"),
         )),
         loose(400.0),
@@ -983,11 +983,11 @@ pub(crate) fn a_panicking_focus_edge_still_reports_the_shown_focus() {
     let seen = Rc::clone(&shown);
     let mut app = lay_out(
         Focus::new(flui_widgets::SizedBox::new(120.0, 60.0))
-            .on_focus_change(move |_cx, held| {
+            .on_focus_change(move |_ctx, held| {
                 // Only the edge in: the tree's teardown runs the edge out.
                 assert!(!held, "focus edge handler");
             })
-            .on_visible_focus_change(move |_cx, now| seen.borrow_mut().push(now)),
+            .on_visible_focus_change(move |_ctx, now| seen.borrow_mut().push(now)),
         loose(400.0),
     );
     let manager = app.focus_manager();
@@ -1105,7 +1105,7 @@ struct ToggledState {
 
 impl StatefulView for Toggled {
     type State = ToggledState;
-    fn create_state(&self, _cx: &dyn flui_view::LifecycleContext) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         ToggledState {
             enabled: self.enabled.clone(),
         }
@@ -1121,7 +1121,7 @@ impl ViewState<Toggled> for ToggledState {
         let button = RawButton::new(flui_widgets::SizedBox::new(120.0, 60.0))
             .states_controller(view.states.clone());
         if self.enabled.get(ctx) {
-            button.on_press(|_cx| {}).boxed()
+            button.on_press(|_ctx| {}).boxed()
         } else {
             button.boxed()
         }
