@@ -92,8 +92,8 @@ fn key(laid: &LaidOut, named: NamedKey) -> bool {
     laid.focus_manager()
         .dispatch_key_event(
             &KeyEventBuilder::new(Code::Unidentified)
-                .with_state(KeyState::Down)
-                .with_key(Key::Named(named))
+                .state(KeyState::Down)
+                .key(Key::Named(named))
                 .build(),
         )
         .is_handled()
@@ -322,9 +322,9 @@ pub(crate) fn slider_focus_keys_and_semantic_actions_share_controlled_proposals(
             laid.focus_manager()
                 .dispatch_key_event(
                     &KeyEventBuilder::new(Code::Unidentified)
-                        .with_state(KeyState::Down)
-                        .with_key(Key::character("+"))
-                        .with_modifiers(modifiers)
+                        .state(KeyState::Down)
+                        .key(Key::character("+"))
+                        .modifiers(modifiers)
                         .build()
                 )
                 .is_handled()
@@ -336,9 +336,9 @@ pub(crate) fn slider_focus_keys_and_semantic_actions_share_controlled_proposals(
             .focus_manager()
             .dispatch_key_event(
                 &KeyEventBuilder::new(Code::Unidentified)
-                    .with_state(KeyState::Down)
-                    .with_key(Key::Named(NamedKey::ArrowRight))
-                    .with_modifiers(flui_interaction::events::Modifiers::SHIFT)
+                    .state(KeyState::Down)
+                    .key(Key::Named(NamedKey::ArrowRight))
+                    .modifiers(flui_interaction::events::Modifiers::SHIFT)
                     .build()
             )
             .is_handled()

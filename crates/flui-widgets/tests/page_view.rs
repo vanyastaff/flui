@@ -111,14 +111,14 @@ impl Keys {
 
     fn press_key(&self, code: Code, key: Key, modifiers: Modifiers) -> bool {
         let down = flui_interaction::testing::input::KeyEventBuilder::new(code)
-            .with_state(KeyState::Down)
-            .with_key(key.clone())
-            .with_modifiers(modifiers)
+            .state(KeyState::Down)
+            .key(key.clone())
+            .modifiers(modifiers)
             .build();
         let handled = self.0.dispatch_key_event(&down).is_handled();
         let up = flui_interaction::testing::input::KeyEventBuilder::new(code)
-            .with_state(KeyState::Up)
-            .with_key(key)
+            .state(KeyState::Up)
+            .key(key)
             .build();
         let _ = self.0.dispatch_key_event(&up);
         handled

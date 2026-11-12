@@ -140,61 +140,25 @@ reason = "written before the rule had a gate; its crate's rename removes it"
 crate = "flui-interaction"
 type = "GestureSettings"
 method = "with_double_tap_timeout"
-reason = "written before the rule had a gate; its crate's rename removes it"
+reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"
 
 [[allow]]
 crate = "flui-interaction"
 type = "GestureSettings"
 method = "with_long_press_timeout"
-reason = "written before the rule had a gate; its crate's rename removes it"
+reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"
 
 [[allow]]
 crate = "flui-interaction"
 type = "GestureSettings"
 method = "with_position_smoothing"
-reason = "written before the rule had a gate; its crate's rename removes it"
+reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"
 
 [[allow]]
 crate = "flui-interaction"
 type = "GestureSettings"
 method = "with_velocity_estimator"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-interaction"
-type = "KeyEventBuilder"
-method = "with_composing"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-interaction"
-type = "KeyEventBuilder"
-method = "with_key"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-interaction"
-type = "KeyEventBuilder"
-method = "with_location"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-interaction"
-type = "KeyEventBuilder"
-method = "with_modifiers"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-interaction"
-type = "KeyEventBuilder"
-method = "with_repeat"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-interaction"
-type = "KeyEventBuilder"
-method = "with_state"
-reason = "written before the rule had a gate; its crate's rename removes it"
+reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"
 
 [[allow]]
 crate = "flui-log"

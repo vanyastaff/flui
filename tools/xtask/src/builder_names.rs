@@ -42,7 +42,7 @@
 //! and fails unless it reports exactly those (ADR-0078 §4).
 //!
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
 use std::process::ExitCode;
 
@@ -82,14 +82,14 @@ pub(crate) fn builder_names(args: &BuilderNamesArgs) -> anyhow::Result<ExitCode>
     let root = util::repo_root();
     let crates = crates(&root, &util::metadata(&root)?)?;
     let found = scan(&Disk(root.clone()), &crates)?;
-    if args.seed {
-        print!("{}", seed(&found));
-        return Ok(ExitCode::SUCCESS);
-    }
     let path = root.join(ALLOWLIST);
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let list = parse_list(&text).with_context(|| format!("parsing {ALLOWLIST}"))?;
+    if args.seed {
+        print!("{}", seed(&found, &list));
+        return Ok(ExitCode::SUCCESS);
+    }
     let findings = check(&found, &list);
     if findings.is_empty() {
         println!(
@@ -335,10 +335,11 @@ struct Entry {
     reason: String,
 }
 
-/// The listed keys. A key listed twice, or one without a reason, is an error.
-fn parse_list(text: &str) -> anyhow::Result<BTreeSet<Key>> {
+/// The listed keys with their reasons. A key listed twice, or one without a
+/// reason, is an error.
+fn parse_list(text: &str) -> anyhow::Result<BTreeMap<Key, String>> {
     let file: ListFile = toml::from_str(text)?;
-    let mut keys = BTreeSet::new();
+    let mut keys = BTreeMap::new();
     for entry in file.allow {
         anyhow::ensure!(
             !entry.reason.trim().is_empty(),
@@ -349,13 +350,13 @@ fn parse_list(text: &str) -> anyhow::Result<BTreeSet<Key>> {
         );
         let key = (entry.krate, entry.ty, entry.method);
         anyhow::ensure!(
-            !keys.contains(&key),
+            !keys.contains_key(&key),
             "{} `{}::{}` is listed twice",
             key.0,
             key.1,
             key.2
         );
-        keys.insert(key);
+        keys.insert(key, entry.reason);
     }
     Ok(keys)
 }
@@ -392,16 +393,16 @@ impl fmt::Display for Finding {
 }
 
 /// Every unlisted method and every stale entry.
-fn check(found: &BTreeSet<Found>, list: &BTreeSet<Key>) -> Vec<Finding> {
+fn check(found: &BTreeSet<Found>, list: &BTreeMap<Key, String>) -> Vec<Finding> {
     let keys: BTreeSet<Key> = found.iter().map(Found::key).collect();
     let mut findings: Vec<Finding> = found
         .iter()
-        .filter(|found| !list.contains(&found.key()))
+        .filter(|found| !list.contains_key(&found.key()))
         .cloned()
         .map(Finding::Unlisted)
         .collect();
     findings.extend(
-        list.iter()
+        list.keys()
             .filter(|key| !keys.contains(*key))
             .cloned()
             .map(Finding::Stale),
@@ -410,9 +411,10 @@ fn check(found: &BTreeSet<Found>, list: &BTreeSet<Key>) -> Vec<Finding> {
     findings
 }
 
-/// The list the tree needs, in [`ALLOWLIST`]'s format; an entry that keeps its
-/// prefix for an invariant gets its own reason by hand.
-fn seed(found: &BTreeSet<Found>) -> String {
+/// The list the tree needs, in [`ALLOWLIST`]'s format. An entry already in
+/// `listed` keeps its reason (one that keeps its prefix for an invariant was
+/// given it by hand); a new one gets the rename's.
+fn seed(found: &BTreeSet<Found>, listed: &BTreeMap<Key, String>) -> String {
     let keys: BTreeSet<Key> = found.iter().map(Found::key).collect();
     let mut out = String::from(
         "# Every `with_` builder method of a description type (a view, `Application`, a\n\
@@ -421,11 +423,16 @@ fn seed(found: &BTreeSet<Found>) -> String {
          # the list only shrinks: the scan fails on a builder it does not name and on an\n\
          # entry that is no longer one.\n",
     );
-    for (krate, ty, method) in &keys {
+    for key in &keys {
+        let (krate, ty, method) = key;
+        let reason = listed.get(key).map_or(
+            "written before the rule had a gate; its crate's rename removes it",
+            String::as_str,
+        );
         let _ = write!(
             out,
             "\n[[allow]]\ncrate = \"{krate}\"\ntype = \"{ty}\"\nmethod = \"{method}\"\n\
-             reason = \"written before the rule had a gate; its crate's rename removes it\"\n"
+             reason = {reason:?}\n"
         );
     }
     out
@@ -436,7 +443,7 @@ const FIXTURE_ROOT: &str = "fixture/src/lib.rs";
 
 /// The self-test's crate: one planted builder per shape the scan must see,
 /// one hidden by each cfg it must skip, and the shapes it must leave alone.
-fn fixture() -> (Memory, BTreeSet<Key>) {
+fn fixture() -> (Memory, BTreeMap<Key, String>) {
     let lib = r"
         mod views;
         #[cfg(test)]
@@ -598,5 +605,30 @@ mod tests {
         )
         .expect_err("an empty reason is an error");
         assert!(error.to_string().contains("empty `reason`"), "{error}");
+    }
+
+    #[test]
+    fn builder_names_seed_keeps_a_listed_reason_and_round_trips() {
+        let (source, mut list) = fixture();
+        let crates = [Krate {
+            name: "fixture".to_owned(),
+            targets: vec![Target {
+                src: FIXTURE_ROOT.to_owned(),
+                bin: None,
+            }],
+        }];
+        let found = scan(&source, &crates).expect("BUG: the fixture's module tree parses");
+        let key = (
+            "fixture".to_owned(),
+            "WindowConfig".to_owned(),
+            "with_title".to_owned(),
+        );
+        list.insert(key.clone(), "an invariant \"quoted\"".to_owned());
+        let seeded = parse_list(&seed(&found, &list)).expect("the seed parses");
+        assert_eq!(check(&found, &seeded), Vec::new());
+        assert_eq!(
+            seeded.get(&key).map(String::as_str),
+            Some("an invariant \"quoted\"")
+        );
     }
 }

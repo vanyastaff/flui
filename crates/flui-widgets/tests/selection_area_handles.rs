@@ -141,9 +141,9 @@ impl Scene {
 
     fn escape(&mut self) {
         let event: KeyEvent = KeyEventBuilder::new(Code::Escape)
-            .with_key(Key::Named(NamedKey::Escape))
-            .with_state(KeyState::Down)
-            .with_modifiers(Modifiers::NONE)
+            .key(Key::Named(NamedKey::Escape))
+            .state(KeyState::Down)
+            .modifiers(Modifiers::NONE)
             .build();
         let _handled = self.laid.focus_manager().dispatch_key_event(&event);
         self.settle();
