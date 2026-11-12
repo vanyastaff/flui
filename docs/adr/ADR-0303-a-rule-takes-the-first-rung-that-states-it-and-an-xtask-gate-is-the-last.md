@@ -184,6 +184,55 @@ is about the text of a string literal, in every crate. It passes §3:
 - **Tool**: no tool CI runs reads Rust string arguments by position.
 - **Owning crate**: the rule has no owner; it holds in every crate.
 
+### §9. A check only main runs gets its pull request when the diff reaches its inputs
+
+A job too slow for every pull request (FULL_JOBS) still holds a rule each pull request can break.
+When a pull request cannot see the break, `main` goes red one merge later, and the next author
+pays for it. So a check that runs only on main has a narrow form that a wide-lane pull request
+runs when its diff reaches what the check reads. The narrow form is worked out by
+`cargo xtask affected` in the `plan` job, the tool that already picks the lane. It is not a gate
+of its own.
+
+- **What the check reads comes from its own expectations.** A trybuild expectation quotes, in its
+  `--> path` and `::: path` lines, every file of the error chain: the fixture, and the declaration
+  of each type or item the compiler names. `plan` reads the tracked `*.stderr` files on each run
+  (`change_scope::diagnostics`) and sets `trybuild_required` when the diff touches one of these:
+  - a cited file;
+  - a file in a case directory: beside an expectation, or in a directory a runner's `pass` or
+    `compile_fail` path names (a passing case has no expectation and runs its assertions);
+  - a runner of the suites;
+  - the source of a workspace procedural macro, whose diagnostics point at the invocation and
+    are copied into the expectations;
+  - a changed line, added or removed, in a crate a suite compiles, that writes a message the
+    compiler copies with no location: a line of a diagnostic attribute
+    (`#[diagnostic::on_unimplemented]`, `#[deprecated]`, `#[must_use = …]`, a `message`,
+    `label` or `note` key), a `compile_error!`, or a run of 20 or more characters of prose that
+    an expectation's message lines quote (a proc macro's or a panic's text);
+  - the toolchain file, `Cargo.lock` or the nextest groups.
+
+  No list of these files is stored, so there is none to keep in step with the expectations.
+
+  What these inputs miss is a declaration a case depends on that its output does not name. A
+  passing case depends on the public API of every crate it uses. A compile-fail case can depend
+  on a field's privacy or a missing bound. For example, making a private field `pub` lets its
+  privacy case compile, and the expectation cites only the fixture. A change of that kind still
+  turns main red, where `test-trybuild` runs on every merge and the break is fixed forward.
+  Closing the gap would make every source of a crate a suite compiles an input, and the suites
+  would then run on most pull requests. The inputs above cover the drift main has shown: a type
+  an expectation names, and a message copied into one.
+- **The narrow form runs over the changed crates.** `feature-scope` runs feature-matrix's
+  `cargo hack clippy --each-feature` over the changed crates that have features, and over every
+  crate whose manifest changed (`hack_args`). It does this in a pull request's full mode too, when
+  a `Cargo.lock` or workflow change sits beside a crate's change. It does not cover a dependent's
+  feature-gated edge, which main's feature-matrix still compiles: those edges would double the
+  pass for a change to one widely used crate.
+- **The aggregator recomputes the run.** Each such job is a row of `ON_DEMAND`
+  (`change_scope/aggregator.rs`), which names the job and the `plan` output that asks for it.
+  `ci-verify` reads that output and fails a job that ran without being asked, or skipped when it
+  was asked, the same way it does for the lanes (rule 2).
+- **A pull request that does not reach the inputs pays nothing.** The job skips, and its only
+  cost is the `plan` step's read of the expectations, done without compiling.
+
 ### Consequences
 
 - Good, because a rule a stock lint states is checked by `cargo clippy` in every editor and every
@@ -199,6 +248,11 @@ is about the text of a string literal, in every crate. It passes §3:
   `cross-typecheck` job covers Windows, macOS, iOS and Android, and `wasm-check` covers wasm32.
 - Bad, because the move from a counting gate to expectations edits every listed site once: the
   hand-written `catch_unwind` calls are about 400 sites in about 130 files.
+- Good, because a pull request that breaks a check only main runs sees the break before it merges.
+  A pull request that does not reach the check's inputs pays nothing (§9).
+- Bad, because a pull request that reaches a trybuild input waits for the suites. Measured on
+  main, they take about 25 minutes against the wide lane's 15, so such a pull request takes about
+  9 minutes longer (§9).
 - Neutral, because no size budget is enforced on `xtask`: a budget would itself be a gate, and the
   admission of §3 is where a gate's cost is weighed.
 
@@ -213,6 +267,14 @@ is about the text of a string literal, in every crate. It passes §3:
   without an expectation, and on an expectation that no longer suppresses anything (§5, §6).
 - `cargo xtask workspace` checks the ADR numbers, so a gate's ADR exists; the lines of §3 are read
   in review of that ADR, the one step here no tool checks.
+- `trybuild_inputs` (`tools/xtask/src/change_scope/diagnostics.rs`) checks which files reach the
+  suites. A type an expectation cites, the expectation, its case, a runner and the toolchain do.
+  Another source file of the same crate, documentation and tooling do not (§9).
+- `on_demand_jobs_are_gated_on_their_output` and `an_on_demand_job_runs_exactly_when_asked` in
+  `aggregator_contract` check two things: every `ON_DEMAND` job's `if:` is the condition its row
+  states, and `ci-verify` fails a job that ran without being asked or skipped when asked (§9).
+- `per_feature_pass_covers_the_changed_crates` in `lane_args_contract` checks the crates
+  `feature-scope` covers, in a pull request's full mode too (§9).
 
 ## Pros and cons of the options
 

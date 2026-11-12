@@ -54,11 +54,18 @@ impl InheritedDependencies {
         }
     }
 
-    /// The providers `dependent` currently depends on (a copy; empty when
-    /// none). Used by the build drain to reset the dependent's masks before
-    /// re-deriving them from the build's reads (ADR-0074 §5.5 reset-on-build).
-    pub(crate) fn providers_of(&self, dependent: ElementId) -> ProviderIds {
-        self.active.get(&dependent).cloned().unwrap_or_default()
+    /// Append the providers `dependent` currently depends on to `into`. Used
+    /// by the build drain to reset the dependent's masks before re-deriving
+    /// them from the build's reads (ADR-0074 §5.5 reset-on-build); the drain
+    /// keeps `into` across builds.
+    pub(crate) fn copy_providers_into(
+        &self,
+        dependent: ElementId,
+        into: &mut smallvec::SmallVec<[ElementId; 8]>,
+    ) {
+        if let Some(providers) = self.active.get(&dependent) {
+            into.extend_from_slice(providers);
+        }
     }
 
     /// Remove an active dependency from the reverse index.

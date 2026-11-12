@@ -26,6 +26,7 @@ use regex::Regex;
 use serde::Deserialize;
 
 use super::aggregator::WIDE_CONDITION;
+use super::diagnostics;
 
 /// Documentation: a change made only of these compiles nothing.
 ///
@@ -309,9 +310,6 @@ pub(super) struct Dependency {
     pub(super) name: String,
     /// `None` for a normal dependency, else `dev` or `build`.
     pub(super) kind: Option<String>,
-    #[serde(default)]
-    pub(super) optional: bool,
-    pub(super) rename: Option<String>,
     path: Option<PathBuf>,
 }
 
@@ -456,7 +454,7 @@ impl Workspace {
     /// depending on them through normal and build edges, transitively, and
     /// then the dev-dependents of all of those. A dev-dependent is the last
     /// hop, because its library does not contain the dependency.
-    fn affected(&self, seeds: &BTreeSet<String>) -> BTreeSet<String> {
+    pub(super) fn affected(&self, seeds: &BTreeSet<String>) -> BTreeSet<String> {
         let mut scope = seeds.clone();
         let mut todo: Vec<String> = seeds.iter().cloned().collect();
         while let Some(pkg) = todo.pop() {
@@ -477,7 +475,7 @@ impl Workspace {
 
     /// The package owning `path`: the longest matching prefix wins. One of the
     /// [`COMPILED_DOCS`] is owned by the package that reads it.
-    fn owning_package(&self, path: &str) -> Option<&str> {
+    pub(super) fn owning_package(&self, path: &str) -> Option<&str> {
         let path = compiled_doc_reader(path).unwrap_or(path);
         let mut best: Option<(&str, usize)> = None;
         for (name, prefixes) in &self.owned {
@@ -525,7 +523,7 @@ impl Repo {
         Ok(self.workspace.get_or_init(|| ws))
     }
 
-    fn git(&self, args: &[&str]) -> anyhow::Result<String> {
+    pub(super) fn git(&self, args: &[&str]) -> anyhow::Result<String> {
         let out = Command::new("git")
             .args(args)
             .current_dir(&self.root)
@@ -540,6 +538,19 @@ impl Repo {
             );
         }
         String::from_utf8(out.stdout).context("non-UTF-8 `git` output")
+    }
+
+    /// The added and removed lines of the Rust files changed since the merge
+    /// base with `base` (with `worktree`, uncommitted work too), as a unified
+    /// diff with no context.
+    pub(super) fn changed_lines(&self, base: &str, worktree: bool) -> anyhow::Result<String> {
+        let merge_base = self.git(&["merge-base", base, "HEAD"])?;
+        let range = format!("{}..HEAD", merge_base.trim());
+        let mut diff = self.git(&["diff", "-U0", "--no-renames", &range, "--", "*.rs"])?;
+        if worktree {
+            diff.push_str(&self.git(&["diff", "-U0", "--no-renames", "HEAD", "--", "*.rs"])?);
+        }
+        Ok(diff)
     }
 
     /// The files changed since the merge base with `base`, plus (with
@@ -593,6 +604,9 @@ pub(super) struct Scope {
     /// Packages whose `Cargo.toml` changed.
     pub(super) manifests: Vec<String>,
     pub(super) heavy_required: bool,
+    /// The changed file that can change a trybuild expectation, if any
+    /// ([`diagnostics::changed_input`]): a pull request then runs the suites.
+    pub(super) trybuild_input: Option<String>,
     pub(super) reason: String,
 }
 
@@ -604,6 +618,7 @@ impl Scope {
             seeds: Vec::new(),
             manifests: Vec::new(),
             heavy_required: false,
+            trybuild_input: None,
             reason,
         }
     }
@@ -618,8 +633,66 @@ fn first_five(files: &[&str]) -> String {
     files.iter().take(5).copied().collect::<Vec<_>>().join(", ")
 }
 
-/// Classifies the changed `files` (repo-relative, `/`-separated).
+/// Classifies the changed `files` (repo-relative, `/`-separated), reading the
+/// current text of each for the messages it holds.
 pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
+    classify_change(repo, files, None)
+}
+
+/// [`classify`], with the added and removed lines of the change as a unified
+/// diff (`changed_lines`) when there is one: a message the change removes
+/// counts as much as one it adds.
+pub(super) fn classify_change(
+    repo: &Repo,
+    files: &[String],
+    changed_lines: Option<&str>,
+) -> anyhow::Result<Scope> {
+    let mut scope = classify_packages(repo, files)?;
+    if scope.mode == Mode::Full && !files.is_empty() {
+        // a workspace-wide input (Cargo.lock, ci.yml) beside a crate's change
+        // still names that crate: the per-feature pass runs over it
+        let owners = owners(repo.workspace()?, files);
+        scope.seeds = owners.seeds.into_iter().collect();
+        scope.manifests = owners.manifests.into_iter().collect();
+    }
+    scope.trybuild_input =
+        diagnostics::changed_input(repo, files, changed_lines)?.map(str::to_owned);
+    Ok(scope)
+}
+
+/// The packages the changed code files belong to, the ones whose manifest
+/// changed, and the code files no package owns.
+struct Owners<'f> {
+    seeds: BTreeSet<String>,
+    manifests: BTreeSet<String>,
+    unknown: Vec<&'f str>,
+}
+
+fn owners<'f>(ws: &Workspace, files: &'f [String]) -> Owners<'f> {
+    let mut owners = Owners {
+        seeds: BTreeSet::new(),
+        manifests: BTreeSet::new(),
+        unknown: Vec::new(),
+    };
+    for f in files.iter().map(String::as_str) {
+        if is_docs_only(f) || matches_any(f, TOOLING) {
+            continue;
+        }
+        match ws.owning_package(f) {
+            Some(pkg) => {
+                owners.seeds.insert(pkg.to_owned());
+                if f == "Cargo.toml" || f.ends_with("/Cargo.toml") {
+                    owners.manifests.insert(pkg.to_owned());
+                }
+            }
+            None => owners.unknown.push(f),
+        }
+    }
+    owners
+}
+
+/// The mode and the packages of the changed `files`.
+fn classify_packages(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
     let code: Vec<&str> = files
         .iter()
         .map(String::as_str)
@@ -667,21 +740,11 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         ));
     }
     let ws = repo.workspace()?;
-    let (mut seeds, mut manifests, mut unknown) = (BTreeSet::new(), BTreeSet::new(), Vec::new());
-    for f in code {
-        if matches_any(f, TOOLING) {
-            continue;
-        }
-        match ws.owning_package(f) {
-            Some(pkg) => {
-                seeds.insert(pkg.to_owned());
-                if f == "Cargo.toml" || f.ends_with("/Cargo.toml") {
-                    manifests.insert(pkg.to_owned());
-                }
-            }
-            None => unknown.push(f),
-        }
-    }
+    let Owners {
+        seeds,
+        manifests,
+        unknown,
+    } = owners(ws, files);
     if !unknown.is_empty() {
         let reason = format!(
             "no package owns: {} (conservatively: everything)",
@@ -708,6 +771,7 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         seeds: seed_list,
         manifests: manifests.into_iter().collect(),
         heavy_required: false,
+        trybuild_input: None,
         reason,
     })
 }

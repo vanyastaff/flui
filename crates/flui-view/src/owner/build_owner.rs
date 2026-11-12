@@ -7,7 +7,6 @@
 //! - Coordinating InheritedElement lookups
 
 use std::{
-    any::Any,
     cell::{Cell, RefCell},
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
@@ -15,6 +14,7 @@ use std::{
     sync::Arc,
 };
 
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ElementId, RebuildReasons, RenderId, SlotSet, ViewKey};
 use flui_interaction::FocusManager;
 use flui_rendering::pipeline::DetachedRenderSubtrees;
@@ -1514,28 +1514,29 @@ impl BuildOwner {
         replacement_location: (ElementId, usize),
         dirty: DirtyElement,
         mut staged: StagedRecoveredPanic,
-        payload: Box<dyn Any + Send>,
+        caught: FirstPanic,
     ) {
         let (parent, slot) = replacement_location;
         // The failed element is replaced below, after which the drain could not find it: read its
         // path while it is a node.
         staged.locate_in(tree);
         let error = crate::view::FrameworkError::from_panic(
-            payload.as_ref(),
+            caught
+                .held()
+                .expect("BUG: a failed lifecycle element's panic is held"),
             "running a lifecycle hook during rebuild",
         );
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a user error-view builder's panic must not escape recovery"
-        )]
-        let recovery_view = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Classified, the hook's payload is destroyed under containment
+        // before the error-view factory, which is user code, runs.
+        drop(caught);
+        // A factory panic must not escape recovery half-done: the element
+        // keeps its dirty entry and the factory's panic is raised.
+        let mut factory = FirstPanic::new();
+        let Some(recovery_view) = factory.contain(|| {
             crate::view::recovery_view_for(&error, self.capabilities.error_view_builder)
-        })) {
-            Ok(view) => view,
-            Err(factory_payload) => {
-                self.dirty_elements.requeue(dirty);
-                std::panic::resume_unwind(factory_payload)
-            }
+        }) else {
+            self.dirty_elements.requeue(dirty);
+            raise(factory)
         };
 
         self.dirty_reasons.remove(&failed);
@@ -1573,15 +1574,11 @@ impl BuildOwner {
             self.scope_depth += 1;
         }
 
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the scoped drain restores build state before a panic propagates"
-        )]
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.drain_build_scope(tree, target, live_scopes)
-        }));
+        // The scoped drain restores build state before a panic propagates.
+        let mut caught = FirstPanic::new();
+        let outcome = caught.contain(|| self.drain_build_scope(tree, target, live_scopes));
 
-        if outcome.is_err() && !matches!(target, BuildScopeTarget::All) {
+        if outcome.is_none() && !matches!(target, BuildScopeTarget::All) {
             let live_scopes = live_scopes.expect("BUG: scoped drain owns a live-scope snapshot");
             self.repartition_dirty(tree, live_scopes);
         }
@@ -1593,13 +1590,13 @@ impl BuildOwner {
         }
 
         match outcome {
-            Ok(result) => {
+            Some(result) => {
                 self.request_owed_frame();
                 result
             }
             // The pass's own failure comes first; the owed wake stays
             // pending for the next request to retry.
-            Err(payload) => std::panic::resume_unwind(payload),
+            None => raise(caught),
         }
     }
 
@@ -1680,6 +1677,10 @@ impl BuildOwner {
         // One buffer of dependency records serves every element this drain
         // builds: each build fills it, the drain below empties it.
         let mut dependent_records: Vec<crate::context::DependentRecord> = Vec::new();
+        // The providers a dependent read in its previous build, kept across
+        // builds and inline for eight, so the drain copies them without
+        // allocating.
+        let mut previous_providers: smallvec::SmallVec<[ElementId; 8]> = smallvec::SmallVec::new();
         loop {
             let absorbed_this_pop =
                 self.absorb_mid_drain_inbox(tree, &mut capped_leftover.leftover);
@@ -1798,11 +1799,8 @@ impl BuildOwner {
             // recovered (reset-on-build then keeps its masks).
             let build_recovered = std::cell::Cell::new(false);
             let partitioned_dirty_count = self.partitioned_dirty_count();
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: the element slot is restored after a build panic"
-            )]
-            let build_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut caught = FirstPanic::new();
+            let build_outcome = caught.contain(|| {
                 let mut element_owner = super::ElementOwner {
                     global_keys: &mut self.global_keys,
                     global_key_reservations: &mut self.global_key_reservations,
@@ -1866,7 +1864,7 @@ impl BuildOwner {
                     );
                 }
                 views
-            })); // `element_owner` + its `&*tree` borrow drop here.
+            }); // `element_owner` + its `&*tree` borrow drop here.
 
             // Restore the element BEFORE anything else — the slot must be whole
             // whether the build returned or unwound. With `&mut tree` free
@@ -1876,43 +1874,38 @@ impl BuildOwner {
             // ordering.
             tree.put_element(id, element);
 
-            let new_views: ChildViews = match build_outcome {
-                Ok(views) => {
-                    debug_assert!(
-                        self.lifecycle_panic_handoff.take().is_disarmed(),
-                        "successful lifecycle windows must disarm their handoff immediately"
-                    );
-                    views
-                }
-                Err(payload) => {
-                    let staged = self.lifecycle_panic_handoff.take().into_staged();
-                    let Some((parent, slot)) = replacement_location else {
-                        self.dirty_elements.requeue(dirty);
-                        std::panic::resume_unwind(payload)
-                    };
-                    let Some(staged) = staged else {
-                        self.dirty_elements.requeue(dirty);
-                        std::panic::resume_unwind(payload)
-                    };
+            let Some(new_views): Option<ChildViews> = build_outcome else {
+                let staged = self.lifecycle_panic_handoff.take().into_staged();
+                let Some((parent, slot)) = replacement_location else {
+                    self.dirty_elements.requeue(dirty);
+                    raise(caught)
+                };
+                let Some(staged) = staged else {
+                    self.dirty_elements.requeue(dirty);
+                    raise(caught)
+                };
 
-                    self.replace_failed_lifecycle_element(
-                        tree,
-                        id,
-                        (parent, slot),
-                        dirty,
-                        staged,
-                        payload,
-                    );
-                    result.any_rebuilt = true;
+                self.replace_failed_lifecycle_element(
+                    tree,
+                    id,
+                    (parent, slot),
+                    dirty,
+                    staged,
+                    caught,
+                );
+                result.any_rebuilt = true;
 
-                    if !matches!(target, BuildScopeTarget::All) {
-                        let fresh_live_scopes = self.live_layout_scope_ids(tree);
-                        self.repartition_dirty(tree, &fresh_live_scopes);
-                        self.activate_build_target(target);
-                    }
-                    continue;
+                if !matches!(target, BuildScopeTarget::All) {
+                    let fresh_live_scopes = self.live_layout_scope_ids(tree);
+                    self.repartition_dirty(tree, &fresh_live_scopes);
+                    self.activate_build_target(target);
                 }
+                continue;
             };
+            debug_assert!(
+                self.lifecycle_panic_handoff.take().is_disarmed(),
+                "successful lifecycle windows must disarm their handoff immediately"
+            );
 
             let reasons = self
                 .dirty_reasons
@@ -1961,11 +1954,11 @@ impl BuildOwner {
             // about what the element depends on, so its previous masks are kept
             // (the sink's records are still added) and it keeps receiving the
             // notifications that let a fixed condition rebuild it.
-            let previous_providers = if build_recovered.get() {
-                super::inherited_dependencies::ProviderIds::default()
-            } else {
-                self.inherited_dependencies.providers_of(id)
-            };
+            previous_providers.clear();
+            if !build_recovered.get() {
+                self.inherited_dependencies
+                    .copy_providers_into(id, &mut previous_providers);
+            }
             for provider in &previous_providers {
                 if let Some(accessor) = tree
                     .get_mut(*provider)
@@ -2009,7 +2002,7 @@ impl BuildOwner {
                     .register(record.dependent, provider);
             }
             dependent_records = recorded;
-            for provider in previous_providers {
+            for &provider in &previous_providers {
                 let pruned = tree
                     .get_mut(provider)
                     .and_then(|node| node.element_mut().as_inherited_mut())
@@ -2031,11 +2024,8 @@ impl BuildOwner {
             // the rebuilding parent regains its consumed reason and queue
             // entry before the scoped-drain guard repartitions all work.
             let partitioned_dirty_count = self.partitioned_dirty_count();
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: the reconciling parent regains its queue entry after a panic"
-            )]
-            let reconcile_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut caught = FirstPanic::new();
+            let reconcile_outcome = caught.contain(|| {
                 let mut element_owner = super::ElementOwner {
                     global_keys: &mut self.global_keys,
                     global_key_reservations: &mut self.global_key_reservations,
@@ -2077,8 +2067,8 @@ impl BuildOwner {
                     &new_views,
                     &mut element_owner,
                 );
-            }));
-            if let Err(payload) = reconcile_outcome {
+            });
+            if reconcile_outcome.is_none() {
                 tree.mark_needs_build(id);
                 match self.dirty_reasons.entry(id) {
                     std::collections::hash_map::Entry::Vacant(entry) => {
@@ -2089,7 +2079,7 @@ impl BuildOwner {
                         entry.get_mut().merge(reasons);
                     }
                 }
-                std::panic::resume_unwind(payload);
+                raise(caught);
             }
         }
 
@@ -2988,26 +2978,25 @@ impl Drop for BuildScopeGuard<'_> {
 /// the same containment that guards event emission applies here: a panic is
 /// caught and logged, never unwound through the owner.
 fn notify_detached(observer: Arc<dyn flui_foundation::observe::TreeObserver>) {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a tree observer's detached() runs contained, never unwinds the owner"
-    )]
-    if let Err(payload) =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer.detached()))
-    {
-        flui_foundation::panic::discard_payload(payload);
+    let mut caught = FirstPanic::new();
+    if caught.contain(|| observer.detached()).is_none() {
+        // Each collector destroys its payload under containment.
+        drop(caught);
         crate::drop_contained(observer);
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a panicking log is contained and discarded"
-        )]
-        let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        FirstPanic::new().contain(|| {
             tracing::error!("TreeObserver::detached() panicked; ignored");
-        }));
-        if let Err(payload) = reported {
-            flui_foundation::panic::discard_payload(payload);
-        }
+        });
     }
+}
+
+/// Raise the panic a contained step left in `caught`, for a seam that cannot
+/// go on once the step failed.
+fn raise(caught: FirstPanic) -> ! {
+    std::panic::resume_unwind(
+        caught
+            .into_payload()
+            .expect("BUG: a contained step that returned nothing holds its panic"),
+    )
 }
 
 #[cfg(test)]

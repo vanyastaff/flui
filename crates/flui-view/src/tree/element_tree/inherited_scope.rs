@@ -1,7 +1,7 @@
 //! The inherited scope of a node: which element publishes each type to it.
 
 use std::any::TypeId;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::ElementId;
 use rustc_hash::FxHashMap;
@@ -10,10 +10,10 @@ use smallvec::SmallVec;
 use super::ElementTree;
 use crate::view::ElementBase;
 
-/// How many types the nearest providers add before a scope folds them into
-/// its table. A control publishes one or two, so a control under a control
-/// still copies no table.
-const RECENT: usize = 4;
+/// How many provider layers a lookup scans before it reaches a table. A
+/// control publishes from one element, so a few controls nested in each
+/// other still copy no table.
+const SCANNED_LAYERS: u8 = 4;
 
 /// The providers in scope at a node: published type → providing element.
 ///
@@ -21,21 +21,30 @@ const RECENT: usize = 4;
 /// scope, so only a provider allocates. The empty scope holds nothing at all,
 /// so a node outside every provider costs no allocation either.
 ///
-/// A provider does not copy the table of everything above it. Its scope is
-/// that table, shared, and the few types the nearest providers added since
-/// it was built, the nearest last. Only when those outgrow [`RECENT`] does a
-/// provider build a new table from both. A lookup scans the few and then
-/// asks the table once.
+/// A provider does not copy what is above it. Its scope is one layer with the
+/// types it publishes and a shared pointer to the scope above. A lookup walks
+/// at most [`SCANNED_LAYERS`] layers and then asks one table; the provider
+/// whose parent's chain is that long folds the chain into a new table.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct InheritedScope(Option<Arc<Layers>>);
+pub(crate) struct InheritedScope(Option<Rc<Layer>>);
 
 #[derive(Debug)]
-struct Layers {
-    /// What the nearest providers publish, a type at most once; these shadow
-    /// `table`.
-    recent: SmallVec<[(TypeId, ElementId); RECENT]>,
-    /// Everything published above them.
-    table: Option<Arc<FxHashMap<TypeId, ElementId>>>,
+struct Layer {
+    /// What one provider publishes, a type at most once; these shadow
+    /// everything above.
+    own: SmallVec<[(TypeId, ElementId); 2]>,
+    above: Above,
+    /// The layers from this one down to `Above::Table` or the root, this one
+    /// included.
+    chain: u8,
+}
+
+#[derive(Debug)]
+enum Above {
+    Nothing,
+    Layer(Rc<Layer>),
+    /// Everything published above, folded.
+    Table(Rc<FxHashMap<TypeId, ElementId>>),
 }
 
 impl InheritedScope {
@@ -44,42 +53,48 @@ impl InheritedScope {
 
     /// The provider of `type_id` in scope, if any.
     pub(super) fn get(&self, type_id: TypeId) -> Option<ElementId> {
-        let layers = self.0.as_ref()?;
-        layers
-            .recent
-            .iter()
-            .find(|(known, _)| *known == type_id)
-            .map(|(_, id)| *id)
-            .or_else(|| layers.table.as_ref()?.get(&type_id).copied())
+        let mut layer = self.0.as_deref()?;
+        loop {
+            if let Some((_, id)) = layer.own.iter().find(|(known, _)| *known == type_id) {
+                return Some(*id);
+            }
+            match &layer.above {
+                Above::Nothing => return None,
+                Above::Layer(above) => layer = above,
+                Above::Table(table) => return table.get(&type_id).copied(),
+            }
+        }
     }
 }
 
-impl Layers {
-    /// These layers with `type_id` published by `id`, shadowing any provider
-    /// of the type above.
-    fn publish(&mut self, type_id: TypeId, id: ElementId) {
-        if let Some((_, provider)) = self.recent.iter_mut().find(|(known, _)| *known == type_id) {
-            *provider = id;
-            return;
+impl Layer {
+    /// Everything this chain of layers publishes, folded into one table.
+    fn fold(&self) -> FxHashMap<TypeId, ElementId> {
+        let mut chain: SmallVec<[&Layer; SCANNED_LAYERS as usize]> = SmallVec::new();
+        let mut layer = self;
+        let mut table = loop {
+            chain.push(layer);
+            match &layer.above {
+                Above::Nothing => break FxHashMap::default(),
+                Above::Layer(above) => layer = above,
+                Above::Table(table) => break FxHashMap::clone(table),
+            }
+        };
+        // The farthest first, so a nearer provider of a type shadows it.
+        for layer in chain.iter().rev() {
+            table.extend(layer.own.iter().copied());
         }
-        if self.recent.len() == RECENT {
-            let mut table: FxHashMap<TypeId, ElementId> =
-                self.table.as_deref().cloned().unwrap_or_default();
-            table.extend(self.recent.drain(..));
-            self.table = Some(Arc::new(table));
-        }
-        self.recent.push((type_id, id));
+        table
     }
 }
 
 /// Compute a node's inherited scope from its parent's.
 ///
 /// An element that publishes nothing returns the parent scope unchanged (a
-/// refcount bump at most, no allocation); a provider returns
-/// `parent + (type → id)` for each type it publishes, so the nearest
-/// provider of a type shadows. A provider allocates its layers, and copies
-/// the table above only when the types added since it was built outgrow
-/// [`RECENT`].
+/// refcount bump at most, no allocation); a provider returns one layer of
+/// `type → id` for each type it publishes over the parent scope, so the
+/// nearest provider of a type shadows. A provider whose parent's chain is
+/// [`SCANNED_LAYERS`] long also folds that chain into a table.
 ///
 /// A provider's resolved scope therefore includes ITSELF, for its children.
 /// Its own reads go through [`ElementTree::enclosing_provider`], which skips
@@ -92,25 +107,21 @@ pub(super) fn compute_inherited_scope(
     let Some(provider) = element.as_inherited() else {
         return parent.clone();
     };
-    let mut layers: Option<Layers> = None;
+    let mut own: SmallVec<[(TypeId, ElementId); 2]> = SmallVec::new();
     provider.provided_types(&mut |type_id| {
-        layers
-            .get_or_insert_with(|| match parent.0.as_deref() {
-                Some(above) => Layers {
-                    recent: above.recent.clone(),
-                    table: above.table.clone(),
-                },
-                None => Layers {
-                    recent: SmallVec::new(),
-                    table: None,
-                },
-            })
-            .publish(type_id, id);
+        if !own.iter().any(|(known, _)| *known == type_id) {
+            own.push((type_id, id));
+        }
     });
-    layers.map_or_else(
-        || parent.clone(),
-        |layers| InheritedScope(Some(Arc::new(layers))),
-    )
+    if own.is_empty() {
+        return parent.clone();
+    }
+    let (above, chain) = match &parent.0 {
+        None => (Above::Nothing, 1),
+        Some(above) if above.chain >= SCANNED_LAYERS => (Above::Table(Rc::new(above.fold())), 1),
+        Some(above) => (Above::Layer(Rc::clone(above)), above.chain + 1),
+    };
+    InheritedScope(Some(Rc::new(Layer { own, above, chain })))
 }
 
 impl ElementTree {

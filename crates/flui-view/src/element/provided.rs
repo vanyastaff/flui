@@ -13,9 +13,9 @@
 //! the elements that read that value.
 
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
 
 use flui_foundation::ElementId;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::view::FieldSet;
@@ -98,9 +98,6 @@ pub struct DependentEntry {
     pub(crate) mask: FieldSet,
     /// The fields read in a lifecycle hook, kept until the dependent unmounts.
     pub(crate) lifecycle_mask: FieldSet,
-    /// Registration order, so same-depth dependents are scheduled in the
-    /// order they first read the provider.
-    pub(crate) registered: u64,
 }
 
 impl DependentEntry {
@@ -112,33 +109,81 @@ impl DependentEntry {
     }
 }
 
+/// How many dependents a provider finds by scanning its list. Past this it
+/// keeps an index from element to position.
+const SCANNED_DEPENDENTS: usize = 8;
+
 /// The forward half of the dependency ledger: who reads this provider.
 ///
 /// One per provider element, whatever it publishes. The reverse half is
 /// `BuildOwner`'s `InheritedDependencies`.
+///
+/// The list keeps registration order (the dependents' first build order), so
+/// a notification schedules same-depth dependents in the same order every
+/// time without sorting. A removed dependent leaves a hole the next
+/// compaction closes; holes never outnumber the live entries.
 #[derive(Debug, Default)]
 pub(crate) struct Dependents {
-    entries: HashMap<ElementId, DependentEntry>,
-    /// The registration stamp the next new dependent receives.
-    next_registration: u64,
+    entries: Vec<Option<(ElementId, DependentEntry)>>,
+    live: usize,
+    /// Position of each live dependent in `entries`, once the list outgrows
+    /// [`SCANNED_DEPENDENTS`].
+    index: Option<Box<FxHashMap<ElementId, usize>>>,
 }
 
 impl Dependents {
+    fn position(&self, element: ElementId) -> Option<usize> {
+        match &self.index {
+            Some(index) => index.get(&element).copied(),
+            None => self
+                .entries
+                .iter()
+                .position(|slot| slot.is_some_and(|(id, _)| id == element)),
+        }
+    }
+
     fn entry(&mut self, element: ElementId, depth: usize) -> &mut DependentEntry {
-        let next_registration = &mut self.next_registration;
-        let entry = self.entries.entry(element).or_insert_with(|| {
-            let registered = *next_registration;
-            // Saturating: past 2^64 registrations the element id orders the tie.
-            *next_registration = registered.saturating_add(1);
+        let position = match self.position(element) {
+            Some(position) => position,
+            None => self.push(element, depth),
+        };
+        let (_, entry) = self.entries[position]
+            .as_mut()
+            .expect("BUG: a dependent's position names a live entry");
+        entry.depth = depth;
+        entry
+    }
+
+    fn push(&mut self, element: ElementId, depth: usize) -> usize {
+        let position = self.entries.len();
+        self.entries.push(Some((
+            element,
             DependentEntry {
                 depth,
                 mask: FieldSet::NONE,
                 lifecycle_mask: FieldSet::NONE,
-                registered,
+            },
+        )));
+        self.live += 1;
+        match &mut self.index {
+            Some(index) => {
+                index.insert(element, position);
             }
-        });
-        entry.depth = depth;
-        entry
+            None if self.live > SCANNED_DEPENDENTS => self.rebuild_index(),
+            None => {}
+        }
+        position
+    }
+
+    fn rebuild_index(&mut self) {
+        let index = self.index.get_or_insert_with(Box::default);
+        index.clear();
+        index.extend(
+            self.entries
+                .iter()
+                .enumerate()
+                .filter_map(|(position, slot)| slot.map(|(id, _)| (id, position))),
+        );
     }
 
     /// Record a read made in `build`. Re-registering overwrites the depth and
@@ -154,7 +199,9 @@ impl Dependents {
     }
 
     pub(crate) fn reset_mask(&mut self, element: ElementId) {
-        if let Some(entry) = self.entries.get_mut(&element) {
+        if let Some(position) = self.position(element)
+            && let Some((_, entry)) = &mut self.entries[position]
+        {
             entry.mask = FieldSet::NONE;
         }
     }
@@ -162,9 +209,9 @@ impl Dependents {
     /// Drop `element` if it no longer reads any field. Returns whether an
     /// entry was removed.
     pub(crate) fn prune_unread(&mut self, element: ElementId) -> bool {
-        match self.entries.get(&element) {
+        match self.get(element) {
             Some(entry) if entry.fields().is_empty() => {
-                self.entries.remove(&element);
+                self.remove(element);
                 true
             }
             _ => false,
@@ -172,15 +219,42 @@ impl Dependents {
     }
 
     pub(crate) fn remove(&mut self, element: ElementId) {
-        self.entries.remove(&element);
+        let Some(position) = self.position(element) else {
+            return;
+        };
+        self.entries[position] = None;
+        self.live -= 1;
+        if let Some(index) = &mut self.index {
+            index.remove(&element);
+        }
+        if self.live == 0 {
+            self.entries.clear();
+            self.index = None;
+        } else if self.entries.len() - self.live > self.live {
+            self.entries.retain(Option::is_some);
+            if self.index.is_some() {
+                self.rebuild_index();
+            }
+        } else {
+            while self.entries.last().is_some_and(Option::is_none) {
+                self.entries.pop();
+            }
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.entries.len()
+        self.live
     }
 
-    pub(crate) fn map(&self) -> &HashMap<ElementId, DependentEntry> {
-        &self.entries
+    pub(crate) fn get(&self, element: ElementId) -> Option<&DependentEntry> {
+        let position = self.position(element)?;
+        self.entries[position].as_ref().map(|(_, entry)| entry)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (ElementId, &DependentEntry)> {
+        self.entries
+            .iter()
+            .filter_map(|slot| slot.as_ref().map(|(id, entry)| (*id, entry)))
     }
 
     /// Schedule every dependent that read a field of `changed`, in
@@ -189,23 +263,15 @@ impl Dependents {
         if changed.is_empty() {
             return;
         }
-        // The map iterates in its hash order, which changes from map to map.
-        // Scheduling in registration order (the dependents' first build
-        // order) lets the drain rebuild same-depth dependents in the same
-        // order every time.
-        let mut notified: Vec<(u64, ElementId, usize)> = self
-            .entries
-            .iter()
-            .filter(|(_, entry)| entry.fields().intersects(changed))
-            .map(|(&id, entry)| (entry.registered, id, entry.depth))
-            .collect();
-        notified.sort_unstable();
-        for (_, id, depth) in notified {
+        for (id, entry) in self.iter() {
+            if !entry.fields().intersects(changed) {
+                continue;
+            }
             // The flag is set here and the hook fires inside
             // `BuildOwner::build_scope`, right before the dependent's build:
             // `did_change_dependencies` runs once per change, before the build.
             owner.note_dependency_change(id);
-            owner.schedule_build_for(id, depth, crate::RebuildReason::DependencyChange);
+            owner.schedule_build_for(id, entry.depth, crate::RebuildReason::DependencyChange);
         }
     }
 
@@ -216,11 +282,13 @@ impl Dependents {
         owner: &mut crate::ElementOwner<'_>,
     ) {
         if let Some(provider) = provider {
-            for dependent in self.entries.keys().copied() {
+            for (dependent, _) in self.iter() {
                 owner.unregister_inherited_dependency(dependent, provider);
             }
         }
         self.entries.clear();
+        self.live = 0;
+        self.index = None;
     }
 }
 

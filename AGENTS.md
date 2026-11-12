@@ -111,6 +111,12 @@ conversation:
 - Commits are `area: what changed`. Pull-request CI executes Linux and wasm32 only; Windows,
   macOS, the iOS Simulator and an Android emulator run nightly on main
   (`nightly-platforms.yml`), so native and GPU changes are run locally before the PR.
+- A job only main runs has a narrow form, which a pull request runs when its diff reaches what the
+  job reads: a row of `ON_DEMAND` in `tools/xtask/src/change_scope/aggregator.rs`, decided by
+  `cargo xtask affected` (ADR-0303 §9). `test-trybuild` runs when the diff touches a file a
+  `*.stderr` cites, a case, a runner, a procedural macro or a message an expectation copies, and
+  `feature-scope` runs over the changed crates' features. A new main-only job that a pull request
+  can break gets such a row.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
