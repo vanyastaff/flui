@@ -7,6 +7,7 @@
   has not destroyed and a later or opaque terminal payload, and §5 retains a user `Drop` during an
   unwind: payloads go to `discard_payload` (the terminal slot keeps an opaque payload's text),
   values are destroyed under containment, and a destructor that panics during an unwind aborts.
+  Also [ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) for §3 step 4 only (the native sources stop beside the services).
 - **Supersedes:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md)
   §5, its sentence "the first panic resumes after restoration and notification" only (a quit
   observer's panic is contained by §1 here and resumes only when §2 classifies it terminal); and the

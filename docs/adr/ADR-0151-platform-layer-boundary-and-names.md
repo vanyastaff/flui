@@ -4,6 +4,7 @@
 - **Date:** 2026-10-20
 - **Superseded-by:** [ADR-0264](ADR-0264-platform-test-doubles-live-with-their-contract.md) for
   §7 only (where the test doubles live) and §6 only (its last sentence)
+  Also [ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) for §8's clause on `tokio::runtime::Handle` only (`NativeExecutor::from_tokio` takes one).
 - **Amended:** 2026-10-22 — section 8: the Activity enters the core host through one function,
   `android_platform(app)`; the confirmation checks the core host's paths on every target it builds
   a host for.

@@ -9,6 +9,7 @@
   step of §4 (the registrations become handler methods) and for the raw-handle impls on
   `dyn PlatformWindow` and `dyn HostWindow` in §3. The remaining sections are
   unchanged.
+  Also [ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) for §4 only (an owner-only callback is kept sound by the compiler, not by `OwnerSlot`'s refusal).
 - **Amended by:** [ADR-0213](ADR-0213-input-capabilities.md) (§5: `PlatformCapabilities` is
   replaced by handle-derived availability and `InputCapabilities`)
 - **Amends:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §2,

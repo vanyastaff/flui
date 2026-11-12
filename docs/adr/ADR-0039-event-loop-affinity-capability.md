@@ -12,7 +12,8 @@
   the capability; the capability and its loop scope stay); and
   [ADR-0152](ADR-0152-capability-seam-revised.md) for §5 (the synchronous `Clipboard` trait is
   gone: each host's clipboard is an owner-local `NativeClipboard` that `OwnerPlatform` hands out,
-  and widgets reach it through the clipboard capability).
+  and widgets reach it through the clipboard capability); and
+  [ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) for §2 only (`Platform` is owner-local; `data_transfer` moves to `OwnerPlatform`).
 
 ## Context
 
