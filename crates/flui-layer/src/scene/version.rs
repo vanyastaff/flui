@@ -8,11 +8,12 @@ use smallvec::SmallVec;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 
 use super::content::{BoundaryContent, Bounds, EntryIndex, LinkRole};
-use super::geometry::Geometry;
+use super::geometry::{Geometry, Reach};
 use super::id::{Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::owner::Placement;
 use super::table::{Table, TableCost};
 use crate::link::LayerLink;
+use crate::scene_snapshot::DamageRegion;
 
 /// Where an entry sits: its boundary's node and its index in that content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -361,6 +362,49 @@ impl SceneVersion {
             .filtered
             .iter()
             .map(move |(_, key)| SceneNodeId::new(lineage, *key))
+    }
+
+    /// Whether anything `node`'s subtree draws can land in `rect`, in surface
+    /// pixels: what the raster side reads to skip a boundary outside a
+    /// partial frame's damage (ADR-0304 §9). It reads the node's stored
+    /// subtree bounds and filter spread through its chain, as the damage of
+    /// a patch does, so a subtree a change there can reach is never skipped:
+    /// `true` for an unbounded or non-finite reach, `false` for a node that
+    /// is hidden, not attached or of another version's lineage. The edges
+    /// count as meeting.
+    #[must_use]
+    pub fn subtree_meets(&self, node: SceneNodeId, rect: Rect<f64>) -> bool {
+        if node.lineage() != self.lineage() {
+            return false;
+        }
+        match Geometry::shown(&self.0).subtree_reach(node.key()) {
+            Reach::Nothing => false,
+            Reach::Rect(reach) => {
+                reach.left() <= rect.right()
+                    && rect.left() <= reach.right()
+                    && reach.top() <= rect.bottom()
+                    && rect.top() <= reach.bottom()
+            }
+            Reach::Unbounded | Reach::NonFinite => true,
+        }
+    }
+
+    /// `region`, on a surface of `surface` pixels, closed over what this
+    /// version's filters and destination-reading chunks read where it
+    /// redraws (ADR-0304 §6): what the raster side redraws when the damage it
+    /// owes joins more than one publication, each closed under its own
+    /// version.
+    #[must_use]
+    pub fn close_damage(&self, region: DamageRegion, surface: (u32, u32)) -> DamageRegion {
+        let mut cost = super::footprint::FootprintCost::default();
+        let mut closures = Vec::new();
+        super::footprint::close_filtered(
+            region,
+            &[(Geometry::shown(&self.0), &self.0)],
+            surface,
+            &mut cost,
+            &mut closures,
+        )
     }
 }
 

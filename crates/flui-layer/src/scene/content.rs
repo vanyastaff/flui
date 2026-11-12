@@ -33,6 +33,15 @@ impl EntryIndex {
     }
 }
 
+impl TryFrom<usize> for EntryIndex {
+    type Error = std::num::TryFromIntError;
+
+    /// The entry at `position` of [`BoundaryContent::entries`].
+    fn try_from(position: usize) -> Result<Self, Self::Error> {
+        u32::try_from(position).map(Self)
+    }
+}
+
 /// Where a recording or an effect reaches, in its own space.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Bounds {

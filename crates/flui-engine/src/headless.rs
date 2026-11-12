@@ -171,7 +171,7 @@ impl HeadlessRenderer {
             context.attach_offscreen(id, size, CAPTURE_FORMAT)?;
             *slot.insert(id)
         };
-        context.render_slot(slot, tree)?;
+        context.render_slot(slot, flui_layer::SceneContent::Tree(tree))?;
         context.read_slot(slot)
     }
 
@@ -228,6 +228,7 @@ impl HeadlessRenderer {
             size,
             intermediate_required: false,
             fail_after_begin: false,
+            panic_after_record: false,
             last_plan: None,
         })
     }
@@ -413,6 +414,9 @@ pub(crate) struct RetainedCapture {
     /// When set, the next frame's content pass fails (after the retained
     /// target was begun) and the flag clears itself.
     fail_after_begin: bool,
+    /// When set, the next frame panics once its content is recorded, before
+    /// it is submitted, and the flag clears itself.
+    panic_after_record: bool,
     last_plan: Option<crate::damage::FramePlan>,
 }
 
@@ -468,6 +472,12 @@ impl RetainedCapture {
                 depth_or_array_layers: 1,
             },
         );
+    }
+
+    /// Makes the next frame panic once its content is recorded, before it is
+    /// submitted: a raster-side panic in the middle of a frame.
+    pub(crate) fn panic_after_next_record(&mut self) {
+        self.panic_after_record = true;
     }
 
     /// Makes the next frame's content pass fail after it began the retained
@@ -613,6 +623,7 @@ struct CaptureFrame<'a> {
     offscreen: &'a mut crate::offscreen::OffscreenRenderer,
     scene: &'a flui_layer::Scene,
     fail: &'a mut bool,
+    panic: &'a mut bool,
 }
 
 #[cfg(test)]
@@ -650,6 +661,10 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
             return Err(EngineError::Timeout);
         }
         let straddled = crate::Renderer::record_frame_content(self.painter, self.scene, partial)?;
+        assert!(
+            !std::mem::take(self.panic),
+            "injected panic after the frame was recorded"
+        );
         self.painter.render_to_texture(texture, encoder)?;
         Ok(straddled)
     }
@@ -705,6 +720,7 @@ impl RetainedCapture {
             offscreen: &mut self.offscreen,
             scene,
             fail: &mut self.fail_after_begin,
+            panic: &mut self.panic_after_record,
         };
         self.frame.run(
             plan,

@@ -374,11 +374,8 @@ pub struct SceneSnapshot {
     /// The version the damage is relative to, `None` when it is full
     /// (ADR-0304 §7).
     pub base: Option<SceneVersionId>,
-    /// The version drawn, which the raster side reports once it is shown;
-    /// `None` for a scene built by hand.
-    pub version: Option<SceneVersion>,
-    /// The composited layer tree, ready to render: the version flattened,
-    /// until the engine walks versions itself.
+    /// What is drawn: the published version the raster side walks, which it
+    /// reports once shown, or a scene built by hand.
     pub scene: Scene,
 }
 
@@ -391,13 +388,11 @@ impl SceneSnapshot {
             stamp,
             damage,
             base: None,
-            version: None,
             scene,
         }
     }
 
-    /// Packages a published `version`, drawn with `damage` against `base`:
-    /// the version is flattened into the scene the engine renders.
+    /// Packages a published `version`, drawn with `damage` against `base`.
     #[must_use]
     pub fn of_version(
         stamp: FrameStamp,
@@ -405,13 +400,11 @@ impl SceneSnapshot {
         damage: DamageRegion,
         version: SceneVersion,
     ) -> Self {
-        let scene = Scene::new(version.flatten());
         Self {
             stamp,
             damage,
             base,
-            version: Some(version),
-            scene,
+            scene: Scene::of_version(version),
         }
     }
 }

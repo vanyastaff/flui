@@ -2075,27 +2075,29 @@ impl Renderer {
             );
         }
 
-        // Depth-first traversal of layer tree. Backdrop-filter and
+        // Depth-first traversal of the scene. Backdrop-filter and
         // advanced-blend passes read from `render_texture`, which always has
         // COPY_SRC here: the swapchain image when the surface offers it, the
-        // retained target (created with it) otherwise.
-        Self::render_layer_recursive(scene.tree(), scene.root(), &mut backend)?;
+        // retained target (created with it) otherwise. A version's walk skips
+        // the boundaries the damage cannot reach.
+        crate::layer_walk::record_scene(scene.content(), partial_damage, &mut backend)?;
 
-        // Damage-straddle self-healing: if a partial scissor was applied AND
-        // `draw_order` now contains an advanced shape whose `device_bounds`
-        // straddle the damage edge, the caller repaints the next frame in full.
-        //
-        // Why next-frame and not this-frame: `render_layer_recursive` has
-        // already populated the draw commands with the scissored geometry; a
-        // this-frame re-record would require replaying the entire scene graph.
-        // The frame rendered into the retained target, so outside the damage
-        // it holds the correct previous frame and the straddling shape's own
-        // out-of-damage slice is the only pixel it can disturb, for one frame.
-        // A precomputed Scene bit or a re-record is the upgrade path if that
-        // transient ever shows.
+        // An advanced shape (one that reads the destination) whose bounds
+        // straddle the damage edge was drawn clipped, so outside the damage
+        // the retained pixels under it are stale: the caller repaints the
+        // next frame in full. A retained version cannot reach this: a chunk
+        // that reads the destination damages its whole bounds and the damage
+        // is closed over it (ADR-0304 §6), so it is a debug assertion there.
+        // A tree built by hand carries no such guarantee and keeps the
+        // repaint.
         let straddled = partial_damage
             .is_some_and(|damage| backend.painter().has_advanced_shape_straddling(damage));
         if straddled {
+            debug_assert!(
+                scene.version().is_none(),
+                "BUG: a destination-reading chunk straddles the damage of a retained version, \
+                 whose damage covers each such chunk whole"
+            );
             tracing::debug!(
                 "Advanced shape straddles partial damage; scheduling full repaint next frame"
             );
@@ -2105,39 +2107,6 @@ impl Renderer {
         // `with_transform`, before the caller renders the painter's batches.
         drop(backend);
         Ok(straddled)
-    }
-
-    /// Recursively render a layer and its children (depth-first, back-to-front /
-    /// painter's algorithm).
-    ///
-    /// Each layer's `render()` pushes state (transforms, clips, opacity),
-    /// children are rendered in order, then `cleanup()` pops the state.
-    ///
-    /// `BackdropFilterLayer` is handled specially at the Renderer level when
-    /// the surface supports `COPY_SRC`, enabling mid-frame flush + blur.
-    /// `FollowerLayer` is handled specially too — its render-time position
-    /// is resolved against the already-fully-built `tree` (which indexes its
-    /// leaders) before its children render.
-    ///
-    /// # Occlusion culling
-    ///
-    /// No per-layer opaque culling is performed here. A back-to-front walk
-    /// registers bottom layers first and would see later (on-top, visible)
-    /// layers as "occluded" — exactly backwards. A sound front-to-back cull
-    /// requires a separate pre-pass that is a future optimization opportunity.
-    /// Walk a layer subtree, rendering every node.
-    ///
-    /// The traversal itself is [`crate::layer_walk::walk_layer_tree`] — an
-    /// explicit-stack walk, because one Rust stack frame per layer means a
-    /// deep-but-valid chain aborts the process rather than panicking, and a
-    /// deep composited chain is ordinary. This function supplies the visit
-    /// steps in the shared recording visitor.
-    fn render_layer_recursive(
-        tree: &flui_layer::LayerTree,
-        layer_id: flui_foundation::LayerId,
-        backend: &mut crate::layer_dispatcher::LayerDispatcher<'_>,
-    ) -> EngineResult<()> {
-        crate::layer_walk::record_layer_tree(tree, layer_id, backend)
     }
 }
 
@@ -2875,7 +2844,7 @@ mod tests {
     // =========================================================================
     // OCR-1 — occlusion-cull regression
     //
-    // Reproduces the bug where `render_layer_recursive` culled visible on-top
+    // Reproduces the bug where the layer walk (`layer_walk::record_scene`) culled visible on-top
     // layers because the occlusion tracker was fed in back-to-front (painter's
     // algorithm) order, which is exactly backwards from the front-to-back order
     // that `OcclusionTracker::add_opaque` requires for sound culling.
@@ -2885,7 +2854,7 @@ mod tests {
     // (child[1]) wrapping a sub-region `CanvasLayer` had that inner canvas
     // culled by `is_occluded` — even though it was drawn on top and fully visible.
     //
-    // The fix removes the unsound occlusion pass from `render_layer_recursive`
+    // The fix removes the unsound occlusion pass from the layer walk (`layer_walk::record_scene`)
     // entirely.  There is no sound way to do per-layer opaque culling in a
     // single back-to-front walk without knowing future (on-top) content first.
     //
@@ -2899,7 +2868,7 @@ mod tests {
     //
     // Render-object-harness-level testing cannot check on-screen positioning
     // (explicitly out of harness scope) — these
-    // tests exercise the REAL `render_layer_recursive` Follower special case
+    // tests exercise the REAL layer walk's (`layer_walk::record_scene`) Follower special case
     // (not a hand-rolled stand-in) against a real GPU texture, reading back
     // actual rendered pixels.
     // =========================================================================
@@ -3033,7 +3002,8 @@ mod tests {
         );
         let mut backend = LayerDispatcher::new(&mut painter);
 
-        Renderer::render_layer_recursive(&tree, root_id, &mut backend).expect("layer tree records");
+        crate::layer_walk::record_scene(flui_layer::SceneContent::Tree(&tree), None, &mut backend)
+            .expect("layer tree records");
         drop(backend);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -3142,7 +3112,8 @@ mod tests {
         );
         let mut backend = LayerDispatcher::new(&mut painter);
 
-        Renderer::render_layer_recursive(&tree, mask_id, &mut backend).expect("layer tree records");
+        crate::layer_walk::record_scene(flui_layer::SceneContent::Tree(&tree), None, &mut backend)
+            .expect("layer tree records");
         drop(backend);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
