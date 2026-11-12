@@ -1178,7 +1178,9 @@ fn build_semantics_fragments_impl(
     }
     debug_assert_hosted_runs(authored_runs, &authored);
 
-    let mut child_fragments = Vec::with_capacity(node.children().len());
+    // Most nodes of a large subtree contribute no fragment (a decoration, a
+    // layout box): the list allocates on its first fragment, not per node.
+    let mut child_fragments: Vec<SemanticsFragment> = Vec::new();
     let mut children_block_previous = append_region_fragments(
         &mut child_fragments,
         authored.before_children,
@@ -1236,7 +1238,17 @@ fn build_semantics_fragments_impl(
                 child_fragments.clear();
                 children_block_previous = true;
             }
-            child_fragments.extend(fragments.nodes);
+            if child_fragments.is_empty() {
+                // The first child that contributes hands its list over whole.
+                child_fragments = fragments.nodes;
+            } else {
+                // Room for these and one fragment per child still to come, as
+                // a list sized for every child up front would have; a child with
+                // several fragments grows it by doubling.
+                let still_to_come = node.children().len() - child_slot - 1;
+                child_fragments.reserve(fragments.nodes.len() + still_to_come);
+                child_fragments.extend(fragments.nodes);
+            }
         }
     }
     children_block_previous |= append_region_fragments(
