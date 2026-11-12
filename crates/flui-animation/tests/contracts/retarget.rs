@@ -1108,21 +1108,38 @@ fn a_large_finite_curve_correction_stays_finite() {
 
 /// A curve with a non-zero terminal slope still arrives at rest: its velocity
 /// tends to zero before arrival, so a retarget one tick early and one on the
-/// completing frame inherit the same momentum.
+/// completing frame inherit the same momentum. Ease-in's terminal slope is a
+/// limit (its last control point is the end point), and it arrives at rest as
+/// well instead of at 862 units/s.
 fn a_curve_arrives_with_zero_velocity() {
     let mode = Mode::Curve {
         curve: 0,
         millis: 200,
     };
-    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(200)).expect("finite motion");
-    value.animate_to(100.0).expect("finite motion");
-    value.advance(Duration::from_secs_f64(0.2 - 1e-6));
-    let early = value.velocity()[0];
-    assert!(early.abs() <= 0.1, "{early} units/s just before arrival");
-    assert_velocity_is_the_derivative(&value, 0, &mode, 100.0);
-    value.advance(Duration::from_secs_f64(1e-6));
-    assert_eq!(value.value(), 100.0);
-    assert_eq!(value.velocity()[0], 0.0);
+    for (name, spec, bound) in [
+        ("linear", linear_spec(200), 0.1),
+        (
+            "ease-in",
+            MotionSpec::Curve {
+                duration: Duration::from_millis(200),
+                curve: SharedCurve::new(curves::EASE_IN),
+            },
+            1.0,
+        ),
+    ] {
+        let mut value = AnimatedValue::with_motion(0.0_f64, spec).expect("finite motion");
+        value.animate_to(100.0).expect("finite motion");
+        value.advance(Duration::from_secs_f64(0.2 - 1e-6));
+        let early = value.velocity()[0];
+        assert!(
+            early.abs() <= bound,
+            "{name}: {early} units/s just before arrival"
+        );
+        assert_velocity_is_the_derivative(&value, 0, &mode, 100.0);
+        value.advance(Duration::from_secs_f64(1e-6));
+        assert_eq!(value.value(), 100.0, "{name}");
+        assert_eq!(value.velocity()[0], 0.0, "{name}");
+    }
 }
 
 /// A reversal early enough to shorten the segment below a millisecond keeps
@@ -1142,6 +1159,37 @@ fn an_early_reversal_is_continuous() {
     assert_eq!(value.value(), 0.0);
 }
 
+/// A curve-only change less than a millisecond before the end runs the old
+/// segment's remainder instead of jumping: the one-millisecond floor is for a
+/// configured duration, not for what is left of one.
+fn a_curve_change_just_before_arrival_keeps_its_seam() {
+    let to = Mode::Curve {
+        curve: 1,
+        millis: 121,
+    };
+    let mut value =
+        AnimatedValue::with_motion(0.0_f64, curve_spec(CUBICS[0], 121)).expect("finite motion");
+    value.animate_to(100.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.120_165_914_746_337_48));
+    let (x, v) = (value.value(), value.velocity()[0]);
+    assert!(x < 100.0 && v > 1.0, "x {x}, v {v} before the change");
+    value.set_motion(to.spec()).expect("finite motion");
+    assert!(
+        close(value.value(), x, 1e-12),
+        "{} after {x}",
+        value.value()
+    );
+    assert!(
+        close(value.velocity()[0], v, 1e-9),
+        "{} after {v}",
+        value.velocity()[0]
+    );
+    assert!(!value.is_settled());
+    assert_velocity_is_the_derivative(&value, 0, &to, 100.0);
+    value.advance(Duration::from_secs_f64(0.001));
+    assert!(value.is_settled());
+    assert_eq!(value.value(), 100.0);
+}
 /// Assigning a curve its current target leaves the segment running on its
 /// schedule instead of restarting the full duration.
 fn retargeting_a_curve_to_its_target_keeps_its_schedule() {
@@ -1271,6 +1319,10 @@ fn retarget_seams() {
             the_spring_rest_boundary_is_c1,
         ),
         ("seam_on_the_completing_frame", seam_on_the_completing_frame),
+        (
+            "a_curve_change_just_before_arrival_keeps_its_seam",
+            a_curve_change_just_before_arrival_keeps_its_seam,
+        ),
         (
             "time_that_does_not_move_forward_samples_the_seam",
             time_that_does_not_move_forward_samples_the_seam,
