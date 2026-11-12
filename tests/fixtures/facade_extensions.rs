@@ -1,4 +1,8 @@
 #![cfg(test)]
+#![expect(
+    deprecated,
+    reason = "the rows below still drive flui::testing::harness; they move to Tester as it gains their verbs"
+)]
 
 use flui::animation::Animation;
 use flui::geometry::{Offset, Point, Rect, Size};
@@ -8,7 +12,7 @@ use flui::rendering::{
     BoxConstraints, BoxDryLayoutCtx, BoxLayoutContext, BoxParentData, BoxProtocol, Leaf, PaintCx,
     RenderBox, RenderUpdateImpact, Single,
 };
-use flui::testing::widgets::{lay_out, loose};
+use flui::testing::harness::widgets::{lay_out, loose};
 use flui::view::{RenderObjectContext, RenderView};
 use flui::widgets::AnimatedBuilder;
 use std::sync::{
@@ -114,7 +118,7 @@ impl CustomPainter for MotionPainter {
 #[test]
 fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
     use flui::animation::{AnimatedValue, Linear, MotionSpec, SharedCurve, Vsync};
-    use flui::testing::widgets::{LaidOut, lay_out_animated};
+    use flui::testing::harness::widgets::{LaidOut, lay_out_animated};
     use flui::view::environment::VsyncScope;
     use flui::widgets::CustomPaint;
 
@@ -298,7 +302,7 @@ fn gesture_recognizer_uses_headless_virtual_time() {
     use flui::interaction::{
         GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerDispatch, PointerId,
     };
-    let mut binding = flui::testing::HeadlessBinding::new();
+    let mut binding = flui::testing::harness::HeadlessBinding::new();
     let fired = Arc::new(AtomicUsize::new(0));
     let callback = fired.clone();
     let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
@@ -310,10 +314,10 @@ fn gesture_recognizer_uses_headless_virtual_time() {
         })
         .build();
     let position = Offset::new(8.0, 8.0);
-    let down = flui::testing::replay::ScriptedPointer::new(
+    let down = flui::testing::harness::replay::ScriptedPointer::new(
         Duration::ZERO,
         PointerId::try_from(1_u64).expect("nonzero pointer"),
-        flui::testing::replay::PointerPhase::Down,
+        flui::testing::harness::replay::PointerPhase::Down,
         position,
     )
     .to_event();
@@ -430,11 +434,11 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
     use flui::interaction::{
         ArenaMembership, GestureArenaMember, GestureRecognizer, PointerId, PrimaryContact,
     };
-    use flui::testing::replay::{PointerPhase, ScriptedPointer};
+    use flui::testing::harness::replay::{PointerPhase, ScriptedPointer};
     use flui::widgets::PointerDispatch;
     use std::rc::Rc;
 
-    let binding = flui::testing::HeadlessBinding::new();
+    let binding = flui::testing::harness::HeadlessBinding::new();
     let arena = binding.arena();
     let recognizer = |threshold| {
         Rc::new_cyclic(
@@ -785,11 +789,11 @@ fn presentation_lifecycle_subscription_runs_through_the_facade() {
         captured: Rc::default(),
         events: Rc::default(),
     };
-    let mut binding = flui::testing::HeadlessBinding::new();
+    let mut binding = flui::testing::harness::HeadlessBinding::new();
     binding.mount_root(
         &view,
-        flui::testing::MountOwners::fresh(),
-        flui::testing::MountOptions::loose(100.0),
+        flui::testing::harness::MountOwners::fresh(),
+        flui::testing::harness::MountOptions::loose(100.0),
     );
     let handle = view.captured.borrow().as_ref().expect("captured").clone();
     binding
@@ -846,12 +850,12 @@ fn presentation_lifecycle_capability_is_absent_when_not_installed() {
         captured: Rc::default(),
         events: Rc::default(),
     };
-    let mut binding = flui::testing::HeadlessBinding::new();
+    let mut binding = flui::testing::harness::HeadlessBinding::new();
     binding.mount_root(
         &view,
-        flui::testing::MountOwners::fresh(),
-        flui::testing::MountOptions::loose(100.0)
-            .with_capabilities(flui::testing::BuildCapabilities::AsyncDriverOnly),
+        flui::testing::harness::MountOwners::fresh(),
+        flui::testing::harness::MountOptions::loose(100.0)
+            .with_capabilities(flui::testing::harness::BuildCapabilities::AsyncDriverOnly),
     );
     assert!(view.initialized.get());
     assert!(view.captured.borrow().is_none());

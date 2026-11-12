@@ -119,7 +119,7 @@ entries and hero flights, and a test must say "created equals released". The tes
 plants a sentinel in each value it hands the framework, and the sentinel's `Drop` is what counts:
 
 ```rust
-// flui-testing; flui::testing::DropLedger
+// flui_testing::DropLedger
 #[derive(Clone, Default)]
 pub struct DropLedger { /* Arc<{ planted: AtomicUsize, dropped: AtomicUsize }> */ }
 impl DropLedger {

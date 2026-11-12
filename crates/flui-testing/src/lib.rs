@@ -125,6 +125,7 @@ pub mod backend_conformance;
 pub mod bootstrap;
 pub mod clipboard;
 pub mod drop_ledger;
+pub mod find;
 pub mod gesture_alternatives;
 pub mod host;
 pub mod motion;
@@ -136,6 +137,7 @@ pub mod primary_selection;
 pub mod recording;
 pub mod replay;
 pub mod storage;
+pub mod tester;
 pub mod text_store_host;
 pub mod text_store_kit;
 pub mod widgets;
@@ -152,6 +154,10 @@ pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
 pub use clipboard::ScriptedClipboard;
 pub use drop_ledger::{DropLedger, DropSentinel};
 pub use flui_platform::testing::{ScriptedHttp, ScriptedResponse};
+pub use flui_protocol::{
+    InspectField, InspectNode, InspectReading, InspectValue, Locator, LogicalRect, Match, Node,
+    Pick, Role, StateFilter, TextMatch, Tree,
+};
 pub use flui_runtime::presentation::{PointerResampling, PointerResamplingError};
 pub use gesture_alternatives::{
     AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
@@ -167,6 +173,7 @@ pub use replay::{
     MouseScript, PenScript, PinchPhase, PointerPhase, PointerScript, ScriptError, ScriptStep,
     ScriptedPointer, TouchScript, TrackpadScript, VirtualScript,
 };
+pub use tester::{Expectation, TestError, TestWindow, Tester};
 pub use text_store_host::{RecordingTextStoreHost, StoreHostCall};
 
 use std::collections::HashMap;

@@ -9,10 +9,15 @@ This page documents the test, lint, format, and benchmark commands enforced for 
 An application can use the framework's test support without depending on its
 implementation crates. Add `features = ["testing"]` to the `flui` entry in
 `[dev-dependencies]`, using the same source/version as the normal dependency.
-Use `flui::testing::widgets::{lay_out, loose}` for widget layout and input,
-`flui::testing::HeadlessBinding` for a virtual-clock frame driver, and
-`flui::testing::rendering::{RenderTester, BoxQueryRun}` for custom render objects.
-Accessibility and gesture replay live in `flui::testing::{a11y, replay}`.
+Write the test with `flui::testing::{Tester, find}`: `Tester::mount` mounts the view as
+`run_app` does, `find` builds the `Locator`s the driver and an agent use, actions go through the
+window's own input path, and `Tester::expect` waits while the application has a frame or work
+due ([cookbook](../book/src/cookbook/testing.md)). `flui::testing::rendering::{RenderTester,
+BoxQueryRun}` tests a render object of one's own. The framework's own harnesses
+(`flui_testing::widgets::lay_out`, `HeadlessHost`, `HeadlessBinding`, gesture replay and the
+accessibility reader) stay in `flui-testing`; the facade keeps the ones it exported before
+`Tester` under the deprecated `flui::testing::harness`
+([gaps](gaps.md#the-facades-old-test-harnesses)).
 
 The `testing` feature is off by default. Independent consumer tests check that
 ordinary dependency graphs do not include the headless test driver. The tier
@@ -898,62 +903,30 @@ whose composition decision a subscriber is, not at the DAG's bottom.
 
 ## Agent workflow
 
-`tests/agent_workflow.rs` is the acceptance test for the agent workflow:
-evidence that an agent (or a human, working the same way)
-can discover the public API, build a UI, inspect it two different ways,
-drive an interaction through it, and assert the result — using only
-`flui::…`, the same surface a consumer of the published crate has. It is
-`flui`'s own `tests/`, not `flui-widgets`' or `flui-testing`'s, for exactly
-that reason: those crates' own tests can see implementation details this one
-must not use.
+`tests/agent_workflow.rs` is the acceptance test for the agent workflow: evidence that an agent
+(or a human, working the same way) can discover the public API, build a UI, inspect it two ways,
+drive an interaction through it, and assert the result, using only `flui::…`, the surface a
+consumer of the published crate has. It is `flui`'s own `tests/`, not `flui-testing`'s, for that
+reason.
 
-The tree under test is a Material counter (`Center` → `Column` → prompt
-`Text` / count `Text` / `ElevatedButton`, a `Signal` created in
-`init_state`), the shape the CLI `counter` template
-(`crates/flui-cli/src/templates/counter.rs`) has with Material in place of
-its `RawButton`. Five steps, each backed by a documented, facade-reachable API:
+The tree is a Material counter (`Center` → `Column` → prompt `Text` / count `Text` /
+`ElevatedButton`, a `Signal` created in `create_state`), the CLI `counter` template's shape with
+Material in place of its `RawButton`.
 
 | Step | What it does | API |
 |------|--------------|-----|
-| 1. Mount | Bootstrap the tree headlessly | `flui::testing::HeadlessBinding::mount_root` |
-| 2. Inspect structure | Snapshot the render tree, check a known node is there | `flui::testing::rendering::render_snapshot` over `HeadlessBinding::pipeline_owner().with(...)`, read with `flui::foundation::inspect::SnapshotNode::{iter, find_by_kind, get}` |
-| 3. Inspect semantics | Find the button by its accessible label | `flui::testing::HeadlessBinding::{enable_semantics, a11y_tree}` + `flui::testing::a11y::A11yTree::find_by_label` |
-| 4. Drive | Tap the label's own bounds | `flui::testing::HeadlessBinding::replay` with `flui::testing::replay::PointerScript::tap` |
-| 5. Assert | Confirm the rendered count advanced | The render snapshot again, with each `RenderParagraph`'s typed `text` field read by `SnapshotNode::get::<&str>("text")` |
+| 1. Mount | Mount the tree as `run_app` does | `flui::testing::Tester::mount` |
+| 2. Inspect structure | Read the render tree, check a known node is there | `Tester::inspect_render`, the agent's `inspect.render` |
+| 3. Inspect semantics | Find the button by role and label | `Tester::read(&find::button("Increment"))` |
+| 4. Drive | Tap it through the window's input path, after the actionability checks | `Tester::tap` |
+| 5. Assert | The rendered count advanced | `Tester::expect(find::text("1")).to_exist()` and each `RenderParagraph`'s `text` field |
 
-Step 4 is deliberately **not** `flui_testing::widgets::lay_out`'s
-`dispatch_pointer_down`/`find_text` convenience: those are widget-internal
-shortcuts this package's own tests use freely, but an outside agent driving the framework through
-its documented surface has only `HeadlessBinding::replay` and a hit-test
-target it found itself — semantics bounds, here — to tap with. Steps 2 and 5
-reuse the same render snapshot for a structural check and a content check
-respectively; that reuse is deliberate, not laziness — the semantics tree
-carries a `Text`'s content as a label, but the snapshot's typed `text` field
-is the reading of what the `RenderParagraph` actually rendered,
-which is what step 5 is asserting.
-
-**A gap the first version of this test found, now closed:** the counter
-template's `ElevatedButton` (`flui-material`'s `ButtonStyleButtonCore`
-composition) attached no `SemanticsConfiguration` of its own, and neither
-did a bare `Text`, so step 3 found nothing unless the test wrapped the
-button in an explicit `flui::prelude::Semantics` — which meant the app `flui
-create` scaffolds was not screen-reader accessible out of the box.
-`RenderParagraph` now publishes its plain text as a semantics label with its
-text direction (an empty paragraph publishes nothing — a recorded mapping
-decision in `crates/flui-objects/ARCHITECTURE.md`), and `ButtonStyleButtonCore`
-wraps every button it composes in `Semantics(container, button, enabled)`.
-The test mounts that Material tree and queries `"Increment"` from the
-framework's own node; the template itself now uses `RawButton`, which
-publishes the same `Semantics(container, button, enabled)` node.
-
-The acceptance criterion's "actionable command failures" half is the error
-`A11yTree::find_by_label` already produces, needing no new helper: a label that
-is not in the tree yields `flui::testing::a11y::A11yQueryError::NotFound`, which
-names the search and lists the labels that *were* reachable. No test asserts it.
-
-Writing the test also found that the facade's `flui::testing::rendering`
-module did not re-export the render-tree reader; it now re-exports `render_snapshot`
-(`flui-rendering`'s typed snapshot of the render tree), and step 2 uses it.
+Steps 1 to 4 are the driver's own path: `Tester` asks the window's development agent
+(`semantics.locate`, `element.actionability`, `input.inject` through the input lease), so a
+scenario written against it runs unchanged where the driver supplies the target. The tree carries
+no explicit `Semantics` node: `RenderParagraph` publishes its text as a label and
+`ButtonStyleButtonCore` wraps every button it composes in `Semantics(container, button,
+enabled)` (`crates/flui-objects/ARCHITECTURE.md`, "Semantics mapping").
 
 ## Determinism
 

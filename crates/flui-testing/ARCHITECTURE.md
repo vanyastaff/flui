@@ -117,10 +117,19 @@ substrate driver over raw owners, which the raw-owner suites still use.
   `HeadlessHost::enter` are crate-private, and `LaidOut` and `Harness` hand
   out narrow accessors (the window's cursor, the accessibility action
   listener, the post-frame handle, the scheduler) rather than the UI runtime:
-  `flui-runtime` is not an embedder API, and `flui::testing` re-exports
-  `widgets`, so a public path to `UiRuntime` here would open the UI runtime's frame
-  entry points (ADR-0083 §2) to every application with the `testing`
-  feature.
+  `flui-runtime` is not an embedder API, and a public path to `UiRuntime` here
+  would open the UI runtime's frame entry points (ADR-0083 §2) to every crate
+  that tests with this one.
+- **An application's test goes through the agent.** `Tester` (`src/tester.rs`)
+  holds a `HeadlessHost`, its window's `AgentWindow` and one `InputLease`, and
+  nothing else: it finds with `semantics.locate`, checks with
+  `element.actionability` and delivers input with `input.inject`, so it
+  hit-tests and walks no tree itself and proves what the driver would. An
+  expectation pumps a frame only while `time_to_next_frame` is within one
+  frame; an idle application fails it at once, so a timer of the application
+  never elapses inside an expectation. `flui::testing` re-exports `Tester`,
+  `find`, the protocol's locator and node types and `rendering`, and none of
+  this crate's other harnesses.
 - **A headless root is the root a runner attaches.** `HeadlessHost::attach`
   and `attach_to` pass the view through `flui_widgets::app_root`, the one
   function `flui-app`'s runners call, before the UI runtime adds its scopes,

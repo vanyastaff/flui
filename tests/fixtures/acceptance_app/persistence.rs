@@ -8,7 +8,7 @@ use std::task::{Poll, Waker};
 
 use flui::platform::StorageError;
 use flui::platform::keyboard::NamedKey;
-use flui::testing::storage::MemoryStorage;
+use flui::testing::harness::storage::MemoryStorage;
 use flui::view::CloseReason;
 use flui::view::persist::Document;
 use serde_json::{Value, json};

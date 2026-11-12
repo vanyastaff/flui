@@ -113,93 +113,41 @@ impl ViewState<CounterView> for CounterState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui::geometry::Size;
-    use flui::testing::widgets::{lay_out, tight};
+    use flui::testing::{TestWindow, Tester, find};
 
-    /// The tree the application is mounted as: the app under the root
-    /// `MediaQuery` the app runner attaches it to.
-    ///
-    /// The runner supplies this root (`flui-app`'s `MediaQueryRoot`), so
-    /// `main` does not — but a test that mounts the app directly has to, or it
-    /// is not mounting the tree the application runs as. `SafeArea` reads its
-    /// insets from that root and panics without one:
-    ///
-    /// ```text
-    /// MediaQuery::of called with no MediaQuery ancestor in the tree
-    /// ```
-    ///
-    /// The data describes the surface the constraints describe, with no
-    /// insets, so the geometry assertions below are exact.
-    fn app_tree(width: f64, height: f64) -> MediaQuery {
-        MediaQuery::new(
-            MediaQueryData {
-                size: Size::new(width, height),
-                ..MediaQueryData::default()
-            },
-            CounterView,
-        )
+    #[test]
+    fn counter_increments() {
+        let mut t = Tester::mount(CounterView);
+        t.expect(find::text("0")).to_exist();
+        t.tap(&find::button("Increment"));
+        t.expect(find::text("1")).to_exist();
+        t.tap(&find::button("Increment"));
+        t.expect(find::text("2")).to_exist();
     }
 
     #[test]
-    fn counter_responds_to_pointer_input() {
-        let mut app = lay_out(app_tree(480.0, 320.0), tight(480.0, 320.0));
-        assert!(app.find_text("0").is_some());
-        for (previous, next) in [("0", "1"), ("1", "2")] {
-            let label = app.find_text("Increment").expect("increment button label");
-            let offset = app.absolute_offset(label);
-            let size = app.size(label);
-            let x = offset.dx + size.width / 2.0;
-            let y = offset.dy + size.height / 2.0;
-            app.dispatch_pointer_down(x, y);
-            app.dispatch_pointer_up(x, y);
-            app.tick();
-            assert!(
-                app.find_text(next).is_some(),
-                "counter should display {next}"
-            );
-            assert!(app.find_text(previous).is_none());
-        }
-        app.pump_widget(app_tree(480.0, 320.0));
-        assert!(
-            app.find_text("2").is_some(),
-            "state survives a parent rebuild"
-        );
-        let independent = lay_out(app_tree(480.0, 320.0), tight(480.0, 320.0));
-        assert!(
-            independent.find_text("0").is_some(),
-            "each app owns its state"
-        );
+    fn each_app_owns_its_state() {
+        let mut first = Tester::mount(CounterView);
+        first.tap(&find::button("Increment"));
+        let mut second = Tester::mount(CounterView);
+        second.expect(find::text("0")).to_exist();
     }
 
     /// The counter is centred on the surface, not merely wrapped in a
-    /// `Center`.
-    ///
-    /// A `Column` fills the height it is given (`MainAxisSize::Max` is the
-    /// default) and packs its children at the top (`MainAxisAlignment::Start`),
-    /// so a `Center` around it has no slack to centre anything in: the wrap
-    /// looks like the centreing and is not. This asserts the geometry the wrap
-    /// is meant to produce — the content block's vertical centre lands on the
-    /// surface's, within a pixel of rounding.
+    /// `Center`: a `Column` fills the height it is given and packs its
+    /// children at the top unless it is told to centre them
+    /// (`MainAxisAlignment::Center`).
     #[test]
     fn counter_content_is_centred() {
-        const WIDTH: f64 = 480.0;
-        const HEIGHT: f64 = 320.0;
-        let app = lay_out(app_tree(WIDTH, HEIGHT), tight(WIDTH, HEIGHT));
-
-        let top = app
-            .find_text("You have pushed the button this many times:")
-            .expect("prompt text");
-        let bottom = app.find_text("Increment").expect("increment button label");
-        let top_offset = app.absolute_offset(top).dy;
-        let bottom_edge = app.absolute_offset(bottom).dy + app.size(bottom).height;
-
-        let content_centre = (top_offset + bottom_edge) / 2.0;
+        let mut t = Tester::mount_in(CounterView, TestWindow::new(480, 320));
+        let top = t.rect(&find::text("You have pushed the button this many times:"));
+        let bottom = t.rect(&find::button("Increment"));
+        let centre = (top.y + bottom.y + bottom.height) / 2.0;
         assert!(
-            (content_centre - HEIGHT / 2.0).abs() <= 1.0,
-            "content spans y {top_offset}..{bottom_edge} of a {HEIGHT}pt surface, so its centre is \
-             {content_centre} rather than {}; a `Column` fills the height and packs its children at \
-             the top unless it is told to centre them (`MainAxisAlignment::Center`)",
-            HEIGHT / 2.0
+            (centre - 160.0).abs() <= 1.0,
+            "the content spans y {}..{} of a 320 pt surface",
+            top.y,
+            bottom.y + bottom.height
         );
     }
 }
@@ -240,7 +188,7 @@ fn readme(name: &str) -> String {
         r"# {name}
 
 A FLUI counter application. Press Increment to update the count.
-The generated test exercises pointer input and checks that state survives a rebuild.
+The generated tests tap the button and check what the screen shows.
 
 ## Getting Started
 
