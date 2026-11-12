@@ -129,7 +129,7 @@ enum Command {
     /// Check that every `unsafe impl Send`/`Sync` is listed and the list only shrinks (ADR-0136).
     SendImpls(send_impls::SendImplsArgs),
     /// Check that every place the public API names `Send` or `Sync` is listed under
-    /// ADR-0136 §3.
+    /// ADR-0323 §3.
     SendPositions(send_positions::SendPositionsArgs),
     /// Check the facade's public API against its committed snapshot `api/flui.txt` (ADR-0324).
     PublicApi(public_api::PublicApiArgs),

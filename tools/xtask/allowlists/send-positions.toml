@@ -1,5 +1,5 @@
 # Every place the public API of `flui` and `flui-sdk` names `Send` or `Sync`
-# (ADR-0089 §6, ADR-0136 §3), written by `cargo xtask send-positions --seed`. The gate
+# (ADR-0089 §6, ADR-0323 §3), written by `cargo xtask send-positions --seed`. The gate
 # fails on a position it does not cover and on an entry that allows more than the code
 # has. A position is added only for a value that really crosses a thread, by the change
 # that writes it, with its kind in `crosses`; every other entry only goes.
