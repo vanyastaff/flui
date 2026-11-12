@@ -1216,7 +1216,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             });
         }
         measure_placement_globally(owner.displays.as_ref(), &mut options);
-        // The loop is shared across threads (`host::Loop: Send + Sync`), so
+        // The loop still crosses threads until its owner-local step (ADR-0327 §5), so
         // only asking AppKit proves this is the main thread the window's
         // calls need; a release build keeps the check the assertion above
         // compiles out.

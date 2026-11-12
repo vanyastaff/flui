@@ -24,7 +24,7 @@ fn slider(range: NumericRange, log: &Proposals) -> Slider {
     let log = Rc::clone(log);
     Slider::new(range)
         .label("Volume")
-        .on_changed(move |_cx, value| log.borrow_mut().push(value))
+        .on_changed(move |_ctx, value| log.borrow_mut().push(value))
 }
 fn standard(log: &Proposals) -> Slider {
     slider(range(25.0, 0.0, 100.0, 10.0), log)
@@ -92,8 +92,8 @@ fn key(laid: &LaidOut, named: NamedKey) -> bool {
     laid.focus_manager()
         .dispatch_key_event(
             &KeyEventBuilder::new(Code::Unidentified)
-                .with_state(KeyState::Down)
-                .with_key(Key::Named(named))
+                .state(KeyState::Down)
+                .key(Key::Named(named))
                 .build(),
         )
         .is_handled()
@@ -322,9 +322,9 @@ pub(crate) fn slider_focus_keys_and_semantic_actions_share_controlled_proposals(
             laid.focus_manager()
                 .dispatch_key_event(
                     &KeyEventBuilder::new(Code::Unidentified)
-                        .with_state(KeyState::Down)
-                        .with_key(Key::character("+"))
-                        .with_modifiers(modifiers)
+                        .state(KeyState::Down)
+                        .key(Key::character("+"))
+                        .modifiers(modifiers)
                         .build()
                 )
                 .is_handled()
@@ -336,9 +336,9 @@ pub(crate) fn slider_focus_keys_and_semantic_actions_share_controlled_proposals(
             .focus_manager()
             .dispatch_key_event(
                 &KeyEventBuilder::new(Code::Unidentified)
-                    .with_state(KeyState::Down)
-                    .with_key(Key::Named(NamedKey::ArrowRight))
-                    .with_modifiers(flui_interaction::events::Modifiers::SHIFT)
+                    .state(KeyState::Down)
+                    .key(Key::Named(NamedKey::ArrowRight))
+                    .modifiers(flui_interaction::events::Modifiers::SHIFT)
                     .build()
             )
             .is_handled()

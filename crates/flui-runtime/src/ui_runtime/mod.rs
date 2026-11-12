@@ -302,7 +302,7 @@ pub struct UiRuntime {
     /// via [`Self::scheduler`].
     scheduler: UpdateScheduler,
     /// The embedder's typed frame-failure callback, if one was registered
-    /// (`AppConfig::with_frame_failure_handler`, wired by each backend's
+    /// (`AppConfig::frame_failure_handler`, wired by each backend's
     /// bootstrap via [`Self::set_frame_failure_handler`]). Runtime-scoped,
     /// never process-global; cloned out of the cell before every delivery
     /// so the callback runs with no UI runtime borrow held.

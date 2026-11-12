@@ -154,7 +154,8 @@ impl PipelineOwner<Semantics> {
                 // Stage every anchor and all authored key scopes before reserving
                 // identities or touching the current arena. A failed later anchor
                 // cannot partially commit an earlier subtree.
-                let mut regions = AssemblyRegions::default();
+                let mut regions =
+                    AssemblyRegions::reusing(std::mem::take(&mut self.semantics_regions.visited));
                 let grafts = (!tree_is_empty)
                     .then(|| {
                         plan_graft_pass(
@@ -221,6 +222,7 @@ impl PipelineOwner<Semantics> {
                 self.semantics_diagnostics.extend(diagnostics);
                 self.counters.semantics_nodes_updated += published as u64;
                 callbacks = std::mem::take(&mut regions.callbacks);
+                self.semantics_regions.visited = std::mem::take(&mut regions.visited);
             } else if pending_count > 0 {
                 // With no owner installed the pass returns early. Keep the
                 // warning so enabled-without-owner wiring
@@ -310,15 +312,31 @@ pub(super) struct RegionIdentities {
     text_runs: FxHashMap<TextRunKey, flui_semantics::SemanticsRegionId>,
     /// The identity space ran out before a field's runs were given theirs.
     text_runs_exhausted: bool,
+    /// The render nodes the last assembly walk visited, kept between passes
+    /// so a pass reuses the table instead of growing a new one.
+    visited: FxHashSet<RenderId>,
 }
 
 #[derive(Default)]
 struct AssemblyRegions {
+    /// The render nodes this pass walked, in the table the previous pass grew:
+    /// emptying it writes its control bytes, which costs less than regrowing.
     visited: FxHashSet<RenderId>,
     authored: FxHashSet<RegionSource>,
     duplicate: Option<RegionSource>,
     invalid_sort_key: Option<RenderId>,
     callbacks: AssemblyCallbacks,
+}
+
+impl AssemblyRegions {
+    /// Regions for a pass that walks into the table of `visited`, emptied.
+    fn reusing(mut visited: FxHashSet<RenderId>) -> Self {
+        visited.clear();
+        Self {
+            visited,
+            ..Self::default()
+        }
+    }
 }
 
 /// Pins executable ownership before folding can replace a receiver's handler
@@ -1178,7 +1196,9 @@ fn build_semantics_fragments_impl(
     }
     debug_assert_hosted_runs(authored_runs, &authored);
 
-    let mut child_fragments = Vec::with_capacity(node.children().len());
+    // Most nodes of a large subtree contribute no fragment (a decoration, a
+    // layout box): the list allocates on its first fragment, not per node.
+    let mut child_fragments: Vec<SemanticsFragment> = Vec::new();
     let mut children_block_previous = append_region_fragments(
         &mut child_fragments,
         authored.before_children,
@@ -1236,7 +1256,17 @@ fn build_semantics_fragments_impl(
                 child_fragments.clear();
                 children_block_previous = true;
             }
-            child_fragments.extend(fragments.nodes);
+            if child_fragments.is_empty() {
+                // The first child that contributes hands its list over whole.
+                child_fragments = fragments.nodes;
+            } else {
+                // Room for these and one fragment per child still to come, as
+                // a list sized for every child up front would have; a child with
+                // several fragments grows it by doubling.
+                let still_to_come = node.children().len() - child_slot - 1;
+                child_fragments.reserve(fragments.nodes.len() + still_to_come);
+                child_fragments.extend(fragments.nodes);
+            }
         }
     }
     children_block_previous |= append_region_fragments(

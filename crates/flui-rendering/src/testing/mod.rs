@@ -54,7 +54,7 @@
 //!     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> flui_rendering::RenderResult<Size> {
 //!         Ok(Size::new(40.0, 40.0))
 //!     }
-//!     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+//!     fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
 //! }
 //!
 //! let run = RenderTester::mount(box_node(FixedBox).label("root"))

@@ -249,7 +249,7 @@ impl ViewState<ShelfList> for ShelfListState {
                     return SizedBox::new(width, height).child(text).into_view().boxed();
                 }
                 let record = Rc::clone(&selecting);
-                let area = SelectionArea::new(text).on_selection_changed(move |_cx, change| {
+                let area = SelectionArea::new(text).on_selection_changed(move |_ctx, change| {
                     record.selected.borrow_mut().push(
                         change
                             .selected
@@ -259,20 +259,20 @@ impl ViewState<ShelfList> for ShelfListState {
                 });
                 SizedBox::new(width, height).child(area).into_view().boxed()
             },
-            move |cx, change| {
+            move |ctx, change| {
                 moved
                     .moves
                     .borrow_mut()
                     .push((change.from, change.to, change.cause));
                 model
-                    .update_in(cx, |items| {
+                    .update_in(ctx, |items| {
                         let item = items.remove(change.from);
                         items.insert(change.to, item);
                     })
                     .expect("the shelf's signal is alive while its list is mounted");
             },
         )
-        .on_reorder_preview(move |_cx, preview| previewed.previews.borrow_mut().push(preview))
+        .on_reorder_preview(move |_ctx, preview| previewed.previews.borrow_mut().push(preview))
         .item_extent_estimate(ROW)
         .scroll_direction(if horizontal {
             Axis::Horizontal
@@ -835,7 +835,7 @@ pub(crate) fn moving_a_row_to_the_end_of_a_long_list_keeps_its_focus() {
 fn middle_row_alternatives() -> GestureAlternatives {
     let menu = MenuSpec::new(
         GestureCommand::new("Move to the start", ReorderIntent::Start),
-        |_cx, _request| {},
+        |_ctx, _request| {},
     )
     .item(GestureCommand::new("Move up", ReorderIntent::Up))
     .item(GestureCommand::new("Move down", ReorderIntent::Down))

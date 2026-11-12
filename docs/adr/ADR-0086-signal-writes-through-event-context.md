@@ -1,9 +1,9 @@
-# ADR-0086: Signal writes go through `EventCx` opened by a `WriterSource`
+# ADR-0086: Signal writes go through `EventContext` opened by a `WriterSource`
 
 - **Status:** Accepted (2026-10-30)
 - **Date:** 2026-09-25
 - **Amended:** 2026-10-30 — §5: listener, animation-status and post-frame callbacks lost `Send`
-  without gaining `cx`; they write through a captured `WriterSource`.
+  without gaining `ctx`; they write through a captured `WriterSource`.
 - **Superseded-by:** [ADR-0161](ADR-0161-immutable-owner-local-gesture-recognizers.md),
   only §4's gesture extension signature compatibility promise; the signal write
   boundary and widget-side `WriterSource` wrapping remain in force
@@ -18,7 +18,7 @@
   UI runtime's `WriterSource`); [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1 (one new
   `LifecycleContext` capability, `writer_source`)
 - **Amends:** [ADR-0023](ADR-0023-actions-shortcuts-seam.md) §2 and §3 (`CallbackShortcuts`
-  callbacks and `Action::invoke` receive the key event's `EventCx`; `Actions::maybe_invoke` is
+  callbacks and `Action::invoke` receive the key event's `EventContext`; `Actions::maybe_invoke` is
   removed)
 - **Related:** [ADR-0018](ADR-0018-async-builder-seam.md) (`RebuildHandle` stays a run-time
   capability), [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §2 and §9 (UI callbacks are meant to
@@ -32,7 +32,7 @@
   and its probes in
   [`decisions/q7_callback_writer.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/decisions/q7_callback_writer.md)
 
-**Owner decision (2026-09-25).** The owner chose the typed form: `&mut EventCx<'_>` on framework
+**Owner decision (2026-09-25).** The owner chose the typed form: `&mut EventContext<'_>` on framework
 event callbacks through `WriterSource`, with the pilot and the rollback trigger of §8 as written.
 This settles the shape question for the pilot; the record stays Proposed until the pilot ships
 and the owner accepts it.
@@ -109,7 +109,7 @@ Element-local state is a `Signal<T>`, created in `create_state` through `ctx.sig
 
 The probes in `decisions/q7_callback_writer.md` established that a write parameter on event
 callbacks turns a write in `build` into a compile error (E0061, "provide the argument"); that a
-`let`-bound closure passed where a higher-ranked `Fn(&mut EventCx<'_>)` is expected fails with
+`let`-bound closure passed where a higher-ranked `Fn(&mut EventContext<'_>)` is expected fails with
 "implementation of `Fn` is not general enough" unless a helper fixes the signature; and that a
 widget which holds a writer and calls a user callback synchronously inside its own `build` still
 compiles, so the run-time guard cannot be removed under any shape
@@ -117,9 +117,9 @@ compiles, so the run-time guard cannot be removed under any shape
 
 ## Decision
 
-### 1. `EventCx` on framework event callbacks
+### 1. `EventContext` on framework event callbacks
 
-Every framework-dispatched event callback in the table below receives `&mut EventCx<'_>`:
+Every framework-dispatched event callback in the table below receives `&mut EventContext<'_>`:
 
 - borrowed, created for one dispatch, dropped when the callback returns;
 - `Deref<Target = Writer>` and `DerefMut`;
@@ -141,17 +141,17 @@ authoritative for the paths the type cannot see: a callback a widget invokes syn
 its own `build`, and writes from a derived computation (`WrittenDuringCompute`, ADR-0075).
 
 *Amended 2026-09-26:* the writes take `&W` where `W: WriteTarget`, a sealed trait implemented by
-`EventCx<'_>`, `Writer` and, until step 3 of §8, `Reactive` —
+`EventContext<'_>`, `Writer` and, until step 3 of §8, `Reactive` —
 `fn set<W: WriteTarget + ?Sized>(self, w: &W, value: T)`. A shared reference loses nothing: a
-`Writer` still cannot escape its dispatch, because the `EventCx` lifetime bounds it, it is not
-`Clone`, and it has no public constructor (the E0521 doctest on `WriterSource`). It keeps `cx`
-reusable across several writes without explicit reborrows (`&mut EventCx` coerces to `&W`), and
+`Writer` still cannot escape its dispatch, because the `EventContext` lifetime bounds it, it is not
+`Clone`, and it has no public constructor (the E0521 doctest on `WriterSource`). It keeps `ctx`
+reusable across several writes without explicit reborrows (`&mut EventContext` coerces to `&W`), and
 it lets the unconverted `&Reactive` callers compile unchanged during the pilot.
 
-### 3. `WriterSource` is the one way to open an `EventCx`
+### 3. `WriterSource` is the one way to open an `EventContext`
 
 `LifecycleContext::writer_source()` returns a `WriterSource`: owned, `'static`, `!Send`, bound to
-the UI runtime of the element that acquired it. `source.write(|cx| ..)` opens an `EventCx` for the
+the UI runtime of the element that acquired it. `source.write(|ctx| ..)` opens an `EventContext` for the
 duration of the closure. It is the single mechanism used by
 
 - catalog widgets, to wrap recognizer callbacks (§4);
@@ -189,7 +189,7 @@ action table behind `SemanticsConfiguration` — is registered in the UI runtime
 as an untyped payload (`RenderObjectContext::register_local_payload`). The render data carries
 only the lane's `Copy`, `Send + Sync` `LocalPayloadTarget` ticket, and the dispatcher resolves
 it on the owner thread with `flui_interaction::resolve_local_payload`, inside the UI runtime's
-entry. The payload holds the `WriterSource` its callbacks open their `EventCx` from; the ticket
+entry. The payload holds the `WriterSource` its callbacks open their `EventContext` from; the ticket
 holds neither a closure nor a graph. A semantics action is advertised through one
 `Send + Sync` handler per node that holds the ticket, kept across rebuilds so the
 configuration compares equal; invoked outside any UI runtime, it is dropped with a warning.
@@ -204,28 +204,28 @@ owner-local API recorded there.
 
 The write boundary is unchanged. A widget captures its `WriterSource` in the
 recognizer closure (legal: callback ownership is `Rc`) and calls
-`source.write(|cx| user_callback(cx, details))`. `flui-interaction` does not
-depend on the reactive graph; gesture callbacks do not receive an `EventCx`.
+`source.write(|ctx| user_callback(ctx, details))`. `flui-interaction` does not
+depend on the reactive graph; gesture callbacks do not receive an `EventContext`.
 
 ### 5. Listener, animation-status and post-frame callbacks
 
 *Amended 2026-10-30.* These callbacks lost their `Send` bound
-([ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) §1) but receive no `cx`:
+([ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) §1) but receive no `ctx`:
 `Listenable` lives in `flui-foundation`, below the signal graph. A write from one goes through
 a `WriterSource` captured in `create_state`, `init_state`, `did_change_dependencies` or a `RenderObjectContext`.
-Opening an `EventCx` inside another is allowed and is not transactional: each write applies at
+Opening an `EventContext` inside another is allowed and is not transactional: each write applies at
 once, in call order, and writes made before a panic stay applied. A controller mutated during
 `build` refuses the mutation. A listener's panic is held until the notification round ends and
 then reaches the UI runtime's frame-failure report
 ([ADR-0178](ADR-0178-notification-first-failure-custody.md)). Platform hooks write only through
 `SignalSender`.
 
-The text replaced: these callbacks were to receive `cx` in the change that removed their `Send`
+The text replaced: these callbacks were to receive `ctx` in the change that removed their `Send`
 bound, writing through `SignalSender` and `UiCommand::SignalWrite` until then.
 
 ### 6. Query callbacks get no writer
 
-A callback that returns a decision taken during routing or hit-testing gets no `cx`. The
+A callback that returns a decision taken during routing or hit-testing gets no `ctx`. The
 classification, with the command above as its census:
 
 | Crate / file | Setters | Class | `Send + Sync` today | Dispatch site |
@@ -236,8 +236,8 @@ classification, with the command above as its census:
 | widgets `interaction/drag_target.rs` | `on_accept`, `on_leave`, `on_move` | event | no (was yes) | the drag session, synchronously inside pointer dispatch, through the target's `WriterSource`; `on_accept` before the draggable's `on_drag_end` |
 | widgets `interaction/drag_target.rs` | `on_will_accept` (`-> bool`) | **query** | no (was yes) | — |
 | widgets `interaction/focus.rs` | `on_focus_change`, `on_key_event` (`-> KeyEventResult`) | event | no | not yet audited |
-| widgets `interaction/gesture_detector.rs` | 13: `on_tap`, `on_secondary_tap`, `on_long_press`, `on_double_tap`, `on_double_tap_down`, `on_multi_tap`, and the `on_*` callbacks of `DragSlot` (`down`, `start`, `update`, `end`, `cancel`), `TransformSlot` and `ForcePressSlot` | event | no | recognizer (§4); `on_tap` and `on_long_press` also from an assistive-technology request, inside that request's `EventCx` in the semantics-action drain |
-| widgets `interaction/raw_button.rs` | `on_press` | event | no | `GestureDetector::on_tap` through the button's `WriterSource` (takes `cx` already) |
+| widgets `interaction/gesture_detector.rs` | 13: `on_tap`, `on_secondary_tap`, `on_long_press`, `on_double_tap`, `on_double_tap_down`, `on_multi_tap`, and the `on_*` callbacks of `DragSlot` (`down`, `start`, `update`, `end`, `cancel`), `TransformSlot` and `ForcePressSlot` | event | no | recognizer (§4); `on_tap` and `on_long_press` also from an assistive-technology request, inside that request's `EventContext` in the semantics-action drain |
+| widgets `interaction/raw_button.rs` | `on_press` | event | no | `GestureDetector::on_tap` through the button's `WriterSource` (takes `ctx` already) |
 | widgets `scroll/interactive_viewer.rs` | `on_interaction_{start,update,end}` | event | no | not yet audited |
 | widgets `interaction/listener.rs` | `on_pointer_{down,up,move,hover,cancel,signal}`, `on_pointer_pan_zoom_update` | event | no | pointer dispatch |
 | widgets `interaction/listener.rs` | `on_scroll_claim`, `on_pointer_pan_zoom_claim` (`-> EventPropagation`) | **query** | no | — |
@@ -258,14 +258,14 @@ classification, with the command above as its census:
 
 `CallbackShortcuts::binding` and `CallbackAction::new` are not `on_*` setters, so the census
 does not count them, but they are event callbacks run from `Focus::on_key_event`, and they and
-`Action::invoke` receive the key event's `cx`. `Action::is_enabled` and
+`Action::invoke` receive the key event's `ctx`. `Action::is_enabled` and
 `Action::to_key_event_result` are queries and get none.
 
 Totals: 101 event, 5 query, 106 in all. (The grep prints 108: besides `on_drag_start`, it
 counts `TextFormFieldInput::on_changed` in `form/text_form_field_core.rs`, a method that returns
 the field's handler rather than a setter.) `on_key_event` is the one event callback that returns a
 value: it runs at key dispatch after routing, and keyboard shortcuts are a primary write path, so
-it receives `cx` and keeps its `KeyEventResult`. The "dispatch site" column must be complete —
+it receives `ctx` and keeps its `KeyEventResult`. The "dispatch site" column must be complete —
 every row audited for a call from `build`, a listener or a post-frame callback — before any
 setter signature changes.
 
@@ -273,8 +273,8 @@ The form's callbacks are the one family dispatched from methods the application 
 than from the framework: `on_saved` runs inside `FormHandle::save`, `on_reset` inside
 `FormHandle::reset` and `FormFieldHandle::reset`, and `Form::on_changed` inside those and
 `FormFieldHandle::did_change`. In step 4 of §8 those handle methods take the caller's
-`&mut EventCx<'_>` and pass it to the callbacks they run — `FormHandle::save(&self, cx: &mut
-EventCx<'_>)` — and a text form field's input forwards the `cx` its own `on_changed` receives into
+`&mut EventContext<'_>` and pass it to the callbacks they run — `FormHandle::save(&self, ctx: &mut
+EventContext<'_>)` — and a text form field's input forwards the `ctx` its own `on_changed` receives into
 `did_change`; `flui migrate` rewrites the handle calls with the setters. The three `validator`
 setters (`FormField`, `RawTextFormField`, the Material `TextFormField`; not `on_*`, so outside
 the count) return a decision and are queries: they get no writer.
@@ -297,7 +297,7 @@ the signatures and production dispatch sites decide the event/query classificati
 | InteractiveViewer, RefreshIndicator, PopScope | Gesture/scroll/pop dispatch; query signatures stay unchanged, and owner-local bridges supply the writer where the lower-level protocol has no context. |
 | Draggable | The owner-local drag session opens each callback's write through the draggable's `WriterSource`. The config is `Rc<RefCell<_>>`, never borrowed across user code. An unmount cancels from `dispose` in `finalize_tree`, where the writes land; the feedback layer is removed before that cancel runs user code. |
 | PageView | The `Send + Sync` controller listener only records the page and schedules a rebuild; `build` hands each recorded page to the local post-frame lane, one entry per page, and delivery reads the current callback. No lane: dropped with a warning, never run inside `build`. |
-| Actions and CallbackShortcuts | `Focus::on_key_event` hands its `cx` to `CallbackShortcuts` callbacks and to `Action::invoke`. `Actions::maybe_invoke` is removed: its only possible caller was `build`. InkWell's keyboard activation drops its writer bridge. |
+| Actions and CallbackShortcuts | `Focus::on_key_event` hands its `ctx` to `CallbackShortcuts` callbacks and to `Action::invoke`. `Actions::maybe_invoke` is removed: its only possible caller was `build`. InkWell's keyboard activation drops its writer bridge. |
 | DragTarget | The slot (entered drags, callbacks, rebuild handle, writer) is an owner-local `Rc` registered in the interaction lane; hit-test metadata carries only its `LocalPayloadTarget`, which the drag session resolves inside pointer dispatch. `on_accept` runs inside `finish_drag`, before the draggable's `on_drag_end`. `on_will_accept` stays a query and loses `Send + Sync`. |
 | Semantics | Each node's action table and writer are one lane payload; the configuration advertises every action through one `Send + Sync` handler holding the ticket, reused across rebuilds so the configuration compares equal. The handler runs in the UI runtime's semantics-action drain; invoked outside a UI runtime, the action is dropped with a warning. A detached mount advertises none. `GestureDetector` runs `on_tap`/`on_long_press` from these handlers, in the drain. |
 
@@ -305,7 +305,7 @@ Callback ownership moved before any `Send` bound was removed: both render object
 `Send + Sync` and carry only tickets. What remains outside this record: `LocalHistoryEntry` is
 an unmounted navigation primitive whose removal also runs through navigator flush, so its
 originating-context contract is settled with that dispatch path; the `TabController` and
-`CupertinoTabController` listeners notify from a method the application calls, so their `cx`
+`CupertinoTabController` listeners notify from a method the application calls, so their `ctx`
 arrives with the listener family (§5) as a caller-supplied context, as the form handles do;
 `UiCommand::SignalWrite` still opens its write on `&Reactive` (§3, ADR-0074 §5.8); the
 `&Reactive` target and both `reactive()` accessors go in §8 step 3. These boundaries follow §5 rather than weakening types or
@@ -327,8 +327,8 @@ transactional rollback if a callback panics or detaches later fields. Silently
 opening the target's writer for a foreign caller is rejected: cross-presentation
 commands need an explicit target and delivery contract.
 
-`EventCx` and its borrowed `Writer` implement the read-only `ReadGraph` face:
-`signal.peek(cx, ...)` sees current state without subscribing or invalidating
+`EventContext` and its borrowed `Writer` implement the read-only `ReadGraph` face:
+`signal.peek(ctx, ...)` sees current state without subscribing or invalidating
 an element. The context is a graph capability, not a physical event identifier,
 propagation state or async lifetime. Independently opened writer bridges must
 not be treated as one transaction merely because they share a graph.
@@ -349,12 +349,12 @@ The changes land one at a time, each with the pre-PR checks (AGENTS.md, "Checkin
 
 1. ADR-0085 §1 (UI runtime routing of `UiCommand::SignalWrite`), with its failing multi-presentation
    test. It does not depend on anything else here.
-2. `EventCx`, `Writer`, `WriterSource`, and a `callback(|cx| ..)` helper that fixes the
+2. `EventContext`, `Writer`, `WriterSource`, and a `callback(|ctx| ..)` helper that fixes the
    higher-ranked signature, named in the widget-author documentation.
 3. The `Signal` write signatures, and removal of both `reactive()` accessors.
 4. The setter signatures, migrated crate by crate by `flui migrate`, starting with a pilot. The
    pilot surface is one new catalog widget, `flui_widgets::RawButton` (its `on_press` takes
-   `Fn(&mut EventCx<'_>)` and wraps an unchanged `GestureDetector::on_tap` through a
+   `Fn(&mut EventContext<'_>)` and wraps an unchanged `GestureDetector::on_tap` through a
    `WriterSource`), and the application code that uses it: the `counter` and `todo` examples
    (`examples/counter.rs`, [`examples/todo.rs`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/todo.rs)) and the `flui create` counter template
    (`crates/flui-cli/src/templates/counter.rs`). Those examples previously used only Material
@@ -377,18 +377,18 @@ amending this record.
 
 - *Converted sites* are five: the counter example's Increment, the todo example's Toggle,
   Delete and Add, and the template's Increment. A site's guard-only counterfactual is the same
-  code with `|cx|` replaced by `||` and each `cx, ` argument removed.
+  code with `|ctx|` replaced by `||` and each `ctx, ` argument removed.
 - *Excess* at a site is anything else that differs from its counterfactual: `let _`, `.ok()`,
   clones, type annotations, extra lines.
 - The trigger **fires** if any converted site needs a closure parameter annotation that
-  `callback` does not remove, or if any converted site carries excess beyond passing `cx` into a
+  `callback` does not remove, or if any converted site carries excess beyond passing `ctx` into a
   helper's parameter (the probe's pattern).
 - Reported but outside the trigger: the excess at the one transitional site (the todo field's
   Enter handler, which stays on an unconverted `Fn(&str)` setter and opens its write through a
   held `WriterSource`); the diff from moving state to `Signal` (the cost of ADR-0074 and
   ADR-0085, not of this record); collateral edits to non-pilot code, expected to be none.
 - Measured with `git diff --numstat` against the base in five groups (application code, the
-  catalog widget, the core crates, tests, docs); `git grep -nE '\|[a-z_]+: *&mut EventCx' --
+  catalog widget, the core crates, tests, docs); `git grep -nE '\|[a-z_]+: *&mut EventContext' --
   examples crates/flui-cli/src/templates` (annotations, expected empty); `git grep -c
   'callback(' -- examples` (helper uses); and, for each compile-fail snapshot, the error code,
   its first line, whether the primary label points at the offending token, and whether a note
@@ -399,18 +399,18 @@ amending this record.
 Measured on 2026-09-26 against base `e91ec071d`, on rustc 1.98.1, with the definitions of §8
 fixed before the code.
 
-**Converted sites.** All five match their guard-only counterfactual except for `cx`:
+**Converted sites.** All five match their guard-only counterfactual except for `ctx`:
 
 | Site | Code | Excess |
 |---|---|---|
-| counter, Increment | `.on_press(move \|cx\| count.update(cx, \|n\| *n += 1))` | none |
-| todo, Toggle | `.on_press(move \|cx\| { items.update(cx, \|list\| { .. }) })` | none |
-| todo, Delete | `.on_press(move \|cx\| { items.update(cx, \|list\| list.retain(..)) })` | none |
-| todo, Add | `.on_press(move \|cx\| { add_item(cx, items, &button_field, &button_field.text()) })` | `cx` passed to the helper's parameter (the probe's pattern) |
+| counter, Increment | `.on_press(move \|ctx\| count.update(ctx, \|n\| *n += 1))` | none |
+| todo, Toggle | `.on_press(move \|ctx\| { items.update(ctx, \|list\| { .. }) })` | none |
+| todo, Delete | `.on_press(move \|ctx\| { items.update(ctx, \|list\| list.retain(..)) })` | none |
+| todo, Add | `.on_press(move \|ctx\| { add_item(ctx, items, &button_field, &button_field.text()) })` | `ctx` passed to the helper's parameter (the probe's pattern) |
 | template, Increment | as the counter | none |
 
 The press callbacks return the write's `Result` (`EventOutcome`), so no site needs `let _` or
-`.ok()`; `Signal` is `Copy`, so none needs a clone. `git grep -nE '\|[a-z_]+: *&mut EventCx' --
+`.ok()`; `Signal` is `Copy`, so none needs a clone. `git grep -nE '\|[a-z_]+: *&mut EventContext' --
 examples crates/flui-cli/src/templates` finds nothing (no annotation), and `git grep -c
 'callback(' -- examples` finds nothing (no site needed the helper).
 
@@ -420,10 +420,10 @@ examples crates/flui-cli/src/templates` finds nothing (no annotation), and `git 
   `RawTextField::on_submitted(Fn(&str))`: 11 lines of excess — a `writer: Option<WriterSource>`
   field, its `None` in `create_state`, `self.writer = Some(ctx.writer_source())` in
   `init_state`, a four-line `let writer = ..expect(..)` in `build`, the call growing from one
-  line to five (`writer.write(|cx| add_item(cx, ..)).report();` in a block, as rustfmt lays it
+  line to five (`writer.write(|ctx| add_item(ctx, ..)).report();` in a block, as rustfmt lays it
   out), and `EventOutcome` added to an existing `use`. `.report()` logs a refused write, as
   `RawButton` does with a press's `Result`. It disappears when the setter
-  itself takes `cx`.
+  itself takes `ctx`.
 - *Moving state to `Signal`*: `ctx.signal(0)` in `create_state`.
 - *Collateral outside the pilot*: none in code. One layout defect surfaced and was fixed in the
   pilot file itself: the todo `ListView` sat in a bare `Column`, got unbounded height, and its
@@ -439,40 +439,40 @@ application code (both examples and the template) +84/−84; the catalog widget
 
 | Case | Code and first line | Primary label on the offending token | Fix named |
 |---|---|---|---|
-| `s.set(ctx, 1)` with `ctx: &dyn BuildContext` | E0277 "`dyn BuildContext` cannot write a signal" | yes, `ctx`: "not a write context" | yes, two notes (take the callback's `cx`; acquire a `WriterSource` in `init_state`). The implementor list also shows `Reactive`, which points at `ctx.reactive()` until step 3 of §8 |
+| `s.set(ctx, 1)` with `ctx: &dyn BuildContext` | E0277 "`dyn BuildContext` cannot write a signal" | yes, `ctx`: "not a write context" | yes, two notes (take the callback's `ctx`; acquire a `WriterSource` in `init_state`). The implementor list also shows `Reactive`, which points at `ctx.reactive()` until step 3 of §8 |
 | `s.set(1)` | E0061 "this method takes 2 arguments but 1 argument was supplied" | yes, `set`: "argument #1 of type `&_` is missing" | generically: `count.set(/* w */, 1)` |
 | `callback(move \|\| ..)` | E0593 "closure is expected to take 1 argument, but it takes 0 arguments" | on the call; the closure is labelled "takes 0 arguments" | yes: `move \|_\|` |
-| a `let`-bound `move \|cx\| count.set(cx, 1)` passed to `write` | E0631 "type mismatch in closure arguments" | yes, the closure argument | a working but clumsy wrapper; `callback` is not named. The mitigation is `callback`'s documentation |
-| `&mut **cx` stored outside the closure | E0521 "borrowed data escapes outside of closure" | yes: "`cx` escapes the closure body here" | no (the pattern has no fix) |
+| a `let`-bound `move \|ctx\| count.set(ctx, 1)` passed to `write` | E0631 "type mismatch in closure arguments" | yes, the closure argument | a working but clumsy wrapper; `callback` is not named. The mitigation is `callback`'s documentation |
+| `&mut **ctx` stored outside the closure | E0521 "borrowed data escapes outside of closure" | yes: "`ctx` escapes the closure body here" | no (the pattern has no fix) |
 
 The probe's "implementation of `Fn` is not general enough" did not reproduce: on this toolchain a
-`let`-bound closure annotated `|cx: &mut EventCx|` compiles, and only an unannotated one fails
+`let`-bound closure annotated `|ctx: &mut EventContext|` compiles, and only an unannotated one fails
 (E0631 above). `callback` still removes the annotation.
 
-**Inference assumptions.** Both hold: `&mut EventCx` coerces to a generic `&W` (the `callback`
-doctest makes two writes through one `cx`), and a closure whose return type `R` is generic is
-inferred higher-ranked where `Fn(&mut EventCx<'_>) -> R` is expected (`RawButton::on_press`,
+**Inference assumptions.** Both hold: `&mut EventContext` coerces to a generic `&W` (the `callback`
+doctest makes two writes through one `ctx`), and a closure whose return type `R` is generic is
+inferred higher-ranked where `Fn(&mut EventContext<'_>) -> R` is expected (`RawButton::on_press`,
 `callback`, `WriterSource::write`).
 
 **Verdict.** The trigger did not fire: no converted site needs an annotation, and no converted
-site carries excess beyond passing `cx` to a helper. The typed shape stands, and the record is
+site carries excess beyond passing `ctx` to a helper. The typed shape stands, and the record is
 ready for the owner to accept.
 
 ## Alternatives considered
 
 - **Ambient write scope (a thread-local "current writer").** Rejected: it needs the same wiring
-  as `EventCx`, fails at run time (`NoScope`) instead of at compile time, and adds a thread-local
+  as `EventContext`, fails at run time (`NoScope`) instead of at compile time, and adds a thread-local
   against ADR-0097.
 - **Guard only; the handle finds its UI runtime** (the rollback shape). Not chosen now: cheapest to
   build, but after 1.0 it cannot be tightened without breaking every callback. It stays the
   recorded fallback.
-- **`EventCx` plus a separate `WriteHandle` for foreign callbacks, fenced out of the catalog by
+- **`EventContext` plus a separate `WriteHandle` for foreign callbacks, fenced out of the catalog by
   `disallowed_methods`.** Rejected: before the `Send` bounds go, the handle has almost no
   compilable use, and the fence would forbid exactly the recognizer wrapping §4 needs.
 - **Put `Writer` into the gesture arena** (`GestureArenaMember` and the recognizer aliases take
   `&mut Writer`). Rejected: it breaks custom recognizers and makes `flui-interaction` depend on
   the reactive graph, which lives in `flui-view` above it.
-- **Accept both `Fn()` and `Fn(&mut EventCx)` during a transition.** Rejected: new-style closures
+- **Accept both `Fn()` and `Fn(&mut EventContext)` during a transition.** Rejected: new-style closures
   then need explicit type annotations (probe d1), which is worse than one shape.
 
 ## Consequences
@@ -487,11 +487,11 @@ ready for the owner to accept.
   change their first parameter. `BuildContext::reactive()` and `BuildOwner::reactive()` are
   removed. Custom recognizers and query callbacks do not change.
 - **Migration.** `flui migrate` rewrites setter call sites crate by crate; a hand-written closure
-  that ignores the context becomes `callback(|_cx| ..)` or `|_cx| ..`. A widget calling a user
+  that ignores the context becomes `callback(|_ctx| ..)` or `|_ctx| ..`. A widget calling a user
   callback from `build` must move that call to a listener or post-frame callback first.
 - `WriterSource` interacts with the `!Send` flip: until listener and post-frame callbacks lose
   `Send`, a `WriterSource` cannot be captured in them. ADR-0091 §1 schedules that flip before the
-  first crates.io publication; it delivers `cx` to each callback family in the same change.
+  first crates.io publication; it delivers `ctx` to each callback family in the same change.
 
 ## Verification
 
@@ -503,7 +503,7 @@ Marked **(exists)** where the item is in the repository.
   `&mut Writer` does not escape into a `'static` closure **(exists**: the E0521 doctest on
   `WriterSource`, `crates/flui-view/tests/ui/writer_escapes_the_dispatch.rs`**)**; `build` has no method
   returning a `Writer` **(exists**: the E0599 and E0624 doctests on
-  `LifecycleContext::writer_source`**)**; `WriterSource`, `Writer` and `EventCx` are `!Send`
+  `LifecycleContext::writer_source`**)**; `WriterSource`, `Writer` and `EventContext` are `!Send`
   **(exists**: `static_assertions` in `reactive/writer.rs`**)**.
 - A test that a widget invoking a user callback synchronously inside its own `build`, through a
   captured `WriterSource`, is refused by the guard **(exists**:
@@ -513,11 +513,11 @@ Marked **(exists)** where the item is in the repository.
 - §5 as amended: `owner_local_write_paths` in `crates/flui-testing/tests/` writes through a
   captured `WriterSource` from a listener, an animation-status listener and a post-frame
   callback (`listener_writes_through_a_captured_writer_source` and its two siblings), and
-  nests one `EventCx` in another (`nested_writer_source_inside_an_event_cx`,
-  `nested_write_panics_inside_an_event_cx`); `listener_panic_reaches_the_realm_report` in
+  nests one `EventContext` in another (`nested_writer_source_inside_an_event_ctx`,
+  `nested_write_panics_inside_an_event_ctx`); `listener_panic_reaches_the_realm_report` in
   `crates/flui-runtime/tests/contracts/owner_delivery.rs`; `tests/wasm_consumer.rs`, compiled
   for wasm32 by `cargo xtask wasm-check`, captures `Rc` in both callback kinds;
-  `event_setters_infer_cx_through_the_facade` keeps every setter family inferring `cx`.
+  `event_setters_infer_cx_through_the_facade` keeps every setter family inferring `ctx`.
 - ADR-0085's multi-presentation routing test, now written through `WriterSource`.
 - The completed §6 table, reproduced by its grep command, in the change that alters setter
   signatures; `flui migrate` applied to `examples/` with the pre-PR checks green.

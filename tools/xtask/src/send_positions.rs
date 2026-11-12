@@ -64,10 +64,10 @@ use crate::api_closure::{self, Build, Items};
 use crate::util;
 
 /// The list, repository-relative.
-const ALLOWLIST: &str = "tools/xtask/allowlists/send-positions.toml";
+pub(crate) const ALLOWLIST: &str = "tools/xtask/allowlists/send-positions.toml";
 
 /// The packages whose public API the gate walks from.
-const ROOTS: &[&str] = &["flui", "flui-sdk"];
+pub(crate) const ROOTS: &[&str] = &["flui", "flui-sdk"];
 
 /// Arguments for `cargo xtask send-positions`.
 #[derive(Debug, clap::Args)]
@@ -663,6 +663,15 @@ enum Crossing {
 
 fn one() -> usize {
     1
+}
+
+/// The item paths [`ALLOWLIST`]'s `text` lists, each where rustdoc records it
+/// (`flui_app::app::config::AppConfig::memory_reclaim`).
+pub(crate) fn listed_items(text: &str) -> anyhow::Result<BTreeSet<String>> {
+    Ok(parse_list(text)?
+        .into_keys()
+        .map(|position| position.item)
+        .collect())
 }
 
 /// The listed positions and their counts. A position listed twice, or with a

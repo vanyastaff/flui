@@ -90,8 +90,8 @@ fn fade() -> Transition {
 /// A linear 100 ms slide.
 fn slide() -> MotionSpec {
     MotionSpec::default()
-        .with_duration(ms(100))
-        .with_curve(curves::LINEAR)
+        .duration(ms(100))
+        .curve(curves::LINEAR)
 }
 
 /// A list of `ids` in a 100 × `height` viewport.

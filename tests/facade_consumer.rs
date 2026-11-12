@@ -236,7 +236,11 @@ fn external_consumers_extend_and_test_through_the_facade() {
         let mut dependencies = toml::Table::new();
         dependencies.insert(alias.into(), dependency("flui", root, false));
         let mut dev_dependencies = toml::Table::new();
-        dev_dependencies.insert(alias.into(), facade_with_features(root, &["testing"]));
+        // `unstable-windows` for the secondary-window case, the one that names it.
+        dev_dependencies.insert(
+            alias.into(),
+            facade_with_features(root, &["testing", "unstable-windows"]),
+        );
         let source = rename_facade(include_str!("fixtures/facade_extensions.rs"), alias);
         let output = run_consumer(dependencies, Some(dev_dependencies), &source, "test");
         assert!(
@@ -323,7 +327,7 @@ fn cross_thread_handles_stay_sendable() {
 }
 
 /// An unannotated closure handed to each family of event setter writes a
-/// signal through the `cx` the framework passes (ADR-0086 §6), through the
+/// signal through the `ctx` the framework passes (ADR-0086 §6), through the
 /// facade with both catalogs.
 #[test]
 fn event_setters_infer_cx_through_the_facade() {
@@ -477,32 +481,41 @@ fn rename_facade(source: &str, alias: &str) -> String {
     renamed
 }
 
-/// `None` when there is no checkout to depend on — see [`checkout_root`].
-fn hot_reload_dependencies(include_layer: bool) -> Option<toml::Table> {
+/// An application that adds `flui-hot-reload` beside the facade, as ADR-0311
+/// §6 has it: the facade names no reload package. `None` when there is no
+/// checkout to depend on — see [`checkout_root`].
+fn hot_reload_dependencies() -> Option<toml::Table> {
     let root = checkout_root()?;
     let mut dependencies = toml::Table::new();
-    dependencies.insert("flui".into(), facade_with_features(root, &["hot-reload"]));
-    if include_layer {
-        dependencies.insert(
-            "flui-layer".into(),
-            dependency("flui-layer", &root.join("crates/flui-layer"), false),
+    dependencies.insert("flui".into(), facade_with_features(root, &[]));
+    let mut package = dependency(
+        "flui-hot-reload",
+        &root.join("packages/flui-hot-reload"),
+        false,
+    );
+    package
+        .as_table_mut()
+        .expect("BUG: dependency() builds a table")
+        .insert(
+            "features".into(),
+            toml::Value::Array(vec!["app-plugin".into()]),
         );
-    }
+    dependencies.insert("flui-hot-reload".into(), package);
     Some(dependencies)
 }
 
-const SCENE_PLUGIN_SOURCE: &str = "fn build(_: f64, _: f64) -> flui_layer::Scene { flui_layer::Scene::default() } flui::hot_reload::scene_plugin!(build);";
+const SCENE_PLUGIN_SOURCE: &str = "fn build(_: f64, _: f64) -> flui_hot_reload::Scene { flui_hot_reload::Scene::default() } flui_hot_reload::scene_plugin!(build);";
 const APP_PLUGIN_SOURCE: &str =
-    "flui::hot_reload::app_plugin!(flui::widgets::Text::new(\"hello\"));";
+    "flui_hot_reload::app_plugin!(flui::widgets::Text::new(\"hello\"));";
 
 #[test]
 fn plugin_factory_requires_the_canonical_scene() {
-    let Some(dependencies) = hot_reload_dependencies(true) else {
+    let Some(dependencies) = hot_reload_dependencies() else {
         return;
     };
     let output = compile_consumer(
         dependencies,
-        "fn build(_: f64, _: f64) -> u8 { 1 } flui::hot_reload::scene_plugin!(build);",
+        "fn build(_: f64, _: f64) -> u8 { 1 } flui_hot_reload::scene_plugin!(build);",
     );
     let diagnostics = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "non-Scene factory compiled");
@@ -513,7 +526,7 @@ fn reject_safe_teardown(source: &str, function: &str) {
     let source = format!(
         "{source}\npub fn invalid_safe_call() {{ {function}(std::ptr::dangling_mut::<u8>().cast()); }}"
     );
-    let Some(dependencies) = hot_reload_dependencies(true) else {
+    let Some(dependencies) = hot_reload_dependencies() else {
         return;
     };
     let output = compile_consumer(dependencies, &source);

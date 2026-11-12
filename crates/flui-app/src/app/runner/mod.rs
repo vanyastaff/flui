@@ -104,12 +104,14 @@ use ios::run_ios;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+#[cfg(feature = "unstable-windows")]
 pub use secondary_window::open_secondary_window;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+#[cfg(feature = "unstable-windows")]
 pub use secondary_window::open_window;
 #[cfg(target_arch = "wasm32")]
 use web::run_web;
@@ -573,7 +575,7 @@ mod tests {
 
         let platform = flui_native::headless_platform();
         let window = platform
-            .open_routed(flui_platform::WindowOptions::default().with_size(marker_size))
+            .open_routed(flui_platform::WindowOptions::default().size(marker_size))
             .expect("headless platform always opens a window");
 
         // `WindowHandler::frame_requested` requires `Send` on the callback; `AppRuntime` is

@@ -249,7 +249,7 @@ impl SnackBarController {
     /// cancels callbacks that have not fired, including post-frame completions.
     pub fn on_closed<R: EventOutcome>(
         &self,
-        callback: impl FnOnce(&mut EventCx<'_>, SnackBarClosedReason) -> R + 'static,
+        callback: impl FnOnce(&mut EventContext<'_>, SnackBarClosedReason) -> R + 'static,
     ) {
         let messenger = self.messenger.clone();
         let _prev = self.on_closed.borrow_mut().replace(Box::new(move |reason| {
@@ -258,7 +258,7 @@ impl SnackBarController {
             };
             let writer = messenger.writer.borrow().clone();
             if let Some(writer) = writer {
-                writer.write(|cx| callback(cx, reason).report());
+                writer.write(|ctx| callback(ctx, reason).report());
             }
         }));
     }

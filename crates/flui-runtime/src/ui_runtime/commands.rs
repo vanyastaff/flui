@@ -120,12 +120,12 @@ pub enum UiCommand {
     SignalWrite {
         /// The slot the write targets; its `graph()` selects the presentation.
         target: flui_view::SignalSlot,
-        /// Runs inside an `EventCx` opened by the `WriterSource` of the
+        /// Runs inside an `EventContext` opened by the `WriterSource` of the
         /// presentation whose graph minted `target`, and of no other. A
         /// retained `FnMut` envelope invoked at most once: after a callback
         /// panic its captures are destroyed under containment, the first
         /// failure staying first (ADR-0281 §3).
-        apply: Box<dyn FnMut(&mut flui_view::EventCx<'_>) + Send>,
+        apply: Box<dyn FnMut(&mut flui_view::EventContext<'_>) + Send>,
     },
 }
 
@@ -342,7 +342,7 @@ impl UiCommandSender {
     }
 
     /// Enqueue a signal write for the owner thread (ADR-0074 §5.8). At the
-    /// next Idle drain `apply` receives `target` re-attached and an `EventCx`
+    /// next Idle drain `apply` receives `target` re-attached and an `EventContext`
     /// opened by the writer source of the presentation whose graph minted it
     /// (ADR-0085 §1), wherever in this UI runtime that presentation lives; a
     /// write it performs marks readers for the following frame. If no
@@ -361,11 +361,11 @@ impl UiCommandSender {
     pub(crate) fn send_signal_write<T: 'static>(
         &self,
         target: flui_view::SignalSender<T>,
-        mut apply: impl FnMut(flui_view::Signal<T>, &mut flui_view::EventCx<'_>) + Send + 'static,
+        mut apply: impl FnMut(flui_view::Signal<T>, &mut flui_view::EventContext<'_>) + Send + 'static,
     ) -> Result<(), CommandSendError> {
         self.send(UiCommand::SignalWrite {
             target: target.slot(),
-            apply: Box::new(move |cx| apply(target.attach(), cx)),
+            apply: Box::new(move |ctx| apply(target.attach(), ctx)),
         })
     }
 
@@ -767,7 +767,7 @@ impl UiRuntime {
                         clippy::disallowed_methods,
                         reason = "ADR-0287: a signal write callback runs contained so the tail stays live"
                     )]
-                    let outcome = catch_unwind(AssertUnwindSafe(|| source.write(|cx| apply(cx))));
+                    let outcome = catch_unwind(AssertUnwindSafe(|| source.write(|ctx| apply(ctx))));
                     // Keep the command envelope outside the caught invocation.
                     // Consuming a boxed `FnOnce` there would destroy captures
                     // during a callback unwind, where a panicking destructor

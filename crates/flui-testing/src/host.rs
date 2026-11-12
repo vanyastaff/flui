@@ -805,10 +805,10 @@ impl HeadlessBackground {
     fn register(&self, registrar: &mut flui_platform::capability::CapabilityRegistrar) {
         let services = Arc::clone(&self.services);
         registrar.provide::<flui_view::background::BackgroundCapability>(
-            move |cx: &flui_platform::capability::ProviderContext<'_>| {
+            move |ctx: &flui_platform::capability::ProviderContext<'_>| {
                 Ok(flui_view::background::Background::new(
                     Arc::clone(&services) as Arc<dyn flui_platform::executor::Executor>,
-                    cx.completions().clone(),
+                    ctx.completions().clone(),
                 ))
             },
         );
@@ -1176,7 +1176,7 @@ impl HeadlessHost {
         let vsync = self.event_now();
         let mut request = flui_platform::FrameRequest::new(vsync);
         if let Some(presented) = self.presented.take() {
-            request = request.with_presented(presented);
+            request = request.presented(presented);
         }
         for presentation in self.presentation_ids() {
             self.ui_runtime.note_frame_request(presentation, request);
@@ -2255,10 +2255,10 @@ impl HeadlessHost {
     /// for their storage. The queue's lock is not held while a write runs.
     fn run_flush_writes(&self) {
         let writes = std::mem::take(&mut *self.flush_writes.lock());
-        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let mut ctx = std::task::Context::from_waker(std::task::Waker::noop());
         let waiting: Vec<FlushWrite> = writes
             .into_iter()
-            .filter_map(|mut write| write.as_mut().poll(&mut cx).is_pending().then_some(write))
+            .filter_map(|mut write| write.as_mut().poll(&mut ctx).is_pending().then_some(write))
             .collect();
         self.flush_writes.lock().extend(waiting);
     }

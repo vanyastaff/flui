@@ -7,7 +7,7 @@ use crate::frame_failure::{FrameFailureHandler, FrameFailureKind, PanicText, Sam
 
 /// Failure reports collected through the real registered-handler
 /// route — the same `FrameFailureHandler` an embedder registers via
-/// `AppConfig::with_frame_failure_handler`. Flattened to owned
+/// `AppConfig::frame_failure_handler`. Flattened to owned
 /// fields because `FrameFailureReport` itself is delivered by
 /// reference and deliberately not `Clone`.
 #[derive(Debug, Clone, PartialEq)]

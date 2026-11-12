@@ -5,7 +5,7 @@
 > **⚠️ HISTORICAL from the result-accumulator sections onward (2026-09-04, issue #844).**
 > This document describes a protocol-level hit-test *result accumulator* —
 > `HitTestContextApi::result` / `result_mut`, `ctx.add_hit(id)`, `ctx.add_self(id)`
-> and the `BoxHitTestCtx.result` field. **None of that exists.** Every one of those
+> and the `RawBoxHitTestContext.result` field. **None of that exists.** Every one of those
 > writers wrote into a structure no production code read: the driver
 > (`PipelineOwner`'s hit-test walk) owns the path and builds each entry from the
 > node's own `RenderId`. They were deleted rather than wired, because a
@@ -209,18 +209,18 @@ impl HitTestCapability for BoxHitTest {
     type Position = Offset;
     type Result = BoxHitTestResult;
     type Entry = BoxHitTestEntry;
-    type Context<'ctx, A: Arity, P: ParentData> = BoxHitTestCtx<'ctx, A, P>
+    type Context<'ctx, A: Arity, P: ParentData> = RawBoxHitTestContext<'ctx, A, P>
     where
         Self: 'ctx;
 }
 ```
 
-### BoxHitTestCtx
+### RawBoxHitTestContext
 
 The context provided during box hit testing:
 
 ```rust
-pub struct BoxHitTestCtx<'a, A: Arity, P: ParentData = BoxParentData> {
+pub struct RawBoxHitTestContext<'a, A: Arity, P: ParentData = BoxParentData> {
     /// Position being tested (in local coordinates)
     pub position: Offset,
     
@@ -231,7 +231,7 @@ pub struct BoxHitTestCtx<'a, A: Arity, P: ParentData = BoxParentData> {
     pub children: ChildrenAccess<'a, A, P, HitTestPhase>,
 }
 
-impl<'a, A: Arity, P: ParentData> BoxHitTestCtx<'a, A, P> {
+impl<'a, A: Arity, P: ParentData> RawBoxHitTestContext<'a, A, P> {
     /// Check if position is within bounds
     pub fn contains(&self, bounds: Rect) -> bool {
         bounds.contains(self.position)
@@ -323,7 +323,7 @@ impl HitTestCapability for SliverHitTest {
     type Position = SliverHitTestPosition;
     type Result = SliverHitTestResult;
     type Entry = SliverHitTestEntry;
-    type Context<'ctx, A: Arity, P: ParentData> = SliverHitTestCtx<'ctx, A, P>
+    type Context<'ctx, A: Arity, P: ParentData> = RawSliverHitTestContext<'ctx, A, P>
     where
         Self: 'ctx;
 }
@@ -382,7 +382,7 @@ impl RenderBox for RenderColoredBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
     
-    fn hit_test(&self, ctx: BoxHitTestCtx<Leaf>) -> bool {
+    fn hit_test(&self, ctx: RawBoxHitTestContext<Leaf>) -> bool {
         let bounds = Rect::from_size(self.size);
         
         if bounds.contains(ctx.position) {
@@ -402,7 +402,7 @@ impl RenderBox for RenderPadding {
     type Arity = Single;
     type ParentData = BoxParentData;
     
-    fn hit_test(&self, mut ctx: BoxHitTestCtx<Single>) -> bool {
+    fn hit_test(&self, mut ctx: RawBoxHitTestContext<Single>) -> bool {
         let bounds = Rect::from_size(self.size);
         
         if !bounds.contains(ctx.position) {
@@ -432,7 +432,7 @@ impl RenderBox for RenderStack {
     type Arity = Variable;
     type ParentData = StackParentData;
     
-    fn hit_test(&self, mut ctx: BoxHitTestCtx<Variable, StackParentData>) -> bool {
+    fn hit_test(&self, mut ctx: RawBoxHitTestContext<Variable, StackParentData>) -> bool {
         let bounds = Rect::from_size(self.size);
         
         if !bounds.contains(ctx.position) {
@@ -465,7 +465,7 @@ impl RenderBox for RenderTransform {
     type Arity = Single;
     type ParentData = BoxParentData;
     
-    fn hit_test(&self, mut ctx: BoxHitTestCtx<Single>) -> bool {
+    fn hit_test(&self, mut ctx: RawBoxHitTestContext<Single>) -> bool {
         // Transform position to child's coordinate space
         let local_position = self.transform.inverse().transform_point(ctx.position);
         
@@ -492,7 +492,7 @@ impl RenderBox for RenderClip {
     type Arity = Single;
     type ParentData = BoxParentData;
     
-    fn hit_test(&self, mut ctx: BoxHitTestCtx<Single>) -> bool {
+    fn hit_test(&self, mut ctx: RawBoxHitTestContext<Single>) -> bool {
         // Check if position is within clip bounds
         if !self.clip_path.contains(ctx.position) {
             return false;
@@ -534,7 +534,7 @@ impl RenderBox for RenderGestureDetector {
     type Arity = Single;
     type ParentData = BoxParentData;
     
-    fn hit_test(&self, mut ctx: BoxHitTestCtx<Single>) -> bool {
+    fn hit_test(&self, mut ctx: RawBoxHitTestContext<Single>) -> bool {
         let bounds = Rect::from_size(self.size);
         
         if !bounds.contains(ctx.position) {
@@ -610,7 +610,7 @@ pub fn dispatch_pointer_event(
 Skip hit testing if position is outside bounding box:
 
 ```rust
-fn hit_test(&self, ctx: BoxHitTestCtx<Variable>) -> bool {
+fn hit_test(&self, ctx: RawBoxHitTestContext<Variable>) -> bool {
     // Quick reject with bounding box
     if !self.bounding_box().contains(ctx.position) {
         return false;

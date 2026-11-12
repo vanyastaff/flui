@@ -40,7 +40,7 @@ use x11rb::protocol::xproto::{self, ConnectionExt as _, NotifyDetail, NotifyMode
 
 use super::input_context::{KeyHold, Told, chars_before, deletion};
 use super::text_input::{ChangeCause, ContentType, TextInputClient, TextInputWire};
-use crate::executor::BackgroundExecutor;
+use crate::executor::NativeExecutor;
 use crate::host::Text;
 use crate::owner::linux::x11::{
     Doorbell, LoopText, WindowRef, WindowScale, X11Connection, X11Key, X11WindowText,
@@ -397,7 +397,7 @@ impl X11Ime {
     /// the session names it, on `executor`; what it sends rings `doorbell`.
     pub(crate) fn start(
         connection: &Arc<X11Connection>,
-        executor: &BackgroundExecutor,
+        executor: &NativeExecutor,
         doorbell: &Doorbell,
     ) -> Arc<Self> {
         let doorbell = doorbell.clone();
@@ -406,7 +406,7 @@ impl X11Ime {
                 tracing::debug!(%error, "cannot wake the X11 loop for the input method");
             }
         });
-        let bus = Bus::start(executor.handle(), Reach::Session, wake);
+        let bus = Bus::start(&executor.handle(), Reach::Session, wake);
         Arc::new(Self::with_bus(Some(Arc::clone(connection)), bus))
     }
 

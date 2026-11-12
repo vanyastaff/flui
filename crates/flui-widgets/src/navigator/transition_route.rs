@@ -623,7 +623,7 @@ impl TransitionHandle {
 impl<T> fmt::Debug for TransitionRoute<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TransitionRoute")
-            .field("name", &self.settings.name())
+            .field("name", &self.settings.name.as_deref())
             .field("duration", &self.duration)
             .finish_non_exhaustive()
     }

@@ -518,7 +518,7 @@ and each idea was accepted or rejected there with a reason.
 - **R52.** **Tracing conventions** hold in every framework crate:
   - contract targets are `flui.<subsystem>` (`flui.frame`, `flui.tree`, `flui.input`,
     `flui.animation`, `flui.signals`, `flui.pace`); the old spellings keep a one-release alias,
-    after a test through the real `EnvFilter` confirms prefix matching;
+    after a test through `flui-log`'s real filter confirms prefix matching;
   - a span is an interval, an event is a point. Spans that are never entered become events or are
     entered;
   - frame-path fields are primitives only (`u64`, `i64`, `bool`, `f64`, `&'static str`); ids are

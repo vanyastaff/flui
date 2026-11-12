@@ -310,15 +310,27 @@ impl Headers {
 }
 
 /// An HTTP request: its method, URL, headers, body and limits.
+///
+/// A description the client reads: its fields are public, it is built with
+/// [`new`](Self::new) or [`get`](Self::get) and its builder methods, and
+/// `#[non_exhaustive]` keeps room for a field.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct HttpRequest {
-    method: Method,
-    url: String,
-    headers: Headers,
-    body: Vec<u8>,
-    body_limit: u64,
-    deadline: Duration,
+    /// The method.
+    pub method: Method,
+    /// The URL, as given; the client checks it when it sends.
+    pub url: String,
+    /// The headers, in the order they were added.
+    pub headers: Headers,
+    /// The body.
+    pub body: Vec<u8>,
+    /// The largest response body accepted; a longer one fails with
+    /// [`HttpError::TooLarge`] without being read whole.
+    pub body_limit: u64,
+    /// How long the request may take, response body included, before it
+    /// fails with [`HttpError::Timeout`].
+    pub deadline: Duration,
 }
 
 impl HttpRequest {
@@ -352,14 +364,14 @@ impl HttpRequest {
 
     /// Add a header.
     #[must_use = "the builder returns the updated request"]
-    pub fn with_header(mut self, name: HeaderName, value: HeaderValue) -> Self {
+    pub fn header(mut self, name: HeaderName, value: HeaderValue) -> Self {
         self.headers.append(name, value);
         self
     }
 
     /// Send `body` with the request.
     #[must_use = "the builder returns the updated request"]
-    pub fn with_body(mut self, body: impl Into<Vec<u8>>) -> Self {
+    pub fn body(mut self, body: impl Into<Vec<u8>>) -> Self {
         self.body = body.into();
         self
     }
@@ -367,7 +379,7 @@ impl HttpRequest {
     /// Accept a response body of at most `limit` bytes; a longer one fails
     /// with [`HttpError::TooLarge`] without being read whole.
     #[must_use = "the builder returns the updated request"]
-    pub fn with_body_limit(mut self, limit: u64) -> Self {
+    pub fn body_limit(mut self, limit: u64) -> Self {
         self.body_limit = limit;
         self
     }
@@ -375,45 +387,9 @@ impl HttpRequest {
     /// Give up with [`HttpError::Timeout`] when the request, response body
     /// included, takes longer than `deadline`.
     #[must_use = "the builder returns the updated request"]
-    pub fn with_deadline(mut self, deadline: Duration) -> Self {
+    pub fn deadline(mut self, deadline: Duration) -> Self {
         self.deadline = deadline;
         self
-    }
-
-    /// The method.
-    #[must_use]
-    pub fn method(&self) -> Method {
-        self.method
-    }
-
-    /// The URL, as given.
-    #[must_use]
-    pub fn url(&self) -> &str {
-        &self.url
-    }
-
-    /// The headers.
-    #[must_use]
-    pub fn headers(&self) -> &Headers {
-        &self.headers
-    }
-
-    /// The body.
-    #[must_use]
-    pub fn body(&self) -> &[u8] {
-        &self.body
-    }
-
-    /// The largest response body accepted.
-    #[must_use]
-    pub fn body_limit(&self) -> u64 {
-        self.body_limit
-    }
-
-    /// How long the request may take.
-    #[must_use]
-    pub fn deadline(&self) -> Duration {
-        self.deadline
     }
 }
 
@@ -508,7 +484,7 @@ pub trait BodySource: Send + 'static {
     /// caller's.
     fn poll_chunk(
         self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        ctx: &mut Context<'_>,
     ) -> Poll<Option<Result<Vec<u8>, HttpError>>>;
 }
 
@@ -518,7 +494,7 @@ struct Whole(Option<Vec<u8>>);
 impl BodySource for Whole {
     fn poll_chunk(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        _ctx: &mut Context<'_>,
     ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
         Poll::Ready(self.0.take().filter(|bytes| !bytes.is_empty()).map(Ok))
     }
@@ -558,11 +534,14 @@ impl ResponseBody {
     ///
     /// The source's failure, or [`HttpError::TooLarge`] once the bytes read
     /// pass the limit. Every later call answers `None`.
-    pub fn poll_chunk(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
+    pub fn poll_chunk(
+        &mut self,
+        ctx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
         if self.done {
             return Poll::Ready(None);
         }
-        let chunk = match self.source.as_mut().poll_chunk(cx) {
+        let chunk = match self.source.as_mut().poll_chunk(ctx) {
             Poll::Pending => return Poll::Pending,
             Poll::Ready(chunk) => chunk,
         };
@@ -586,7 +565,7 @@ impl ResponseBody {
 
     /// The next chunk, `None` at the end; see [`Self::poll_chunk`].
     pub fn next_chunk(&mut self) -> impl Future<Output = Option<Result<Vec<u8>, HttpError>>> + '_ {
-        std::future::poll_fn(move |cx| self.poll_chunk(cx))
+        std::future::poll_fn(move |ctx| self.poll_chunk(ctx))
     }
 
     /// The whole body.

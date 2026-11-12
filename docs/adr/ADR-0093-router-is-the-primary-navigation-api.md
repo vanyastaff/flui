@@ -166,8 +166,8 @@ overlays are excluded.
 ### §3. The handle is acquired in a lifecycle hook and targets the nearest ancestor
 
 ```rust
-fn create_state(&self, cx: &dyn LifecycleContext) -> NotesState {
-    NotesState { router: Router::<AppRoute>::handle(cx).ok() }
+fn create_state(&self, ctx: &dyn LifecycleContext) -> NotesState {
+    NotesState { router: Router::<AppRoute>::handle(ctx).ok() }
 }
 // later, in a callback the state built:
 router.push(AppRoute::Note { id: NoteId(1) })?;

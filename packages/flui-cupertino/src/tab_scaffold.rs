@@ -376,12 +376,12 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
             .tab_bar
             .clone()
             .current_index(current_index)
-            .on_tap(move |cx, index| {
+            .on_tap(move |ctx, index| {
                 // A refusal is reported by the controller; the tap still
                 // reaches the bar's own handler.
                 let _ = controller.set_index(index);
                 if let Some(original) = &original_on_tap {
-                    original(cx, index);
+                    original(ctx, index);
                 }
             });
 

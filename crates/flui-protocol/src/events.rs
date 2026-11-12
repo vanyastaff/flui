@@ -336,7 +336,7 @@ impl AnnouncementsParams {
 
     /// At most `max` announcements.
     #[must_use]
-    pub const fn with_max_entries(mut self, max: u32) -> Self {
+    pub const fn max_entries(mut self, max: u32) -> Self {
         self.max_entries = Some(max);
         self
     }

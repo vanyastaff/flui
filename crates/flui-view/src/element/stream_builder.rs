@@ -56,8 +56,11 @@ use crate::{
     view::{IntoView, StatefulView, View, ViewState},
 };
 
-/// A boxed, `Send` stream of `Result<T, E>`.
-pub type BoxedResultStream<T, E> = Pin<Box<dyn Stream<Item = Result<T, E>> + Send + 'static>>;
+/// A boxed stream of `Result<T, E>`, polled on the owner thread by the
+/// binding's driver: it may hold `Rc` state. A source that produces on another
+/// thread runs as a job (`Background::io`, a service) and this stream yields its
+/// results on the owner thread (ADR-0323 §4).
+pub type BoxedResultStream<T, E> = Pin<Box<dyn Stream<Item = Result<T, E>> + 'static>>;
 
 /// Produces the stream to listen to. `Fn`, not `FnOnce`: the view is cloned on
 /// every rebuild. Called once per subscription.
@@ -122,9 +125,9 @@ impl<K: std::fmt::Debug, T, E> std::fmt::Debug for StreamBuilder<K, T, E> {
 
 impl<K, T, E> StreamBuilder<K, T, E>
 where
-    K: Clone + PartialEq + Send + Sync + 'static,
-    T: Send + 'static,
-    E: Send + 'static,
+    K: Clone + PartialEq + std::fmt::Debug + 'static,
+    T: 'static,
+    E: 'static,
 {
     /// Listen to the stream identified by `key`; `None` means no stream.
     pub fn keyed(
@@ -144,7 +147,7 @@ where
     ///
     /// Applied **only** at `init_state`; a later key change does not re-apply it.
     #[must_use]
-    pub fn with_initial_data(mut self, initial_data: InitialDataFactory<T>) -> Self {
+    pub fn initial_data(mut self, initial_data: InitialDataFactory<T>) -> Self {
         self.initial_data = Some(initial_data);
         self
     }
@@ -152,9 +155,9 @@ where
 
 impl<K, T, E> StatefulView for StreamBuilder<K, T, E>
 where
-    K: Clone + PartialEq + Send + Sync + std::fmt::Debug + 'static,
-    T: Send + Sync + 'static,
-    E: Send + Sync + 'static,
+    K: Clone + PartialEq + std::fmt::Debug + 'static,
+    T: 'static,
+    E: 'static,
 {
     type State = StreamBuilderState<K, T, E>;
 
@@ -176,9 +179,9 @@ where
 
 impl<K, T, E> View for StreamBuilder<K, T, E>
 where
-    K: Clone + PartialEq + Send + Sync + std::fmt::Debug + 'static,
-    T: Send + Sync + 'static,
-    E: Send + Sync + 'static,
+    K: Clone + PartialEq + std::fmt::Debug + 'static,
+    T: 'static,
+    E: 'static,
 {
     fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::stateful(self)
@@ -231,9 +234,9 @@ where
 
 impl<K, T, E> StreamBuilderState<K, T, E>
 where
-    K: Clone + PartialEq + Send + Sync + 'static,
-    T: Send + Sync + 'static,
-    E: Send + Sync + 'static,
+    K: Clone + PartialEq + std::fmt::Debug + 'static,
+    T: 'static,
+    E: 'static,
 {
     /// Cancel the live subscription and invalidate its generation, so an event
     /// already in flight is discarded.
@@ -276,7 +279,7 @@ where
                 // `futures-core` gives the trait only — no `StreamExt::next()` —
                 // so the stream is polled by hand through `poll_fn`. That is the
                 // whole reason the dependency is trait-only.
-                let event = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await;
+                let event = std::future::poll_fn(|ctx| stream.as_mut().poll_next(ctx)).await;
                 let is_end = event.is_none();
 
                 // `StreamBuilder` never opens an inline window, so `false` here
@@ -303,9 +306,9 @@ where
 
 impl<K, T, E> ViewState<StreamBuilder<K, T, E>> for StreamBuilderState<K, T, E>
 where
-    K: Clone + PartialEq + Send + Sync + std::fmt::Debug + 'static,
-    T: Send + Sync + 'static,
-    E: Send + Sync + 'static,
+    K: Clone + PartialEq + std::fmt::Debug + 'static,
+    T: 'static,
+    E: 'static,
 {
     /// `_StreamBuilderBaseState.initState`: seed from `initial()`, then subscribe.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {

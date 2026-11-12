@@ -10,7 +10,7 @@
 - **Revised:** 2026-11-03 — after a callback panic the opaque bundle is destroyed under
   containment instead of retained (ADR-0281 §3).
 - **Amends:** [ADR-0074](ADR-0074-realm-scoped-signals.md) — §5.1 ("`Reactive` … lives beside
-  `BuildOwner`", "reachable as `cx.reactive()`"), §5.2 (reads take `&dyn BuildContext`; now any
+  `BuildOwner`", "reachable as `ctx.reactive()`"), §5.2 (reads take `&dyn BuildContext`; now any
   `&S` where `S: ReadScope`), and the `signals` feature named in its Status line
 - **Related:** [ADR-0013](ADR-0013-render-object-attach-self-dirty-handle.md) (the self-dirty
   handle a render-phase subscriber uses), [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (UI runtime
@@ -39,7 +39,7 @@ The whole graph is one file, `crates/flui-view/src/reactive/mod.rs` (1159 lines)
 dependencies are small: `flui_foundation::{ElementId, RebuildReason}` (`mod.rs:65`), `smallvec`,
 and two things from its own crate — `crate::owner::ExternalBuildScheduler` (`mod.rs:68`) and
 `crate::BuildContext`, which `Signal::get` takes as its read parameter
-(`mod.rs:752`: `pub fn get(self, cx: &dyn crate::BuildContext) -> T`). Because `get` is an
+(`mod.rs:752`: `pub fn get(self, ctx: &dyn crate::BuildContext) -> T`). Because `get` is an
 inherent method, `Signal<T>` and the graph must live in the same crate as whatever names them;
 `flui-rendering` and `flui-animation` sit below `flui-view` and cannot name a `Signal<T>` at all.
 
@@ -52,7 +52,7 @@ way to subscribe; it has to be rebuilt through an element.
 The graph is reachable from every context. `BuildContext::reactive()`
 (`crates/flui-view/src/context/build_context.rs:131-132`) returns the owning `Reactive` handle,
 which is `Clone` (`mod.rs:160-164`) and exposes `set`/`update` (`mod.rs:774`, `:783`). A `build`
-that calls `cx.reactive()` and writes is refused only at run time (`WrittenDuringBuild`,
+that calls `ctx.reactive()` and writes is refused only at run time (`WrittenDuringBuild`,
 `mod.rs:578`).
 
 ### The graph is per presentation, not per UI runtime
@@ -101,7 +101,7 @@ registries on one scheduler, not one.
 ### Why the crate question is settled by measurement
 
 - The review proposed a `flui-reactive` crate below `flui-view` (D4) so that `flui-rendering` and
-  `flui-animation` could name `Signal<T>`, which the inherent `get(self, cx: &dyn
+  `flui-animation` could name `Signal<T>`, which the inherent `get(self, ctx: &dyn
   crate::BuildContext)` (`mod.rs:752`) confines to `flui-view`.
 - The earlier text of this record estimated the rebuild set of a graph edit at 27 crates in
   `flui-foundation` against 16 in a crate beside `flui-view`/`flui-rendering`/`flui-animation`,
@@ -127,22 +127,22 @@ Branch `spike/readscope`, commits `28ed25536` (variant A, reads take `&dyn ReadS
   claimed. Every run had `signals` on, so default builds are unmeasured.
 - **Variant A against variant B.** `&dyn ReadScope` rejects `&&dyn BuildContext` and
   `&Box<dyn BuildContext>`, which compile today by deref coercion; blanket impls fix both. It
-  also rejects `fn f<C: BuildContext + ?Sized>(cx: &C) { sig.get(cx) }` (E0277). That shape does
+  also rejects `fn f<C: BuildContext + ?Sized>(ctx: &C) { sig.get(ctx) }` (E0277). That shape does
   not compile on main either (the parameter is `&dyn BuildContext`), so it is not a regression.
   Variant B accepts all six shapes probed, including `&dyn ReadScope`.
 - **Holes the prototype opened** (found in review; the Decision closes each):
   - `Signal::from_slot` and `SignalSlot::new` became public, so
-    `Signal::<String>::from_slot(u32_sig.slot()).get(cx)` panics with a `BUG:` message, which
+    `Signal::<String>::from_slot(u32_sig.slot()).get(ctx)` panics with a `BUG:` message, which
     breaks [`docs/PANIC-POLICY.md`](../PANIC-POLICY.md).
   - `ReadGraph::register_reader` and `ScopeRef::new(graph, Some(reader))` let any holder of a
-    `Reactive` (through `cx.reactive()`) subscribe an arbitrary `ElementId` or `RenderId`.
-  - `PaintCx` became `!Send`/`!Sync`.
+    `Reactive` (through `ctx.reactive()`) subscribe an arbitrary `ElementId` or `RenderId`.
+  - `PaintContext` became `!Send`/`!Sync`.
   - The render reader is recorded but not marked on write.
-  - `PaintCx::with_read_scope` has no production caller.
+  - `PaintContext::with_read_scope` has no production caller.
   - The trybuild snapshot `tests/ui/build_context_is_sealed.stderr` lists every `ReadScope`
     implementor.
   - The new tests go through `ElementBuildContext`, which production never constructs
-    (production uses `BuildCtx`).
+    (production uses `LiveBuildContext`).
 
 ## Decision
 
@@ -222,10 +222,10 @@ impl<T: 'static> Signal<T> {
     #[doc(hidden)] pub const fn from_slot(slot: SignalSlot) -> Self;
     pub const fn slot(self) -> SignalSlot;
     pub const fn detach(self) -> SignalSender<T>;
-    pub fn try_with<S: ReadScope + ?Sized, R>(self, cx: &S, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
-    pub fn try_get<S: ReadScope + ?Sized>(self, cx: &S) -> Result<T, SignalError> where T: Clone;
-    pub fn with<S: ReadScope + ?Sized, R>(self, cx: &S, f: impl FnMut(&T) -> R) -> R; // `# Panics` documented
-    pub fn get<S: ReadScope + ?Sized>(self, cx: &S) -> T where T: Clone;                // `# Panics` documented
+    pub fn try_with<S: ReadScope + ?Sized, R>(self, ctx: &S, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
+    pub fn try_get<S: ReadScope + ?Sized>(self, ctx: &S) -> Result<T, SignalError> where T: Clone;
+    pub fn with<S: ReadScope + ?Sized, R>(self, ctx: &S, f: impl FnMut(&T) -> R) -> R; // `# Panics` documented
+    pub fn get<S: ReadScope + ?Sized>(self, ctx: &S) -> T where T: Clone;                // `# Panics` documented
     pub fn peek<R>(self, graph: &dyn ReadGraph, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
 }
 
@@ -236,12 +236,12 @@ pub struct SignalSender<T: 'static>; // Send + Sync; attach() -> Signal<T>; slot
   that compiles today, plus a generic `?Sized` context and `&dyn ReadScope`. It is chosen because
   it accepts strictly more shapes than `&dyn ReadScope`, not because it fixes a break: the
   blanket impls already repair what `&dyn ReadScope` would reject (Context).
-- **`BuildContext: ReadScope` stays a supertrait**, so `count.get(cx)` keeps its spelling.
+- **`BuildContext: ReadScope` stays a supertrait**, so `count.get(ctx)` keeps its spelling.
 - **Subscription is not a method of the graph.** `Reactive` implements `ReadGraph`, which is
   enough for `peek`, and never `ReaderSink`. Sinks are private types in `flui-view`. Today the
   one sink is `ElementReads` (a graph plus one `ElementId`), minted by `make_build_ctx` for the
   element about to build and by `ElementBuildContext` for its own element; from §6 step 2 the
-  drivers of §3 mint them (`ElementDriver` for `BuildCtx` during `build`, `RenderDriver` for
+  drivers of §3 mint them (`ElementDriver` for `LiveBuildContext` during `build`, `RenderDriver` for
   layout and paint). A `ScopeRef` built outside `flui-view` can subscribe only through a sink
   its builder was given, so a forged scope reads and cannot subscribe anyone on a real graph.
 - **A handle of the wrong `T` is a typed error.** `try_with`/`try_get` return
@@ -274,8 +274,8 @@ graph no longer imports anything from `flui-view`'s owner module.
 
 `PipelineOwner` reaches its `RenderDriver` through dependency inversion: a trait object whose
 trait `flui-rendering` declares and `flui-view` implements, so `flui-rendering` never names the
-graph. The driver mints the layout and paint `ScopeRef`s, and `PaintCx` exposes the one it is
-given through `PaintCx::with_read_scope(self, scope: ScopeRef<'a>) -> Self`, not a
+graph. The driver mints the layout and paint `ScopeRef`s, and `PaintContext` exposes the one it is
+given through `PaintContext::with_read_scope(self, scope: ScopeRef<'a>) -> Self`, not a
 `(graph, node)` pair as in the prototype. The drivers are also what mint the `ReaderSink`s of
 §2.
 
@@ -362,10 +362,10 @@ The ordering is three steps, each shippable alone, all in `flui-view` plus the c
    has none until a render reader exists, `ElementDriver` would only restate the `pub(crate)`
    visibility of today's hooks, and `RebuildSink` changes no behaviour.
 3. **The first render-phase subscriber.** A render-object field read in `paint` through
-   `PaintCx: ReadScope`, with the scope minted by `RenderDriver`, written outside the frame
+   `PaintContext: ReadScope`, with the scope minted by `RenderDriver`, written outside the frame
    phases, with a test that fails without the change and observes the repaint itself, not the
    existence of a subscription. This is the first production caller of
-   `PaintCx::with_read_scope`, which does not merge before this step.
+   `PaintContext::with_read_scope`, which does not merge before this step.
 
 `ScrollPosition` is not the first subscriber: the viewport writes it from `perform_layout`
 (`crates/flui-objects/src/sliver/viewport.rs:1057`, `:1104`, `:1827-1828`) and there is no
@@ -374,13 +374,13 @@ policy for writes during layout yet. `CustomPainter` is not either: the trait is
 `Signal<T>` without an API change of its own.
 
 If no render-phase subscriber exists by the B1 milestone, `Reader::Layout`/`Paint`,
-`RenderDriver` and `PaintCx: ReadScope` are removed rather than kept as unwired surface. The
+`RenderDriver` and `PaintContext: ReadScope` are removed rather than kept as unwired surface. The
 foundation contract stays, because production element reads use it.
 
 **Why the graph is not extracted.**
 
 - **The motivation for extraction is met without it.** The prototype compiled
-  `PaintCx: ReadScope` with no manifest change, so render and animation code can name
+  `PaintContext: ReadScope` with no manifest change, so render and animation code can name
   `Signal<T>` and read through `ReadScope` while the graph stays in `flui-view`.
 - **Extraction would make the frequent edit more expensive.** A graph edit where the graph is
   re-checks 3 crates in 3.07 s. A `flui-reactive` crate would have to sit below
@@ -436,19 +436,19 @@ foundation contract stays, because production element reads use it.
 
 ## Consequences
 
-- ADR-0074's placement sentence, its `cx.reactive()` read path and its feature gate are replaced
+- ADR-0074's placement sentence, its `ctx.reactive()` read path and its feature gate are replaced
   by this record; its semantics, guard and measurement stand. [`docs/FOUNDATIONS.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/FOUNDATIONS.md) C1 (line 91)
   loses "`flui-view` feature `signals`" and says "the UI runtime-owned graph" in the same change as §5;
   its sentence "The catalog crates … never take a dependency on a signals crate" stays true,
   because there is no signals crate (§6).
-- **Breaks.** `Signal::get(cx)` call sites keep compiling. Helpers that take `&dyn BuildContext`
+- **Breaks.** `Signal::get(ctx)` call sites keep compiling. Helpers that take `&dyn BuildContext`
   for reads keep compiling and may generalise to `&S where S: ReadScope + ?Sized`. `.set`,
   `.update` and `.set_if_changed` without `flui_view::prelude::*` need
   `use flui_view::SignalWriteExt`; the prototype showed that no in-tree site breaks. Every
   `cfg(feature = "signals")` and the facade's `signals` feature disappear; downstream manifests
   that enable `flui/signals` must drop it. `BuildContext::reactive()` disappears in ADR-0086's
   change, not here.
-- `PaintCx` becomes `!Send`/`!Sync` once it holds a scope. Nothing requires `Send` of it today;
+- `PaintContext` becomes `!Send`/`!Sync` once it holds a scope. Nothing requires `Send` of it today;
   the frame path is owner-thread (ADR-0091).
 - The contract enters the facade's Stable closure (the promise follows the item,
   [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §1): `flui::view` re-exports
@@ -489,18 +489,18 @@ What exists:
   and for a foreign graph, and the owning presentation's frame request.
 
 - §2, in `crates/flui-view/tests/signal_reads.rs` (the `view_it` binary). The production read
-  path (`make_build_ctx`, `BuildCtx::scope`) has no `debug_assertions` branch, so the file runs
+  path (`make_build_ctx`, `LiveBuildContext::scope`) has no `debug_assertions` branch, so the file runs
   in the debug profile only; the one debug-gated read branch, `ElementBuildContext::is_building`,
   belongs to the test seam, which subscribes nobody in release:
-  - `sig.get(cx)` for `&dyn BuildContext`, `&&dyn BuildContext`, `&Box<dyn BuildContext>`,
+  - `sig.get(ctx)` for `&dyn BuildContext`, `&&dyn BuildContext`, `&Box<dyn BuildContext>`,
     generic `C: BuildContext` with and without `?Sized`, `&dyn ReadScope`,
     `&dyn LifecycleContext` and a closure. **Unasserted:** no test pins this.
   - `a_read_in_build_subscribes_through_the_production_context`: a real mount, so the build
-    goes through `make_build_ctx` and `BuildCtx`; a write rebuilds the reader and not its
+    goes through `make_build_ctx` and `LiveBuildContext`; a write rebuilds the reader and not its
     parent, and the reader stays subscribed. The frame report shows two builds: one
     `SignalChange` (the reader) and one `ParentUpdate` (the leaf under it, updated by the
     reader's rebuild, as for any rebuild). That second build is expected, not a second
-    subscriber. With `BuildCtx::scope` passing no sink it fails on the reader set.
+    subscriber. With `LiveBuildContext::scope` passing no sink it fails on the reader set.
   - A write through a handle of the wrong `T` to a slot with a mounted reader returns
     `TypeMismatch`, and the next frame rebuilds nothing for `SignalChange`.
     **Unasserted:** no test pins this.

@@ -121,7 +121,7 @@ impl std::error::Error for FrameworkError {}
 ///
 /// # Customization
 ///
-/// Set an [`ErrorViewBuilder`] on the UI runtime (`AppConfig::with_error_view_builder`,
+/// Set an [`ErrorViewBuilder`] on the UI runtime (`AppConfig::error_view_builder`,
 /// or `BuildOwner::capabilities_mut` for one presentation) to customize how
 /// errors are displayed.
 #[derive(Clone)]

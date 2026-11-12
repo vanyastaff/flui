@@ -208,9 +208,9 @@ pub struct InteractionEndDetails {
     pub scale_velocity: f64,
 }
 
-type StartCallback = Rc<dyn Fn(&mut EventCx<'_>, InteractionStartDetails)>;
-type UpdateCallback = Rc<dyn Fn(&mut EventCx<'_>, InteractionUpdateDetails)>;
-type EndCallback = Rc<dyn Fn(&mut EventCx<'_>, InteractionEndDetails)>;
+type StartCallback = Rc<dyn Fn(&mut EventContext<'_>, InteractionStartDetails)>;
+type UpdateCallback = Rc<dyn Fn(&mut EventContext<'_>, InteractionUpdateDetails)>;
+type EndCallback = Rc<dyn Fn(&mut EventContext<'_>, InteractionEndDetails)>;
 
 // ============================================================================
 // ZoomIntent
@@ -313,9 +313,8 @@ struct ViewerConfig {
 ///         .control(GestureCommand::new("Zoom out", ZoomIntent::Out), SizedBox::new(16.0, 16.0)),
 /// ))
 /// .expect("two distinct labels");
-/// let viewer = InteractiveViewer::new(alternatives)
-///     .max_scale(8.0)
-///     .child(ColoredBox::new(Color::rgb(20, 40, 60)));
+/// let viewer = InteractiveViewer::new(alternatives, ColoredBox::new(Color::rgb(20, 40, 60)))
+///     .max_scale(8.0);
 /// ```
 #[derive(Clone)]
 pub struct InteractiveViewer {
@@ -341,12 +340,12 @@ impl std::fmt::Debug for InteractiveViewer {
 }
 
 impl InteractiveViewer {
-    /// A viewer whose single-pointer, keyboard and assistive paths are
-    /// `alternatives`, with default limits (`min_scale: 0.8`,
-    /// `max_scale: 2.5`, zero boundary margin, pan, wheel scale and double
-    /// tap zoom enabled).
+    /// A viewer that pans and zooms `child`, whose single-pointer, keyboard
+    /// and assistive paths are `alternatives`, with default limits
+    /// (`min_scale: 0.8`, `max_scale: 2.5`, zero boundary margin, pan, wheel
+    /// scale and double tap zoom enabled).
     #[must_use]
-    pub fn new(alternatives: GestureAlternatives) -> Self {
+    pub fn new(alternatives: GestureAlternatives, child: impl IntoView) -> Self {
         Self {
             alternatives,
             controller: TransformationController::new(),
@@ -367,7 +366,7 @@ impl InteractiveViewer {
             on_interaction_start: None,
             on_interaction_update: None,
             on_interaction_end: None,
-            child: Child::empty(),
+            child: Child::some(child.into_view()),
         }
     }
 
@@ -521,10 +520,10 @@ impl InteractiveViewer {
     #[must_use]
     pub fn on_interaction_start<R: EventOutcome>(
         mut self,
-        callback: impl Fn(&mut EventCx<'_>, InteractionStartDetails) -> R + 'static,
+        callback: impl Fn(&mut EventContext<'_>, InteractionStartDetails) -> R + 'static,
     ) -> Self {
         self.on_interaction_start =
-            Some(Rc::new(move |cx, details| callback(cx, details).report()));
+            Some(Rc::new(move |ctx, details| callback(ctx, details).report()));
         self
     }
 
@@ -532,10 +531,10 @@ impl InteractiveViewer {
     #[must_use]
     pub fn on_interaction_update<R: EventOutcome>(
         mut self,
-        callback: impl Fn(&mut EventCx<'_>, InteractionUpdateDetails) -> R + 'static,
+        callback: impl Fn(&mut EventContext<'_>, InteractionUpdateDetails) -> R + 'static,
     ) -> Self {
         self.on_interaction_update =
-            Some(Rc::new(move |cx, details| callback(cx, details).report()));
+            Some(Rc::new(move |ctx, details| callback(ctx, details).report()));
         self
     }
 
@@ -543,16 +542,10 @@ impl InteractiveViewer {
     #[must_use]
     pub fn on_interaction_end<R: EventOutcome>(
         mut self,
-        callback: impl Fn(&mut EventCx<'_>, InteractionEndDetails) -> R + 'static,
+        callback: impl Fn(&mut EventContext<'_>, InteractionEndDetails) -> R + 'static,
     ) -> Self {
-        self.on_interaction_end = Some(Rc::new(move |cx, details| callback(cx, details).report()));
-        self
-    }
-
-    /// The child to pan and zoom.
-    #[must_use]
-    pub fn child(mut self, child: impl IntoView) -> Self {
-        self.child = Child::some(child.into_view());
+        self.on_interaction_end =
+            Some(Rc::new(move |ctx, details| callback(ctx, details).report()));
         self
     }
 }
@@ -1437,7 +1430,7 @@ impl ViewerCore {
 struct ZoomAction(Rc<ViewerCore>);
 
 impl Action<ZoomIntent> for ZoomAction {
-    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &ZoomIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, intent: &ZoomIntent) -> ActionOutcome {
         if self.0.zoom_step(*intent) {
             ActionOutcome::Performed
         } else {
@@ -1450,7 +1443,7 @@ impl Action<ZoomIntent> for ZoomAction {
 struct PanAction(Rc<ViewerCore>);
 
 impl Action<PanIntent> for PanAction {
-    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &PanIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, intent: &PanIntent) -> ActionOutcome {
         if self.0.pan_step(*intent) {
             ActionOutcome::Performed
         } else {
@@ -2030,7 +2023,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
         let keys = Focus::new(mount)
             .focus_node(Rc::clone(&self.keys))
             .can_request_focus(false)
-            .on_key_event(move |_cx, event| key_core.key_pan(event));
+            .on_key_event(move |_ctx, event| key_core.key_pan(event));
         let mut shortcuts = Shortcuts::new(keys);
         for (activator, intent) in zoom_keys(flui_view::environment::PlatformConvention::of(ctx)) {
             shortcuts = shortcuts.shortcut(activator, intent);
@@ -2091,7 +2084,7 @@ impl InteractiveViewerState {
 
             // -- Contacts and the native pinch (one transform slot) --------
             let start_core = Rc::clone(&core);
-            let on_start = move |cx: &mut EventCx<'_>, details: ScaleStartDetails| {
+            let on_start = move |ctx: &mut EventContext<'_>, details: ScaleStartDetails| {
                 let core = &start_core;
                 // A gesture that catches a snap-back continues from where the
                 // scene shows.
@@ -2114,7 +2107,7 @@ impl InteractiveViewerState {
                 }
                 if let Some(callback) = core.callbacks().start {
                     callback(
-                        cx,
+                        ctx,
                         InteractionStartDetails {
                             focal_point: details.focal_point,
                             local_focal_point: details.local_focal_point,
@@ -2124,7 +2117,7 @@ impl InteractiveViewerState {
             };
 
             let update_core = Rc::clone(&core);
-            let on_update = move |cx: &mut EventCx<'_>, details: ScaleUpdateDetails| {
+            let on_update = move |ctx: &mut EventContext<'_>, details: ScaleUpdateDetails| {
                 let core = &update_core;
                 let config = core.config.get();
                 let before = core.controller().value();
@@ -2171,7 +2164,7 @@ impl InteractiveViewerState {
                 }
                 if let Some(callback) = core.callbacks().update {
                     callback(
-                        cx,
+                        ctx,
                         InteractionUpdateDetails {
                             focal_point: details.focal_point,
                             local_focal_point: details.local_focal_point,
@@ -2189,7 +2182,7 @@ impl InteractiveViewerState {
 
             let end_core = Rc::clone(&core);
             let end_post_frame = post_frame.clone();
-            let on_end = move |cx: &mut EventCx<'_>, details: ScaleEndDetails| {
+            let on_end = move |ctx: &mut EventContext<'_>, details: ScaleEndDetails| {
                 let core = &end_core;
                 let config = core.config.get();
                 let velocity = core.lock(details.focal_fling_velocity().pixels_per_second);
@@ -2238,7 +2231,7 @@ impl InteractiveViewerState {
                 if let Some(callback) = core.callbacks().end {
                     recovery.run(|| {
                         callback(
-                            cx,
+                            ctx,
                             InteractionEndDetails {
                                 reason: GestureEndReason::Completed,
                                 velocity: details.focal_velocity,
@@ -2252,7 +2245,7 @@ impl InteractiveViewerState {
 
             let cancel_core = Rc::clone(&core);
             let cancel_post_frame = post_frame.clone();
-            let on_cancel = move |cx: &mut EventCx<'_>| {
+            let on_cancel = move |ctx: &mut EventContext<'_>| {
                 let core = &cancel_core;
                 core.fling.stop(ScrollEndReason::Cancelled);
                 core.gesture.reset();
@@ -2269,7 +2262,7 @@ impl InteractiveViewerState {
                 }
                 if let Some(callback) = core.callbacks().end {
                     callback(
-                        cx,
+                        ctx,
                         InteractionEndDetails {
                             reason: GestureEndReason::Cancelled,
                             velocity: Velocity::ZERO,
@@ -2341,7 +2334,7 @@ impl InteractiveViewerState {
             let wheel_writer = writer.clone();
             let wheel_preferences = wheel_preferences.clone();
             let scroll_claim = move |data: &ScrollEvent| {
-                wheel_writer.write(|cx| {
+                wheel_writer.write(|ctx| {
                     let core = &wheel_core;
                     if core.config.get().wheel_scale_gate == WheelScaleGate::CtrlWheel
                         && !data.modifiers.contains(Modifiers::CONTROL)
@@ -2354,7 +2347,7 @@ impl InteractiveViewerState {
                             EventPropagation::Continue
                         };
                     }
-                    wheel_zoom(core, cx, data)
+                    wheel_zoom(core, ctx, data)
                 })
             };
 
@@ -2385,14 +2378,14 @@ impl InteractiveViewerState {
                 let tap_core = Rc::clone(&core);
                 let zoom_core = Rc::clone(&core);
                 recognized = recognized
-                    .on_double_tap_down(move |_cx, details| {
+                    .on_double_tap_down(move |_ctx, details| {
                         hint_core.focal_hint.set(Some(details.local_position));
                     })
-                    .on_double_tap(move |cx| double_tap(&tap_core, cx))
+                    .on_double_tap(move |ctx| double_tap(&tap_core, ctx))
                     // A trackpad's smart zoom is the same gesture.
-                    .on_smart_zoom(move |cx, details| {
+                    .on_smart_zoom(move |ctx, details| {
                         zoom_core.focal_hint.set(Some(details.local_position));
-                        double_tap(&zoom_core, cx);
+                        double_tap(&zoom_core, ctx);
                     });
             }
             let recognized = recognized.child(clipped);
@@ -2435,7 +2428,7 @@ impl InteractiveViewerState {
 
 /// A double tap: the first command about the tapped point, or, at the
 /// maximum scale, back out to the minimum.
-fn double_tap(core: &ViewerCore, cx: &mut EventCx<'_>) {
+fn double_tap(core: &ViewerCore, ctx: &mut EventContext<'_>) {
     let config = core.config.get();
     let at_max = core.scale() >= config.max_scale * (1.0 - 1e-9);
     if at_max {
@@ -2446,7 +2439,7 @@ fn double_tap(core: &ViewerCore, cx: &mut EventCx<'_>) {
     }
     let command = core.command.borrow().clone();
     if let Some(command) = command {
-        let _ = command.perform(cx);
+        let _ = command.perform(ctx);
     }
     core.focal_hint.set(None);
 }
@@ -2462,13 +2455,15 @@ fn viewer_semantics(core: &Rc<ViewerCore>, config: &ViewerConfig, matrix: &Matri
     };
     let zoom = |intent: ZoomIntent| {
         let core = Rc::clone(core);
-        move |_cx: &mut EventCx<'_>| {
+        move |_ctx: &mut EventContext<'_>| {
             let _ = core.zoom_step(intent);
         }
     };
     let pan = |direction: Vec2| {
         let core = Rc::clone(core);
-        move |_cx: &mut EventCx<'_>, unit: SemanticsScrollUnit| core.assistive_pan(direction, unit)
+        move |_ctx: &mut EventContext<'_>, unit: SemanticsScrollUnit| {
+            core.assistive_pan(direction, unit);
+        }
     };
     let mut semantics = Semantics::new()
         .value(format!("{percent}%"))
@@ -2488,19 +2483,24 @@ fn viewer_semantics(core: &Rc<ViewerCore>, config: &ViewerConfig, matrix: &Matri
         )
     {
         let set_core = Rc::clone(core);
-        semantics = semantics
-            .numeric_range(range)
-            .on_set_numeric_value(move |_cx, target: f64| {
-                let current = set_core.scale();
-                set_core.interrupt();
-                let _ = set_core.zoom_by(target / current, None);
-            });
+        semantics =
+            semantics
+                .numeric_range(range)
+                .on_set_numeric_value(move |_ctx, target: f64| {
+                    let current = set_core.scale();
+                    set_core.interrupt();
+                    let _ = set_core.zoom_by(target / current, None);
+                });
     }
     semantics
 }
 
 /// A wheel tick that zooms about the pointer.
-fn wheel_zoom(core: &ViewerCore, cx: &mut EventCx<'_>, data: &ScrollEvent) -> EventPropagation {
+fn wheel_zoom(
+    core: &ViewerCore,
+    ctx: &mut EventContext<'_>,
+    data: &ScrollEvent,
+) -> EventPropagation {
     let config = core.config.get();
     let geometry = core.geometry();
     let pixels_per_unit = match data.delta.unit() {
@@ -2537,7 +2537,7 @@ fn wheel_zoom(core: &ViewerCore, cx: &mut EventCx<'_>, data: &ScrollEvent) -> Ev
     let callbacks = core.callbacks();
     if let Some(callback) = &callbacks.start {
         callback(
-            cx,
+            ctx,
             InteractionStartDetails {
                 focal_point: position,
                 local_focal_point: position,
@@ -2574,7 +2574,7 @@ fn wheel_zoom(core: &ViewerCore, cx: &mut EventCx<'_>, data: &ScrollEvent) -> Ev
 
     if let Some(callback) = &callbacks.update {
         callback(
-            cx,
+            ctx,
             InteractionUpdateDetails {
                 focal_point: position,
                 local_focal_point: position,
@@ -2585,7 +2585,7 @@ fn wheel_zoom(core: &ViewerCore, cx: &mut EventCx<'_>, data: &ScrollEvent) -> Ev
     }
     if let Some(callback) = &callbacks.end {
         callback(
-            cx,
+            ctx,
             InteractionEndDetails {
                 reason: GestureEndReason::Completed,
                 velocity: Velocity::ZERO,

@@ -23,7 +23,7 @@ pub fn dismiss_alternatives() -> flui_widgets::GestureAlternatives {
     flui_widgets::GestureAlternatives::try_new(flui_widgets::Alternative::ContextMenu(
         flui_widgets::MenuSpec::new(
             flui_widgets::GestureCommand::new("Dismiss", Dismiss),
-            |_cx, _request| {},
+            |_ctx, _request| {},
         ),
     ))
     .expect("one labelled command")
@@ -37,7 +37,7 @@ pub fn viewer_alternatives() -> flui_widgets::GestureAlternatives {
     flui_widgets::GestureAlternatives::try_new(flui_widgets::Alternative::ContextMenu(
         flui_widgets::MenuSpec::new(
             flui_widgets::GestureCommand::new("Zoom in", flui_widgets::ZoomIntent::In),
-            |_cx, _request| {},
+            |_ctx, _request| {},
         )
         .item(flui_widgets::GestureCommand::new(
             "Zoom out",
@@ -55,7 +55,7 @@ pub fn pager_alternatives() -> flui_widgets::GestureAlternatives {
     flui_widgets::GestureAlternatives::try_new(flui_widgets::Alternative::ContextMenu(
         flui_widgets::MenuSpec::new(
             flui_widgets::GestureCommand::new("Previous page", flui_widgets::PageIntent::Previous),
-            |_cx, _request| {},
+            |_ctx, _request| {},
         )
         .item(flui_widgets::GestureCommand::new(
             "Next page",

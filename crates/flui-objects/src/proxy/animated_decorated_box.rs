@@ -16,7 +16,7 @@ use flui_painting::styling::BoxDecoration;
 use flui_painting::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
 use flui_rendering::{
     RenderUpdateImpact,
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
     traits::RenderBox,
@@ -28,7 +28,7 @@ use crate::proxy::DecorationPosition;
 /// Paints an animated [`BoxDecoration`] before or after its child.
 #[derive(Debug)]
 pub struct RenderAnimatedDecoratedBox {
-    decoration: AnimationSample<BoxDecoration<f64>>,
+    decoration: AnimationSample<BoxDecoration>,
     position: DecorationPosition,
     has_child: bool,
 }
@@ -36,7 +36,7 @@ pub struct RenderAnimatedDecoratedBox {
 impl RenderAnimatedDecoratedBox {
     /// A node painting `decoration`'s current value behind its child.
     #[must_use]
-    pub fn new(decoration: ProxyAnimation<BoxDecoration<f64>>) -> Self {
+    pub fn new(decoration: ProxyAnimation<BoxDecoration>) -> Self {
         Self {
             decoration: AnimationSample::new(decoration, BoxDecoration::new(), |_| true),
             position: DecorationPosition::Background,
@@ -46,7 +46,7 @@ impl RenderAnimatedDecoratedBox {
 
     /// The last sampled decoration.
     #[must_use]
-    pub fn decoration(&self) -> BoxDecoration<f64> {
+    pub fn decoration(&self) -> BoxDecoration {
         self.decoration.get()
     }
 
@@ -65,7 +65,7 @@ impl RenderAnimatedDecoratedBox {
         RenderUpdateImpact::PAINT
     }
 
-    fn paint_decoration(ctx: &mut PaintCx<'_, Single>, decoration: &BoxDecoration<f64>) {
+    fn paint_decoration(ctx: &mut PaintContext<'_, Single>, decoration: &BoxDecoration) {
         let rect = Rect::from_origin_size(Point::ZERO, ctx.size());
         paint_box_decoration(
             ctx.canvas(),
@@ -122,7 +122,7 @@ impl RenderBox for RenderAnimatedDecoratedBox {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let decoration = self.decoration();
         if self.position == DecorationPosition::Background {
             Self::paint_decoration(ctx, &decoration);

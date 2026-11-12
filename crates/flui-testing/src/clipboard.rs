@@ -153,7 +153,7 @@ impl ScriptedClipboard {
 }
 
 impl CapabilityProvider<ClipboardCapability> for ScriptedClipboard {
-    fn provide(&self, cx: &ProviderContext<'_>) -> Result<ClipboardHandle, Unsupported> {
+    fn provide(&self, ctx: &ProviderContext<'_>) -> Result<ClipboardHandle, Unsupported> {
         let state = self.state.borrow();
         if let Some(refusal) = state.refusal {
             return Err(refusal);
@@ -162,7 +162,7 @@ impl CapabilityProvider<ClipboardCapability> for ScriptedClipboard {
             state: Rc::clone(&self.state),
             _handle: Rc::clone(&state.handles),
         };
-        Ok(ClipboardHandle::new(backend, cx))
+        Ok(ClipboardHandle::new(backend, ctx))
     }
 }
 

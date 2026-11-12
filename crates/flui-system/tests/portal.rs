@@ -535,10 +535,10 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
     );
     let request = OpenRequest::files()
         .allow_multiple()
-        .with_title("Pictures")
-        .with_directory("/home/me")
-        .with_accept_label("Use")
-        .with_filter(FileFilter::new("Images").with_extension("png"));
+        .title("Pictures")
+        .directory("/home/me")
+        .accept_label("Use")
+        .filter(FileFilter::new("Images").with_extension("png"));
     assert_eq!(
         settle(&mut host, dialogs.open(request)),
         Ok(Ok(Some(vec![
@@ -551,7 +551,7 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
     assert_eq!(
         settle(
             &mut host,
-            dialogs.save(SaveRequest::new().with_suggested_name("notes.txt"))
+            dialogs.save(SaveRequest::new().suggested_name("notes.txt"))
         ),
         Ok(Ok(None)),
         "a cancelled dialog answers no pick"

@@ -31,8 +31,8 @@ fn sliver_hit_constraints(axis: AxisDirection, growth: GrowthDirection) -> Slive
         AxisDirection::LeftToRight | AxisDirection::RightToLeft => sliver::horizontal(),
     };
     builder
-        .with_axis_direction(axis)
-        .with_growth_direction(growth)
+        .axis_direction(axis)
+        .growth_direction(growth)
         .remaining_paint_extent(100.0)
         .cross_axis_extent(100.0)
         .viewport_main_axis_extent(100.0)

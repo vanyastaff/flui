@@ -186,7 +186,7 @@ mod cases {
             let platform = self.platform.upgrade().expect("the client lives");
             let window = platform
                 .open_window(
-                    flui_platform::WindowOptions::default().with_title("opened by a drop"),
+                    flui_platform::WindowOptions::default().title("opened by a drop"),
                     flui_testing::window_handler::RecordingWindowHandler::new() as _,
                 )
                 .expect("a window opens from a dropped capture");

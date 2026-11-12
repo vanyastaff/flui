@@ -1,4 +1,4 @@
-use super::{DependencySource, ProjectPlan};
+use super::{DependencySource, FrameworkPackage, ProjectPlan};
 
 /// A reusable widget library: one `StatelessView` plus a widget test, no
 /// `main.rs` and no `[[bin]]` — `flui run` detects the missing binary target
@@ -16,8 +16,14 @@ pub fn generate(name: &str, app_id: &str, source: &DependencySource) -> ProjectP
 fn cargo_toml(name: &str, lib_name: &str, source: &DependencySource) -> String {
     let version = env!("CARGO_PKG_VERSION");
 
-    let deps = format!("flui = {}", source.dependency("flui", &[]));
-    let test_deps = format!("flui = {}", source.dependency("flui", &["testing"]));
+    let deps = format!(
+        "flui = {}",
+        source.dependency(FrameworkPackage::Facade, &[])
+    );
+    let test_deps = format!(
+        "flui = {}",
+        source.dependency(FrameworkPackage::Facade, &["testing"])
+    );
     let mode_comment = if matches!(source, DependencySource::Local(_)) {
         " (local development)"
     } else {

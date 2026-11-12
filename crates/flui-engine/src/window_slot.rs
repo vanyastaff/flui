@@ -216,6 +216,38 @@ impl WindowSlot {
         self.frame.surface_changed();
     }
 
+    /// The surface the slot holds; `None` while it is released.
+    pub(crate) fn surface(&self) -> Option<&wgpu::Surface<'static>> {
+        self.lease.surface()
+    }
+
+    /// The context rebuilt its device: configure the held surface on the new
+    /// one from the new adapter's capabilities (ADR-0063 decision 6), at the
+    /// slot's size. What the frame protocol retained was the old device's
+    /// and is dropped, so the next frame repaints in full. A released slot
+    /// stays released until its restore.
+    ///
+    /// # Errors
+    /// [`EngineError::IncompatibleSurface`] when the new adapter cannot
+    /// present to the surface, which is then dropped for the owner to
+    /// replace; [`EngineError::InvalidTargetSize`] when the slot's size is over
+    /// the new device's limit, which leaves the surface unconfigured until a
+    /// resize fits; a configuration error.
+    pub(crate) fn rebuild(&mut self, gpu: &Gpu<'_>) -> EngineResult<()> {
+        self.configured = None;
+        self.recovery.reset();
+        self.frame.release_target();
+        self.frame.surface_changed();
+        if !self.lease.has_surface() {
+            return Ok(());
+        }
+        if let Err(error) = presentable(gpu, &self.lease) {
+            let _released = self.lease.release();
+            return Err(error);
+        }
+        self.configure(gpu)
+    }
+
     /// Present to `surface` from now on, configured at the slot's size.
     ///
     /// # Errors
@@ -408,10 +440,21 @@ impl WindowSlot {
 
     /// Configure the held surface at the slot's size from its own
     /// capabilities; nothing while it has no size or no surface.
+    ///
+    /// # Errors
+    /// [`EngineError::InvalidTargetSize`] when the size is over the device's
+    /// limit, which leaves the slot unconfigured; a configuration error.
     fn configure(&mut self, gpu: &Gpu<'_>) -> EngineResult<()> {
         let (Some(surface), Some((width, height))) = (self.lease.surface(), self.size) else {
             return Ok(());
         };
+        // Every configuration checks the size against the device it is made
+        // on: a rebuilt device's limit can be below the size an older one
+        // took, and the slot then stays unconfigured until a resize fits.
+        let max = gpu.device.limits().max_texture_dimension_2d;
+        if width > max || height > max {
+            return Err(EngineError::InvalidTargetSize { width, height });
+        }
         let (config, supports_copy_src, color) = crate::Renderer::derive_surface_config(
             surface,
             gpu.adapter,

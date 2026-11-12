@@ -143,14 +143,14 @@ struct PageState {
 }
 
 impl ViewState<Page> for PageState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.probe.inits.set(self.probe.inits.get() + 1);
-        *self.probe.handle.borrow_mut() = Some(Router::<AppRoute>::handle(cx));
-        *self.probe.navigator.borrow_mut() = NavigatorHandle::maybe_of(cx);
-        *self.probe.driver.borrow_mut() = cx.async_driver();
+        *self.probe.handle.borrow_mut() = Some(Router::<AppRoute>::handle(ctx));
+        *self.probe.navigator.borrow_mut() = NavigatorHandle::maybe_of(ctx);
+        *self.probe.driver.borrow_mut() = ctx.async_driver();
     }
 
-    fn build(&self, view: &Page, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &Page, _ctx: &dyn BuildContext) -> impl IntoView {
         (view.child)()
     }
 }
@@ -170,7 +170,7 @@ fn text(label: String) -> BoxedView {
 /// The two-screen app: `Home` is a tappable page that pushes `Note 1`.
 fn pages(home: &Probe) -> impl Fn(&AppRoute, &dyn BuildContext) -> BoxedView + 'static {
     let home = home.clone();
-    move |route, _cx| match route {
+    move |route, _ctx| match route {
         AppRoute::Home => {
             let probe = home.clone();
             page(&home, move || {
@@ -179,7 +179,7 @@ fn pages(home: &Probe) -> impl Fn(&AppRoute, &dyn BuildContext) -> BoxedView + '
                     .label("Home page")
                     .child(
                         GestureDetector::new()
-                            .on_tap(move |_cx| {
+                            .on_tap(move |_ctx| {
                                 probe
                                     .handle()
                                     .push(AppRoute::Note { id: 1 })
@@ -378,7 +378,7 @@ pub(crate) fn router_go_recomputes_its_prefix_after_popup_observer_navigation() 
     let home_id = navigator.current().expect("initial page");
     router.push(AppRoute::Note { id: 1 }).expect("mounted");
     settle(&mut laid);
-    let _popup = navigator.push(PopupRoute::<()>::new(|_cx, _a, _s| {
+    let _popup = navigator.push(PopupRoute::<()>::new(|_ctx, _a, _s| {
         Text::new("Temporary popup").boxed()
     }));
     settle(&mut laid);
@@ -577,13 +577,13 @@ impl StatefulView for DropPage {
 struct DropPageState(DropProbe);
 
 impl ViewState<DropPage> for DropPageState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         *self.0.router.borrow_mut() =
-            Some(Router::<DropRoute>::handle(cx).expect("router ancestor"));
-        *self.0.navigator.borrow_mut() = NavigatorHandle::maybe_of(cx);
+            Some(Router::<DropRoute>::handle(ctx).expect("router ancestor"));
+        *self.0.navigator.borrow_mut() = NavigatorHandle::maybe_of(ctx);
     }
 
-    fn build(&self, view: &DropPage, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &DropPage, _ctx: &dyn BuildContext) -> impl IntoView {
         Text::new(format!("Drop page {}", view.value))
     }
 }
@@ -595,7 +595,7 @@ fn drop_route_app() -> (LaidOut, RouterHandle<DropRoute>, NavigatorHandle) {
     let mut laid = lay_out_animated(
         VsyncScope::new(
             vsync.clone(),
-            Router::new(DropRoute::new(0), move |route: &DropRoute, _cx| {
+            Router::new(DropRoute::new(0), move |route: &DropRoute, _ctx| {
                 DropPage {
                     probe: page_probe.clone(),
                     value: route.value,
@@ -1443,7 +1443,7 @@ pub(crate) fn router_opens_at_a_location_with_its_back_stack() {
 /// a restored router opens on hands the test a handle.
 fn recording_pages(probe: &Probe) -> impl Fn(&AppRoute, &dyn BuildContext) -> BoxedView + 'static {
     let probe = probe.clone();
-    move |route, _cx| {
+    move |route, _ctx| {
         let label = match route {
             AppRoute::Home => "Home".to_owned(),
             AppRoute::Note { id } => format!("Note {id}"),
@@ -1537,7 +1537,7 @@ pub(crate) fn from_stack_opens_without_a_transition() {
     let pages = {
         let built = Rc::clone(&built);
         let probe = probe.clone();
-        move |route: &AppRoute, _cx: &dyn BuildContext| {
+        move |route: &AppRoute, _ctx: &dyn BuildContext| {
             built.borrow_mut().push(route.clone());
             let label = route.to_path().to_string();
             page(&probe, move || text(label.clone()))
@@ -1545,7 +1545,7 @@ pub(crate) fn from_stack_opens_without_a_transition() {
     };
     let transitions = {
         let entrances = Rc::clone(&entrances);
-        move |_cx: &dyn BuildContext,
+        move |_ctx: &dyn BuildContext,
               animation: &RouteAnimation,
               _secondary: &RouteAnimation,
               child: BoxedView| {
@@ -1608,7 +1608,7 @@ pub(crate) fn stack_leaves_out_popups() {
     settle(&mut laid);
     let _result = home
         .navigator()
-        .push(PopupRoute::<()>::new(|_cx, _a, _s| text("Dialog".into())));
+        .push(PopupRoute::<()>::new(|_ctx, _a, _s| text("Dialog".into())));
     settle(&mut laid);
 
     assert!(laid_out_text(&laid, "Dialog"));
@@ -1738,12 +1738,12 @@ struct HandleKeeperState {
 }
 
 impl ViewState<HandleKeeper> for HandleKeeperState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         *self.router.borrow_mut() =
-            Some(Router::<PoppingRoute>::handle(cx).expect("a Router<PoppingRoute> above"));
+            Some(Router::<PoppingRoute>::handle(ctx).expect("a Router<PoppingRoute> above"));
     }
 
-    fn build(&self, _view: &HandleKeeper, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &HandleKeeper, _ctx: &dyn BuildContext) -> impl IntoView {
         Text::new("page")
     }
 }
@@ -1771,7 +1771,7 @@ fn popping_router() -> PoppingRouter {
     let keeper = HandleKeeper {
         router: Rc::clone(&router),
     };
-    let restored = Router::from_stack(vec![route(0), route(1), route(2)], move |_route, _cx| {
+    let restored = Router::from_stack(vec![route(0), route(1), route(2)], move |_route, _ctx| {
         keeper.clone().boxed()
     })
     .expect("a non-empty stack");
@@ -1838,7 +1838,7 @@ pub(crate) fn popup_routes_are_admitted_and_leave_the_location_alone() {
     let router = home.handle();
     let navigator = home.navigator();
 
-    let _result = navigator.push(PopupRoute::<()>::new(|_cx, _a, _s| {
+    let _result = navigator.push(PopupRoute::<()>::new(|_ctx, _a, _s| {
         Text::new("Dialog").into_view().boxed()
     }));
     settle(&mut laid);
@@ -1886,7 +1886,7 @@ pub(crate) fn a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles() {
     let home = Probe::default();
     let transitions = {
         let (frame, entering) = (Rc::clone(&frame), Rc::clone(&entering));
-        move |_cx: &dyn BuildContext,
+        move |_ctx: &dyn BuildContext,
               animation: &RouteAnimation,
               _secondary: &RouteAnimation,
               child: BoxedView| {

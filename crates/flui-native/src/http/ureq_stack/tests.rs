@@ -178,11 +178,11 @@ fn a_request_carries_its_parts_and_any_status_answers() {
     let server = Server::start(answer);
     let stack = Agents::new();
     let request = HttpRequest::new(Method::Post, server.url("/missing"))
-        .with_header(
+        .header(
             HeaderName::try_new("X-Name").expect("a token"),
             HeaderValue::try_new(b"value").expect("a value"),
         )
-        .with_body(b"ping".to_vec());
+        .body(b"ping".to_vec());
     let mut connection = stack.open(&request).expect("the request opens");
     let head = connection.send().expect("a 404 is an answer");
     assert_eq!(head.status.as_u16(), 404);

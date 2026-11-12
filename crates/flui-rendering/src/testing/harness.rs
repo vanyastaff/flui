@@ -483,7 +483,7 @@ impl FrameRun {
     /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> flui_rendering::RenderResult<Size> {
     /// #         Ok(Size::new((self.0), (self.0)))
     /// #     }
-    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    /// #     fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
     /// # }
     /// let mut run = RenderTester::mount(box_node(FixedBox(40.0)).label("root"))
     ///     .run_frame();
@@ -563,7 +563,7 @@ impl FrameRun {
     /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> flui_rendering::RenderResult<Size> {
     /// #         Ok(Size::new((self.0), (self.0)))
     /// #     }
-    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    /// #     fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
     /// # }
     /// let mut run = RenderTester::mount(box_node(FixedBox(40.0)).label("root"))
     ///     .run_frame();
@@ -705,7 +705,7 @@ impl RenderTester {
     /// #     type Arity = Leaf;
     /// #     type ParentData = BoxParentData;
     /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> flui_rendering::RenderResult<Size> { Ok(Size::ZERO) }
-    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    /// #     fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
     /// # }
     /// let run = RenderTester::mount(box_node(FixedBox)).run_layout();
     /// let _ = run.snapshot();
@@ -728,7 +728,7 @@ impl RenderTester {
     /// #     type Arity = Leaf;
     /// #     type ParentData = BoxParentData;
     /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> flui_rendering::RenderResult<Size> { Ok(Size::ZERO) }
-    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    /// #     fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
     /// # }
     /// let run = RenderTester::mount(box_node(FixedBox)).run_to_paint();
     /// let _ = run.snapshot();

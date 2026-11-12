@@ -22,6 +22,14 @@ impl PreparedCost {
         })
     }
 
+    fn saturating_sub(self, other: Self) -> Self {
+        Self {
+            gpu_bytes: self.gpu_bytes.saturating_sub(other.gpu_bytes),
+            cpu_bytes: self.cpu_bytes.saturating_sub(other.cpu_bytes),
+            objects: self.objects.saturating_sub(other.objects),
+        }
+    }
+
     fn fits(self, cap: Self) -> bool {
         self.gpu_bytes <= cap.gpu_bytes
             && self.cpu_bytes <= cap.cpu_bytes
@@ -97,6 +105,9 @@ struct LedgerState {
     retirements: usize,
     lifecycle: Lifecycle,
     frame: Option<(u64, usize, usize)>,
+    /// What the open frame reserved and still holds: a request that does not
+    /// fit beside it never fits while that frame asks.
+    frame_held: PreparedCost,
     next_frame: u64,
 }
 
@@ -116,6 +127,7 @@ impl Ledger {
                 retirements: 0,
                 lifecycle: Lifecycle::Open,
                 frame: None,
+                frame_held: PreparedCost::default(),
                 next_frame: 0,
             }),
         })
@@ -135,9 +147,17 @@ impl Ledger {
             return Err(DomainError::Unavailable);
         }
         let next = state.used.checked_add(cost).ok_or(DomainError::Overflow)?;
+        let frame_next = state
+            .frame_held
+            .checked_add(cost)
+            .ok_or(DomainError::Overflow)?;
         if !next.fits(self.limits.cost) {
             let current = state.frame.map_or(0, |(_, _, live)| live);
-            if cost.fits(self.limits.cost) && (state.submissions > current || state.retirements > 0)
+            // What the open frame holds does not leave while the frame asks:
+            // a request that does not fit beside it never fits, however much
+            // earlier work retires, so it is refused for good, not held back.
+            if frame_next.fits(self.limits.cost)
+                && (state.submissions > current || state.retirements > 0)
             {
                 return Err(DomainError::Backpressure);
             }
@@ -148,9 +168,14 @@ impl Ledger {
             });
         }
         state.used = next;
+        let frame = state.frame.map(|(id, _, _)| id);
+        if frame.is_some() {
+            state.frame_held = frame_next;
+        }
         Ok(PreparedPermit {
             ledger: Arc::clone(self),
             cost,
+            frame,
         })
     }
 
@@ -224,6 +249,7 @@ impl Drop for FrameSubmissionScope {
         let mut state = self.ledger.state();
         if state.frame.is_some_and(|(id, _, _)| id == self.id) {
             state.frame = None;
+            state.frame_held = PreparedCost::default();
         }
     }
 }
@@ -233,6 +259,9 @@ impl Drop for FrameSubmissionScope {
 pub(crate) struct PreparedPermit {
     ledger: Arc<Ledger>,
     cost: PreparedCost,
+    /// The frame that reserved it while that frame was open, whose held
+    /// charge it counts in.
+    frame: Option<u64>,
 }
 
 impl Drop for PreparedPermit {
@@ -241,6 +270,11 @@ impl Drop for PreparedPermit {
         state.used.gpu_bytes = state.used.gpu_bytes.saturating_sub(self.cost.gpu_bytes);
         state.used.cpu_bytes = state.used.cpu_bytes.saturating_sub(self.cost.cpu_bytes);
         state.used.objects = state.used.objects.saturating_sub(self.cost.objects);
+        if let Some(frame) = self.frame
+            && state.frame.is_some_and(|(id, _, _)| id == frame)
+        {
+            state.frame_held = state.frame_held.saturating_sub(self.cost);
+        }
     }
 }
 
@@ -718,6 +752,7 @@ mod tests {
         active_frame_work_is_separate_from_prior_backlog();
         delayed_allocation_retirement_keeps_retry_durable();
         current_frame_resource_shortage_is_hard();
+        a_request_the_open_frame_cannot_hold_is_refused_for_good();
         registration_completion_races();
         contain_final_progress(|| panic!("final progress fault"));
     }
@@ -791,6 +826,65 @@ mod tests {
             .expect("retired backlog permits next scene");
         drop(ledger.submission().expect("next scene work"));
         drop(next);
+    }
+
+    /// A request that does not fit beside what the open frame already holds is
+    /// refused for good (`Budget`), even while earlier work is in flight: that
+    /// work retiring cannot make room the frame itself takes, so `Backpressure`
+    /// would have the caller retry a request that never fits. One that fits
+    /// beside the frame's own charge is held back while earlier work is in
+    /// flight, and admitted once it retires.
+    ///
+    /// Red-check: test `cost` instead of the frame's held charge plus `cost`
+    /// in `Ledger::reserve` and the too-large request answers `Backpressure`.
+    fn a_request_the_open_frame_cannot_hold_is_refused_for_good() {
+        let unit = PreparedCost {
+            gpu_bytes: 8,
+            cpu_bytes: 0,
+            objects: 1,
+        };
+        let ledger = Ledger::new(PreparedIrLimits {
+            cost: PreparedCost {
+                gpu_bytes: 24,
+                cpu_bytes: 0,
+                objects: 8,
+            },
+            submissions: 4,
+            frame_submissions: 4,
+        });
+        let earlier = ledger.reserve(unit).expect("the earlier frame's charge");
+        let in_flight = ledger.submission().expect("the earlier frame's work");
+        let frame = ledger.begin_frame().expect("the next frame");
+        let held = ledger.reserve(unit).expect("the frame's first charge");
+        let double = PreparedCost {
+            gpu_bytes: 16,
+            ..unit
+        };
+        let triple = PreparedCost {
+            gpu_bytes: 24,
+            ..unit
+        };
+        assert!(
+            matches!(ledger.reserve(double), Err(DomainError::Backpressure)),
+            "room the earlier work holds comes back when it retires"
+        );
+        assert!(
+            matches!(ledger.reserve(triple), Err(DomainError::Budget { .. })),
+            "the frame's own charge leaves no room for it, whatever retires"
+        );
+        drop(in_flight);
+        drop(earlier);
+        let admitted = ledger
+            .reserve(double)
+            .expect("room once the earlier work retired");
+        drop(admitted);
+        assert!(
+            matches!(ledger.reserve(triple), Err(DomainError::Budget { .. })),
+            "still refused with nothing in flight"
+        );
+        drop(held);
+        assert_eq!(ledger.state().frame_held, PreparedCost::default());
+        drop(frame);
     }
 
     fn current_frame_resource_shortage_is_hard() {

@@ -29,7 +29,7 @@
 //! crate's only allowed normal dependent is `flui-app`, checked by
 //! `cargo xtask workspace`. An embedded host
 //! that already runs its own executors injects them through
-//! [`HostExecutors`] (`AppConfig::with_executors`); the default pools are
+//! [`HostExecutors`] (`AppConfig::executors`); the default pools are
 //! then **never constructed**, so FLUI and the host cannot oversubscribe the
 //! machine with two full-core pools.
 //!
@@ -99,7 +99,7 @@ pub trait HostIoPool: Send + Sync {
 }
 
 /// The host-injection seam: an embedded host's own executors, passed via
-/// `AppConfig::with_executors`.
+/// `AppConfig::executors`.
 ///
 /// When present, FLUI routes all background work through these pools and
 /// **never constructs its default pools** — the mechanism by which FLUI
@@ -330,11 +330,11 @@ struct WindowRoom {
 }
 
 impl WindowRoom {
-    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll(&mut self, ctx: &mut Context<'_>) -> Poll<()> {
         if !self.window.has_room() {
             self.window
                 .waiting
-                .register(&mut self.registration, cx.waker());
+                .register(&mut self.registration, ctx.waker());
             // Checked again once registered: a unit that left before the
             // registration woke no one, and one that leaves after it wakes
             // this waker.
@@ -401,20 +401,20 @@ struct ServicesRoom {
 impl Future for ServicesRoom {
     type Output = Result<(), SpawnError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = &mut *self;
         if !this.lifecycle.is_accepting() {
             return Poll::Ready(Err(SpawnError::ShuttingDown));
         }
         this.lifecycle
             .stopping
-            .register(&mut this.registration, cx.waker());
+            .register(&mut this.registration, ctx.waker());
         // Checked again once registered: shutdown stops admission before
         // it wakes the waiting, so this sees it or is woken.
         if !this.lifecycle.is_accepting() {
             return Poll::Ready(Err(SpawnError::ShuttingDown));
         }
-        if this.window.poll(cx).is_pending() {
+        if this.window.poll(ctx).is_pending() {
             return Poll::Pending;
         }
         if this.host_wait.is_none() {
@@ -425,7 +425,7 @@ impl Future for ServicesRoom {
             };
         }
         match &mut this.host_wait {
-            Some(waiting) => Pin::new(waiting).poll(cx),
+            Some(waiting) => Pin::new(waiting).poll(ctx),
             None => Poll::Ready(Ok(())),
         }
     }
@@ -625,6 +625,33 @@ impl ExecutionServices {
     #[must_use]
     pub fn owns_default_pools(&self) -> bool {
         !matches!(self.backend, Backend::Host(_))
+    }
+
+    /// The IO runtime the native host runs its long-lived sources on (XIM,
+    /// IBus, logind, the settings portal), starting it on first use, so a
+    /// process runs one IO runtime (ADR-0327 §3). Its IO and time drivers
+    /// are enabled.
+    ///
+    /// `Ok(None)` with host-injected pools: FLUI runs no runtime then, and
+    /// the host keeps its own.
+    ///
+    /// The host spawns on the handle directly, outside the IO lane's
+    /// admission window: its sources are not jobs, and each ends when its
+    /// owner drops it or when [`Self::shutdown`] drops the runtime's tasks.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::ShuttingDown`] once [`Self::shutdown`] has begun and
+    /// [`SpawnError::Unavailable`] when the OS refuses to start the pool.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn io_runtime(&self) -> Result<Option<tokio::runtime::Handle>, SpawnError> {
+        if !self.lifecycle.is_accepting() {
+            return Err(SpawnError::ShuttingDown);
+        }
+        match &self.backend {
+            Backend::Host(_) => Ok(None),
+            Backend::Default(pools) => pools.io_handle().map(Some),
+        }
     }
 
     /// Spawn an **asynchronous compute** job (see the module doc's
@@ -990,7 +1017,7 @@ impl DeterministicExecutors {
     }
 
     /// The [`HostExecutors`] bundle routing both work classes to this
-    /// executor — pass it to `AppConfig::with_executors`.
+    /// executor — pass it to `AppConfig::executors`.
     #[must_use]
     pub fn host_executors(&self) -> HostExecutors {
         HostExecutors::new(Arc::new(self.clone()), Arc::new(self.clone()))

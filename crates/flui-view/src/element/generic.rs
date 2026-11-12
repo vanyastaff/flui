@@ -30,7 +30,7 @@
 //!     fn mount(&mut self, p: Option<ElementId>, s: usize) { self.core.mount(p, s) }
 //!
 //!     // Only view-specific logic remains. Real component builds run through
-//!     // BuildOwner::build_scope, which supplies a live tree-backed BuildCtx.
+//!     // BuildOwner::build_scope, which supplies a live tree-backed LiveBuildContext.
 //!     fn perform_build(&mut self) {
 //!         if !self.core.should_build() { return; }
 //!         self.core.clear_dirty();
@@ -339,7 +339,7 @@ where
     /// `ElementTree::insert` / `mount_root_*` (not slab-addressable).
     ///
     /// Read by the behaviors to anchor the live build-time
-    /// [`BuildCtx`](crate::context::BuildContext) ancestor walk at the real
+    /// [`LiveBuildContext`](crate::context::BuildContext) ancestor walk at the real
     /// node (PR-K); the in-flight element is extracted by value during build,
     /// so this id addresses the now-empty slot the walk skips.
     pub(crate) fn self_id(&self) -> Option<ElementId> {
@@ -360,7 +360,7 @@ where
 
     // NOTE: the production build/reconcile path reads `self_id` through
     // the element surface stamped by `set_self_id`; external consumers
-    // (the build-time `BuildCtx` anchor) go through [`Self::self_id`].
+    // (the build-time `LiveBuildContext` anchor) go through [`Self::self_id`].
 
     // ========================================================================
     // Lifecycle Methods (eliminates ~40 lines of boilerplate per element)

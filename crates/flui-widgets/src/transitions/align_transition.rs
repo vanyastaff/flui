@@ -8,7 +8,7 @@ use flui_animation::Animation;
 use flui_objects::AlignMotion;
 use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, StatefulView};
-use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
+use flui_view::{BoxedView, Child, IntoView, ViewExt, ViewState};
 
 use super::align_view::AnimatedAlignView;
 use super::proxy_slot::ProxySlot;
@@ -87,7 +87,7 @@ impl ViewState<AlignTransition> for AlignTransitionState {
             alignment: Alignment::CENTER,
             width_factor: view.width_factor,
             height_factor: view.height_factor,
-            child: view.child.clone(),
+            child: Child::some(view.child.clone()),
         }
     }
 

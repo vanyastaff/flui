@@ -145,12 +145,12 @@ fn owner_local_write_paths() {
         "owner_local_write_paths",
         &[
             (
-                "owner_local_write_paths::nested_writer_source_inside_an_event_cx",
-                owner_local_write_paths::nested_writer_source_inside_an_event_cx as fn(),
+                "owner_local_write_paths::nested_writer_source_inside_an_event_ctx",
+                owner_local_write_paths::nested_writer_source_inside_an_event_ctx as fn(),
             ),
             (
-                "owner_local_write_paths::nested_write_panics_inside_an_event_cx",
-                owner_local_write_paths::nested_write_panics_inside_an_event_cx,
+                "owner_local_write_paths::nested_write_panics_inside_an_event_ctx",
+                owner_local_write_paths::nested_write_panics_inside_an_event_ctx,
             ),
             (
                 "owner_local_write_paths::listener_writes_through_a_captured_writer_source",

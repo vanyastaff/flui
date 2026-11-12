@@ -57,7 +57,7 @@ impl HostHttp {
 }
 
 impl CapabilityProvider<HttpCapability> for HostHttp {
-    fn provide(&self, _cx: &ProviderContext<'_>) -> Result<Http, Unsupported> {
+    fn provide(&self, _ctx: &ProviderContext<'_>) -> Result<Http, Unsupported> {
         let services = self.slot.borrow().clone().ok_or_else(|| {
             // Before the host installs a UI runtime it has no lanes.
             Unsupported::of::<HttpCapability>(flui_platform::UnsupportedReason::Unavailable)
@@ -118,12 +118,12 @@ mod held {
             let mut head = self.client.send(request);
             Box::pin(async move {
                 let mut release = release;
-                let response = poll_fn(|cx| {
-                    if release.poll_closed(cx).is_ready() {
+                let response = poll_fn(|ctx| {
+                    if release.poll_closed(ctx).is_ready() {
                         // Dropping `head` abandons the request.
                         return Poll::Ready(Err(HttpError::Cancelled));
                     }
-                    head.as_mut().poll(cx)
+                    head.as_mut().poll(ctx)
                 })
                 .await?;
                 let status = response.status();
@@ -158,10 +158,10 @@ mod held {
     impl BodySource for Held {
         fn poll_chunk(
             mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
+            ctx: &mut Context<'_>,
         ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
             if let Some(release) = self.release.as_mut()
-                && release.poll_closed(cx).is_ready()
+                && release.poll_closed(ctx).is_ready()
             {
                 self.release = None;
                 self.body = None;
@@ -170,7 +170,7 @@ mod held {
             let Some(body) = self.body.as_mut() else {
                 return Poll::Ready(None);
             };
-            let chunk = std::task::ready!(body.poll_chunk(cx));
+            let chunk = std::task::ready!(body.poll_chunk(ctx));
             if !matches!(chunk, Some(Ok(_))) {
                 self.release = None;
             }
@@ -283,9 +283,8 @@ mod tests {
             .expect("a 404 is a response");
         assert_eq!(missing.status().as_u16(), 404);
 
-        let too_large = block_on(
-            http.send(HttpRequest::get(format!("http://{address}/large")).with_body_limit(16)),
-        );
+        let too_large =
+            block_on(http.send(HttpRequest::get(format!("http://{address}/large")).body_limit(16)));
         assert!(
             matches!(too_large, Err(HttpError::TooLarge { limit: 16 })),
             "{too_large:?}"
@@ -358,7 +357,7 @@ mod tests {
         let held = block_on(
             http.send(
                 HttpRequest::get(format!("http://{address}/large"))
-                    .with_deadline(Duration::from_millis(300)),
+                    .deadline(Duration::from_millis(300)),
             ),
         )
         .expect("the head arrives within the deadline");

@@ -7,10 +7,7 @@ use flui_animation::{Animation, ProxyAnimation};
 use flui_objects::RenderAnimatedOpacity;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, StatefulView};
-use flui_view::{
-    BoxedView, IntoView, RenderObjectContext, RenderView, View, ViewExt, ViewState,
-    impl_render_view,
-};
+use flui_view::{Child, IntoView, RenderObjectContext, RenderView, ViewState, impl_render_view};
 
 /// Fades its child in and out as an [`Animation<f64>`] (the opacity) changes.
 ///
@@ -20,24 +17,31 @@ use flui_view::{
 ///
 /// ```rust,ignore
 /// let controller = AnimationController::builder(Duration::from_millis(300)).build();
-/// let fade = FadeTransition::new(Rc::new(controller.clone()), Text::new("hi"));
+/// let fade = FadeTransition::new(Rc::new(controller.clone())).child(Text::new("hi"));
 /// controller.forward(); // each frame re-reads the opacity into the child
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct FadeTransition {
     opacity: std::rc::Rc<dyn Animation<f64>>,
-    child: BoxedView,
+    child: Child,
     always_include_semantics: bool,
 }
 
 impl FadeTransition {
-    /// A fade driven by `opacity`, fading `child`.
-    pub fn new(opacity: std::rc::Rc<dyn Animation<f64>>, child: impl IntoView) -> Self {
+    /// A fade driven by `opacity`, with no child yet.
+    pub fn new(opacity: std::rc::Rc<dyn Animation<f64>>) -> Self {
         Self {
             opacity,
-            child: child.into_view().boxed(),
+            child: Child::empty(),
             always_include_semantics: false,
         }
+    }
+
+    /// Sets the child the transition animates.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
     }
 
     /// Whether the child stays in the semantics tree while fully transparent; the default
@@ -62,7 +66,7 @@ impl std::fmt::Debug for FadeTransition {
 pub struct FadeTransitionState {
     proxy: ProxyAnimation<f64>,
     opacity: std::rc::Rc<dyn Animation<f64>>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl ViewState<FadeTransition> for FadeTransitionState {
@@ -98,7 +102,7 @@ impl StatefulView for FadeTransition {
 #[derive(Clone)]
 struct FadeTransitionRenderView {
     proxy: ProxyAnimation<f64>,
-    child: BoxedView,
+    child: Child,
     always_include_semantics: bool,
 }
 
@@ -126,13 +130,7 @@ impl RenderView for FadeTransitionRenderView {
         render_object.set_always_include_semantics(self.always_include_semantics)
     }
 
-    fn has_children(&self) -> bool {
-        true
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        visitor(&self.child);
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(FadeTransitionRenderView);

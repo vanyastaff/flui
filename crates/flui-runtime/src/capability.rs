@@ -116,10 +116,10 @@ impl CapabilityRegistry {
         &self,
         capability: TypeId,
         name: &'static str,
-        cx: &ProviderContext<'_>,
+        ctx: &ProviderContext<'_>,
     ) -> Result<Box<dyn Any>, Unsupported> {
         match self.providers.get(&capability) {
-            Some(provider) => provider.provide(cx),
+            Some(provider) => provider.provide(ctx),
             None => Err(Unsupported::named(name, UnsupportedReason::NotRegistered)),
         }
     }
@@ -345,8 +345,8 @@ impl CapabilitySource for PresentationCapabilities {
             WindowRef::new(window.id(), scale, window.surface_target())
         });
         let poster = self.completions.poster();
-        let cx = ProviderContext::new(poster, &self.completions, &self.locals, window);
-        self.registry.acquire(capability, name, &cx)
+        let ctx = ProviderContext::new(poster, &self.completions, &self.locals, window);
+        self.registry.acquire(capability, name, &ctx)
     }
 }
 

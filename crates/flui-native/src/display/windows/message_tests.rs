@@ -191,7 +191,7 @@ fn dpi_change_invalidates_the_snapshot() {
     let platform = WindowsPlatform::try_new().expect("native platform");
     let window = platform
         .open_window(
-            WindowOptions::default().with_visible(false),
+            WindowOptions::default().visible(false),
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("hidden window");

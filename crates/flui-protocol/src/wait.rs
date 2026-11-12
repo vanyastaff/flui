@@ -112,7 +112,7 @@ impl WaitParams {
 
     /// Wait at most `timeout_ms`.
     #[must_use]
-    pub fn with_timeout_ms(mut self, timeout_ms: u64) -> Self {
+    pub fn timeout_ms(mut self, timeout_ms: u64) -> Self {
         self.timeout_ms = Some(timeout_ms);
         self
     }

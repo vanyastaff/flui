@@ -73,7 +73,7 @@ resolution), or §2.
 Under `Hide` the leader's anchor point is mapped up the leader's chain, and the follower resolves
 to `None` while that point lies outside a clip layer with `Clip != None` on it. The clip shapes are
 closed. Clips at or above the common ancestor already clip the follower and are not consulted.
-`RenderFollowerLayer::with_leader_clip` sets it, and `PaintCx::with_follower` takes a
+`RenderFollowerLayer::with_leader_clip` sets it, and `PaintContext::with_follower` takes a
 `FollowerLayer` value.
 
 ### Consequences

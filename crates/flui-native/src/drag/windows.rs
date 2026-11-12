@@ -1328,9 +1328,9 @@ const MAX_ENUMERATED_FORMATS: usize = 256;
 #[cfg(windows)]
 fn describe(object: &IDataObject) -> Vec<(NativeFormat, RepresentationDescriptor)> {
     let mut formats = Vec::new();
-    // SAFETY: `object` is a live data object; the enumerator it returns is
-    // owned here.
     if let Ok(list) =
+        // SAFETY: `object` is a live data object; the enumerator it returns is
+        // owned here.
         unsafe { object.EnumFormatEtc(windows::Win32::System::Com::DATADIR_GET.0 as u32) }
     {
         // The other process's enumerator decides when it ends; a bound keeps

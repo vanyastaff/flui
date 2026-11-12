@@ -1,5 +1,5 @@
 //! [`RawButton`] — a pressable area whose callback writes signals through the
-//! [`EventCx`] it receives (ADR-0086).
+//! [`EventContext`] it receives (ADR-0086).
 
 use std::rc::Rc;
 
@@ -16,16 +16,16 @@ use crate::support::event_callback;
 use crate::widget_state::WidgetStatesController;
 
 /// A press callback, already adapted to report its outcome.
-type PressCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
+type PressCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 
 /// A theme-free button: its child, a tap target over it, keyboard focus and
 /// activation, and the semantics of a button.
 ///
-/// The press callback receives `&mut EventCx<'_>`, the write capability of
+/// The press callback receives `&mut EventContext<'_>`, the write capability of
 /// ADR-0086, so it writes a signal directly:
 ///
 /// ```rust,ignore
-/// RawButton::new(Text::new("Increment")).on_press(move |cx| count.update(cx, |n| *n += 1))
+/// RawButton::new(Text::new("Increment")).on_press(move |ctx| count.update(ctx, |n| *n += 1))
 /// ```
 ///
 /// The callback may return `()` or the `Result` of a write; a refused write
@@ -75,11 +75,11 @@ impl RawButton {
     }
 
     /// Call `callback` when the button is pressed, with the dispatch's
-    /// `&mut EventCx<'_>`.
+    /// `&mut EventContext<'_>`.
     #[must_use]
     pub fn on_press<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_press = Some(event_callback(callback));
@@ -116,10 +116,10 @@ impl RawButton {
 struct Press(Option<PressCallback>);
 
 impl Press {
-    fn run(&self, cx: &mut EventCx<'_>) -> ActionOutcome {
+    fn run(&self, ctx: &mut EventContext<'_>) -> ActionOutcome {
         match &self.0 {
             Some(on_press) => {
-                on_press(cx);
+                on_press(ctx);
                 ActionOutcome::Performed
             }
             None => ActionOutcome::NotPerformed,
@@ -128,14 +128,14 @@ impl Press {
 }
 
 impl Action<ActivateIntent> for Press {
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
-        self.run(cx)
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+        self.run(ctx)
     }
 }
 
 impl Action<ButtonActivateIntent> for Press {
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
-        self.run(cx)
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
+        self.run(ctx)
     }
 }
 
@@ -153,7 +153,11 @@ impl PressSource for Press {
 impl NodePress for Press {}
 
 impl Action<ActivationPressIntent> for Press {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+    fn invoke(
+        &self,
+        _ctx: &mut EventContext<'_>,
+        _intent: &ActivationPressIntent,
+    ) -> ActionOutcome {
         ActionOutcome::Performed
     }
 }

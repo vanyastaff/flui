@@ -124,11 +124,11 @@ fn gated() -> (AcceptanceApp, Rc<Gate>) {
     let loader: Loader = Rc::new(move |attempt| {
         held.attempts.borrow_mut().push(attempt);
         let gate = Rc::clone(&held);
-        Box::pin(poll_fn(move |cx| {
+        Box::pin(poll_fn(move |ctx| {
             if gate.open.get() {
                 return Poll::Ready(Ok(()));
             }
-            *gate.waiting.borrow_mut() = Some(cx.waker().clone());
+            *gate.waiting.borrow_mut() = Some(ctx.waker().clone());
             Poll::Pending
         }))
     });

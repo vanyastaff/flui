@@ -427,12 +427,12 @@ impl fmt::Debug for CloseChanged {
 impl Future for CloseChanged {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
         let mut state = self.state.borrow_mut();
         if state.settled > self.taken_at {
             return Poll::Ready(());
         }
-        let waker = cx.waker();
+        let waker = ctx.waker();
         if !state
             .waiters
             .iter()

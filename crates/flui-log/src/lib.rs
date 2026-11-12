@@ -54,7 +54,7 @@
 //! use tracing_subscriber::{Registry, layer::SubscriberExt as _, Layer as _};
 //!
 //! let config = LogConfig::builder().directives("info,flui_view=trace").build();
-//! let filter = config.env_filter()?;
+//! let filter = config.targets()?;
 //!
 //! let subscriber = Registry::default()
 //!     .with(PlatformLayer::platform_default(&config).with_filter(filter));
@@ -162,7 +162,7 @@ pub use backend::privacy::{
 };
 pub use backend::{LogcatPriority, PlatformLayer};
 pub use config::{DesktopFormat, LogConfig, LogConfigBuilder};
-pub use filter::{DEFAULT_DIRECTIVES, DEFAULT_ENV_VAR, FilterConfig, FilterError};
+pub use filter::{DEFAULT_DIRECTIVES, DEFAULT_ENV_VAR, DirectiveError, FilterConfig, FilterError};
 pub use identity::{
     APP_ID_MAX_LEN, APPLE_CATEGORY, AppId, AppIdentity, DEFAULT_DISPLAY_NAME, IdentityError,
     UNIDENTIFIED_APPLE_SUBSYSTEM,

@@ -65,7 +65,7 @@ pub fn snack_bar_keeps_its_display_duration_under_reduced_motion() {
     let observed = Rc::clone(&closed);
     handle
         .show_snack_bar(SnackBar::new(Text::new("Saved")).duration(Duration::from_millis(800)))
-        .on_closed(move |_cx, reason| observed.borrow_mut().push(reason));
+        .on_closed(move |_ctx, reason| observed.borrow_mut().push(reason));
     pump_ms(&mut laid, 400);
     assert_eq!(
         snack_bar_material_count(&laid),
@@ -89,7 +89,7 @@ pub fn snack_bar_display_timer_pauses_while_hovered() {
     let recorded = Rc::clone(&closed);
     handle
         .show_snack_bar(SnackBar::new(Text::new("Saved")).duration(Duration::from_millis(800)))
-        .on_closed(move |_cx, reason| recorded.borrow_mut().push(reason));
+        .on_closed(move |_ctx, reason| recorded.borrow_mut().push(reason));
     pump_ms(&mut laid, 450);
     let bar = find_snack_bar_material(&laid).expect("visible bar");
     let offset = laid.absolute_offset(bar);
@@ -128,7 +128,7 @@ pub fn unmounting_a_hovered_snack_bar_releases_its_timer_pause() {
     let recorded = Rc::clone(&closed);
     handle
         .show_snack_bar(SnackBar::new(Text::new("Saved")).duration(Duration::from_millis(800)))
-        .on_closed(move |_cx, reason| recorded.set(Some(reason)));
+        .on_closed(move |_ctx, reason| recorded.set(Some(reason)));
     pump_ms(&mut laid, 450);
     let bar = find_snack_bar_material(&laid).expect("visible bar");
     let offset = laid.absolute_offset(bar);
@@ -281,7 +281,7 @@ pub fn action_press_closes_the_snack_bar_and_is_single_fire() {
         mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
 
     handle.show_snack_bar(
-        SnackBar::new(Text::new("Saved")).action(SnackBarAction::new("UNDO", move |_cx| {
+        SnackBar::new(Text::new("Saved")).action(SnackBarAction::new("UNDO", move |_ctx| {
             action_presses_for_cb.fetch_add(1, Ordering::SeqCst);
         })),
     );
@@ -411,8 +411,8 @@ pub fn a_snack_bar_completion_cannot_write_another_presentations_signal() {
     let recorded = Rc::clone(&outcome);
     handle
         .show_snack_bar(SnackBar::new(Text::new("foreign")))
-        .on_closed(move |cx, _reason| {
-            *recorded.borrow_mut() = Some(count.set(cx, 1));
+        .on_closed(move |ctx, _reason| {
+            *recorded.borrow_mut() = Some(count.set(ctx, 1));
         });
 
     handle.remove_current_snack_bar();
@@ -432,7 +432,7 @@ pub fn action_callback_panic_disables_the_button_and_fresh_action_progresses() {
     let mut laid = lay_out_animated(
         themed_animated(
             &vsync,
-            SnackBarAction::new("UNDO", move |_cx| -> () {
+            SnackBarAction::new("UNDO", move |_ctx| -> () {
                 callback_calls.set(callback_calls.get() + 1);
                 panic!("action failed");
             }),
@@ -478,7 +478,7 @@ pub fn action_callback_panic_disables_the_button_and_fresh_action_progresses() {
     let fresh_calls = Rc::clone(&calls);
     laid.pump_widget(themed_animated(
         &vsync,
-        SnackBarAction::new("RETRY", move |_cx| {
+        SnackBarAction::new("RETRY", move |_ctx| {
             fresh_calls.set(fresh_calls.get() + 1);
         }),
     ));
@@ -504,7 +504,7 @@ pub fn a_completion_panic_still_advances_the_accepted_snack_bar_queue() {
     let recorded = Rc::clone(&first_calls);
     handle
         .show_snack_bar(SnackBar::new(Text::new("first")))
-        .on_closed(move |_cx, reason| -> () {
+        .on_closed(move |_ctx, reason| -> () {
             assert_eq!(reason, flui_material::SnackBarClosedReason::Remove);
             recorded.set(recorded.get() + 1);
             panic!("first completion failed");
@@ -513,7 +513,7 @@ pub fn a_completion_panic_still_advances_the_accepted_snack_bar_queue() {
     let recorded = Rc::clone(&second_reason);
     handle
         .show_snack_bar(SnackBar::new(Text::new("second")).duration(Duration::from_millis(64)))
-        .on_closed(move |_cx, reason| recorded.set(Some(reason)));
+        .on_closed(move |_ctx, reason| recorded.set(Some(reason)));
     pump_ms(&mut laid, 300);
     assert_eq!(snack_bar_material_count(&laid), 1);
     let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -541,7 +541,7 @@ pub fn a_completion_panic_still_advances_the_accepted_snack_bar_queue() {
     let recorded = Rc::clone(&third_reason);
     handle
         .show_snack_bar(SnackBar::new(Text::new("third")))
-        .on_closed(move |_cx, reason| recorded.set(Some(reason)));
+        .on_closed(move |_ctx, reason| recorded.set(Some(reason)));
     pump_ms(&mut laid, 300);
     assert_eq!(snack_bar_material_count(&laid), 1);
     handle.remove_current_snack_bar();

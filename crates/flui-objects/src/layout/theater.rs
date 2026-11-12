@@ -52,7 +52,8 @@ use flui_foundation::geometry::{Offset, Size};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext,
     },
     parent_data::StackParentData,
     traits::{RenderBox, TextBaseline},
@@ -162,10 +163,10 @@ impl RenderTheater {
     /// later siblings.
     fn max_onstage_intrinsic(
         &self,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
         extent: f64,
         mut query: impl FnMut(
-            &mut BoxIntrinsicsCtx<'_>,
+            &mut BoxIntrinsicsContext<'_>,
             usize,
             f64,
         ) -> flui_rendering::RenderResult<f64>,
@@ -256,7 +257,7 @@ impl RenderBox for RenderTheater {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         let child_constraints = BoxConstraints::tight(Self::theater_size(constraints));
         let mut highest: Option<f64> = None;
@@ -271,7 +272,7 @@ impl RenderBox for RenderTheater {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut BoxDryLayoutCtx<'_>,
+        _ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         Ok(Self::theater_size(constraints))
     }
@@ -279,7 +280,7 @@ impl RenderBox for RenderTheater {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.max_onstage_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_min_intrinsic_width(i, extent)
@@ -289,7 +290,7 @@ impl RenderBox for RenderTheater {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.max_onstage_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_max_intrinsic_width(i, extent)
@@ -299,7 +300,7 @@ impl RenderBox for RenderTheater {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.max_onstage_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_min_intrinsic_height(i, extent)
@@ -309,7 +310,7 @@ impl RenderBox for RenderTheater {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.max_onstage_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_max_intrinsic_height(i, extent)
@@ -320,7 +321,7 @@ impl RenderBox for RenderTheater {
     ///
     /// No clip: a clip behavior would only bite when a `Positioned`
     /// entry overflows, and FLUI's theater has no positioned children.
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Variable>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Variable>) {
         for i in self.first_onstage(self.child_count)..self.child_count {
             ctx.paint_child(i);
         }

@@ -70,7 +70,7 @@ use x11rb::protocol::{Event, xproto};
 use x11rb::xcb_ffi::XCBConnection;
 
 use crate::error::PlatformError;
-use crate::executor::BackgroundExecutor;
+use crate::executor::NativeExecutor;
 use crate::host;
 use crate::owner::app_delivery::AppDelivery;
 use crate::owner::handlers::OpenWindows;
@@ -209,16 +209,13 @@ pub(crate) trait X11Host: 'static {
     /// The Settings portal's preferences, observed on `executor` and waking
     /// the owner behind `signal`; started as the loop runs.
     fn preferences(
-        executor: &BackgroundExecutor,
+        executor: &NativeExecutor,
         signal: &Arc<OwnerSignal>,
     ) -> Arc<dyn LinuxPreferences>;
 
     /// The sources of the host's notices (logind, memory pressure), started
     /// once the application can hear what they report.
-    fn host_notices(
-        executor: &BackgroundExecutor,
-        signal: &Arc<OwnerSignal>,
-    ) -> Arc<dyn LinuxNotices>;
+    fn host_notices(executor: &NativeExecutor, signal: &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices>;
 
     /// The windows' input on `connection`: the pointers, the keyboard and
     /// the cursor, made on the thread that builds the loop. Every key goes
@@ -230,7 +227,7 @@ pub(crate) trait X11Host: 'static {
     /// sent something. Made on the thread that builds the loop.
     fn text(
         connection: &Arc<X11Connection>,
-        executor: &BackgroundExecutor,
+        executor: &NativeExecutor,
         doorbell: &Doorbell,
     ) -> Arc<dyn LoopText>;
 
@@ -592,9 +589,9 @@ pub struct X11Loop {
     text: Arc<dyn LoopText>,
     clipboard: Arc<dyn LoopClipboard>,
     drag: Arc<dyn LoopDrag>,
-    start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
-    start_host_notices: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices>,
-    background_executor: Arc<BackgroundExecutor>,
+    start_preferences: fn(&NativeExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
+    start_host_notices: fn(&NativeExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices>,
+    background_executor: NativeExecutor,
     /// The preference source while the loop runs.
     portal: PortalSlot,
     /// The application asked for its exit policy again.
@@ -622,6 +619,7 @@ impl X11Loop {
     pub(crate) fn try_new<H: X11Host>(
         connection: Arc<X11Connection>,
         windows: Arc<dyn LoopWindows>,
+        executor: NativeExecutor,
     ) -> Result<Self, PlatformError> {
         let doorbell = Doorbell::try_new()?;
         let rung = doorbell.clone();
@@ -629,7 +627,7 @@ impl X11Loop {
         let app = Arc::new(AppDelivery::new());
         let notices = H::notices(&app);
         let displays = H::displays();
-        let background_executor = Arc::new(BackgroundExecutor::new());
+        let background_executor = executor;
         let text = H::text(&connection, &background_executor, &doorbell);
         let input = H::input(&connection, Arc::clone(&text));
         let clipboard = H::clipboard(&doorbell)?;
@@ -1047,7 +1045,7 @@ impl host::Loop for X11Loop {
         // The delivery holds the platform and the hooks weakly: they live in
         // this frame until the loop ends, declared before the guard so they
         // outlive it and the handler still hears the quit.
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+        let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
             Arc::clone(&platform),
             Arc::clone(&self.signal),
         ));
@@ -1069,10 +1067,7 @@ impl host::Loop for X11Loop {
         // not in the light one it would otherwise wait a turn to leave.
         self.deliver_appearance();
         self.app
-            .ready(OwnerPlatform::new(
-                Arc::clone(&platform),
-                Arc::clone(&hooks),
-            ))
+            .ready(OwnerPlatform::new(Arc::clone(&platform), Rc::clone(&hooks)))
             .map_err(PlatformError::bootstrap)?;
         self.signal
             .start()

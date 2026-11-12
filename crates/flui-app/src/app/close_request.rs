@@ -60,7 +60,7 @@
 //! # Not in this slice (stated, not silently assumed)
 //!
 //! - **A widget-tier capability.** A handler is registered through
-//!   [`AppConfig::with_close_request_handler`](crate::AppConfig::with_close_request_handler),
+//!   [`AppConfig::close_request_handler`](crate::AppConfig::close_request_handler),
 //!   the same embedder-facing route
 //!   [`FrameFailureHandler`](crate::FrameFailureHandler) and
 //!   [`ExitPolicy`](crate::ExitPolicy) take. There is deliberately no
@@ -160,7 +160,7 @@ pub enum CloseResponse {
 /// window may close.
 ///
 /// Register via
-/// [`AppConfig::with_close_request_handler`](crate::AppConfig::with_close_request_handler);
+/// [`AppConfig::close_request_handler`](crate::AppConfig::close_request_handler);
 /// each window opened with that config registers it for its own
 /// presentation.
 ///
@@ -354,7 +354,7 @@ impl PreparedCloseRequest {
             not(target_arch = "wasm32")
         )
     ))]
-    pub(crate) fn with_guard(mut self, guard: flui_view::__runtime::CloseGuardSource) -> Self {
+    pub(crate) fn guard(mut self, guard: flui_view::__runtime::CloseGuardSource) -> Self {
         self.0.guard = Some(guard);
         self
     }
@@ -902,7 +902,7 @@ mod tests {
                 CloseResponse::Close
             })),
         )
-        .with_guard(source.clone());
+        .guard(source.clone());
         router
             .publication(&prepared)
             .expect("fresh test registration")
@@ -954,7 +954,7 @@ mod tests {
                 CloseResponse::KeepOpen
             })),
         )
-        .with_guard(source.clone());
+        .guard(source.clone());
         router
             .publication(&prepared)
             .expect("fresh test registration")

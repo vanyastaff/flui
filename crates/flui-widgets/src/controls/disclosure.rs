@@ -137,11 +137,11 @@ impl Disclosure {
     #[must_use]
     pub fn on_changed<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ExpansionState) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ExpansionState) -> R + 'static,
         R: EventOutcome,
     {
         let callback = Terminal::new(callback);
-        let incoming = Terminal::new(Some(value_callback(move |cx, state| callback(cx, state))));
+        let incoming = Terminal::new(Some(value_callback(move |ctx, state| callback(ctx, state))));
         let old = std::mem::replace(&mut self.on_changed, incoming);
         drop(old);
         self
@@ -234,7 +234,7 @@ impl Drop for LiveDisclosure {
 
 fn propose(
     live: &Rc<RefCell<LiveDisclosure>>,
-    cx: &mut EventCx<'_>,
+    ctx: &mut EventContext<'_>,
     target: Option<ExpansionState>,
 ) -> bool {
     let (handler, writer, target) = {
@@ -258,10 +258,10 @@ fn propose(
             target,
         )
     };
-    if writer.check_context(cx).is_err() {
+    if writer.check_context(ctx).is_err() {
         return false;
     }
-    handler(cx, target);
+    handler(ctx, target);
     true
 }
 
@@ -357,12 +357,12 @@ impl ViewState<Disclosure> for DisclosureState {
                 GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)
                     .child(header)
-                    .on_tap(move |cx| {
+                    .on_tap(move |ctx| {
                         let _ = node.request_focus();
                         // Focus notifications can unmount, disable or reconfigure us.
                         // Re-admit against the current owner after that user-code edge.
                         if node.is_attached() {
-                            let _ = propose(&live, cx, None);
+                            let _ = propose(&live, ctx, None);
                         }
                     })
                     .boxed()
@@ -385,16 +385,16 @@ impl ViewState<Disclosure> for DisclosureState {
                 let expand = Rc::clone(&live);
                 let collapse = Rc::clone(&live);
                 semantics = semantics
-                    .on_click(move |cx| {
-                        let _ = propose(&activate, cx, None);
+                    .on_click(move |ctx| {
+                        let _ = propose(&activate, ctx, None);
                     })
                     .expandable(
                         expanded,
-                        move |cx| {
-                            let _ = propose(&expand, cx, Some(ExpansionState::Expanded));
+                        move |ctx| {
+                            let _ = propose(&expand, ctx, Some(ExpansionState::Expanded));
                         },
-                        move |cx| {
-                            let _ = propose(&collapse, cx, Some(ExpansionState::Collapsed));
+                        move |ctx| {
+                            let _ = propose(&collapse, ctx, Some(ExpansionState::Collapsed));
                         },
                     );
             }
@@ -403,7 +403,7 @@ impl ViewState<Disclosure> for DisclosureState {
             let header = Focus::new(semantics)
                 .focus_node(Rc::clone(&node))
                 .can_request_focus(enabled)
-                .on_focus_change(move |_cx, next| {
+                .on_focus_change(move |_ctx, next| {
                     if changed.replace(next) != next {
                         rebuild.schedule(RebuildReason::StateChange);
                     }
@@ -464,8 +464,8 @@ impl<T: Intent> Action<T> for DisclosureActivate {
         live.mounted && live.handler.is_some()
     }
 
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &T) -> ActionOutcome {
-        if propose(&self.live, cx, None) {
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &T) -> ActionOutcome {
+        if propose(&self.live, ctx, None) {
             ActionOutcome::Performed
         } else {
             ActionOutcome::NotPerformed

@@ -196,7 +196,7 @@ impl RenderBox for RenderLimitedBox {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         // With a child, its dry size under the limited constraints,
         // re-constrained by the incoming set; without one, the smallest
@@ -213,7 +213,7 @@ impl RenderBox for RenderLimitedBox {
         &self,
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
-        ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         flui_rendering::context::proxy_queries::forward_dry_baseline(constraints, baseline, ctx)
     }

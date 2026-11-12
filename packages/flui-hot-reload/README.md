@@ -1,0 +1,59 @@
+# flui-hot-reload
+
+**`dlopen`-based hot-reload host for FLUI scenes** — iterate on desktop UI
+without restarting the process.
+
+`flui-hot-reload` loads scene plugins (cdylibs) at runtime via a
+`HotReloadDriver`, watches for rebuilds, and swaps the plugin in place while
+the host window and GPU context stay alive. See `examples/scene_render.rs` (the
+desktop host) with the workspace's `examples/desktop_scene/` plugin, and
+`examples/hot_reload_counter/` for the host/worker layout.
+
+Part of the [FLUI](https://github.com/vanyastaff/flui) workspace — pre-release,
+consumed by path (not published to crates.io).
+
+## How it works
+
+```text
+host process (flui-app window + wgpu context)
+    │ dlopen / dlclose on rebuild
+    ▼
+scene plugin (cdylib): exposes the scene entry points
+    │ versioned ABI handshake guards mismatched host/plugin builds
+    ▼
+render pipeline continues with the fresh scene
+```
+
+Android hot-reload uses the same plugin contract: `flui run --scene` rebuilds the scene crate
+with `cargo ndk` and pushes it to the device ([`docs/hot-reload.md`](../../docs/hot-reload.md)).
+
+## Installing in a host
+
+`flui-app` does not depend on this crate. A host installs one of its
+`DevReloadHook`s (ADR-0311) on its configuration, and the runner drives it.
+The hooks sit behind the `host-hook` feature, which only the host crate's
+development build turns on (an application adds this package itself, ADR-0311
+§6; the host `flui create --hot-reload` writes turns it on through its own
+`reload` feature, which `flui run` builds with); a scene plugin or worker crate
+leaves it off. The desktop and iOS runners drive `WorkerReloadHook`; the
+Android runner drives only `ScenePluginHook`:
+
+```rust,ignore
+use flui_hot_reload::{ScenePluginHook, WorkerReloadHook};
+
+// Desktop host/worker split (`flui create --hot-reload`):
+let config = AppConfig::new().dev_reload(WorkerReloadHook::new(worker_path));
+
+// Android `flui run --scene`:
+let path = ScenePluginHook::device_library_path(app.internal_data_path().as_deref());
+let config = AppConfig::new().dev_reload(ScenePluginHook::new(path));
+```
+
+## Documentation
+
+Every public item is documented (`#![deny(missing_docs)]`); build locally with
+`cargo doc -p flui-hot-reload --open`.
+
+## License
+
+MIT OR Apache-2.0, per the workspace license.

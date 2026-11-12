@@ -116,7 +116,7 @@ const _: () = assert!(CHECKBOX_EDGE_SIZE < CHECKBOX_TAP_TARGET_SIZE);
 
 /// A value-change callback: the next tristate value. `Rc`-based
 /// (owner-local, per ADR-0027) — matches [`InkWell`]'s own callback shape.
-type CheckboxChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, Option<bool>)>;
+type CheckboxChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, Option<bool>)>;
 
 /// A Material Design tristate-capable checkbox.
 ///
@@ -133,7 +133,7 @@ type CheckboxChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, Option
 /// ```rust
 /// use flui_material::Checkbox;
 ///
-/// let _off = Checkbox::new(false).on_changed(|_cx, _next| { /* ... */ });
+/// let _off = Checkbox::new(false).on_changed(|_ctx, _next| { /* ... */ });
 /// let _tristate = Checkbox::tristate(None);
 /// let _disabled = Checkbox::new(true);
 /// ```
@@ -235,7 +235,7 @@ impl Checkbox {
     #[must_use]
     pub fn on_changed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, Option<bool>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>, Option<bool>) -> R + 'static,
     ) -> Self {
         self.on_changed = Some(crate::event_callback::value_callback(callback));
         self
@@ -429,9 +429,9 @@ impl ViewState<Checkbox> for CheckboxState {
         .states_controller(self.states.clone())
         .focus_indicator(FocusIndicator::Halo);
         if interactive {
-            ink_well = ink_well.on_tap(move |cx| {
+            ink_well = ink_well.on_tap(move |ctx| {
                 if let Some(handler) = &on_changed {
-                    handler(cx, next_value);
+                    handler(ctx, next_value);
                 }
             });
         }
@@ -515,7 +515,7 @@ fn checkbox_default_check_color(colors: &ColorScheme, states: WidgetStates) -> C
 }
 
 /// The M3 default border side.
-fn checkbox_default_side(colors: &ColorScheme, states: WidgetStates) -> BorderSide<f64> {
+fn checkbox_default_side(colors: &ColorScheme, states: WidgetStates) -> BorderSide {
     let side = |color: Color, width: f64| BorderSide::new(color, width, BorderStyle::Solid);
 
     if states.contains_state(WidgetState::Disabled) {
@@ -585,7 +585,7 @@ fn checkbox_default_overlay_color(colors: &ColorScheme, states: WidgetStates) ->
 #[derive(Debug, Clone, PartialEq)]
 struct CheckboxPainter {
     fill_color: Color,
-    side: BorderSide<f64>,
+    side: BorderSide,
     check_color: Color,
     value: Option<bool>,
 }

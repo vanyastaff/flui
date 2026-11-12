@@ -892,9 +892,9 @@ fn a_window_offers_its_text_services_as_its_host() {
     let window = platform
         .open_window(
             WindowOptions::default()
-                .with_title("flui window host")
-                .with_size(Size::new(200.0, 80.0))
-                .with_visible(false),
+                .title("flui window host")
+                .size(Size::new(200.0, 80.0))
+                .visible(false),
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
@@ -1000,9 +1000,9 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
     let window = platform
         .open_window(
             WindowOptions::default()
-                .with_title("flui moved field")
-                .with_size(Size::new(200.0, 80.0))
-                .with_visible(false),
+                .title("flui moved field")
+                .size(Size::new(200.0, 80.0))
+                .visible(false),
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
@@ -1120,9 +1120,9 @@ fn a_rescaled_window_answers_layout_at_its_new_scale() {
     let window = platform
         .open_window(
             WindowOptions::default()
-                .with_title("flui rescaled field")
-                .with_size(Size::new(200.0, 80.0))
-                .with_visible(false),
+                .title("flui rescaled field")
+                .size(Size::new(200.0, 80.0))
+                .visible(false),
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
@@ -1162,9 +1162,9 @@ fn the_text_services_answer_a_completion_for_its_store() {
     let window = platform
         .open_window(
             WindowOptions::default()
-                .with_title("flui text services")
-                .with_size(Size::new(200.0, 80.0))
-                .with_visible(false),
+                .title("flui text services")
+                .size(Size::new(200.0, 80.0))
+                .visible(false),
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
@@ -1290,6 +1290,8 @@ fn owner_thread_window_titled(title: &str) -> bool {
         // SAFETY: enumeration is synchronous on the caller; state points to
         // its live exclusive Search, and the buffer is writable for the call.
         let search = unsafe { &mut *(state.0 as *mut Search) };
+        // SAFETY: `hwnd` is the window the enumeration hands this callback;
+        // the slice bounds what the call may write.
         let length = unsafe { GetWindowTextW(hwnd, &mut search.buffer) } as usize;
         search.found |= search.buffer[..length] == search.title;
         BOOL(1)
@@ -1425,9 +1427,9 @@ fn a_panicking_activation_diagnostic_orphans_no_window() {
         catch_unwind(AssertUnwindSafe(|| {
             platform.open_window(
                 WindowOptions::default()
-                    .with_title(TITLE)
-                    .with_size(Size::new(200.0, 80.0))
-                    .with_visible(false),
+                    .title(TITLE)
+                    .size(Size::new(200.0, 80.0))
+                    .visible(false),
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
         }))
@@ -1472,9 +1474,9 @@ fn a_window_destroyed_during_activation_fails_the_open() {
     super::super::BEFORE_TSF_ACTIVATION.set(Some(destroy));
     let opened = platform.open_window(
         WindowOptions::default()
-            .with_title("flui destroyed during activation")
-            .with_size(Size::new(200.0, 80.0))
-            .with_visible(false),
+            .title("flui destroyed during activation")
+            .size(Size::new(200.0, 80.0))
+            .visible(false),
         flui_testing::window_handler::RecordingWindowHandler::new(),
     );
     super::super::BEFORE_TSF_ACTIVATION.set(None);
@@ -1521,9 +1523,9 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
     let window = platform
         .open_window(
             WindowOptions::default()
-                .with_title("flui outlives its platform")
-                .with_size(Size::new(200.0, 80.0))
-                .with_visible(false),
+                .title("flui outlives its platform")
+                .size(Size::new(200.0, 80.0))
+                .visible(false),
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");

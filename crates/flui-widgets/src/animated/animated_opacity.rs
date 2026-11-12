@@ -8,10 +8,7 @@ use flui_animation::{MotionSpec, ProxyAnimation};
 use flui_objects::RenderAnimatedOpacity;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{
-    BoxedView, IntoView, RenderObjectContext, RenderView, View, ViewExt, ViewState,
-    impl_render_view,
-};
+use flui_view::{Child, IntoView, RenderObjectContext, RenderView, ViewState, impl_render_view};
 
 use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
 
@@ -22,17 +19,24 @@ use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
 pub struct AnimatedOpacity {
     opacity: f64,
     motion: MotionSpec,
-    child: BoxedView,
+    child: Child,
 }
 
 impl AnimatedOpacity {
     /// Animate toward `opacity` with a 200 ms ease-in-out transition.
-    pub fn new(opacity: f64, child: impl IntoView) -> Self {
+    pub fn new(opacity: f64) -> Self {
         Self {
             opacity,
             motion: MotionSpec::default(),
-            child: child.into_view().boxed(),
+            child: Child::empty(),
         }
+    }
+
+    /// Sets the child.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
     }
 }
 
@@ -56,7 +60,7 @@ impl std::fmt::Debug for AnimatedOpacity {
 pub struct AnimatedOpacityState {
     animation: ImplicitMotion<f64>,
     proxy: ProxyAnimation<f64>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl StatefulView for AnimatedOpacity {
@@ -104,7 +108,7 @@ impl ViewState<AnimatedOpacity> for AnimatedOpacityState {
 #[derive(Clone)]
 struct AnimatedOpacityRenderView {
     proxy: ProxyAnimation<f64>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl std::fmt::Debug for AnimatedOpacityRenderView {
@@ -134,13 +138,7 @@ impl RenderView for AnimatedOpacityRenderView {
         flui_rendering::RenderUpdateImpact::NONE
     }
 
-    fn has_children(&self) -> bool {
-        true
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        visitor(&self.child);
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(AnimatedOpacityRenderView);

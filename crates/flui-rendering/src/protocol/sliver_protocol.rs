@@ -43,7 +43,7 @@ impl Protocol for SliverProtocol {
     type DefaultParentData = SliverParentData;
 
     // Protocol-layout-erasure — sanctioned erased layout-context boundary
-    type LayoutCtxErased<'ctx> = dyn SliverLayoutCtxErased + 'ctx;
+    type ErasedLayoutContext<'ctx> = dyn ErasedSliverLayoutContext + 'ctx;
 
     // No sliver layout cache yet: no sliver object exposes intrinsic
     // queries, so invalidation never needs the cache-driven escalation.
@@ -88,17 +88,17 @@ impl Protocol for SliverProtocol {
     /// Sliver counterpart to
     /// [`BoxProtocol::with_leaf_erased_ctx`](super::BoxProtocol::with_leaf_erased_ctx).
     /// Wraps the given `SliverConstraints` in a typed
-    /// `SliverLayoutCtx::<Leaf, SliverParentData>::new(constraints)` and
-    /// hands an erased `&mut dyn SliverLayoutCtxErased` view to `f`.
+    /// `RawSliverLayoutContext::<Leaf, SliverParentData>::new(constraints)` and
+    /// hands an erased `&mut dyn ErasedSliverLayoutContext` view to `f`.
     fn with_leaf_erased_ctx<R>(
         constraints: SliverConstraints,
         _text: crate::pipeline::TextSource<'_>,
-        f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
+        f: impl FnOnce(&mut Self::ErasedLayoutContext<'_>) -> R,
     ) -> R {
         let mut typed =
-            SliverLayoutCtx::<flui_foundation::Leaf, SliverParentData>::new(constraints);
+            RawSliverLayoutContext::<flui_foundation::Leaf, SliverParentData>::new(constraints);
         // Protocol-layout-erasure — sanctioned erased layout-context boundary
-        let erased: &mut dyn SliverLayoutCtxErased = &mut typed;
+        let erased: &mut dyn ErasedSliverLayoutContext = &mut typed;
         f(erased)
     }
 }
@@ -176,7 +176,7 @@ impl SliverConstraintsCacheKey {
 // CHILD STATE
 // ============================================================================
 
-/// Per-child layout-time state held by [`SliverLayoutCtx`].
+/// Per-child layout-time state held by [`RawSliverLayoutContext`].
 #[derive(Debug)]
 pub struct SliverChildState<P: ParentData + Default> {
     /// Render ID of this child.
@@ -232,7 +232,7 @@ impl LayoutCapability for SliverLayout {
     type Geometry = SliverGeometry;
     type CacheKey = SliverConstraintsCacheKey;
     type Context<'ctx, A: Arity, P: ParentData + Default>
-        = SliverLayoutCtx<'ctx, A, P>
+        = RawSliverLayoutContext<'ctx, A, P>
     where
         Self: 'ctx;
 
@@ -255,40 +255,40 @@ impl LayoutCapability for SliverLayout {
 
 /// Sliver layout context implementation.
 ///
-/// Carries two storage modes mirroring [`super::box_protocol::BoxLayoutCtx`]:
+/// Carries two storage modes mirroring [`super::box_protocol::RawBoxLayoutContext`]:
 ///
-/// 1. `Direct` (constructor [`SliverLayoutCtx::new`]): owns constraints and a
+/// 1. `Direct` (constructor [`RawSliverLayoutContext::new`]): owns constraints and a
 ///    local geometry slot. This is the production path created by
 ///    [`SliverProtocol::with_leaf_erased_ctx`] and the pipeline.
-/// 2. `Proxy` (constructor `SliverLayoutCtx::from_erased`): wraps
-///    `&mut dyn SliverLayoutCtxErased` so the
+/// 2. `Proxy` (constructor `RawSliverLayoutContext::from_erased`): wraps
+///    `&mut dyn ErasedSliverLayoutContext` so the
 ///    `RenderObject<SliverProtocol>` blanket impl can reconstruct a typed
-///    `SliverLayoutCtx<T::Arity, T::ParentData>` from the erased GAT
+///    `RawSliverLayoutContext<T::Arity, T::ParentData>` from the erased GAT
 ///    boundary and call `RenderSliver::perform_layout`. Completion writes
 ///    through to the underlying context so both the local cache and the
 ///    pipeline-side Direct ctx stay consistent.
-pub struct SliverLayoutCtx<'ctx, A: Arity, P: ParentData + Default> {
-    storage: SliverLayoutCtxStorage<'ctx, P>,
+pub struct RawSliverLayoutContext<'ctx, A: Arity, P: ParentData + Default> {
+    storage: SliverLayoutContextStorage<'ctx, P>,
     _phantom: std::marker::PhantomData<(A, P)>,
 }
 
-impl<A: Arity, P: ParentData + Default> std::fmt::Debug for SliverLayoutCtx<'_, A, P> {
+impl<A: Arity, P: ParentData + Default> std::fmt::Debug for RawSliverLayoutContext<'_, A, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Storage holds live driver callbacks / an erased pipeline context;
         // report the storage mode and the (Copy) constraints only.
         let (mode, constraints) = match &self.storage {
-            SliverLayoutCtxStorage::Direct { constraints, .. } => ("Direct", constraints),
-            SliverLayoutCtxStorage::Proxy { constraints, .. } => ("Proxy", constraints),
+            SliverLayoutContextStorage::Direct { constraints, .. } => ("Direct", constraints),
+            SliverLayoutContextStorage::Proxy { constraints, .. } => ("Proxy", constraints),
         };
-        f.debug_struct("SliverLayoutCtx")
+        f.debug_struct("RawSliverLayoutContext")
             .field("storage", &mode)
             .field("constraints", constraints)
             .finish_non_exhaustive()
     }
 }
 
-/// Internal storage variants for [`SliverLayoutCtx`].
-enum SliverLayoutCtxStorage<'ctx, P: ParentData + Default> {
+/// Internal storage variants for [`RawSliverLayoutContext`].
+enum SliverLayoutContextStorage<'ctx, P: ParentData + Default> {
     /// Production / pipeline path: owns constraints, geometry slot, and
     /// optional child layout access.
     Direct {
@@ -311,15 +311,15 @@ enum SliverLayoutCtxStorage<'ctx, P: ParentData + Default> {
     Proxy {
         constraints: SliverConstraints,
         child_geometries: ProxySliverChildGeometryCache,
-        erased: &'ctx mut dyn SliverLayoutCtxErased,
+        erased: &'ctx mut dyn ErasedSliverLayoutContext,
     },
 }
 
-impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
+impl<'ctx, A: Arity, P: ParentData + Default> RawSliverLayoutContext<'ctx, A, P> {
     /// Creates a new sliver layout context with given constraints. Direct storage.
     pub fn new(constraints: SliverConstraints) -> Self {
         Self {
-            storage: SliverLayoutCtxStorage::Direct {
+            storage: SliverLayoutContextStorage::Direct {
                 constraints,
                 children: None,
                 child_ids: None,
@@ -337,7 +337,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
         children: &'ctx mut Vec<SliverChildState<P>>,
     ) -> Self {
         Self {
-            storage: SliverLayoutCtxStorage::Direct {
+            storage: SliverLayoutContextStorage::Direct {
                 constraints,
                 children: Some(children),
                 child_ids: None,
@@ -359,7 +359,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
         box_child_intrinsic_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
     ) -> Self {
         Self {
-            storage: SliverLayoutCtxStorage::Direct {
+            storage: SliverLayoutContextStorage::Direct {
                 constraints,
                 children: Some(children),
                 child_ids: Some(child_ids),
@@ -371,14 +371,14 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
         }
     }
 
-    /// Constructs a Proxy-mode `SliverLayoutCtx` that delegates child
+    /// Constructs a Proxy-mode `RawSliverLayoutContext` that delegates child
     /// operations to the given erased context.
     ///
     /// Used by the `RenderObject<SliverProtocol>` blanket impl in
     /// [`crate::traits::RenderSliver`] to hand a typed
-    /// `&mut SliverLayoutCtx<T::Arity, T::ParentData>` to
+    /// `&mut RawSliverLayoutContext<T::Arity, T::ParentData>` to
     /// `RenderSliver::perform_layout`, given only
-    /// `&mut dyn SliverLayoutCtxErased` at the trait boundary.
+    /// `&mut dyn ErasedSliverLayoutContext` at the trait boundary.
     ///
     /// Constraints are eagerly cached from `erased.constraints()` (cheap —
     /// `SliverConstraints` is `Copy`) so
@@ -389,14 +389,14 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
     /// `RenderObject<SliverProtocol>` blanket impl in
     /// [`crate::traits::RenderSliver`].
     // Protocol-layout-erasure (the sliver leaf bridge)
-    pub(crate) fn from_erased(erased: &'ctx mut dyn SliverLayoutCtxErased) -> Self {
+    pub(crate) fn from_erased(erased: &'ctx mut dyn ErasedSliverLayoutContext) -> Self {
         let constraints = erased.constraints();
         debug_assert!(
             match erased.parent_data_type_id() {
                 Some(id) => id == std::any::TypeId::of::<P>(),
                 None => true,
             },
-            "SliverLayoutCtx::from_erased: ParentData type mismatch — \
+            "RawSliverLayoutContext::from_erased: ParentData type mismatch — \
              underlying erased ctx reports TypeId={:?}, typed wrapper \
              requested {:?} ({})",
             erased.parent_data_type_id(),
@@ -405,7 +405,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
         );
         let child_count = erased.child_count();
         Self {
-            storage: SliverLayoutCtxStorage::Proxy {
+            storage: SliverLayoutContextStorage::Proxy {
                 constraints,
                 child_geometries: vec![None; child_count],
                 erased,
@@ -421,16 +421,16 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
     /// Gets the scroll offset from constraints.
     pub fn scroll_offset(&self) -> f64 {
         match &self.storage {
-            SliverLayoutCtxStorage::Direct { constraints, .. }
-            | SliverLayoutCtxStorage::Proxy { constraints, .. } => constraints.scroll_offset,
+            SliverLayoutContextStorage::Direct { constraints, .. }
+            | SliverLayoutContextStorage::Proxy { constraints, .. } => constraints.scroll_offset,
         }
     }
 
     /// Gets the remaining paint extent.
     pub fn remaining_paint_extent(&self) -> f64 {
         match &self.storage {
-            SliverLayoutCtxStorage::Direct { constraints, .. }
-            | SliverLayoutCtxStorage::Proxy { constraints, .. } => {
+            SliverLayoutContextStorage::Direct { constraints, .. }
+            | SliverLayoutContextStorage::Proxy { constraints, .. } => {
                 constraints.remaining_paint_extent
             }
         }
@@ -439,8 +439,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
     /// Gets the viewport main axis extent.
     pub fn viewport_main_axis_extent(&self) -> f64 {
         match &self.storage {
-            SliverLayoutCtxStorage::Direct { constraints, .. }
-            | SliverLayoutCtxStorage::Proxy { constraints, .. } => {
+            SliverLayoutContextStorage::Direct { constraints, .. }
+            | SliverLayoutContextStorage::Proxy { constraints, .. } => {
                 constraints.viewport_main_axis_extent
             }
         }
@@ -449,8 +449,10 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
     /// Gets the cross axis extent.
     pub fn cross_axis_extent(&self) -> f64 {
         match &self.storage {
-            SliverLayoutCtxStorage::Direct { constraints, .. }
-            | SliverLayoutCtxStorage::Proxy { constraints, .. } => constraints.cross_axis_extent,
+            SliverLayoutContextStorage::Direct { constraints, .. }
+            | SliverLayoutContextStorage::Proxy { constraints, .. } => {
+                constraints.cross_axis_extent
+            }
         }
     }
 
@@ -474,7 +476,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
         match &mut self.storage {
             // A direct context runs no walk, so a size its callback answers
             // is the child's own.
-            SliverLayoutCtxStorage::Direct {
+            SliverLayoutContextStorage::Direct {
                 child_ids,
                 layout_box_child_callback,
                 ..
@@ -487,7 +489,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
                 }
                 Ok(BoxChildSize::StandIn(Size::ZERO))
             }
-            SliverLayoutCtxStorage::Proxy { erased, .. } => {
+            SliverLayoutContextStorage::Proxy { erased, .. } => {
                 erased.measure_box_child(index, constraints)
             }
         }
@@ -501,7 +503,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
         extent: f64,
     ) -> crate::error::RenderResult<f64> {
         match &mut self.storage {
-            SliverLayoutCtxStorage::Direct {
+            SliverLayoutContextStorage::Direct {
                 child_ids,
                 box_child_intrinsic_callback,
                 ..
@@ -514,7 +516,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
                 }
                 Ok(0.0)
             }
-            SliverLayoutCtxStorage::Proxy { erased, .. } => {
+            SliverLayoutContextStorage::Proxy { erased, .. } => {
                 erased.box_child_intrinsic(index, dimension, extent)
             }
         }
@@ -522,21 +524,21 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
 }
 
 impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayout, A, P>
-    for SliverLayoutCtx<'ctx, A, P>
+    for RawSliverLayoutContext<'ctx, A, P>
 {
     fn constraints(&self) -> &SliverConstraints {
         match &self.storage {
-            SliverLayoutCtxStorage::Direct { constraints, .. }
-            | SliverLayoutCtxStorage::Proxy { constraints, .. } => constraints,
+            SliverLayoutContextStorage::Direct { constraints, .. }
+            | SliverLayoutContextStorage::Proxy { constraints, .. } => constraints,
         }
     }
 
     fn child_count(&self) -> usize {
         match &self.storage {
-            SliverLayoutCtxStorage::Direct { children, .. } => {
+            SliverLayoutContextStorage::Direct { children, .. } => {
                 children.as_ref().map_or(0, |c| c.len())
             }
-            SliverLayoutCtxStorage::Proxy { erased, .. } => erased.child_count(),
+            SliverLayoutContextStorage::Proxy { erased, .. } => erased.child_count(),
         }
     }
 
@@ -546,7 +548,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
         constraints: SliverConstraints,
     ) -> crate::error::RenderResult<SliverGeometry> {
         match &mut self.storage {
-            SliverLayoutCtxStorage::Direct {
+            SliverLayoutContextStorage::Direct {
                 children,
                 child_ids,
                 layout_child_callback,
@@ -573,7 +575,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
                 }
                 Ok(SliverGeometry::ZERO)
             }
-            SliverLayoutCtxStorage::Proxy {
+            SliverLayoutContextStorage::Proxy {
                 erased,
                 child_geometries,
                 ..
@@ -589,7 +591,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
 
     fn position_child(&mut self, index: usize, offset: Offset) {
         match &mut self.storage {
-            SliverLayoutCtxStorage::Direct { children, .. } => {
+            SliverLayoutContextStorage::Direct { children, .. } => {
                 if let Some(children) = children.as_mut()
                     && let Some(child) = children.get_mut(index)
                 {
@@ -597,7 +599,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
                     child.offset = offset;
                 }
             }
-            SliverLayoutCtxStorage::Proxy { erased, .. } => {
+            SliverLayoutContextStorage::Proxy { erased, .. } => {
                 erased.position_child(index, offset);
             }
         }
@@ -605,11 +607,11 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
 
     fn child_geometry(&self, index: usize) -> Option<&SliverGeometry> {
         match &self.storage {
-            SliverLayoutCtxStorage::Direct { children, .. } => children
+            SliverLayoutContextStorage::Direct { children, .. } => children
                 .as_ref()
                 .and_then(|c| c.get(index))
                 .map(|child| &child.geometry),
-            SliverLayoutCtxStorage::Proxy {
+            SliverLayoutContextStorage::Proxy {
                 child_geometries, ..
             } => child_geometries.get(index).and_then(Option::as_ref),
         }
@@ -617,11 +619,11 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
 
     fn child_parent_data(&self, index: usize) -> Option<&P> {
         match &self.storage {
-            SliverLayoutCtxStorage::Direct { children, .. } => children
+            SliverLayoutContextStorage::Direct { children, .. } => children
                 .as_ref()
                 .and_then(|c| c.get(index))
                 .map(|child| &child.parent_data),
-            SliverLayoutCtxStorage::Proxy { erased, .. } => erased
+            SliverLayoutContextStorage::Proxy { erased, .. } => erased
                 .child_parent_data_dyn(index)
                 .and_then(|d| d.downcast_ref::<P>()),
         }
@@ -629,11 +631,11 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
 
     fn child_parent_data_mut(&mut self, index: usize) -> Option<&mut P> {
         match &mut self.storage {
-            SliverLayoutCtxStorage::Direct { children, .. } => children
+            SliverLayoutContextStorage::Direct { children, .. } => children
                 .as_mut()
                 .and_then(|c| c.get_mut(index))
                 .map(|child| &mut child.parent_data),
-            SliverLayoutCtxStorage::Proxy { erased, .. } => erased
+            SliverLayoutContextStorage::Proxy { erased, .. } => erased
                 .child_parent_data_dyn_or_insert(index, &|| {
                     Box::new(P::default()) as Box<dyn ParentData>
                 })
@@ -647,18 +649,18 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
 // ============================================================================
 
 /// Sliver counterpart to
-/// [`BoxLayoutCtxErased`](super::box_protocol::BoxLayoutCtxErased) — protocol-typed but
+/// [`ErasedBoxLayoutContext`](super::box_protocol::ErasedBoxLayoutContext) — protocol-typed but
 /// arity- and parent-data-erased view of a sliver layout context for use
 /// at the `RenderObject<SliverProtocol>::perform_layout_raw` trait
 /// boundary.
 ///
 /// The trait surface mirrors the Box erased layout bridge: the pipeline
 /// owns parent-data-erased child slots, while the blanket impl rebuilds a
-/// typed `SliverLayoutCtx<T::Arity, T::ParentData>` and delegates child
+/// typed `RawSliverLayoutContext<T::Arity, T::ParentData>` and delegates child
 /// layout / parent-data access through this trait. No longer `Send +
 /// Sync`-bound, for the same reason as
-/// [`BoxLayoutCtxErased`](super::box_protocol::BoxLayoutCtxErased).
-pub trait SliverLayoutCtxErased {
+/// [`ErasedBoxLayoutContext`](super::box_protocol::ErasedBoxLayoutContext).
+pub trait ErasedSliverLayoutContext {
     /// Sliver constraints from parent.
     fn constraints(&self) -> SliverConstraints;
 
@@ -756,19 +758,21 @@ pub trait SliverLayoutCtxErased {
     /// — the removal half of the request-strategy seam, drained by the
     /// binding layer between layout passes of the frame's fixpoint.
     ///
-    /// Only `ErasedSliverLayoutCtx` (the pipeline-wired context) records the
+    /// Only `DriverSliverLayoutContext` (the pipeline-wired context) records the
     /// band; `Direct` / test / leaf contexts are honestly inert — they carry
     /// no `pending_retain_bands` sink.  The default is a no-op.
     fn emit_retain_band(&mut self, _first: usize, _last: usize) {}
 }
 
-impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCtx<'_, A, P> {
+impl<A: Arity, P: ParentData + Default> ErasedSliverLayoutContext
+    for RawSliverLayoutContext<'_, A, P>
+{
     #[inline]
     fn descendant_layout_degraded(&self) -> bool {
         match &self.storage {
             // A direct context runs no walk, so nothing can have degraded.
-            SliverLayoutCtxStorage::Direct { .. } => false,
-            SliverLayoutCtxStorage::Proxy { erased, .. } => erased.descendant_layout_degraded(),
+            SliverLayoutContextStorage::Direct { .. } => false,
+            SliverLayoutContextStorage::Proxy { erased, .. } => erased.descendant_layout_degraded(),
         }
     }
 
@@ -799,7 +803,7 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
         index: usize,
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<BoxChildSize> {
-        SliverLayoutCtx::measure_box_child(self, index, constraints)
+        RawSliverLayoutContext::measure_box_child(self, index, constraints)
     }
 
     #[inline]
@@ -809,7 +813,7 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
         dimension: IntrinsicDimension,
         extent: f64,
     ) -> crate::error::RenderResult<f64> {
-        SliverLayoutCtx::box_child_intrinsic(self, index, dimension, extent)
+        RawSliverLayoutContext::box_child_intrinsic(self, index, dimension, extent)
     }
 
     #[inline]
@@ -820,33 +824,35 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
     #[inline]
     fn child_parent_data_dyn(&self, index: usize) -> Option<&dyn ParentData> {
         match &self.storage {
-            SliverLayoutCtxStorage::Direct { children, .. } => children
+            SliverLayoutContextStorage::Direct { children, .. } => children
                 .as_ref()
                 .and_then(|c| c.get(index))
                 .map(|child| &child.parent_data as &dyn ParentData),
-            SliverLayoutCtxStorage::Proxy { erased, .. } => erased.child_parent_data_dyn(index),
+            SliverLayoutContextStorage::Proxy { erased, .. } => erased.child_parent_data_dyn(index),
         }
     }
 
     #[inline]
     fn child_parent_data_dyn_mut(&mut self, index: usize) -> Option<&mut dyn ParentData> {
         match &mut self.storage {
-            SliverLayoutCtxStorage::Direct { children, .. } => children
+            SliverLayoutContextStorage::Direct { children, .. } => children
                 .as_mut()
                 .and_then(|c| c.get_mut(index))
                 .map(|child| &mut child.parent_data as &mut dyn ParentData),
-            SliverLayoutCtxStorage::Proxy { erased, .. } => erased.child_parent_data_dyn_mut(index),
+            SliverLayoutContextStorage::Proxy { erased, .. } => {
+                erased.child_parent_data_dyn_mut(index)
+            }
         }
     }
 
     #[inline]
     fn parent_data_type_id(&self) -> Option<std::any::TypeId> {
         match &self.storage {
-            SliverLayoutCtxStorage::Direct {
+            SliverLayoutContextStorage::Direct {
                 children: Some(_), ..
             } => Some(std::any::TypeId::of::<P>()),
-            SliverLayoutCtxStorage::Direct { children: None, .. }
-            | SliverLayoutCtxStorage::Proxy { .. } => None,
+            SliverLayoutContextStorage::Direct { children: None, .. }
+            | SliverLayoutContextStorage::Proxy { .. } => None,
         }
     }
 
@@ -855,8 +861,8 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
         match &mut self.storage {
             // Direct storage carries no request sink — honestly Unwired so the
             // caller knows no backend is wired.
-            SliverLayoutCtxStorage::Direct { .. } => ChildLayout::Unwired,
-            SliverLayoutCtxStorage::Proxy { erased, .. } => {
+            SliverLayoutContextStorage::Direct { .. } => ChildLayout::Unwired,
+            SliverLayoutContextStorage::Proxy { erased, .. } => {
                 erased.request_child_build(logical_index)
             }
         }
@@ -865,8 +871,10 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
     #[inline]
     fn emit_retain_band(&mut self, first: usize, last: usize) {
         match &mut self.storage {
-            SliverLayoutCtxStorage::Direct { .. } => {} // honestly inert
-            SliverLayoutCtxStorage::Proxy { erased, .. } => erased.emit_retain_band(first, last),
+            SliverLayoutContextStorage::Direct { .. } => {} // honestly inert
+            SliverLayoutContextStorage::Proxy { erased, .. } => {
+                erased.emit_retain_band(first, last);
+            }
         }
     }
 }
@@ -906,8 +914,8 @@ impl ErasedSliverChildState {
 }
 
 /// Driver-native, parent-data-erased implementation of
-/// [`SliverLayoutCtxErased`] used by the sliver subtree walk.
-pub struct ErasedSliverLayoutCtx<'ctx> {
+/// [`ErasedSliverLayoutContext`] used by the sliver subtree walk.
+pub struct DriverSliverLayoutContext<'ctx> {
     constraints: SliverConstraints,
     children: &'ctx mut Vec<ErasedSliverChildState>,
     child_ids: &'ctx [RenderId],
@@ -940,11 +948,11 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     degradation: Option<super::box_protocol::DegradationProbe<'ctx>>,
 }
 
-impl std::fmt::Debug for ErasedSliverLayoutCtx<'_> {
+impl std::fmt::Debug for DriverSliverLayoutContext<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Callbacks are live driver closures and the pending_* sinks are
         // never borrowed in fmt; report ids + child state.
-        f.debug_struct("ErasedSliverLayoutCtx")
+        f.debug_struct("DriverSliverLayoutContext")
             .field("constraints", &self.constraints)
             .field("children", &self.children)
             .field("child_ids", &self.child_ids)
@@ -953,7 +961,7 @@ impl std::fmt::Debug for ErasedSliverLayoutCtx<'_> {
     }
 }
 
-impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
+impl<'ctx> DriverSliverLayoutContext<'ctx> {
     /// Creates the walk-side context over pre-built child slots. `node_id` is
     /// the sliver being laid out; `pending_child_requests` and
     /// `pending_retain_bands` are the producer/removal sinks for the
@@ -988,7 +996,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
     }
 }
 
-impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
+impl ErasedSliverLayoutContext for DriverSliverLayoutContext<'_> {
     fn descendant_layout_degraded(&self) -> bool {
         self.degradation.is_some_and(|probe| probe.degraded())
     }
@@ -1118,7 +1126,7 @@ impl HitTestCapability for SliverHitTest {
     type Result = SliverHitTestResult;
     type Entry = SliverHitTestEntry;
     type Context<'ctx, A: Arity, P: ParentData>
-        = SliverHitTestCtx<'ctx, A, P>
+        = RawSliverHitTestContext<'ctx, A, P>
     where
         Self: 'ctx;
 }
@@ -1205,7 +1213,7 @@ impl SliverHitTestEntry {
 /// The third parameter mirrors the box protocol's
 /// [`box_protocol::HitTestChildCallback`](crate::protocol::box_protocol::HitTestChildCallback)
 /// for signature uniformity with the shared `RenderObject::hit_test_raw`
-/// trait method, but `SliverHitTestCtx`'s own transform stack is a no-op
+/// trait method, but `RawSliverHitTestContext`'s own transform stack is a no-op
 /// (see its `push_transform`/`pop_transform` impl below — main-axis
 /// position covers the sliver protocol's needs), so this is always
 /// `None` in practice.
@@ -1213,24 +1221,24 @@ pub type SliverHitTestChildCallback<'a> =
     &'a mut dyn FnMut(usize, Option<MainAxisPosition>, Option<Matrix4>) -> bool;
 
 /// Sliver hit test context implementation.
-pub struct SliverHitTestCtx<'ctx, A: Arity, P: ParentData> {
+pub struct RawSliverHitTestContext<'ctx, A: Arity, P: ParentData> {
     position: MainAxisPosition,
     result: SliverHitTestResult,
     child_callback: Option<SliverHitTestChildCallback<'ctx>>,
     _phantom: std::marker::PhantomData<(&'ctx (), A, P)>,
 }
 
-impl<A: Arity, P: ParentData> std::fmt::Debug for SliverHitTestCtx<'_, A, P> {
+impl<A: Arity, P: ParentData> std::fmt::Debug for RawSliverHitTestContext<'_, A, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `child_callback` is the driver's live hit-test recursion.
-        f.debug_struct("SliverHitTestCtx")
+        f.debug_struct("RawSliverHitTestContext")
             .field("position", &self.position)
             .field("result", &self.result)
             .finish_non_exhaustive()
     }
 }
 
-impl<'ctx, A: Arity, P: ParentData> SliverHitTestCtx<'ctx, A, P> {
+impl<'ctx, A: Arity, P: ParentData> RawSliverHitTestContext<'ctx, A, P> {
     /// Creates a new sliver hit test context.
     pub fn new(position: MainAxisPosition) -> Self {
         Self {
@@ -1256,7 +1264,7 @@ impl<'ctx, A: Arity, P: ParentData> SliverHitTestCtx<'ctx, A, P> {
 }
 
 impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
-    for SliverHitTestCtx<'ctx, A, P>
+    for RawSliverHitTestContext<'ctx, A, P>
 {
     fn position(&self) -> &MainAxisPosition {
         &self.position

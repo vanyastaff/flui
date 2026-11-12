@@ -636,8 +636,8 @@ impl Indication {
                     STATE_EXIT
                 };
                 let motion = MotionSpec::default()
-                    .with_duration(duration)
-                    .with_curve(curves::LINEAR);
+                    .duration(duration)
+                    .curve(curves::LINEAR);
                 Some(layer.retarget(target_alpha, motion))
             }
         };

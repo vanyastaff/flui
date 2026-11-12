@@ -546,11 +546,11 @@ impl Landing {
 
     /// Resolves once [`land`](Self::land) has run.
     fn wait(self: Rc<Self>) -> impl Future<Output = ()> {
-        std::future::poll_fn(move |cx| {
+        std::future::poll_fn(move |ctx| {
             if self.landed.get() {
                 Poll::Ready(())
             } else {
-                let previous = self.waker.replace(Some(cx.waker().clone()));
+                let previous = self.waker.replace(Some(ctx.waker().clone()));
                 drop(previous);
                 Poll::Pending
             }
@@ -750,11 +750,11 @@ impl<T: 'static> ViewState<OpenContainer<T>> for OpenContainerState<T> {
         }
         if view.tappable {
             let on_tap = action.clone();
-            well = well.on_tap(move |_cx| on_tap.open());
+            well = well.on_tap(move |_ctx| on_tap.open());
             let on_click = action;
             semantics = semantics
                 .role(SemanticsRole::Button)
-                .on_click(move |_cx| on_click.open());
+                .on_click(move |_ctx| on_click.open());
         }
         let surface = Material::new(look.closed_color)
             .elevation(look.closed_elevation)

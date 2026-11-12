@@ -1,9 +1,9 @@
-//! The `flui.<subsystem>` targets through the real `EnvFilter`: a directive selects a target and
-//! everything under it.
+//! The `flui.<subsystem>` targets through the real `Targets` filter: a directive selects a
+//! target and everything under it.
 
 use std::sync::{Arc, Mutex};
 
-use flui_log::FilterConfig;
+use flui_log::{FilterConfig, FilterError};
 use tracing::Level;
 use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, SubscriberExt as _};
@@ -31,7 +31,7 @@ impl<S: tracing::Subscriber> Layer<S> for Seen {
 fn admitted(directives: &str) -> Vec<&'static str> {
     let filter = FilterConfig::new(directives)
         .without_env_var()
-        .env_filter()
+        .targets()
         .expect("the directives parse");
     let seen = Seen::default();
     let subscriber = Registry::default().with(seen.clone().with_filter(filter));
@@ -87,4 +87,19 @@ fn other_directives_are_left_alone() {
         admitted("off,flui_animation=trace"),
         ["flui_animation::controller"]
     );
+}
+
+#[test]
+fn a_span_or_field_directive_is_refused() {
+    for directives in [
+        "[frame]=trace",
+        "flui.frame[span{id=1}]=trace",
+        "flui.frame=loud",
+    ] {
+        let resolved = FilterConfig::new(directives).without_env_var().targets();
+        assert!(
+            matches!(resolved, Err(FilterError::Configured { .. })),
+            "{directives}: {resolved:?}"
+        );
+    }
 }

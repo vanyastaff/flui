@@ -57,7 +57,7 @@ impl ViewState<AgentCounter> for AgentCounterState {
                 Text::new(count.get(ctx).to_string()),
                 SizedBox::height(16.0),
                 ElevatedButton::new(Text::new("Increment"))
-                    .on_pressed(move |cx| count.update(cx, |n| *n += 1)),
+                    .on_pressed(move |ctx| count.update(ctx, |n| *n += 1)),
             ))
             .main_axis_alignment(MainAxisAlignment::Center),
         )

@@ -278,13 +278,13 @@ impl ViewState<FloatingHeaderHost> for FloatingHeaderHostState {
             .map(|owner| owner.controller().clone());
         if view.pinned {
             FloatingPinnedPersistentHeaderView::new(Rc::clone(&view.delegate))
-                .with_snap_controller(controller)
-                .with_snap_command(command)
+                .snap_controller(controller)
+                .snap_command(command)
                 .boxed()
         } else {
             FloatingPersistentHeaderView::new(Rc::clone(&view.delegate))
-                .with_snap_controller(controller)
-                .with_snap_command(command)
+                .snap_controller(controller)
+                .snap_command(command)
                 .boxed()
         }
     }

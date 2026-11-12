@@ -27,7 +27,7 @@
 //! use flui_app::{AppConfig, run_direct};
 //!
 //! run_direct(
-//!     AppConfig::new().with_title("Direct Render").with_size(800, 600),
+//!     AppConfig::new().title("Direct Render").size(800, 600),
 //!     |builder, w, h| {
 //!         use flui_painting::Canvas;
 //!         use flui_painting::{styling::Color, paint::Paint};

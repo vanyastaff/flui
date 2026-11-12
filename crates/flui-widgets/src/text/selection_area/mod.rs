@@ -39,7 +39,7 @@ use flui_rendering::semantics::{
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{
-    BoxedView, CreationSite, EventCx, EventOutcome, InheritedView, LifecycleContext,
+    BoxedView, CreationSite, EventContext, EventOutcome, InheritedView, LifecycleContext,
     PostFrameHandle, RebuildHandle, RebuildReason, StatefulView, View, ViewExt, ViewState,
     WriterSource, impl_inherited_view,
 };
@@ -107,7 +107,7 @@ pub enum SelectionInput {
 }
 
 /// Told each change of the selection.
-type SelectionCallback = Rc<dyn Fn(&mut EventCx<'_>, &SelectionChange)>;
+type SelectionCallback = Rc<dyn Fn(&mut EventContext<'_>, &SelectionChange)>;
 
 /// Makes the static text beneath it selectable as one document.
 ///
@@ -154,7 +154,7 @@ type SelectionCallback = Rc<dyn Fn(&mut EventCx<'_>, &SelectionChange)>;
 /// ```rust
 /// # use flui_widgets::prelude::*;
 /// let _ = SelectionArea::new(Column::new((Text::new("Terms"), Text::new("Read them."))))
-///     .on_selection_changed(|_cx, change| {
+///     .on_selection_changed(|_ctx, change| {
 ///         if let Some(selected) = &change.selected {
 ///             println!("selected {:?}", selected.text);
 ///         }
@@ -237,11 +237,11 @@ impl SelectionArea {
     #[must_use]
     pub fn on_selection_changed<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &SelectionChange) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &SelectionChange) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_selection_changed = Some(Rc::new(move |cx, change| {
-            handler(cx, change).report();
+        self.on_selection_changed = Some(Rc::new(move |ctx, change| {
+            handler(ctx, change).report();
         }));
         self
     }
@@ -465,11 +465,11 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             .focus_node(Rc::clone(&self.model.focus))
             .skip_traversal(true)
             .include_semantics(false)
-            .on_key_event(move |cx, event| {
+            .on_key_event(move |ctx, event| {
                 keys.upgrade()
-                    .map_or(KeyEventResult::Ignored, |model| model.key(cx, event))
+                    .map_or(KeyEventResult::Ignored, |model| model.key(ctx, event))
             })
-            .on_focus_change(move |_cx, focused| {
+            .on_focus_change(move |_ctx, focused| {
                 if let Some(model) = focus_changed.upgrade() {
                     model.focus_changed(focused);
                 }
@@ -481,13 +481,13 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             .merge_boundary(true)
             .text_direction(direction)
             .document_selection(self.model.selection.borrow().clone())
-            .on_set_document_selection(move |cx, selection| {
-                model.select(cx, Some(&selection), SelectionInput::AssistiveTechnology);
+            .on_set_document_selection(move |ctx, selection| {
+                model.select(ctx, Some(&selection), SelectionInput::AssistiveTechnology);
             });
         // Assistive technology's menu acts on the area once it holds the
         // focus, as a secondary click gives it.
         let focus = Rc::clone(&self.model.focus);
-        show_menu_action(semantics, &self.model.handles.menu, move |_cx| {
+        show_menu_action(semantics, &self.model.handles.menu, move |_ctx| {
             let _outcome = focus.request_focus();
         })
         .child(actions)
@@ -573,12 +573,12 @@ impl SelectionModel {
     /// is resumed afterwards.
     fn select(
         &self,
-        cx: &mut EventCx<'_>,
+        ctx: &mut EventContext<'_>,
         selection: Option<&DocumentSelection>,
         input: SelectionInput,
     ) {
         self.commit(
-            cx,
+            ctx,
             selection,
             SelectionChangeCause::User(input),
             CaretMemory::default(),
@@ -593,7 +593,7 @@ impl SelectionModel {
     /// change after the area's listener.
     fn commit(
         &self,
-        cx: &mut EventCx<'_>,
+        ctx: &mut EventContext<'_>,
         selection: Option<&DocumentSelection>,
         cause: SelectionChangeCause,
         caret: CaretMemory,
@@ -665,7 +665,7 @@ impl SelectionModel {
         let change = SelectionChange { selected, cause };
         failure.contain(|| {
             if let Some(listener) = listener {
-                listener(cx, &change);
+                listener(ctx, &change);
             }
         });
         if let Some(controller) = controller {
@@ -820,9 +820,9 @@ impl SelectionModel {
         self.rebase_drag(held, next.as_ref());
         let writer = self.writer.borrow().clone();
         if let Some(writer) = writer {
-            writer.write(|cx| {
+            writer.write(|ctx| {
                 self.commit(
-                    cx,
+                    ctx,
                     next.as_ref(),
                     SelectionChangeCause::TextRemoved,
                     CaretMemory::default(),

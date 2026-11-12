@@ -6,7 +6,7 @@
 //! Each skeleton draws a [`LinearGradient`](flui_painting::paint::Shader::LinearGradient)
 //! laid out across its nearest paint anchor (the shimmer), not across
 //! itself: the gradient's points are the band's position in the anchor
-//! translated by the skeleton's offset from it (`PaintCx::paint_anchor`).
+//! translated by the skeleton's offset from it (`PaintContext::paint_anchor`).
 //! Skeletons at different places therefore cut different windows out of one
 //! band and read as a single sweep, without an offscreen group around them.
 //!
@@ -24,7 +24,7 @@ use flui_painting::styling::Color;
 use flui_rendering::{
     RenderUpdateImpact,
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxLayoutContext, PaintCx},
+    context::{BoxDryLayoutContext, BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
     traits::RenderBox,
@@ -190,12 +190,12 @@ impl RenderBox for RenderSkeleton {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut BoxDryLayoutCtx<'_>,
+        _ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         Ok(self.layout_size(constraints))
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         let size = ctx.size();
         let rect = Rect::from_origin_size(Point::ZERO, size);
         let mut paint = Paint::fill(self.base);

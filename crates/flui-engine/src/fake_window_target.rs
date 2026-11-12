@@ -72,11 +72,11 @@ impl HasWindowHandle for FakeTarget {
             .lock()
             .expect("BUG: test-only mutex is never poisoned");
         let raw = RawWindowHandle::Xlib(XlibWindowHandle::new(window_id));
+        #[expect(unsafe_code, reason = "test double, no FFI island")]
         // SAFETY: an Xlib window handle is a plain integer ID (`c_ulong`),
         // not a pointer — `borrow_raw`'s safety contract is entirely about
         // pointer fields staying valid, and there is no pointee here for it
         // to protect.
-        #[expect(unsafe_code)] // test double, no FFI island: see SAFETY above
         let handle = unsafe { WindowHandle::borrow_raw(raw) };
         Ok(handle)
     }
@@ -96,9 +96,9 @@ impl HasDisplayHandle for FakeTarget {
             return Err(HandleError::Unavailable);
         }
         let raw = RawDisplayHandle::Xlib(XlibDisplayHandle::new(None, 0));
+        #[expect(unsafe_code, reason = "test double, no FFI island")]
         // SAFETY: `display: None` carries no pointer at all, so there is no
         // pointee for `borrow_raw`'s safety contract to protect.
-        #[expect(unsafe_code)] // test double, no FFI island: see SAFETY above
         let handle = unsafe { DisplayHandle::borrow_raw(raw) };
         Ok(handle)
     }

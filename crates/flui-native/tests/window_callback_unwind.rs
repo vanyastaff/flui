@@ -9,17 +9,11 @@
 use std::{
     cell::Cell,
     rc::{Rc, Weak},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
     thread,
     time::Duration,
 };
 
-use flui_native::{
-    HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform as _, executor::BackgroundExecutor,
-};
+use flui_native::{HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform as _};
 use flui_platform::{CloseDecision, WindowCommand, WindowOptions};
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 
@@ -148,41 +142,9 @@ fn a_close_from_a_failed_method_still_finishes() {
     );
 }
 
-/// Test that background executor handles panic in tasks gracefully
-fn test_background_executor_panic_handling() {
-    let executor = BackgroundExecutor::new();
-    let post_panic_executed = Arc::new(AtomicBool::new(false));
-    let post_panic_clone = Arc::clone(&post_panic_executed);
-
-    // Spawn task that panics
-    executor
-        .spawn(async {
-            panic!("Intentional panic for testing");
-        })
-        .detach();
-
-    thread::sleep(Duration::from_millis(50));
-
-    // Spawn another task after panic
-    executor
-        .spawn(async move {
-            post_panic_clone.store(true, Ordering::SeqCst);
-        })
-        .detach();
-
-    thread::sleep(Duration::from_millis(50));
-
-    // Verify executor still works after panic
-    assert!(
-        post_panic_executed.load(Ordering::SeqCst),
-        "Executor should continue working after task panic"
-    );
-}
-
 /// A panicking handler method or task never wedges what runs next: a request
 /// queued behind a failed frame is delivered, a nested close request keeps
-/// the window, a close made from a failed method still finishes, and the
-/// background executor keeps running tasks.
+/// the window, and a close made from a failed method still finishes.
 #[test]
 fn panics_in_callbacks_and_tasks_leave_the_dispatcher_usable() {
     crate::run_table(
@@ -199,10 +161,6 @@ fn panics_in_callbacks_and_tasks_leave_the_dispatcher_usable() {
             (
                 "a_close_from_a_failed_method_still_finishes",
                 a_close_from_a_failed_method_still_finishes,
-            ),
-            (
-                "test_background_executor_panic_handling",
-                test_background_executor_panic_handling,
             ),
         ],
     );

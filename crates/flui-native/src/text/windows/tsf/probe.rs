@@ -344,7 +344,7 @@ fn bring_to_front(hwnd: HWND) -> bool {
             }
         }
         std::thread::sleep(Duration::from_millis(50));
-        // SAFETY: no arguments.
+        // SAFETY: `GetForegroundWindow` takes nothing and only reads the foreground handle.
         if unsafe { GetForegroundWindow() } == hwnd {
             return true;
         }
@@ -354,12 +354,12 @@ fn bring_to_front(hwnd: HWND) -> bool {
 
 /// Press and release `key`, only while `hwnd` is the foreground window.
 fn press(hwnd: HWND, key: VIRTUAL_KEY) {
-    // SAFETY: no arguments.
+    // SAFETY: `GetForegroundWindow` takes nothing and only reads the foreground handle.
     if unsafe { GetForegroundWindow() } != hwnd {
         bring_to_front(hwnd);
     }
-    // SAFETY: no arguments.
     assert_eq!(
+        // SAFETY: `GetForegroundWindow` takes nothing and only reads the foreground handle.
         unsafe { GetForegroundWindow() },
         hwnd,
         "the probe window lost the foreground; no key sent"
@@ -408,18 +408,22 @@ fn type_keys(hwnd: HWND, keys: &str, probe: &Probe) {
 fn text_services_probe() {
     let journal = Arc::new(Mutex::new(Vec::<u8>::new()));
     let sink = Arc::clone(&journal);
-    let subscriber = tracing_subscriber::fmt()
-        .with_env_filter("flui_native::tsf=debug")
-        .with_ansi(false)
-        .without_time()
-        .with_writer(move || JournalWriter(Arc::clone(&sink)))
-        .finish();
+    let subscriber = tracing_subscriber::layer::SubscriberExt::with(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .without_time()
+            .with_writer(move || JournalWriter(Arc::clone(&sink)))
+            .finish(),
+        tracing_subscriber::filter::Targets::new()
+            .with_target("flui_native::tsf", tracing::Level::DEBUG),
+    );
     let _subscriber = tracing::subscriber::set_default(subscriber);
 
     let platform = crate::WindowsPlatform::try_new().expect("platform");
     let options = WindowOptions::default()
-        .with_title("flui tsf probe")
-        .with_size(Size::new(640.0, 200.0));
+        .title("flui tsf probe")
+        .size(Size::new(640.0, 200.0));
     let window = platform
         .open_window(
             options,

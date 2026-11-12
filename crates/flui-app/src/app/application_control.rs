@@ -90,7 +90,7 @@ pub enum AppWindowError {
     /// running `Platform::run`'s `on_ready`.
     #[error("no application loop runs on this thread; call from the owner thread")]
     NoOwnerLoop,
-    /// The requested [`WindowPolicy`](crate::app::WindowPolicy) is not
+    /// The requested `WindowPolicy` (under `unstable-windows`) is not
     /// supported by this entry point in the application's current state;
     /// `reason` says which precondition failed.
     #[error("window policy not supported here: {reason}")]
@@ -229,8 +229,8 @@ impl WindowRequest {
     }
     /// Take a completed result without blocking the owner thread.
     pub fn try_result(&mut self) -> Option<Result<PresentationAddress, AppWindowError>> {
-        let mut cx = Context::from_waker(std::task::Waker::noop());
-        match Pin::new(&mut *self).poll(&mut cx) {
+        let mut ctx = Context::from_waker(std::task::Waker::noop());
+        match Pin::new(&mut *self).poll(&mut ctx) {
             Poll::Ready(result) => Some(result),
             Poll::Pending => None,
         }
@@ -238,8 +238,8 @@ impl WindowRequest {
 }
 impl Future for WindowRequest {
     type Output = Result<PresentationAddress, AppWindowError>;
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match Pin::new(&mut self.reply).poll(cx) {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        match Pin::new(&mut self.reply).poll(ctx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(ClaimOutcome::Delivered(result)) => Poll::Ready(result),
             Poll::Ready(ClaimOutcome::OwnerGone | ClaimOutcome::AlreadyClaimed) => {

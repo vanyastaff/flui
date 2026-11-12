@@ -67,7 +67,7 @@ pub fn icon_button_theme_slot_reaches_the_icons_icon_theme() {
     });
 
     let _laid = lay_out(
-        Theme::new(theme, IconButton::new(probe).on_pressed(|_cx| {})),
+        Theme::new(theme, IconButton::new(probe).on_pressed(|_ctx| {})),
         tight(40.0, 40.0),
     );
 
@@ -89,7 +89,7 @@ pub fn a_toggle_icon_button_announces_its_selection() {
 
     let announced = |button: IconButton| {
         let mut laid = lay_out(
-            Theme::new(ThemeData::light(), button.on_pressed(|_cx| {})),
+            Theme::new(ThemeData::light(), button.on_pressed(|_ctx| {})),
             tight(40.0, 40.0),
         );
         laid.enable_semantics();
@@ -134,11 +134,11 @@ pub fn a_selected_icon_button_takes_the_primary_color() {
             .color
     };
     assert_eq!(
-        icon_color(|probe| IconButton::new(probe).selected(true).on_pressed(|_cx| {})),
+        icon_color(|probe| IconButton::new(probe).selected(true).on_pressed(|_ctx| {})),
         Some(colors.primary),
     );
     assert_eq!(
-        icon_color(|probe| IconButton::new(probe).selected(false).on_pressed(|_cx| {})),
+        icon_color(|probe| IconButton::new(probe).selected(false).on_pressed(|_ctx| {})),
         Some(colors.on_surface_variant),
     );
     assert_eq!(
@@ -167,7 +167,7 @@ pub fn a_toggle_cross_fades_to_its_selected_icon() {
                 IconButton::new(Icon::new(IconData::new(0xE87E)).semantic_label("Not favorite"))
                     .selected_icon(Icon::new(IconData::new(0xE87D)).semantic_label("Favorite"))
                     .selected(selected)
-                    .on_pressed(|_cx| {}),
+                    .on_pressed(|_ctx| {}),
             ),
         )
     };
@@ -217,7 +217,7 @@ pub fn a_selected_icon_button_hovers_in_primary() {
                 ThemeData::light(),
                 IconButton::new(SizedBox::new(24.0, 24.0))
                     .selected(selected)
-                    .on_pressed(|_cx| {}),
+                    .on_pressed(|_ctx| {}),
             ),
             tight(40.0, 40.0),
         );

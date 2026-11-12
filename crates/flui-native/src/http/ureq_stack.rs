@@ -88,31 +88,27 @@ impl Agents {
 impl Stack for Agents {
     fn open(&self, request: &HttpRequest) -> Result<Box<dyn Connection>, HttpError> {
         let invalid = || HttpError::InvalidUrl {
-            url: request.url().to_owned(),
+            url: request.url.clone(),
         };
-        let uri = Uri::try_from(request.url()).map_err(|_| invalid())?;
+        let uri = Uri::try_from(request.url.as_str()).map_err(|_| invalid())?;
         let origin = match (uri.scheme_str(), uri.authority()) {
             (Some(scheme @ ("http" | "https")), Some(authority)) => {
                 format!("{scheme}://{authority}")
             }
             _ => return Err(invalid()),
         };
-        let mut outgoing = Request::builder()
-            .method(request.method().as_str())
-            .uri(uri);
-        for (name, value) in request.headers().iter() {
+        let mut outgoing = Request::builder().method(request.method.as_str()).uri(uri);
+        for (name, value) in request.headers.iter() {
             outgoing = outgoing.header(name.as_str(), value.as_bytes());
         }
-        let outgoing = outgoing
-            .body(request.body().to_vec())
-            .map_err(|_| invalid())?;
+        let outgoing = outgoing.body(request.body.clone()).map_err(|_| invalid())?;
         let agent = self.pool.take(&origin);
         Ok(Box::new(UreqConnection {
             slot: Arc::new(Slot(Mutex::new(Some(agent.clone())))),
             agent,
             pool: Arc::clone(&self.pool),
             origin,
-            url: request.url().to_owned(),
+            url: request.url.clone(),
             request: Some(outgoing),
             body: None,
         }))

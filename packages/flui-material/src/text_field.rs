@@ -153,16 +153,16 @@ pub struct TextField {
     on_changed: Option<TextChanged>,
 }
 
-/// Callback for [`TextField::on_changed`], with the dispatch's [`EventCx`].
-type TextChanged = Rc<dyn Fn(&mut EventCx<'_>, &str)>;
+/// Callback for [`TextField::on_changed`], with the dispatch's [`EventContext`].
+type TextChanged = Rc<dyn Fn(&mut EventContext<'_>, &str)>;
 
 /// Store a text callback, adapted to report its outcome (ADR-0086).
 fn text_callback<F, R>(callback: F) -> TextChanged
 where
-    F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+    F: Fn(&mut EventContext<'_>, &str) -> R + 'static,
     R: EventOutcome,
 {
-    Rc::new(move |cx: &mut EventCx<'_>, text: &str| callback(cx, text).report())
+    Rc::new(move |ctx: &mut EventContext<'_>, text: &str| callback(ctx, text).report())
 }
 
 // Hand-written rather than derived: `on_submitted`'s `Rc<dyn Fn(&str)>` has
@@ -294,25 +294,25 @@ impl TextField {
     /// while it has focus. Forwards to [`EditableText::on_submitted`] â€” see
     /// that method's doc for exactly when it fires and why it is Enter
     /// rather than an IME action-button commit. The callback receives the
-    /// dispatch's `&mut EventCx<'_>` first (ADR-0086).
+    /// dispatch's `&mut EventContext<'_>` first (ADR-0086).
     #[must_use]
     pub fn on_submitted<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &str) -> R + 'static,
         R: EventOutcome,
     {
         self.on_submitted = Some(text_callback(callback));
         self
     }
 
-    /// Call `callback` with the dispatch's `&mut EventCx<'_>` and the new
+    /// Call `callback` with the dispatch's `&mut EventContext<'_>` and the new
     /// text after each user edit. Forwards
     /// to [`EditableText::on_changed`]; a caller's own controller edits do
     /// not call it.
     #[must_use]
     pub fn on_changed<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &str) -> R + 'static,
         R: EventOutcome,
     {
         self.on_changed = Some(text_callback(callback));
@@ -516,10 +516,10 @@ impl ViewState<TextField> for MaterialTextFieldState {
             editable = editable.text_style(text_style);
         }
         if let Some(on_submitted) = view.on_submitted.clone() {
-            editable = editable.on_submitted(move |cx, text| on_submitted(cx, text));
+            editable = editable.on_submitted(move |ctx, text| on_submitted(ctx, text));
         }
         if let Some(on_changed) = view.on_changed.clone() {
-            editable = editable.on_changed(move |cx, text| on_changed(cx, text));
+            editable = editable.on_changed(move |ctx, text| on_changed(ctx, text));
         }
 
         let focus_node = Rc::clone(&self.focus_node);
@@ -529,7 +529,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
         // time, and a focus it requested then would take the focus back from
         // wherever the keyboard moved it meanwhile.
         Listener::new()
-            .on_pointer_down(move |_cx, _dispatch| {
+            .on_pointer_down(move |_ctx, _dispatch| {
                 let _ = focus_node.request_focus();
             })
             .child(

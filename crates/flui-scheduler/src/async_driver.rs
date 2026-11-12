@@ -355,13 +355,13 @@ impl TaskStore {
         // requested, exactly once, here.
         let flags = Arc::new(TaskFlags::new(false, false));
         let waker = self.new_waker(id, &flags);
-        let mut cx = Context::from_waker(&waker);
+        let mut ctx = Context::from_waker(&waker);
 
         #[expect(
             clippy::disallowed_methods,
             reason = "ADR-0287: a task's first poll runs contained; the future stays owned outside"
         )]
-        let outcome = catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx)));
+        let outcome = catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut ctx)));
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(payload) => {
@@ -482,14 +482,14 @@ impl TaskStore {
             // removes this slot on unwind (issue #1057).
             guard.in_flight = Some(id);
 
-            let mut cx = Context::from_waker(&waker);
+            let mut ctx = Context::from_waker(&waker);
             // Borrow the future into the recovery boundary: it must remain
             // owned outside the closure so poll unwinding cannot drop it.
             #[expect(
                 clippy::disallowed_methods,
                 reason = "ADR-0287: a task's poll runs contained; the future stays owned outside"
             )]
-            let outcome = catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx)));
+            let outcome = catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut ctx)));
             let outcome = match outcome {
                 Ok(outcome) => outcome,
                 Err(payload) => {
@@ -1067,12 +1067,12 @@ mod tests {
     impl Future for Controlled {
         type Output = ();
 
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
             self.polls.fetch_add(1, Ordering::Relaxed);
             if self.finish.load(Ordering::Acquire) {
                 Poll::Ready(())
             } else {
-                let _prev = self.waker.lock().replace(cx.waker().clone());
+                let _prev = self.waker.lock().replace(ctx.waker().clone());
                 Poll::Pending
             }
         }
@@ -1236,7 +1236,7 @@ mod tests {
     impl Future for PanicsOnPoll {
         type Output = ();
 
-        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
+        fn poll(self: Pin<&mut Self>, _ctx: &mut Context<'_>) -> Poll<()> {
             panic!("poll probe");
         }
     }
@@ -1384,9 +1384,9 @@ mod tests {
 
         let _token = frame
             .async_driver()
-            .spawn_local(Box::pin(std::future::poll_fn(move |cx| {
+            .spawn_local(Box::pin(std::future::poll_fn(move |ctx| {
                 polls_for_task.set(polls_for_task.get() + 1);
-                cx.waker().wake_by_ref(); // immediate self-wake
+                ctx.waker().wake_by_ref(); // immediate self-wake
                 Poll::<()>::Pending
             })));
 
@@ -1410,7 +1410,7 @@ mod tests {
 
         let _first = driver.spawn_local(Box::pin(async {}));
         let _second = driver.spawn_local(Box::pin(PanicsOnPoll));
-        let _third = driver.spawn_local(Box::pin(std::future::poll_fn(move |_cx| {
+        let _third = driver.spawn_local(Box::pin(std::future::poll_fn(move |_ctx| {
             third_polls_for_task.set(third_polls_for_task.get() + 1);
             Poll::<()>::Pending
         })));

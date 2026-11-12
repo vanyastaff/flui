@@ -44,9 +44,9 @@ fn an_open_dialog_is_modal_to_the_widgets_window_and_answers_its_picks() {
 
     let request = OpenRequest::files()
         .allow_multiple()
-        .with_title("Choose pictures")
-        .with_directory("/home")
-        .with_filter(
+        .title("Choose pictures")
+        .directory("/home")
+        .filter(
             FileFilter::new("Images")
                 .with_extension(".png")
                 .with_mime_type("image/png"),
@@ -67,7 +67,7 @@ fn an_open_dialog_is_modal_to_the_widgets_window_and_answers_its_picks() {
     assert_eq!(*window, host.window().id());
     assert_eq!(*asked, request);
     assert_eq!(
-        asked.filters()[0].extensions(),
+        asked.filters[0].extensions(),
         ["png"],
         "the leading dot is dropped"
     );
@@ -80,7 +80,7 @@ fn a_cancelled_save_dialog_answers_none() {
     let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
     let handle = handle.expect("the scripted plugin provides dialogs");
 
-    let answered = land(handle.save(SaveRequest::new().with_suggested_name("notes.txt")));
+    let answered = land(handle.save(SaveRequest::new().suggested_name("notes.txt")));
     turn(&mut host);
 
     assert_eq!(dialogs.requests().len(), 1);
@@ -130,20 +130,20 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
     let images = || FileFilter::new("Images").with_extension("png");
 
     let opens = [
-        OpenRequest::files().with_filter(FileFilter::new("").with_extension("png")),
-        OpenRequest::files().with_filter(FileFilter::new("Nothing")),
-        OpenRequest::files().with_filter(FileFilter::new("Glob").with_extension("*.png")),
-        OpenRequest::files().with_filter(FileFilter::new("Path").with_extension("a/b")),
-        OpenRequest::files().with_filter(FileFilter::new("Mime").with_mime_type("image")),
-        OpenRequest::folders().with_filter(images()),
-        OpenRequest::files().with_directory("relative/dir"),
+        OpenRequest::files().filter(FileFilter::new("").with_extension("png")),
+        OpenRequest::files().filter(FileFilter::new("Nothing")),
+        OpenRequest::files().filter(FileFilter::new("Glob").with_extension("*.png")),
+        OpenRequest::files().filter(FileFilter::new("Path").with_extension("a/b")),
+        OpenRequest::files().filter(FileFilter::new("Mime").with_mime_type("image")),
+        OpenRequest::folders().filter(images()),
+        OpenRequest::files().directory("relative/dir"),
     ];
     let saves = [
-        SaveRequest::new().with_suggested_name("dir/name.txt"),
-        SaveRequest::new().with_suggested_name(".."),
-        SaveRequest::new().with_suggested_name("  "),
-        SaveRequest::new().with_filter(FileFilter::new("Images")),
-        SaveRequest::new().with_directory("relative"),
+        SaveRequest::new().suggested_name("dir/name.txt"),
+        SaveRequest::new().suggested_name(".."),
+        SaveRequest::new().suggested_name("  "),
+        SaveRequest::new().filter(FileFilter::new("Images")),
+        SaveRequest::new().directory("relative"),
     ];
     let open_answers = opens.map(|request| land(handle.open(request)));
     let save_answers = saves.map(|request| land(handle.save(request)));
@@ -158,7 +158,7 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
     }
 
     // A refused request leaves the window free for the next one.
-    let valid = land(handle.open(OpenRequest::files().with_filter(images())));
+    let valid = land(handle.open(OpenRequest::files().filter(images())));
     turn(&mut host);
     assert_eq!(*valid.borrow(), Some(Ok(Ok(None))));
 }
@@ -182,8 +182,8 @@ struct ForgetfulPlugin;
 
 impl Plugin for ForgetfulPlugin {
     fn register(&self, registrar: &mut CapabilityRegistrar) {
-        registrar.provide::<FileDialogCapability>(|cx: &ProviderContext<'_>| {
-            FileDialogs::try_new(ForgetfulBackend, cx)
+        registrar.provide::<FileDialogCapability>(|ctx: &ProviderContext<'_>| {
+            FileDialogs::try_new(ForgetfulBackend, ctx)
         });
     }
 }
