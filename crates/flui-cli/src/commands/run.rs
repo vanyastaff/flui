@@ -1325,11 +1325,11 @@ impl BrowserSession {
             .and_then(Session::driver_feature)
             .map(str::to_owned);
         let ctx = BuilderContextBuilder::new(self.root.clone())
-            .with_features(driver_feature)
-            .with_platform(Platform::Web {
+            .features(driver_feature)
+            .platform(Platform::Web {
                 target: "web".to_string(),
             })
-            .with_profile(if self.release {
+            .profile(if self.release {
                 Profile::Release
             } else {
                 Profile::Debug
@@ -1627,12 +1627,12 @@ impl AndroidSession {
             .and_then(Session::driver_feature)
             .map(str::to_owned);
         let ctx = BuilderContextBuilder::new(self.root.clone())
-            .with_floors(floors)
-            .with_features(driver_feature)
-            .with_platform(Platform::Android {
+            .floors(floors)
+            .features(driver_feature)
+            .platform(Platform::Android {
                 targets: vec![abi.to_owned()],
             })
-            .with_profile(if self.release {
+            .profile(if self.release {
                 Profile::Release
             } else {
                 Profile::Debug

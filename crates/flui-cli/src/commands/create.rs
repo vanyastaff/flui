@@ -75,8 +75,8 @@ pub(crate) fn execute(
         .dependency_source(source)
         .platforms(platform_names)
         .hot_reload(hot_reload)
-        .with_git(false)
-        .with_cargo_check(false);
+        .git(false)
+        .cargo_check(false);
 
     if dry_run {
         let plan = builder.plan();
