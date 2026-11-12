@@ -1127,3 +1127,43 @@ impl ViewState<Toggled> for ToggledState {
         }
     }
 }
+
+/// A listener that panics when a hold first sets `Pressed` unwinds through
+/// the hold, which gives its count back: `Pressed` is clear after the
+/// containment and the next hold presses and releases as before.
+///
+/// Red-check: build the `PressHold` after the listeners run (the count stays
+/// taken by a token that never existed, and `Pressed` never clears).
+pub(crate) fn a_listener_panic_under_a_new_hold_leaves_no_hold_behind() {
+    use flui_foundation::Listenable as _;
+    use flui_foundation::panic::FirstPanic;
+
+    let states = WidgetStatesController::default();
+    let armed = Rc::new(std::cell::Cell::new(true));
+    let _listening = {
+        let armed = Rc::clone(&armed);
+        states.listen(Rc::new(move || {
+            assert!(!armed.replace(false), "the listener's first call panics");
+        }))
+    };
+    let pressed =
+        |states: &WidgetStatesController| states.value().contains_state(WidgetState::Pressed);
+
+    let mut failure = FirstPanic::new();
+    let hold = failure.contain(|| states.hold_pressed());
+    assert!(
+        hold.is_none() && failure.held().is_some(),
+        "the listener panicked"
+    );
+    flui_foundation::panic::discard_payload(
+        failure
+            .into_payload()
+            .expect("BUG: the panic was just held"),
+    );
+    assert!(!pressed(&states), "the unwound hold released Pressed");
+
+    let hold = states.hold_pressed();
+    assert!(pressed(&states), "the next hold presses");
+    drop(hold);
+    assert!(!pressed(&states), "and its drop releases");
+}

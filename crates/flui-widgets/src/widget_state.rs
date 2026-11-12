@@ -495,10 +495,13 @@ impl WidgetStatesController {
                 .checked_add(1)
                 .expect("BUG: a control holds one activation at a time, far below u8::MAX"),
         );
-        self.publish_pressed();
-        PressHold {
+        // The token exists before the listeners run: one that panics unwinds
+        // through the token's `Drop`, which gives the count back.
+        let hold = PressHold {
             states: self.clone(),
-        }
+        };
+        self.publish_pressed();
+        hold
     }
 
     /// Whether a source of `Pressed` is live: the writing control's contact
