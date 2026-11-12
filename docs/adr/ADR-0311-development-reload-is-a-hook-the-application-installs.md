@@ -38,8 +38,8 @@ is rejected, so the seam had no accepted record. What `main` holds:
 | The host keeps the instance in `Arc<Mutex<Slot>>`, lends it out of the slot for each call and catches each call's panic by hand | `crates/flui-app/src/app/hot_reload.rs` (`DevReload`, `lend`, `disable`) |
 | Hosts call different methods: desktop and iOS `attach`, `poll` and `detach`; Android only `scene_frame`; the web none. A worker hook does nothing on Android, a scene hook nothing elsewhere | the trait's module table; `runner/desktop.rs`, `runner/ios.rs`, `runner/main_window.rs`, `runner/android.rs` |
 | `flui-app` has no edge to `flui-hot-reload` under any feature | `FACTS` in `tools/xtask/src/workspace/reach.rs` |
-| `flui-hot-reload` is an official package (`tier-kind = "official"`) still under `crates/`, implementing both hooks behind its `host-hook` feature | `crates/flui-hot-reload/Cargo.toml`, `src/hook.rs` |
-| Fifteen manifest exceptions are debt of the dlopen path: in `flui-hot-reload` four `edge-exceptions`, two `reach-exceptions` and six `globals`; in `flui-view` two `globals` (`REGISTRY_STACK` and `TEST_REGISTRY`, `ManuallyDrop` for a hot-reload `cdylib`); in the facade one `edge-exceptions` entry | the manifests' `[package.metadata.flui]` |
+| `flui-hot-reload` is an official package (`tier-kind = "official"`) under `packages/`, implementing both hooks behind its `host-hook` feature | `packages/flui-hot-reload/Cargo.toml`, `src/hook.rs` |
+| Ten manifest exceptions are debt of the dlopen path: in `flui-hot-reload` two `reach-exceptions` and six `globals`; in `flui-view` two `globals` (`REGISTRY_STACK` and `TEST_REGISTRY`, `ManuallyDrop` for a hot-reload `cdylib`) | the manifests' `[package.metadata.flui]` |
 
 What is the contract of the reload seam, independent of the tool behind it, and where do the dlopen
 path's exceptions exit?

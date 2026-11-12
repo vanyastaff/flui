@@ -52,10 +52,14 @@ fn workspace_target_dir(root: &Path) -> PathBuf {
 /// The check gets its own `--target-dir`: reusing the workspace's would
 /// deadlock, since the outer `cargo test` holds that directory's build lock for
 /// the duration of the run.
-fn assert_generated_project_compiles(template: &str) {
+fn assert_generated_project_compiles(template: &str, hot_reload: bool) {
     let root = repo_root();
     let target = workspace_target_dir(&root);
-    let name = format!("flui-tmpl-check-{template}");
+    let name = if hot_reload {
+        format!("flui-tmpl-check-{template}-hot-reload")
+    } else {
+        format!("flui-tmpl-check-{template}")
+    };
     let output_dir = TempDir::new().expect("external output directory");
     let project = output_dir.path().join(&name);
 
@@ -76,10 +80,11 @@ fn assert_generated_project_compiles(template: &str) {
         ])
         .arg("--path")
         .arg(output_dir.path())
+        .args(hot_reload.then_some("--hot-reload"))
         .assert()
         .success();
 
-    if template == "counter" {
+    if template == "counter" && !hot_reload {
         // The app and its tests live in the library; main.rs only mounts it.
         let source = std::fs::read_to_string(project.join("src/lib.rs")).expect("generated source");
         for test in GENERATED_COUNTER_TESTS {
@@ -166,7 +171,7 @@ fn assert_generated_project_compiles(template: &str) {
             );
         }
     }
-    if template == "counter" {
+    if template == "counter" && !hot_reload {
         run_generated_counter_tests(&cargo, &project, &target);
     }
 }
@@ -229,22 +234,29 @@ fn run_generated_counter_tests(cargo: &str, project: &Path, target: &Path) {
 
 #[test]
 fn generated_basic_project_compiles() {
-    assert_generated_project_compiles("basic");
+    assert_generated_project_compiles("basic", false);
 }
 
 #[test]
 fn generated_counter_project_compiles() {
-    assert_generated_project_compiles("counter");
+    assert_generated_project_compiles("counter", false);
 }
 
 #[test]
 fn generated_empty_project_compiles() {
-    assert_generated_project_compiles("empty");
+    assert_generated_project_compiles("empty", false);
 }
 
 #[test]
 fn generated_widget_project_compiles() {
-    assert_generated_project_compiles("widget");
+    assert_generated_project_compiles("widget", false);
+}
+
+/// The host, worker and types crates `--hot-reload` generates build against
+/// the facade and `flui-hot-reload` side by side (ADR-0311 §6).
+#[test]
+fn generated_hot_reload_project_compiles() {
+    assert_generated_project_compiles("counter", true);
 }
 
 /// The widget template ships a widget test (`greeting_renders_its_name`); a
@@ -324,7 +336,7 @@ fn create_project_default_template_is_counter() {
 }
 
 #[test]
-fn all_templates_depend_on_the_public_facade_only() {
+fn templates_depend_on_the_facade_and_hot_reload_on_its_package() {
     let tmp = TempDir::new().expect("temp dir");
     for (name, template, hot_reload) in [
         ("basic", "basic", false),
@@ -365,11 +377,15 @@ fn all_templates_depend_on_the_public_facade_only() {
                 .expect("TOML");
             let dependencies = manifest["dependencies"].as_table().expect("dependencies");
             let types_package = format!("{name}-types");
+            let host_package = format!("{name}-host");
             let mut expected = vec!["flui"];
+            if hot_reload {
+                expected.push("flui-hot-reload");
+            }
             if hot_reload && member != types_package {
                 expected.push(&types_package);
             }
-            if hot_reload && member == format!("{name}-host") {
+            if hot_reload && member == host_package {
                 expected.push("tracing");
             }
             expected.sort_unstable();
@@ -383,6 +399,12 @@ fn all_templates_depend_on_the_public_facade_only() {
                 Path::new(facade["path"].as_str().expect("facade source")),
                 repo_root()
             );
+            // The facade names no reload package (ADR-0311 §6): no member
+            // turns a facade feature on for it.
+            assert!(
+                facade.get("features").is_none(),
+                "facade features for {name}/{member}: {facade}"
+            );
             if hot_reload && member != types_package {
                 assert_eq!(
                     dependencies[&types_package]["path"].as_str(),
@@ -390,12 +412,25 @@ fn all_templates_depend_on_the_public_facade_only() {
                 );
             }
             if hot_reload {
-                assert!(
-                    facade["features"]
-                        .as_array()
-                        .expect("features")
-                        .iter()
-                        .any(|feature| feature.as_str() == Some("hot-reload"))
+                let reload = &dependencies["flui-hot-reload"];
+                assert_eq!(
+                    Path::new(reload["path"].as_str().expect("package source")),
+                    repo_root().join("packages/flui-hot-reload")
+                );
+                let features: Vec<&str> = reload["features"]
+                    .as_array()
+                    .expect("features")
+                    .iter()
+                    .map(|feature| feature.as_str().expect("feature name"))
+                    .collect();
+                let wanted: &[&str] = if member == host_package {
+                    &["app-plugin", "host-hook"]
+                } else {
+                    &["app-plugin"]
+                };
+                assert_eq!(
+                    features, wanted,
+                    "flui-hot-reload features for {name}/{member}"
                 );
             }
         }

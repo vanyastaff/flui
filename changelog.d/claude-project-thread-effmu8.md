@@ -12,6 +12,14 @@
 - `flui create` templates strip symbols from release builds (`strip = "symbols"`): a panic still
   prints its message and `file:line`, only backtrace frame names are lost. A `profiling` profile
   inherits release and keeps symbols and line tables for profilers and symbolized backtraces.
+- `flui-hot-reload` is an official package under `packages/` on `flui-sdk` alone. An application
+  adds it as its own dependency (`flui-hot-reload = { …, features = ["app-plugin", "host-hook"] }`)
+  and imports `flui_hot_reload::…` instead of `flui::hot_reload::…`; `flui create --hot-reload`
+  generates projects that do so. The plugin ABI it mounts plugins on, `PluginPipeline` with
+  `PluginFrameError`, `Scene`, `LayerTree` and `TextContextHandle`, is in `flui_sdk::hooks`
+  (Evolving). An `app_plugin!` frame that draws nothing now reports why on stderr (logcat on
+  Android) and draws an empty scene.
+- The `scene_render` example runs as `cargo run -p flui-hot-reload --example scene_render`.
 
 ### Removed
 
@@ -21,3 +29,5 @@
   in `flui-view`, `flui-widgets`, `flui-app` and `flui-testing`, `flui-app`'s `desktop`,
   `android`, `ios`, `web`, `debug-overlay` and `performance-overlay`, and `flui-native`'s `web`.
   A manifest that names one of them drops it.
+- The facade's `hot-reload` feature and its `flui::hot_reload` re-export; name `flui-hot-reload`
+  directly.
