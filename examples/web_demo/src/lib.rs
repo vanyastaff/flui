@@ -127,8 +127,8 @@ pub fn start() {
 
     // Create canvas window before running the event loop
     let options = flui_platform::WindowOptions::default()
-        .with_title("FLUI Web Demo".to_string())
-        .with_size(flui_foundation::geometry::Size::new(800.0, 600.0));
+        .title("FLUI Web Demo".to_string())
+        .size(flui_foundation::geometry::Size::new(800.0, 600.0));
 
     let handler = Rc::new(ConsoleLog::default());
     let window = platform

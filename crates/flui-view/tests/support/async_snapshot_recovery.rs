@@ -118,11 +118,11 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
     });
     let view = if stream {
         StreamBuilder::keyed(Some(1u32), stream_factory(&mailbox), builder(&log))
-            .with_initial_data(initial)
+            .initial_data(initial)
             .boxed()
     } else {
         FutureBuilder::keyed(Some(1u32), future_factory(&mailbox), builder(&log))
-            .with_initial_data(initial)
+            .initial_data(initial)
             .boxed()
     };
     let mut tree = ElementTree::new();
@@ -262,7 +262,7 @@ fn eager_disposal() {
         }),
         Rc::new(|_, _| ErrorView::new("eager leaf").boxed()),
     )
-    .with_initial_data(Rc::new(move || EagerValue {
+    .initial_data(Rc::new(move || EagerValue {
         initial: true,
         drops: Arc::clone(&initial_drops),
         _field: None,

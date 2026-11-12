@@ -152,7 +152,7 @@ mod sealed {
 /// `run`'s [`AppHandler::ready`] receives an [`OwnerPlatform`], which only a
 /// `pub(crate)` constructor here mints. A new platform is a host table in
 /// `hosts/`, not another implementation of this trait.
-pub trait Platform: sealed::Sealed + Send + Sync + 'static {
+pub trait Platform: sealed::Sealed + 'static {
     // ==================== Core System ====================
 
     // ==================== Lifecycle ====================
@@ -163,8 +163,8 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// Takes the platform and the current thread, which becomes the owner
     /// thread. [`AppHandler::ready`] is called once, synchronously, on it,
     /// with the [`OwnerPlatform`] by value: it can open windows and reach every
-    /// other owner-affine operation, and reach the residual `Send + Sync`
-    /// surface through [`OwnerPlatform::shared`]. The handler is the one place
+    /// other owner-affine operation, and mint the [`PlatformProxy`](crate::PlatformProxy)
+    /// another thread reaches the owner through. The handler is the one place
     /// a quit, a reopen, a session end, a host notice and the exit and
     /// wake-deadline questions go for the rest of the run; it is released when
     /// the loop ends.
@@ -205,7 +205,9 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// asks exactly as the window-close path does (only when its window
     /// bookkeeping is empty) and exits if the handler now allows it.
     ///
-    /// Callable from **any thread**; coalesced (a burst of requests costs
+    /// Called on the owner thread: through [`OwnerPlatform`], or in the owner turn a
+    /// [`PlatformProxy::request_exit_policy_reevaluation`](crate::PlatformProxy::request_exit_policy_reevaluation)
+    /// from another thread posts. Coalesced (a burst of requests costs
     /// one re-check); always safe to over-call — a re-check while windows
     /// are still open, or while the handler still vetoes, is a no-op.
     ///

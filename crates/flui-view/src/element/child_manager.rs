@@ -31,7 +31,7 @@
 //! required because the registry maps `RenderId → Rc<RefCell<dyn ChildManager>>`
 //! without knowing the concrete manager type at registry time (the registry lives
 //! on `BuildOwner`; the concrete type lives on the adaptor element). This is the
-//! same FR-029 #6 rationale as `SliverLayoutCtxErased`.
+//! same FR-029 #6 rationale as `ErasedSliverLayoutContext`.
 //!
 //! [`RenderSliverList`]: flui_objects::RenderSliverList
 

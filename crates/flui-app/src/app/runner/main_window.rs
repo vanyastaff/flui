@@ -84,7 +84,6 @@ enum CompletionState {
 }
 struct OpenWake {
     proxy: PlatformProxy,
-    shared: flui_native::SharedPlatform,
     ingress: std::sync::Weak<Ingress>,
     batch: Arc<()>,
     ready: AtomicBool,
@@ -147,7 +146,7 @@ impl Wake for OpenWake {
                     || tracing::error!(%error, "main-window cleanup wake failed; cleanup requires a later owner event or shutdown"),
                 );
             }
-            self.shared.request_exit_policy_reevaluation();
+            super::host::reevaluate_exit_policy(&self.proxy);
         }
     }
 }
@@ -305,8 +304,6 @@ impl MainController {
                 self.pending = Some(pending);
                 self.pending_wake = Some(Arc::new(OpenWake {
                     proxy: with_owner_platform(flui_native::OwnerPlatform::proxy)
-                        .expect("BUG: current owner"),
-                    shared: with_owner_platform(flui_native::OwnerPlatform::shared)
                         .expect("BUG: current owner"),
                     ingress: Arc::downgrade(&self.ingress),
                     batch: self.ingress.active_batch(),
@@ -468,7 +465,7 @@ impl MainController {
         self.cancel_pending();
         self.ingress.settle(Err(error.clone()));
         self.report_failure(error);
-        with_owner_platform(|owner| owner.shared().request_exit_policy_reevaluation());
+        with_owner_platform(flui_native::OwnerPlatform::request_exit_policy_reevaluation);
     }
     fn report_failure(&mut self, error: AppWindowError) {
         contain(|| tracing::error!(%error, "main window request failed"));
@@ -689,6 +686,39 @@ pub(super) fn shutdown_main_window() {
     }
 }
 
+/// The execution services a starting platform may resolve, before any
+/// teardown is armed: dropped armed (a refused platform, an unwind out of
+/// the host's start), it shuts them down and clears the executors the run
+/// stashed, so the next run on this thread resolves its own (ADR-0327 §3).
+struct StartupExecution {
+    armed: bool,
+}
+
+impl StartupExecution {
+    /// The platform is up: the loop's teardown owns the services from here.
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StartupExecution {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let shut = APP_RUNTIME.with(|slot| {
+            slot.try_borrow_mut()
+                .map(|mut runtime| runtime.shutdown_execution(std::time::Instant::now()))
+                .is_ok()
+        });
+        if !shut {
+            tracing::warn!(
+                "the runtime was borrowed when the platform failed to start; its execution services stay"
+            );
+        }
+    }
+}
+
 /// Retires the loop's main window and UI runtimes when dropped: after
 /// `Platform::run` returns, or while a panic unwinds out of it. Held inside
 /// the [`OwnerHostClearGuard`], so the windows go before the owner platform
@@ -736,8 +766,35 @@ where
         let host = flui_native::current_host().map_err(AppRunError::from_platform)?;
         // Before the platform, whose registries report only to a capture already installed.
         super::begin_native_journal(host.backend());
-        host.start().map_err(AppRunError::from_platform)
+        start_host(host)
     })
+}
+
+/// Start `host`. The Wayland and X11 hosts run their IO sources (XIM, IBus,
+/// logind, the settings portal) on the application's IO runtime, so a
+/// process runs one (ADR-0327 §3); every other host, and an application that
+/// brought its own executors, starts on the host's own.
+fn start_host(
+    host: flui_native::CurrentHost,
+) -> Result<Box<dyn flui_native::Platform>, AppRunError> {
+    #[cfg(target_os = "linux")]
+    if matches!(
+        host,
+        flui_native::CurrentHost::Wayland | flui_native::CurrentHost::X11
+    ) {
+        let services = APP_RUNTIME.with(|slot| Arc::clone(slot.borrow_mut().ensure_execution()));
+        let runtime = services
+            .io_runtime()
+            .map_err(|error| AppRunError::Platform {
+                source: Arc::new(error),
+            })?;
+        if let Some(runtime) = runtime {
+            return host
+                .start_with(flui_native::NativeExecutor::from_tokio(runtime))
+                .map_err(AppRunError::from_platform);
+        }
+    }
+    host.start().map_err(AppRunError::from_platform)
 }
 
 #[cfg(test)]
@@ -847,7 +904,16 @@ where
         .into_registry(&slots)
         .map_err(AppRunError::CapabilityConflict)?;
     let _logging = super::super::logging::init_managed_logging(&application.config);
+    // Before the platform: a host that runs IO on the application's runtime
+    // takes it while it starts (ADR-0327 §3). Until the platform is up no
+    // teardown is armed, so the guard takes the services down with a
+    // refusal or an unwind out of the host's start.
+    let startup = StartupExecution { armed: true };
+    if let Some(executors) = application.config.executors.clone() {
+        APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_executors(executors));
+    }
     let platform = platform()?;
+    startup.disarm();
     let fatal = Rc::new(RefCell::new(None));
     let disconnect = Arc::new(Disconnect::default());
     // The loop's handle on it: the loop arms it and installs the agent.
@@ -880,8 +946,6 @@ where
                 ..
             } = application;
             let proxy = owner.proxy();
-            // What the driver agent's launch is read through.
-            let launch = owner.shared();
             let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
             let handle = ingress.handle();
             install_owner_platform(owner)?;
@@ -891,9 +955,6 @@ where
                 runtime.capabilities = Some(registry);
                 runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
                 runtime.window_renderers = renderers;
-                if let Some(executors) = config.executors.clone() {
-                    runtime.install_host_executors(executors);
-                }
                 runtime.reopen_lifecycles();
                 runtime.ensure_execution();
             });
@@ -918,7 +979,7 @@ where
             });
             let served = crate::app::agent::install_from_launch(
                 &mut config,
-                |key| launch.launch_value(key),
+                |key| with_owner_platform(|owner| owner.launch_value(key)).flatten(),
                 &ended,
                 super::journals_native(),
             );
@@ -1009,7 +1070,7 @@ where
                 let _ = handle.ingress.quit_now();
             }
             drive_main_window();
-            with_owner_platform(|owner| owner.shared().request_exit_policy_reevaluation());
+            with_owner_platform(flui_native::OwnerPlatform::request_exit_policy_reevaluation);
             Ok(())
         }))
     }));
@@ -1326,6 +1387,57 @@ mod tests {
         assert!(matches!(error, AppRunError::Platform { .. }), "{error:?}");
     }
 
+    /// The application's executors are in place before the platform starts,
+    /// so a host that runs its IO on the application's runtime finds the
+    /// services it was configured with (ADR-0327 §3); a platform that then
+    /// refuses takes the services down with the run.
+    fn the_platform_starts_after_the_application_executors_are_installed() {
+        let executors = flui_runtime::execution::DeterministicExecutors::new();
+        let app = Application::new(|_| -> flui_widgets::Text {
+            panic!("never built when the platform refuses");
+        })
+        .config(crate::app::AppConfig::default().executors(executors.host_executors()));
+        let seen = Rc::new(std::cell::Cell::new(None));
+        let witness = Rc::clone(&seen);
+        let error = run_with_platform_factory(app, move || {
+            let host_pools =
+                APP_RUNTIME.with(|slot| !slot.borrow_mut().ensure_execution().owns_default_pools());
+            witness.set(Some(host_pools));
+            Err(AppRunError::OnReadyPanicked)
+        })
+        .expect_err("a refused platform fails the run");
+        assert!(matches!(error, AppRunError::OnReadyPanicked), "{error:?}");
+        assert_eq!(
+            seen.get(),
+            Some(true),
+            "the platform starts on the configured executors"
+        );
+        assert!(
+            APP_RUNTIME.with(|slot| slot.borrow().execution().is_none()),
+            "a refused platform leaves no execution services behind"
+        );
+
+        // A host whose start unwinds after the services resolved leaves none
+        // behind either, and the next run resolves the executors it names.
+        let app = Application::new(|_| -> flui_widgets::Text {
+            panic!("never built when the platform's start unwinds");
+        })
+        .config(crate::app::AppConfig::default().executors(executors.host_executors()));
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with_platform_factory(app, || {
+                APP_RUNTIME.with(|slot| {
+                    slot.borrow_mut().ensure_execution();
+                });
+                panic!("the host's start unwinds");
+            })
+        }));
+        assert!(unwound.is_err(), "the start's panic resumes to the caller");
+        assert!(
+            APP_RUNTIME.with(|slot| slot.borrow().execution().is_none()),
+            "an unwind out of the platform's start leaves no execution services behind"
+        );
+    }
+
     fn main_window_factory_panic_is_typed_and_initial_window_is_fatal() {
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("factory witness");
@@ -1375,8 +1487,8 @@ mod tests {
         }
 
         let app = Application::new(|_| -> flui_widgets::Text { flui_widgets::Text::new("") })
-            .with_startup_window(StartupWindow::None)
-            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::ExplicitQuit));
+            .startup_window(StartupWindow::None)
+            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit));
         let unwound = tracing::subscriber::with_default(PanicsWhenReady, || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run_with_platform(app, Box::new(HeadlessPlatform::new()))
@@ -1409,6 +1521,10 @@ mod tests {
                 (
                     "a_platform_below_the_floor_fails_the_run_as_unsupported",
                     a_platform_below_the_floor_fails_the_run_as_unsupported as fn(),
+                ),
+                (
+                    "the_platform_starts_after_the_application_executors_are_installed",
+                    the_platform_starts_after_the_application_executors_are_installed as fn(),
                 ),
                 (
                     "main_window_factory_panic_is_typed_and_initial_window_is_fatal",
@@ -1465,11 +1581,11 @@ mod tests {
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("factory failure before GPU setup");
         })
-        .with_startup_window(StartupWindow::None)
-        .with_config(
+        .startup_window(StartupWindow::None)
+        .config(
             AppConfig::new()
-                .with_exit_policy(ExitPolicy::ExplicitQuit)
-                .with_dev_reload(Counting(Arc::clone(&counts))),
+                .exit_policy(ExitPolicy::ExplicitQuit)
+                .dev_reload(Counting(Arc::clone(&counts))),
         )
         .on_ready(move |handle| {
             assert_eq!(observed.get(), (1, 0), "attached when the loop starts");
@@ -1548,11 +1664,11 @@ mod tests {
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("factory failure before GPU setup");
         })
-        .with_startup_window(StartupWindow::None)
-        .with_config(
+        .startup_window(StartupWindow::None)
+        .config(
             AppConfig::new()
-                .with_exit_policy(ExitPolicy::ExplicitQuit)
-                .with_dev_agent(Counting(Arc::clone(&counts))),
+                .exit_policy(ExitPolicy::ExplicitQuit)
+                .dev_agent(Counting(Arc::clone(&counts))),
         )
         .on_ready(move |handle| {
             assert_eq!(observed.get(), (1, 0, 0), "attached when the loop starts");
@@ -1609,19 +1725,19 @@ mod tests {
         let cases: [(&str, AppConfig, bool); 4] = [
             (
                 "a configured directory",
-                AppConfig::new().with_storage_dir(dir()),
+                AppConfig::new().storage_dir(dir()),
                 true,
             ),
             (
                 "an application identifier alone",
-                AppConfig::new().with_application_identity(identified()),
+                AppConfig::new().application_identity(identified()),
                 true,
             ),
             (
                 "a configured directory beside an identifier",
                 AppConfig::new()
-                    .with_application_identity(identified())
-                    .with_storage_dir(dir()),
+                    .application_identity(identified())
+                    .storage_dir(dir()),
                 true,
             ),
             ("neither, on a desktop", AppConfig::new(), false),
@@ -1646,8 +1762,8 @@ mod tests {
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("no main window is opened");
         })
-        .with_startup_window(StartupWindow::None)
-        .with_config(config.with_exit_policy(ExitPolicy::ExplicitQuit))
+        .startup_window(StartupWindow::None)
+        .config(config.exit_policy(ExitPolicy::ExplicitQuit))
         .on_ready(move |_| {
             let (dispatcher, _window) = super::super::secondary_window::open_secondary_window_impl(
                 AppConfig::default(),

@@ -20,7 +20,7 @@ fn fixture_path() -> &'static str {
 }
 
 fn registry() -> AssetRegistry {
-    AssetRegistryBuilder::new().with_default_capacity().build()
+    AssetRegistryBuilder::new().default_capacity().build()
 }
 
 /// Loads `path` on a native host's default lanes and waits for it.
@@ -241,8 +241,8 @@ fn a_load_on_lanes_that_shut_down_is_taken_over_on_other_lanes() {
 fn a_cancelled_load_never_reaches_the_decoder() {
     let lanes = QueuedLanes::new();
     let registry = AssetRegistryBuilder::new()
-        .with_default_capacity()
-        .with_decode_threads(NonZeroUsize::MIN)
+        .default_capacity()
+        .decode_threads(NonZeroUsize::MIN)
         .build();
     drop(registry.load_image(fixture_path(), lanes.services()));
     lanes.run_until_idle();
@@ -309,8 +309,8 @@ fn a_decode_refused_by_retiring_lanes_is_taken_over_on_other_lanes() {
 /// load never starts).
 fn loads_held_unpolled_leave_the_load_to_the_awaited_one() {
     let registry = AssetRegistryBuilder::new()
-        .with_default_capacity()
-        .with_decode_threads(NonZeroUsize::MIN)
+        .default_capacity()
+        .decode_threads(NonZeroUsize::MIN)
         .build();
     let held: Vec<_> = (0..8)
         .map(|index| {
@@ -329,7 +329,7 @@ fn loads_held_unpolled_leave_the_load_to_the_awaited_one() {
     );
     drop(held);
 
-    let shared = AssetRegistryBuilder::new().with_default_capacity().build();
+    let shared = AssetRegistryBuilder::new().default_capacity().build();
     let held = shared.load_image(fixture_path(), LoadServices::new());
     let lanes = ThreadLanes::new();
     assert_fixture(
@@ -409,8 +409,8 @@ impl Drop for FixtureCopies {
 
 fn budgeted(bytes: usize) -> flui_assets::AssetRegistry {
     AssetRegistryBuilder::new()
-        .with_default_capacity()
-        .with_decoded_image_budget(bytes)
+        .default_capacity()
+        .decoded_image_budget(bytes)
         .build()
 }
 

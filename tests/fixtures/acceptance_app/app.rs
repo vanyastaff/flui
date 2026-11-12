@@ -222,7 +222,7 @@ pub const DATA_DIR: &str = "dev.flui.acceptance-app";
 pub fn launch() -> flui::AppLaunch {
     let dir = flui::platform::AppDataDir::try_new(DATA_DIR)
         .expect("BUG: the acceptance application's data directory name is valid");
-    flui::AppLaunch::new().config(flui::AppConfig::new().with_storage_dir(dir))
+    flui::AppLaunch::new().config(flui::AppConfig::new().storage_dir(dir))
 }
 
 /// The acceptance application's root view.
@@ -659,7 +659,7 @@ impl CloseWatch {
 
 impl Shared {
     /// Write the notebook and the compact flag as they stand.
-    fn store(&self, ctx: &EventCx<'_>) {
+    fn store(&self, ctx: &EventContext<'_>) {
         let saved = Saved {
             notebook: self
                 .notebook
@@ -1051,7 +1051,7 @@ impl ViewState<Screen> for ScreenState {
             Route::Note { id } => editor(ctx, id, shared, &router, &self.form, &self.focus),
             Route::Settings => settings(ctx, shared),
         };
-        SafeArea::new().child(Column::new((
+        SafeArea::new(Column::new((
             Row::new(header(&view.route, &router)),
             Text::new(shared.status.get(ctx)),
             storage_banner(&shared.data),
@@ -1095,7 +1095,7 @@ fn on_current_page(
     label: &str,
     router: &RouterHandle<Route>,
     route: &Route,
-    action: impl Fn(&mut EventCx<'_>, &RouterHandle<Route>) + 'static,
+    action: impl Fn(&mut EventContext<'_>, &RouterHandle<Route>) + 'static,
 ) -> TextButton {
     let router = router.clone();
     let route = route.clone();
@@ -1127,7 +1127,12 @@ fn header(route: &Route, router: &RouterHandle<Route>) -> Vec<BoxedView> {
     header
 }
 
-fn open_note(ctx: &mut EventCx<'_>, shared: &Shared, router: &RouterHandle<Route>, id: NoteId) {
+fn open_note(
+    ctx: &mut EventContext<'_>,
+    shared: &Shared,
+    router: &RouterHandle<Route>,
+    id: NoteId,
+) {
     if shared.editing.get() != Some(id) {
         let title = shared
             .notebook

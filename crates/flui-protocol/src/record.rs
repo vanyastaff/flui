@@ -72,7 +72,7 @@ impl RecordParams {
 
     /// These parameters keeping the rows' text when `keep_text`.
     #[must_use]
-    pub fn with_keep_text(mut self, keep_text: bool) -> Self {
+    pub fn keep_text(mut self, keep_text: bool) -> Self {
         self.keep_text = keep_text;
         self
     }

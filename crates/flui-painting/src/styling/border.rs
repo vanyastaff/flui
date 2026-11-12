@@ -34,7 +34,7 @@ impl BorderStyle {
 
 /// A single side of a border.
 ///
-/// Generic over unit type `T` for full type safety. Use `BorderSide<f64>`
+/// Generic over unit type `T` for full type safety. Use `BorderSide`
 /// for UI borders.
 ///
 /// # Examples
@@ -50,7 +50,7 @@ impl BorderStyle {
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BorderSide<T: Unit> {
+pub struct BorderSide<T: Unit = f64> {
     /// The color of this side of the border.
     pub color: Color,
 
@@ -140,7 +140,7 @@ impl<T: Unit> BorderSide<T> {
     }
 }
 
-impl BorderSide<f64> {
+impl BorderSide {
     /// A hairline border side (width = 0.0).
     ///
     /// This is the default border side, with black color.

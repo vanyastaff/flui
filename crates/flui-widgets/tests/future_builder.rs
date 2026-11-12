@@ -136,7 +136,7 @@ pub(crate) fn future_builder_pending_then_error() {
             completer.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Rc::new(|| Payload(1))),
+        .initial_data(Rc::new(|| Payload(1))),
         loose(400.0),
     );
     assert_eq!(last(&log).data, Some(1), "initial data survives Waiting");

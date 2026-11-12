@@ -29,9 +29,10 @@ topology is not part of any package manifest.
   visible decision, and its `measured` module names every measured item through its SDK path,
   so removing one fails to build.
 - **Evolving surface under the ceiling.** `pipeline` and `hooks` are Evolving. The four
-  `pipeline` items count toward the ceiling; `hooks` holds one (`FrameSnapshot`) and, like every
-  development hook, sits outside it. ADR-0088 §4 revisits the crate when its Evolving surface
-  beyond the hooks passes about thirty items.
+  `pipeline` items count toward the ceiling; `hooks` holds the development hooks (the frame
+  snapshot devtools reads and the plugin ABI hot reload mounts, listed in `tests/surface.rs`)
+  and, like every development hook, sits outside it. ADR-0088 §4 revisits the crate when its
+  Evolving surface beyond the hooks passes about thirty items.
 - **Own version.** `version = "0.N"`, not the workspace's: `cargo xtask workspace` refuses an
   evolving crate that inherits the version or leaves major 0.
 - **One train per graph.** The guard is not here: `flui-foundation` declares
@@ -141,8 +142,16 @@ not SDK surface.
   `foundation::observe` (`TreeObserver`, the four event types) and `foundation::RebuildReason`,
   already inside the whole `foundation` re-export at the facade's path, so the `measured`
   module names them and `src/lib.rs` gains no line for them.
+- **`flui-hot-reload`** (`packages/flui-hot-reload`) builds on this crate alone (ADR-0311 §6):
+  its normal dependencies are `flui-sdk`, `tracing` and, behind `app-plugin`, `parking_lot`,
+  plus the target crates of its dlopen loader. A plugin image mounts its view tree on
+  `hooks::PluginPipeline`, which keeps the binding, pipeline owner and layer tree behind one
+  `draw_frame` call and reports a frame that drew nothing as `hooks::PluginFrameError`; the
+  image returns `hooks::Scene`, built from `hooks::LayerTree`, and measures text through a
+  `hooks::TextContextHandle` of its own (`standalone()`: the host's context cannot cross the
+  dlopen boundary, see the package's ARCHITECTURE). The facade names none of them.
 
-The kind rule of `cargo xtask workspace` (ADR-0081 §3, ADR-0088 §2) keeps the three
+The kind rule of `cargo xtask workspace` (ADR-0081 §3, ADR-0088 §2) keeps the four
 manifests on the SDK: an official package's normal and build dependencies are `flui-sdk` and
 the contract crates, and its self-test plants each way of leaving it.
 

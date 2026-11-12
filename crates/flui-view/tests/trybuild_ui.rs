@@ -36,7 +36,7 @@ fn ui_tests() {
     t.compile_fail("tests/ui/signal_write_through_build_context.rs");
     t.compile_fail("tests/ui/signal_write_through_the_graph.rs");
     t.compile_fail("tests/ui/signal_write_without_a_writer.rs");
-    t.compile_fail("tests/ui/unit_closure_where_event_cx_expected.rs");
+    t.compile_fail("tests/ui/unit_closure_where_event_context_expected.rs");
     t.compile_fail("tests/ui/let_bound_event_closure_without_helper.rs");
     t.compile_fail("tests/ui/writer_escapes_the_dispatch.rs");
 }

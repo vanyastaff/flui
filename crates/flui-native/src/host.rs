@@ -134,7 +134,7 @@ pub type WindowRefOf<H> = <<H as Host>::Window as Window<<H as Host>::Loop>>::Re
 
 /// The owner thread's loop. It keeps the application's handler for the run in
 /// the owner's delivery (`owner::app_delivery`), which its sources report to.
-pub trait Loop: Send + Sync + Sized + 'static {
+pub trait Loop: Sized + 'static {
     /// Runs the loop on the calling thread, handing `handler` the owner
     /// capability over `platform` once windows can open; see
     /// [`Platform::run`].
@@ -204,7 +204,7 @@ pub trait Window<O> {
     /// this position: one
     /// instance for both (`HostPlatform::from_parts`). It holds the
     /// [`WindowPositions`] the platform made from the table.
-    type Shared: Send + Sync + 'static;
+    type Shared: 'static;
 
     /// The platform's own reference to one of its windows, which the
     /// window-level positions are made for: the Win32 handle with its

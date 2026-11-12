@@ -222,7 +222,7 @@ impl GestureCommand {
     }
 
     /// Perform the intent through `chain`.
-    fn perform(&self, ctx: &mut EventCx<'_>, chain: Option<&ActionChain>) -> ActionOutcome {
+    fn perform(&self, ctx: &mut EventContext<'_>, chain: Option<&ActionChain>) -> ActionOutcome {
         let intent: &dyn Any = &*self.intent;
         let Some(action) = chain.and_then(|chain| resolve(chain, intent)) else {
             if chain.is_none_or(|chain| !chain.declares(intent.type_id())) {
@@ -282,7 +282,7 @@ pub struct CommandHandle {
 
 impl CommandHandle {
     /// Perform the command: what the gesture does when it completes.
-    pub fn perform(&self, ctx: &mut EventCx<'_>) -> ActionOutcome {
+    pub fn perform(&self, ctx: &mut EventContext<'_>) -> ActionOutcome {
         self.command.perform(ctx, self.chain.as_ref())
     }
 }
@@ -383,7 +383,7 @@ impl fmt::Debug for ControlSpec {
 
 /// Shows a context menu: called with each [`MenuRequest`], it presents the
 /// request's items until one is chosen or the menu is dismissed.
-pub type MenuPresenter = Rc<dyn Fn(&mut EventCx<'_>, MenuRequest)>;
+pub type MenuPresenter = Rc<dyn Fn(&mut EventContext<'_>, MenuRequest)>;
 
 /// The items of [`Alternative::ContextMenu`], the first performing the
 /// widget's gesture command, and the presenter that shows them.
@@ -409,7 +409,7 @@ pub struct MenuSpec {
 }
 
 /// Closes the menu a [`MenuPresenter`] shows.
-type MenuDismiss = Rc<dyn Fn(&mut EventCx<'_>)>;
+type MenuDismiss = Rc<dyn Fn(&mut EventContext<'_>)>;
 
 impl MenuSpec {
     /// A menu whose first item is `first`, the gesture's command, shown by
@@ -417,7 +417,7 @@ impl MenuSpec {
     #[must_use]
     pub fn new(
         first: GestureCommand,
-        presenter: impl Fn(&mut EventCx<'_>, MenuRequest) + 'static,
+        presenter: impl Fn(&mut EventContext<'_>, MenuRequest) + 'static,
     ) -> Self {
         Self {
             items: vec![first],
@@ -437,7 +437,7 @@ impl MenuSpec {
     /// hands its contact to a drag. Without it the menu stays open behind
     /// the drag.
     #[must_use]
-    pub fn dismiss(mut self, dismiss: impl Fn(&mut EventCx<'_>) + 'static) -> Self {
+    pub fn dismiss(mut self, dismiss: impl Fn(&mut EventContext<'_>) + 'static) -> Self {
         self.dismiss = Some(Rc::new(dismiss));
         self
     }
@@ -598,7 +598,7 @@ impl Default for AlternativeKind {
 impl AlternativeKind {
     /// A context menu shown by `presenter`.
     #[must_use]
-    pub fn context_menu(presenter: impl Fn(&mut EventCx<'_>, MenuRequest) + 'static) -> Self {
+    pub fn context_menu(presenter: impl Fn(&mut EventContext<'_>, MenuRequest) + 'static) -> Self {
         Self::ContextMenu(Rc::new(presenter))
     }
 }
@@ -758,7 +758,7 @@ impl MenuItem {
     /// Perform the item's command, as choosing it does. A menu that hears
     /// of the choice hears of it though the command panics; the panic
     /// resumes after.
-    pub fn perform(&self, ctx: &mut EventCx<'_>) -> ActionOutcome {
+    pub fn perform(&self, ctx: &mut EventContext<'_>) -> ActionOutcome {
         let mut failure = flui_foundation::panic::FirstPanic::new();
         let outcome = failure.contain(|| self.command.perform(ctx, self.chain.as_ref()));
         if let Some(chosen) = &self.chosen {
@@ -928,7 +928,7 @@ impl GestureAlternatives {
     /// Open the menu's long press as `hold`, whose successor the mounting
     /// widget's own long-press drag is, instead of composing a hold of its
     /// own. Ignored by visible controls.
-    pub(crate) fn with_hold(mut self, hold: Option<Rc<SequencedBranch>>) -> Self {
+    pub(crate) fn hold(mut self, hold: Option<Rc<SequencedBranch>>) -> Self {
         self.hold = hold;
         self
     }
@@ -939,7 +939,7 @@ impl GestureAlternatives {
     pub(crate) fn present_menu_with(
         mut self,
         presenter: MenuPresenter,
-        dismiss: impl Fn(&mut EventCx<'_>) + 'static,
+        dismiss: impl Fn(&mut EventContext<'_>) + 'static,
     ) -> Self {
         if let Alternative::ContextMenu(spec) = &mut self.alternative {
             spec.presenter = presenter;
@@ -993,7 +993,7 @@ impl fmt::Debug for GestureAlternatives {
 }
 
 /// Opens the menu with the cause and pointer position.
-type MenuOpener = Rc<dyn Fn(&mut EventCx<'_>, MenuCause, Option<Offset<f64>>)>;
+type MenuOpener = Rc<dyn Fn(&mut EventContext<'_>, MenuCause, Option<Offset<f64>>)>;
 
 impl StatefulView for GestureAlternatives {
     type State = GestureAlternativesState;
@@ -1461,7 +1461,7 @@ fn control_button(
     label: String,
     content: BoxedView,
     min_target: f64,
-    on_press: impl Fn(&mut EventCx<'_>) + 'static,
+    on_press: impl Fn(&mut EventContext<'_>) + 'static,
 ) -> BoxedView {
     let side = if min_target.is_finite() {
         min_target.max(0.0)
@@ -1510,7 +1510,7 @@ fn more_glyph() -> BoxedView {
 struct OpenMenu(MenuOpener);
 
 impl Action<ShowContextMenuIntent> for OpenMenu {
-    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &ShowContextMenuIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &ShowContextMenuIntent) -> ActionOutcome {
         (self.0)(ctx, MenuCause::Key, None);
         ActionOutcome::Performed
     }

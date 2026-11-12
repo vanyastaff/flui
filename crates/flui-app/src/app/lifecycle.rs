@@ -1051,7 +1051,7 @@ impl ServiceContext {
 /// The declaration of one application service: a name, a lifetime policy,
 /// and a factory for its future.
 ///
-/// Registered through `AppConfig::with_service` and started by the
+/// Registered through `AppConfig::service` and started by the
 /// bootstrap once the loop's execution services exist; owned thereafter by
 /// the runtime's `ServiceRegistry`, which is the *named owner* every
 /// unit of background work must have.
@@ -1205,7 +1205,7 @@ pub(crate) struct ServiceRegistry {
     /// Fired (from whatever worker thread the service ran on) when a
     /// `KeepsAppAlive` service reports its exit — the runner wires this to
     /// the platform's coalesced exit-policy re-evaluation request
-    /// (`SharedPlatform::request_exit_policy_reevaluation`). Without it, a
+    /// (`PlatformProxy::request_exit_policy_reevaluation`). Without it, a
     /// last-window close vetoed by a running keep-alive service would
     /// never be re-decided once that service completes: no window remains
     /// to produce the close event that consults the policy, so the veto

@@ -8,7 +8,7 @@ use flui_assets::{AssetHandle, AssetKey, AssetRegistryBuilder, Image, ImageAsset
 
 #[test]
 fn registered_image_hook_can_await_same_key_spawned_work() {
-    let registry = Arc::new(AssetRegistryBuilder::new().with_default_capacity().build());
+    let registry = Arc::new(AssetRegistryBuilder::new().default_capacity().build());
     let calls = Arc::new(AtomicUsize::new(0));
     let hook_calls = Arc::clone(&calls);
     let hook_registry = Arc::clone(&registry);

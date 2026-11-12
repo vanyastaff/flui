@@ -118,8 +118,8 @@ impl ImageServices {
 /// # Object safety
 ///
 /// This trait is object-safe and intended to be stored as
-/// `Arc<dyn ImageProvider + Send + Sync>` inside [`Image`](crate::Image).
-pub trait ImageProvider: std::fmt::Debug + Send + Sync {
+/// `Rc<dyn ImageProvider>` inside [`Image`](crate::Image).
+pub trait ImageProvider: std::fmt::Debug {
     /// Synchronously decode and return the image.
     ///
     /// Called on every widget rebuild for a provider whose

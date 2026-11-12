@@ -52,7 +52,7 @@ impl Default for ImageConfig {
 /// use flui_assets::{AssetRegistryBuilder, ImageAsset};
 ///
 /// // Create a registry
-/// let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+/// let registry = AssetRegistryBuilder::new().default_capacity().build();
 ///
 /// // Load an image
 /// let image = ImageAsset::file("logo.png");
@@ -120,9 +120,9 @@ impl AssetRegistry {
     /// used; a request for a path already loading joins that load; otherwise
     /// the file is read on the IO lane of the services' lanes and decoded on
     /// their compute lane, at most
-    /// [`with_decode_threads`](AssetRegistryBuilder::with_decode_threads)
+    /// [`decode_threads`](AssetRegistryBuilder::decode_threads)
     /// decodes at a time. The decoded image is kept within
-    /// [`with_decoded_image_budget`](AssetRegistryBuilder::with_decoded_image_budget);
+    /// [`decoded_image_budget`](AssetRegistryBuilder::decoded_image_budget);
     /// failures are not kept, so a later request retries.
     ///
     /// With no lanes, or lanes too full or unable to take the load, it runs
@@ -380,7 +380,7 @@ impl AssetRegistry {
 /// cheaper half-way to give back, so each level drops the same entries.
 /// Decoded images (`images` feature) are kept by recency: moderate pressure
 /// trims them to half the decoded-image budget
-/// (`AssetRegistryBuilder::with_decoded_image_budget`), critical pressure drops
+/// (`AssetRegistryBuilder::decoded_image_budget`), critical pressure drops
 /// them all. Handles and images already given out keep their data, and loads
 /// in flight finish into the caches they started with.
 impl ReclaimMemory for AssetRegistry {
@@ -427,7 +427,7 @@ pub struct HasCapacity(pub(crate) AssetCacheConfig);
 ///
 /// // This compiles - capacity is set
 /// let registry = AssetRegistryBuilder::new()
-///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity"))) // entry count
+///     .capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity"))) // entry count
 ///     .build();
 ///
 /// // This won't compile - capacity not set
@@ -436,18 +436,18 @@ pub struct HasCapacity(pub(crate) AssetCacheConfig);
 ///
 /// # Default Capacity
 ///
-/// If you want a registry with default capacity, use `with_default_capacity()`:
+/// If you want a registry with default capacity, use `default_capacity()`:
 ///
 /// ```rust,ignore
 /// let registry = AssetRegistryBuilder::new()
-///     .with_default_capacity() // entry count
+///     .default_capacity() // entry count
 ///     .build();
 /// ```
 #[derive(Debug)]
 pub struct AssetRegistryBuilder<C = NoCapacity> {
     capacity: C,
-    /// Set via [`with_decoded_image_budget`](Self::with_decoded_image_budget)
-    /// and [`with_decode_threads`](Self::with_decode_threads).
+    /// Set via [`decoded_image_budget`](Self::decoded_image_budget)
+    /// and [`decode_threads`](Self::decode_threads).
     #[cfg(feature = "images")]
     images: ImageConfig,
 }
@@ -457,7 +457,7 @@ pub struct AssetRegistryBuilder<C = NoCapacity> {
 impl AssetRegistryBuilder<NoCapacity> {
     /// Creates a new registry builder.
     ///
-    /// You must call `with_capacity()` or `with_default_capacity()` before building.
+    /// You must call `capacity()` or `default_capacity()` before building.
     ///
     /// # Examples
     ///
@@ -485,18 +485,18 @@ impl AssetRegistryBuilder<NoCapacity> {
     ///
     /// ```rust,ignore
     /// let registry = AssetRegistryBuilder::new()
-    ///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity"))) // entry count
+    ///     .capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity"))) // entry count
     ///     .build();
     /// ```
-    pub fn with_capacity(self, capacity: CacheCapacity) -> AssetRegistryBuilder<HasCapacity> {
-        self.with_cache_config(AssetCacheConfig {
+    pub fn capacity(self, capacity: CacheCapacity) -> AssetRegistryBuilder<HasCapacity> {
+        self.cache_config(AssetCacheConfig {
             capacity,
             ..AssetCacheConfig::default()
         })
     }
 
     /// Configures count capacity and expiration for every typed cache.
-    pub fn with_cache_config(self, config: AssetCacheConfig) -> AssetRegistryBuilder<HasCapacity> {
+    pub fn cache_config(self, config: AssetCacheConfig) -> AssetRegistryBuilder<HasCapacity> {
         AssetRegistryBuilder {
             capacity: HasCapacity(config),
             #[cfg(feature = "images")]
@@ -512,11 +512,11 @@ impl AssetRegistryBuilder<NoCapacity> {
     ///
     /// ```rust,ignore
     /// let registry = AssetRegistryBuilder::new()
-    ///     .with_default_capacity()
+    ///     .default_capacity()
     ///     .build();
     /// ```
-    pub fn with_default_capacity(self) -> AssetRegistryBuilder<HasCapacity> {
-        self.with_cache_config(AssetCacheConfig::default())
+    pub fn default_capacity(self) -> AssetRegistryBuilder<HasCapacity> {
+        self.cache_config(AssetCacheConfig::default())
     }
 }
 
@@ -530,7 +530,7 @@ impl<C> AssetRegistryBuilder<C> {
     /// and 64 MiB on Android, iOS and the web.
     #[cfg(feature = "images")]
     #[must_use]
-    pub fn with_decoded_image_budget(mut self, bytes: usize) -> Self {
+    pub fn decoded_image_budget(mut self, bytes: usize) -> Self {
         self.images.budget = bytes;
         self
     }
@@ -541,7 +541,7 @@ impl<C> AssetRegistryBuilder<C> {
     /// on its IO lane. The default is half the available cores, at most four.
     #[cfg(feature = "images")]
     #[must_use]
-    pub fn with_decode_threads(mut self, threads: std::num::NonZeroUsize) -> Self {
+    pub fn decode_threads(mut self, threads: std::num::NonZeroUsize) -> Self {
         self.images.decode_threads = threads;
         self
     }
@@ -558,7 +558,7 @@ impl AssetRegistryBuilder<HasCapacity> {
     ///
     /// ```rust,ignore
     /// let registry = AssetRegistryBuilder::new()
-    ///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity")))
+    ///     .capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity")))
     ///     .build();
     /// ```
     pub fn build(self) -> AssetRegistry {
@@ -574,24 +574,24 @@ impl AssetRegistryBuilder<HasCapacity> {
 
     /// Updates the capacity after it has been set.
     ///
-    /// This allows changing the capacity even after calling `with_capacity()`.
+    /// This allows changing the capacity even after calling `capacity()`.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// let registry = AssetRegistryBuilder::new()
-    ///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity")))
-    ///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity"))) // Override previous value
+    ///     .capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity")))
+    ///     .capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity"))) // Override previous value
     ///     .build();
     /// ```
-    pub fn with_capacity(self, capacity: CacheCapacity) -> AssetRegistryBuilder<HasCapacity> {
+    pub fn capacity(self, capacity: CacheCapacity) -> AssetRegistryBuilder<HasCapacity> {
         let mut config = self.capacity.0;
         config.capacity = capacity;
-        self.with_cache_config(config)
+        self.cache_config(config)
     }
 
     /// Replaces the typed-cache capacity and expiration configuration.
-    pub fn with_cache_config(self, config: AssetCacheConfig) -> AssetRegistryBuilder<HasCapacity> {
+    pub fn cache_config(self, config: AssetCacheConfig) -> AssetRegistryBuilder<HasCapacity> {
         AssetRegistryBuilder {
             capacity: HasCapacity(config),
             #[cfg(feature = "images")]

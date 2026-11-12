@@ -2,20 +2,28 @@
 //!
 //! # One filter, not two
 //!
-//! An [`EnvFilter`] is the *only* thing that decides whether an event reaches a
-//! backend. The historical logger stacked a second `LevelFilter` beside the
-//! `EnvFilter` and seeded it from a `Level` field that defaulted to `INFO`, so
-//! `RUST_LOG=flui_view=trace` selected the events and the ceiling then threw
-//! them away — a filter that could only ever subtract from what the user asked
-//! for, and that no directive could raise.
+//! A [`Targets`] filter is the *only* thing that decides whether an event
+//! reaches a backend. The historical logger stacked a second `LevelFilter`
+//! beside the directive filter and seeded it from a `Level` field that
+//! defaulted to `INFO`, so `RUST_LOG=flui_view=trace` selected the events and
+//! the ceiling then threw them away — a filter that could only ever subtract
+//! from what the user asked for, and that no directive could raise.
 //!
 //! This module therefore has no level knob at all. A ceiling cannot be
 //! configured because there is nowhere to configure one; the technical maximum
 //! of each native backend is likewise pinned wide open (see
 //! [`crate::backend`]).
+//!
+//! # Directives
+//!
+//! A directive string is a comma-separated list of `target=level` pairs and at
+//! most one bare `level` for every other target, as `RUST_LOG` is usually
+//! written: `"info,wgpu=warn,flui_view=trace"`. A target matches itself and the
+//! module paths below it. Span and field directives (`[span{field=value}]`)
+//! and regular expressions are not supported, so an application does not link
+//! a regex engine to read its log level.
 
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::filter::ParseError;
+use tracing_subscriber::filter::{ParseError, Targets};
 
 /// Directives used when neither the environment nor the application says
 /// otherwise.
@@ -27,7 +35,7 @@ pub const DEFAULT_DIRECTIVES: &str = "info,wgpu=warn";
 /// Environment variable consulted before the configured directives.
 pub const DEFAULT_ENV_VAR: &str = "RUST_LOG";
 
-/// Why an [`EnvFilter`] could not be built.
+/// Why a filter could not be built.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum FilterError {
@@ -40,9 +48,9 @@ pub enum FilterError {
     Environment {
         /// Name of the consulted variable.
         env_var: String,
-        /// The underlying parse failure.
+        /// Why the directives were refused.
         #[source]
-        source: ParseError,
+        source: DirectiveError,
     },
 
     /// The environment variable was present but was not valid Unicode.
@@ -57,18 +65,22 @@ pub enum FilterError {
     Configured {
         /// The rejected directive string.
         directives: String,
-        /// The underlying parse failure.
+        /// Why the directives were refused.
         #[source]
-        source: ParseError,
+        source: DirectiveError,
     },
 }
 
 /// Which directives select events, and which environment variable may override
 /// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FilterConfig {
-    directives: String,
-    env_var: Option<String>,
+    /// The directive string (see [Directives](self#directives)). It is not validated
+    /// until [`FilterConfig::targets`] resolves it.
+    pub directives: String,
+    /// The environment variable consulted before the directives, if any.
+    pub env_var: Option<String>,
 }
 
 impl Default for FilterConfig {
@@ -83,9 +95,10 @@ impl Default for FilterConfig {
 impl FilterConfig {
     /// Build a configuration from an explicit directive string.
     ///
-    /// The directive string uses [`EnvFilter`] syntax, e.g.
+    /// The directive string is a list of `target=level` pairs (see
+    /// [Directives](self#directives)), e.g.
     /// `"info,wgpu=warn,flui_view=trace"`. It is not validated here — call
-    /// [`FilterConfig::env_filter`] for that, so a caller sees the failure at
+    /// [`FilterConfig::targets`] for that, so a caller sees the failure at
     /// the point it can act on it.
     #[must_use]
     pub fn new(directives: impl Into<String>) -> Self {
@@ -97,7 +110,7 @@ impl FilterConfig {
 
     /// Consult a different environment variable.
     #[must_use]
-    pub fn with_env_var(mut self, env_var: impl Into<String>) -> Self {
+    pub fn env_var(mut self, env_var: impl Into<String>) -> Self {
         self.env_var = Some(env_var.into());
         self
     }
@@ -113,21 +126,7 @@ impl FilterConfig {
         self
     }
 
-    /// The configured directive string.
-    #[inline]
-    #[must_use]
-    pub fn directives(&self) -> &str {
-        &self.directives
-    }
-
-    /// The environment variable consulted before the directives, if any.
-    #[inline]
-    #[must_use]
-    pub fn env_var(&self) -> Option<&str> {
-        self.env_var.as_deref()
-    }
-
-    /// Resolve the configuration into an [`EnvFilter`], reading the configured
+    /// Resolve the configuration into a [`Targets`] filter, reading the configured
     /// environment variable.
     ///
     /// A non-blank value in that variable wins; otherwise the configured
@@ -139,7 +138,7 @@ impl FilterConfig {
     /// Returns [`FilterError::Environment`] when the environment variable holds
     /// a directive string that does not parse, and [`FilterError::Configured`]
     /// when the configured directives do not.
-    pub fn env_filter(&self) -> Result<EnvFilter, FilterError> {
+    pub fn targets(&self) -> Result<Targets, FilterError> {
         let from_environment = match &self.env_var {
             Some(env_var) => match std::env::var(env_var) {
                 Ok(value) => Some(value),
@@ -153,7 +152,7 @@ impl FilterConfig {
             None => None,
         };
 
-        self.env_filter_from(from_environment.as_deref())
+        self.targets_from(from_environment.as_deref())
     }
 
     /// Resolve the configuration against an explicitly supplied environment
@@ -171,7 +170,7 @@ impl FilterConfig {
     ///
     /// Returns [`FilterError::Environment`] when `env_value` does not parse,
     /// and [`FilterError::Configured`] when the configured directives do not.
-    pub fn env_filter_from(&self, env_value: Option<&str>) -> Result<EnvFilter, FilterError> {
+    pub fn targets_from(&self, env_value: Option<&str>) -> Result<Targets, FilterError> {
         // Trim once and use the *trimmed* value. Testing `value.trim()` for
         // emptiness and then parsing the untrimmed original made
         // `RUST_LOG=' info '` a hard error: a directive string is not
@@ -181,15 +180,47 @@ impl FilterConfig {
             && let Some(directives) = env_value.map(str::trim)
             && !directives.is_empty()
         {
-            return EnvFilter::try_new(directives).map_err(|source| FilterError::Environment {
+            return parse_directives(directives).map_err(|source| FilterError::Environment {
                 env_var: env_var.clone(),
                 source,
             });
         }
 
-        EnvFilter::try_new(&self.directives).map_err(|source| FilterError::Configured {
+        parse_directives(&self.directives).map_err(|source| FilterError::Configured {
             directives: self.directives.clone(),
             source,
         })
     }
+}
+
+/// Why a directive string was refused.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum DirectiveError {
+    /// A directive selects by span or field (`target[span{field=value}]=level`),
+    /// which the `target=level` filter does not support. Refused rather than
+    /// read as a target of that literal name, which would select nothing.
+    #[error("`{directive}` selects by span or field; write `target=level`")]
+    SpanOrField {
+        /// The refused directive.
+        directive: String,
+    },
+
+    /// A directive does not parse, such as an unknown level.
+    #[error(transparent)]
+    Parse(#[from] ParseError),
+}
+
+/// Parses `directives` (see [Directives](self#directives)).
+fn parse_directives(directives: &str) -> Result<Targets, DirectiveError> {
+    if let Some(directive) = directives
+        .split(',')
+        .map(str::trim)
+        .find(|directive| directive.contains(['[', ']', '{', '}']))
+    {
+        return Err(DirectiveError::SpanOrField {
+            directive: directive.to_owned(),
+        });
+    }
+    Ok(directives.parse::<Targets>()?)
 }

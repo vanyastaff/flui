@@ -503,7 +503,7 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
 }
 
 /// A text context over a fresh collection, lent to each measurement.
-fn text_cx() -> flui_painting::TextContext {
+fn text_ctx() -> flui_painting::TextContext {
     flui_painting::TextContext::new(&flui_painting::FontCollection::new())
 }
 
@@ -560,16 +560,16 @@ pub(crate) fn a_truncated_layout_caches_the_authored_intrinsic_widths() {
     };
     let unlaid = painter();
     let min = unlaid
-        .min_intrinsic_width(&mut text_cx())
+        .min_intrinsic_width(&mut text_ctx())
         .expect("valid fixture measures");
     let max = unlaid
-        .max_intrinsic_width(&mut text_cx())
+        .max_intrinsic_width(&mut text_ctx())
         .expect("valid fixture measures");
     assert!(min > 0.0 && min < max, "min {min}, max {max}");
 
     let mut laid_out = painter();
     laid_out
-        .layout(&mut text_cx(), 0.0, min)
+        .layout(&mut text_ctx(), 0.0, min)
         .expect("valid fixture lays out");
     assert!(
         laid_out.did_exceed_max_lines(),
@@ -577,10 +577,10 @@ pub(crate) fn a_truncated_layout_caches_the_authored_intrinsic_widths() {
     );
     let cached = (
         laid_out
-            .min_intrinsic_width(&mut text_cx())
+            .min_intrinsic_width(&mut text_ctx())
             .expect("valid fixture measures"),
         laid_out
-            .max_intrinsic_width(&mut text_cx())
+            .max_intrinsic_width(&mut text_ctx())
             .expect("valid fixture measures"),
     );
     assert!(
@@ -606,13 +606,13 @@ pub(crate) fn wide_ellipsis_floors_min_intrinsic_width() {
         .with_ellipsis(Some(ellipsis.to_string()));
 
     let text_min = text_only
-        .min_intrinsic_width(&mut text_cx())
+        .min_intrinsic_width(&mut text_ctx())
         .expect("valid fixture measures");
     let ellipsis_width = ellipsis_only
-        .max_intrinsic_width(&mut text_cx())
+        .max_intrinsic_width(&mut text_ctx())
         .expect("valid fixture measures");
     let floored = truncated
-        .min_intrinsic_width(&mut text_cx())
+        .min_intrinsic_width(&mut text_ctx())
         .expect("valid fixture measures");
 
     assert!(
@@ -631,11 +631,11 @@ pub(crate) fn wide_ellipsis_floors_min_intrinsic_width() {
         .with_max_lines(Some(1))
         .with_ellipsis(Some(ellipsis.to_string()));
     laid_out
-        .layout(&mut text_cx(), 0.0, 200.0)
+        .layout(&mut text_ctx(), 0.0, 200.0)
         .expect("valid fixture lays out");
     assert!(
         (laid_out
-            .min_intrinsic_width(&mut text_cx())
+            .min_intrinsic_width(&mut text_ctx())
             .expect("valid fixture measures")
             - floored)
             .abs()
@@ -665,10 +665,10 @@ pub(crate) fn a_rich_span_ellipsis_floors_min_intrinsic_width() {
         .with_ellipsis(Some("…".to_owned()));
 
     let min = painter
-        .min_intrinsic_width(&mut text_cx())
+        .min_intrinsic_width(&mut text_ctx())
         .expect("valid fixture measures");
     painter
-        .layout(&mut text_cx(), 0.0, min)
+        .layout(&mut text_ctx(), 0.0, min)
         .expect("valid fixture lays out");
     let painted = painter.width();
     assert!(

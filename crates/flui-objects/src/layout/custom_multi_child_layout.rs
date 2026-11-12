@@ -13,7 +13,7 @@ use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
+    context::{BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext, BoxLayoutContext},
     delegates::{MultiChildLayoutContext, MultiChildLayoutDelegate},
     parent_data::MultiChildLayoutParentData,
     traits::RenderBox,
@@ -151,7 +151,7 @@ impl RenderBox for RenderCustomMultiChildLayoutBox {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.intrinsic_width(height))
     }
@@ -159,7 +159,7 @@ impl RenderBox for RenderCustomMultiChildLayoutBox {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.intrinsic_width(height))
     }
@@ -167,7 +167,7 @@ impl RenderBox for RenderCustomMultiChildLayoutBox {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.intrinsic_height(width))
     }
@@ -175,7 +175,7 @@ impl RenderBox for RenderCustomMultiChildLayoutBox {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.intrinsic_height(width))
     }
@@ -183,7 +183,7 @@ impl RenderBox for RenderCustomMultiChildLayoutBox {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut BoxDryLayoutCtx<'_>,
+        _ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         Ok(self.get_size(constraints))
     }

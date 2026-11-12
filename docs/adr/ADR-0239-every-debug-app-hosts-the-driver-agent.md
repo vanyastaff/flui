@@ -21,7 +21,7 @@
 ## Context
 
 ADR-0095 §3 put the in-process server in `flui-devtools`, installed by application code through
-`AppConfig::with_dev_agent`. `flui-app` could not name an official package, and the facade names
+`AppConfig::dev_agent`. `flui-app` could not name an official package, and the facade names
 none (ADR-0088). The result is that no example is drivable as built, a test tool cannot drive an
 app it did not write, and Android and web drive no hook at all. Flutter's experience points the
 same way: its driver needed an extension each app had to enable, and `integration_test` replaced
@@ -72,7 +72,7 @@ that with a binding every test app gets.
 - `flui-app` gains `interprocess` as a dependency on desktop, Android and iOS, and a web export.
 - The bespoke probes ([`android_input_probe`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/crates/flui-native/examples/android_input_probe.rs), [`web_input_probe`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/crates/flui-native/examples/web_input_probe.rs)) and their command channels are
   deleted; their checks run through the agent.
-- `AppConfig::with_dev_agent` remains for third-party development hooks. The devtools `agent`
+- `AppConfig::dev_agent` remains for third-party development hooks. The devtools `agent`
   feature and `AgentServer` are removed.
 
 ## Alternatives considered

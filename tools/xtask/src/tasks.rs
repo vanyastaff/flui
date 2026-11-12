@@ -123,20 +123,18 @@ fn deny_warnings(cmd: Cmd) -> Cmd {
     cmd.args(["--", "-D", "warnings"])
 }
 
-/// The facade's `hot-reload` feature on wasm32: it has no web runner, but
-/// enabling it must stay a well-formed build rather than expose native-only
-/// imports.
-fn wasm_facade_check() -> Cmd {
+/// `flui-hot-reload` with every feature on wasm32: it has no web runner, but an
+/// application that keeps the package in a cross-target build must still build
+/// for the web rather than meet native-only imports.
+fn wasm_hot_reload_check() -> Cmd {
     Cmd::cargo([
         "check",
         "-p",
-        "flui",
+        "flui-hot-reload",
         "--locked",
         "--target",
         WASM_TARGET,
-        "--no-default-features",
-        "--features",
-        "hot-reload",
+        "--all-features",
     ])
 }
 

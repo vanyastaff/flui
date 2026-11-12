@@ -91,7 +91,7 @@ impl SliverConstraintsBuilder {
 
     /// Sets the main-axis direction and matching cross-axis direction.
     #[must_use]
-    pub fn with_axis_direction(mut self, axis: AxisDirection) -> Self {
+    pub fn axis_direction(mut self, axis: AxisDirection) -> Self {
         self.inner.axis_direction = axis;
         self.inner.cross_axis_direction = match axis {
             AxisDirection::TopToBottom | AxisDirection::BottomToTop => AxisDirection::LeftToRight,
@@ -102,7 +102,7 @@ impl SliverConstraintsBuilder {
 
     /// Sets the growth direction (forward from leading edge or reverse from trailing).
     #[must_use]
-    pub fn with_growth_direction(mut self, growth: GrowthDirection) -> Self {
+    pub fn growth_direction(mut self, growth: GrowthDirection) -> Self {
         self.inner.growth_direction = growth;
         self
     }

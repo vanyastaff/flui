@@ -137,7 +137,7 @@ impl std::fmt::Debug for CupertinoTabBarItem {
 
 /// A user tap handler over a tab's index. `Rc`-based (owner-local, per
 /// ADR-0027) — matches `GestureDetector::on_tap`'s own callback shape.
-type TabTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, usize)>;
+type TabTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, usize)>;
 
 /// An iOS-style bottom tab bar — see the module docs for exactly what is and
 /// is not supported.
@@ -161,7 +161,7 @@ pub struct CupertinoTabBar {
     inactive_color: CupertinoColor,
     icon_size: f64,
     height: f64,
-    border: Option<Border<f64>>,
+    border: Option<Border>,
     /// Whether `border` still holds the un-overridden default. If so,
     /// `build` resolves [`default_border_color`]'s light/dark variant fresh
     /// against the ambient brightness every time, rather than using a color
@@ -208,7 +208,7 @@ impl CupertinoTabBar {
     #[must_use]
     pub fn on_tap<R: flui_sdk::view::EventOutcome>(
         mut self,
-        on_tap: impl Fn(&mut flui_sdk::view::EventCx<'_>, usize) -> R + 'static,
+        on_tap: impl Fn(&mut flui_sdk::view::EventContext<'_>, usize) -> R + 'static,
     ) -> Self {
         self.on_tap = Some(Rc::new(move |ctx, index| on_tap(ctx, index).report()));
         self
@@ -277,7 +277,7 @@ impl CupertinoTabBar {
     /// Overrides the top border, or removes it with `None`. Defaults to
     /// the hairline border.
     #[must_use]
-    pub fn border(mut self, border: Option<Border<f64>>) -> Self {
+    pub fn border(mut self, border: Option<Border>) -> Self {
         self.border = border;
         self.border_is_default = false;
         self

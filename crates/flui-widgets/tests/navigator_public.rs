@@ -349,12 +349,10 @@ pub(crate) fn explicit_finish_commits_an_authored_page_and_retires_the_old_route
         AuthoredPage {
             settings: RouteSettings::named("/new"),
             builder: Rc::new(move |_| {
-                FadeTransition::new(
-                    Rc::clone(&opacity),
-                    ColoredBox::new(Color::RED).child(SizedBox::new(80.0, 40.0)),
-                )
-                .into_view()
-                .boxed()
+                FadeTransition::new(Rc::clone(&opacity))
+                    .child(ColoredBox::new(Color::RED).child(SizedBox::new(80.0, 40.0)))
+                    .into_view()
+                    .boxed()
             }),
             owner: Some(owner),
             run: Rc::clone(&original),

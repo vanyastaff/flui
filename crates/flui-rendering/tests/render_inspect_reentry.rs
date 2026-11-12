@@ -58,7 +58,7 @@ impl flui_foundation::inspect::Inspect for Reaching {
 impl RenderObject<BoxProtocol> for Reaching {
     fn perform_layout_raw(
         &mut self,
-        _ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::LayoutCtxErased<'_>,
+        _ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::ErasedLayoutContext<'_>,
     ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
         Ok(Size::new(10.0, 10.0))
     }

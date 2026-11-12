@@ -69,7 +69,7 @@ cross-crate контракт оформляется ADR.
   ADR о persistence нет. Каталога данных приложения нет ни в одном крейте.
 - Жизненный цикл: платформа сообщает `WindowExecutionState::Suspended`
   (`crates/flui-platform-api/src/window.rs:193`–`198`) и `CloseRequested` после вето (`window.rs:305`);
-  вето регистрируется только через `AppConfig::with_close_request_handler`
+  вето регистрируется только через `AppConfig::close_request_handler`
   (`crates/flui-app/src/app/config.rs:419`), web и Android его не спрашивают
   (`crates/flui-app/src/app/close_request.rs:70`), flush при закрытии отложен (`close_request.rs:52`–`55`).
   Widget видит `AppLifecycleState` (`Resumed`/`Inactive`/`Hidden`/`Paused`/`Detached`,

@@ -38,8 +38,8 @@ use flui_painting::paint::Clip;
 use flui_view::owner::{KeepAliveHandle, KeepAliveLease};
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{
-    BoxedView, EventCx, EventOutcome, IntoView, PostFrameHandle, RebuildHandle, ViewExt, ViewState,
-    WriterSource,
+    BoxedView, EventContext, EventOutcome, IntoView, PostFrameHandle, RebuildHandle, ViewExt,
+    ViewState, WriterSource,
 };
 
 use super::row::{
@@ -214,13 +214,13 @@ impl DismissThresholdError {
 
 /// Fired when the [`Dismissible`] has been dismissed, after any resize
 /// collapse has finished (or immediately, if `resize_duration` is `None`).
-pub type DismissSideCallback = Rc<dyn Fn(&mut EventCx<'_>, DismissSide)>;
+pub type DismissSideCallback = Rc<dyn Fn(&mut EventContext<'_>, DismissSide)>;
 
 /// Fired on every drag/threshold-state change while a [`Dismissible`] is
 /// being dragged.
-pub type DismissUpdateCallback = Rc<dyn Fn(&mut EventCx<'_>, DismissUpdateDetails)>;
+pub type DismissUpdateCallback = Rc<dyn Fn(&mut EventContext<'_>, DismissUpdateDetails)>;
 
-type ResizeCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
+type ResizeCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 
 /// Details delivered to [`Dismissible::on_update`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -264,7 +264,7 @@ impl Dismissible {
     /// custom action, the command's keys while the row has focus, and the
     /// visible control or context menu (ADR-0216). Those reach the same model
     /// effect with no slide and no collapse.
-    pub fn new(child: impl IntoView, alternatives: GestureAlternatives) -> Self {
+    pub fn new(alternatives: GestureAlternatives, child: impl IntoView) -> Self {
         Self {
             alternatives,
             child: child.into_view().boxed(),
@@ -301,7 +301,7 @@ impl Dismissible {
     #[must_use]
     pub fn on_resize<R: EventOutcome>(
         mut self,
-        on_resize: impl Fn(&mut EventCx<'_>) -> R + 'static,
+        on_resize: impl Fn(&mut EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_resize = Some(Rc::new(move |ctx| on_resize(ctx).report()));
         self
@@ -313,7 +313,7 @@ impl Dismissible {
     #[must_use]
     pub fn on_dismissed<R: EventOutcome>(
         mut self,
-        on_dismissed: impl Fn(&mut EventCx<'_>, DismissSide) -> R + 'static,
+        on_dismissed: impl Fn(&mut EventContext<'_>, DismissSide) -> R + 'static,
     ) -> Self {
         self.on_dismissed = Some(Rc::new(move |ctx, side| {
             on_dismissed(ctx, side).report();
@@ -326,7 +326,7 @@ impl Dismissible {
     #[must_use]
     pub fn on_update<R: EventOutcome>(
         mut self,
-        on_update: impl Fn(&mut EventCx<'_>, DismissUpdateDetails) -> R + 'static,
+        on_update: impl Fn(&mut EventContext<'_>, DismissUpdateDetails) -> R + 'static,
     ) -> Self {
         self.on_update = Some(Rc::new(move |ctx, details| {
             on_update(ctx, details).report();

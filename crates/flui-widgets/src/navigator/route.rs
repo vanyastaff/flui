@@ -179,17 +179,26 @@ impl RouteId {
     }
 }
 
-/// A [`RouteSettings::arguments`] payload, type-erased.
+/// A [`RouteSettings`] arguments payload, type-erased.
 ///
 /// `Arc`-shared so cloning a route's settings does not deep-copy the
 /// payload. This is exactly the shape ADR-0024 named for this field.
 pub type RouteArguments = Arc<dyn Any + Send + Sync>;
 
 /// A route's name and arguments payload.
+///
+/// A description the navigator and a route generator read: its fields are
+/// public, as Flutter's `RouteSettings` has final fields, and it is built
+/// with [`named`](Self::named) and its builder methods. `#[non_exhaustive]`
+/// keeps room for a field without breaking a caller.
 #[derive(Default, Clone)]
+#[non_exhaustive]
 pub struct RouteSettings {
-    name: Option<String>,
-    arguments: Option<RouteArguments>,
+    /// The route's name, if it has one.
+    pub name: Option<String>,
+    /// The route's arguments payload, if it has one. Compared by pointer
+    /// identity (see the `PartialEq` impl below).
+    pub arguments: Option<RouteArguments>,
 }
 
 impl RouteSettings {
@@ -202,58 +211,40 @@ impl RouteSettings {
         }
     }
 
-    /// Builder: attach an arguments payload. Used when building the route, e.g.
-    /// from a route generator.
+    /// Attach an arguments payload. Used when building the route, e.g. from a
+    /// route generator.
     ///
     /// This **allocates a fresh [`Arc`]**, so the payload it attaches is a new
     /// object even when `value` was cloned out of another `RouteSettings`. Since
-    /// [`RouteSettings`] compares its payload by pointer identity (see the
-    /// `PartialEq` impl below), relaying a payload you already hold must go through
-    /// [`with_arguments_shared`](Self::with_arguments_shared) instead — this
-    /// method would silently change its identity.
+    /// [`RouteSettings`] compares its payload by pointer identity, relaying a
+    /// payload you already hold goes through
+    /// [`arguments_shared`](Self::arguments_shared) instead: this method would
+    /// silently change its identity.
     #[must_use]
-    pub fn with_arguments<T: Any + Send + Sync + 'static>(mut self, value: T) -> Self {
+    pub fn arguments<T: Any + Send + Sync + 'static>(mut self, value: T) -> Self {
         self.arguments = Some(Arc::new(value));
         self
     }
 
-    /// Builder: attach an arguments payload **the caller already holds**,
-    /// forwarding it without re-wrapping.
+    /// Attach an arguments payload **the caller already holds**, forwarding
+    /// it without re-wrapping.
     ///
-    /// The identity-preserving counterpart to
-    /// [`with_arguments`](Self::with_arguments), for the relay case: reading
-    /// [`arguments`](Self::arguments) off one settings object and putting it on
-    /// another. `with_arguments` would re-wrap — it takes the payload by value
-    /// and mints a new `Arc` — breaking the pointer identity that both this
-    /// type's `PartialEq` defines equality by.
-    ///
-    /// It is not the *only* way to relay a payload: the `Arc` is reachable
-    /// through [`arguments`](Self::arguments) and can be carried by hand. What
-    /// this buys is that the identity-preserving form is a builder call like any
-    /// other, so the safe spelling is no longer than the unsafe one.
+    /// The identity-preserving counterpart to [`arguments`](Self::arguments),
+    /// for the relay case: reading the `arguments` field off one settings
+    /// object and putting it on another. `arguments` would re-wrap (it takes
+    /// the payload by value and mints a new `Arc`), breaking the pointer
+    /// identity this type's `PartialEq` defines equality by.
     #[must_use]
-    pub fn with_arguments_shared(mut self, arguments: RouteArguments) -> Self {
+    pub fn arguments_shared(mut self, arguments: RouteArguments) -> Self {
         self.arguments = Some(arguments);
         self
-    }
-
-    /// The route's name, if it has one.
-    #[must_use]
-    pub fn name(&self) -> Option<&str> {
-        self.name.as_deref()
-    }
-
-    /// The route's arguments payload, if it has one.
-    #[must_use]
-    pub fn arguments(&self) -> Option<&RouteArguments> {
-        self.arguments.as_ref()
     }
 
     /// Attempts to downcast the arguments payload to the requested concrete
     /// type. Returns `None` if there is no payload or its type doesn't match.
     ///
-    /// Named `argument`, singular, per ADR-0024's `settings.argument::<T>()`.
-    /// The typed counterpart to [`arguments`](Self::arguments) — the same role
+    /// Named `argument`, singular, per ADR-0024's `settings.argument::<T>()`:
+    /// the typed reading of the `arguments` field, the same role
     /// `RenderMetaData::metadata_as` plays for its own erased payload.
     #[must_use]
     pub fn argument<T: Any + Send + Sync + 'static>(&self) -> Option<&T> {
@@ -264,7 +255,7 @@ impl RouteSettings {
 // A bare name is the overwhelmingly common named-route request, so
 // `handle.push_named("/details")` should not make the caller name
 // `RouteSettings` at all — the argument-carrying form
-// (`RouteSettings::named("/details").with_arguments(id)`) is the exception, and
+// (`RouteSettings::named("/details").arguments(id)`) is the exception, and
 // reads as one. This is what makes the `impl Into<RouteSettings>` request
 // object on every `*_named` entry point ergonomic.
 impl From<&str> for RouteSettings {

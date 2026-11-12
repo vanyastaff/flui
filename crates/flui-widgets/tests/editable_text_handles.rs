@@ -178,9 +178,9 @@ impl Scene {
 
     fn key(&mut self, code: Code, key: Key) {
         let event: KeyEvent = KeyEventBuilder::new(code)
-            .with_key(key)
-            .with_state(KeyState::Down)
-            .with_modifiers(Modifiers::NONE)
+            .key(key)
+            .state(KeyState::Down)
+            .modifiers(Modifiers::NONE)
             .build();
         let _handled = self.laid.focus_manager().dispatch_key_event(&event);
         self.settle();

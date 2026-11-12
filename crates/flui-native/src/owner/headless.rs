@@ -122,7 +122,7 @@ impl host::Displays<HeadlessLoop> for HeadlessLoop {
 /// whether a window is left (the exit policy) and opens a deferred window
 /// through it; the simulated devices and drag sessions reach a window's
 /// callbacks through it.
-pub(crate) trait TrackedWindows: OpenWindows {
+pub(crate) trait TrackedWindows: OpenWindows + Send + Sync {
     /// Builds a window delivering to `handler` under the locked `state` and
     /// tracks it; `platform` is the lock `state` came from, which the window
     /// keeps to close. The caller delivers the capability snapshot once the
@@ -517,14 +517,15 @@ impl host::Loop for HeadlessLoop {
         let deferred_window_open = state_handle.lock().deferred_window_open;
         let owner_thread = thread::current().id();
 
-        let hooks: Arc<dyn OwnerHooks> = if deferred_window_open {
-            Arc::new(HeadlessDeferredOwnerHooks {
+        let hooks: Rc<dyn OwnerHooks> = if deferred_window_open {
+            signal.serve_platform(&platform);
+            Rc::new(HeadlessDeferredOwnerHooks {
                 state: state_handle,
                 signal: Arc::clone(&signal),
                 owner_thread,
             })
         } else {
-            Arc::new(DirectOwnerHooks::with_signal(
+            Rc::new(DirectOwnerHooks::with_signal(
                 Arc::clone(&platform),
                 Arc::clone(&signal),
             ))

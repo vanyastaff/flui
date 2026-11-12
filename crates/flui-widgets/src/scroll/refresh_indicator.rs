@@ -65,7 +65,7 @@ use flui_platform::TargetPlatform;
 use flui_platform::keyboard::NamedKey;
 use flui_view::prelude::StatefulView;
 use flui_view::{
-    AsyncDriver, BoxedTask, BoxedView, BuildContext, BuildContextExt, EventCx, InheritedView,
+    AsyncDriver, BoxedTask, BoxedView, BuildContext, BuildContextExt, EventContext, InheritedView,
     IntoView, LifecycleContext, PostFrameHandle, RebuildHandle, RebuildReason, TaskToken, View,
     ViewExt, ViewState, WriterSource, impl_inherited_view,
 };
@@ -318,7 +318,7 @@ impl_inherited_view!(RefreshIndicatorStyle);
 // ---------------------------------------------------------------------------
 
 /// Starts a refresh: the future that completes it.
-type RefreshCallback = Rc<dyn Fn(&mut EventCx<'_>) -> BoxedTask>;
+type RefreshCallback = Rc<dyn Fn(&mut EventContext<'_>) -> BoxedTask>;
 
 /// Pull to refresh over the scrollables in its child (see the
 /// `refresh_indicator` module documentation).
@@ -335,8 +335,8 @@ type RefreshCallback = Rc<dyn Fn(&mut EventCx<'_>) -> BoxedTask>;
 /// )))
 /// .expect("one labelled command");
 /// let inbox = RefreshIndicator::new(
-///     SingleChildScrollView::new().child(SizedBox::new(300.0, 1400.0)),
 ///     alternatives,
+///     SingleChildScrollView::new().child(SizedBox::new(300.0, 1400.0)),
 /// )
 /// .on_refresh(|_ctx| async { /* fetch the messages */ });
 /// ```
@@ -364,7 +364,7 @@ impl RefreshIndicator {
     /// Pull to refresh over the scrollables in `child`, reached without the
     /// pull through `alternatives`, whose first command performs
     /// [`RefreshIntent`].
-    pub fn new(child: impl IntoView, alternatives: GestureAlternatives) -> Self {
+    pub fn new(alternatives: GestureAlternatives, child: impl IntoView) -> Self {
         Self {
             child: child.into_view().boxed(),
             alternatives,
@@ -378,7 +378,10 @@ impl RefreshIndicator {
     /// Start the refresh: called with the event's context when one starts,
     /// on any path. The refresh runs until the returned future completes.
     #[must_use]
-    pub fn on_refresh<F>(mut self, on_refresh: impl Fn(&mut EventCx<'_>) -> F + 'static) -> Self
+    pub fn on_refresh<F>(
+        mut self,
+        on_refresh: impl Fn(&mut EventContext<'_>) -> F + 'static,
+    ) -> Self
     where
         F: Future<Output = ()> + 'static,
     {
@@ -595,7 +598,7 @@ impl Refresher {
     }
 
     /// Start one refresh, unless one runs.
-    fn start(&self, ctx: &mut EventCx<'_>) -> ActionOutcome {
+    fn start(&self, ctx: &mut EventContext<'_>) -> ActionOutcome {
         let controller = self.controller();
         if !self.mounted.get() || controller.is_refreshing() {
             return ActionOutcome::NotPerformed;
@@ -725,7 +728,7 @@ struct RefreshAction {
 }
 
 impl Action<RefreshIntent> for RefreshAction {
-    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &RefreshIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &RefreshIntent) -> ActionOutcome {
         self.refresher
             .upgrade()
             .map_or(ActionOutcome::NotPerformed, |refresher| {

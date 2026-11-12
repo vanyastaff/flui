@@ -1,7 +1,8 @@
-//! A window another thread asks for through `PlatformProxy::open_window`
-//! opens in the owner's next turn, on the owner, and its requester hears the
-//! window's identity or why it did not open, on the headless host, whose owner
-//! turns a test drives by hand.
+//! What another thread asks the owner through `PlatformProxy`: a window it
+//! asks for through `open_window` opens in the owner's next turn, on the owner,
+//! and its requester hears the window's identity or why it did not open; an
+//! exit-policy request is asked of the platform in that turn. On the headless
+//! host, whose owner turns a test drives by hand.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -9,8 +10,8 @@ use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
 use flui_native::{
-    HeadlessOpenWindows, HeadlessOwnerTurns, HeadlessPlatform, OpenWindowError, OwnerPlatform,
-    PendingWindow, Platform as _, ProxySendError, WindowRequest,
+    HeadlessExitReevaluation, HeadlessOpenWindows, HeadlessOwnerTurns, HeadlessPlatform,
+    OpenWindowError, OwnerPlatform, PendingWindow, Platform as _, ProxySendError, WindowRequest,
 };
 use flui_platform::{WindowHandler, WindowOptions};
 use flui_testing::window_handler::RecordingWindowHandler;
@@ -49,12 +50,17 @@ struct Session {
     owner: OwnerPlatform,
     turns: HeadlessOwnerTurns,
     windows: HeadlessOpenWindows,
+    exit: HeadlessExitReevaluation,
 }
 
 fn session() -> Session {
-    let platform = HeadlessPlatform::new();
+    session_of(HeadlessPlatform::new())
+}
+
+fn session_of(platform: HeadlessPlatform) -> Session {
     let turns = platform.owner_turns();
     let windows = platform.open_windows();
+    let exit = platform.exit_reevaluation();
     let saved = Rc::new(std::cell::RefCell::new(None));
     let installed = Rc::clone(&saved);
     Box::new(platform)
@@ -68,6 +74,7 @@ fn session() -> Session {
         owner,
         turns,
         windows,
+        exit,
     }
 }
 
@@ -130,7 +137,7 @@ fn requests_open_in_order_and_a_full_queue_hands_the_request_back() {
 
     let refused = proxy
         .open_window(WindowRequest::new(
-            WindowOptions::default().with_title("one too many"),
+            WindowOptions::default().title("one too many"),
             || RecordingWindowHandler::new() as Rc<dyn WindowHandler>,
         ))
         .expect_err("a full queue refuses");
@@ -240,4 +247,105 @@ fn a_quit_refuses_the_opens_still_queued() {
         ),
         "a later open is refused"
     );
+}
+
+#[test]
+fn proxy_exit_policy_request_contract() {
+    crate::run_table(
+        "proxy_exit_policy_request_contract",
+        &[
+            (
+                "an_exit_policy_request_from_another_thread_is_asked_in_the_owners_next_turn",
+                an_exit_policy_request_from_another_thread_is_asked_in_the_owners_next_turn,
+            ),
+            (
+                "an_owner_that_opens_no_windows_for_other_threads_still_takes_the_request",
+                an_owner_that_opens_no_windows_for_other_threads_still_takes_the_request,
+            ),
+            (
+                "an_exit_policy_request_on_the_owner_asks_the_platform_at_once",
+                an_exit_policy_request_on_the_owner_asks_the_platform_at_once,
+            ),
+            (
+                "an_exit_policy_request_after_the_quit_hears_the_owner_is_gone",
+                an_exit_policy_request_after_the_quit_hears_the_owner_is_gone,
+            ),
+        ],
+    );
+}
+
+/// Ask from a worker thread, which reaches the platform only through the
+/// owner: nothing of the platform runs there.
+fn ask_from_another_thread(session: &Session) {
+    let proxy = session.owner.proxy();
+    thread::spawn(move || proxy.request_exit_policy_reevaluation())
+        .join()
+        .expect("the requesting thread")
+        .expect("the owner takes the request");
+}
+
+/// A worker's request reaches the platform in the owner's next turn, on the
+/// owner; a burst of them is one request.
+fn an_exit_policy_request_from_another_thread_is_asked_in_the_owners_next_turn() {
+    let session = session();
+    ask_from_another_thread(&session);
+    ask_from_another_thread(&session);
+    assert!(
+        !session.exit.requested(),
+        "the platform is asked on the owner, not on the requesting thread"
+    );
+    session.turns.drive();
+    assert!(
+        session.exit.requested(),
+        "the owner's turn asks the platform"
+    );
+}
+
+/// The headless owner that defers its own opens serves no window open for
+/// other threads, and still asks its exit policy for them.
+fn an_owner_that_opens_no_windows_for_other_threads_still_takes_the_request() {
+    let platform = HeadlessPlatform::new();
+    let _deferred = platform.enable_deferred_window_open();
+    let session = session_of(platform);
+    let built = Built::default();
+    assert!(
+        matches!(
+            session.owner.proxy().open_window(request(0, &built)),
+            Err(ProxySendError::Unsupported { .. })
+        ),
+        "this owner opens no window for another thread"
+    );
+    ask_from_another_thread(&session);
+    session.turns.drive();
+    assert!(
+        session.exit.requested(),
+        "the owner's turn asks the platform"
+    );
+}
+
+/// Once the owner quit, a request is refused and the platform is not asked.
+fn an_exit_policy_request_after_the_quit_hears_the_owner_is_gone() {
+    let session = session();
+    let proxy = session.owner.proxy();
+    proxy.request_quit().expect("the quit is taken");
+    session.turns.drive();
+    assert!(
+        matches!(
+            proxy.request_exit_policy_reevaluation(),
+            Err(ProxySendError::OwnerGone { .. })
+        ),
+        "a stopped owner refuses the request"
+    );
+    assert!(!session.exit.requested(), "the platform was not asked");
+}
+
+/// On the owner the platform is asked at once: no turn is spent on it.
+fn an_exit_policy_request_on_the_owner_asks_the_platform_at_once() {
+    let session = session();
+    session
+        .owner
+        .proxy()
+        .request_exit_policy_reevaluation()
+        .expect("the owner takes the request");
+    assert!(session.exit.requested(), "asked without an owner turn");
 }

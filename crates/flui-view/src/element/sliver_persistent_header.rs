@@ -360,14 +360,14 @@ impl<R> PersistentHeaderView<R> {
 
     /// Attach the widget layer's snap controller. See the field doc.
     #[must_use]
-    pub fn with_snap_controller(mut self, controller: Option<AnimationController>) -> Self {
+    pub fn snap_controller(mut self, controller: Option<AnimationController>) -> Self {
         self.snap_controller = controller;
         self
     }
 
     /// Attach the widget layer's current snap command. See the field doc.
     #[must_use]
-    pub fn with_snap_command(mut self, command: Option<SnapCommand>) -> Self {
+    pub fn snap_command(mut self, command: Option<SnapCommand>) -> Self {
         self.snap_command = command;
         self
     }

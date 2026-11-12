@@ -72,13 +72,13 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// dispatch in the caller.
     ///
     /// For `BoxProtocol` this
-    /// resolves to `dyn BoxLayoutCtxErased + 'ctx`; for `SliverProtocol`
-    /// to `dyn SliverLayoutCtxErased + 'ctx`. Each per-protocol trait
+    /// resolves to `dyn ErasedBoxLayoutContext + 'ctx`; for `SliverProtocol`
+    /// to `dyn ErasedSliverLayoutContext + 'ctx`. Each per-protocol trait
     /// exposes the small protocol-shared surface (constraints, child ops)
     /// that the [`RenderObject`](crate::traits::RenderObject)
     /// blanket impl needs to reconstruct a typed layout context via a
     /// `Proxy` storage variant on the typed context type.
-    type LayoutCtxErased<'ctx>: ?Sized
+    type ErasedLayoutContext<'ctx>: ?Sized
     where
         Self: 'ctx;
 
@@ -170,10 +170,10 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
 
     /// Constructs a leaf-mode (no children, no layout callback) erased
     /// layout context from protocol-typed constraints, then invokes `f`
-    /// with a `&mut Self::LayoutCtxErased<'_>` referencing it.
+    /// with a `&mut Self::ErasedLayoutContext<'_>` referencing it.
     ///
     /// Closure shape (`FnOnce`) keeps the typed context's lifetime scoped
-    /// to the call — the typed `BoxLayoutCtx::new(...)` value lives on
+    /// to the call — the typed `RawBoxLayoutContext::new(...)` value lives on
     /// the caller's stack inside the trait method, the erased coercion
     /// borrows it, and the borrow expires when `f` returns.
     ///
@@ -188,7 +188,7 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     fn with_leaf_erased_ctx<R>(
         constraints: <Self::Layout as LayoutCapability>::Constraints,
         text: crate::pipeline::TextSource<'_>,
-        f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
+        f: impl FnOnce(&mut Self::ErasedLayoutContext<'_>) -> R,
     ) -> R
     where
         Self: Sized;

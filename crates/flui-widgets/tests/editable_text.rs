@@ -2871,7 +2871,7 @@ pub(crate) mod text_store {
 /// Event context (ADR-0086): `on_changed` and `on_submitted` run inside a
 /// write the field opens from the writer source it acquired in
 /// `init_state`, whichever path made the edit.
-pub(crate) mod event_cx {
+pub(crate) mod event_context {
     use std::rc::Rc;
 
     use flui_interaction::focus::FocusNode;

@@ -104,7 +104,7 @@ fn decodes_leave_the_io_lane_free() {
     });
     let files = SignedFiles::new("worker-probe");
     let path = files.write(SIGNATURE, "probe.img");
-    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+    let registry = AssetRegistryBuilder::new().default_capacity().build();
 
     let image = block_on(registry.load_image(path, lanes.services()))
         .expect("the decode reaches a free IO worker");
@@ -158,8 +158,8 @@ fn abandoned_loads_never_decode_and_do_not_delay_a_live_one() {
     let files = SignedFiles::new("gated");
     let lanes = ThreadLanes::new();
     let registry = AssetRegistryBuilder::new()
-        .with_default_capacity()
-        .with_decode_threads(NonZeroUsize::MIN)
+        .default_capacity()
+        .decode_threads(NonZeroUsize::MIN)
         .build();
 
     let blocker = registry.load_image(files.write(SIGNATURE, "blocker.img"), lanes.services());
@@ -221,8 +221,8 @@ fn loads_past_admission_are_bounded_by_count() {
     let files = SignedFiles::new("bound");
     let lanes = ThreadLanes::new();
     let registry = AssetRegistryBuilder::new()
-        .with_default_capacity()
-        .with_decode_threads(NonZeroUsize::MIN)
+        .default_capacity()
+        .decode_threads(NonZeroUsize::MIN)
         .build();
 
     let blocker = registry.load_image(files.write(BLOCKER, "blocker.img"), lanes.services());
@@ -287,8 +287,8 @@ fn decode_slots_go_to_the_earliest_admitted_ready_load() {
     let files = SignedFiles::new("order");
     let lanes = ThreadLanes::new();
     let registry = AssetRegistryBuilder::new()
-        .with_default_capacity()
-        .with_decode_threads(NonZeroUsize::MIN)
+        .default_capacity()
+        .decode_threads(NonZeroUsize::MIN)
         .build();
     let http = ScriptedHttp::new();
     let mut response = NETWORK.to_vec();

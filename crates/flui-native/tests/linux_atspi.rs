@@ -596,7 +596,7 @@ mod cases {
     fn open<P: Platform>(platform: &P) -> Rc<dyn HostWindow> {
         platform
             .open_window(
-                WindowOptions::default().with_size(Size::new(400.0, 300.0)),
+                WindowOptions::default().size(Size::new(400.0, 300.0)),
                 RecordingWindowHandler::new() as _,
             )
             .expect("a window opens")

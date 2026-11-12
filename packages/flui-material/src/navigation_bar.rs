@@ -185,7 +185,7 @@ const _: () = assert!(NAVIGATION_DESTINATION_ICON_SIZE <= NAVIGATION_INDICATOR_H
 /// A destination-selected callback: the tapped destination's index.
 /// `Rc`-based (owner-local, per ADR-0027) — matches [`InkWell::on_tap`]'s own
 /// callback shape.
-type DestinationSelectedCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, usize)>;
+type DestinationSelectedCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, usize)>;
 
 /// One destination (icon + label) in a [`NavigationBar`].
 ///
@@ -309,8 +309,8 @@ impl NavigationBar {
             indicator_color: None,
             overlay_color: None,
             motion: MotionSpec::default()
-                .with_duration(NAVIGATION_INDICATOR_DURATION)
-                .with_curve(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
+                .duration(NAVIGATION_INDICATOR_DURATION)
+                .curve(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
         }
     }
 
@@ -334,7 +334,7 @@ impl NavigationBar {
     #[must_use]
     pub fn on_destination_selected<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, usize) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>, usize) -> R + 'static,
     ) -> Self {
         self.on_destination_selected = Some(crate::event_callback::value_callback(callback));
         self
@@ -636,7 +636,7 @@ impl StatelessView for NavigationBar {
 
         Material::new(background_color)
             .elevation(elevation)
-            .child(SafeArea::new().child(content))
+            .child(SafeArea::new(content))
     }
 }
 

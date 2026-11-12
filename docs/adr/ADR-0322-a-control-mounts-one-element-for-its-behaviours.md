@@ -7,7 +7,7 @@
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md) (keyboard
   activation and visible focus, unchanged);
   [ADR-0086](ADR-0086-signal-writes-through-event-context.md) (every callback of the node receives
-  the dispatch's `EventCx`);
+  the dispatch's `EventContext`);
   [ADR-0240](ADR-0240-semantics-identifier.md) (the identifier locators select by, which the
   node's one semantics configuration carries);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (the node commits its

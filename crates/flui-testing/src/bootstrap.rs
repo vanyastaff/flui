@@ -187,7 +187,7 @@ impl MountOptions {
 
     /// Override the capability policy (see [`BuildCapabilities`]).
     #[must_use]
-    pub fn with_capabilities(mut self, capabilities: BuildCapabilities) -> Self {
+    pub fn capabilities(mut self, capabilities: BuildCapabilities) -> Self {
         self.capabilities = capabilities;
         self
     }

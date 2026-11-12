@@ -634,8 +634,8 @@ fn explicit_finish_uses_the_last_repeat_leg() {
             let run = controller
                 .repeat(
                     RepeatSpec::new(mode)
-                        .with_range(range)
-                        .with_iterations(Iterations::Finite(count)),
+                        .range(range)
+                        .iterations(Iterations::Finite(count)),
                 )
                 .expect("finite repeat");
             controller.tick_at(Duration::from_millis(250));

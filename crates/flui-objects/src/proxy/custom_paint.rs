@@ -21,7 +21,10 @@ use flui_painting::Canvas;
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
+    context::{
+        BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext, BoxLayoutContext,
+        PaintContext,
+    },
     delegates::CustomPainter,
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
@@ -337,7 +340,7 @@ impl RenderBox for RenderCustomPaint {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(if ctx.child_count() > 0 {
             ctx.child_min_intrinsic_width(0, height)?
@@ -349,7 +352,7 @@ impl RenderBox for RenderCustomPaint {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(if ctx.child_count() > 0 {
             ctx.child_max_intrinsic_width(0, height)?
@@ -361,7 +364,7 @@ impl RenderBox for RenderCustomPaint {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(if ctx.child_count() > 0 {
             ctx.child_min_intrinsic_height(0, width)?
@@ -373,7 +376,7 @@ impl RenderBox for RenderCustomPaint {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(if ctx.child_count() > 0 {
             ctx.child_max_intrinsic_height(0, width)?
@@ -385,7 +388,7 @@ impl RenderBox for RenderCustomPaint {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() > 0 {
             ctx.child_dry_layout(0, constraints)
@@ -394,7 +397,7 @@ impl RenderBox for RenderCustomPaint {
         }
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let size = ctx.size();
         if let Some(background) = &self.painter {
             paint_with_painter(ctx.canvas(), size, background.as_ref());

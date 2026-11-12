@@ -191,6 +191,17 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
   [C-FEATURE]. (`names`: feature)
 - **N10. Тест называется исходом.** Без префикса `test_` и без существительного-темы. Гонщик таблицы — `<семейство>_contract`
   или `_matrix`, строка — исход. [AGENTS «Writing tests»]. (`names`: test-name)
+- **N11. Билдер-метод описания — без `with_`.** Описание — тип, который автор только собирает и отдаёт
+  фреймворку: всё, что реализует трейт вида, `Application`, типы `…Config/Options/Settings/Request/Builder/Params/Spec`.
+  Его метод `(self) -> Self`, задающий необязательный параметр конструктора Flutter, носит голое имя параметра:
+  `.title(…)`, `.alignment(…)`. Параметр, который читают хосты и распознаватели, — `pub`-поле типа с
+  `#[non_exhaustive]` (как final-поля `RouteSettings` во Flutter), одноимённый геттер удаляется, `get_x` не вводится
+  (N3). Поле с инвариантом, который проверяет конструктор или билдер, остаётся приватным с геттером, а его билдер
+  остаётся `with_x` в списке гейта с причиной. `with_x` сохраняет другие смыслы: `withX`/`copyWith` готового значения
+  (`Color`, `TextStyle`, `Size`, `BoxConstraints`, `SliverGeometry`, `SliverConstraints`), парный к сеттеру метод
+  объекта для чтения и записи (`Render*`, `Paint`, `*ParentData`, `WindowState`: голое имя — геттер, `set_x` — сеттер),
+  конструктор без `self` (`with_capacity`), замыкание в области (`Canvas::with_transform`), снимок ОС для тестов
+  (`SystemPreferences`, `DisplayInfo`). [C-GETTER; конструкторы Flutter]. (`xtask builder-names`, ADR-0325)
 
 ## Принуждение
 
@@ -339,7 +350,7 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
 - **N1. Контексты.** Типы называются `…Context` (как `std::task::Context`), привязка любого
   контекста — `ctx`, включая `EventContext` и `std::task::Context`: `ctx: &dyn BuildContext`,
   `move |ctx| …`. Написания `Ctx` и `Cx` в именах типов уходят. Привязку держит гейт
-  `xtask context-names` ([ADR-0325](../../../adr/ADR-0325-a-context-is-bound-as-ctx-and-its-type-is-named-context.md)).
+  `xtask context-names` ([ADR-0325](../../../adr/ADR-0325-a-context-is-bound-as-ctx-and-a-description-builder-has-no-with.md)).
 - **N2. Имена из Flutter/Dart/Skia — всё по-растовски.** Пересматриваются не только артефакты Dart
   (`Mixin`, `Base`, статический `Curves`, бессмысленный `Data`, сокращения Skia вроде `RRect`), но
   и предметные имена виджетов и типов (`Container`, `ThemeData` и т. п.) — под стиль экосистемы

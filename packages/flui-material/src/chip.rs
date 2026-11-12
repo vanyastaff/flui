@@ -26,7 +26,7 @@
 //! [`crate::RadioThemeData`]/[`crate::NavigationBarThemeData`], whose color
 //! slots are all `Option<WidgetStateProperty<Option<Color>>>`,
 //! [`crate::ChipThemeData`]'s fields are **plain** (`Option<Color>`,
-//! `Option<BorderSide<f64>>`, …): every field except `color` (the container
+//! `Option<BorderSide>`, …): every field except `color` (the container
 //! fill, not exposed at the theme tier here — see below) is a plain,
 //! non-resolved value. Per-state
 //! variation for label/icon/delete-icon color is entirely a property of the
@@ -311,7 +311,7 @@ fn chip_icon_color_default(states: WidgetStates, colors: &ColorScheme) -> Color 
 /// Because of this real branch-order difference, `side` is resolved from
 /// plain `(bool, bool)` parameters rather than a [`WidgetStates`] query —
 /// see the module docs' "`ChipThemeData`: plain overrides" section.
-fn chip_default_side(selected: bool, enabled: bool, colors: &ColorScheme) -> BorderSide<f64> {
+fn chip_default_side(selected: bool, enabled: bool, colors: &ColorScheme) -> BorderSide {
     if selected {
         BorderSide::new(Color::TRANSPARENT, 1.0, BorderStyle::Solid)
     } else if enabled {
@@ -357,11 +357,11 @@ fn chip_content_min_height(padding: EdgeInsets, label_padding: EdgeInsets) -> f6
 
 /// A tap/press callback taking no arguments. `Rc`-based (owner-local, per
 /// ADR-0027) — matches [`InkWell::on_tap`]'s own callback shape.
-type ChipTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
+type ChipTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>;
 
 /// A selection-change callback: the next selected value. `Rc`-based, same
 /// shape as [`ChipTapCallback`].
-type FilterChipSelectCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, bool)>;
+type FilterChipSelectCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, bool)>;
 
 /// A Material Design chip: a compact label with an optional leading avatar
 /// and trailing delete affordance, outlined and unfilled by default.
@@ -424,7 +424,7 @@ impl Chip {
     #[must_use]
     pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_pressed = Some(crate::event_callback::press_callback(callback));
         self
@@ -435,7 +435,7 @@ impl Chip {
     #[must_use]
     pub fn on_deleted<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_deleted = Some(crate::event_callback::press_callback(callback));
         self
@@ -662,7 +662,7 @@ impl FilterChip {
     #[must_use]
     pub fn on_selected<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, bool) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>, bool) -> R + 'static,
     ) -> Self {
         self.on_selected = Some(crate::event_callback::value_callback(callback));
         self
@@ -673,7 +673,7 @@ impl FilterChip {
     #[must_use]
     pub fn on_deleted<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_deleted = Some(crate::event_callback::press_callback(callback));
         self
@@ -912,7 +912,7 @@ fn chip_content_constraints(padding: EdgeInsets, label_padding: EdgeInsets) -> B
 /// [`Material`]'s own missing border-side paint path.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ChipBorderPainter {
-    side: BorderSide<f64>,
+    side: BorderSide,
     shape: MaterialShape,
 }
 

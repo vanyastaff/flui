@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use flui_app::app::{AppConfig, AppHandle, Application};
 use flui_foundation::geometry::Size;
-use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
+use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
 use flui_view::prelude::*;
 
 /// Set in the child's environment: the child case runs the application only
@@ -79,7 +79,7 @@ pub(crate) fn child() {
             handle: handle.clone(),
             asked: Arc::new(AtomicBool::new(false)),
         })
-        .with_config(AppConfig::new().with_title("native linux"))
+        .config(AppConfig::new().title("native linux"))
         .run()
     });
     result.expect("the application runs, paints and quits");
@@ -312,7 +312,7 @@ impl RenderBox for QuitOnPaintBox {
         Ok(Size::new(40.0, 24.0))
     }
 
-    fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {
         if !self.asked.swap(true, Ordering::SeqCst) {
             self.handle
                 .request_quit()

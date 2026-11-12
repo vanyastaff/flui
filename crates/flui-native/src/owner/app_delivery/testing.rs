@@ -16,13 +16,13 @@ use crate::platform::{AppHandler, Platform};
 pub(crate) struct Bound {
     pub(crate) delivery: Arc<AppDelivery>,
     pub(crate) platform: Arc<dyn Platform>,
-    pub(crate) hooks: Arc<dyn OwnerHooks>,
+    pub(crate) hooks: Rc<dyn OwnerHooks>,
 }
 
 impl Bound {
     /// The owner capability `ready` is handed.
     pub(crate) fn owner(&self) -> OwnerPlatform {
-        OwnerPlatform::new(Arc::clone(&self.platform), Arc::clone(&self.hooks))
+        OwnerPlatform::new(Arc::clone(&self.platform), Rc::clone(&self.hooks))
     }
 }
 
@@ -30,8 +30,8 @@ impl Bound {
 pub(crate) fn bind(delivery: Arc<AppDelivery>, handler: Rc<dyn AppHandler>) -> Bound {
     let platform: Arc<dyn Platform> = Arc::new(crate::HeadlessPlatform::new());
     let signal = OwnerSignal::new(Arc::new(|| Ok(())));
-    let hooks: Arc<dyn OwnerHooks> =
-        Arc::new(DirectOwnerHooks::with_signal(Arc::clone(&platform), signal));
+    let hooks: Rc<dyn OwnerHooks> =
+        Rc::new(DirectOwnerHooks::with_signal(Arc::clone(&platform), signal));
     delivery.bind(handler, &platform, &hooks);
     Bound {
         delivery,

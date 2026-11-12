@@ -148,7 +148,7 @@ where
     /// It is applied **only** at
     /// `init_state`; a later key change does not re-apply it.
     #[must_use]
-    pub fn with_initial_data(mut self, initial_data: InitialDataFactory<T>) -> Self {
+    pub fn initial_data(mut self, initial_data: InitialDataFactory<T>) -> Self {
         self.initial_data = Some(initial_data);
         self
     }

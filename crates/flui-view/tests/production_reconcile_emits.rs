@@ -22,7 +22,7 @@
     reason = "a panic is the failure report in a test scenario"
 )]
 
-use std::{any::TypeId, sync::Arc};
+use std::{any::TypeId, rc::Rc};
 
 use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
@@ -513,11 +513,11 @@ pub(crate) fn object_keys_follow_retained_allocations_through_reorder() {
     ));
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
-    let first = Arc::new(42);
-    let second = Arc::new(42);
-    let first_key = ObjectKey::new(Arc::clone(&first));
-    let second_key = ObjectKey::new(second);
-    let retained = Arc::downgrade(&first);
+    let first = Rc::new(42);
+    let second = Rc::new(42);
+    let first_key = ObjectKey::new(&first);
+    let second_key = ObjectKey::new(&second);
+    let retained = Rc::downgrade(&first);
     drop(first);
     let root = MultiBox::host(
         0,

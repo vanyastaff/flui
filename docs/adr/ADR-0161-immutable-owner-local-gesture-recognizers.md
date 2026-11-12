@@ -95,7 +95,7 @@ external implementations and the built-in recognizers, rather than exposing
 unwired utility types.
 
 ADR-0086's write boundary is preserved. `flui-interaction` does not depend on the
-reactive graph or accept an `EventCx`; widgets capture their presentation's
+reactive graph or accept an `EventContext`; widgets capture their presentation's
 `WriterSource` and open a write while invoking their framework callback. The
 gesture API change does not widen access to writes during build.
 

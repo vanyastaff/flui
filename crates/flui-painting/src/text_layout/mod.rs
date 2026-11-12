@@ -41,7 +41,7 @@ pub(crate) struct SpanPaint<'a> {
     /// The colour filled behind the span's line boxes.
     pub(crate) background: Option<crate::styling::Color>,
     /// The shadows the span's glyphs cast; `None` inherits.
-    pub(crate) shadows: Option<&'a [crate::styling::Shadow<f64>]>,
+    pub(crate) shadows: Option<&'a [crate::styling::Shadow]>,
     /// The lines drawn along the span's text (ADR-0310); `None` inherits.
     pub(crate) decoration: Option<crate::typography::TextDecoration>,
 }

@@ -51,8 +51,8 @@ use super::actions::{EnclosingActions, FocusRecord};
 use super::focus_host::{FocusConfig, FocusHost, FocusNodeOwnership};
 
 /// Reports whether this widget's node gained or lost the primary focus, with
-/// the dispatch's [`EventCx`] (ADR-0086).
-pub type FocusChangeHandler = Rc<dyn Fn(&mut EventCx<'_>, bool)>;
+/// the dispatch's [`EventContext`] (ADR-0086).
+pub type FocusChangeHandler = Rc<dyn Fn(&mut EventContext<'_>, bool)>;
 
 // ============================================================================
 // The ambient scope
@@ -254,7 +254,7 @@ impl Focus {
 
     /// Called with `true`/`false` as this widget's node gains/loses the
     /// primary focus, and the
-    /// dispatch's `&mut EventCx<'_>`, so it writes a signal directly
+    /// dispatch's `&mut EventContext<'_>`, so it writes a signal directly
     /// (ADR-0086): `.on_focus_change(move |ctx, focused| has_focus.set(ctx, focused))`.
     ///
     /// Framework autofocus and reconfiguration run in lifecycle hooks outside
@@ -264,7 +264,7 @@ impl Focus {
     #[must_use]
     pub fn on_focus_change<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
         self.config.on_focus_change = Some(value_callback(handler));
@@ -281,7 +281,7 @@ impl Focus {
     #[must_use]
     pub fn on_visible_focus_change<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
         self.config.on_visible_focus_change = Some(value_callback(handler));
@@ -297,14 +297,14 @@ impl Focus {
     /// to stop the bubbling without consuming (ADR-0023).
     ///
     /// The handler runs after routing, so it receives the dispatch's
-    /// `&mut EventCx<'_>` and may write signals; it keeps its decision as the
+    /// `&mut EventContext<'_>` and may write signals; it keeps its decision as the
     /// return value, so a write's `Result` is not reported for it: call
     /// [`report`](EventOutcome::report) on a write whose refusal should be
     /// logged (ADR-0086 Â§6).
     #[must_use]
     pub fn on_key_event<F>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &KeyEvent) -> KeyEventResult + 'static,
+        F: Fn(&mut EventContext<'_>, &KeyEvent) -> KeyEventResult + 'static,
     {
         self.config.on_key_event = Some(Rc::new(handler));
         self

@@ -12,7 +12,7 @@ use flui_rendering::constraints::AxisDirection::{
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
-    context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
+    context::{PaintContext, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     traits::RenderSliver,
 };
@@ -99,7 +99,7 @@ impl RenderSliver for RenderSliverToBoxAdapter {
         -constraints.scroll_offset
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 

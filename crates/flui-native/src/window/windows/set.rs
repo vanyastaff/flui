@@ -569,7 +569,7 @@ mod open_tests {
     }
 
     fn the_size_is_the_content_and_the_frame_is_added() {
-        let options = WindowOptions::default().with_size(Size::new(800.0, 600.0));
+        let options = WindowOptions::default().size(Size::new(800.0, 600.0));
         let spot = open_spot(&options, None, 1.0, with_frame);
         assert_eq!(spot.outer, (816, 639));
         assert_eq!(spot.origin, None);
@@ -580,8 +580,8 @@ mod open_tests {
         // pixels from its origin, whatever the system scale is.
         let target = display(2.0, (1920, 0));
         let options = WindowOptions::default()
-            .with_size(Size::new(800.0, 600.0))
-            .with_position(Some(Point::new(100.0, 50.0)));
+            .size(Size::new(800.0, 600.0))
+            .position(Some(Point::new(100.0, 50.0)));
         let spot = open_spot(&options, Some(&target), 1.0, with_frame);
         assert_eq!(spot.scale, 2.0);
         assert_eq!(spot.outer, (1600 + 16, 1200 + 39));
@@ -589,7 +589,7 @@ mod open_tests {
     }
 
     fn without_a_display_the_position_is_global_at_the_system_scale() {
-        let options = WindowOptions::default().with_position(Some(Point::new(100.0, 50.0)));
+        let options = WindowOptions::default().position(Some(Point::new(100.0, 50.0)));
         let spot = open_spot(&options, None, 1.5, with_frame);
         assert_eq!(spot.origin, Some((150, 75)));
     }
@@ -597,8 +597,8 @@ mod open_tests {
     fn the_normal_rectangle_is_the_outer_geometry_it_returns_to() {
         let target = display(1.0, (0, 0));
         let options = WindowOptions::default()
-            .with_mode(WindowMode::Maximized)
-            .with_normal_geometry(Some(WindowGeometry::new(
+            .mode(WindowMode::Maximized)
+            .normal_geometry(Some(WindowGeometry::new(
                 Some(Point::new(100.0, 80.0)),
                 Size::new(700.0, 500.0),
             )));
@@ -608,19 +608,19 @@ mod open_tests {
 
     fn a_normal_rectangle_without_a_position_follows_the_windows_own() {
         let options = WindowOptions::default()
-            .with_position(Some(Point::new(30.0, 40.0)))
-            .with_normal_geometry(Some(WindowGeometry::new(None, Size::new(300.0, 200.0))));
+            .position(Some(Point::new(30.0, 40.0)))
+            .normal_geometry(Some(WindowGeometry::new(None, Size::new(300.0, 200.0))));
         let spot = open_spot(&options, None, 1.0, with_frame);
         assert_eq!(spot.normal, Some((30, 40, 330, 240)));
         let unplaced = WindowOptions::default()
-            .with_normal_geometry(Some(WindowGeometry::new(None, Size::new(300.0, 200.0))));
+            .normal_geometry(Some(WindowGeometry::new(None, Size::new(300.0, 200.0))));
         assert_eq!(open_spot(&unplaced, None, 1.0, with_frame).normal, None);
     }
 
     fn an_opening_rectangle_at_the_edge_of_the_range_saturates() {
         let options = WindowOptions::default()
-            .with_mode(WindowMode::Maximized)
-            .with_normal_geometry(Some(WindowGeometry::new(
+            .mode(WindowMode::Maximized)
+            .normal_geometry(Some(WindowGeometry::new(
                 Some(Point::new(3.0e9, 3.0e9)),
                 Size::new(700.0, 500.0),
             )));
@@ -676,8 +676,8 @@ mod open_tests {
         let window = platform
             .open_window(
                 WindowOptions::default()
-                    .with_size(Size::new(640.0, 480.0))
-                    .with_visible(false),
+                    .size(Size::new(640.0, 480.0))
+                    .visible(false),
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("window");
@@ -700,7 +700,7 @@ mod open_tests {
         let platform = crate::WindowsPlatform::try_new().expect("platform");
         let window = platform
             .open_window(
-                WindowOptions::default().with_visible(false),
+                WindowOptions::default().visible(false),
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("window");
@@ -732,8 +732,8 @@ mod open_tests {
         let window = platform
             .open_window(
                 WindowOptions::default()
-                    .with_mode(WindowMode::Maximized)
-                    .with_normal_geometry(Some(WindowGeometry::new(
+                    .mode(WindowMode::Maximized)
+                    .normal_geometry(Some(WindowGeometry::new(
                         Some(Point::new(120.0, 100.0)),
                         Size::new(700.0, 500.0),
                     ))),
@@ -762,9 +762,9 @@ mod open_tests {
         let window = platform
             .open_window(
                 WindowOptions::default()
-                    .with_size(Size::new(640.0, 480.0))
-                    .with_position(Some(Point::new(150.0, 120.0)))
-                    .with_visible(false),
+                    .size(Size::new(640.0, 480.0))
+                    .position(Some(Point::new(150.0, 120.0)))
+                    .visible(false),
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("window");

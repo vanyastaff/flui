@@ -73,7 +73,7 @@ impl Slider {
     #[must_use]
     pub fn on_changed<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, f64) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, f64) -> R + 'static,
         R: EventOutcome,
     {
         let callback = Terminal::new(callback);
@@ -141,13 +141,13 @@ impl Live {
             && size.height.is_finite()
             && size.height > 0.0
     }
-    fn admits_context(&self, ctx: &EventCx<'_>) -> bool {
+    fn admits_context(&self, ctx: &EventContext<'_>) -> bool {
         self.writer
             .borrow()
             .as_ref()
             .is_some_and(|writer| writer.check_context(ctx).is_ok())
     }
-    fn propose(&self, ctx: &mut EventCx<'_>, value: f64) {
+    fn propose(&self, ctx: &mut EventContext<'_>, value: f64) {
         if !self.usable() || !self.admits_context(ctx) || !self.range.get().contains(value) {
             return;
         }
@@ -156,12 +156,12 @@ impl Live {
             callback(ctx, value);
         }
     }
-    fn request_focus(&self, ctx: &EventCx<'_>) {
+    fn request_focus(&self, ctx: &EventContext<'_>) {
         if self.usable() && self.admits_context(ctx) {
             let _ = self.focus.request_focus();
         }
     }
-    fn at_pointer(&self, ctx: &mut EventCx<'_>, x: f64) {
+    fn at_pointer(&self, ctx: &mut EventContext<'_>, x: f64) {
         if !self.pointer_usable() || !self.admits_context(ctx) || !x.is_finite() {
             return;
         }
@@ -178,7 +178,7 @@ impl Live {
         }
         self.propose(ctx, interpolate(self.range.get(), fraction));
     }
-    fn stepped(&self, ctx: &mut EventCx<'_>, increase: bool) {
+    fn stepped(&self, ctx: &mut EventContext<'_>, increase: bool) {
         let range = self.range.get();
         let sum = if increase {
             range.value() + range.step()

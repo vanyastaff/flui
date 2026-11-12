@@ -234,7 +234,7 @@ of its own.
   - declares a `pub use` or `pub mod`, or sits inside a `pub use` that spans several lines (read
     from the blob on its side of the diff), which decides what the facade re-exports;
   - names, in the file that defines an item the list names, a segment of that item's path
-    there (`AppConfig`, `with_memory_reclaim`), so a rename or a move on a line apart from the
+    there (`AppConfig`, `memory_reclaim`), so a rename or a move on a line apart from the
     bound is seen. An implementation's entry (`impl Trait for Type`) resolves each path it
     holds.
 

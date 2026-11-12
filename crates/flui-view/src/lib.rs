@@ -234,9 +234,10 @@ pub use owner::{
     RebuildReasons, RecoveredAt, RecoveredPanic, UnmountHook,
 };
 pub use reactive::{
-    BuildInProgress, EventContextError, EventCx, EventError, EventOutcome, Reactive, ReadGraph,
-    ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot, SignalWriteExt,
-    SlotInfo, WriteTarget, Writer, WriterSource, callback, callback_ref, callback_with,
+    BuildInProgress, EventContext, EventContextError, EventError, EventOutcome, Reactive,
+    ReadGraph, ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot,
+    SignalWriteExt, SlotInfo, WriteTarget, Writer, WriterSource, callback, callback_ref,
+    callback_with,
 };
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
@@ -295,7 +296,7 @@ pub mod prelude {
     // the source a widget opens it from, the outcome a callback reports, and
     // the helpers that fix a `let`-bound callback's signature (ADR-0086).
     pub use crate::reactive::{
-        EventContextError, EventCx, EventError, EventOutcome, Signal, WriterSource, callback,
+        EventContext, EventContextError, EventError, EventOutcome, Signal, WriterSource, callback,
         callback_ref, callback_with,
     };
     pub use crate::{
