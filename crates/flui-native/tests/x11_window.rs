@@ -57,6 +57,10 @@ mod cases {
 
     const CASES: &[(&str, fn())] = &[
         (
+            "the_host_runs_its_io_on_the_runtime_it_is_handed",
+            the_host_runs_its_io_on_the_runtime_it_is_handed,
+        ),
+        (
             "a_decorated_window_is_placed_and_measured_by_its_frame",
             a_decorated_window_is_placed_and_measured_by_its_frame,
         ),
@@ -1031,5 +1035,38 @@ mod cases {
             .filter(|call| matches!(call, HandlerCall::FrameRequested(_)))
             .count();
         assert_eq!(frames, 1, "the deadline asked for one frame");
+    }
+
+    /// A host started on a runtime its creator lends runs its IO there (ADR-0327 §3): the
+    /// input-method bus's task is the lent runtime's, and it ends when the platform is dropped.
+    fn the_host_runs_its_io_on_the_runtime_it_is_handed() {
+        let lent = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("lent-io")
+            .enable_all()
+            .build()
+            .expect("a lent runtime");
+        let metrics = lent.handle().metrics();
+        assert_eq!(metrics.num_alive_tasks(), 0, "the lent runtime starts idle");
+
+        let platform = flui_native::CurrentHost::X11
+            .start_with(flui_native::NativeExecutor::from_tokio(
+                lent.handle().clone(),
+            ))
+            .expect("the X11 platform");
+        assert!(
+            metrics.num_alive_tasks() >= 1,
+            "the host's input-method bus runs on the lent runtime"
+        );
+
+        drop(platform);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while metrics.num_alive_tasks() > 0 {
+            assert!(
+                Instant::now() < deadline,
+                "the host's tasks end when the platform is dropped"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }

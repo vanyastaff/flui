@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use crate::accessibility::linux::UnixAccessibility;
 use crate::error::PlatformError;
-use crate::executor::BackgroundExecutor;
+use crate::executor::NativeExecutor;
 use crate::host::{Absent, Host, position};
 use crate::lifecycle::linux::HostNoticeSource;
 use crate::lifecycle::notice::SystemNotices;
@@ -46,15 +46,12 @@ fn system_notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
 }
 
 /// The Settings portal on the session bus, for both hosts.
-fn portal(executor: &BackgroundExecutor, signal: &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences> {
+fn portal(executor: &NativeExecutor, signal: &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences> {
     PreferenceSource::new(executor, signal)
 }
 
 /// logind on the system bus and the kernel's memory pressure, for both hosts.
-fn session_notices(
-    executor: &BackgroundExecutor,
-    signal: &Arc<OwnerSignal>,
-) -> Arc<dyn LinuxNotices> {
+fn session_notices(executor: &NativeExecutor, signal: &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices> {
     Arc::new(HostNoticeSource::start(executor, signal))
 }
 
@@ -63,9 +60,8 @@ mod wayland {
     use std::sync::Arc;
 
     use super::{
-        Absent, AppDelivery, BackgroundExecutor, Host, HostPlatform, LinuxNotices,
-        LinuxPreferences, NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility,
-        UserDataDirs, position,
+        Absent, AppDelivery, Host, HostPlatform, LinuxNotices, LinuxPreferences, NativeExecutor,
+        NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility, UserDataDirs, position,
     };
     use crate::clipboard::linux::wayland::SeatClipboard;
     use crate::display::linux::protocol::Environment;
@@ -137,14 +133,14 @@ mod wayland {
         }
 
         fn preferences(
-            executor: &BackgroundExecutor,
+            executor: &NativeExecutor,
             signal: &Arc<OwnerSignal>,
         ) -> Arc<dyn LinuxPreferences> {
             super::portal(executor, signal)
         }
 
         fn host_notices(
-            executor: &BackgroundExecutor,
+            executor: &NativeExecutor,
             signal: &Arc<OwnerSignal>,
         ) -> Arc<dyn LinuxNotices> {
             super::session_notices(executor, signal)
@@ -165,6 +161,12 @@ mod wayland {
         /// compositor answers on it, libwayland cannot be loaded, or the
         /// compositor lacks the globals a window needs.
         pub fn try_new() -> Result<Self, PlatformError> {
+            Self::try_new_with(NativeExecutor::own())
+        }
+
+        /// [`try_new`](Self::try_new) on `executor`'s runtime, as
+        /// [`CurrentHost::start_with`](crate::CurrentHost::start_with) starts it.
+        pub(crate) fn try_new_with(executor: NativeExecutor) -> Result<Self, PlatformError> {
             let socket = Environment::current()
                 .wayland_socket_path()
                 .ok_or_else(|| PlatformError::Init {
@@ -173,7 +175,7 @@ mod wayland {
                         .to_owned(),
                 })?;
             Self::try_from_parts(WaylandWindows::new, |_| {
-                WaylandLoop::try_new::<Wayland>(&socket)
+                WaylandLoop::try_new::<Wayland>(&socket, executor)
             })
         }
     }
@@ -184,9 +186,8 @@ mod x11 {
     use std::sync::Arc;
 
     use super::{
-        Absent, AppDelivery, BackgroundExecutor, Host, HostPlatform, LinuxNotices,
-        LinuxPreferences, NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility,
-        UserDataDirs, position,
+        Absent, AppDelivery, Host, HostPlatform, LinuxNotices, LinuxPreferences, NativeExecutor,
+        NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility, UserDataDirs, position,
     };
     use crate::clipboard::linux::x11::X11Clipboard;
     use crate::display::linux::source::LinuxDisplays;
@@ -235,14 +236,14 @@ mod x11 {
         }
 
         fn preferences(
-            executor: &BackgroundExecutor,
+            executor: &NativeExecutor,
             signal: &Arc<OwnerSignal>,
         ) -> Arc<dyn LinuxPreferences> {
             super::portal(executor, signal)
         }
 
         fn host_notices(
-            executor: &BackgroundExecutor,
+            executor: &NativeExecutor,
             signal: &Arc<OwnerSignal>,
         ) -> Arc<dyn LinuxNotices> {
             super::session_notices(executor, signal)
@@ -258,7 +259,7 @@ mod x11 {
         /// the background executor.
         fn text(
             connection: &Arc<X11Connection>,
-            executor: &BackgroundExecutor,
+            executor: &NativeExecutor,
             doorbell: &Doorbell,
         ) -> Arc<dyn LoopText> {
             X11Ime::start(connection, executor, doorbell)
@@ -309,12 +310,18 @@ mod x11 {
         /// [`PlatformError::Init`] when libxcb cannot be loaded, no X server
         /// answers, or the loop's wake descriptor cannot be made.
         pub fn try_new() -> Result<Self, PlatformError> {
+            Self::try_new_with(NativeExecutor::own())
+        }
+
+        /// [`try_new`](Self::try_new) on `executor`'s runtime, as
+        /// [`CurrentHost::start_with`](crate::CurrentHost::start_with) starts it.
+        pub(crate) fn try_new_with(executor: NativeExecutor) -> Result<Self, PlatformError> {
             let connection = X11Connection::connect()?;
             let atoms = WindowAtoms::intern(&connection)?;
             let windows = Arc::clone(&connection);
             Self::try_from_parts(
                 |positions| X11Windows::new(positions, windows, atoms),
-                |windows| X11Loop::try_new::<X11>(connection, Arc::clone(windows) as _),
+                |windows| X11Loop::try_new::<X11>(connection, Arc::clone(windows) as _, executor),
             )
         }
     }
