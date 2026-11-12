@@ -50,11 +50,13 @@ workspace crates they name, and it adds no tool: it reads rustdoc's JSON through
 
 `api/flui.txt` lists, one line each, what a user can name through `flui` with every feature on, as
 the Linux host builds it: each module; each type with its public fields or variants and whether it
-has private fields; each function with its signature; constants, statics, type aliases and macros;
-under a type, its public inherent items and every trait implementation an author wrote, with the
-associated types it sets; under a trait, its items and its implementations for types nothing else
-lists (a blanket `impl<T: Send> Trait for T`). `#[non_exhaustive]` and `#[deprecated]` are written
-on the line, because they change what a user may write.
+has private fields, each field and variant with its place in the declaration (a reorder moves field
+offsets under `#[repr(C)]`, implicit discriminants and derived orderings); each function with its
+signature; constants, statics, type aliases and macros; under a type, its public inherent items and
+every trait implementation an author wrote, with the associated types it sets; under a trait, its
+items and its implementations for types nothing else lists (a blanket `impl<T: Send> Trait for T`).
+`#[non_exhaustive]`, `#[deprecated]` and a `#[repr]` other than Rust's are written on the line,
+because they change what a user may write or what a layout guarantees.
 
 An item gets one path, the first the walk finds in order of path length; each other path to it is
 a `reexport` line naming that one, so the prelude adds one line per name and not a copy of each

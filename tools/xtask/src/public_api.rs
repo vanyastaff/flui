@@ -567,14 +567,14 @@ impl Surface {
                     .or_else(|| inner.get("fields").map(|_| inner))
                 {
                     let mut private = plain["has_stripped_fields"].as_bool() == Some(true);
-                    for id in send_positions::ids(&plain["fields"]) {
+                    for (position, id) in send_positions::ids(&plain["fields"]).enumerate() {
                         let field = &index[&id];
                         if !send_positions::public(field) || hidden(field) {
                             private = true;
                             continue;
                         }
                         members.push(format!(
-                            "field {path}::{}: {}",
+                            "field {path}::{}: {} // at {position}",
                             field["name"].as_str().unwrap_or("?"),
                             render::ty(&names, &field["inner"]["struct_field"])
                         ));
@@ -597,12 +597,12 @@ impl Surface {
             }
             "enum" => {
                 let generics = &inner["generics"];
-                for id in send_positions::ids(&inner["variants"]) {
+                for (position, id) in send_positions::ids(&inner["variants"]).enumerate() {
                     let variant = &index[&id];
                     if hidden(variant) {
                         continue;
                     }
-                    members.push(variant_line(&names, index, path, variant));
+                    members.push(variant_line(&names, index, path, variant, position));
                 }
                 members.extend(self.render_impls(key, path, &inner["impls"], written));
                 format!(
@@ -889,8 +889,9 @@ fn hidden(item: &Json) -> bool {
         })
 }
 
-/// The attributes a line states: `#[deprecated]` and `#[non_exhaustive]`,
-/// the ones that change what a user may write.
+/// The attributes a line states: `#[deprecated]`, `#[non_exhaustive]` and a
+/// `#[repr]` other than Rust's,
+/// the ones that change what a user may write or what a layout guarantees.
 fn attributes(item: &Json) -> String {
     let mut text = String::new();
     if !item["deprecation"].is_null() {
@@ -908,7 +909,38 @@ fn attributes(item: &Json) -> String {
     if non_exhaustive {
         text.push_str("#[non_exhaustive] ");
     }
+    for attribute in item["attrs"].as_array().into_iter().flatten() {
+        if let Some(repr) = attribute.get("repr") {
+            text.push_str(&representation(repr));
+        }
+    }
     text
+}
+
+/// `#[repr(C, u8, align(8))] ` for a representation other than Rust's own,
+/// which fixes field offsets, discriminants or alignment; nothing for the
+/// default one.
+fn representation(repr: &Json) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    match repr["kind"].as_str() {
+        Some("rust") | None => {}
+        Some("c") => parts.push("C".to_owned()),
+        Some(kind) => parts.push(kind.to_owned()),
+    }
+    if let Some(int) = repr["int"].as_str() {
+        parts.push(int.to_owned());
+    }
+    if let Some(align) = repr["align"].as_u64() {
+        parts.push(format!("align({align})"));
+    }
+    if let Some(packed) = repr["packed"].as_u64() {
+        parts.push(format!("packed({packed})"));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("#[repr({})] ", parts.join(", "))
+    }
 }
 
 /// ` = 3` for a literal constant; nothing for a computed one, whose text is
@@ -923,8 +955,15 @@ fn literal(constant: &Json) -> String {
     }
 }
 
-/// One variant of the enum at `path`.
-fn variant_line(names: &Namer<'_>, index: &Json, path: &str, variant: &Json) -> String {
+/// One variant of the enum at `path`, with its place in the declaration,
+/// which fixes implicit discriminants and derived orderings.
+fn variant_line(
+    names: &Namer<'_>,
+    index: &Json,
+    path: &str,
+    variant: &Json,
+    position: usize,
+) -> String {
     let name = variant["name"].as_str().unwrap_or("?");
     let data = &variant["inner"]["variant"];
     let kind = &data["kind"];
@@ -967,7 +1006,7 @@ fn variant_line(names: &Namer<'_>, index: &Json, path: &str, variant: &Json) -> 
         .as_str()
         .map_or_else(String::new, |expr| format!(" = {expr}"));
     format!(
-        "{}variant {path}::{name}{shape}{discriminant}",
+        "{}variant {path}::{name}{shape}{discriminant} // at {position}",
         attributes(variant)
     )
 }
@@ -1093,7 +1132,7 @@ pub mod fixture
 pub trait fixture::Bounded: Send
 pub type fixture::Callback = dyn Send
 pub struct fixture::S { .. }
-field fixture::S::payload: dyn Send
+field fixture::S::payload: dyn Send // at 0
 impl Sync for fixture::S
 pub trait fixture::Sealed: fixture::sealed::Base
 impl<T: Send> fixture::Sealed for T
@@ -1193,7 +1232,7 @@ mod tests {
         let f64_point = json!({ "resolved_path": { "path": "Point", "id": 3,
             "args": { "angle_bracketed": { "args": [{ "type": { "primitive": "f64" } }], "constraints": [] } } } });
         let index: serde_json::Map<String, Json> = [
-            entry(0, Some("lib"), "public", json!({ "module": { "is_crate": true, "items": [1, 2, 3, 10, 20], "is_stripped": false } })),
+            entry(0, Some("lib"), "public", json!({ "module": { "is_crate": true, "items": [1, 2, 3, 10, 20, 40, 50], "is_stripped": false } })),
             entry(1, Some("Inspect"), "public", json!({ "trait": { "is_auto": false, "is_unsafe": false, "is_dyn_compatible": true,
                 "items": [11, 12], "generics": no_generics(), "bounds": [], "implementations": [] } })),
             entry(2, Some("Inspect"), "public", json!({ "use": { "source": "lib_macros::Inspect", "name": "Inspect", "id": 90, "is_glob": false } })),
@@ -1213,6 +1252,22 @@ mod tests {
                 "trait": null, "for": { "resolved_path": { "path": "Inner", "id": 30, "args": null } }, "items": [32],
                 "is_negative": false, "is_synthetic": false, "blanket_impl": null } })),
             method("layout_child", 32),
+            {
+                let mut size = entry(40, Some("Size"), "public", json!({ "struct": { "kind": { "plain": { "fields": [41, 42], "has_stripped_fields": false } },
+                    "generics": no_generics(), "impls": [] } }));
+                size.1["attrs"] = json!([{ "repr": { "kind": "c", "align": null, "packed": null, "int": null } }]);
+                size
+            },
+            entry(41, Some("width"), "public", json!({ "struct_field": { "primitive": "f64" } })),
+            entry(42, Some("height"), "public", json!({ "struct_field": { "primitive": "f64" } })),
+            {
+                let mut axis = entry(50, Some("Axis"), "public", json!({ "enum": { "generics": no_generics(), "variants": [51, 52],
+                    "has_stripped_variants": false, "impls": [] } }));
+                axis.1["attrs"] = json!([{ "repr": { "kind": "rust", "align": null, "packed": null, "int": "u8" } }]);
+                axis
+            },
+            entry(51, Some("Horizontal"), "public", json!({ "variant": { "kind": "plain", "discriminant": null } })),
+            entry(52, Some("Vertical"), "public", json!({ "variant": { "kind": "plain", "discriminant": null } })),
         ]
         .into_iter()
         .collect();
@@ -1224,6 +1279,8 @@ mod tests {
                 "3": { "crate_id": 0, "path": ["lib", "Point"], "kind": "struct" },
                 "10": { "crate_id": 0, "path": ["lib", "Context"], "kind": "type_alias" },
                 "30": { "crate_id": 0, "path": ["lib", "hidden", "Inner"], "kind": "struct" },
+                "40": { "crate_id": 0, "path": ["lib", "Size"], "kind": "struct" },
+                "50": { "crate_id": 0, "path": ["lib", "Axis"], "kind": "enum" },
                 "90": { "crate_id": 1, "path": ["lib_macros", "Inspect"], "kind": "proc_derive" },
             },
             "external_crates": { "1": { "name": "lib_macros", "html_root_url": null } },
@@ -1232,7 +1289,7 @@ mod tests {
     }
 
     #[test]
-    fn public_api_writes_namespaces_specializations_defaults_and_aliased_types() {
+    fn public_api_writes_namespaces_specializations_defaults_aliased_types_and_layout() {
         let mut load =
             |lib: &str| -> anyhow::Result<Option<Json>> { Ok((lib == "lib").then(shapes)) };
         let mut surface = Surface::default();
@@ -1251,6 +1308,14 @@ mod tests {
             "pub type lib::Context = lib::hidden::Inner",
             "pub struct lib::hidden::Inner;",
             "pub fn lib::hidden::Inner::layout_child(self)",
+            // A representation that fixes the layout, and each field's and
+            // variant's place in the declaration, so a reorder is a diff.
+            "#[repr(C)] pub struct lib::Size",
+            "field lib::Size::width: f64 // at 0",
+            "field lib::Size::height: f64 // at 1",
+            "#[repr(u8)] pub enum lib::Axis",
+            "variant lib::Axis::Horizontal // at 0",
+            "variant lib::Axis::Vertical // at 1",
         ] {
             assert!(
                 text.lines().any(|candidate| candidate == line),
