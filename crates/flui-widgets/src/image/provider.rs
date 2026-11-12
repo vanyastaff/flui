@@ -610,8 +610,8 @@ fn read_file(path: &std::path::Path) -> Result<Vec<u8>, ImageProviderError> {
 // ---------------------------------------------------------------------------
 
 /// Decodes encoded bytes (PNG, JPEG, GIF) into a [`PixelImage`] through
-/// [`PixelImage::decode`], which refuses an image past its decoded-size limit
-/// before decoding it.
+/// `PixelImage::decode` (flui-painting's `decode` feature), which refuses an
+/// image past its decoded-size limit before decoding it.
 ///
 /// Gated on the `images` feature. Returns
 /// [`ImageProviderError::DecoderUnavailable`] when the feature is absent so
