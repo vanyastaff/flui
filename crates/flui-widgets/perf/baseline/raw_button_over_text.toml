@@ -7,6 +7,6 @@ bytes = 4966
 elements = 2
 reallocations = 2
 render_nodes = 1
-text_allocations = 55
+text_allocations = 54
 text_bytes = 9626
 text_reallocations = 2
