@@ -63,8 +63,8 @@ live plugin-backed values safe.
 `flui_sdk::view::dev_reload::DevReloadHook` twice, and the application installs
 one with `AppConfig::dev_reload`. Both sit behind the `host-hook` feature, which
 only compiles the hooks: `flui-sdk` is a normal dependency of every build (ADR-0311 §6), so
-a scene plugin or worker `cdylib` on the default features links the SDK but builds no hook
-and no watcher. The module is also compiled under `cfg(test)`, so its unit tests run
+a scene plugin or worker `cdylib` on the default features links the SDK but builds no
+hook. The module is also compiled under `cfg(test)`, so its unit tests run
 without the feature:
 
 - `WorkerReloadHook` owns the `WorkerReloadDriver`. `attach` starts the
