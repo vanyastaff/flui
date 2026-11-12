@@ -87,9 +87,11 @@ pub trait SlotBackend {
     /// §8). The executor calls it only while [`device_lost`](Self::device_lost)
     /// answers `true`, paced by the context's backoff.
     ///
-    /// Answers the slots the new device cannot present to, each with why:
-    /// their surface was dropped, and the owner sends another in a
-    /// [`RasterCommand::Restore`](super::RasterCommand::Restore).
+    /// Answers the slots the new device cannot serve, each with why: a window
+    /// whose surface was dropped or failed to configure, for which the owner
+    /// sends another in a
+    /// [`RasterCommand::Restore`](super::RasterCommand::Restore), or a slot over
+    /// the new device's size limit, which waits for a size that fits.
     ///
     /// # Errors
     /// No device could be made; the device stays lost.

@@ -473,9 +473,11 @@ impl<B: SlotBackend> RasterExecutor<B> {
             };
             let extra = {
                 let mut state = slot.inbox.lock();
-                // A window slot dropped its surface; an offscreen slot waits
-                // for a size its new device can make.
-                state.wants_surface |= slot.window;
+                // A window slot dropped its surface or failed to configure it,
+                // and the owner makes another; a slot over the new device's
+                // limit, window or offscreen, waits for a size that fits.
+                state.wants_surface |=
+                    slot.window && !matches!(error, EngineError::InvalidTargetSize { .. });
                 state.hold_failure(SlotFailure::Refused(error))
             };
             retire(None, extra, first);

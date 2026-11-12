@@ -396,7 +396,9 @@ executor runs each command under its own catch, in both placements.
   `EngineError::IncompatibleSurface` at that slot's address, an error of that slot and not of
   the context. A slot whose reconfigure fails settles `SurfaceStale`, and its
   record asks the owner for a new surface, which the owner makes with the factory and sends in a
-  `Restore`. Each slot redraws in full and re-uploads its external textures from its registry
+  `Restore`. A slot over the new device's size limit keeps its surface unconfigured and holds
+  `InvalidTargetSize` until a resize fits, as an offscreen slot does. Each slot redraws in full
+  and re-uploads its external textures from its registry
   (ADR-0233).
 - On the web the rebuild is a future the owner spawns; frames settle `DeviceLost` until it ends.
 

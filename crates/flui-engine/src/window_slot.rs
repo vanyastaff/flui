@@ -230,7 +230,9 @@ impl WindowSlot {
     /// # Errors
     /// [`EngineError::IncompatibleSurface`] when the new adapter cannot
     /// present to the surface, which is then dropped for the owner to
-    /// replace; a configuration error.
+    /// replace; [`EngineError::InvalidTargetSize`] when the slot's size is over
+    /// the new device's limit, which leaves the surface unconfigured until a
+    /// resize fits; a configuration error.
     pub(crate) fn rebuild(&mut self, gpu: &Gpu<'_>) -> EngineResult<()> {
         self.configured = None;
         self.recovery.reset();
@@ -242,6 +244,14 @@ impl WindowSlot {
         if let Err(error) = presentable(gpu, &self.lease) {
             let _released = self.lease.release();
             return Err(error);
+        }
+        let max = gpu.device.limits().max_texture_dimension_2d;
+        if let Some((width, height)) = self.size
+            && (width > max || height > max)
+        {
+            // The new device's limit is below the size the old one took: the
+            // slot keeps its surface, unconfigured, until a resize fits.
+            return Err(EngineError::InvalidTargetSize { width, height });
         }
         self.configure(gpu)
     }

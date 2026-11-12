@@ -554,3 +554,38 @@ fn a_window_the_rebuilt_device_cannot_present_to_asks_for_a_new_surface() {
     assert_eq!(rig.verdicts(slot), [(1, RasterVerdict::Presented)]);
     assert!(!rig.sender.record(slot).expect("held").wants_surface);
 }
+
+/// A window over the rebuilt device's size limit keeps its surface: its
+/// record holds why and asks for no new surface, and a size that fits
+/// renders again.
+#[test]
+fn a_window_over_the_rebuilt_device_limit_waits_for_a_size_that_fits() {
+    let mut rig = rig();
+    let (slot, _) = rig.sized_window();
+    rig.backend.lose_device();
+    rig.backend.refuse_on_rebuild(
+        slot,
+        EngineError::InvalidTargetSize {
+            width: 32,
+            height: 16,
+        },
+    );
+    let _ = rig.executor.turn();
+    assert!(
+        !rig.sender.record(slot).expect("held").wants_surface,
+        "the surface is kept"
+    );
+    assert!(matches!(
+        rig.sender.take_failure(slot),
+        Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
+    ));
+    let SendReceipt::Configured(resized) = rig.send(RasterCommand::Configure {
+        slot,
+        change: SlotChange::Size(DeviceSize::new(16, 8)),
+    }) else {
+        panic!("a positive size mints a generation");
+    };
+    let _ = rig.frame(slot, resized, 1);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(1, RasterVerdict::Presented)]);
+}
