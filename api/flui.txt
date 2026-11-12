@@ -28178,9 +28178,17 @@ pub fn flui_layer::link::LayerLink::new() -> Self
 pub struct flui_layer::scene::Scene { .. }
 impl Default for flui_layer::scene::Scene
 impl core::fmt::Debug for flui_layer::scene::Scene
+pub fn flui_layer::scene::Scene::content(&self) -> flui_layer::scene::SceneContent<'_>
 pub fn flui_layer::scene::Scene::new(tree: flui_layer::tree::layer_tree::LayerTree) -> Self
-pub fn flui_layer::scene::Scene::root(&self) -> flui::foundation::LayerId
-pub fn flui_layer::scene::Scene::tree(&self) -> &flui_layer::tree::layer_tree::LayerTree
+pub fn flui_layer::scene::Scene::of_version(version: flui_layer::scene::version::SceneVersion) -> Self
+pub fn flui_layer::scene::Scene::tree(&self) -> Option<&flui_layer::tree::layer_tree::LayerTree>
+pub fn flui_layer::scene::Scene::version(&self) -> Option<&flui_layer::scene::version::SceneVersion>
+pub enum flui_layer::scene::SceneContent<'a>
+impl<'a> Clone for flui_layer::scene::SceneContent<'a>
+impl<'a> Copy for flui_layer::scene::SceneContent<'a>
+impl<'a> core::fmt::Debug for flui_layer::scene::SceneContent<'a>
+variant flui_layer::scene::SceneContent::Tree(&'a flui_layer::tree::layer_tree::LayerTree) // at 0
+variant flui_layer::scene::SceneContent::Version(&'a flui_layer::scene::version::SceneVersion) // at 1
 pub struct flui_layer::scene::content::BoundaryContent { .. }
 impl Default for flui_layer::scene::content::BoundaryContent
 impl core::fmt::Debug for flui_layer::scene::content::BoundaryContent
@@ -28232,6 +28240,7 @@ impl Eq for flui_layer::scene::content::EntryIndex
 impl Ord for flui_layer::scene::content::EntryIndex
 impl PartialEq for flui_layer::scene::content::EntryIndex
 impl PartialOrd for flui_layer::scene::content::EntryIndex
+impl TryFrom<usize> for flui_layer::scene::content::EntryIndex { type Error = core::num::error::TryFromIntError; }
 impl core::fmt::Debug for flui_layer::scene::content::EntryIndex
 impl core::hash::Hash for flui_layer::scene::content::EntryIndex
 impl core::marker::StructuralPartialEq for flui_layer::scene::content::EntryIndex
@@ -28343,6 +28352,7 @@ pub fn flui_layer::scene::version::SceneNode::placement(self) -> flui_layer::sce
 pub struct flui_layer::scene::version::SceneVersion(_)
 impl Clone for flui_layer::scene::version::SceneVersion
 impl core::fmt::Debug for flui_layer::scene::version::SceneVersion
+pub fn flui_layer::scene::version::SceneVersion::close_damage(&self, region: flui_layer::scene_snapshot::DamageRegion, surface: (u32, u32)) -> flui_layer::scene_snapshot::DamageRegion
 pub fn flui_layer::scene::version::SceneVersion::filtered_nodes(&self) -> impl Iterator<Item = flui_layer::scene::id::SceneNodeId> + '_
 pub fn flui_layer::scene::version::SceneVersion::find_annotation<T: core::any::Any + Send + Sync>(&self, point: flui::geometry::Point<f64>) -> Option<alloc::rcs::arc::Arc<T>>
 pub fn flui_layer::scene::version::SceneVersion::flatten(&self) -> flui_layer::tree::layer_tree::LayerTree
@@ -28358,7 +28368,11 @@ pub fn flui_layer::scene::version::SceneVersion::len(&self) -> usize
 pub fn flui_layer::scene::version::SceneVersion::node(&self, id: flui_layer::scene::id::SceneNodeId) -> Option<flui_layer::scene::version::SceneNode<'_>>
 pub fn flui_layer::scene::version::SceneVersion::nodes(&self) -> impl Iterator<Item = flui_layer::scene::version::SceneNode<'_>> + '_
 pub fn flui_layer::scene::version::SceneVersion::root(&self) -> flui_layer::scene::id::SceneNodeId
+pub fn flui_layer::scene::version::SceneVersion::subtree_cull(&self, rect: flui::geometry::Rect<f64>) -> flui_layer::scene::version::SubtreeCull<'_>
 pub fn flui_layer::scene::version::SceneVersion::texture_users(&self, texture: flui::painting::paint::TextureId) -> impl Iterator<Item = flui_layer::scene::version::EntryAddress> + '_
+pub struct flui_layer::scene::version::SubtreeCull<'v> { .. }
+impl core::fmt::Debug for flui_layer::scene::version::SubtreeCull<'_>
+pub fn flui_layer::scene::version::SubtreeCull::meets(&mut self, node: flui_layer::scene::id::SceneNodeId) -> bool // impl<'v> flui_layer::scene::version::SubtreeCull<'v>
 pub struct flui_layer::scene_snapshot::DamageRect { .. }
 impl Clone for flui_layer::scene_snapshot::DamageRect
 impl Copy for flui_layer::scene_snapshot::DamageRect
