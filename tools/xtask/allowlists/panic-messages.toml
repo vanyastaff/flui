@@ -181,10 +181,6 @@ path = "crates/flui-widgets/src/overlay/mod.rs"
 count = 1
 
 [[allow]]
-path = "packages/flui-material/src/ink_well.rs"
-count = 1
-
-[[allow]]
 path = "packages/flui-material/src/scaffold.rs"
 count = 1
 
