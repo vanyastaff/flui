@@ -147,8 +147,9 @@ not SDK surface.
   plus the target crates of its dlopen loader. A plugin image mounts its view tree on
   `hooks::PluginPipeline`, which keeps the binding, pipeline owner and layer tree behind one
   `draw_frame` call and reports a frame that drew nothing as `hooks::PluginFrameError`; the
-  image returns `hooks::Scene`, built from `hooks::LayerTree`, and shares the host's text
-  context through `hooks::TextContextHandle`. The facade names none of them.
+  image returns `hooks::Scene`, built from `hooks::LayerTree`, and measures text through a
+  `hooks::TextContextHandle` of its own (`standalone()`: the host's context cannot cross the
+  dlopen boundary, see the package's ARCHITECTURE). The facade names none of them.
 
 The kind rule of `cargo xtask workspace` (ADR-0081 §3, ADR-0088 §2) keeps the four
 manifests on the SDK: an official package's normal and build dependencies are `flui-sdk` and
