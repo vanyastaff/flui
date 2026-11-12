@@ -95,9 +95,6 @@ flui-foundation = { workspace = true, features = ["testing"] }
 # The widget catalog, for the tests that drive a presentation through real
 # widgets; the runtime itself names no widget.
 flui-widgets = { workspace = true }
-# Arbitrary bytes on the agent's wire (`agent_service`); the nightly run
-# raises `PROPTEST_CASES`.
-proptest = { workspace = true }
 # `flui_interaction::events::make_*_event`, the synthetic pointer events the
 # held-input tests queue.
 flui-interaction = { workspace = true, features = ["testing"] }
@@ -125,6 +122,12 @@ flui-view = { workspace = true, features = ["testing"] }
 # `testing::font_collection_holders`, which pins who holds the app's font
 # collection and when a UI runtime lets go of it.
 flui-painting = { workspace = true, features = ["testing"] }
+
+# Arbitrary bytes on the agent's wire (`agent_service`); the nightly run
+# raises `PROPTEST_CASES`. Not on wasm32: its random source, getrandom, has
+# no backend there without a feature this crate does not ship.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest = { workspace = true }
 
 # Executing wasm32 unit tests: the execution services' sequential backend is
 # pinned by lib tests that run on wasm32 (`cargo xtask wasm-test`). Pinned to

@@ -24,6 +24,7 @@ use flui_view::persist::{
 };
 use flui_view::prelude::*;
 use flui_view::{CloseGuard, CloseReason};
+#[cfg(not(target_arch = "wasm32"))]
 use proptest::prelude::*;
 
 /// The document under test: one line of text.
@@ -497,6 +498,7 @@ fn a_load_reports_each_stored_state() {
 /// leave: raw bytes, and headers whose every field is steered toward the
 /// edges (another magic, another name, a version or revision that is
 /// negative, past `u64`, or not a number, odd separators).
+#[cfg(not(target_arch = "wasm32"))]
 fn foreign_document() -> impl Strategy<Value = Vec<u8>> {
     let field = || {
         prop_oneof![
@@ -532,6 +534,7 @@ fn foreign_document() -> impl Strategy<Value = Vec<u8>> {
     prop_oneof![proptest::collection::vec(any::<u8>(), 0..80), header]
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: ProptestConfig::default().cases / 4,

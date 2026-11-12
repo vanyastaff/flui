@@ -86,8 +86,6 @@ flui-foundation = { workspace = true, features = ["testing"] }
 criterion = { workspace = true }
 # The `serde` round trip of `Revision`.
 serde_json = { workspace = true }
-# Arbitrary stored bytes for the persisted-document load.
-proptest = { workspace = true }
 # Enable flui-rendering's `testing` feature for unit tests so the
 # layout-builder tests can read committed geometry back off the pipeline
 # (`testing::box_geometry`). Dev-only; stays out of release builds.
@@ -110,6 +108,12 @@ serial_test = "4"
 # trybuild drives the `tests/ui/` compile-fail corpus: the
 # `#[diagnostic::on_unimplemented]` messages on the view traits.
 trybuild = { workspace = true }
+
+# Arbitrary stored bytes for the persisted-document load. Not on wasm32: its
+# random source, getrandom, has no backend there without a feature this crate
+# does not ship.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest = { workspace = true }
 
 [[test]]
 name = "view_it"

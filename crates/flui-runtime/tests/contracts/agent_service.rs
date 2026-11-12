@@ -1318,6 +1318,7 @@ fn a_native_recording_is_refused_without_the_input_or_a_journal() {
 /// What a client could write, a chunk at a time: a request line with any
 /// method, id and params, a line that is not JSON, a line with no newline yet,
 /// or bytes from nowhere.
+#[cfg(not(target_arch = "wasm32"))]
 fn client_chunk() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
     use proptest::prelude::*;
     let id = prop_oneof![
@@ -1353,6 +1354,7 @@ fn client_chunk() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
     ]
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 proptest::proptest! {
     #![proptest_config(proptest::prelude::ProptestConfig {
         // Each case mounts a host: a quarter of the cases the run asks for.
