@@ -81,7 +81,7 @@ configuration, and the runner drives it through the `DevReloadHook` trait
 use flui::hot_reload::WorkerReloadHook;
 
 let config = AppConfig::new().with_dev_reload(WorkerReloadHook::new(worker_path));
-run_app(root, AppLaunch::new().config(config))?;
+Application::new().config(config).run(root)?;
 ```
 
 The loop attaches the hook once, before the first window, and detaches it when

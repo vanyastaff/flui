@@ -1,15 +1,14 @@
-//! Desktop application lifetime, independent of any particular widget tree.
+//! What a desktop [`Application`] adds: the observers of its lifetime and a
+//! run that starts without a window.
 use super::{
-    AppConfig,
+    Application, LaunchError,
     application_control::{AppHandle, AppWindowError},
 };
-use flui_platform::capability::{Capability, CapabilityProvider, Plugin};
 use flui_view::View;
-use std::marker::PhantomData;
 
 /// Whether startup requests the designated main window.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum StartupWindow {
+pub(crate) enum StartupWindow {
     /// Reserve and open the initial main window after `on_ready`.
     #[default]
     Open,
@@ -17,156 +16,104 @@ pub enum StartupWindow {
     None,
 }
 
-/// Failure of application startup or the native event loop.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum AppRunError {
-    /// A configuration setting cannot be honored by the host.
-    #[error("application configuration failed: {0}")]
-    Configuration(#[source] AppWindowError),
-    /// The system is below FLUI's floor (ADR-0244 §3), found when the platform
-    /// is built, before any window opens.
-    #[error("this system cannot run FLUI: {0}")]
-    UnsupportedSystem(#[source] crate::app::UnsupportedSystem),
-    /// Native platform initialization or event-loop failure.
-    #[error("platform startup or event loop failed: {source}")]
-    Platform {
-        /// Original native failure.
-        #[source]
-        source: std::sync::Arc<dyn std::error::Error + Send + Sync>,
-    },
-    /// The reserved startup window could not be installed.
-    #[error("initial main window failed: {0}")]
-    InitialWindow(#[source] AppWindowError),
-    /// The startup observer unwound before initial creation.
-    #[error("application on_ready callback panicked")]
-    OnReadyPanicked,
-    /// A configured application service failed to start.
-    #[error("application service startup failed: {source}")]
-    Service {
-        /// Original service startup failure.
-        #[source]
-        source: std::sync::Arc<dyn std::error::Error + Send + Sync>,
-    },
-    /// Two capability registrations the run cannot choose between: two
-    /// plugins, or two overrides, for one capability, or two capabilities
-    /// sharing a name. Found before the platform starts, so no window opens.
-    #[error("capability registration failed: {0}")]
-    CapabilityConflict(#[source] flui_runtime::capability::CapabilityConflict),
-}
-
-impl AppRunError {
-    /// A platform failure: the refusal of a system below FLUI's floor, or
-    /// any other failure as [`Platform`](Self::Platform).
-    pub(crate) fn from_platform(error: flui_native::PlatformError) -> Self {
-        match crate::app::UnsupportedSystem::from_platform(error) {
-            Ok(unsupported) => Self::UnsupportedSystem(unsupported),
-            Err(error) => Self::Platform {
-                source: std::sync::Arc::new(error),
-            },
-        }
-    }
-}
-
 pub(crate) type ReadyObserver = Box<dyn FnOnce(&AppHandle)>;
 pub(crate) type WindowErrorObserver = Box<dyn FnMut(&AppWindowError)>;
 
-/// A desktop application's loop-owned factory and configuration.
-///
-/// Every new main window gets a fresh view tree. Persistent application data
-/// belongs in factory captures; those captures may use `Rc` and need not be Send.
-/// The factory and observers run on the application owner thread.
-pub struct Application<V, F> {
-    pub(crate) factory: F,
-    pub(crate) config: AppConfig,
-    pub(crate) startup: StartupWindow,
-    pub(crate) ready: Option<ReadyObserver>,
-    pub(crate) window_error: Option<WindowErrorObserver>,
-    pub(crate) capabilities: super::capability::AppCapabilities,
-    marker: PhantomData<fn() -> V>,
-}
-impl<V, F> Application<V, F>
-where
-    V: View + Clone + 'static,
-    F: FnMut(&AppHandle) -> V + 'static,
-{
-    /// Create an application with the default last-window exit policy.
-    pub fn new(factory: F) -> Self {
-        Self {
-            factory,
-            config: AppConfig::default(),
-            startup: StartupWindow::Open,
-            ready: None,
-            window_error: None,
-            capabilities: super::capability::AppCapabilities::default(),
-            marker: PhantomData,
-        }
-    }
-    /// Set window and loop service configuration.
-    #[must_use = "the builder returns the updated application; assign or chain it"]
-    pub fn with_config(mut self, config: AppConfig) -> Self {
-        self.config = config;
-        self
-    }
-    /// Select whether startup reserves an initial main window.
-    #[must_use = "the builder returns the updated application; assign or chain it"]
-    pub fn with_startup_window(mut self, startup: StartupWindow) -> Self {
-        self.startup = startup;
-        self
-    }
-    /// Called once before any root factory invocation. Quit suppresses startup creation.
-    #[must_use = "the builder returns the updated application; assign or chain it"]
+impl Application {
+    /// Called once on the owner thread before the first main window is
+    /// built, with the [`AppHandle`] that shows the main window or quits from
+    /// any thread. A quit requested here suppresses the startup window.
+    /// Desktop only.
     pub fn on_ready(mut self, callback: impl FnOnce(&AppHandle) + 'static) -> Self {
         self.ready = Some(Box::new(callback));
         self
     }
+
     /// Observe later window failures after rollback and reply settlement.
-    /// A panicking observer is retired; it does not poison later show requests.
-    #[must_use = "the builder returns the updated application; assign or chain it"]
+    /// A panicking observer is retired; it does not poison later show
+    /// requests. Desktop only.
     pub fn on_window_error(mut self, callback: impl FnMut(&AppWindowError) + 'static) -> Self {
         self.window_error = Some(Box::new(callback));
         self
     }
-    /// Provide the capability `C` with `provider`, in place of the built-in
-    /// provider and of any plugin's (ADR-0152). A widget acquires it with
-    /// `ctx.capability::<C>()` in a lifecycle hook.
+
+    /// Run a resident application: one that starts without a window and
+    /// lives until it quits, by its exit policy or an
+    /// [`AppHandle::quit`]. Each main window, opened by
+    /// [`AppHandle::request_show_main_window`], mounts a fresh tree that
+    /// `factory` builds on the owner thread; state that outlives a window
+    /// belongs in the factory's captures, which may be `Rc`. Desktop only.
     ///
-    /// Overriding one capability twice fails [`run`](Self::run) with
-    /// [`AppRunError::CapabilityConflict`] before any window opens.
-    #[must_use = "the builder returns the updated application; assign or chain it"]
-    pub fn capability<C: Capability>(mut self, provider: impl CapabilityProvider<C>) -> Self {
-        self.capabilities = std::mem::take(&mut self.capabilities).capability::<C>(provider);
-        self
-    }
-    /// Register the providers of `plugin`. A plugin provides what neither the
-    /// application nor the framework does; two plugins providing one
-    /// capability fail [`run`](Self::run) with
-    /// [`AppRunError::CapabilityConflict`] before any window opens.
-    #[must_use = "the builder returns the updated application; assign or chain it"]
-    pub fn plugin(mut self, plugin: impl Plugin) -> Self {
-        self.capabilities = std::mem::take(&mut self.capabilities).plugin(plugin);
-        self
-    }
-    /// Run the native loop and release its services before returning.
+    /// # Errors
+    ///
+    /// As [`run`](Self::run), but with no startup window to fail.
     ///
     /// # Panics
     ///
-    /// With the application's own panic, when nothing is left to go on after
-    /// it (ADR-0258 §2): a destructor or `on_quit` that panics at the exit, or
-    /// the close of the last window. The exit first writes what the
-    /// application persisted and stops its services and pools; the panic then
-    /// resumes, so the process exits with 101 and the panic's text, printed
-    /// once.
-    pub fn run(self) -> Result<(), AppRunError> {
-        super::runner::run_application(self)
+    /// As [`run`](Self::run).
+    pub fn run_resident<V, F>(self, factory: F) -> Result<(), LaunchError>
+    where
+        V: View + Clone + 'static,
+        F: FnMut(&AppHandle) -> V + 'static,
+    {
+        super::runner::run_application(self.into_run(factory, StartupWindow::None))
+    }
+
+    /// The run of `self` with `factory` building its main windows.
+    pub(crate) fn into_run<V, F>(self, factory: F, startup: StartupWindow) -> DesktopRun<V, F> {
+        let Self {
+            config,
+            capabilities,
+            ready,
+            window_error,
+        } = self;
+        DesktopRun {
+            factory,
+            config,
+            startup,
+            ready,
+            window_error,
+            capabilities,
+            marker: std::marker::PhantomData,
+        }
     }
 }
 
-impl<V, F> std::fmt::Debug for Application<V, F> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Application")
-            .field("config", &self.config)
-            .field("startup", &self.startup)
-            .finish_non_exhaustive()
+/// A desktop run: an [`Application`] with the factory of its main windows
+/// and whether startup opens one.
+pub(crate) struct DesktopRun<V, F> {
+    pub(crate) factory: F,
+    pub(crate) config: super::AppConfig,
+    pub(crate) startup: StartupWindow,
+    pub(crate) ready: Option<ReadyObserver>,
+    pub(crate) window_error: Option<WindowErrorObserver>,
+    pub(crate) capabilities: super::capability::AppCapabilities,
+    marker: std::marker::PhantomData<fn() -> V>,
+}
+
+/// The builder the runner's own tests start a run with, in the order they
+/// read: the factory first, then what it runs with.
+#[cfg(test)]
+impl<V, F> DesktopRun<V, F>
+where
+    F: FnMut(&AppHandle) -> V,
+{
+    pub(crate) fn new(factory: F) -> Self {
+        Application::new().into_run(factory, StartupWindow::Open)
+    }
+
+    pub(crate) fn config(mut self, config: super::AppConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    pub(crate) fn with_startup_window(mut self, startup: StartupWindow) -> Self {
+        self.startup = startup;
+        self
+    }
+
+    pub(crate) fn on_ready(mut self, callback: impl FnOnce(&AppHandle) + 'static) -> Self {
+        self.ready = Some(Box::new(callback));
+        self
     }
 }

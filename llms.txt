@@ -78,7 +78,7 @@ impl StatelessView for Gallery {
 }
 
 fn main() -> Result<(), LaunchError> {
-    run_app(Gallery, AppLaunch::new())
+    run_app(Gallery)
 }
 ```
 

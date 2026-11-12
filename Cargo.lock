@@ -1791,6 +1791,7 @@ dependencies = [
  "flui-interaction",
  "flui-layer",
  "flui-log",
+ "flui-macros",
  "flui-native",
  "flui-objects",
  "flui-painting",

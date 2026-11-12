@@ -17,14 +17,6 @@ path = "crates/flui-app/src/app/runner/android.rs"
 count = 1
 
 [[allow]]
-path = "crates/flui-app/src/app/runner/desktop.rs"
-count = 1
-
-[[allow]]
-path = "crates/flui-app/src/app/runner/mod.rs"
-count = 1
-
-[[allow]]
 path = "crates/flui-app/src/app/runner/web.rs"
 count = 1
 

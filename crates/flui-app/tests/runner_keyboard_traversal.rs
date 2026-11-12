@@ -75,15 +75,15 @@ pub(crate) fn tab_moves_focus_in_every_window_a_runner_installs() {
     let secondary = Fields::new("secondary");
     let main_root = main.root();
     let secondary_root = secondary.root();
-    let application = Application::new(move |_| main_root.clone())
-        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed))
+    let application = Application::new()
+        .config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed))
         .on_ready(move |_| {
             drop(
                 flui_app::open_window(AppConfig::new(), WindowPolicy::Isolated, secondary_root)
                     .expect("an isolated window opens on the headless platform"),
             );
         });
-    let run = HeadlessRun::start(application);
+    let run = HeadlessRun::start(application, main_root);
     run.run_owner_turn();
     let windows = run.open_windows();
     assert_eq!(windows.len(), 2, "both windows are open");

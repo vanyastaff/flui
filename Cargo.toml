@@ -747,6 +747,8 @@ ignored-paths = [
     "tests/ui/thread_boundary/cupertino/*.rs",
     "tests/ui/unstable_input/*.rs",
     "tests/ui/unstable_windows/*.rs",
+    "tests/ui/entry/pass/*.rs",
+    "tests/ui/entry/fail/*.rs",
     "tests/ui/native/*.rs",
 ]
 

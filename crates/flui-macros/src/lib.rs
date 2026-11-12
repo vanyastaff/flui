@@ -22,6 +22,11 @@
 //! derives alongside the supporting trait — no extra `use
 //! flui_macros::…` import.
 //!
+//! ## Attribute
+//!
+//! - [`macro@main`] — mark the function an application starts from, so one
+//!   entry runs on every platform; re-exported as `flui::main`.
+//!
 //! ## Why a separate crate?
 //!
 //! `proc-macro` crates must be `[lib] proc-macro = true`, which makes
@@ -54,6 +59,7 @@ mod derive_routable;
 mod derive_stateful;
 mod derive_stateless;
 mod derive_two_way_converter;
+mod main_attr;
 mod runtime_path;
 
 use proc_macro::TokenStream;
@@ -306,6 +312,40 @@ pub fn derive_two_way_converter(input: TokenStream) -> TokenStream {
 pub fn derive_routable(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     derive_routable::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Mark the function an application starts from, so that one entry runs on
+/// every platform, as Flutter's `main` does.
+///
+/// ```rust,ignore
+/// // src/lib.rs
+/// #[flui::main]
+/// pub fn run() -> Result<(), flui::LaunchError> {
+///     flui::run_app(Counter)
+/// }
+///
+/// // src/main.rs: the desktop, iOS and the web start here
+/// fn main() -> Result<(), flui::LaunchError> {
+///     counter::run()
+/// }
+/// ```
+///
+/// On the desktop, iOS and the web the function is left as it is: they start
+/// from the binary's `fn main`, which calls it. On Android, whose system
+/// loads the library as a `cdylib` and calls an exported `android_main`
+/// with its `AndroidApp`, the attribute writes that `android_main`: it hands
+/// the `AndroidApp` to the run the function starts and logs the function's
+/// `Err`. So an application writes no Android code.
+///
+/// The function takes nothing and returns `()` or `Result<(), E>` with a
+/// displayable `E`; an `async`, `unsafe`, generic or argument-taking
+/// function, or arguments on the attribute, are compile errors on every
+/// target.
+#[proc_macro_attribute]
+pub fn main(args: TokenStream, item: TokenStream) -> TokenStream {
+    main_attr::expand(args.into(), item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

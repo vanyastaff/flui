@@ -13,8 +13,9 @@ use super::{
 };
 use crate::app::agent::Disconnect;
 use crate::app::{
-    AppConfig, AppRunError, Application, StartupWindow,
+    AppConfig, LaunchError,
     application::WindowErrorObserver,
+    application::{DesktopRun, StartupWindow},
     application_control::{AppHandle, AppWindowError, Ingress, contain},
     hot_reload::{WorkerReload, WorkerWatcherGuard},
 };
@@ -57,7 +58,7 @@ pub(in crate::app) struct MainController {
     closing: bool,
     initial: bool,
     error: Option<WindowErrorObserver>,
-    fatal: Rc<RefCell<Option<AppRunError>>>,
+    fatal: Rc<RefCell<Option<LaunchError>>>,
     watcher: Option<WorkerWatcherGuard>,
 }
 // Each field is dropped on its own, so one that panics does not keep the
@@ -477,7 +478,7 @@ impl MainController {
             let old = self
                 .fatal
                 .borrow_mut()
-                .replace(AppRunError::InitialWindow(error));
+                .replace(LaunchError::initial_window(error));
             contain(|| drop(old));
             let _ = self.ingress.quit_now();
         } else if let Some(mut observer) = self.error.take() {
@@ -726,25 +727,25 @@ impl Drop for LoopTeardown {
 }
 
 pub(in crate::app) fn run_application<V, F>(
-    application: Application<V, F>,
-) -> Result<(), AppRunError>
+    application: DesktopRun<V, F>,
+) -> Result<(), LaunchError>
 where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
     run_with_platform_factory(application, || {
-        let host = flui_native::current_host().map_err(AppRunError::from_platform)?;
+        let host = flui_native::current_host().map_err(LaunchError::from_platform)?;
         // Before the platform, whose registries report only to a capture already installed.
         super::begin_native_journal(host.backend());
-        host.start().map_err(AppRunError::from_platform)
+        host.start().map_err(LaunchError::from_platform)
     })
 }
 
 #[cfg(test)]
 fn run_with_platform<V, F>(
-    application: Application<V, F>,
+    application: DesktopRun<V, F>,
     platform: Box<dyn flui_native::Platform>,
-) -> Result<(), AppRunError>
+) -> Result<(), LaunchError>
 where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
@@ -753,9 +754,9 @@ where
 }
 
 fn run_with_platform_factory<V, F>(
-    application: Application<V, F>,
-    platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, AppRunError>,
-) -> Result<(), AppRunError>
+    application: DesktopRun<V, F>,
+    platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, LaunchError>,
+) -> Result<(), LaunchError>
 where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
@@ -777,7 +778,7 @@ pub(crate) struct StartedLoop {
     // Last: the watch the teardown started ends once the owner platform is
     // gone too.
     watchdog: Rc<RefCell<Option<Rc<ExitWatchdog>>>>,
-    fatal: Rc<RefCell<Option<AppRunError>>>,
+    fatal: Rc<RefCell<Option<LaunchError>>>,
     result: Result<(), flui_native::PlatformError>,
     /// Whether the driver agent quit the loop because its driver went.
     disconnect: Arc<Disconnect>,
@@ -795,7 +796,7 @@ impl StartedLoop {
     ///
     /// With the terminal failure's payload, once the teardown has written
     /// what the application persisted.
-    pub(crate) fn finish(self) -> Result<(), AppRunError> {
+    pub(crate) fn finish(self) -> Result<(), LaunchError> {
         let Self {
             teardown,
             owner_guard,
@@ -820,7 +821,7 @@ impl StartedLoop {
             // and from a panic by its code.
             std::process::exit(flui_protocol::launch::EXIT_DISCONNECTED);
         }
-        result.map_err(AppRunError::from_platform)
+        result.map_err(LaunchError::from_platform)
     }
 }
 
@@ -829,11 +830,11 @@ impl StartedLoop {
 /// teardown step that ends to `teardown_log`, on unwind too. Its windows
 /// render with what `renderers` builds.
 pub(crate) fn start_loop<V, F>(
-    mut application: Application<V, F>,
-    platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, AppRunError>,
+    mut application: DesktopRun<V, F>,
+    platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, LaunchError>,
     teardown_log: Rc<RefCell<Vec<TeardownStep>>>,
     renderers: WindowRenderers,
-) -> Result<StartedLoop, AppRunError>
+) -> Result<StartedLoop, LaunchError>
 where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
@@ -845,7 +846,7 @@ where
     let slots = APP_RUNTIME.with(|slot| slot.borrow().capability_slots());
     let registry = capabilities
         .into_registry(&slots)
-        .map_err(AppRunError::CapabilityConflict)?;
+        .map_err(LaunchError::CapabilityConflict)?;
     let _logging = super::super::logging::init_managed_logging(&application.config);
     let platform = platform()?;
     let fatal = Rc::new(RefCell::new(None));
@@ -871,7 +872,7 @@ where
     )]
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         platform.run(crate::app::runner::app_handler(move |owner| {
-            let Application {
+            let DesktopRun {
                 mut factory,
                 config,
                 startup,
@@ -981,7 +982,7 @@ where
                             .map(|controller| Rc::clone(&controller.fatal))
                     });
                     if let Some(fatal) = fatal {
-                        fatal.replace(Some(AppRunError::Service {
+                        fatal.replace(Some(LaunchError::Service {
                             source: Arc::new(error),
                         }));
                     }
@@ -1003,7 +1004,7 @@ where
                         controller
                             .fatal
                             .borrow_mut()
-                            .replace(AppRunError::OnReadyPanicked);
+                            .replace(LaunchError::OnReadyPanicked);
                     }
                 });
                 let _ = handle.ingress.quit_now();
@@ -1277,14 +1278,14 @@ mod tests {
 
         use crate::app::UnsupportedSystem;
 
-        fn run_refused(refusal: flui_native::PlatformError) -> (AppRunError, bool) {
+        fn run_refused(refusal: flui_native::PlatformError) -> (LaunchError, bool) {
             let built = Rc::new(Cell::new(false));
             let witness = Rc::clone(&built);
-            let app = Application::new(move |_| -> flui_widgets::Text {
+            let app = DesktopRun::new(move |_| -> flui_widgets::Text {
                 witness.set(true);
                 panic!("never built below the floor");
             });
-            let error = run_with_platform_factory(app, || Err(AppRunError::from_platform(refusal)))
+            let error = run_with_platform_factory(app, || Err(LaunchError::from_platform(refusal)))
                 .expect_err("a refused platform fails the run");
             (error, built.get())
         }
@@ -1297,7 +1298,7 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                AppRunError::UnsupportedSystem(UnsupportedSystem::OsBelowFloor { environment: Environment::Windows, found, floor })
+                LaunchError::UnsupportedSystem(UnsupportedSystem::OsBelowFloor { environment: Environment::Windows, found, floor })
                     if found.to_string() == "build 9600" && floor.to_string() == "build 10240"
             ),
             "{error:?}"
@@ -1311,7 +1312,7 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                AppRunError::UnsupportedSystem(UnsupportedSystem::MissingRequirement {
+                LaunchError::UnsupportedSystem(UnsupportedSystem::MissingRequirement {
                     environment: Environment::Linux,
                     requirement: "the X11 RandR 1.5 extension",
                 })
@@ -1323,18 +1324,18 @@ mod tests {
         let (error, _) = run_refused(flui_native::PlatformError::Init {
             message: "no window class".to_owned(),
         });
-        assert!(matches!(error, AppRunError::Platform { .. }), "{error:?}");
+        assert!(matches!(error, LaunchError::Platform { .. }), "{error:?}");
     }
 
     fn main_window_factory_panic_is_typed_and_initial_window_is_fatal() {
-        let app = Application::new(|_| -> flui_widgets::Text {
+        let app = DesktopRun::new(|_| -> flui_widgets::Text {
             panic!("factory witness");
         });
         let error = run_with_platform(app, Box::new(HeadlessPlatform::new()))
             .expect_err("initial factory fails");
         assert!(matches!(
             error,
-            AppRunError::InitialWindow(AppWindowError::FactoryPanicked { .. })
+            LaunchError::InitialWindow(AppWindowError::FactoryPanicked { .. })
         ));
         assert!(APP_RUNTIME.with(|slot| slot.borrow().main_ingress.is_none()));
     }
@@ -1374,9 +1375,9 @@ mod tests {
             fn exit(&self, _: &tracing::span::Id) {}
         }
 
-        let app = Application::new(|_| -> flui_widgets::Text { flui_widgets::Text::new("") })
+        let app = DesktopRun::new(|_| -> flui_widgets::Text { flui_widgets::Text::new("") })
             .with_startup_window(StartupWindow::None)
-            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::ExplicitQuit));
+            .config(AppConfig::new().with_exit_policy(ExitPolicy::ExplicitQuit));
         let unwound = tracing::subscriber::with_default(PanicsWhenReady, || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run_with_platform(app, Box::new(HeadlessPlatform::new()))
@@ -1462,11 +1463,11 @@ mod tests {
 
         let counts = Arc::new(Counts::default());
         let observed = Arc::clone(&counts);
-        let app = Application::new(|_| -> flui_widgets::Text {
+        let app = DesktopRun::new(|_| -> flui_widgets::Text {
             panic!("factory failure before GPU setup");
         })
         .with_startup_window(StartupWindow::None)
-        .with_config(
+        .config(
             AppConfig::new()
                 .with_exit_policy(ExitPolicy::ExplicitQuit)
                 .with_dev_reload(Counting(Arc::clone(&counts))),
@@ -1545,11 +1546,11 @@ mod tests {
 
         let counts = Arc::new(Counts::default());
         let observed = Arc::clone(&counts);
-        let app = Application::new(|_| -> flui_widgets::Text {
+        let app = DesktopRun::new(|_| -> flui_widgets::Text {
             panic!("factory failure before GPU setup");
         })
         .with_startup_window(StartupWindow::None)
-        .with_config(
+        .config(
             AppConfig::new()
                 .with_exit_policy(ExitPolicy::ExplicitQuit)
                 .with_dev_agent(Counting(Arc::clone(&counts))),
@@ -1643,11 +1644,11 @@ mod tests {
 
         let reached = Rc::new(Cell::new(None));
         let seen = Rc::clone(&reached);
-        let app = Application::new(|_| -> flui_widgets::Text {
+        let app = DesktopRun::new(|_| -> flui_widgets::Text {
             panic!("no main window is opened");
         })
         .with_startup_window(StartupWindow::None)
-        .with_config(config.with_exit_policy(ExitPolicy::ExplicitQuit))
+        .config(config.with_exit_policy(ExitPolicy::ExplicitQuit))
         .on_ready(move |_| {
             let (dispatcher, _window) = super::super::secondary_window::open_secondary_window_impl(
                 AppConfig::default(),

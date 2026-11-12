@@ -75,12 +75,19 @@ pub(crate) fn child() {
         return;
     }
     let (result, log) = flui_testing::log_capture::capture(|| {
-        Application::new(|handle: &AppHandle| QuitOnPaint {
-            handle: handle.clone(),
-            asked: Arc::new(AtomicBool::new(false)),
-        })
-        .with_config(AppConfig::new().with_title("native linux"))
-        .run()
+        Application::new()
+            .config(AppConfig::new().with_title("native linux"))
+            .on_ready(|handle| {
+                drop(
+                    handle
+                        .request_show_main_window()
+                        .expect("the ready application shows its main window"),
+                );
+            })
+            .run_resident(|handle: &AppHandle| QuitOnPaint {
+                handle: handle.clone(),
+                asked: Arc::new(AtomicBool::new(false)),
+            })
     });
     result.expect("the application runs, paints and quits");
     let host = log

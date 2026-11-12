@@ -1,0 +1,5 @@
+error: `#[flui::main]` function takes no arguments: write `pub fn run() -> Result<(), flui::LaunchError>`
+ --> tests/ui/entry/fail/main_attribute_refuses_arguments.rs:4:12
+  |
+4 | pub fn run(title: &str) -> Result<(), flui::LaunchError> {
+  |            ^^^^^

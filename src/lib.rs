@@ -23,8 +23,7 @@
 //! }
 //!
 //! fn main() -> Result<(), flui::LaunchError> {
-//!     flui::run_app(Hello, flui::AppLaunch::new())?;
-//!     Ok(())
+//!     flui::run_app(Hello)
 //! }
 //! ```
 //!
@@ -34,17 +33,41 @@
 //! them during `build`, and write them from event callbacks. The
 //! [`view::BuildContext`] deliberately does not provide lifecycle capabilities.
 //!
-//! # Application entry points
+//! # Starting an application
 //!
-//! [`run_app`] takes the root and an [`AppLaunch`]: the [`AppConfig`] (window
-//! configuration and application services) and the [`AppCapabilities`] the
-//! application registers (overrides of the built-in providers and plugins,
-//! ADR-0152). It returns a [`LaunchError`] when the registrations conflict or
-//! the platform cannot start. On desktop it drives the native event loop until
-//! shutdown; on iOS it enters UIKit; on the web it starts the browser runner.
-//! On Android it panics: call `flui::run_app_android` from `android_main`,
-//! passing the system-provided `AndroidApp` available through
-//! `flui::android_activity` and the same [`AppLaunch`].
+//! [`run_app`]`(root)` starts the same way on every platform: on the desktop
+//! it drives the native event loop until shutdown, on iOS it enters UIKit, on
+//! the web it starts the browser runner and on Android it runs in the
+//! Activity's window. It returns a [`LaunchError`] when the platform cannot
+//! start, the system is below FLUI's floor or, on the desktop, the event loop
+//! or the first window fails.
+//!
+//! An application that configures its run builds an [`Application`]: the
+//! [`AppConfig`] (window configuration and application services) and the
+//! capability providers it registers (overrides of the built-in providers and
+//! plugins, ADR-0152), ended by [`Application::run`]. `run_app(root)` is
+//! `Application::new().run(root)`.
+//!
+//! A project that also builds for Android marks the function it starts from
+//! with [`main`]: the system loads an Android application as a library and
+//! calls an exported `android_main`, which the attribute writes, so the
+//! application writes no Android code. On every other platform the
+//! attribute leaves the function as it is, and the binary's `fn main` calls
+//! it:
+//!
+//! ```no_run
+//! # use flui::prelude::*;
+//! # #[derive(Clone, StatelessView)]
+//! # struct Hello;
+//! # impl StatelessView for Hello {
+//! #     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView { Text::new("Hello") }
+//! # }
+//! // src/lib.rs
+//! #[flui::main]
+//! pub fn run() -> Result<(), flui::LaunchError> {
+//!     flui::run_app(Hello)
+//! }
+//! ```
 //!
 #![cfg_attr(
     all(
@@ -52,12 +75,11 @@
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ),
-    doc = "For fallible desktop startup, use [`Application::new`] with a root factory and
-call [`Application::run`], which returns `Result<(), AppRunError>`. The factory runs
-on the owner thread and creates a fresh tree whenever the main window is reopened.
-Use [`Application::on_ready`] to obtain an [`AppHandle`] for cross-thread show and
-quit requests. A successful show-command admission is not window completion:
-await its returned request or poll `try_result` to obtain the window result."
+    doc = "On the desktop, [`Application::on_ready`] gives an [`AppHandle`] for
+cross-thread show and quit requests, and [`Application::run_resident`] starts an
+application without a window, building each main window it later shows from a
+factory. A successful show-command admission is not window completion: await its
+returned request or poll `try_result` to obtain the window result."
 )]
 //!
 //! # Choosing a catalog
@@ -145,7 +167,7 @@ impl StatelessView for MaterialHello {
 }
 
 fn main() -> Result<(), flui::LaunchError> {
-    flui::run_app(MaterialHello, flui::AppLaunch::new())
+    flui::run_app(MaterialHello)
 }
 ```"#
 )]
@@ -319,10 +341,6 @@ pub mod view {
     mod __runtime {}
 }
 
-/// The `android-activity` crate `android_main` receives its `AndroidApp`
-/// from, so an application declares no Android dependency of its own.
-#[cfg(target_os = "android")]
-pub use flui_app::android_activity;
 /// Application configuration. Re-exported from [`app`] (`flui-app`).
 pub use flui_app::app::AppConfig;
 /// The errors a window request can fail with — what [`AppHandle`] reports and
@@ -376,36 +394,28 @@ pub use flui_app::app::open_secondary_window;
     feature = "unstable-windows"
 ))]
 pub use flui_app::app::open_window;
-/// The resident-application builder and its control surface: a reusable
-/// main-window factory, windowless startup, and a `Send + Sync` handle that
-/// can show the window or quit from any thread. Re-exported from [`app`]
-/// (`flui-app`); desktop only.
+/// The handle a desktop [`Application`] gives its `on_ready` observer, which
+/// shows the main window or quits from any thread, and why a request through
+/// it fails. Re-exported from [`app`] (`flui-app`); desktop only.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub use flui_app::app::{AppControlError, AppHandle, AppRunError, Application, StartupWindow};
-/// The application entry point — builds the tree, opens a window, and drives
-/// the frame loop with an [`AppLaunch`]'s configuration and capabilities.
-/// Re-exported from [`app`] (`flui-app`).
+pub use flui_app::app::{AppControlError, AppHandle};
+/// The function an application starts from on every platform; on Android it
+/// writes the `android_main` the system calls. Re-exported from `flui-app`.
+pub use flui_app::main;
+/// Run `root` in a main window: `Application::new().run(root)`, as Flutter's
+/// `runApp` takes the root widget. Re-exported from [`app`] (`flui-app`).
 ///
 /// The root is any [`view::View`], stateless or stateful. It returns a
-/// [`LaunchError`] when the capability registrations conflict or the platform
-/// cannot start; on desktop it returns after shutdown and panics on an
-/// event-loop failure. On Android it panics: use `flui::run_app_android` with
-/// the system's `AndroidApp` instead.
+/// [`LaunchError`] when the platform cannot start, the system is below FLUI's
+/// floor or the run fails; on the desktop it returns after shutdown.
 pub use flui_app::run_app;
-/// The Android entry point, called from the `cdylib`'s `android_main`
-/// (`flui create` writes one). Re-exported from `flui-app`.
-#[cfg(target_os = "android")]
-pub use flui_app::run_app_android;
-/// What [`run_app`] and `run_app_android` start a run with, the capability
-/// registrations it carries, and why starting fails. Re-exported from [`app`]
-/// (`flui-app`).
-pub use flui_app::{
-    AppCapabilities, AppLaunch, BackendFailure, GpuBackend, LaunchError, UnsupportedSystem,
-};
+/// The builder of a configured run, and why a run fails. Re-exported from
+/// [`app`] (`flui-app`).
+pub use flui_app::{Application, BackendFailure, GpuBackend, LaunchError, UnsupportedSystem};
 /// Registers a font's faces with the app, for measurement, paint and carets.
 /// Re-exported from [`app`] (`flui-app`).
 ///
@@ -480,7 +490,7 @@ pub mod prelude {
         feature = "unstable-windows"
     ))]
     pub use flui_app::app::{open_secondary_window, open_window};
-    pub use flui_app::{AppCapabilities, AppLaunch, LaunchError, register_font, run_app};
+    pub use flui_app::{Application, LaunchError, register_font, run_app};
     #[cfg(feature = "material")]
     pub use flui_material::{
         AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,

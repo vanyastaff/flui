@@ -230,10 +230,11 @@ exact `UiRuntimeId`. Failures release reservations once and close resolved,
 uninstalled windows. A failed physical wake is traced and cancels the request;
 nothing spins.
 
-**Resident main window.** `Application<V, F>` separates application lifetime
-from a root tree: an owner-local `FnMut(&AppHandle) -> V` factory builds fresh
-view state per window. `StartupWindow::None` starts services without fonts or
-a GPU; `ExitPolicy::ExplicitQuit` keeps an empty loop alive (last-window exit
+**Resident main window.** `Application` separates application lifetime from a
+root tree: `run(root)` mounts a fresh tree from a clone of `root` in each main
+window, and `run_resident(factory)` builds each from an owner-local
+`FnMut(&AppHandle) -> V`. A resident run starts services without a window,
+fonts or a GPU; `ExitPolicy::ExplicitQuit` keeps an empty loop alive (last-window exit
 stays the default). `AppHandle` sends only show and quit intents; a
 `WindowRequest` reply uses a claim slot for the result, not for native
 resource ownership, so dropping the receiver does not cancel an accepted show.

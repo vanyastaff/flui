@@ -15,67 +15,15 @@ use super::surface_lifecycle::{
     SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
     retry_surface_recreation, settle_surface_availability,
 };
-use crate::app::{AppConfig, AppLaunch, LaunchError};
+use crate::app::AppConfig;
 
 // ============================================================================
 // Android Implementation
 // ============================================================================
 
-/// Run a FLUI application on Android: `root` in the Activity's window, with
-/// `launch`'s configuration and capability providers.
-///
-/// This is the entry point on Android. Call it from your `android_main()`
-/// function:
-///
-/// ```rust,ignore
-/// #[no_mangle]
-/// fn android_main(app: AndroidApp) {
-///     let launch = AppLaunch::new()
-///         .config(AppConfig::new().with_title("My App"))
-///         .capabilities(AppCapabilities::new().plugin(MyPlugin));
-///     // `run_app_android` logs why it could not start.
-///     let _started = flui_app::run_app_android(app, MyRootView, launch);
-/// }
-/// ```
-///
-/// # Errors
-///
-/// [`LaunchError::CapabilityConflict`] when `launch`'s registrations
-/// conflict, found before the platform starts and logged.
 #[cfg(target_os = "android")]
-pub fn run_app_android<V>(
-    app: android_activity::AndroidApp,
-    root: V,
-    launch: AppLaunch,
-) -> Result<(), LaunchError>
-where
-    V: View + Clone + 'static,
-{
-    let AppLaunch {
-        config,
-        capabilities,
-    } = launch;
-    // Logging first: `android_main` has no stderr, so the log is where a
-    // conflict can be read.
-    let _installation = crate::app::logging::init_managed_logging(&config);
-    // Before the platform starts, so a conflict starts nothing (ADR-0152 §1).
-    super::install_capabilities(capabilities).inspect_err(|error| {
-        tracing::error!(%error, "FLUI could not start");
-    })?;
-
-    tracing::info!(
-        title = %config.title,
-        "Starting FLUI application on Android"
-    );
-
-    run_android(root, config, app).inspect_err(|error| {
-        super::discard_capabilities();
-        tracing::error!(%error, "FLUI could not start");
-    })
-}
-
-#[cfg(target_os = "android")]
-fn run_android<V>(
+/// Run `root` in the Activity's window `app` names, with `config`.
+pub(super) fn run_android<V>(
     root: V,
     config: AppConfig,
     app: android_activity::AndroidApp,

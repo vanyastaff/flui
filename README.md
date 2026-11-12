@@ -159,7 +159,7 @@ impl ViewState<CounterView> for CounterState {
 }
 
 fn main() -> Result<(), LaunchError> {
-    run_app(CounterView, AppLaunch::new())
+    run_app(CounterView)
 }
 ```
 

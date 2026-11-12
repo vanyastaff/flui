@@ -250,7 +250,7 @@ fn observed_app(
     observed: Observed,
     ready: Rc<RefCell<Option<AppHandle>>>,
     handler: Option<CloseRequestHandler>,
-) -> Application<ObservedRoot, impl FnMut(&AppHandle) -> ObservedRoot> {
+) -> (Application, ObservedRoot) {
     let device_reports = Arc::clone(&observed.device_reports);
     let mut config = AppConfig::new()
         .with_exit_policy(ExitPolicy::OnLastWindowClosed)
@@ -268,13 +268,11 @@ fn observed_app(
     if let Some(handler) = handler {
         config = config.with_close_request_handler(handler);
     }
-    Application::new(move |_| ObservedRoot {
-        observed: observed.clone(),
-    })
-    .with_config(config)
-    .on_ready(move |handle| {
+    let root = ObservedRoot { observed };
+    let application = Application::new().config(config).on_ready(move |handle| {
         ready.replace(Some(handle.clone()));
-    })
+    });
+    (application, root)
 }
 
 /// A started run of [`observed_app`], its main window up and presented.
@@ -292,7 +290,8 @@ fn start(observed: &Observed) -> Started {
 /// [`start`], with `handler` answering the windows' close requests.
 fn start_with(observed: &Observed, handler: Option<CloseRequestHandler>) -> Started {
     let ready = Rc::new(RefCell::new(None));
-    let run = HeadlessRun::start(observed_app(observed.clone(), Rc::clone(&ready), handler));
+    let (application, root) = observed_app(observed.clone(), Rc::clone(&ready), handler);
+    let run = HeadlessRun::start(application, root);
     run.run_owner_turn();
     let handle = ready.take().expect("on_ready ran during start");
     let windows = run.open_windows();

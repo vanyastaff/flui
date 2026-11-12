@@ -50,9 +50,8 @@ fn start(
     let root = StorageRoot {
         acquired: Rc::clone(&acquired),
     };
-    let application = Application::new(move |_| root.clone())
-        .with_config(config.with_executors(executors.host_executors()));
-    let run = HeadlessRun::start_on(application, platform);
+    let application = Application::new().config(config.with_executors(executors.host_executors()));
+    let run = HeadlessRun::start_on(application, root, platform);
     run.run_owner_turn();
     let storage = acquired
         .get()

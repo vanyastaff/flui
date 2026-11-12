@@ -10,7 +10,7 @@ pub fn generate(
     ProjectPlan::new()
         .file("Cargo.toml", cargo_toml(name, source))
         .file("src/lib.rs", LIB)
-        .file("src/main.rs", super::main_rs(&lib_name, "CounterView"))
+        .file("src/main.rs", super::main_rs(&lib_name))
         .file("flui.toml", flui_toml(name, app_id, platforms))
         .file("README.md", readme(name))
         .dir("assets")
@@ -55,18 +55,18 @@ rust-version = "1.99"
 
 const LIB: &str = r#"//! The application, and the entry points the platforms call.
 //!
-//! `src/main.rs` mounts [`CounterView`] on the desktop; `android_main` below
-//! is what Android's `NativeActivity` calls once it has loaded this crate as
-//! a `cdylib` (`flui build android`).
+//! [`run`] is where every platform starts: `src/main.rs` calls it on the
+//! desktop, iOS and the web, and on Android `#[flui::main]` makes it the
+//! entry `NativeActivity` calls once it has loaded this crate as a `cdylib`
+//! (`flui build android`).
 
 use flui::prelude::*;
 use flui::widgets::SafeArea;
 
-#[cfg(target_os = "android")]
-#[unsafe(no_mangle)]
-fn android_main(app: flui::android_activity::AndroidApp) {
-    // `run_app_android` logs why it could not start.
-    let _started = flui::run_app_android(app, CounterView, flui::AppLaunch::new());
+/// Start the application in a window with [`CounterView`] as its root.
+#[flui::main]
+pub fn run() -> Result<(), flui::LaunchError> {
+    flui::run_app(CounterView)
 }
 
 #[derive(Clone, StatefulView)]

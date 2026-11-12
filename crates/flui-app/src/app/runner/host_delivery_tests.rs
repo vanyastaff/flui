@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::application::{DesktopRun, StartupWindow};
 use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
 use crate::app::runner::window_routes::OwnerOpenRouted as _;
 use crate::app::runtime::{ExitPolicy, WindowPolicy};
@@ -24,9 +25,9 @@ fn service_factory_can_use_owner_window_capabilities() {
             Box::pin(async {})
         },
     );
-    let app = Application::new(|_| flui_widgets::Text::new("unused"))
+    let app = DesktopRun::new(|_| flui_widgets::Text::new("unused"))
         .with_startup_window(StartupWindow::None)
-        .with_config(
+        .config(
             AppConfig::new()
                 .with_exit_policy(ExitPolicy::ExplicitQuit)
                 .with_service(service),
@@ -99,15 +100,15 @@ fn executor_refusal_retires_service_future_outside_host_borrow() {
             })
         },
     );
-    let app = Application::new(|_| flui_widgets::Text::new("unused"))
+    let app = DesktopRun::new(|_| flui_widgets::Text::new("unused"))
         .with_startup_window(StartupWindow::None)
-        .with_config(
+        .config(
             AppConfig::new()
                 .with_service(service)
                 .with_executors(HostExecutors::new(Arc::new(Pool), Arc::new(Pool))),
         );
     let result = run_with_platform(app, Box::new(HeadlessPlatform::new()));
-    let Err(AppRunError::Service { source }) = result else {
+    let Err(LaunchError::Service { source }) = result else {
         panic!("executor refusal must reach startup");
     };
     assert!(matches!(

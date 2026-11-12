@@ -64,7 +64,6 @@ use crate::theme::{CupertinoTheme, CupertinoThemeData};
 ///     CupertinoApp::new(MyHome::new())
 ///         // Optional: pin brightness instead of following the platform.
 ///         .theme(CupertinoThemeData::default().with_brightness(Brightness::Dark)),
-///     flui::AppLaunch::new(),
 /// )?;
 /// ```
 #[derive(Clone, StatelessView)]
