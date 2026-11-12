@@ -1016,6 +1016,7 @@ zizmor .                                                      # workflow securit
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo xtask feature-matrix --slice 1/5                        # feature-matrix job: cargo-hack per-feature clippy, shards 1/5..5/5 (--partition)
 cargo xtask feature-matrix --slice combinations               # same job: each facade feature combination built in isolation
+cargo xtask feature-matrix --packages "<hack_args>"           # feature-scope job: the same per-feature clippy over the packages `affected` names in `hack_args`
 cargo check --workspace --locked --target wasm32-unknown-unknown --exclude ...                   # wasm-capable set — cargo xtask wasm-check
 cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown --exclude ... -- -D warnings  # the only lint pass over the wasm32-only web backend — cargo xtask wasm-check
 cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32              # the only step that EXECUTES wasm — cargo xtask wasm-test
@@ -1050,8 +1051,8 @@ runs `checks`, `plan` and the `ci` aggregator:
 |---|---|---|
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling | `deps` |
-| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`) over the whole workspace |
-| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `miri`, `doc-test`, `test-trybuild`, `api-contracts` (all Linux); in `clippy` and `test` it also turns on the `native-features` and `gpu-test --backend gl` steps |
+| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`) over the whole workspace, and the on-demand jobs its diff asks for (below) |
+| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `miri`, `doc-test`, `api-contracts` (all Linux), and `test-trybuild` always; in `clippy` and `test` it also turns on the `native-features` and `gpu-test --backend gl` steps |
 
 - **Wide lane**: every pull request that compiles anything runs every Linux
   job, in parallel, over the whole workspace. One serial job over the
@@ -1088,6 +1089,30 @@ runs `checks`, `plan` and the `ci` aggregator:
   A red run on main opens (or comments on) the "CI is red on main" issue,
   and the next green run on main closes it. The rule is fix forward within
   the hour, or revert.
+**On demand** (ADR-0303 §9). A wide-lane pull request also runs a main-only check when its diff
+reaches what the check reads. `plan` decides this in its outputs, and each job is a row of
+`ON_DEMAND` (`tools/xtask/src/change_scope/aggregator.rs`):
+
+- `test-trybuild` runs when `trybuild_required` is set. That happens when the diff touches one of
+  these:
+  - a file that a tracked `*.stderr` cites in a `--> path` or `::: path` line (the fixture, or the declaration of
+    a type the compiler names);
+  - a file in a case directory: beside an expectation, or in a directory a runner's `pass` or
+    `compile_fail` path names;
+  - a runner of the suites;
+  - the source of a workspace procedural macro (its diagnostics are copied into expectations);
+  - a changed line, in a crate a suite compiles, that writes a message the compiler copies: a
+    line of a diagnostic attribute (`#[diagnostic::on_unimplemented]`, `#[deprecated]`, its
+    `message`, `label` or `note`), a `compile_error!`, or prose an expectation quotes;
+  - the toolchain file, `Cargo.lock` or `.config/nextest.toml`.
+
+  The cited files are read from the expectations on each run.
+- `feature-scope` runs feature-matrix's per-feature clippy (`--packages`) over `hack_args`: the
+  changed crates that have features and the crates whose manifest changed. A dependent's
+  feature-gated edge is left to `feature-matrix`.
+
+A pull request that reaches neither skips both.
+
 
 **Only `full` checks these**, so a pull request can merge green and still
 turn main red: the per-feature matrix (`feature-matrix`), miri and the
@@ -1102,8 +1127,8 @@ the suite and `clippy` lints xtask on every pull request). This
 includes native cache-key, host-lock and platform driver regressions; it
 does not replace application or device runtime validation.
 
-The `ci` aggregator recomputes which jobs the lane runs from `plan`'s `lane`
-and its lists `HEAVY_JOBS` and `FULL_JOBS`. It fails on any
+The `ci` aggregator recomputes which jobs the lane runs from `plan`'s `lane`, its on-demand outputs
+and its lists `HEAVY_JOBS`, `FULL_JOBS` and `ON_DEMAND`. It fails on any
 other skip, and on a job that ran where it should have skipped.
 
 Locally, the pre-PR checks are the few commands in AGENTS.md's "Checking a change". `cargo xtask ci` is
@@ -1125,6 +1150,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `doc-test` | `cargo test --workspace --locked --doc` (in `cargo xtask ci`) | — |
 | `miri` | `cargo xtask miri` | nightly + miri |
 | `feature-matrix` | `cargo xtask feature-matrix` (runs `facade-combos` too) | CI runs `--slice 1/5` to `5/5` and `combinations` in parallel; locally it is one run over the workspace |
+| `feature-scope` | `cargo xtask feature-matrix --packages "<hack_args>"` | CI runs `--slice 1/3` to `3/3` in parallel: a pull request's per-feature clippy over its changed crates that have features and its changed manifests; runs when `hack_args` names one |
 | `wasm-check` | `cargo xtask wasm-check`, `cargo xtask wasm-link`, `cargo xtask wasm-test` | `wasm-test` needs the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it) |
 | `cross-typecheck` | `cargo xtask cross-typecheck --target <triple>`, then the same command with `--all-features` (omit the filter for every target) | needs Rust target standard libraries and native C tools; see below |
 | `ci` | — | CI only: the single check a ruleset would require. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the lane skips |
