@@ -510,7 +510,7 @@ fn foreign_document() -> impl Strategy<Value = Vec<u8>> {
     let header = (
         prop_oneof![
             Just("flui-document"),
-            Just("flui-documen"),
+            Just("flui-doc"),
             Just("FLUI-DOCUMENT")
         ],
         prop_oneof![Just(" "), Just("  "), Just("\t"), Just("")],
