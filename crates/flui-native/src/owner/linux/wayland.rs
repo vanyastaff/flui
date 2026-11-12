@@ -2183,7 +2183,7 @@ mod event_loop {
             }
             tracing::info!("starting the Wayland loop");
             self.signal.bind_owner();
-            let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+            let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
                 Arc::clone(&platform),
                 Arc::clone(&self.signal),
             ));
@@ -2195,7 +2195,7 @@ mod event_loop {
             self.start_sources();
             let outcome = self
                 .app
-                .ready(OwnerPlatform::new(platform, Arc::clone(&hooks)))
+                .ready(OwnerPlatform::new(platform, Rc::clone(&hooks)))
                 .map_err(PlatformError::bootstrap)
                 .and_then(|()| {
                     self.signal

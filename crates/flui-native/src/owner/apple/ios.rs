@@ -736,7 +736,7 @@ struct DelegateState {
     handler: Option<Rc<dyn AppHandler>>,
     /// The owner hooks of the run, kept for the session: the delivery holds
     /// them weakly.
-    hooks: Option<Arc<dyn OwnerHooks>>,
+    hooks: Option<Rc<dyn OwnerHooks>>,
     /// Live for the whole session; read by every lifecycle callback.
     platform: Option<Arc<IOSLoop>>,
     /// The platform over `platform` that the owner capability is built on,
@@ -892,7 +892,7 @@ fn run_pending_bootstrap() -> bool {
         return false;
     };
 
-    let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+    let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
         Arc::clone(&owner_platform),
         Arc::clone(&platform.signal),
     ));
@@ -905,7 +905,7 @@ fn run_pending_bootstrap() -> bool {
     // state keeps them for the session, which `UIApplicationMain` never ends.
     platform.app.bind(handler, &owner_platform, &hooks);
     platform.app.resume_through_signal(&platform.signal);
-    DELEGATE_STATE.with(|state| state.borrow_mut().hooks = Some(Arc::clone(&hooks)));
+    DELEGATE_STATE.with(|state| state.borrow_mut().hooks = Some(Rc::clone(&hooks)));
     // The bootstrap's panic is caught here: UIKit's callback cannot unwind.
     #[expect(
         clippy::disallowed_methods,

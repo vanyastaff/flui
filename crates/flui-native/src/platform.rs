@@ -152,7 +152,7 @@ mod sealed {
 /// `run`'s [`AppHandler::ready`] receives an [`OwnerPlatform`], which only a
 /// `pub(crate)` constructor here mints. A new platform is a host table in
 /// `hosts/`, not another implementation of this trait.
-pub trait Platform: sealed::Sealed + Send + Sync + 'static {
+pub trait Platform: sealed::Sealed + 'static {
     // ==================== Core System ====================
 
     // ==================== Lifecycle ====================
