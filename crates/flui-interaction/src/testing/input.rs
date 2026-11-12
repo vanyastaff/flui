@@ -167,8 +167,8 @@ impl ModifiersBuilder {
 /// use flui_platform::keyboard::{Code, KeyState, Modifiers};
 ///
 /// let event = KeyEventBuilder::new(Code::KeyA)
-///     .with_state(KeyState::Down)
-///     .with_modifiers(Modifiers::CONTROL)
+///     .state(KeyState::Down)
+///     .modifiers(Modifiers::CONTROL)
 ///     .build();
 /// ```
 #[derive(Debug, Clone)]
