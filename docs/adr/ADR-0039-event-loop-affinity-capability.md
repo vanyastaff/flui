@@ -93,11 +93,12 @@ backend's state lock or mutate the window map mid-frame. Errors are typed and
 
 ### 2. What stays on `Platform`
 
-`run`, `capabilities`/`name`,
+`Platform` is owner-local ([ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) §1). It keeps `run`, `capabilities`/`name`,
 `app_path`, the `on_*` registrations (registration writes a `Send` callback;
-delivery is owner-thread by construction), `clipboard()` and `data_transfer()`
-(resolution is thread-safe; §5), and the shell dispatches
-`open_url`/`reveal_path`/`open_path` (OS calls usable from any thread).
+delivery is owner-thread by construction), `clipboard()`
+(§5), and the shell dispatches
+`open_url`/`reveal_path`/`open_path`. `data_transfer()` is `OwnerPlatform`'s, where every caller
+is.
 
 `prompt_for_paths`/`prompt_for_new_path` keep their seat unchanged. The one
 real implementation (Windows) already runs its dialog on a dedicated STA

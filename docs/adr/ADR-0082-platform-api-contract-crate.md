@@ -222,7 +222,8 @@ A trait signature cannot differ per backend, so the order is:
 2. one change drops `+ Send` from the signatures once every backend stores callbacks owner-only
    **and** registration is reachable only through types that prove the owner thread.
 
-The refusal in step 1 is what keeps step 2 sound. `Platform`, `PlatformWindow` and
+While the host is `Send + Sync`, the refusal in step 1 is what keeps step 2 sound; once the host
+is owner-local ([ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) §1) the compiler keeps it sound and the refusal goes. `Platform`, `PlatformWindow` and
 `SharedPlatform` are `Send + Sync` and their registrations take `&self`, so without it any thread
 could hand over a closure that captures an `Rc` and have it run on the owner while the `Rc`'s
 other handle stays on the registering thread. Step 2 therefore also moves registration behind
@@ -258,7 +259,9 @@ the callback dropped on the thread that made it, and a slot dropped elsewhere le
 the owner thread's exit. Win32 keeps it in its `WindowContext` as above. With every backend
 owner-only for this callback, `PlatformWindow::on_input` takes `Box<dyn FnMut(PlatformInput) ->
 DispatchEventResult>` without `Send` (ADR-0207 §8); the refusal, not a registrar type, is what
-keeps that sound, and the other `on_*` callbacks keep `+ Send` until their slots move the same way.
+keeps that sound while the window is `Send`, and the other `on_*` callbacks keep `+ Send` until their
+slots move the same way. Once the window is owner-local (ADR-0327 §1), a callback is reached only
+through an `Rc` window, the compiler refuses the off-owner registration, and `OwnerSlot` is deleted.
 `an_input_callback_registered_off_the_owner_thread_is_refused` and the `ui_pass` fixture
 `input_callback_captures_rc` pin it. Only the headless and Win32 paths ran on the implementing
 host; AppKit, UIKit, Android and web are type-checked (UIKit not even that without `clang`).

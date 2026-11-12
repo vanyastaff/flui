@@ -465,7 +465,9 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
   not string keys (SDL: [libsdl-org/SDL@d0183f0ee3 include/SDL3/SDL_video.h:1493-1507](https://github.com/libsdl-org/SDL/blob/d0183f0ee3/include/SDL3/SDL_video.h#L1493-L1507)).
 - OS types in the core host's public paths (`HWND` and the `win32` re-exports at
   `crates/flui-platform/src/platforms/windows/mod.rs:50-59`, `NSApplication`, `AndroidApp`,
-  `HtmlCanvasElement`, `tokio::runtime::Handle`) become `pub(crate)`. Deeper control from outside goes through
+  `HtmlCanvasElement`) become `pub(crate)`. The one tokio type on a public path is the
+  `tokio::runtime::Handle` that `NativeExecutor::from_tokio` takes, so the host runs its IO on the
+  runtime its creator lends it ([ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) §3). Deeper control from outside goes through
   capability crates and the host bridge (ADR-0152). The Activity, which the system hands only to
   the application's `android_main`, enters through one function of the core host,
   `android_platform(app)`, as the facade's `run_app_android` takes it; nothing the core host hands

@@ -41,7 +41,7 @@ consolidation"). The measured state on `main` at `8b2b210`:
   assertion is the lower rung (ADR-0303).
 - One tokio runtime per process for IO (ADR-0047), and `flui-native` gains no edge to
   `flui-runtime` (ADR-0083, ADR-0081).
-- XIM, logind and D-Bus need tokio's IO and time drivers; that does not change.
+- XIM, logind and D-Bus need tokio's IO and time drivers on the Linux hosts; that does not change.
 - `flui-native` still runs without an application: its own tests, `flui-testing`'s dev
   dependencies, headless.
 - Exit stays bounded by ADR-0258 §7, and a source that hangs does not hold it.
@@ -106,36 +106,49 @@ and the loop opens windows in its own turn through the `Weak<dyn Platform>` it h
 // flui-native
 #[derive(Clone)]
 pub struct NativeExecutor(Inner);                          // kind handle
-enum Inner { Own(BackgroundExecutor), Borrowed(tokio::runtime::Handle) }
+enum Inner { Own(Arc<RuntimeOwner>), Borrowed(tokio::runtime::Handle) }
 impl NativeExecutor {
     pub fn own() -> Self;                                  // a lazy 2-thread runtime, no threads until first use
-    pub fn from_tokio(runtime: tokio::runtime::Handle) -> Self; // its IO and time drivers are enabled
-    pub(crate) fn spawn<F: Future + Send + 'static>(&self, future: F) -> Task<F::Output>;
-    pub(crate) fn spawn_blocking<R: Send + 'static>(&self, job: impl FnOnce() -> R + Send + 'static) -> Task<R>;
+    pub fn from_tokio(runtime: tokio::runtime::Handle) -> Self; // precondition: IO and time drivers enabled
+    pub(crate) fn handle(&self) -> tokio::runtime::Handle; // the sources spawn on it
 }
 impl CurrentHost {
     pub fn start_with(self, executor: NativeExecutor) -> Result<Box<dyn Platform>, PlatformError>;
 }
 // flui-runtime (tier-internal, hosts only)
-impl ExecutionServices { pub fn io_runtime(&self) -> Result<tokio::runtime::Handle, SpawnError>; }
+impl ExecutionServices {
+    // None when the host injected its own pools (`Backend::Host`): FLUI runs no runtime then.
+    pub fn io_runtime(&self) -> Result<Option<tokio::runtime::Handle>, SpawnError>;
+}
 ```
 
 `from_tokio` names `tokio::runtime::Handle` in the core host's public path, the one exception to
-ADR-0151 §8's clause. A handle proves the IO and time drivers exist where the sources need them;
-a run-time `Handle::try_current()` check (option 2) would turn that proof into a failure the host
-reports. `BackgroundExecutor` becomes `pub(crate)` as `Inner::Own`, and its `block` is deleted.
-`Task<T>` waits on a `tokio::sync::oneshot`, so it works on either runtime.
+ADR-0151 §8's clause. The handle proves the runtime exists and lets the sources spawn on it without
+a context of their own; it does not prove the drivers. That the runtime has its IO and time drivers
+enabled is a documented precondition of `from_tokio`, met by the one caller that passes a borrowed
+runtime: `flui-app` hands over the IO pool of `ExecutionServices`, built with `enable_all`. A
+handle without them fails inside the source's task: tokio panics when the task first registers a
+socket or a timer, the task ends with a `JoinError`, and the source reports itself unavailable as it
+does when its service is missing; the owner thread does not panic. A run-time
+`Handle::try_current()` check (option 2) would not prove more and would add a failure the host
+reports at start. `BackgroundExecutor` becomes `pub(crate)` as `Inner::Own`, and its `block` and
+`spawn` are deleted.
+
+Only the Wayland and X11 hosts start sources on the runtime (XIM, IBus, logind, the settings
+portal), so only they take an executor. The Windows file dialogs run on an STA thread of their own
+and answer through a `tokio::sync::oneshot` that `Task<T>` waits on: they need no runtime, and no
+runtime worker blocks on a dialog. The macOS, iOS, Android, web and headless hosts run no IO task.
 
 `flui-app`'s runner starts the execution services before the host: `install_host_executors`
-and `ensure_execution` move ahead of `host.start()`, and the runner calls
-`start_with(NativeExecutor::from_tokio(services.io_runtime()?))` when the services are FLUI's own.
-An application that brought its own executors through `with_executors` gets `NativeExecutor::own()`,
-so an embedding stays neutral.
+and `ensure_execution` move ahead of `platform()`, and on Wayland and X11 the runner calls
+`start_with(NativeExecutor::from_tokio(runtime))` with the runtime `io_runtime` returns. Every other
+host, and an application that brought its own executors through `with_executors` (`io_runtime`
+returns `None`), starts with `start()`, which uses `own()`, so an embedding stays neutral and no IO
+pool starts for a host that would not use it.
 
 Without an application (`current_platform()`, `CurrentHost::start()`, `headless_platform()`,
 `flui-native`'s tests, the dev dependencies of `flui-testing` and `flui-runtime`) the host uses
-`own()`. Headless starts no sources. The driver agent lives in `flui-app` and gets the
-application's runtime.
+`own()`. The driver agent lives in `flui-app` and gets the application's runtime.
 
 ### §4. A source ends when its owner drops it
 
@@ -159,7 +172,7 @@ Each step is its own PR, green on Linux CI, with the other hosts written from th
 documentation and type-checked:
 
 1. this record;
-2. `NativeExecutor`, `CurrentHost::start_with`, `BackgroundExecutor` made `pub(crate)` without `block`, `Task` on a `oneshot`;
+2. `NativeExecutor`, `CurrentHost::start_with`, `BackgroundExecutor` made `pub(crate)` without `block` and `spawn`, the Windows dialogs answering through a `oneshot`;
 3. `ExecutionServices::io_runtime`, and `flui-app` starts the services first and hands the runtime over;
 4. the thread bounds leave `Platform`, `Loop`, `Window::Shared`, `OpenWindows`, `OwnerHooks` and
    `on_wake` in one change across every host, bounds only, with `cross-typecheck` green on every
@@ -186,6 +199,8 @@ documentation and type-checked:
   `an_input_callback_registered_off_the_owner_thread_is_refused`.
 - `ui_pass` fixtures: a loop callback holding `Rc<Cell<_>>`, and an `impl PlatformHaptics`
   holding `Rc<Cell<u32>>` installed on a headless window.
+- `the_host_runs_its_io_on_the_runtime_it_is_handed`: an X11 host started with a lent runtime
+  spawns its sources there.
 - Under Xvfb: an X11 application runs with `flui-io` threads and no `flui-native-bg` thread
   (`/proc/self/task/*/comm`).
 - A source task parked at an `await` forever on a borrowed runtime is finished once its owner drops
@@ -199,7 +214,8 @@ documentation and type-checked:
 
 ### 1. Owner-local host, tokio handle from the creator
 
-- Good, because both the thread and the runtime's drivers are proven by types.
+- Good, because the thread is proven by types and the runtime is named by one; the drivers are a
+  precondition met by its one borrowing caller.
 - Bad, because a tokio type enters the core host's public path.
 
 ### 2. Owner-local host, `Arc<dyn Executor>` and a run-time context check
