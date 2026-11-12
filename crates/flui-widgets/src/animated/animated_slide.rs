@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use flui_animation::{MotionSpec, ProxyAnimation};
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
+use flui_view::{Child, IntoView, ViewState};
 
 use flui_objects::TranslationFraction;
 
@@ -25,7 +25,7 @@ use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
 /// use flui_widgets::{AnimatedSlide, MotionBuilder, SizedBox, TranslationFraction};
 /// use std::time::Duration;
 ///
-/// let hidden = AnimatedSlide::new(TranslationFraction::new(0.0, 1.0), SizedBox::new(40.0, 40.0))
+/// let hidden = AnimatedSlide::new(TranslationFraction::new(0.0, 1.0)).child(SizedBox::new(40.0, 40.0))
 ///     .duration(Duration::from_millis(250));
 /// # let _ = hidden;
 /// ```
@@ -33,17 +33,24 @@ use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
 pub struct AnimatedSlide {
     offset: TranslationFraction,
     motion: MotionSpec,
-    child: BoxedView,
+    child: Child,
 }
 
 impl AnimatedSlide {
-    /// Translate `child` by `offset` with the default motion.
-    pub fn new(offset: TranslationFraction, child: impl IntoView) -> Self {
+    /// Translate by `offset` with the default motion, with no child yet.
+    pub fn new(offset: TranslationFraction) -> Self {
         Self {
             offset,
             motion: MotionSpec::default(),
-            child: child.into_view().boxed(),
+            child: Child::empty(),
         }
+    }
+
+    /// Sets the child.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
     }
 }
 
@@ -67,7 +74,7 @@ impl std::fmt::Debug for AnimatedSlide {
 pub struct AnimatedSlideState {
     animation: ImplicitMotion<TranslationFraction>,
     proxy: ProxyAnimation<TranslationFraction>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl StatefulView for AnimatedSlide {
@@ -99,7 +106,7 @@ impl ViewState<AnimatedSlide> for AnimatedSlideState {
     }
 
     fn build(&self, _view: &AnimatedSlide, _ctx: &dyn BuildContext) -> impl IntoView {
-        SlideTransition::new(Rc::new(self.proxy.clone()), self.child.clone())
+        SlideTransition::new(Rc::new(self.proxy.clone())).child_slot(self.child.clone())
     }
 
     fn did_update_view(&mut self, _old_view: &AnimatedSlide, new_view: &AnimatedSlide) {

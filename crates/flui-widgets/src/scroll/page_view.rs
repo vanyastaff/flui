@@ -411,8 +411,8 @@ type OnPageChanged = ValueCallback<usize>;
 /// ))
 /// .expect("two distinct labels");
 /// let pager = PageView::new(
-///     vec![SizedBox::expand(), SizedBox::expand(), SizedBox::expand()],
 ///     alternatives,
+///     vec![SizedBox::expand(), SizedBox::expand(), SizedBox::expand()],
 /// );
 /// ```
 #[derive(Clone, StatefulView)]
@@ -437,7 +437,7 @@ impl PageView {
     /// without a swipe through `alternatives`, whose commands name
     /// [`PageIntent`] or an intent the surroundings answer. By default [`PageView::cache_extent`] keeps no
     /// neighbouring pages laid out.
-    pub fn new(children: impl ViewSeq, alternatives: GestureAlternatives) -> Self {
+    pub fn new(alternatives: GestureAlternatives, children: impl ViewSeq) -> Self {
         Self {
             alternatives,
             controller: None,

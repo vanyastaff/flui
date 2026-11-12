@@ -351,7 +351,7 @@ impl ViewState<RawTextField> for RawTextFieldState {
 // ============================================================================
 
 /// Simple 1-px dark-gray border over a white background for the field.
-fn field_border_decoration() -> BoxDecoration<f64> {
+fn field_border_decoration() -> BoxDecoration {
     BoxDecoration::new()
         .set_color(Some(Color::WHITE))
         .set_border(Some(Border::all(BorderSide::new(
