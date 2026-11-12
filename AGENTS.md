@@ -64,8 +64,8 @@ and edits its row.
 
 - only `flui-app` depends on `flui-native`, and `windows::*`/`objc2::*` types stay in it
   (ADR-0082); `flui-runtime` has no host, platform or GPU edge (ADR-0083);
-- official packages build on `flui-sdk` alone (ADR-0088); `flui-hot-reload` is one, still under
-  `crates/`, reached only through `DevReloadHook`;
+- official packages build on `flui-sdk` alone (ADR-0088); `flui-hot-reload` is one, which an
+  application adds itself and the framework reaches only through `DevReloadHook`;
 - a crate's invariants are in its `ARCHITECTURE.md` (in the crate's `docs/` for
   `flui-animation`, `flui-assets`, `flui-interaction`).
 

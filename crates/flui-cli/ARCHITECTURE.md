@@ -135,21 +135,24 @@ shapes; source-validation failures must leave no partially created application.
 
 ### Applications depend on the facade
 
-Basic, counter, and hot-reload templates declare only `flui` as a framework
-dependency. Generated imports use its public prelude and modules. A local facade
+Basic and counter templates declare only `flui` as a framework dependency.
+Generated imports use its public prelude and modules. A local facade
 dependency points at the checkout root; internal crate directories stay an
 implementation detail. The root package and required source manifests are still
 validated before output creation.
 
-Hot-reload members enable the facade's `hot-reload` feature, which exposes
-`flui::hot_reload`; the generated host installs its `WorkerReloadHook` with
-`AppConfig::with_dev_reload`. Sibling app
-crates retain relative dependencies. The worker deliberately receives the full
-facade dependency graph: this increases its compile graph but keeps application
-authoring consistent with the host and ordinary projects. The development-only
-reload dependency remains absent from the normal graph when that feature is off.
-The generated worker uses the hygienic `hot_reload_worker!` macro; this change
-does not alter the separate scene/plugin macro contracts.
+The hot-reload template adds the official package `flui-hot-reload` beside the
+facade in each of its three crates: the facade names no official package
+(ADR-0311 §6). The types and worker crates take its `app-plugin` feature, the
+host `app-plugin` and `host-hook`, and the host installs its `WorkerReloadHook`
+with `AppConfig::with_dev_reload`. A local package dependency points at
+`packages/flui-hot-reload` in the checkout, which `--local` validates. Sibling
+app crates retain relative dependencies. The worker deliberately receives the
+full facade dependency graph: this increases its compile graph but keeps
+application authoring consistent with the host and ordinary projects. The
+host/worker split is the reload itself, so the template has no build without
+the package; an ordinary template never names it.
+The generated worker uses the hygienic `hot_reload_worker!` macro.
 
 This follows the application-facing entry points demonstrated by
 [Iced's widget module](https://docs.rs/iced/latest/iced/widget/) and

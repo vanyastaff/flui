@@ -17,7 +17,7 @@
 
 use std::path::Path;
 
-use flui_layer::Scene;
+use flui_sdk::hooks::Scene;
 
 use crate::dynlib::{self, DynLib};
 

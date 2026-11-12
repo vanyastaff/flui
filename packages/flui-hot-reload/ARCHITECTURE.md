@@ -18,9 +18,9 @@ destroys the outgoing hook outside the slot lock.
 ### Typed scene factories and explicit ownership transfer
 
 The plugin macros export fixed C symbol families once per image. Factories return
-the canonical `Scene`, publicly reexported from its owning layer crate. Macro
+the canonical `Scene`, which the package re-exports from `flui_sdk::hooks`. Macro
 expansions resolve it through `$crate`, so application authors can invoke either
-macro through `flui::hot_reload` or a renamed facade dependency. No consumer
+macro through `flui_hot_reload` or a renamed dependency. No consumer
 layer dependency is necessary.
 
 Every returned allocation has exactly two mutually exclusive consumption paths:

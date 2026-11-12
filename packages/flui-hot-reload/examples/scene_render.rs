@@ -18,18 +18,18 @@
 //! cargo build -p flui-desktop-scene
 //!
 //! # Run with hot-reload (Linux/macOS):
-//! FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run --example scene_render
+//! FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run -p flui-hot-reload --example scene_render
 //!
 //! # Run with hot-reload (Windows):
 //! set FLUI_SCENE_PLUGIN=target\debug\flui_scene.dll
-//! cargo run --example scene_render
+//! cargo run -p flui-hot-reload --example scene_render
 //! ```
 //!
 //! Without the env var, the built-in scene (colored rectangles) is used.
 //!
-//! Run with: cargo run --example scene_render
-//! Native effects gallery: cargo run --example scene_render -- --effects
-//! Deterministic PNG: cargo run --example scene_render -- --capture-effects gallery.png
+//! Run with: cargo run -p flui-hot-reload --example scene_render
+//! Native effects gallery: cargo run -p flui-hot-reload --example scene_render -- --effects
+//! Deterministic PNG: cargo run -p flui-hot-reload --example scene_render -- --capture-effects gallery.png
 
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report

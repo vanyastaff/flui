@@ -326,13 +326,27 @@ pub mod pipeline {
 
 /// Development hooks the facade does not expose.
 ///
-/// **Evolving** (ADR-0088 §4), like [`pipeline`]: frame telemetry that
-/// development tooling reads. The tree-observation seam is not here; it is
-/// `foundation::observe`, at the facade's path.
+/// **Evolving** (ADR-0088 §4), like [`pipeline`]:
 ///
-/// No public API produces a `FrameSnapshot` yet: the
-/// presentation's frame clock is internal to the app host. A public snapshot
-/// source is the follow-up recorded in ADR-0088's move 4.
+/// - frame telemetry that development tooling reads. No public API produces a
+///   `FrameSnapshot` yet: the presentation's frame clock is internal to the
+///   app host. A public snapshot source is the follow-up recorded in
+///   ADR-0088's move 4.
+/// - the plugin ABI of `flui-hot-reload`'s dlopen path (ADR-0311 §6): the
+///   [`PluginPipeline`](hooks::PluginPipeline) a scene plugin mounts its root
+///   on, the [`Scene`](hooks::Scene) and [`LayerTree`](hooks::LayerTree) it
+///   hands back, and the [`TextContextHandle`](hooks::TextContextHandle) it
+///   measures with. They leave with that path (ADR-0311 §7).
+///
+/// The tree-observation seam is not here; it is `foundation::observe`, at the
+/// facade's path.
 pub mod hooks {
+    mod plugin_pipeline;
+
+    pub use flui_layer::LayerTree;
+    pub use flui_layer::Scene;
+    pub use flui_rendering::pipeline::TextContextHandle;
     pub use flui_scheduler::FrameSnapshot;
+    pub use plugin_pipeline::PluginFrameError;
+    pub use plugin_pipeline::PluginPipeline;
 }

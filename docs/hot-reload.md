@@ -2,7 +2,7 @@
 
 # Hot Reload
 
-FLUI targets **hot reload** (state preserved, `build()` re-run). The operational two-layer model below is the dev-time/build side; the runtime hook is [ADR-0311](adr/ADR-0311-development-reload-is-a-hook-the-application-installs.md), which also says when a code patcher such as Subsecond (rejected for now, [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md)) replaces the dlopen path, and the plugin boundary's invariants in [`crates/flui-hot-reload/ARCHITECTURE.md`](../crates/flui-hot-reload/ARCHITECTURE.md).
+FLUI targets **hot reload** (state preserved, `build()` re-run). The operational two-layer model below is the dev-time/build side; the runtime hook is [ADR-0311](adr/ADR-0311-development-reload-is-a-hook-the-application-installs.md), which also says when a code patcher such as Subsecond (rejected for now, [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md)) replaces the dlopen path, and the plugin boundary's invariants in [`packages/flui-hot-reload/ARCHITECTURE.md`](../packages/flui-hot-reload/ARCHITECTURE.md).
 
 ## Target vs today
 
@@ -27,7 +27,9 @@ flui run
 in `flui.toml`. Edit `my-app-logic/src/lib.rs` and save: `flui run` rebuilds the
 worker, the host reloads it in-process, and `State` is preserved. Edit
 `my-app-types/src/` and the CLI restarts the host instead (the shared type
-layout changed — bump `TYPE_FINGERPRINT`).
+layout changed — bump `TYPE_FINGERPRINT`). Each of the three crates depends on
+`flui` and, beside it, on the official package `flui-hot-reload`: the facade
+has no reload feature (ADR-0311 §6).
 
 ### Staging: why the worker path changes on every rebuild
 
@@ -78,7 +80,7 @@ configuration, and the runner drives it through the `DevReloadHook` trait
 (`flui::view::dev_reload`, [ADR-0311](adr/ADR-0311-development-reload-is-a-hook-the-application-installs.md)):
 
 ```rust,ignore
-use flui::hot_reload::WorkerReloadHook;
+use flui_hot_reload::WorkerReloadHook;
 
 let config = AppConfig::new().with_dev_reload(WorkerReloadHook::new(worker_path));
 run_app(root, AppLaunch::new().config(config))?;
@@ -89,7 +91,7 @@ it ends. Every UI runtime polls it at its frame boundary, on the owner thread; a
 reload (or a worker's `request_rebuild`) is applied once to every UI runtime, as a
 reassemble that keeps `State`. A hook that panics is dropped and the app keeps
 running without reload. An idle window applies a reload when it next draws.
-The Android `--scene` host installs `flui::hot_reload::ScenePluginHook` the
+The Android `--scene` host installs `flui_hot_reload::ScenePluginHook` the
 same way; the Android runner calls only its `scene_frame`, so a worker hook
 does nothing there, and it warns when a scene plugin is on the device but no
 hook is installed.
@@ -140,7 +142,7 @@ producing.
 
 ## Reload Strategies
 
-[`ReloadStrategy`](https://github.com/flui-rs/flui/blob/main/crates/flui-hot-reload/src/strategy.rs) in `flui-hot-reload` describes how changes reach the running app:
+[`ReloadStrategy`](https://github.com/flui-rs/flui/blob/main/packages/flui-hot-reload/src/strategy.rs) in `flui-hot-reload` describes how changes reach the running app:
 
 | Strategy | Command / setup | Layer 1 | Layer 2 | Host process |
 |----------|-----------------|---------|---------|--------------|
@@ -204,11 +206,11 @@ Terminal 2 — run host with in-process reload:
 
 ```bash
 # Linux/macOS
-FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run --example scene_render
+FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run -p flui-hot-reload --example scene_render
 
 # Windows
 set FLUI_SCENE_PLUGIN=target\debug\flui_scene.dll
-cargo run --example scene_render
+cargo run -p flui-hot-reload --example scene_render
 ```
 
 The host calls `HotReloadDriver::poll()` in its frame loop; when the `.so` mtime changes, it reloads without restarting.
@@ -264,7 +266,7 @@ For a full `flui-app` desktop runner, the same `HotReloadDriver` can wrap a plug
 
 ## See Also
 
-- [`crates/flui-hot-reload`](../crates/flui-hot-reload/src/lib.rs) — API and module docs
-- [`examples/scene_render.rs`](../examples/scene_render.rs) — reference host integration
+- [`packages/flui-hot-reload`](../packages/flui-hot-reload/src/lib.rs) — API and module docs
+- [`packages/flui-hot-reload/examples/scene_render.rs`](../packages/flui-hot-reload/examples/scene_render.rs) — reference host integration
 - [`examples/desktop_scene`](../examples/desktop_scene/) — reference plugin crate
-- [Architecture](architecture.md) — workspace tiers (hot-reload sits in pkg, an official package under crates/ per ADR-0088)
+- [Architecture](architecture.md) — workspace tiers (hot-reload sits in pkg, an official package under packages/ on `flui-sdk` alone per ADR-0088 and ADR-0311 §6)

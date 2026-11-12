@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 flui-app = { path = "../../../crates/flui-app" }
-flui-hot-reload = { path = "../../../crates/flui-hot-reload", features = [
+flui-hot-reload = { path = "../../../packages/flui-hot-reload", features = [
     "app-plugin",
     "host-hook",
 ] }
