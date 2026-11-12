@@ -9,7 +9,6 @@ use crate::clipboard::windows::WindowsClipboard;
 use crate::display::windows::{DisplayBroadcasts, WindowsDisplays};
 use crate::drag::windows::{DropTargetRegistration, OleTransfer};
 use crate::error::PlatformError;
-use crate::executor::NativeExecutor;
 use crate::haptics::windows::WindowsHaptics;
 use crate::host::{Absent, Host, position};
 use crate::input::windows::InputWindows;
@@ -129,29 +128,18 @@ impl HostPlatform<Windows> {
     /// [`PlatformError::Init`] when the owner thread's COM apartment, window
     /// class or owner window cannot be set up.
     pub fn try_new() -> Result<Self, PlatformError> {
-        Self::try_new_with(NativeExecutor::own())
-    }
-
-    /// [`try_new`](Self::try_new) on `executor`'s runtime, as
-    /// [`CurrentHost::start_with`](crate::CurrentHost::start_with) starts it.
-    pub(crate) fn try_new_with(executor: NativeExecutor) -> Result<Self, PlatformError> {
         let build = WindowsBuild::read();
         crate::version::gate::refuse_below_floor(build)?;
-        Self::at_build_with(build, executor)
+        Self::at_build(build)
     }
 
     /// The platform as it runs on `build`, which its windows' version gates
     /// read: [`try_new`](Self::try_new) with the build the process runs on, and a
     /// test with the build it names.
-    #[cfg(test)]
     pub(crate) fn at_build(build: WindowsBuild) -> Result<Self, PlatformError> {
-        Self::at_build_with(build, NativeExecutor::own())
-    }
-
-    fn at_build_with(build: WindowsBuild, executor: NativeExecutor) -> Result<Self, PlatformError> {
         Self::try_from_parts(
             |positions| WindowSet::new(WindowConfiguration::default(), positions, build),
-            |windows| WindowsLoop::try_new::<Windows>(Arc::clone(windows) as _, executor),
+            |windows| WindowsLoop::try_new::<Windows>(Arc::clone(windows) as _),
         )
     }
 }

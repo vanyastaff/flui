@@ -8,3 +8,4 @@
 ### Removed
 
 - `BackgroundExecutor::block`, `spawn` and `timer`: the executor is the host's, not a public pool.
+  The Windows file dialogs answer from their own thread through a channel and run on no runtime.

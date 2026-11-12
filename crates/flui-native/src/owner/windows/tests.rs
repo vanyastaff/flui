@@ -461,10 +461,9 @@ fn every_owner_hook_hears_the_window_go_after_one_panics() {
 /// this test alone in, as it runs every test.
 #[test]
 fn a_second_host_is_refused_the_window_class() {
-    let _first =
-        WindowsLoop::try_new::<QuietHost>(Arc::new(NoWindows), crate::NativeExecutor::own())
-            .expect("the first host registers the class");
-    match WindowsLoop::try_new::<TestHost>(Arc::new(NoWindows), crate::NativeExecutor::own()) {
+    let _first = WindowsLoop::try_new::<QuietHost>(Arc::new(NoWindows))
+        .expect("the first host registers the class");
+    match WindowsLoop::try_new::<TestHost>(Arc::new(NoWindows)) {
         Err(PlatformError::Init { message }) => assert!(
             message.contains("another host"),
             "the refusal names the class's other host: {message}"

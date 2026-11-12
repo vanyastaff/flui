@@ -592,7 +592,7 @@ impl CurrentHost {
         }
     }
 
-    /// Starts this host, running its IO (the Linux session sources, the Windows dialogs) on
+    /// Starts this host, running its IO (the Linux session sources and the Wayland title fonts) on
     /// `executor`'s runtime (ADR-0327 §3). An application passes its execution services' IO
     /// runtime, so the process runs one IO pool.
     ///
@@ -607,16 +607,20 @@ impl CurrentHost {
 
     /// The host, built on `executor` where it runs IO. The browser host has no
     /// tokio runtime and takes none.
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "a target whose only hosts cannot fail to start still answers through `start`'s `Result`"
+    )]
     fn launch(
         self,
         #[cfg(not(target_arch = "wasm32"))] executor: NativeExecutor,
     ) -> Result<Box<dyn Platform>, PlatformError> {
-        #[cfg(not(any(windows, target_os = "linux", target_arch = "wasm32")))]
+        #[cfg(not(any(target_os = "linux", target_arch = "wasm32")))]
         let _ = executor;
         match self {
             Self::Headless => Ok(Box::new(HeadlessPlatform::new())),
             #[cfg(windows)]
-            Self::Windows => Ok(Box::new(WindowsPlatform::try_new_with(executor)?)),
+            Self::Windows => Ok(Box::new(WindowsPlatform::try_new()?)),
             #[cfg(all(target_os = "macos", not(windows)))]
             Self::MacOs => Ok(Box::new(MacOSPlatform::try_new()?)),
             #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]

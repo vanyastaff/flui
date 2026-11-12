@@ -55,7 +55,7 @@ Activity `android_main` is handed, through `android_platform(app)`.
   applicable W3C vocabularies; native adapters keep their platform contracts
   (ADR-0143), with execution evidence distinct from type compatibility.
 - **Executor** — `NativeExecutor` is the tokio runtime a host runs its IO on (the Linux
-  session sources, the Windows dialogs): the one its creator lends with `from_tokio`, which
+  session sources and the Wayland title fonts): the one its creator lends with `from_tokio`, which
   `CurrentHost::start_with` takes, or a small one of its own (`own`, what `start` uses).
   UI-owner commands stay private to each backend's bounded, wake-integrated control path.
 - **Displays** — monitor enumeration, DPI/scale factors, device↔logical pixel

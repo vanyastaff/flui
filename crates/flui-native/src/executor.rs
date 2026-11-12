@@ -1,21 +1,17 @@
 //! The runtime the host runs its IO on (ADR-0327 §3).
 //!
-//! The Linux hosts watch logind, the settings portal and the IBus bus on
-//! tokio, and the Windows host marshals its dialogs through it. The runtime
-//! is the one the host's creator hands it: `flui-app` passes its execution
-//! services' IO runtime with [`NativeExecutor::from_tokio`], so a process
-//! runs one IO pool (ADR-0047). A host started without an application (its
-//! own tests, headless, `current_platform`) takes [`NativeExecutor::own`], a
-//! small runtime that starts no thread until its first use.
+//! The Linux hosts watch logind, the settings portal and the IBus bus, and
+//! the Wayland host loads its title fonts, on tokio; no other host runs IO.
+//! The runtime is the one the host's creator hands it: `flui-app` passes its
+//! execution services' IO runtime with [`NativeExecutor::from_tokio`], so a
+//! process runs one IO pool (ADR-0047). A host started without an application
+//! (its own tests, headless, `current_platform`) takes
+//! [`NativeExecutor::own`], a small runtime that starts no thread until its
+//! first use.
 
-use std::{
-    future::Future,
-    sync::{Arc, OnceLock},
-};
+use std::sync::{Arc, OnceLock};
 
 use tokio::runtime::{Handle, Runtime};
-
-use crate::task::Task;
 
 /// Worker threads of the host's own runtime. Small and fixed: an application
 /// hands the host its IO runtime instead, so this one serves only a host
@@ -43,6 +39,10 @@ impl Drop for RuntimeOwner {
 pub struct NativeExecutor(Inner);
 
 #[derive(Clone)]
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(dead_code, reason = "only the Linux hosts run IO on tokio")
+)]
 enum Inner {
     /// A runtime of the host's own, started on first use.
     Own(Arc<RuntimeOwner>),
@@ -70,30 +70,23 @@ impl NativeExecutor {
     }
 
     /// The runtime to spawn on, starting an own runtime on first use.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(dead_code, reason = "only the Linux hosts run IO on tokio")
+    )]
     pub(crate) fn handle(&self) -> Handle {
         match &self.0 {
             Inner::Own(owner) => owner.runtime().handle().clone(),
             Inner::Borrowed(handle) => handle.clone(),
         }
     }
-
-    /// Spawn `future` on the runtime; the returned [`Task`] awaits it.
-    #[cfg_attr(
-        not(windows),
-        expect(
-            dead_code,
-            reason = "the Windows host's dialogs spawn through it; the other hosts spawn on `handle`"
-        )
-    )]
-    pub(crate) fn spawn<R: Send + 'static>(
-        &self,
-        future: impl Future<Output = R> + Send + 'static,
-    ) -> Task<R> {
-        Task::from_handle(self.handle().spawn(future))
-    }
 }
 
 impl RuntimeOwner {
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(dead_code, reason = "only the Linux hosts run IO on tokio")
+    )]
     fn runtime(&self) -> &Runtime {
         self.0.get_or_init(|| {
             tracing::info!(
@@ -123,7 +116,7 @@ impl std::fmt::Debug for NativeExecutor {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use std::{sync::mpsc, time::Duration};
 

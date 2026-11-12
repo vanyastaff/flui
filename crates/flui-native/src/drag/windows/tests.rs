@@ -551,7 +551,6 @@ fn platform_over(transport: &Arc<OleTransfer>) -> WindowsPlatform {
         |windows| {
             WindowsLoop::with_drag::<Windows>(
                 Arc::clone(windows) as _,
-                crate::NativeExecutor::own(),
                 Arc::clone(transport) as Arc<dyn HostDrag>,
             )
         },
