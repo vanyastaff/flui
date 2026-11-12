@@ -793,7 +793,7 @@ mod tests {
         let id_b_cell = Rc::new(RefCell::new(None::<ListenerId>));
         let n2 = n.clone();
         let cell2 = Rc::clone(&id_b_cell);
-        let _a = n.add(Rc::new(move |&()| {
+        let id_a = n.add(Rc::new(move |&()| {
             let id = *cell2.borrow_mut();
             if let Some(id) = id {
                 n2.remove(id);
@@ -806,6 +806,9 @@ mod tests {
         let _prev = id_b_cell.borrow_mut().replace(id_b);
         n.notify(&());
         assert_eq!(fired_b.load(Ordering::SeqCst), 0);
+        // The first listener holds a clone of the notifier: removing it breaks
+        // the cycle, so the list and both listeners are freed.
+        n.remove(id_a);
     }
 
     /// Withdrawing leaves no listener behind and none out of order, across

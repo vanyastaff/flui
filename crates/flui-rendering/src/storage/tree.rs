@@ -1193,6 +1193,10 @@ mod tests {
     /// Re-adopting a subtree whose deepest leaf sits at the last representable
     /// depth succeeds: only a node with children derives a child depth.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "65 535 nodes deep, hours under Miri; the depth arithmetic it checks has no unsafe, and the shallow re-adoption tests run the same storage under it"
+    )]
     fn readopting_a_subtree_down_to_the_last_depth_does_not_overflow() {
         let mut tree = RenderTree::new();
         let root = tree.insert_box(make_leaf());
