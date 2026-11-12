@@ -2215,7 +2215,7 @@ graph LR
   10), `Unrecognized { request, value }`, `NotOnThisHost` (значение контракта новее хоста);
   переименованы `set_snap_layouts`, `snap_layouts`, `set_blur_behind`, `dark_mode`; удалён дубль
   `set_caption_color`. (6) Слот — структура: `WindowOptions::os_options: OsWindowOptions { windows:
-  Option<Win32WindowOptions> }` (`with_os_options`, `OsWindowOptions::with_windows`), то же имя в
+  Option<Win32WindowOptions> }` (`os_options`, `OsWindowOptions::windows`), то же имя в
   `AppConfig` (`os_options`); опции двух ОС больше не вытесняют друг друга.
   (7) Типы — в публичном модуле контракта `flui_platform::os_options`, не в корне; все
   `#[non_exhaustive]`. ADR-0089 даёт уровень крейту, не модулю (§1: обещание следует за элементом),

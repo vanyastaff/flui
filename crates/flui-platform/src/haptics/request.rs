@@ -58,7 +58,7 @@ impl HapticRequest {
 
     /// This request played on `source`'s actuator.
     #[must_use]
-    pub const fn with_source(self, source: DeviceId) -> Self {
+    pub const fn source(self, source: DeviceId) -> Self {
         Self {
             source: Some(source),
             ..self
@@ -67,7 +67,7 @@ impl HapticRequest {
 
     /// This request tagged with the input sequence it answers.
     #[must_use]
-    pub const fn with_sequence(self, sequence: InputSequenceId) -> Self {
+    pub const fn sequence(self, sequence: InputSequenceId) -> Self {
         Self {
             sequence: Some(sequence),
             ..self
@@ -76,7 +76,7 @@ impl HapticRequest {
 
     /// This request at `timing`.
     #[must_use]
-    pub const fn with_timing(self, timing: HapticTiming) -> Self {
+    pub const fn timing(self, timing: HapticTiming) -> Self {
         Self { timing, ..self }
     }
 }

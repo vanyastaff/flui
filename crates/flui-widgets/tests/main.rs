@@ -222,3 +222,7 @@ mod widgets_app_router;
 mod window_chrome;
 #[path = "wrap.rs"]
 mod wrap;
+
+// Localization delegates, image providers and animated-list keys carry no
+// thread bound (ADR-0323 §4).
+mod owner_local;

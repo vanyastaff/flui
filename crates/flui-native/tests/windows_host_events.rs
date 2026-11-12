@@ -371,7 +371,7 @@ fn a_block_is_registered_on_the_visible_window() {
             let window = host
                 .owner
                 .open_window(
-                    flui_platform::WindowOptions::default().with_visible(true),
+                    flui_platform::WindowOptions::default().visible(true),
                     flui_testing::window_handler::RecordingWindowHandler::new(),
                 )
                 .expect("a window")

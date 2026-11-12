@@ -381,8 +381,8 @@ mod cases {
         ) -> Self {
             Self::open_with_options(
                 WindowOptions::default()
-                    .with_title(title)
-                    .with_size(Size::new(400.0, 300.0)),
+                    .title(title)
+                    .size(Size::new(400.0, 300.0)),
                 handler,
             )
         }
@@ -630,7 +630,7 @@ mod cases {
         let connection = platform.display_connection();
         let window = platform
             .open_window(
-                WindowOptions::default().with_size(Size::new(64.0, 64.0)),
+                WindowOptions::default().size(Size::new(64.0, 64.0)),
                 RecordingWindowHandler::new(),
             )
             .expect("an X11 window opens");
@@ -677,9 +677,9 @@ mod cases {
         let window = platform
             .open_window(
                 WindowOptions::default()
-                    .with_size(Size::new(320.0, 240.0))
-                    .with_mode(WindowMode::Maximized)
-                    .with_reveal(WindowReveal::AtOpen),
+                    .size(Size::new(320.0, 240.0))
+                    .mode(WindowMode::Maximized)
+                    .reveal(WindowReveal::AtOpen),
                 RecordingWindowHandler::new(),
             )
             .expect("an X11 window opens");
@@ -879,7 +879,7 @@ mod cases {
             let handler = RecordingWindowHandler::new();
             let window = owner
                 .open_window(
-                    WindowOptions::default().with_visible(false),
+                    WindowOptions::default().visible(false),
                     Rc::clone(&handler) as _,
                 )?
                 .try_ready()?;
@@ -1017,7 +1017,7 @@ mod cases {
         log.bootstrap(move |owner| {
             quit_after(owner.proxy(), Duration::from_millis(600));
             let _window = owner
-                .open_window(WindowOptions::default().with_visible(false), opened)?
+                .open_window(WindowOptions::default().visible(false), opened)?
                 .try_ready()?;
             Ok(())
         });

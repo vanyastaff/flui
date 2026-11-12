@@ -69,7 +69,7 @@ use crate::version::gate::Since;
 ///
 /// // A headless window is not a Win32 window: nothing is asked of it.
 /// let window = headless_platform().open_window(
-///     WindowOptions::default().with_visible(false),
+///     WindowOptions::default().visible(false),
 ///     RecordingWindowHandler::new(),
 /// )?;
 /// assert!(!mica(window.as_ref()));
@@ -683,7 +683,7 @@ mod material_tests {
     fn open(platform: &crate::WindowsPlatform) -> (Rc<dyn HostWindow>, HWND) {
         let window = platform
             .open_window(
-                WindowOptions::default().with_title("flui material"),
+                WindowOptions::default().title("flui material"),
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("a Win32 window opens");

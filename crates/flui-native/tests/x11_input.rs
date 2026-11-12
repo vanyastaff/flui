@@ -906,9 +906,9 @@ fn a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager(
     let handler = RecordingWindowHandler::new();
     let mut fixture = X11Fixture::open_with_options(
         WindowOptions::default()
-            .with_title("app title bar")
-            .with_size(Size::new(400.0, 300.0))
-            .with_frame(WindowFrame::AppTitleBar(AppTitleBar::new())),
+            .title("app title bar")
+            .size(Size::new(400.0, 300.0))
+            .frame(WindowFrame::AppTitleBar(AppTitleBar::new())),
         Rc::clone(&handler) as Rc<dyn flui_platform::WindowHandler>,
     );
     assert!(

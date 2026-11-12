@@ -129,7 +129,7 @@ impl ScriptedHttp {
         lock_state(&self.state)
             .requests
             .iter()
-            .filter(|request| request.url() == url)
+            .filter(|request| request.url == url)
             .count()
     }
 
@@ -158,8 +158,8 @@ impl HttpClient for ScriptedHttp {
     }
 
     fn send(&self, request: HttpRequest) -> HttpFuture<HttpResponse> {
-        let url = request.url().to_owned();
-        let limit = request.body_limit();
+        let url = request.url.clone();
+        let limit = request.body_limit;
         let id = {
             let mut state = lock_state(&self.state);
             state.requests.push(request);

@@ -389,7 +389,7 @@ mod cases {
         let handler = RecordingWindowHandler::new();
         let window = platform
             .open_window(
-                WindowOptions::default().with_title(title),
+                WindowOptions::default().title(title),
                 Rc::clone(&handler) as _,
             )
             .expect("an AppKit window opens");

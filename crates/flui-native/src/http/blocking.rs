@@ -107,7 +107,7 @@ impl<S: Stack> HttpClient for BlockingClient<S> {
     fn send(&self, request: HttpRequest) -> HttpFuture<HttpResponse> {
         let exchange = Arc::new(Exchange::default());
         // `None` past what the clock can name: no deadline to keep.
-        let due = Instant::now().checked_add(request.deadline());
+        let due = Instant::now().checked_add(request.deadline);
         if let Some(due) = due
             && let Err(error) = self.watchdog.watch(due, &exchange)
         {
@@ -144,7 +144,7 @@ fn run(
     exchange: &Arc<Exchange>,
     head_tx: oneshot::Sender<Result<HttpResponse, HttpError>>,
 ) {
-    let limit = request.body_limit();
+    let limit = request.body_limit;
     let mut connection = match stack.open(request) {
         Ok(connection) => connection,
         Err(error) => return refuse(exchange, head_tx, error),

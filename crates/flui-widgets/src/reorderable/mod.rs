@@ -912,7 +912,7 @@ struct Shared {
     writer: RefCell<Option<WriterSource>>,
     announcer: RefCell<Option<Announcer>>,
     /// The localizations the list was last built with, for its announcements.
-    strings: RefCell<Option<std::sync::Arc<BoxedWidgetsLocalizations>>>,
+    strings: RefCell<Option<Rc<BoxedWidgetsLocalizations>>>,
     /// The render tree the rows lay out in, for the size and place of a
     /// dragged row.
     pipeline: RefCell<Option<WeakPipelineCell>>,
