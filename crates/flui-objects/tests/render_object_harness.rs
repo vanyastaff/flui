@@ -3482,7 +3482,7 @@ struct ContainerStackCase {
     child: Size,
     constraints: BoxConstraints,
     color: Option<Color>,
-    decoration: Option<BoxDecoration<f64>>,
+    decoration: Option<BoxDecoration>,
     transform: Option<Matrix4>,
     /// When set, the CHILD itself is wrapped in a `RenderTransform` using
     /// this matrix — distinct from `transform` above, which is the
@@ -5948,7 +5948,7 @@ fn harness_animated_decorated_box_releases_proxy_after_tree_drop() {
             BoxDecoration::with_color(Color::BLUE),
         ),
         parent,
-    )) as std::rc::Rc<dyn Animation<BoxDecoration<f64>>>);
+    )) as std::rc::Rc<dyn Animation<BoxDecoration>>);
     let run = RenderTester::mount(box_node(RenderAnimatedDecoratedBox::new(decoration)))
         .with_size(Size::new(40.0, 40.0))
         .run_frame();

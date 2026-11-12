@@ -515,7 +515,7 @@ fn checkbox_default_check_color(colors: &ColorScheme, states: WidgetStates) -> C
 }
 
 /// The M3 default border side.
-fn checkbox_default_side(colors: &ColorScheme, states: WidgetStates) -> BorderSide<f64> {
+fn checkbox_default_side(colors: &ColorScheme, states: WidgetStates) -> BorderSide {
     let side = |color: Color, width: f64| BorderSide::new(color, width, BorderStyle::Solid);
 
     if states.contains_state(WidgetState::Disabled) {
@@ -585,7 +585,7 @@ fn checkbox_default_overlay_color(colors: &ColorScheme, states: WidgetStates) ->
 #[derive(Debug, Clone, PartialEq)]
 struct CheckboxPainter {
     fill_color: Color,
-    side: BorderSide<f64>,
+    side: BorderSide,
     check_color: Color,
     value: Option<bool>,
 }

@@ -143,7 +143,7 @@ validated before output creation.
 
 Hot-reload members enable the facade's `hot-reload` feature, which exposes
 `flui::hot_reload`; the generated host installs its `WorkerReloadHook` with
-`AppConfig::with_dev_reload`. Sibling app
+`AppConfig::dev_reload`. Sibling app
 crates retain relative dependencies. The worker deliberately receives the full
 facade dependency graph: this increases its compile graph but keeps application
 authoring consistent with the host and ordinary projects. The development-only

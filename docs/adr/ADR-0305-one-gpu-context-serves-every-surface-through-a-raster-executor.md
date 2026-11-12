@@ -114,7 +114,6 @@ pub struct GpuContext {
     glyphs: TextAtlas,                  // ADR-0067, one per context
     images: TextureCache,               // keyed by TextureKey, which pins the allocation
     slots: SlotTable<SurfaceSlot>,      // §3
-    health: DeviceHealth,               // §8
     epoch: ContextEpoch,                // §7
     _one_mutator: PhantomData<Cell<()>>, // Send, !Sync
 }
@@ -363,23 +362,43 @@ executor runs each command under its own catch, in both placements.
 
 - wgpu's device-lost callback is installed once per device and marks the domain lost
   (`renderer.rs:1641`). Every slot's frames settle `DeviceLost` until the rebuild succeeds.
-- One `DeviceHealth` per context holds ADR-0267's backoff, ceiling and states (`DeviceRecovery
-  { Pending, Failed, Abandoned }`); every slot's record publishes it, which is what
-  `is_device_lost` reads instead of the backend (`raster_lane.rs:289`). After `Abandoned` the
-  context stays given up until the application sends `RetryDevice`; nothing retries on its own.
+- One `DeviceRebuilds` per executor, which owns the one context, holds ADR-0267's backoff (16 ms
+  doubling to a one-second ceiling) and its ceiling (ten failures at it) on the clock the executor
+  is built with, so a manual clock walks it; a failed attempt's wait runs from when the attempt
+  ended, since the request blocks for as long as the driver takes. The executor's record
+  publishes the state as
+  `DeviceHealth { Healthy, Rebuilding { attempts }, GivenUp { attempts } }`, which the host maps to
+  ADR-0267's `DeviceRecovery { Pending, Failed, Abandoned }`, with when the next rebuild may run
+  (`RasterSender::device_retry_at`, for the host's wake) and why the last one failed
+  (`RasterSender::take_device_failure`); that record is what `is_device_lost` reads instead of the
+  backend (`raster_lane.rs:289`). A loss that this turn's own frames meet is published after the
+  slots are served, with its first rebuild due now (`device_retry_at` answers the current instant),
+  so the owner runs the next turn. A rebuild that panics counts as a failure and its panic is
+  resumed once the turn has served every slot; the context counts its device lost until every
+  slot is on the new one, so a rebuild that unwinds part way is asked for again from the start
+  (what an unwound attempt refused is kept and answered by the attempt that finishes),
+  and the executor restamps every slot whenever a lost device renders again, whichever way it
+  came back. A backend that cannot rebuild where the executor runs (the web, below) is given up
+  at the first due attempt. After `GivenUp` the context stays given up until
+  the application sends `RetryDevice`; nothing retries on its own.
   That retry runs ADR-0244 decision 1's probe again in fresh instances, because the backend whose
   rebuilds exhausted the backoff may be the cause: the factory is replaced and every slot gets a
   new surface from the owner in a `Restore`.
+- A rebuild that succeeds mints each configured slot's next surface generation, so a frame
+  stamped before it is refused as after a `Restore`; a size pending or refused keeps its barrier
+  (§6), and every slot redraws in full.
 - The rebuild runs where the executor runs (§10). It keeps the instance and every surface,
-  requests an adapter and device on that instance, compatible with the surface of the first slot
-  that is still attached and shown (`RequestAdapterOptions::compatible_surface`), rebuilds the
+  requests an adapter and device on that instance, compatible with the surface of the first window
+  slot that still holds one (`RequestAdapterOptions::compatible_surface`), rebuilds the
   pipelines and caches, and reconfigures each slot's surface from the new adapter's capabilities
   (ADR-0063 decision 6's rule for a rebuilt surface). On a hybrid-GPU machine the new adapter can
   differ from the old one; a slot it cannot present to settles `SurfaceStale` and reports
   `EngineError::IncompatibleSurface` at that slot's address, an error of that slot and not of
   the context. A slot whose reconfigure fails settles `SurfaceStale`, and its
   record asks the owner for a new surface, which the owner makes with the factory and sends in a
-  `Restore`. Each slot redraws in full and re-uploads its external textures from its registry
+  `Restore`. A slot over the new device's size limit keeps its surface unconfigured and holds
+  `InvalidTargetSize` until a resize fits, as an offscreen slot does. Each slot redraws in full
+  and re-uploads its external textures from its registry
   (ADR-0233).
 - On the web the rebuild is a future the owner spawns; frames settle `DeviceLost` until it ends.
 
@@ -467,7 +486,7 @@ the facade. Every production use of `with_backend` becomes:
 | `android.rs:608` | renders the hot-reload plugin's lent scene | `RasterExecutor::render_lent`, inline only |
 | `device_recovery.rs:403` | rebuilds a lost device before a frame | the context's rebuild (§8); `RetryDevice` after `Abandoned` |
 | `device_recovery.rs:438` | the same rebuild after a frame | as above |
-| `raster_lane.rs:289` | asks whether the device is lost | reads `DeviceHealth` in the slot's record |
+| `raster_lane.rs:289` | asks whether the device is lost | reads `DeviceHealth` in the executor's record (`RasterSender::device_health`) |
 | `raster_lane.rs:354` | applies external texture updates | the updates ride the slot's `Frame` |
 
 ### Consequences

@@ -5,7 +5,7 @@ use std::rc::Rc;
 use flui_animation::{AnimatedValueView, Animation, MotionSpec};
 use flui_foundation::geometry::EdgeInsets;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
+use flui_view::{Child, IntoView, ViewState};
 
 use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
 use crate::{AnimatedBuilder, Padding};
@@ -17,17 +17,24 @@ use crate::{AnimatedBuilder, Padding};
 pub struct AnimatedPadding {
     padding: EdgeInsets,
     motion: MotionSpec,
-    child: BoxedView,
+    child: Child,
 }
 
 impl AnimatedPadding {
     /// Animate these insets with a 200 ms ease-in-out transition.
-    pub fn new(padding: EdgeInsets, child: impl IntoView) -> Self {
+    pub fn new(padding: EdgeInsets) -> Self {
         Self {
             padding,
             motion: MotionSpec::default(),
-            child: child.into_view().boxed(),
+            child: Child::empty(),
         }
+    }
+
+    /// Sets the child.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
     }
 }
 
@@ -51,7 +58,7 @@ impl std::fmt::Debug for AnimatedPadding {
 pub struct AnimatedPaddingState {
     animation: ImplicitMotion<EdgeInsets>,
     stream: Rc<AnimatedValueView<EdgeInsets>>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl StatefulView for AnimatedPadding {
@@ -87,7 +94,7 @@ impl ViewState<AnimatedPadding> for AnimatedPaddingState {
         let child = self.child.clone();
         AnimatedBuilder::new(self.stream.clone(), move || {
             // Layout receives non-negative padding even while motion overshoots.
-            Padding::new(stream.value().clamp_non_negative()).child(child.clone())
+            Padding::new(stream.value().clamp_non_negative()).child_slot(child.clone())
         })
     }
 

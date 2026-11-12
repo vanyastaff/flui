@@ -137,7 +137,7 @@ fn pages(count: u8) -> Vec<BoxedView> {
 fn pager(controller: &PageController, count: u8) -> Column {
     Column::new(vec![
         Expanded::new(
-            PageView::new(pages(count), pager_alternatives()).controller(controller.clone()),
+            PageView::new(pager_alternatives(), pages(count)).controller(controller.clone()),
         )
         .boxed(),
         PageIndicator::controlled(controller, usize::from(count)).boxed(),
@@ -394,7 +394,7 @@ fn a_box_wider_than_the_dots_keeps_them_and_their_taps_on_the_strip() {
         TextDirection::Rtl,
         Column::new(vec![
             Expanded::new(
-                PageView::new(pages(3), pager_alternatives()).controller(controller.clone()),
+                PageView::new(pager_alternatives(), pages(3)).controller(controller.clone()),
             )
             .boxed(),
             SizedBox::width(SIDE)

@@ -96,7 +96,8 @@ impl ViewState<Population> for PopulationState {
         let children = (0..view.count)
             .map(|index| {
                 let cell = if view.workload.changes_color() {
-                    AnimatedContainer::new(SizedBox::square(10.0))
+                    AnimatedContainer::new()
+                        .child(SizedBox::square(10.0))
                         .color(view.workload.color(target))
                         .duration(RUN)
                         .curve(Linear)
@@ -107,7 +108,8 @@ impl ViewState<Population> for PopulationState {
                         .boxed()
                 };
                 let cell = if view.workload.changes_opacity() {
-                    AnimatedOpacity::new(if target { 0.85 } else { 0.25 }, cell)
+                    AnimatedOpacity::new(if target { 0.85 } else { 0.25 })
+                        .child(cell)
                         .duration(RUN)
                         .curve(Linear)
                         .boxed()

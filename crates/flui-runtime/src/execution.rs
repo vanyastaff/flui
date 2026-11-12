@@ -29,7 +29,7 @@
 //! crate's only allowed normal dependent is `flui-app`, checked by
 //! `cargo xtask workspace`. An embedded host
 //! that already runs its own executors injects them through
-//! [`HostExecutors`] (`AppConfig::with_executors`); the default pools are
+//! [`HostExecutors`] (`AppConfig::executors`); the default pools are
 //! then **never constructed**, so FLUI and the host cannot oversubscribe the
 //! machine with two full-core pools.
 //!
@@ -99,7 +99,7 @@ pub trait HostIoPool: Send + Sync {
 }
 
 /// The host-injection seam: an embedded host's own executors, passed via
-/// `AppConfig::with_executors`.
+/// `AppConfig::executors`.
 ///
 /// When present, FLUI routes all background work through these pools and
 /// **never constructs its default pools** — the mechanism by which FLUI
@@ -990,7 +990,7 @@ impl DeterministicExecutors {
     }
 
     /// The [`HostExecutors`] bundle routing both work classes to this
-    /// executor — pass it to `AppConfig::with_executors`.
+    /// executor — pass it to `AppConfig::executors`.
     #[must_use]
     pub fn host_executors(&self) -> HostExecutors {
         HostExecutors::new(Arc::new(self.clone()), Arc::new(self.clone()))

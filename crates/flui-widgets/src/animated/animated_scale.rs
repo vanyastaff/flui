@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use flui_animation::{MotionSpec, ProxyAnimation};
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
+use flui_view::{Child, IntoView, ViewState};
 
 use crate::ScaleTransition;
 use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
@@ -22,7 +22,7 @@ use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
 /// use flui_widgets::{AnimatedScale, MotionBuilder, SizedBox};
 /// use std::time::Duration;
 ///
-/// let pressed = AnimatedScale::new(0.95, SizedBox::new(40.0, 40.0))
+/// let pressed = AnimatedScale::new(0.95).child(SizedBox::new(40.0, 40.0))
 ///     .duration(Duration::from_millis(100));
 /// # let _ = pressed;
 /// ```
@@ -30,17 +30,24 @@ use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
 pub struct AnimatedScale {
     scale: f64,
     motion: MotionSpec,
-    child: BoxedView,
+    child: Child,
 }
 
 impl AnimatedScale {
-    /// Scale `child` by `scale` with the default motion.
-    pub fn new(scale: f64, child: impl IntoView) -> Self {
+    /// Scale toward `scale` with the default motion, with no child yet.
+    pub fn new(scale: f64) -> Self {
         Self {
             scale,
             motion: MotionSpec::default(),
-            child: child.into_view().boxed(),
+            child: Child::empty(),
         }
+    }
+
+    /// Sets the child.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
     }
 }
 
@@ -64,7 +71,7 @@ impl std::fmt::Debug for AnimatedScale {
 pub struct AnimatedScaleState {
     animation: ImplicitMotion<f64>,
     proxy: ProxyAnimation<f64>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl StatefulView for AnimatedScale {
@@ -91,7 +98,7 @@ impl ViewState<AnimatedScale> for AnimatedScaleState {
     }
 
     fn build(&self, _view: &AnimatedScale, _ctx: &dyn BuildContext) -> impl IntoView {
-        ScaleTransition::new(Rc::new(self.proxy.clone()), self.child.clone())
+        ScaleTransition::new(Rc::new(self.proxy.clone())).child_slot(self.child.clone())
     }
 
     fn did_update_view(&mut self, _old_view: &AnimatedScale, new_view: &AnimatedScale) {

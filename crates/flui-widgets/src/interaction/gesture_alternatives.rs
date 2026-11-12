@@ -928,7 +928,7 @@ impl GestureAlternatives {
     /// Open the menu's long press as `hold`, whose successor the mounting
     /// widget's own long-press drag is, instead of composing a hold of its
     /// own. Ignored by visible controls.
-    pub(crate) fn with_hold(mut self, hold: Option<Rc<SequencedBranch>>) -> Self {
+    pub(crate) fn hold(mut self, hold: Option<Rc<SequencedBranch>>) -> Self {
         self.hold = hold;
         self
     }

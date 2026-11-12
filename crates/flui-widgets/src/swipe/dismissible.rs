@@ -264,7 +264,7 @@ impl Dismissible {
     /// custom action, the command's keys while the row has focus, and the
     /// visible control or context menu (ADR-0216). Those reach the same model
     /// effect with no slide and no collapse.
-    pub fn new(child: impl IntoView, alternatives: GestureAlternatives) -> Self {
+    pub fn new(alternatives: GestureAlternatives, child: impl IntoView) -> Self {
         Self {
             alternatives,
             child: child.into_view().boxed(),

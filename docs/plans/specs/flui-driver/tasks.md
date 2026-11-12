@@ -495,7 +495,7 @@ graph LR
   `framing` (`MAX_LINE`, `BlobHeader`, `BlobId`), pinned by
   `a_payload_header_round_trips_and_refuses_what_the_reader_does_not_take` and
   `the_exit_on_disconnect_switch_is_exactly_one`. `flui-app::app::agent` serves 0.8 on desktop
-  and iOS; `AppConfig::with_dev_agent` appends, each hook in a host of its own
+  and iOS; `AppConfig::dev_agent` appends, each hook in a host of its own
   (`every_installed_hook_is_attached_and_one_that_panics_is_dropped_alone`).
   `reads_the_counter_and_taps_it_by_element_and_by_locator` and the 13 rows of
   `the_driver_agent_contains_every_failure` cover no hello, a wrong or short token, another

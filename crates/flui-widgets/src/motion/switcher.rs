@@ -264,7 +264,7 @@ impl AnimatedSwitcher {
         child: BoxedView,
         animation: std::rc::Rc<dyn Animation<f64>>,
     ) -> BoxedView {
-        FadeTransition::new(animation, child).boxed()
+        FadeTransition::new(animation).child(child).boxed()
     }
 
     /// The default `layout_builder`: a [`Stack`] centering every

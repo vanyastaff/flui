@@ -2376,9 +2376,8 @@ pub(crate) fn viewer_reports_cancelled_then_completed_interactions() {
     let reasons = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&reasons);
     let laid = lay_out(
-        InteractiveViewer::new(crate::common::viewer_alternatives())
-            .on_interaction_end(move |_ctx, details| recorded.borrow_mut().push(details.reason))
-            .child(target_for_viewer()),
+        InteractiveViewer::new(crate::common::viewer_alternatives(), target_for_viewer())
+            .on_interaction_end(move |_ctx, details| recorded.borrow_mut().push(details.reason)),
         tight(200.0, 200.0),
     );
     laid.dispatch_pointer_down(30.0, 80.0);

@@ -26,7 +26,7 @@
 //! [`crate::RadioThemeData`]/[`crate::NavigationBarThemeData`], whose color
 //! slots are all `Option<WidgetStateProperty<Option<Color>>>`,
 //! [`crate::ChipThemeData`]'s fields are **plain** (`Option<Color>`,
-//! `Option<BorderSide<f64>>`, …): every field except `color` (the container
+//! `Option<BorderSide>`, …): every field except `color` (the container
 //! fill, not exposed at the theme tier here — see below) is a plain,
 //! non-resolved value. Per-state
 //! variation for label/icon/delete-icon color is entirely a property of the
@@ -311,7 +311,7 @@ fn chip_icon_color_default(states: WidgetStates, colors: &ColorScheme) -> Color 
 /// Because of this real branch-order difference, `side` is resolved from
 /// plain `(bool, bool)` parameters rather than a [`WidgetStates`] query —
 /// see the module docs' "`ChipThemeData`: plain overrides" section.
-fn chip_default_side(selected: bool, enabled: bool, colors: &ColorScheme) -> BorderSide<f64> {
+fn chip_default_side(selected: bool, enabled: bool, colors: &ColorScheme) -> BorderSide {
     if selected {
         BorderSide::new(Color::TRANSPARENT, 1.0, BorderStyle::Solid)
     } else if enabled {
@@ -912,7 +912,7 @@ fn chip_content_constraints(padding: EdgeInsets, label_padding: EdgeInsets) -> B
 /// [`Material`]'s own missing border-side paint path.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ChipBorderPainter {
-    side: BorderSide<f64>,
+    side: BorderSide,
     shape: MaterialShape,
 }
 

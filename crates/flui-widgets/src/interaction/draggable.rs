@@ -1064,14 +1064,11 @@ impl ViewState<Draggable> for DraggableState {
             .cursor(CursorIcon::Grab)
             .child(listener.child(content));
         match &view.alternatives {
-            Some(alternatives) => Actions::new(
-                alternatives
-                    .clone()
-                    .with_hold(self.own_hold.clone())
-                    .child(grab),
-            )
-            .action(transfers)
-            .boxed(),
+            Some(alternatives) => {
+                Actions::new(alternatives.clone().hold(self.own_hold.clone()).child(grab))
+                    .action(transfers)
+                    .boxed()
+            }
             None => grab.boxed(),
         }
     }

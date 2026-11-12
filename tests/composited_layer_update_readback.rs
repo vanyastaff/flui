@@ -522,12 +522,12 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
     );
     let root = GestureArenaScope::new(
         binding.arena().clone(),
-        FocusTreeRoot::new(app_root(Align::new(Alignment::TOP_LEFT).child(
-            SlideTransition::new(
-                position,
-                SizedBox::new(40.0, 40.0).child(ColoredBox::new(Color::rgb(255, 0, 0))),
-            ),
-        ))),
+        FocusTreeRoot::new(app_root(
+            Align::new(Alignment::TOP_LEFT)
+                .child(SlideTransition::new(position).child(
+                    SizedBox::new(40.0, 40.0).child(ColoredBox::new(Color::rgb(255, 0, 0))),
+                )),
+        )),
     );
     let _mounted = binding.mount_root(
         &root,
@@ -864,7 +864,7 @@ fn decoration_filter_precision(filter: fn(f32) -> flui_painting::paint::ColorFil
     use flui_painting::{Canvas, DecorationPaintOptions, Paint, paint_box_decoration};
 
     #[derive(Debug)]
-    struct ImagePainter(BoxDecoration<f64>);
+    struct ImagePainter(BoxDecoration);
 
     impl CustomPainter for ImagePainter {
         fn paint(&self, canvas: &mut Canvas, size: Size) {
