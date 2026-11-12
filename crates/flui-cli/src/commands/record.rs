@@ -53,7 +53,7 @@ pub(crate) fn execute(args: RecordArgs) -> CliResult<()> {
             })
         })
         .transpose()?;
-    let mut params = RecordParams::input(window).with_keep_text(args.keep_text);
+    let mut params = RecordParams::input(window).keep_text(args.keep_text);
     if args.native.is_some() {
         params.layers.push(RecordLayer::Native);
     }

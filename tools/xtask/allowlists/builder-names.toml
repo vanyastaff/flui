@@ -161,48 +161,6 @@ method = "with_scale_factor"
 reason = "written before the rule had a gate; its crate's rename removes it"
 
 [[allow]]
-crate = "flui-protocol"
-type = "ActParams"
-method = "with_snapshot"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-protocol"
-type = "AnnouncementsParams"
-method = "with_max_entries"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-protocol"
-type = "MotionRequest"
-method = "with_rate"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-protocol"
-type = "MotionRequest"
-method = "with_step_ms"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-protocol"
-type = "ReadParams"
-method = "with_query"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-protocol"
-type = "RecordParams"
-method = "with_keep_text"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-protocol"
-type = "WaitParams"
-method = "with_timeout_ms"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
 crate = "flui-rendering"
 type = "SliverConstraintsBuilder"
 method = "with_axis_direction"
