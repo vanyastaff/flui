@@ -73,8 +73,9 @@ pub(crate) struct PerfArgs {
     #[arg(long, conflicts_with = "self_test")]
     instructions: bool,
     /// Count the packages of the facade's default graph on each target and
-    /// build the counter example in release for the host and wasm32, and
-    /// compare them with `perf/size.toml` instead of the scenarios' baseline.
+    /// build `flui create` projects in release (a counter for the host and
+    /// wasm32, a hot-reload host), and compare them with `perf/size.toml`
+    /// instead of the scenarios' baseline.
     #[arg(long, conflicts_with_all = ["self_test", "instructions"])]
     size: bool,
     /// With `--size`: count the packages only and build nothing.

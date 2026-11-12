@@ -688,7 +688,9 @@ fn created_application_builds_with_its_identifier() {
 /// Every application template's workspace root optimizes its dependencies in
 /// a debug build, as this workspace does: without it wgpu, naga, Parley and
 /// lyon set the frame time of a new project's first `flui run`. Its release
-/// build strips symbols, and `--profile profiling` keeps them.
+/// build links with whole-program LTO, sizes the dependencies and keeps the
+/// frame crates at full speed, strips symbols, and `--profile profiling` keeps
+/// them.
 #[test]
 fn every_application_template_optimizes_its_dependencies_in_debug() {
     let tmp = TempDir::new().expect("temp dir");
@@ -730,9 +732,27 @@ fn every_application_template_optimizes_its_dependencies_in_debug() {
             manifest["profile"]["release"]
                 .get("lto")
                 .and_then(toml::Value::as_str),
-            Some("thin"),
+            Some("fat"),
             "{name}: [profile.release] lto"
         );
+        let release_packages = &manifest["profile"]["release"]["package"];
+        assert_eq!(
+            release_packages["*"]
+                .get("opt-level")
+                .and_then(toml::Value::as_str),
+            Some("s"),
+            "{name}: [profile.release.package.\"*\"] opt-level"
+        );
+        for frame_crate in ["flui-view", "flui-rendering", "flui-engine", "flui-runtime"] {
+            assert_eq!(
+                release_packages
+                    .get(frame_crate)
+                    .and_then(|package| package.get("opt-level"))
+                    .and_then(toml::Value::as_integer),
+                Some(3),
+                "{name}: [profile.release.package.{frame_crate}] opt-level"
+            );
+        }
         assert_eq!(
             manifest["profile"]["release"]
                 .get("strip")
