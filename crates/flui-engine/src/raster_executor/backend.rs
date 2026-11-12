@@ -8,7 +8,11 @@ use super::{
     SlotId,
     command::{SlotConfig, SlotTarget},
 };
-use crate::{FrameLatency, UnconfiguredSurface, error::EngineResult, raster::PresentDisposition};
+use crate::{
+    FrameLatency, UnconfiguredSurface,
+    error::{EngineError, EngineResult},
+    raster::PresentDisposition,
+};
 
 /// What the raster executor drives: the slots of one GPU context, or a
 /// testing stand-in that needs no GPU.
@@ -72,4 +76,30 @@ pub trait SlotBackend {
 
     /// Give back memory the next frames can rebuild.
     fn reclaim(&mut self, level: MemoryPressureLevel);
+
+    /// Whether the device is lost: every frame fails
+    /// [`EngineError::DeviceLost`] until a
+    /// [`rebuild_device`](Self::rebuild_device) succeeds.
+    fn device_lost(&self) -> bool;
+
+    /// Make a new device on the instance every surface was made on, keeping
+    /// every slot's target, and configure each slot on it again (ADR-0305
+    /// §8). The executor calls it only while [`device_lost`](Self::device_lost)
+    /// answers `true`, paced by the context's backoff.
+    ///
+    /// Answers the slots the new device cannot serve, each with why: a window
+    /// whose surface was dropped or failed to configure, for which the owner
+    /// sends another in a
+    /// [`RasterCommand::Restore`](super::RasterCommand::Restore), or a slot over
+    /// the new device's size limit, which waits for a size that fits.
+    ///
+    /// # Errors
+    /// No device could be made; the device stays lost.
+    fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>>;
+
+    /// Whether [`rebuild_device`](Self::rebuild_device) can succeed where the
+    /// executor runs. One that cannot (the web, whose device request is a
+    /// future the owner spawns) is given up at the first due attempt instead
+    /// of walking the backoff.
+    fn rebuilds_inline(&self) -> bool;
 }

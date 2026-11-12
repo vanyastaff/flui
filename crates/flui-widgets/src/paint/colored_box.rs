@@ -48,7 +48,7 @@ impl ColoredBox {
         self
     }
 
-    fn decoration(&self) -> BoxDecoration<f64> {
+    fn decoration(&self) -> BoxDecoration {
         BoxDecoration::<f64>::with_color(self.color)
     }
 }

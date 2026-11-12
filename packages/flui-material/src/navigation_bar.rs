@@ -636,7 +636,7 @@ impl StatelessView for NavigationBar {
 
         Material::new(background_color)
             .elevation(elevation)
-            .child(SafeArea::new().child(content))
+            .child(SafeArea::new(content))
     }
 }
 

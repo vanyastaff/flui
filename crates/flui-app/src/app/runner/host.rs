@@ -95,7 +95,7 @@ pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
 }
 
 /// The directory the run's storage lives in under the data roots: the one
-/// [`AppConfig::with_storage_dir`](crate::app::AppConfig::with_storage_dir)
+/// [`AppConfig::storage_dir`](crate::app::AppConfig::storage_dir)
 /// names, else the application's identifier, else, where the roots belong to
 /// this application alone, [`SANDBOXED_STORAGE_DIR`]. `None` on a desktop
 /// application with neither, whose roots every application shares.

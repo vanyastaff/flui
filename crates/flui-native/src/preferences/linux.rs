@@ -21,7 +21,7 @@ use parking_lot::Mutex;
 use zbus::{OwnedVariant, Proxy};
 
 use crate::{
-    PlatformError, executor::BackgroundExecutor, owner::signal::OwnerSignal,
+    PlatformError, executor::NativeExecutor, owner::signal::OwnerSignal,
     owner::sources::SystemPreferenceSource, preferences::locales as preferred_locales,
     preferences::regional,
 };
@@ -74,7 +74,7 @@ impl PreferenceSource {
     /// Start watching the portal on `executor`, waking the owner behind
     /// `signal` when what it accepted changes. Waits a bounded moment for the
     /// first answer, so the first sample usually has one.
-    pub(crate) fn new(executor: &BackgroundExecutor, signal: &Arc<OwnerSignal>) -> Arc<Self> {
+    pub(crate) fn new(executor: &NativeExecutor, signal: &Arc<OwnerSignal>) -> Arc<Self> {
         // The environment does not change under a running process.
         let var = |name: &str| std::env::var(name).ok();
         let locales = preferred_locales::from_posix_environment(var);

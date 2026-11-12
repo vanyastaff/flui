@@ -36,7 +36,7 @@ impl SizedOverflowBox {
 
     /// Sets the alignment of the child within the claimed slot.
     #[must_use]
-    pub fn with_alignment(mut self, alignment: Alignment) -> Self {
+    pub fn alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
         self
     }

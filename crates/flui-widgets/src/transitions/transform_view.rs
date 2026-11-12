@@ -6,7 +6,7 @@ use flui_objects::{RenderAnimatedTransform, TransformMotion};
 use flui_painting::typography::TextDirection;
 use flui_rendering::RenderUpdateImpact;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{BoxedView, RenderObjectContext, RenderView, View, impl_render_view};
+use flui_view::{Child, RenderObjectContext, RenderView, impl_render_view};
 
 /// Carries the transition's motion (whose proxy the transition's state owns)
 /// and the two settings a rebuild may change.
@@ -15,7 +15,7 @@ pub(crate) struct AnimatedTransformView {
     pub(crate) motion: TransformMotion,
     pub(crate) transform_hit_tests: bool,
     pub(crate) text_direction: TextDirection,
-    pub(crate) child: BoxedView,
+    pub(crate) child: Child,
 }
 
 impl std::fmt::Debug for AnimatedTransformView {
@@ -48,13 +48,7 @@ impl RenderView for AnimatedTransformView {
             | render_object.set_text_direction(self.text_direction)
     }
 
-    fn has_children(&self) -> bool {
-        true
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        visitor(&self.child);
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(AnimatedTransformView);

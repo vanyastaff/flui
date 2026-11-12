@@ -65,9 +65,9 @@ impl Default for DiagnosticsProfile {
 /// use flui_app::AppConfig;
 ///
 /// let config = AppConfig::new()
-///     .with_title("My App")
-///     .with_size(1024, 768)
-///     .with_resizable(true);
+///     .title("My App")
+///     .size(1024, 768)
+///     .resizable(true);
 /// assert_eq!(config.title, "My App");
 /// ```
 #[derive(Debug, Clone)]
@@ -163,7 +163,7 @@ pub struct AppConfig {
     pub input_latency: flui_platform::InputLatency,
 
     /// The development reload driver, if the application installed one with
-    /// [`Self::with_dev_reload`] (ADR-0094 §1).
+    /// [`Self::dev_reload`] (ADR-0094 §1).
     ///
     /// `None` (the default): nothing reloads, and no reload tool is in the
     /// application's graph. `Some`: the desktop and iOS runners attach the
@@ -175,7 +175,7 @@ pub struct AppConfig {
     pub dev_reload: Option<DevReload>,
 
     /// The development agent hooks the application installed with
-    /// [`Self::with_dev_agent`] (ADR-0095 §3).
+    /// [`Self::dev_agent`] (ADR-0095 §3).
     ///
     /// `None` (the default): the application installed none. The event loop
     /// that starts with this configuration, or a clone of it, takes the hooks
@@ -296,14 +296,14 @@ pub struct AppConfig {
     pub services: Vec<ServiceDefinition>,
 
     /// The application's directory name under the per-user data roots, set
-    /// with [`Self::with_storage_dir`].
+    /// with [`Self::storage_dir`].
     pub(crate) storage_dir: Option<flui_platform::AppDataDir>,
 
     /// The storage name a window's placement is kept under, set with
     /// [`Self::restore_placement`].
     pub(crate) placement: Option<flui_platform::StorageName>,
 
-    /// The receivers registered with [`Self::with_memory_reclaim`].
+    /// The receivers registered with [`Self::memory_reclaim`].
     pub(crate) memory_reclaimers: MemoryReceivers,
 }
 
@@ -378,7 +378,7 @@ impl Default for AppConfig {
 impl AppConfig {
     /// Override the host motion preference before the first root is mounted.
     #[must_use]
-    pub fn with_motion_override(mut self, preference: MotionOverride) -> Self {
+    pub fn motion_override(mut self, preference: MotionOverride) -> Self {
         self.motion_override = preference;
         self
     }
@@ -412,7 +412,7 @@ impl AppConfig {
 
     /// Opt this window's presentation into frame-aligned pointer interpolation.
     #[must_use]
-    pub fn with_pointer_resampling(mut self, policy: PointerResampling) -> Self {
+    pub fn pointer_resampling(mut self, policy: PointerResampling) -> Self {
         self.pointer_resampling = policy;
         self
     }
@@ -421,7 +421,7 @@ impl AppConfig {
     /// as far as the surface and the display allow; read what was granted from
     /// `Renderer::surface_color`.
     #[must_use]
-    pub fn with_surface_color(mut self, color: flui_engine::SurfaceColor) -> Self {
+    pub fn surface_color(mut self, color: flui_engine::SurfaceColor) -> Self {
         self.surface_color = color;
         self
     }
@@ -433,21 +433,21 @@ impl AppConfig {
 
     /// Set the window title.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+    pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
         self
     }
 
     /// Set the process-level identity used by native diagnostics sinks.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_application_identity(mut self, identity: AppIdentity) -> Self {
+    pub fn application_identity(mut self, identity: AppIdentity) -> Self {
         self.application_identity = identity;
         self
     }
 
     /// Select development or production diagnostics defaults explicitly.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_diagnostics_profile(mut self, profile: DiagnosticsProfile) -> Self {
+    pub fn diagnostics_profile(mut self, profile: DiagnosticsProfile) -> Self {
         self.diagnostics_profile = profile;
         self
     }
@@ -455,21 +455,21 @@ impl AppConfig {
     /// Set the initial window size: the content area, in logical pixels, which
     /// is what the window reports as its content size once it is open.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_size(mut self, width: u32, height: u32) -> Self {
+    pub fn size(mut self, width: u32, height: u32) -> Self {
         self.size = Size::new(width as f64, height as f64);
         self
     }
 
     /// Set the minimum window size.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_min_size(mut self, width: u32, height: u32) -> Self {
+    pub fn min_size(mut self, width: u32, height: u32) -> Self {
         self.min_size = Some(Size::new(width as f64, height as f64));
         self
     }
 
     /// Set the maximum window size.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_max_size(mut self, width: u32, height: u32) -> Self {
+    pub fn max_size(mut self, width: u32, height: u32) -> Self {
         self.max_size = Some(Size::new(width as f64, height as f64));
         self
     }
@@ -481,7 +481,7 @@ impl AppConfig {
     /// a backend that does not report it (the Wayland host, where the
     /// compositor places windows) leaves the place to the system.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_position(mut self, at: Point<f64>) -> Self {
+    pub fn position(mut self, at: Point<f64>) -> Self {
         self.position = Some(at);
         self
     }
@@ -493,28 +493,28 @@ impl AppConfig {
     /// [`WindowMode::Normal`] and the application sets the mode through its
     /// `WindowHandle` once it is up.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_mode(mut self, mode: WindowMode) -> Self {
+    pub fn mode(mut self, mode: WindowMode) -> Self {
         self.mode = mode;
         self
     }
 
     /// Set whether the window is resizable.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_resizable(mut self, resizable: bool) -> Self {
+    pub fn resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
         self
     }
 
     /// Set what frames the window.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_frame(mut self, frame: flui_platform::WindowFrame) -> Self {
+    pub fn frame(mut self, frame: flui_platform::WindowFrame) -> Self {
         self.frame = frame;
         self
     }
 
     /// Set how many frames each window's swapchain holds ahead of the display.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_frame_latency(mut self, latency: FrameLatency) -> Self {
+    pub fn frame_latency(mut self, latency: FrameLatency) -> Self {
         self.frame_latency = latency;
         self
     }
@@ -522,7 +522,7 @@ impl AppConfig {
     /// Set how early pointer samples reach every window the application
     /// opens; see [`Self::input_latency`].
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_input_latency(mut self, latency: flui_platform::InputLatency) -> Self {
+    pub fn input_latency(mut self, latency: flui_platform::InputLatency) -> Self {
         self.input_latency = latency;
         self
     }
@@ -530,17 +530,14 @@ impl AppConfig {
     /// Set what the window is created with on each operating system that has
     /// options of its own.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_os_options(
-        mut self,
-        os_options: flui_platform::os_options::OsWindowOptions,
-    ) -> Self {
+    pub fn os_options(mut self, os_options: flui_platform::os_options::OsWindowOptions) -> Self {
         self.os_options = os_options;
         self
     }
 
     /// Enable performance overlay.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_performance_overlay(mut self, show: bool) -> Self {
+    pub fn performance_overlay(mut self, show: bool) -> Self {
         self.show_performance_overlay = show;
         self
     }
@@ -548,7 +545,7 @@ impl AppConfig {
     /// Set the policy governing when the platform loop exits once every
     /// hosted window has closed. See [`ExitPolicy`]'s own doc.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_exit_policy(mut self, policy: ExitPolicy) -> Self {
+    pub fn exit_policy(mut self, policy: ExitPolicy) -> Self {
         self.exit_policy = policy;
         self
     }
@@ -558,7 +555,7 @@ impl AppConfig {
     /// call it, and [`DevReloadHook`](flui_view::dev_reload::DevReloadHook)
     /// for the hook's contract. Replaces any hook installed before.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_dev_reload(mut self, hook: impl flui_view::dev_reload::DevReloadHook) -> Self {
+    pub fn dev_reload(mut self, hook: impl flui_view::dev_reload::DevReloadHook) -> Self {
         self.dev_reload = Some(DevReload::new(hook));
         self
     }
@@ -572,7 +569,7 @@ impl AppConfig {
     /// being served if another panics. The driver agent needs none of this:
     /// the runner installs it itself (ADR-0239).
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_dev_agent(mut self, hook: impl flui_view::dev_agent::DevAgentHook) -> Self {
+    pub fn dev_agent(mut self, hook: impl flui_view::dev_agent::DevAgentHook) -> Self {
         self.dev_agent = Some(DevAgent::with(self.dev_agent.take(), hook));
         self
     }
@@ -580,7 +577,7 @@ impl AppConfig {
     /// Inject the host's own background executors. See
     /// [`Self::executors`]'s doc for what this changes.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_executors(mut self, executors: HostExecutors) -> Self {
+    pub fn executors(mut self, executors: HostExecutors) -> Self {
         self.executors = Some(executors);
         self
     }
@@ -590,7 +587,7 @@ impl AppConfig {
     /// [`FrameFailureHandler`](flui_runtime::frame_failure::FrameFailureHandler)'s
     /// delivery timing and owner-admission contract.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_frame_failure_handler(mut self, factory: FrameFailureHandlerFactory) -> Self {
+    pub fn frame_failure_handler(mut self, factory: FrameFailureHandlerFactory) -> Self {
         self.frame_failure_handler = Some(factory);
         self
     }
@@ -598,7 +595,7 @@ impl AppConfig {
     /// Record every runtime's input stream through taps `factory` makes. See
     /// [`Self::input_tap`]'s doc.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_input_tap(mut self, factory: InputTapFactory) -> Self {
+    pub fn input_tap(mut self, factory: InputTapFactory) -> Self {
         self.input_tap = Some(factory);
         self
     }
@@ -606,7 +603,7 @@ impl AppConfig {
     /// Render a view whose build, mount or update failed with `builder`. See
     /// [`Self::error_view_builder`]'s doc.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_error_view_builder(mut self, builder: flui_view::ErrorViewBuilder) -> Self {
+    pub fn error_view_builder(mut self, builder: flui_view::ErrorViewBuilder) -> Self {
         self.error_view_builder = Some(builder);
         self
     }
@@ -618,11 +615,11 @@ impl AppConfig {
     /// ```
     /// use flui_app::{AppConfig, FrameFailureDetail};
     ///
-    /// let config = AppConfig::new().with_frame_failure_detail(FrameFailureDetail::Redacted);
+    /// let config = AppConfig::new().frame_failure_detail(FrameFailureDetail::Redacted);
     /// assert_eq!(config.frame_failure_detail, FrameFailureDetail::Redacted);
     /// ```
     #[must_use]
-    pub fn with_frame_failure_detail(mut self, detail: FrameFailureDetail) -> Self {
+    pub fn frame_failure_detail(mut self, detail: FrameFailureDetail) -> Self {
         self.frame_failure_detail = detail;
         self
     }
@@ -632,7 +629,7 @@ impl AppConfig {
     /// when, and [`CloseRequestHandler`]'s for the contract the callback
     /// must honor.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_close_request_handler(mut self, handler: CloseRequestHandler) -> Self {
+    pub fn close_request_handler(mut self, handler: CloseRequestHandler) -> Self {
         self.close_request_handler = Some(handler);
         self
     }
@@ -641,7 +638,7 @@ impl AppConfig {
     /// [`Self::services`]'s doc for the lifetime and shutdown contract.
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_service(mut self, service: ServiceDefinition) -> Self {
+    pub fn service(mut self, service: ServiceDefinition) -> Self {
         self.services.push(service);
         self
     }
@@ -669,7 +666,7 @@ impl AppConfig {
     /// application of the user, so pick a name only this application uses
     /// (`com.acme.notes`, not `notes`).
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_storage_dir(mut self, dir: flui_platform::AppDataDir) -> Self {
+    pub fn storage_dir(mut self, dir: flui_platform::AppDataDir) -> Self {
         self.storage_dir = Some(dir);
         self
     }
@@ -677,13 +674,13 @@ impl AppConfig {
     /// Remember where this window was and open the next run there.
     ///
     /// The window's position, size and mode are kept in the host storage
-    /// ([`Self::with_storage_dir`]) under `name`, and the next run reads them
+    /// ([`Self::storage_dir`]) under `name`, and the next run reads them
     /// before the window is first shown. They are fitted to the displays of that
     /// run first: a window whose display is gone opens on the primary one, and a
     /// window that would lie off the screen is moved back onto it
     /// ([`WindowPlacement::resolve`]). What it restores replaces the
-    /// configuration's [`with_size`](Self::with_size),
-    /// [`with_position`](Self::with_position) and [`with_mode`](Self::with_mode);
+    /// configuration's [`size`](Self::size),
+    /// [`position`](Self::position) and [`mode`](Self::mode);
     /// they apply the first time, when nothing is stored yet, and whenever the
     /// stored value cannot be read.
     ///
@@ -720,7 +717,7 @@ impl AppConfig {
     /// hears the notice. The host has one set of receivers, read from the
     /// configuration the run starts with.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_memory_reclaim(
+    pub fn memory_reclaim(
         mut self,
         receiver: impl flui_foundation::memory::ReclaimMemory + Send + Sync + 'static,
     ) -> Self {
@@ -811,14 +808,14 @@ mod tests {
             (flui_engine::SurfaceColor::Hdr, Some(AndroidColorMode::Hdr)),
         ] {
             assert_eq!(
-                mode(&AppConfig::new().with_surface_color(requested)),
+                mode(&AppConfig::new().surface_color(requested)),
                 expected,
                 "{requested:?}"
             );
         }
         let own = AppConfig::new()
-            .with_surface_color(flui_engine::SurfaceColor::Hdr)
-            .with_os_options(OsWindowOptions::default().with_android(
+            .surface_color(flui_engine::SurfaceColor::Hdr)
+            .os_options(OsWindowOptions::default().with_android(
                 AndroidWindowOptions::default().with_color_mode(AndroidColorMode::WideColorGamut),
             ));
         assert_eq!(mode(&own), Some(AndroidColorMode::WideColorGamut));
@@ -830,7 +827,7 @@ mod tests {
     fn a_configured_input_tap_records_each_runtime_it_is_installed_on() {
         let seen: Arc<Mutex<Vec<(usize, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let made = Arc::new(Mutex::new(0_usize));
-        let config = AppConfig::new().with_input_tap(InputTapFactory::new({
+        let config = AppConfig::new().input_tap(InputTapFactory::new({
             let seen = Arc::clone(&seen);
             let made = Arc::clone(&made);
             move |_start: &crate::RecordingStart| {

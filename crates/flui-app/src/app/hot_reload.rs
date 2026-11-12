@@ -2,7 +2,7 @@
 //!
 //! `flui-app` names no reload tool. An application that wants hot reload
 //! installs a [`DevReloadHook`] on its configuration
-//! ([`AppConfig::with_dev_reload`]); this module is the only code that calls
+//! ([`AppConfig::dev_reload`]); this module is the only code that calls
 //! it, and every runner goes through the crate-private wrappers below:
 //!
 //! - `WorkerReload` (desktop and iOS): attaches the hook once per loop,
@@ -45,7 +45,7 @@ use flui_runtime::reload::ReloadTier;
 
 /// A development reload driver installed on an [`AppConfig`].
 ///
-/// Built by [`AppConfig::with_dev_reload`]. `Clone` shares the one hook and
+/// Built by [`AppConfig::dev_reload`]. `Clone` shares the one hook and
 /// its bookkeeping, so every window opened with clones of the same
 /// configuration is driven by the same hook: attached once per loop, polled
 /// at each UI runtime's frame boundary, and each patch applied once to every
@@ -218,7 +218,7 @@ impl WorkerReload {
         if config.dev_reload.is_none() && std::env::var_os("FLUI_WORKER_PLUGIN").is_some() {
             tracing::warn!(
                 "FLUI_WORKER_PLUGIN is set, but no DevReloadHook is installed on the AppConfig, so \
-                 the worker will not be loaded; install one with `AppConfig::with_dev_reload`"
+                 the worker will not be loaded; install one with `AppConfig::dev_reload`"
             );
         }
         Self(config.dev_reload.clone())
@@ -360,7 +360,7 @@ impl ScenePlugin {
             if pushed.exists() {
                 tracing::warn!(
                     path = %pushed.display(),
-                    "a scene plugin is on the device, but no DevReloadHook is installed on the                      AppConfig, so it will not be loaded; install                      `flui_hot_reload::ScenePluginHook` with `AppConfig::with_dev_reload`"
+                    "a scene plugin is on the device, but no DevReloadHook is installed on the                      AppConfig, so it will not be loaded; install                      `flui_hot_reload::ScenePluginHook` with `AppConfig::dev_reload`"
                 );
             }
         }

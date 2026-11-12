@@ -222,7 +222,7 @@ pub const DATA_DIR: &str = "dev.flui.acceptance-app";
 pub fn launch() -> flui::AppLaunch {
     let dir = flui::platform::AppDataDir::try_new(DATA_DIR)
         .expect("BUG: the acceptance application's data directory name is valid");
-    flui::AppLaunch::new().config(flui::AppConfig::new().with_storage_dir(dir))
+    flui::AppLaunch::new().config(flui::AppConfig::new().storage_dir(dir))
 }
 
 /// The acceptance application's root view.
@@ -1051,7 +1051,7 @@ impl ViewState<Screen> for ScreenState {
             Route::Note { id } => editor(ctx, id, shared, &router, &self.form, &self.focus),
             Route::Settings => settings(ctx, shared),
         };
-        SafeArea::new().child(Column::new((
+        SafeArea::new(Column::new((
             Row::new(header(&view.route, &router)),
             Text::new(shared.status.get(ctx)),
             storage_banner(&shared.data),

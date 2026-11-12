@@ -97,9 +97,9 @@ impl ViewState<Inbox> for InboxState {
             .into_iter()
             .map(|name| {
                 Dismissible::new(
+                    row_alternatives(view.rows, name, &view.menu),
                     SizedBox::new(300.0, 50.0)
                         .child(ColoredBox::new(Color::rgb(10, 20, 30)).child(Text::new(name))),
-                    row_alternatives(view.rows, name, &view.menu),
                 )
                 .direction(DismissDirection::Horizontal)
                 .boxed()
@@ -515,11 +515,13 @@ pub(crate) fn interactive_viewer_with_zoom_controls() {
         // Zoomed in one step, so both commands change the scale.
         transform.set_value(flui_foundation::geometry::Matrix4::scaling(2.0, 2.0, 1.0));
         let model = transform.clone();
-        let view = InteractiveViewer::new(alternatives.clone())
-            .controller(transform)
-            .min_scale(1.0)
-            .max_scale(8.0)
-            .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+        let view = InteractiveViewer::new(
+            alternatives.clone(),
+            ColoredBox::new(Color::rgb(10, 20, 30)),
+        )
+        .controller(transform)
+        .min_scale(1.0)
+        .max_scale(8.0);
         AlternativesSubject::new(view, &alternatives, move || {
             let m = model.value().to_col_major_array();
             // The scale, in thousandths: every path zooms about some point,
@@ -564,11 +566,13 @@ pub(crate) fn interactive_viewer_with_pan_controls() {
         .expect("four distinct labels");
         let transform = TransformationController::new();
         let model = transform.clone();
-        let view = InteractiveViewer::new(alternatives.clone())
-            .controller(transform)
-            .double_tap_zoom(false)
-            .boundary_margin(flui_foundation::geometry::EdgeInsets::all(200.0))
-            .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+        let view = InteractiveViewer::new(
+            alternatives.clone(),
+            ColoredBox::new(Color::rgb(10, 20, 30)),
+        )
+        .controller(transform)
+        .double_tap_zoom(false)
+        .boundary_margin(flui_foundation::geometry::EdgeInsets::all(200.0));
         AlternativesSubject::new(view, &alternatives, move || {
             let (x, y, _) = model.value().translation_component();
             ((x * 1000.0).round() as i64, (y * 1000.0).round() as i64)
@@ -620,7 +624,7 @@ pub(crate) fn page_view_with_page_controls() {
         let pages: Vec<BoxedView> = (0..3_u8)
             .map(|index| ColoredBox::new(Color::rgb(40 * index, 20, 30)).boxed())
             .collect();
-        let view = PageView::new(pages, alternatives.clone()).controller(controller);
+        let view = PageView::new(alternatives.clone(), pages).controller(controller);
         AlternativesSubject::new(view, &alternatives, move || {
             model.page().map(|page| (page * 1000.0).round() as i64)
         })
@@ -1097,8 +1101,8 @@ fn single_row(mailbox: SharedSignal<Mailbox>, alternatives: GestureAlternatives)
         mailbox,
         child: Actions::new(
             Dismissible::new(
-                SizedBox::new(300.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
                 alternatives,
+                SizedBox::new(300.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
             )
             .boxed(),
         )
@@ -1523,7 +1527,7 @@ fn buttons_over_pager(
         .map(|index| ColoredBox::new(Color::rgb(40 * index, 20, 30)).boxed())
         .collect();
     let pager =
-        PageView::new(pages, companion_page_alternatives(link)).controller(controller.clone());
+        PageView::new(companion_page_alternatives(link), pages).controller(controller.clone());
     let mut column = vec![Expanded::new(pager).boxed()];
     if buttons {
         let row = PageButtons {

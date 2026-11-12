@@ -86,7 +86,7 @@ await its returned request or poll `try_result` to obtain the window result."
 //! want.
 //! Hot reload is the official package `flui-hot-reload`, which an application
 //! adds as a dependency of its own and installs with
-//! `AppConfig::with_dev_reload`; the facade re-exports no package for it
+//! `AppConfig::dev_reload`; the facade re-exports no package for it
 //! (ADR-0311 §6).
 //!
 //! Additional opt-in capabilities are `testing` (the `flui::testing` headless
@@ -233,7 +233,7 @@ pub mod services {
 ///
 /// What a window is created with on one system is a value of that system's
 /// type in [`platform::os_options::OsWindowOptions`], given to
-/// [`AppConfig::with_os_options`].
+/// [`AppConfig::os_options`].
 #[cfg(feature = "native")]
 pub mod native {
     #[cfg(target_os = "macos")]

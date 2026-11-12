@@ -123,7 +123,7 @@ pub(crate) fn project_floors(root: &Path) -> CliResult<AppFloors> {
 /// When present, `flui run` keeps the host process alive, rebuilds only the
 /// worker `cdylib` on source changes, and relies on the
 /// `flui_hot_reload::WorkerReloadHook` the host installs with
-/// `AppConfig::with_dev_reload` to apply the reload.
+/// `AppConfig::dev_reload` to apply the reload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct HotReloadConfig {
     /// Host binary crate (`cargo run -p …`).

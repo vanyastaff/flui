@@ -124,7 +124,7 @@ fn no_wake() -> Arc<dyn Fn() + Send + Sync> {
 fn a_patch_polled_through_the_hook_reassembles_the_ui_runtime() {
     let hook = Scripted::default();
     hook.then(ReloadEvent::Patched);
-    let reload = WorkerReload::from_config(&AppConfig::new().with_dev_reload(hook.clone()));
+    let reload = WorkerReload::from_config(&AppConfig::new().dev_reload(hook.clone()));
     let ui_runtime = settled_ui_runtime();
 
     frame_boundary(&reload, &ui_runtime);
@@ -155,7 +155,7 @@ fn without_a_hook_the_frame_is_unchanged() {
     );
 
     let hook = Scripted::default();
-    let reload = WorkerReload::from_config(&AppConfig::new().with_dev_reload(hook.clone()));
+    let reload = WorkerReload::from_config(&AppConfig::new().dev_reload(hook.clone()));
     frame_boundary(&reload, &ui_runtime);
     assert_eq!(hook.polls(), 1);
     assert!(
@@ -166,7 +166,7 @@ fn without_a_hook_the_frame_is_unchanged() {
 
 fn one_patch_reaches_every_ui_runtime_exactly_once() {
     let hook = Scripted::default();
-    let config = AppConfig::new().with_dev_reload(hook.clone());
+    let config = AppConfig::new().dev_reload(hook.clone());
     // Two windows opened from clones of one configuration, as the runners do.
     let (reload_a, reload_b) = (
         WorkerReload::from_config(&config.clone()),
@@ -206,7 +206,7 @@ fn one_patch_reaches_every_ui_runtime_exactly_once() {
 
 fn a_ui_runtime_first_polled_after_a_patch_does_not_replay_it() {
     let hook = Scripted::default();
-    let reload = WorkerReload::from_config(&AppConfig::new().with_dev_reload(hook.clone()));
+    let reload = WorkerReload::from_config(&AppConfig::new().dev_reload(hook.clone()));
     let older = settled_ui_runtime();
     hook.then(ReloadEvent::Patched);
     frame_boundary(&reload, &older);
@@ -222,7 +222,7 @@ fn a_ui_runtime_first_polled_after_a_patch_does_not_replay_it() {
 
 fn a_ui_runtime_mounted_before_a_patch_applies_it_at_its_first_boundary() {
     let hook = Scripted::default();
-    let config = AppConfig::new().with_dev_reload(hook.clone());
+    let config = AppConfig::new().dev_reload(hook.clone());
     let (reload_main, reload_second) = (
         WorkerReload::from_config(&config.clone()),
         WorkerReload::from_config(&config),
@@ -249,7 +249,7 @@ fn a_ui_runtime_mounted_before_a_patch_applies_it_at_its_first_boundary() {
 
 fn a_panicking_poll_disables_the_hook_and_the_frame_continues() {
     let (calls, drops) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-    let reload = WorkerReload::from_config(&AppConfig::new().with_dev_reload(Panics {
+    let reload = WorkerReload::from_config(&AppConfig::new().dev_reload(Panics {
         in_attach: false,
         in_poll: true,
         in_drop: true,
@@ -282,7 +282,7 @@ fn a_panicking_poll_disables_the_hook_and_the_frame_continues() {
 
 fn attach_and_detach_pair_once_per_loop_and_a_second_attach_is_refused() {
     let hook = Scripted::default();
-    let reload = WorkerReload::from_config(&AppConfig::new().with_dev_reload(hook.clone()));
+    let reload = WorkerReload::from_config(&AppConfig::new().dev_reload(hook.clone()));
     let wakes = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&wakes);
     let guard = reload
@@ -316,7 +316,7 @@ fn attach_and_detach_pair_once_per_loop_and_a_second_attach_is_refused() {
 
 fn a_detach_that_arrives_during_a_hook_call_runs_when_the_call_returns() {
     let hook = Scripted::default();
-    let reload = WorkerReload::from_config(&AppConfig::new().with_dev_reload(hook.clone()));
+    let reload = WorkerReload::from_config(&AppConfig::new().dev_reload(hook.clone()));
     let guard = Arc::new(Mutex::new(Some(
         reload.spawn_watcher(no_wake()).expect("attaches"),
     )));
@@ -345,7 +345,7 @@ fn a_detach_that_arrives_during_a_hook_call_runs_when_the_call_returns() {
 
 fn a_panicking_attach_leaves_the_loop_without_reload() {
     let (calls, drops) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-    let reload = WorkerReload::from_config(&AppConfig::new().with_dev_reload(Panics {
+    let reload = WorkerReload::from_config(&AppConfig::new().dev_reload(Panics {
         in_attach: true,
         in_poll: false,
         in_drop: false,

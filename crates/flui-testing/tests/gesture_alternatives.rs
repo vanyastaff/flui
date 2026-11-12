@@ -204,8 +204,8 @@ fn mount(subject: Subject) -> AlternativesSubject<u32> {
     let alternatives = GestureAlternatives::try_new(alternative).expect("one labelled command");
     let extra = Rc::clone(&removed);
     let mut card = Dismissible::new(
-        SizedBox::new(300.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
         alternatives.clone(),
+        SizedBox::new(300.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
     );
     if matches!(subject, Subject::GestureDoesMore) {
         card = card.on_dismissed(move |_ctx, _direction| extra.set(extra.get() + 10));

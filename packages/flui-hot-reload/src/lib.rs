@@ -112,7 +112,7 @@
 //! ```rust,ignore
 //! use flui_hot_reload::WorkerReloadHook;
 //!
-//! let config = flui::AppConfig::new().with_dev_reload(WorkerReloadHook::new(worker_path));
+//! let config = flui::AppConfig::new().dev_reload(WorkerReloadHook::new(worker_path));
 //! ```
 
 // Every public item is documented; keep it that way.

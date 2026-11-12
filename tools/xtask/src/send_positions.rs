@@ -666,7 +666,7 @@ fn one() -> usize {
 }
 
 /// The item paths [`ALLOWLIST`]'s `text` lists, each where rustdoc records it
-/// (`flui_app::app::config::AppConfig::with_memory_reclaim`).
+/// (`flui_app::app::config::AppConfig::memory_reclaim`).
 pub(crate) fn listed_items(text: &str) -> anyhow::Result<BTreeSet<String>> {
     Ok(parse_list(text)?
         .into_keys()

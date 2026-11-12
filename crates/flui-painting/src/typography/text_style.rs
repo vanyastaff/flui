@@ -262,7 +262,7 @@ pub struct TextStyle {
     /// glyphs: each is the glyphs' silhouette in the shadow's colour, moved
     /// by its offset and blurred by its blur radius (ADR-0309). `None`
     /// inherits the enclosing style's; an empty list casts none.
-    pub shadows: Option<Vec<Shadow<f64>>>,
+    pub shadows: Option<Vec<Shadow>>,
     /// The lines drawn along the span's text, where its font puts them
     /// (ADR-0310). `None` inherits the enclosing style's;
     /// [`TextDecoration::NONE`] draws none.
@@ -401,7 +401,7 @@ impl TextStyle {
 
     /// Adds a shadow after the ones the style already casts.
     #[inline]
-    pub fn with_shadow(mut self, shadow: Shadow<f64>) -> Self {
+    pub fn with_shadow(mut self, shadow: Shadow) -> Self {
         self.shadows.get_or_insert_with(Vec::new).push(shadow);
         self
     }

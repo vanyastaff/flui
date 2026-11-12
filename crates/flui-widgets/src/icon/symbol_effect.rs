@@ -624,7 +624,8 @@ impl SymbolEffectHostState {
         AnimatedBuilder::new(Rc::clone(&progress) as Rc<dyn Listenable>, move || {
             // The new content is heard from the first frame, while it is still unseen.
             let mut layers = vec![
-                FadeTransition::new(Rc::clone(&fade_in), content.clone())
+                FadeTransition::new(Rc::clone(&fade_in))
+                    .child(content.clone())
                     .always_include_semantics(true)
                     .boxed(),
             ];
@@ -637,13 +638,13 @@ impl SymbolEffectHostState {
                 layers.push(
                     Positioned::fill(
                         OverflowBox::new()
-                            .with_min_width(0.0)
-                            .with_max_width(f64::INFINITY)
-                            .with_min_height(0.0)
-                            .with_max_height(f64::INFINITY)
+                            .min_width(0.0)
+                            .max_width(f64::INFINITY)
+                            .min_height(0.0)
+                            .max_height(f64::INFINITY)
                             .child(
                                 ExcludeSemantics::new()
-                                    .child(FadeTransition::new(fade_out, leaving.clone())),
+                                    .child(FadeTransition::new(fade_out).child(leaving.clone())),
                             ),
                     )
                     .boxed(),
@@ -717,7 +718,9 @@ impl ViewState<SymbolEffectHost> for SymbolEffectHostState {
         if !live || (reduced && !transition) {
             // Still: at rest, or at a transition's end.
             return if motion == Motion::Disappear {
-                FadeTransition::new(Rc::new(ConstantAnimation::new(0.0)), content).boxed()
+                FadeTransition::new(Rc::new(ConstantAnimation::new(0.0)))
+                    .child(content)
+                    .boxed()
             } else {
                 content
             };
@@ -726,13 +729,19 @@ impl ViewState<SymbolEffectHost> for SymbolEffectHostState {
         let tracks = Tracks::of(motion, matches!(self.effect.trigger, Trigger::Active(_)));
         let mut built = content;
         if let Some(turns) = tracks.turns {
-            built = RotationTransition::new(observe(turns, &progress), built).boxed();
+            built = RotationTransition::new(observe(turns, &progress))
+                .child(built)
+                .boxed();
         }
         if let Some(scale) = tracks.scale {
-            built = ScaleTransition::new(observe(scale, &progress), built).boxed();
+            built = ScaleTransition::new(observe(scale, &progress))
+                .child(built)
+                .boxed();
         }
         if let Some(opacity) = tracks.opacity {
-            built = FadeTransition::new(observe(opacity, &progress), built).boxed();
+            built = FadeTransition::new(observe(opacity, &progress))
+                .child(built)
+                .boxed();
         }
         built
     }

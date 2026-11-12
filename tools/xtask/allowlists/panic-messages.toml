@@ -69,10 +69,6 @@ path = "crates/flui-native/src/owner/apple/macos/content_view.rs"
 count = 2
 
 [[allow]]
-path = "crates/flui-native/src/task.rs"
-count = 1
-
-[[allow]]
 path = "crates/flui-native/src/window/apple/macos/delegate.rs"
 count = 2
 

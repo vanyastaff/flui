@@ -253,8 +253,8 @@ fn observed_app(
 ) -> Application<ObservedRoot, impl FnMut(&AppHandle) -> ObservedRoot> {
     let device_reports = Arc::clone(&observed.device_reports);
     let mut config = AppConfig::new()
-        .with_exit_policy(ExitPolicy::OnLastWindowClosed)
-        .with_frame_failure_handler(FrameFailureHandlerFactory::new(move || {
+        .exit_policy(ExitPolicy::OnLastWindowClosed)
+        .frame_failure_handler(FrameFailureHandlerFactory::new(move || {
             let reports = Arc::clone(&device_reports);
             FrameFailureHandler::new(move |report| {
                 if let FrameFailureKind::DeviceLost { recovery, .. } = report.kind {
@@ -266,12 +266,12 @@ fn observed_app(
             })
         }));
     if let Some(handler) = handler {
-        config = config.with_close_request_handler(handler);
+        config = config.close_request_handler(handler);
     }
     Application::new(move |_| ObservedRoot {
         observed: observed.clone(),
     })
-    .with_config(config)
+    .config(config)
     .on_ready(move |handle| {
         ready.replace(Some(handle.clone()));
     })

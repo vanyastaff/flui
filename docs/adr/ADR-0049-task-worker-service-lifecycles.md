@@ -66,7 +66,7 @@ nothing.
 
 ### Services: declared lifetime, registry ownership, typed events
 
-`AppConfig::with_service(ServiceDefinition::new(name, lifetime, factory))` declares a service;
+`AppConfig::service(ServiceDefinition::new(name, lifetime, factory))` declares a service;
 the desktop and Android bootstraps start each one once the UI runtime install has resolved the
 loop's execution services, and a start failure fails the bootstrap (a declared service is
 load-bearing, not optional). The factory gets the same panic containment as every body this

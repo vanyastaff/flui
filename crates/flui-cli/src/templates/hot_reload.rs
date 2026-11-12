@@ -462,9 +462,9 @@ fn main() -> Result<(), LaunchError> {
     };
 
     let config = AppConfig::new()
-        .with_title("__NAME__")
-        .with_size(480, 320)
-        .with_dev_reload(WorkerReloadHook::new(worker_path));
+        .title("__NAME__")
+        .size(480, 320)
+        .dev_reload(WorkerReloadHook::new(worker_path));
 
     run_app(root, AppLaunch::new().config(config))?;
 

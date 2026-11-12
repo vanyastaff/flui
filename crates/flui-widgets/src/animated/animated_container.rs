@@ -8,7 +8,7 @@ use flui_foundation::geometry::{EdgeInsets, Matrix4};
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
+use flui_view::{Child, IntoView, ViewState};
 
 use crate::animated::implicitly_animated::{MotionBuilder, TransformTween};
 use crate::animated::property_motion::PropertyMotion;
@@ -38,13 +38,13 @@ pub struct AnimatedContainer {
     margin: Option<EdgeInsets>,
     transform: Option<Matrix4>,
     motion: MotionSpec,
-    child: BoxedView,
+    child: Child,
 }
 
 impl AnimatedContainer {
-    /// An animated container wrapping `child`, with no properties set yet, the
+    /// An animated container with no child and no properties set yet, the
     /// 200 ms default duration, and an ease-in-out curve.
-    pub fn new(child: impl IntoView) -> Self {
+    pub fn new() -> Self {
         Self {
             alignment: None,
             padding: None,
@@ -54,8 +54,15 @@ impl AnimatedContainer {
             margin: None,
             transform: None,
             motion: MotionSpec::default(),
-            child: child.into_view().boxed(),
+            child: Child::empty(),
         }
+    }
+
+    /// Sets the child.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
     }
 
     /// Animate toward this alignment of the child within the container.
@@ -112,6 +119,12 @@ impl AnimatedContainer {
     }
 }
 
+impl Default for AnimatedContainer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MotionBuilder for AnimatedContainer {
     fn motion_mut(&mut self) -> &mut MotionSpec {
         &mut self.motion
@@ -139,7 +152,7 @@ pub struct AnimatedContainerState {
     transform: TransformTween,
     notifications: Rc<ChangeNotifier>,
     vsync: Option<Vsync>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl StatefulView for AnimatedContainer {
@@ -273,7 +286,7 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
             {
                 container = container.transform(value);
             }
-            container.child(child.clone())
+            container.child_slot(child.clone())
         })
     }
 

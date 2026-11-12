@@ -40,11 +40,11 @@ Android runner drives only `ScenePluginHook`:
 use flui_hot_reload::{ScenePluginHook, WorkerReloadHook};
 
 // Desktop host/worker split (`flui create --hot-reload`):
-let config = AppConfig::new().with_dev_reload(WorkerReloadHook::new(worker_path));
+let config = AppConfig::new().dev_reload(WorkerReloadHook::new(worker_path));
 
 // Android `flui run --scene`:
 let path = ScenePluginHook::device_library_path(app.internal_data_path().as_deref());
-let config = AppConfig::new().with_dev_reload(ScenePluginHook::new(path));
+let config = AppConfig::new().dev_reload(ScenePluginHook::new(path));
 ```
 
 ## Documentation

@@ -76,8 +76,8 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
                 let delivered = Rc::clone(&delivered);
                 let first = Rc::clone(&first);
                 Dismissible::new(
-                    ColoredBox::new(Color::rgb(10, 20, 30)),
                     crate::common::dismiss_alternatives(),
+                    ColoredBox::new(Color::rgb(10, 20, 30)),
                 )
                 .direction(DismissDirection::Horizontal)
                 .on_update(move |ctx, details| {
@@ -306,8 +306,8 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
         let sides = Rc::new(std::cell::RefCell::new(Vec::new()));
         let update_sides = Rc::clone(&sides);
         let mut card = Dismissible::new(
-            SizedBox::new(200.0, 200.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
             crate::common::dismiss_alternatives(),
+            SizedBox::new(200.0, 200.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
         )
         .direction(if vertical {
             DismissDirection::Vertical
@@ -476,8 +476,8 @@ fn dismissal_release_uses_profile(direction: DismissDirection) {
         let dismissed = Rc::new(Cell::new(0));
         let recorder = Rc::clone(&dismissed);
         let card = Dismissible::new(
-            ColoredBox::new(Color::rgb(10, 20, 30)),
             crate::common::dismiss_alternatives(),
+            ColoredBox::new(Color::rgb(10, 20, 30)),
         )
         .direction(direction)
         .resize_duration(None)
@@ -535,7 +535,7 @@ fn cancelled_card(direction: DismissDirection, end: f64) {
     let child = GestureDetector::new()
         .on_tap(move |_| on_tap.set(on_tap.get() + 1))
         .child(ColoredBox::new(Color::rgb(10, 20, 30)));
-    let card = Dismissible::new(child, crate::common::dismiss_alternatives())
+    let card = Dismissible::new(crate::common::dismiss_alternatives(), child)
         .direction(direction)
         .resize_duration(None)
         .on_dismissed(move |_, _| on_dismiss.set(on_dismiss.get() + 1));
@@ -628,8 +628,8 @@ pub(crate) fn a_vertical_dismissible_leaves_a_horizontal_drag_to_its_ancestor() 
     let started = Rc::clone(&outer_starts);
     let vsync = Vsync::new();
     let card = Dismissible::new(
-        SizedBox::new(200.0, 200.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
         crate::common::dismiss_alternatives(),
+        SizedBox::new(200.0, 200.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
     )
     .direction(DismissDirection::Vertical)
     .resize_duration(None);
@@ -701,9 +701,9 @@ pub(crate) fn a_returning_dismissible_migrates_between_registries() {
         let old = Vsync::new();
         let next = Vsync::new();
         let card = Dismissible::new(
+            crate::common::dismiss_alternatives(),
             flui_widgets::SizedBox::new(200.0, 200.0)
                 .child(ColoredBox::new(Color::rgb(10, 20, 30))),
-            crate::common::dismiss_alternatives(),
         )
         .direction(if vertical {
             DismissDirection::Vertical
@@ -764,9 +764,9 @@ fn release_speed(width: f64, reverse: bool, maximum: Option<f64>, vertical: bool
         flui_foundation::geometry::Size::new(width, 100.0)
     };
     let card = Dismissible::new(
+        crate::common::dismiss_alternatives(),
         flui_widgets::SizedBox::new(size.width, size.height)
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
-        crate::common::dismiss_alternatives(),
     )
     .direction(if vertical {
         DismissDirection::Vertical
@@ -884,8 +884,8 @@ fn exercise_collapse_registry(migrate: bool, fail_wake: bool) {
     let output = dismissed.clone();
     let vsync = Vsync::new();
     let card = Dismissible::new(
-        flui_widgets::SizedBox::new(150.0, 100.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
         crate::common::dismiss_alternatives(),
+        flui_widgets::SizedBox::new(150.0, 100.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
     )
     .background(ColoredBox::new(color))
     .on_dismissed(move |_, _| output.set(output.get() + 1));
@@ -1045,9 +1045,9 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
                 let dismiss_output = Rc::clone(&delivered);
                 let panic_on_resize = Rc::clone(&panic_pending);
                 Dismissible::new(
+                    crate::common::dismiss_alternatives(),
                     flui_widgets::SizedBox::new(150.0, 100.0)
                         .child(ColoredBox::new(Color::rgb(10, 20, 30))),
-                    crate::common::dismiss_alternatives(),
                 )
                 .on_resize(move |_| {
                     resize_output.borrow_mut().push((generation, "resize"));
@@ -1147,8 +1147,8 @@ pub(crate) fn a_dismissible_goes_out_only_where_its_direction_and_threshold_allo
     let card = |dismissed: &Rc<std::cell::RefCell<Vec<DismissSide>>>| {
         let dismissed = Rc::clone(dismissed);
         Dismissible::new(
-            ColoredBox::new(Color::rgb(10, 20, 30)),
             crate::common::dismiss_alternatives(),
+            ColoredBox::new(Color::rgb(10, 20, 30)),
         )
         .resize_duration(None)
         .on_dismissed(move |_, direction| dismissed.borrow_mut().push(direction))
@@ -1332,7 +1332,7 @@ pub(crate) fn a_row_scrolled_out_of_a_lazy_list_mid_slide_keeps_its_slide() {
             let cell = SizedBox::new(400.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30)));
             if index == 0 {
                 let on_dismissed = Rc::clone(&on_dismissed);
-                Dismissible::new(cell, crate::common::dismiss_alternatives())
+                Dismissible::new(crate::common::dismiss_alternatives(), cell)
                     .resize_duration(None)
                     .on_dismissed(move |_, _| on_dismissed.set(on_dismissed.get() + 1))
                     .into_view()

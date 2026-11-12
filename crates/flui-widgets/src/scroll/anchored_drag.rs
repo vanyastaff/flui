@@ -40,8 +40,8 @@ use flui_rendering::constraints::AxisDirection;
 use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::element::ElementKind;
 use flui_view::{
-    AnimatedView, BoxedView, BuildContext, EventContext, IntoView, LifecycleContext, StatefulView,
-    View, ViewExt, ViewState,
+    AnimatedView, BoxedView, BuildContext, Child, EventContext, IntoView, LifecycleContext,
+    StatefulView, View, ViewExt, ViewState,
 };
 
 use super::ScrollView;
@@ -1251,7 +1251,7 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
                         },
                         transform_hit_tests: true,
                         text_direction: TextDirection::Ltr,
-                        child: child.clone(),
+                        child: Child::some(child.clone()),
                     },
                 ),
             )

@@ -16,7 +16,7 @@ fn host_executors_route_work_through_flui_app_paths() {
     let det = DeterministicExecutors::new();
 
     let executors: HostExecutors = det.host_executors();
-    let config = AppConfig::default().with_executors(executors);
+    let config = AppConfig::default().executors(executors);
     assert!(config.executors.is_some());
 
     let ran = Arc::new(AtomicBool::new(false));

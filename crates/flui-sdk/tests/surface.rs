@@ -403,7 +403,7 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::painting::SemanticsRegionKey) -> flui_sdk::painting::SemanticsRegionKey = |x| x;
     let _: fn(flui::painting::DrawOp) -> flui_sdk::painting::DrawOp = |x| x;
     let _: fn(flui::painting::BlurSigma) -> flui_sdk::painting::BlurSigma = |x| x;
-    let _: fn(flui::painting::styling::Shadow<f64>) -> flui_sdk::painting::Shadow<f64> = |x| x;
+    let _: fn(flui::painting::styling::Shadow) -> flui_sdk::painting::Shadow = |x| x;
     let _: fn(flui::painting::typography::TextDecoration) -> flui_sdk::painting::TextDecoration =
         |x| x;
     let _: fn(

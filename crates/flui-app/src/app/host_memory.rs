@@ -1,6 +1,6 @@
 //! The memory the host gives back when the system asks for it (ADR-0237
 //! decision 9): the receivers the application registered
-//! ([`AppConfig::with_memory_reclaim`]), among them the asset registry that
+//! ([`AppConfig::memory_reclaim`]), among them the asset registry that
 //! keeps decoded images, and the GPU memory behind each raster lane: pooled
 //! buffers, the glyph atlas and image textures.
 //!
@@ -9,7 +9,7 @@
 //! receivers of the windows opened before it. The lists are cloned out before any receiver runs, so a receiver
 //! may register or release another without meeting this lock.
 //!
-//! [`AppConfig::with_memory_reclaim`]: crate::app::AppConfig::with_memory_reclaim
+//! [`AppConfig::memory_reclaim`]: crate::app::AppConfig::memory_reclaim
 
 use std::sync::Arc;
 

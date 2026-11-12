@@ -21,7 +21,7 @@
 //! let tree = |opacity| {
 //!     VsyncScope::new(
 //!         vsync.clone(),
-//!         AnimatedOpacity::new(opacity, SizedBox::new(40.0, 40.0))
+//!         AnimatedOpacity::new(opacity).child(SizedBox::new(40.0, 40.0))
 //!             .duration(Duration::from_millis(200)),
 //!     )
 //! };

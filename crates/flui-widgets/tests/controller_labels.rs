@@ -109,14 +109,19 @@ fn animated_size() {
 
 fn implicit_single_values() {
     assert_labels(
-        |vsync| scoped(vsync, AnimatedOpacity::new(0.5, SizedBox::new(10.0, 10.0))),
+        |vsync| {
+            scoped(
+                vsync,
+                AnimatedOpacity::new(0.5).child(SizedBox::new(10.0, 10.0)),
+            )
+        },
         &["AnimatedOpacity"],
     );
     assert_labels(
         |vsync| {
             scoped(
                 vsync,
-                AnimatedPadding::new(EdgeInsets::all(4.0), SizedBox::new(10.0, 10.0)),
+                AnimatedPadding::new(EdgeInsets::all(4.0)).child(SizedBox::new(10.0, 10.0)),
             )
         },
         &["AnimatedPadding"],
@@ -125,7 +130,7 @@ fn implicit_single_values() {
         |vsync| {
             scoped(
                 vsync,
-                AnimatedRotation::new(Angle::from_turns(0.25), SizedBox::new(10.0, 10.0)),
+                AnimatedRotation::new(Angle::from_turns(0.25)).child(SizedBox::new(10.0, 10.0)),
             )
         },
         &["AnimatedRotation"],
@@ -137,7 +142,8 @@ fn implicit_properties() {
         |vsync| {
             scoped(
                 vsync,
-                AnimatedAlign::new(Alignment::CENTER, SizedBox::new(10.0, 10.0))
+                AnimatedAlign::new(Alignment::CENTER)
+                    .child(SizedBox::new(10.0, 10.0))
                     .width_factor(1.0)
                     .height_factor(1.0),
             )
@@ -152,7 +158,8 @@ fn implicit_properties() {
         |vsync| {
             scoped(
                 vsync,
-                AnimatedContainer::new(SizedBox::shrink())
+                AnimatedContainer::new()
+                    .child(SizedBox::shrink())
                     .width(40.0)
                     .height(30.0)
                     .padding(EdgeInsets::all(2.0))
@@ -177,8 +184,10 @@ fn interactive_viewer() {
         |vsync| {
             scoped(
                 vsync,
-                InteractiveViewer::new(crate::common::viewer_alternatives())
-                    .child(SizedBox::new(300.0, 300.0)),
+                InteractiveViewer::new(
+                    crate::common::viewer_alternatives(),
+                    SizedBox::new(300.0, 300.0),
+                ),
             )
         },
         300.0,
@@ -198,12 +207,12 @@ fn refresh_indicator() {
             scoped(
                 vsync,
                 RefreshIndicator::new(
-                    SizedBox::new(300.0, 5000.0),
                     GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
                         RefreshIntent::command("Refresh"),
                         SizedBox::new(24.0, 24.0),
                     )))
                     .expect("one labelled command"),
+                    SizedBox::new(300.0, 5000.0),
                 ),
             )
         },
@@ -218,8 +227,8 @@ fn dismissible() {
             scoped(
                 vsync,
                 Dismissible::new(
-                    ColoredBox::new(Color::rgb(10, 20, 30)),
                     crate::common::dismiss_alternatives(),
+                    ColoredBox::new(Color::rgb(10, 20, 30)),
                 )
                 .direction(DismissDirection::Horizontal),
             )

@@ -162,6 +162,7 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | Test support is named `testing`; a hand-written `pump`/`advance`/`tick` or a `Mock*`/`Fake*`/`Scripted*`/`Recording*`/`Probe*` type in test code is in a kit or counted in the allowlist (ADR-0243) | `xtask testing` |
 | A constructor that can fail is `try_new`: every `new` returning `Result` or `Option` is listed and the list only shrinks | `xtask try-new` |
 | A context is bound as `ctx`, never `cx`, whatever its kind | `xtask context-names` (ADR-0325) |
+| A description type's builder method (a view, `Application`, a `…Config/Options/Settings/Request/Builder/Params/Spec`) has the bare name, never `with_`; the list of the ones left only shrinks | `xtask builder-names` (ADR-0325) |
 | A production `expect` or `panic!` names its invariant (`BUG: `) or its `try_` twin; the per-file counts of the ones that do not only go down | `xtask panic-messages` |
 | User code runs through `flui_foundation::panic` (`commit`, `FirstPanic`) and an OS entry through `os_entry`: `std::panic::catch_unwind` is a disallowed method, and a site that still catches by hand carries `#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]` on its statement or function (ADR-0303 §6) | clippy (`disallowed-methods`) |
 

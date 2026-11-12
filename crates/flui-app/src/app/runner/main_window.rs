@@ -1375,8 +1375,8 @@ mod tests {
         }
 
         let app = Application::new(|_| -> flui_widgets::Text { flui_widgets::Text::new("") })
-            .with_startup_window(StartupWindow::None)
-            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::ExplicitQuit));
+            .startup_window(StartupWindow::None)
+            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit));
         let unwound = tracing::subscriber::with_default(PanicsWhenReady, || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run_with_platform(app, Box::new(HeadlessPlatform::new()))
@@ -1465,11 +1465,11 @@ mod tests {
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("factory failure before GPU setup");
         })
-        .with_startup_window(StartupWindow::None)
-        .with_config(
+        .startup_window(StartupWindow::None)
+        .config(
             AppConfig::new()
-                .with_exit_policy(ExitPolicy::ExplicitQuit)
-                .with_dev_reload(Counting(Arc::clone(&counts))),
+                .exit_policy(ExitPolicy::ExplicitQuit)
+                .dev_reload(Counting(Arc::clone(&counts))),
         )
         .on_ready(move |handle| {
             assert_eq!(observed.get(), (1, 0), "attached when the loop starts");
@@ -1548,11 +1548,11 @@ mod tests {
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("factory failure before GPU setup");
         })
-        .with_startup_window(StartupWindow::None)
-        .with_config(
+        .startup_window(StartupWindow::None)
+        .config(
             AppConfig::new()
-                .with_exit_policy(ExitPolicy::ExplicitQuit)
-                .with_dev_agent(Counting(Arc::clone(&counts))),
+                .exit_policy(ExitPolicy::ExplicitQuit)
+                .dev_agent(Counting(Arc::clone(&counts))),
         )
         .on_ready(move |handle| {
             assert_eq!(observed.get(), (1, 0, 0), "attached when the loop starts");
@@ -1609,19 +1609,19 @@ mod tests {
         let cases: [(&str, AppConfig, bool); 4] = [
             (
                 "a configured directory",
-                AppConfig::new().with_storage_dir(dir()),
+                AppConfig::new().storage_dir(dir()),
                 true,
             ),
             (
                 "an application identifier alone",
-                AppConfig::new().with_application_identity(identified()),
+                AppConfig::new().application_identity(identified()),
                 true,
             ),
             (
                 "a configured directory beside an identifier",
                 AppConfig::new()
-                    .with_application_identity(identified())
-                    .with_storage_dir(dir()),
+                    .application_identity(identified())
+                    .storage_dir(dir()),
                 true,
             ),
             ("neither, on a desktop", AppConfig::new(), false),
@@ -1646,8 +1646,8 @@ mod tests {
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("no main window is opened");
         })
-        .with_startup_window(StartupWindow::None)
-        .with_config(config.with_exit_policy(ExitPolicy::ExplicitQuit))
+        .startup_window(StartupWindow::None)
+        .config(config.exit_policy(ExitPolicy::ExplicitQuit))
         .on_ready(move |_| {
             let (dispatcher, _window) = super::super::secondary_window::open_secondary_window_impl(
                 AppConfig::default(),

@@ -80,7 +80,8 @@ pub(crate) fn opacity_retarget_with_a_new_curve_keeps_the_displayed_sample() {
         |registry, target, curve| {
             VsyncScope::new(
                 registry,
-                AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0))
+                AnimatedOpacity::new(target)
+                    .child(SizedBox::new(100.0, 50.0))
                     .duration(RUN)
                     .curve(curve),
             )
@@ -95,7 +96,8 @@ pub(crate) fn opacity_retarget_preserves_the_painted_velocity() {
     let tree = |target, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
-            AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0))
+            AnimatedOpacity::new(target)
+                .child(SizedBox::new(100.0, 50.0))
                 .duration(Duration::from_secs(1))
                 .curve(curve),
         )
@@ -132,7 +134,8 @@ pub(crate) fn padding_retarget_preserves_the_laid_out_velocity() {
     let tree = |padding, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
-            AnimatedPadding::new(padding, SizedBox::new(20.0, 10.0))
+            AnimatedPadding::new(padding)
+                .child(SizedBox::new(20.0, 10.0))
                 .duration(Duration::from_secs(1))
                 .curve(curve),
         )
@@ -185,7 +188,8 @@ pub(crate) fn padding_retarget_with_a_new_curve_keeps_the_displayed_sample() {
         |registry, target, curve| {
             VsyncScope::new(
                 registry,
-                AnimatedPadding::new(EdgeInsets::all(target), SizedBox::new(20.0, 10.0))
+                AnimatedPadding::new(EdgeInsets::all(target))
+                    .child(SizedBox::new(20.0, 10.0))
                     .duration(RUN)
                     .curve(curve),
             )
@@ -203,7 +207,8 @@ pub(crate) fn container_retarget_with_a_new_curve_keeps_the_displayed_sample() {
         |registry, target, curve| {
             VsyncScope::new(
                 registry,
-                AnimatedContainer::new(SizedBox::shrink())
+                AnimatedContainer::new()
+                    .child(SizedBox::shrink())
                     .width(target)
                     .height(if target == 60.0 { 50.0 } else { target / 2.0 })
                     .duration(RUN)
@@ -223,7 +228,8 @@ pub(crate) fn container_retarget_preserves_the_laid_out_size_velocity() {
     let tree = |width, height, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
-            AnimatedContainer::new(SizedBox::shrink())
+            AnimatedContainer::new()
+                .child(SizedBox::shrink())
                 .width(width)
                 .height(height)
                 .duration(Duration::from_secs(1))
@@ -286,7 +292,8 @@ pub(crate) fn container_color_retarget_preserves_painted_alpha_progress() {
     let tree = |color, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
-            AnimatedContainer::new(SizedBox::square(20.0))
+            AnimatedContainer::new()
+                .child(SizedBox::square(20.0))
                 .color(color)
                 .duration(Duration::from_secs(1))
                 .curve(curve),
@@ -333,7 +340,8 @@ pub(crate) fn container_property_motion_settles_and_unmounts_independently() {
         let registry = Vsync::new();
         let curve = SharedCurve::new(curves::LINEAR);
         let tree = |size, scale, color| {
-            let mut container = AnimatedContainer::new(SizedBox::shrink())
+            let mut container = AnimatedContainer::new()
+                .child(SizedBox::shrink())
                 .width(size)
                 .height(size)
                 .color(color)
@@ -407,7 +415,8 @@ fn assert_refused_container_motion_preserves_the_admitted_run(accepted_slopes: u
     let tree = |size, scale, curve| {
         VsyncScope::new(
             registry.clone(),
-            AnimatedContainer::new(SizedBox::shrink())
+            AnimatedContainer::new()
+                .child(SizedBox::shrink())
                 .width(size)
                 .height(size)
                 .transform(Matrix4::scaling(scale, scale, 1.0))
@@ -479,7 +488,8 @@ pub(crate) fn container_refused_transform_motion_preserves_the_admitted_matrix()
 pub(crate) fn an_absent_container_transform_owns_no_frame_registration() {
     let registry = Vsync::new();
     let tree = |transform: Option<Matrix4>| {
-        let mut container = AnimatedContainer::new(SizedBox::new(20.0, 20.0))
+        let mut container = AnimatedContainer::new()
+            .child(SizedBox::new(20.0, 20.0))
             .duration(RUN)
             .curve(curves::LINEAR);
         if let Some(transform) = transform {
@@ -576,7 +586,8 @@ pub(crate) fn container_registry_migration_finishes_before_a_wake_failure() {
         let scale = if changed { 2.0 } else { 1.0 };
         VsyncScope::new(
             registry,
-            AnimatedContainer::new(SizedBox::shrink())
+            AnimatedContainer::new()
+                .child(SizedBox::shrink())
                 .width(size)
                 .height(size)
                 .transform(Matrix4::scaling(scale, scale, 1.0))
@@ -595,7 +606,8 @@ pub(crate) fn align_registry_migration_finishes_before_a_wake_failure() {
         };
         VsyncScope::new(
             registry,
-            AnimatedAlign::new(alignment, SizedBox::new(20.0, 20.0))
+            AnimatedAlign::new(alignment)
+                .child(SizedBox::new(20.0, 20.0))
                 .width_factor(factor)
                 .height_factor(factor)
                 .duration(RUN)
@@ -609,14 +621,12 @@ pub(crate) fn align_retarget_with_a_new_curve_keeps_the_displayed_sample() {
         |registry, target, curve| {
             VsyncScope::new(
                 registry,
-                AnimatedAlign::new(
-                    if target == 0.0 {
-                        Alignment::TOP_LEFT
-                    } else {
-                        Alignment::BOTTOM_RIGHT
-                    },
-                    SizedBox::new(20.0, 10.0),
-                )
+                AnimatedAlign::new(if target == 0.0 {
+                    Alignment::TOP_LEFT
+                } else {
+                    Alignment::BOTTOM_RIGHT
+                })
+                .child(SizedBox::new(20.0, 10.0))
                 .duration(RUN)
                 .curve(curve),
             )
@@ -634,7 +644,8 @@ pub(crate) fn align_retarget_preserves_the_laid_out_velocity() {
     let tree = |target, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
-            AnimatedAlign::new(target, SizedBox::new(20.0, 10.0))
+            AnimatedAlign::new(target)
+                .child(SizedBox::new(20.0, 10.0))
                 .duration(Duration::from_secs(1))
                 .curve(curve),
         )
@@ -686,7 +697,8 @@ pub(crate) fn align_changes_leave_an_unchanged_factor_on_its_original_deadline()
     let tree = |alignment, factor| {
         VsyncScope::new(
             registry.clone(),
-            AnimatedAlign::new(alignment, SizedBox::square(10.0))
+            AnimatedAlign::new(alignment)
+                .child(SizedBox::square(10.0))
                 .width_factor(factor)
                 .duration(RUN)
                 .curve(curve.clone()),
@@ -711,10 +723,12 @@ pub(crate) fn align_changes_leave_an_unchanged_factor_on_its_original_deadline()
 pub(crate) fn align_spring_settles_and_optional_factors_snap_independently() {
     let registry = Vsync::new();
     let tree = |alignment, width: Option<f64>| {
-        let mut align = AnimatedAlign::new(alignment, SizedBox::square(10.0)).spring(
-            flui_animation::SpringDescription::with_damping_ratio(1.0, 100.0, 1.0)
-                .expect("admitted spring"),
-        );
+        let mut align = AnimatedAlign::new(alignment)
+            .child(SizedBox::square(10.0))
+            .spring(
+                flui_animation::SpringDescription::with_damping_ratio(1.0, 100.0, 1.0)
+                    .expect("admitted spring"),
+            );
         if let Some(width) = width {
             align = align.width_factor(width);
         }
@@ -749,7 +763,8 @@ pub(crate) fn invalid_align_targets_preserve_all_running_layout_properties() {
     let tree = |alignment, factor| {
         VsyncScope::new(
             registry.clone(),
-            AnimatedAlign::new(alignment, SizedBox::square(10.0))
+            AnimatedAlign::new(alignment)
+                .child(SizedBox::square(10.0))
                 .width_factor(factor)
                 .duration(RUN)
                 .curve(curve.clone()),
@@ -782,7 +797,8 @@ pub(crate) fn rotation_retarget_preserves_the_painted_velocity() {
     let tree = |target, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
-            AnimatedRotation::new(Angle::from_turns(target), SizedBox::new(20.0, 10.0))
+            AnimatedRotation::new(Angle::from_turns(target))
+                .child(SizedBox::new(20.0, 10.0))
                 .path(RotationPath::Numeric)
                 .duration(Duration::from_secs(1))
                 .curve(curve),
@@ -817,7 +833,8 @@ pub(crate) fn rotation_retarget_with_a_new_curve_keeps_the_displayed_sample() {
         |registry, target, curve| {
             VsyncScope::new(
                 registry,
-                AnimatedRotation::new(Angle::from_turns(target), SizedBox::new(20.0, 10.0))
+                AnimatedRotation::new(Angle::from_turns(target))
+                    .child(SizedBox::new(20.0, 10.0))
                     .path(RotationPath::Numeric)
                     .duration(RUN)
                     .curve(curve),
@@ -833,7 +850,8 @@ pub(crate) fn changing_only_the_curve_keeps_the_existing_deadline() {
     let tree = |target, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
-            AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0))
+            AnimatedOpacity::new(target)
+                .child(SizedBox::new(100.0, 50.0))
                 .duration(RUN)
                 .curve(curve),
         )
@@ -868,7 +886,8 @@ pub(crate) fn changing_only_the_duration_preserves_motion_and_sets_a_new_deadlin
         let tree = |target, duration| {
             VsyncScope::new(
                 registry.clone(),
-                AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0))
+                AnimatedOpacity::new(target)
+                    .child(SizedBox::new(100.0, 50.0))
                     .duration(duration)
                     .curve(curves::LINEAR),
             )
@@ -941,7 +960,9 @@ pub(crate) fn swapping_the_scope_registry_preserves_an_implicit_run() {
     let tree = |registry: Vsync, target| {
         VsyncScope::new(
             registry,
-            AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0)).duration(RUN),
+            AnimatedOpacity::new(target)
+                .child(SizedBox::new(100.0, 50.0))
+                .duration(RUN),
         )
     };
     let mut laid = lay_out_animated(tree(old.clone(), 0.0), tight(100.0, 50.0), old.clone());
@@ -1225,7 +1246,9 @@ pub(crate) fn a_detached_ticker_mode_lands_an_implicit_run() {
         }
         let tree = |target| {
             let mode = flui_widgets::TickerMode::new(
-                AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0)).duration(RUN),
+                AnimatedOpacity::new(target)
+                    .child(SizedBox::new(100.0, 50.0))
+                    .duration(RUN),
             );
             if closed_parent {
                 VsyncScope::new(parent.clone(), mode)
@@ -1284,7 +1307,9 @@ impl ViewState<KeyedOpacity> for KeyedOpacityState {
         *self.registry.borrow_mut() = VsyncScope::maybe_of(ctx);
     }
     fn build(&self, view: &KeyedOpacity, _ctx: &dyn BuildContext) -> impl IntoView {
-        AnimatedOpacity::new(view.target, SizedBox::new(40.0, 30.0)).duration(RUN)
+        AnimatedOpacity::new(view.target)
+            .child(SizedBox::new(40.0, 30.0))
+            .duration(RUN)
     }
 }
 
@@ -1386,7 +1411,9 @@ impl ViewState<OpacityProbe> for OpacityProbeState {
     fn build(&self, _view: &OpacityProbe, _ctx: &dyn BuildContext) -> impl IntoView {
         VsyncScope::new(
             self.vsync.clone(),
-            AnimatedOpacity::new(*self.target.lock(), SizedBox::new(100.0, 50.0)).duration(RUN),
+            AnimatedOpacity::new(*self.target.lock())
+                .child(SizedBox::new(100.0, 50.0))
+                .duration(RUN),
         )
     }
 }
@@ -1474,7 +1501,8 @@ impl ViewState<ContainerProbe> for ContainerProbeState {
         let side = *self.side.lock();
         VsyncScope::new(
             self.vsync.clone(),
-            AnimatedContainer::new(SizedBox::new(10.0, 10.0))
+            AnimatedContainer::new()
+                .child(SizedBox::new(10.0, 10.0))
                 .width(side)
                 .height(side)
                 .duration(RUN),
@@ -1576,7 +1604,8 @@ impl StatefulView for OvershootProbe {
 
 impl ViewState<OvershootProbe> for OvershootProbeState {
     fn build(&self, _view: &OvershootProbe, _ctx: &dyn BuildContext) -> impl IntoView {
-        let container = AnimatedContainer::new(SizedBox::new(10.0, 10.0))
+        let container = AnimatedContainer::new()
+            .child(SizedBox::new(10.0, 10.0))
             .duration(RUN)
             .curve(curves::EASE_OUT_BACK);
         VsyncScope::new(
@@ -1665,7 +1694,8 @@ pub(crate) fn non_finite_container_targets_preserve_the_last_admitted_layout() {
     let mut animated = lay_out_animated(
         VsyncScope::new(
             registry.clone(),
-            AnimatedContainer::new(SizedBox::new(10.0, 10.0))
+            AnimatedContainer::new()
+                .child(SizedBox::new(10.0, 10.0))
                 .width(f64::NAN)
                 .height(f64::NAN),
         ),
@@ -1676,7 +1706,8 @@ pub(crate) fn non_finite_container_targets_preserve_the_last_admitted_layout() {
     let tree = |width, height| {
         VsyncScope::new(
             registry.clone(),
-            AnimatedContainer::new(SizedBox::square(10.0))
+            AnimatedContainer::new()
+                .child(SizedBox::square(10.0))
                 .width(width)
                 .height(height)
                 .duration(RUN)
@@ -1725,7 +1756,8 @@ impl ViewState<TransformProbe> for TransformProbeState {
     fn build(&self, _view: &TransformProbe, _ctx: &dyn BuildContext) -> impl IntoView {
         VsyncScope::new(
             self.probe.vsync.clone(),
-            AnimatedContainer::new(SizedBox::new(10.0, 10.0))
+            AnimatedContainer::new()
+                .child(SizedBox::new(10.0, 10.0))
                 .transform(*self.probe.transform.lock())
                 .color(*self.probe.color.lock())
                 .duration(RUN)
@@ -1866,7 +1898,8 @@ impl ViewState<RotationProbe> for RotationProbeState {
     fn build(&self, _view: &RotationProbe, _ctx: &dyn BuildContext) -> impl IntoView {
         VsyncScope::new(
             self.probe.vsync.clone(),
-            AnimatedRotation::new(*self.probe.angle.lock(), SizedBox::new(10.0, 10.0))
+            AnimatedRotation::new(*self.probe.angle.lock())
+                .child(SizedBox::new(10.0, 10.0))
                 .path(*self.probe.path.lock())
                 .duration(RUN)
                 .curve(curves::LINEAR),
@@ -1975,7 +2008,8 @@ pub(crate) fn motion_replaces_the_configured_motion() {
     let tree = |target| {
         VsyncScope::new(
             registry.clone(),
-            AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0))
+            AnimatedOpacity::new(target)
+                .child(SizedBox::new(100.0, 50.0))
                 .duration(Duration::from_secs(10))
                 .motion(MotionSpec::Curve {
                     duration: RUN,
@@ -2023,7 +2057,8 @@ pub(crate) fn implicit_widgets_land_on_their_target_under_reduced_motion() {
         |registry, on| {
             VsyncScope::new(
                 registry,
-                AnimatedOpacity::new(if on { 1.0 } else { 0.0 }, SizedBox::new(20.0, 20.0))
+                AnimatedOpacity::new(if on { 1.0 } else { 0.0 })
+                    .child(SizedBox::new(20.0, 20.0))
                     .duration(slow),
             )
         },
@@ -2035,11 +2070,9 @@ pub(crate) fn implicit_widgets_land_on_their_target_under_reduced_motion() {
         |registry, on| {
             VsyncScope::new(
                 registry,
-                AnimatedPadding::new(
-                    EdgeInsets::all(if on { 30.0 } else { 0.0 }),
-                    SizedBox::new(20.0, 20.0),
-                )
-                .duration(slow),
+                AnimatedPadding::new(EdgeInsets::all(if on { 30.0 } else { 0.0 }))
+                    .child(SizedBox::new(20.0, 20.0))
+                    .duration(slow),
             )
         },
         |laid| laid.offset(laid.child(laid.current_root(), 0)).dx,
@@ -2050,11 +2083,9 @@ pub(crate) fn implicit_widgets_land_on_their_target_under_reduced_motion() {
         |registry, on| {
             VsyncScope::new(
                 registry,
-                AnimatedRotation::new(
-                    Angle::from_turns(if on { 0.25 } else { 0.0 }),
-                    SizedBox::new(20.0, 20.0),
-                )
-                .duration(slow),
+                AnimatedRotation::new(Angle::from_turns(if on { 0.25 } else { 0.0 }))
+                    .child(SizedBox::new(20.0, 20.0))
+                    .duration(slow),
             )
         },
         layer_turns,
@@ -2065,14 +2096,12 @@ pub(crate) fn implicit_widgets_land_on_their_target_under_reduced_motion() {
         |registry, on| {
             VsyncScope::new(
                 registry,
-                AnimatedAlign::new(
-                    if on {
-                        Alignment::BOTTOM_RIGHT
-                    } else {
-                        Alignment::TOP_LEFT
-                    },
-                    SizedBox::new(20.0, 20.0),
-                )
+                AnimatedAlign::new(if on {
+                    Alignment::BOTTOM_RIGHT
+                } else {
+                    Alignment::TOP_LEFT
+                })
+                .child(SizedBox::new(20.0, 20.0))
                 .duration(slow),
             )
         },
@@ -2085,7 +2114,8 @@ pub(crate) fn implicit_widgets_land_on_their_target_under_reduced_motion() {
             VsyncScope::new(
                 registry,
                 Center::new().child(
-                    AnimatedContainer::new(SizedBox::shrink())
+                    AnimatedContainer::new()
+                        .child(SizedBox::shrink())
                         .width(if on { 80.0 } else { 20.0 })
                         .height(20.0)
                         .duration(slow),
@@ -2100,7 +2130,8 @@ pub(crate) fn implicit_widgets_land_on_their_target_under_reduced_motion() {
         |registry, on| {
             VsyncScope::new(
                 registry,
-                AnimatedScale::new(if on { 2.0 } else { 1.0 }, SizedBox::new(20.0, 20.0))
+                AnimatedScale::new(if on { 2.0 } else { 1.0 })
+                    .child(SizedBox::new(20.0, 20.0))
                     .duration(slow),
             )
         },
@@ -2112,11 +2143,9 @@ pub(crate) fn implicit_widgets_land_on_their_target_under_reduced_motion() {
         |registry, on| {
             VsyncScope::new(
                 registry,
-                AnimatedSlide::new(
-                    TranslationFraction::new(if on { 1.0 } else { 0.0 }, 0.0),
-                    SizedBox::new(20.0, 20.0),
-                )
-                .duration(slow),
+                AnimatedSlide::new(TranslationFraction::new(if on { 1.0 } else { 0.0 }, 0.0))
+                    .child(SizedBox::new(20.0, 20.0))
+                    .duration(slow),
             )
         },
         |laid| {
@@ -2485,7 +2514,8 @@ pub(crate) fn single_value_implicit_widgets_show_the_half_way_value() {
         |registry, on| {
             VsyncScope::new(
                 registry,
-                AnimatedScale::new(if on { 2.0 } else { 1.0 }, SizedBox::new(20.0, 20.0))
+                AnimatedScale::new(if on { 2.0 } else { 1.0 })
+                    .child(SizedBox::new(20.0, 20.0))
                     .motion(linear()),
             )
         },
@@ -2497,11 +2527,9 @@ pub(crate) fn single_value_implicit_widgets_show_the_half_way_value() {
         |registry, on| {
             VsyncScope::new(
                 registry,
-                AnimatedSlide::new(
-                    TranslationFraction::new(if on { 1.0 } else { 0.0 }, 0.0),
-                    SizedBox::new(20.0, 20.0),
-                )
-                .motion(linear()),
+                AnimatedSlide::new(TranslationFraction::new(if on { 1.0 } else { 0.0 }, 0.0))
+                    .child(SizedBox::new(20.0, 20.0))
+                    .motion(linear()),
             )
         },
         |laid| {
@@ -2757,7 +2785,9 @@ pub(crate) fn new_implicit_widgets_keep_velocity_across_a_spring_retarget() {
         |registry, scale| {
             VsyncScope::new(
                 registry,
-                AnimatedScale::new(scale, SizedBox::new(20.0, 20.0)).spring(spring()),
+                AnimatedScale::new(scale)
+                    .child(SizedBox::new(20.0, 20.0))
+                    .spring(spring()),
             )
         },
         layer_scale,
@@ -2768,7 +2798,8 @@ pub(crate) fn new_implicit_widgets_keep_velocity_across_a_spring_retarget() {
         |registry, dx| {
             VsyncScope::new(
                 registry,
-                AnimatedSlide::new(TranslationFraction::new(dx, 0.0), SizedBox::new(20.0, 20.0))
+                AnimatedSlide::new(TranslationFraction::new(dx, 0.0))
+                    .child(SizedBox::new(20.0, 20.0))
                     .spring(spring()),
             )
         },

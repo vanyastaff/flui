@@ -33,7 +33,7 @@ is rejected, so the seam had no accepted record. What `main` holds:
 | Fact | Evidence |
 |---|---|
 | `DevReloadHook: Send + 'static` has `attach`, `detach`, `poll` and an unsafe `scene_frame`; `ReloadEvent` is `Unchanged` or `Patched`; `ReloadWake` is the hook's `Send + Sync` frame request | `crates/flui-view/src/dev_reload.rs` |
-| The application installs one instance, `AppConfig::with_dev_reload(impl DevReloadHook)`, and every clone of the configuration shares it | `crates/flui-app/src/app/config.rs` |
+| The application installs one instance, `AppConfig::dev_reload(impl DevReloadHook)`, and every clone of the configuration shares it | `crates/flui-app/src/app/config.rs` |
 | The `Send` bound is there only because the instance travels inside `AppConfig`, which is `Send`; every call is on the owner thread | the trait's docs; `crates/flui-app/src/app/hot_reload.rs` |
 | The host keeps the instance in `Arc<Mutex<Slot>>`, lends it out of the slot for each call and catches each call's panic by hand | `crates/flui-app/src/app/hot_reload.rs` (`DevReload`, `lend`, `disable`) |
 | Hosts call different methods: desktop and iOS `attach`, `poll` and `detach`; Android only `scene_frame`; the web none. A worker hook does nothing on Android, a scene hook nothing elsewhere | the trait's module table; `runner/desktop.rs`, `runner/ios.rs`, `runner/main_window.rs`, `runner/android.rs` |
@@ -111,7 +111,7 @@ thread.**
 
 ```rust
 impl AppConfig {
-    pub fn with_dev_reload<H: DevReloadHook>(
+    pub fn dev_reload<H: DevReloadHook>(
         self,
         make: impl Fn() -> H + Send + Sync + 'static,
     ) -> Self;
@@ -253,7 +253,7 @@ user code:
   longer sits silently on Android and a scene hook no longer sits silently on the desktop.
 - Good, because the fifteen exceptions name an accepted record with a stated exit.
 - Good, because a second owner thread gets an instance of its own from the same configuration.
-- Bad, because `with_dev_reload` breaks its callers: they pass a closure that builds the hook, and
+- Bad, because `dev_reload` breaks its callers: they pass a closure that builds the hook, and
   the Android `--scene` host moves to `with_dev_scene`.
 - Bad, because `cargo xtask send-positions` gains the two factories' `Send` and `Sync` positions
   while losing the hook's `Send` supertrait; they stay because the factory really crosses threads
@@ -266,7 +266,7 @@ user code:
 ### Confirmation
 
 - **The compiler.** Both hooks are `'static` alone. The implementing change adds a doctest on
-  `AppConfig::with_dev_reload` whose hook holds an `Rc` (it compiles only without `Send`), and a
+  `AppConfig::dev_reload` whose hook holds an `Rc` (it compiles only without `Send`), and a
   `compile_fail` doctest that calls `scene_frame` on a `dyn DevReloadHook`; the existing
   `compile_fail,E0133` doctest of a safe `scene_frame` call moves to `DevSceneHook`.
 - **`cargo xtask send-positions`.** The `flui_view::dev_reload::DevReloadHook` supertrait entry of
@@ -318,7 +318,7 @@ user code:
 - Good, because the compiler holds the owner-thread rule, and owner-local state replaces the lock.
 - Good, because each hook's calls are the same on every host that drives it.
 - Good, because the shape is the one `InputTapFactory` already has.
-- Bad, because it breaks `with_dev_reload`'s callers and adds the factories' `Send` positions.
+- Bad, because it breaks `dev_reload`'s callers and adds the factories' `Send` positions.
 
 ### 3. Delete the dlopen path and run without hot reload
 

@@ -38,14 +38,14 @@ impl IntrinsicWidth {
 
     /// Sets the column-width quantum (rounds intrinsic width up to a multiple).
     #[must_use]
-    pub fn with_step_width(mut self, step_width: f64) -> Self {
+    pub fn step_width(mut self, step_width: f64) -> Self {
         self.step_width = Some(step_width);
         self
     }
 
     /// Sets the row-height quantum (rounds height-for-width-query up to a multiple).
     #[must_use]
-    pub fn with_step_height(mut self, step_height: f64) -> Self {
+    pub fn step_height(mut self, step_height: f64) -> Self {
         self.step_height = Some(step_height);
         self
     }

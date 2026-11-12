@@ -82,7 +82,7 @@ configuration, and the runner drives it through the `DevReloadHook` trait
 ```rust,ignore
 use flui_hot_reload::WorkerReloadHook;
 
-let config = AppConfig::new().with_dev_reload(WorkerReloadHook::new(worker_path));
+let config = AppConfig::new().dev_reload(WorkerReloadHook::new(worker_path));
 run_app(root, AppLaunch::new().config(config))?;
 ```
 
@@ -189,7 +189,7 @@ Runs Build → Layout → Paint inside the `.so` via `PluginPipeline`. Hot reloa
 
 | Crate | Responsibility |
 |-------|----------------|
-| **`flui-hot-reload`** | Runtime half, linked by the app: `DynLib`, `ScenePlugin`, `HotReloadDriver`, `ReloadStrategy`, the worker/host ABI, and `WorkerReloadHook`/`ScenePluginHook`, the `DevReloadHook`s a host installs with `AppConfig::with_dev_reload` |
+| **`flui-hot-reload`** | Runtime half, linked by the app: `DynLib`, `ScenePlugin`, `HotReloadDriver`, `ReloadStrategy`, the worker/host ABI, and `WorkerReloadHook`/`ScenePluginHook`, the `DevReloadHook`s a host installs with `AppConfig::dev_reload` |
 | **`flui-cli`** | Dev-machine half: the `SourceWatcher` (`src/watch.rs`), the build pipeline (`src/build/`, once `flui-build`), `flui run`, `flui run --scene` |
 
 Do **not** add a second file-watcher implementation. Extend `flui-cli`'s `watch::SourceWatcher`. The env-var names the CLI sets (`FLUI_HOT_RELOAD`, `FLUI_WORKER_PLUGIN`) are duplicated from `flui_hot_reload::{strategy, engine}::env` and pinned by a test in `commands/run.rs`.

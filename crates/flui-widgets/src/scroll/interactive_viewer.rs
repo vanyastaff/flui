@@ -313,9 +313,8 @@ struct ViewerConfig {
 ///         .control(GestureCommand::new("Zoom out", ZoomIntent::Out), SizedBox::new(16.0, 16.0)),
 /// ))
 /// .expect("two distinct labels");
-/// let viewer = InteractiveViewer::new(alternatives)
-///     .max_scale(8.0)
-///     .child(ColoredBox::new(Color::rgb(20, 40, 60)));
+/// let viewer = InteractiveViewer::new(alternatives, ColoredBox::new(Color::rgb(20, 40, 60)))
+///     .max_scale(8.0);
 /// ```
 #[derive(Clone)]
 pub struct InteractiveViewer {
@@ -341,12 +340,12 @@ impl std::fmt::Debug for InteractiveViewer {
 }
 
 impl InteractiveViewer {
-    /// A viewer whose single-pointer, keyboard and assistive paths are
-    /// `alternatives`, with default limits (`min_scale: 0.8`,
-    /// `max_scale: 2.5`, zero boundary margin, pan, wheel scale and double
-    /// tap zoom enabled).
+    /// A viewer that pans and zooms `child`, whose single-pointer, keyboard
+    /// and assistive paths are `alternatives`, with default limits
+    /// (`min_scale: 0.8`, `max_scale: 2.5`, zero boundary margin, pan, wheel
+    /// scale and double tap zoom enabled).
     #[must_use]
-    pub fn new(alternatives: GestureAlternatives) -> Self {
+    pub fn new(alternatives: GestureAlternatives, child: impl IntoView) -> Self {
         Self {
             alternatives,
             controller: TransformationController::new(),
@@ -367,7 +366,7 @@ impl InteractiveViewer {
             on_interaction_start: None,
             on_interaction_update: None,
             on_interaction_end: None,
-            child: Child::empty(),
+            child: Child::some(child.into_view()),
         }
     }
 
@@ -547,13 +546,6 @@ impl InteractiveViewer {
     ) -> Self {
         self.on_interaction_end =
             Some(Rc::new(move |ctx, details| callback(ctx, details).report()));
-        self
-    }
-
-    /// The child to pan and zoom.
-    #[must_use]
-    pub fn child(mut self, child: impl IntoView) -> Self {
-        self.child = Child::some(child.into_view());
         self
     }
 }

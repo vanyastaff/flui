@@ -876,7 +876,7 @@ const PAGE: f64 = 300.0;
 fn pager(controller: &PageController, page: impl Fn() -> BoxedView) -> LaidOut {
     let pages: Vec<BoxedView> = (0..3).map(|_| page()).collect();
     lay_out(
-        PageView::new(pages, pager_alternatives())
+        PageView::new(pager_alternatives(), pages)
             .controller(controller.clone())
             .allowed_devices(PointerKindSet::all()),
         tight(PAGE, PAGE),
@@ -934,12 +934,14 @@ fn interactive_viewer_in_pager_widget(device: PointerKind) {
         let starts = Rc::clone(&starts);
         move || {
             let starts = Rc::clone(&starts);
-            InteractiveViewer::new(viewer_alternatives())
-                .boundary_margin(EdgeInsets::all(PAGE))
-                .on_interaction_start(move |_, _| starts.borrow_mut().push("viewer"))
-                .child(ColoredBox::new(Color::rgb(20, 40, 60)))
-                .into_view()
-                .boxed()
+            InteractiveViewer::new(
+                viewer_alternatives(),
+                ColoredBox::new(Color::rgb(20, 40, 60)),
+            )
+            .boundary_margin(EdgeInsets::all(PAGE))
+            .on_interaction_start(move |_, _| starts.borrow_mut().push("viewer"))
+            .into_view()
+            .boxed()
         }
     };
     let mut laid = pager(&controller, viewer);
