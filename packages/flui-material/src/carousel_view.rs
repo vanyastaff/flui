@@ -19,7 +19,7 @@ use std::rc::Rc;
 use flui_sdk::geometry::{EdgeInsets, Radius};
 use flui_sdk::painting::{BorderRadius, Clip, Color};
 use flui_sdk::view::prelude::*;
-use flui_sdk::view::{EventCx, EventOutcome};
+use flui_sdk::view::{EventContext, EventOutcome};
 use flui_sdk::widgets::{
     AnimatedBuilder, Carousel, CarouselAutoplay, CarouselController, CarouselItemScope,
     CarouselLayout, KeylineSnap, Positioned, Semantics, SemanticsRole, Stack, WidgetState,
@@ -161,7 +161,7 @@ impl CarouselView {
     #[must_use]
     pub fn on_tap<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, usize) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, usize) -> R + 'static,
         R: EventOutcome,
     {
         self.on_tap = Some(value_callback(callback));

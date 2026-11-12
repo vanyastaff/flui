@@ -292,7 +292,7 @@ Five variants have no production producer today: `Canvas`, `Texture`, `PlatformV
   `ClipRect`, `ClipRRect`, `ClipSuperellipse`, `ClipPath`, `ShaderMask`, `BackdropFilter`,
   `AnnotatedRegion`, `Leader` and `Follower`. `ClipSuperellipse` comes from
   `PaintClip::RSuperellipse`, which `RenderClipRSuperellipse` (`flui-objects`, behind the
-  `ClipRSuperellipse` widget) records; `AnnotatedRegion` comes from `PaintCx::with_annotated_region`,
+  `ClipRSuperellipse` widget) records; `AnnotatedRegion` comes from `PaintContext::with_annotated_region`,
   which `RenderAnnotatedRegion` calls;
 - `FragmentComposer` builds `Offset` (the root at a device pixel ratio of 1, and each
   repaint-boundary child in `place_boundary_impl`), `Transform` (the root's device-pixel-ratio

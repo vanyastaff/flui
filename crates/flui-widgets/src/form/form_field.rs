@@ -14,8 +14,8 @@ use crate::support::{EventCallback, event_callback, ref_callback};
 /// Checks a value; `Some(message)` is the error to show.
 pub type FormFieldValidator<T> = Rc<dyn Fn(&T) -> Option<String>>;
 /// Receives the value on `save`, with the
-/// `&mut EventCx<'_>` the caller of [`FormHandle::save`] passed (ADR-0086).
-pub type FormFieldSetter<T> = Rc<dyn Fn(&mut EventCx<'_>, &T)>;
+/// `&mut EventContext<'_>` the caller of [`FormHandle::save`] passed (ADR-0086).
+pub type FormFieldSetter<T> = Rc<dyn Fn(&mut EventContext<'_>, &T)>;
 /// Builds the field's content from its handle.
 type FormFieldBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &FormFieldHandle<T>) -> BoxedView>;
 
@@ -213,7 +213,7 @@ impl<T: Clone + 'static> FieldInner<T> {
         }
     }
 
-    fn did_change(&self, ctx: &mut EventCx<'_>, value: T) -> Result<(), EventContextError> {
+    fn did_change(&self, ctx: &mut EventContext<'_>, value: T) -> Result<(), EventContextError> {
         self.check_context(ctx)?;
         *self.value.borrow_mut() = Some(value.clone());
         self.interacted.set(true);
@@ -226,7 +226,7 @@ impl<T: Clone + 'static> FieldInner<T> {
         Ok(())
     }
 
-    fn reset(&self, ctx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+    fn reset(&self, ctx: &mut EventContext<'_>) -> Result<(), EventContextError> {
         self.check_context(ctx)?;
         let initial = self.initial.borrow().clone();
         self.value.borrow_mut().clone_from(&initial);
@@ -252,7 +252,7 @@ impl<T: Clone + 'static> FieldInner<T> {
 }
 
 impl<T: Clone + 'static> FormFieldEntry for FieldInner<T> {
-    fn check_context(&self, ctx: &EventCx<'_>) -> Result<(), EventContextError> {
+    fn check_context(&self, ctx: &EventContext<'_>) -> Result<(), EventContextError> {
         self.writer
             .borrow()
             .as_ref()
@@ -268,7 +268,7 @@ impl<T: Clone + 'static> FormFieldEntry for FieldInner<T> {
         self.error.borrow().is_none()
     }
 
-    fn save(&self, ctx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+    fn save(&self, ctx: &mut EventContext<'_>) -> Result<(), EventContextError> {
         self.check_context(ctx)?;
         let on_saved = self.on_saved.borrow().clone();
         if let (Some(on_saved), Some(value)) = (on_saved, self.current()) {
@@ -277,7 +277,7 @@ impl<T: Clone + 'static> FormFieldEntry for FieldInner<T> {
         Ok(())
     }
 
-    fn reset(&self, ctx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+    fn reset(&self, ctx: &mut EventContext<'_>) -> Result<(), EventContextError> {
         Self::reset(self, ctx)
     }
 
@@ -424,13 +424,17 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
     /// field's and the form's autovalidation, and report the change to the
     /// form.
     ///
-    /// Takes the `&mut EventCx<'_>` of the event callback that made the edit
+    /// Takes the `&mut EventContext<'_>` of the event callback that made the edit
     /// and passes it to [`Form::on_changed`] (ADR-0086 §6).
     ///
     /// # Errors
     /// Refuses a detached field, foreign presentation or build-time call
     /// before changing the value or invoking callbacks.
-    pub fn did_change(&self, ctx: &mut EventCx<'_>, value: T) -> Result<(), EventContextError> {
+    pub fn did_change(
+        &self,
+        ctx: &mut EventContext<'_>,
+        value: T,
+    ) -> Result<(), EventContextError> {
         self.inner.did_change(ctx, value)
     }
 
@@ -450,12 +454,12 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
 
     /// Back to the initial value, error and interaction cleared, then
     /// `on_reset`. The caller's
-    /// `&mut EventCx<'_>` reaches `on_reset` and [`Form::on_changed`].
+    /// `&mut EventContext<'_>` reaches `on_reset` and [`Form::on_changed`].
     ///
     /// # Errors
     /// Refuses a detached field, foreign presentation or build-time call
     /// before changing the value or invoking callbacks.
-    pub fn reset(&self, ctx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+    pub fn reset(&self, ctx: &mut EventContext<'_>) -> Result<(), EventContextError> {
         self.inner.reset(ctx)
     }
 
@@ -550,24 +554,24 @@ impl<T: Clone + 'static> FormField<T> {
         self
     }
 
-    /// Receive the value when the form saves, with the `&mut EventCx<'_>`
+    /// Receive the value when the form saves, with the `&mut EventContext<'_>`
     /// passed to [`FormHandle::save`].
     #[must_use]
     pub fn on_saved<F, R>(mut self, on_saved: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &T) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &T) -> R + 'static,
         R: EventOutcome,
     {
         self.on_saved = Some(ref_callback(on_saved));
         self
     }
 
-    /// Called after the field resets, with the `&mut EventCx<'_>` passed to
+    /// Called after the field resets, with the `&mut EventContext<'_>` passed to
     /// the reset.
     #[must_use]
     pub fn on_reset<F, R>(mut self, on_reset: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_reset = Some(event_callback(on_reset));

@@ -14,7 +14,7 @@ use crate::common::harness::mount;
 
 /// `RawTextField` forwards the `ctx` its `EditableText` opens, so both of its
 /// callbacks write signals (ADR-0086).
-pub(crate) fn raw_text_field_callbacks_write_through_the_forwarded_cx() {
+pub(crate) fn raw_text_field_callbacks_write_through_the_forwarded_ctx() {
     use crate::common::{ProbeSignals, SignalProbe};
 
     let controller = TextEditingController::new();

@@ -278,7 +278,7 @@ enum Made {
     Wrappers,
 }
 
-type OnTap = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
+type OnTap = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>;
 
 /// The pre-node `InkWell` without its ink: a `GestureDetector` with the tap
 /// family over a contact `Listener`, a `MouseRegion`, `Actions`, a `Focus`
@@ -529,7 +529,7 @@ pub fn a_disabled_ink_well_is_disabled_in_every_part() {
     impl IntentAction<ActivateIntent> for Outer {
         fn invoke(
             &self,
-            _ctx: &mut flui_sdk::view::EventCx<'_>,
+            _ctx: &mut flui_sdk::view::EventContext<'_>,
             _intent: &ActivateIntent,
         ) -> ActionOutcome {
             self.0.borrow_mut().push("outer");

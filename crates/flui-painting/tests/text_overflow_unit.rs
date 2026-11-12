@@ -36,7 +36,7 @@ fn rasterized_ink_right(paragraph: &ShapedParagraph) -> f64 {
 }
 
 /// A text context over a fresh collection, lent to each measurement.
-fn text_cx() -> flui_painting::TextContext {
+fn text_ctx() -> flui_painting::TextContext {
     flui_painting::TextContext::new(&flui_painting::FontCollection::new())
 }
 
@@ -57,7 +57,7 @@ pub(crate) fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
         .with_max_lines(Some(1))
         .with_ellipsis(Some("…".to_string()));
     painter
-        .layout(&mut text_cx(), 0.0, 80.0)
+        .layout(&mut text_ctx(), 0.0, 80.0)
         .expect("valid fixture lays out");
     assert!(painter.did_exceed_max_lines());
 
@@ -181,7 +181,7 @@ pub(crate) fn a_recolour_paints_what_a_fresh_layout_paints() {
 
     // One context for every painter: the faces, and so the glyph keys, are
     // the same ones.
-    let mut ctx: TextContext = text_cx();
+    let mut ctx: TextContext = text_ctx();
     let mut rasterizer = SwashRasterizer::new();
     fn painter_on(
         text: TextSpan,
@@ -425,7 +425,7 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
 
     // One context for every layout: a fresh collection per layout would
     // miss the shaping cache and prove nothing about what was kept.
-    let mut ctx = text_cx();
+    let mut ctx = text_ctx();
 
     // Every field set, none defaulted: a new field fails to compile here.
     let TextStyle {

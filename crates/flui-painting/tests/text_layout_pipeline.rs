@@ -164,7 +164,7 @@ pub(crate) fn exact_profiles_reach_every_measurement_and_painted_run() {
             "EEE",
             TextStyle::new().with_font_size(28.125),
         ));
-    let mut context = text_cx();
+    let mut context = text_ctx();
     let mut painter = TextPainter::new()
         .with_text(authored)
         .with_text_direction(TextDirection::Ltr);
@@ -276,7 +276,7 @@ pub(crate) fn exact_frontier_is_complete_and_does_not_publish_stale_geometry() {
     use flui_painting::{TextMeasurement, TextMeasurementError, TextSizing};
     let (empty, mut admission) = TextSizing::captured();
     let source = admission.source();
-    let mut context = text_cx();
+    let mut context = text_ctx();
     let authored = TextSpan::new("unstyled")
         .with_child(TextSpan::styled(
             "caption",
@@ -460,7 +460,7 @@ pub(crate) fn captured_live_geometry_rejects_conflicts_after_warm_eviction() {
     admission
         .admit([(first, TextSize::try_new(21.0).expect("answer"))])
         .expect("initial answer");
-    let mut context = text_cx();
+    let mut context = text_ctx();
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new("live geometry"))
         .with_text_direction(TextDirection::Ltr)
@@ -514,7 +514,7 @@ pub(crate) fn captured_cohorts_converge_beyond_warm_capacity_and_retire_history(
     };
     let (sizing, mut admission) = TextSizing::captured();
     admission.set_warm_capacity(2);
-    let mut context = text_cx();
+    let mut context = text_ctx();
     let make_painter = |size| {
         TextPainter::new()
             .with_text(TextSpan::styled(
@@ -701,7 +701,7 @@ pub(crate) fn captured_attempts_retain_nested_sources_across_frontiers() {
     nested_writer.set_warm_capacity(0);
     let root_attempt = root_policy.begin_cohort();
     let inherited = root_attempt.policy();
-    let mut context = text_cx();
+    let mut context = text_ctx();
     let root = make_painter(10.0, None);
     assert!(matches!(
         TextMeasurement::new(&mut context, &inherited).dry_size(&root, 0.0, 400.0),
@@ -777,7 +777,7 @@ pub(crate) fn fixed_and_linear_attempts_retain_multiple_nested_sources() {
         let (second, mut second_writer) = TextSizing::captured();
         first_writer.set_warm_capacity(0);
         second_writer.set_warm_capacity(0);
-        let mut context = text_cx();
+        let mut context = text_ctx();
         let mut measured = Vec::new();
         for (policy, writer, authored, resolved) in [
             (&first, &mut first_writer, 12.25, 24.5),
@@ -947,7 +947,7 @@ pub(crate) fn captured_cache_hits_pin_the_current_attempt_before_font_invalidati
 }
 
 /// A text context over a fresh collection, lent to each measurement.
-fn text_cx() -> flui_painting::TextContext {
+fn text_ctx() -> flui_painting::TextContext {
     flui_painting::TextContext::new(&flui_painting::FontCollection::new())
 }
 
@@ -971,7 +971,7 @@ pub(crate) fn full_pipeline_with_styled_text() {
         .with_text_direction(TextDirection::Ltr);
 
     painter
-        .layout(&mut text_cx(), 0.0, 400.0)
+        .layout(&mut text_ctx(), 0.0, 400.0)
         .expect("valid fixture lays out");
     assert!(painter.width() > 0.0);
 

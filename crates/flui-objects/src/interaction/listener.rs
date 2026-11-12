@@ -20,7 +20,7 @@ use flui_rendering::{
     parent_data::BoxParentData,
     traits::{RenderBox, TextBaseline},
 };
-use flui_rendering::{context::BoxDryBaselineCtx, context::BoxDryLayoutCtx};
+use flui_rendering::{context::BoxDryBaselineContext, context::BoxDryLayoutContext};
 
 /// A render object that registers itself in the hit-test path and contributes
 /// a data-only [`PointerTarget`], so pointer dispatch resolves and invokes the
@@ -207,7 +207,7 @@ impl RenderBox for RenderListener {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
             Ok(constraints.biggest())
@@ -220,7 +220,7 @@ impl RenderBox for RenderListener {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         flui_rendering::context::proxy_queries::forward_dry_baseline(constraints, baseline, ctx)
     }

@@ -2682,7 +2682,7 @@ thread_local! {
 fn logs_as(
     name: &'static str,
     log: &Rc<RefCell<Vec<String>>>,
-) -> impl Fn(&mut flui_view::EventCx<'_>, &str) + 'static {
+) -> impl Fn(&mut flui_view::EventContext<'_>, &str) + 'static {
     let log = Rc::clone(log);
     move |_ctx, text| log.borrow_mut().push(format!("{name}: {text}"))
 }

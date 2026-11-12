@@ -133,7 +133,7 @@ const _: () = assert!(INNER_RADIUS < OUTER_RADIUS);
 
 /// A value-change callback: the newly-selected value. `Rc`-based
 /// (owner-local, per ADR-0027) — matches [`InkWell`]'s own callback shape.
-type RadioChangeCallback<T> = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, T)>;
+type RadioChangeCallback<T> = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, T)>;
 
 /// A Material Design radio button for selecting one value out of a
 /// mutually-exclusive group. See the module docs' "API shape" section for
@@ -197,7 +197,7 @@ impl<T: PartialEq + Clone + 'static> Radio<T> {
     #[must_use]
     pub fn on_changed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, T) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>, T) -> R + 'static,
     ) -> Self {
         self.on_changed = Some(crate::event_callback::value_callback(callback));
         self

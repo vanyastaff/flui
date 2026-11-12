@@ -27,8 +27,8 @@ use flui_painting::{paint::Clip, typography::TextDirection};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
-        PaintCx,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext, PaintContext,
     },
     parent_data::WrapParentData,
     traits::{RenderBox, TextBaseline},
@@ -596,7 +596,7 @@ impl RenderWrap {
     fn simulate_wrap_cross(
         &self,
         max_main: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let child_count = ctx.child_count();
         if child_count == 0 {
@@ -761,7 +761,7 @@ impl RenderBox for RenderWrap {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         // Delegates entirely to compute_runs: sizing (Phases 1-2) is
         // identical to perform_layout; Phase 3 positioning is irrelevant
@@ -787,7 +787,7 @@ impl RenderBox for RenderWrap {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         let sized = self.compute_runs(
             constraints,
@@ -813,7 +813,7 @@ impl RenderBox for RenderWrap {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             // Worst case: every child on its own row → max of child min widths.
@@ -831,7 +831,7 @@ impl RenderBox for RenderWrap {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             // The width that admits every child in one run includes its gaps.
@@ -847,7 +847,7 @@ impl RenderBox for RenderWrap {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             // Horizontal: simulate row wrapping at the given width.
@@ -865,7 +865,7 @@ impl RenderBox for RenderWrap {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             // Horizontal: simulate row wrapping at the given width.
@@ -879,7 +879,7 @@ impl RenderBox for RenderWrap {
 
     // ── Hit testing ───────────────────────────────────────────────────────────
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         // A `Wrap` clips only when it
         // actually overflowed AND a behaviour was asked for — the default is
         // `Clip::None`, so the common case pushes no layer at all. That is the
@@ -888,7 +888,7 @@ impl RenderBox for RenderWrap {
         // only when its constraints could not hold what it was given.
         if self.has_visual_overflow && self.clip_behavior != Clip::None {
             let clip_rect = Rect::from_origin_size(Point::ZERO, ctx.size());
-            ctx.with_clip_rect(clip_rect, self.clip_behavior, PaintCx::paint_children);
+            ctx.with_clip_rect(clip_rect, self.clip_behavior, PaintContext::paint_children);
         } else {
             ctx.paint_children();
         }

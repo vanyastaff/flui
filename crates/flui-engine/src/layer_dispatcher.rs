@@ -204,7 +204,7 @@ impl Drop for LayerDispatcher<'_> {
 /// a `DrawCommand` carrying the clip and the layer as one, which is a change to
 /// the canvas vocabulary rather than to this backend; issue #848 stays open for
 /// it. No in-repo caller reaches it: `RenderClip` and `RenderPhysicalModel` both
-/// paint through `PaintCx::with_clip_*`, which pushes a clip LAYER.
+/// paint through `PaintContext::with_clip_*`, which pushes a clip LAYER.
 /// Whether a clip layer's mode asks for an offscreen around the clipped
 /// subtree.
 ///

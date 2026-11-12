@@ -776,8 +776,8 @@ pub struct TextContext {
     /// through `testing::text_context_lends`.
     #[cfg(any(test, feature = "testing"))]
     lent: u64,
-    pub(crate) font_cx: parley::FontContext,
-    pub(crate) layout_cx: parley::LayoutContext<SpanBrush>,
+    pub(crate) font_ctx: parley::FontContext,
+    pub(crate) layout_ctx: parley::LayoutContext<SpanBrush>,
     /// A dropped layout the next shaping builds into, keeping its buffers.
     pub(crate) spare_layout: Option<parley::Layout<SpanBrush>>,
 }
@@ -791,11 +791,11 @@ impl TextContext {
             fonts: fonts.clone(),
             #[cfg(any(test, feature = "testing"))]
             lent: 0,
-            font_cx: parley::FontContext {
+            font_ctx: parley::FontContext {
                 collection: fonts.0.collection.clone(),
                 source_cache: fonts.0.source_cache.clone(),
             },
-            layout_cx: parley::LayoutContext::new(),
+            layout_ctx: parley::LayoutContext::new(),
             spare_layout: None,
         }
     }
@@ -816,11 +816,11 @@ impl TextContext {
     /// its keys; a face nothing holds loads again, under a new blob id, on its
     /// next use.
     pub fn reclaim(&mut self, level: MemoryPressureLevel) {
-        self.layout_cx = parley::LayoutContext::new();
+        self.layout_ctx = parley::LayoutContext::new();
         self.spare_layout = None;
         match level {
-            MemoryPressureLevel::Moderate => self.font_cx.source_cache.prune(TRIM_MAX_AGE, false),
-            _ => self.font_cx.source_cache.prune(0, true),
+            MemoryPressureLevel::Moderate => self.font_ctx.source_cache.prune(TRIM_MAX_AGE, false),
+            _ => self.font_ctx.source_cache.prune(0, true),
         }
     }
 
@@ -1317,7 +1317,7 @@ mod tests {
     fn a_held_blob_keeps_its_keys_across_a_prune() {
         use crate::glyphs::FontRegistry;
 
-        let pruned = |ctx: &mut TextContext| ctx.font_cx.source_cache.prune(0, true);
+        let pruned = |ctx: &mut TextContext| ctx.font_ctx.source_cache.prune(0, true);
 
         let (fonts, path) = file_backed_roboto("held");
         let mut ctx = TextContext::new(&fonts);

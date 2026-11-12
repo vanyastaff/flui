@@ -10,7 +10,7 @@ use flui_interaction::FocusManager;
 use flui_interaction::focus::FocusNode;
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::{Key, KeyRepeat, KeyState, Modifiers, NamedKey};
-use flui_view::EventCx;
+use flui_view::EventContext;
 use flui_widgets::interaction::{
     Action, ActionOutcome, Actions, ActivateIntent, BackIntent, CallbackAction, DismissIntent,
     Focus,
@@ -41,7 +41,7 @@ impl Action<ActivateIntent> for DisabledActivate {
         false
     }
 
-    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &ActivateIntent) -> ActionOutcome {
         panic!("a disabled activation must never be invoked");
     }
 }

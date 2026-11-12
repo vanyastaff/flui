@@ -1438,11 +1438,11 @@ fn authored_drag_owner_replacement(horizontal: bool) {
             remembered.set(Some(count));
             let (started, cancels, ends, fail) =
                 (started.clone(), cancels.clone(), ends.clone(), fail.clone());
-            let on_start = move |_: &mut flui_view::EventCx<'_>,
+            let on_start = move |_: &mut flui_view::EventContext<'_>,
                                  _: flui_interaction::DragStartDetails| {
                 started.set(started.get() + 1);
             };
-            let on_end = move |_: &mut flui_view::EventCx<'_>,
+            let on_end = move |_: &mut flui_view::EventContext<'_>,
                                details: flui_interaction::DragEndDetails| {
                 match details.reason {
                     GestureEndReason::Completed => ends.set(ends.get() + 1),
@@ -2211,11 +2211,11 @@ pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_
 }
 
 // ============================================================================
-// Event context (ADR-0086): every callback receives `&mut EventCx<'_>` and
+// Event context (ADR-0086): every callback receives `&mut EventContext<'_>` and
 // writes a signal through it; the write rebuilds the signal's reader.
 // ============================================================================
 
-pub(crate) mod event_cx {
+pub(crate) mod event_context {
     use std::cell::Cell;
     use std::rc::Rc;
 

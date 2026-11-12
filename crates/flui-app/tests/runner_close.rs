@@ -17,7 +17,7 @@ use flui_app::app::{
 use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit, StandInRenderer, TeardownStep};
 use flui_foundation::PresentationAddress;
 use flui_foundation::geometry::Size;
-use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
+use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
 use flui_testing::{DropLedger, DropSentinel};
 use flui_view::element::FutureBuilder;
 use flui_view::prelude::*;
@@ -152,7 +152,7 @@ impl RenderBox for PaintTripBox {
         Ok(Size::new(40.0, 24.0))
     }
 
-    fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {
         assert!(
             !self.armed.load(Ordering::SeqCst),
             "the leaf's paint failed"

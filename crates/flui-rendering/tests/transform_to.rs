@@ -30,7 +30,7 @@ impl RenderBox for FixedBox {
     ) -> flui_rendering::RenderResult<Size> {
         Ok(Size::new(20.0, 20.0))
     }
-    fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
 }
 
 /// A single-child box that positions its child at a fixed offset — the plain
@@ -59,7 +59,7 @@ impl RenderBox for OffsetBox {
             constraints.biggest()
         })
     }
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 }

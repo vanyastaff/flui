@@ -69,7 +69,7 @@ use crate::theme::CupertinoTheme;
 
 /// A user tap/long-press handler. `Rc`-based (owner-local, per ADR-0027) —
 /// matches `GestureDetector::on_tap`'s own callback shape.
-type ButtonCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
+type ButtonCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>;
 
 /// The press-in fade's duration.
 pub const K_FADE_OUT_DURATION: Duration = Duration::from_millis(120);
@@ -292,7 +292,7 @@ impl CupertinoButton {
     #[must_use]
     pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_pressed = Some(Rc::new(move |ctx| callback(ctx).report()));
         self
@@ -305,7 +305,7 @@ impl CupertinoButton {
     #[must_use]
     pub fn on_long_press<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_long_press = Some(Rc::new(move |ctx| callback(ctx).report()));
         self

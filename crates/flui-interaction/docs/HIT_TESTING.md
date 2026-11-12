@@ -195,7 +195,7 @@ is leaf-first.
 `with_offset` (`crates/flui-rendering/src/context/hit_test.rs`) let a render
 object record a FORWARD (paint-direction) transform before recursing into a
 child via `hit_test_child`/`hit_test_child_at_layout_offset`. That push used
-to feed a per-node `BoxHitTestCtx` stack that `hit_test_raw`
+to feed a per-node `RawBoxHitTestContext` stack that `hit_test_raw`
 (`crates/flui-rendering/src/traits/render_box.rs`) discarded when the
 context went out of scope, so `RenderFractionalTranslation`
 (`crates/flui-objects/src/layout/fractional_translation.rs`) and
@@ -205,7 +205,7 @@ un-localized positions.
 The ctx now hands its accumulated forward transform to the driver's
 `HitTestChildCallback` on every `hit_test_child`/`hit_test_child_at_layout_offset`
 call (`crates/flui-rendering/src/protocol/box_protocol.rs`,
-`BoxHitTestCtx::local_transform_for_driver`); the driver pushes its inverse
+`RawBoxHitTestContext::local_transform_for_driver`); the driver pushes its inverse
 onto the SAME `HitTestResult` this document describes, scoped to that one
 recursive call, via `with_paint_transform` — the identical mechanism the
 walk already uses for `hit_test_transform` and resolved follower offsets
@@ -222,7 +222,7 @@ reaching the driver:
   wrapper that subtracts a caller-supplied offset before delegating to
   `hit_test_child`) computed the child-local position but never pushed the
   offset it consumed — a bug in the wrapper itself, distinct from the
-  `BoxHitTestCtx`-discarded-on-scope-exit bug fixed above. Its only
+  `RawBoxHitTestContext`-discarded-on-scope-exit bug fixed above. Its only
   nonzero-offset caller, `RenderFractionallySizedBox::hit_test`
   (`crates/flui-objects/src/layout/fractionally_sized_box.rs`), delivered
   un-localized positions to a fractionally-sized, off-center-aligned child.

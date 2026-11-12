@@ -1,5 +1,5 @@
 //! ADR-0086 §8 step 3: the reactive graph is not a write target. A write
-//! opens an `EventCx` through a `WriterSource`.
+//! opens an `EventContext` through a `WriterSource`.
 
 use flui_view::{Reactive, SignalWriteExt};
 

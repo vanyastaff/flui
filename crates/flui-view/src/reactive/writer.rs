@@ -1,7 +1,7 @@
 //! The write capability of the reactive graph (ADR-0086).
 //!
 //! A signal write takes a [`WriteTarget`]. Application code meets exactly one:
-//! the `&mut EventCx<'_>` a framework event callback receives. The only way to
+//! the `&mut EventContext<'_>` a framework event callback receives. The only way to
 //! open one is [`WriterSource::write`]. Stateful widgets acquire a
 //! [`WriterSource`] through [`LifecycleContext::writer_source`]; render views
 //! use [`crate::RenderObjectContext::writer_source`] while registering their
@@ -19,7 +19,7 @@
 //!
 //! The graph itself is not a write target. Host code that writes outside a
 //! widget (a cross-thread `UiCommand::SignalWrite`, a test harness) opens an
-//! [`EventCx`] through the owner's source,
+//! [`EventContext`] through the owner's source,
 //! [`BuildOwner::writer_source`](crate::BuildOwner::writer_source), like any
 //! callback.
 //!
@@ -51,7 +51,7 @@ pub(super) mod sealed {
 
 /// The write capability for one dispatch. It has no public constructor and
 /// is neither `Clone` nor `Send`: application code only ever borrows one,
-/// through the [`EventCx`] a [`WriterSource`] opens.
+/// through the [`EventContext`] a [`WriterSource`] opens.
 pub struct Writer {
     graph: Reactive,
 }
@@ -84,7 +84,7 @@ impl ReadGraph for Writer {
     }
 }
 
-/// What an event callback receives: `&mut EventCx<'_>`, borrowed for one
+/// What an event callback receives: `&mut EventContext<'_>`, borrowed for one
 /// dispatch and dropped when the callback returns.
 ///
 /// It dereferences to the [`Writer`] and carries nothing else: no tree
@@ -93,7 +93,7 @@ impl ReadGraph for Writer {
 /// write reborrows it, so one callback can make several writes.
 /// Current values can be inspected with `signal.peek(ctx, |value| ...)`.
 /// These reads neither subscribe an element nor schedule a rebuild.
-pub struct EventCx<'a> {
+pub struct EventContext<'a> {
     writer: &'a mut Writer,
 }
 
@@ -133,13 +133,13 @@ pub enum EventError {
     Context(#[from] EventContextError),
 }
 
-impl<'a> EventCx<'a> {
+impl<'a> EventContext<'a> {
     pub(crate) fn new(writer: &'a mut Writer) -> Self {
         Self { writer }
     }
 }
 
-impl Deref for EventCx<'_> {
+impl Deref for EventContext<'_> {
     type Target = Writer;
 
     fn deref(&self) -> &Writer {
@@ -147,21 +147,21 @@ impl Deref for EventCx<'_> {
     }
 }
 
-impl DerefMut for EventCx<'_> {
+impl DerefMut for EventContext<'_> {
     fn deref_mut(&mut self) -> &mut Writer {
         self.writer
     }
 }
 
-impl fmt::Debug for EventCx<'_> {
+impl fmt::Debug for EventContext<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EventCx")
+        f.debug_struct("EventContext")
             .field("graph", &self.writer.graph.id())
             .finish()
     }
 }
 
-impl ReadGraph for EventCx<'_> {
+impl ReadGraph for EventContext<'_> {
     fn graph_id(&self) -> u32 {
         self.writer.graph_id()
     }
@@ -175,7 +175,7 @@ impl ReadGraph for EventCx<'_> {
     }
 }
 
-/// An owned, `'static`, `!Send` capability that opens an [`EventCx`].
+/// An owned, `'static`, `!Send` capability that opens an [`EventContext`].
 ///
 /// Acquire it in `create_state` (or `init_state`) with
 /// [`LifecycleContext::writer_source`](crate::LifecycleContext::writer_source)
@@ -187,7 +187,7 @@ impl ReadGraph for EventCx<'_> {
 /// signal minted by another presentation's graph is refused with
 /// [`SignalError::ForeignGraph`].
 ///
-/// The writer an [`EventCx`] lends cannot outlive the closure that received
+/// The writer an [`EventContext`] lends cannot outlive the closure that received
 /// it:
 ///
 /// ```compile_fail,E0521
@@ -213,7 +213,7 @@ impl WriterSource {
     /// state. This checks presentation identity and the signal build guard,
     /// but is not a transaction or proof that the target widget is mounted.
     /// The target must separately invalidate its stored source on disposal.
-    pub fn check_context(&self, ctx: &EventCx<'_>) -> Result<(), EventContextError> {
+    pub fn check_context(&self, ctx: &EventContext<'_>) -> Result<(), EventContextError> {
         if self.graph.inner.borrow().closed {
             return Err(EventContextError::Detached);
         }
@@ -226,14 +226,14 @@ impl WriterSource {
         Ok(())
     }
 
-    /// Open one [`EventCx`] for the duration of `f`.
+    /// Open one [`EventContext`] for the duration of `f`.
     ///
     /// The run-time guard still applies: a write made through it while an
     /// element is building is refused with
     /// [`SignalError::WrittenDuringBuild`].
-    pub fn write<R>(&self, f: impl FnOnce(&mut EventCx<'_>) -> R) -> R {
+    pub fn write<R>(&self, f: impl FnOnce(&mut EventContext<'_>) -> R) -> R {
         let mut writer = Writer::new(self.graph.clone());
-        let mut ctx = EventCx::new(&mut writer);
+        let mut ctx = EventContext::new(&mut writer);
         f(&mut ctx)
     }
 }
@@ -246,10 +246,10 @@ impl fmt::Debug for WriterSource {
     }
 }
 
-/// What a signal write accepts: in application code, the `&mut EventCx<'_>`
+/// What a signal write accepts: in application code, the `&mut EventContext<'_>`
 /// an event callback receives.
 ///
-/// Sealed: `EventCx` and the `Writer` it lends are the only implementors.
+/// Sealed: `EventContext` and the `Writer` it lends are the only implementors.
 /// The graph is not one, so naming it is never a way to write.
 ///
 /// ```compile_fail,E0277
@@ -262,7 +262,7 @@ impl fmt::Debug for WriterSource {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot write a signal",
     label = "not a write context",
-    note = "a signal write takes the `&mut EventCx` an event callback receives: `move |ctx| count.set(ctx, v)`",
+    note = "a signal write takes the `&mut EventContext` an event callback receives: `move |ctx| count.set(ctx, v)`",
     note = "outside a callback, acquire a `WriterSource` in `init_state` and call `source.write(|ctx| ..)`; `build` has none"
 )]
 pub trait WriteTarget: sealed::Sealed {
@@ -278,8 +278,8 @@ impl WriteTarget for Writer {
     }
 }
 
-impl sealed::Sealed for EventCx<'_> {}
-impl WriteTarget for EventCx<'_> {
+impl sealed::Sealed for EventContext<'_> {}
+impl WriteTarget for EventContext<'_> {
     fn graph(&self, _: sealed::Token) -> &Reactive {
         &self.writer.graph
     }
@@ -344,14 +344,14 @@ impl<T> EventOutcome for Result<T, EventError> {
 
 /// Fix the higher-ranked signature of an event closure bound with `let`.
 ///
-/// A closure written inline where `Fn(&mut EventCx<'_>)` is expected gets the
+/// A closure written inline where `Fn(&mut EventContext<'_>)` is expected gets the
 /// right signature from that bound. A closure bound with `let` first does
 /// not: nothing tells it what `ctx` is, the write infers `&_` for it, and
 /// passing it on fails with E0631, "type mismatch in closure arguments".
-/// Wrap it here (annotating `|ctx: &mut EventCx<'_>|` also works):
+/// Wrap it here (annotating `|ctx: &mut EventContext<'_>|` also works):
 ///
 /// ```
-/// use flui_view::{EventCx, Signal, SignalError, SignalWriteExt, WriterSource, callback};
+/// use flui_view::{EventContext, Signal, SignalError, SignalWriteExt, WriterSource, callback};
 ///
 /// fn wire(source: &WriterSource, a: Signal<u32>, b: Signal<u32>) -> Result<(), SignalError> {
 ///     let press = callback(move |ctx| {
@@ -363,7 +363,7 @@ impl<T> EventOutcome for Result<T, EventError> {
 /// ```
 pub fn callback<F, R>(f: F) -> F
 where
-    F: Fn(&mut EventCx<'_>) -> R + 'static,
+    F: Fn(&mut EventContext<'_>) -> R + 'static,
     R: EventOutcome,
 {
     f
@@ -388,7 +388,7 @@ where
 /// ```
 pub fn callback_with<A, F, R>(f: F) -> F
 where
-    F: Fn(&mut EventCx<'_>, A) -> R + 'static,
+    F: Fn(&mut EventContext<'_>, A) -> R + 'static,
     R: EventOutcome,
 {
     f
@@ -419,7 +419,7 @@ where
 pub fn callback_ref<T, F, R>(f: F) -> F
 where
     T: ?Sized,
-    F: for<'a> Fn(&mut EventCx<'_>, &'a T) -> R + 'static,
+    F: for<'a> Fn(&mut EventContext<'_>, &'a T) -> R + 'static,
     R: EventOutcome,
 {
     f
@@ -438,7 +438,7 @@ mod tests {
     static_assertions::assert_impl_all!(WriterSource: Clone);
     static_assertions::assert_not_impl_any!(WriterSource: Send, Sync);
     static_assertions::assert_not_impl_any!(Writer: Send, Sync, Clone);
-    static_assertions::assert_not_impl_any!(EventCx<'static>: Send, Sync, Clone);
+    static_assertions::assert_not_impl_any!(EventContext<'static>: Send, Sync, Clone);
 
     fn graph_with_inbox() -> (Reactive, Arc<ExternalBuildInbox>) {
         let inbox = Arc::new(ExternalBuildInbox::default());

@@ -9,13 +9,14 @@ use crate::parent_data::BoxParentData;
 use crate::traits::TextBaseline;
 
 use super::{
-    BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+    BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+    BoxLayoutContext,
 };
 
 /// Minimum intrinsic width: child answer, or `0.0` when childless.
 #[inline]
 pub fn forward_min_intrinsic_width(
-    ctx: &mut BoxIntrinsicsCtx<'_>,
+    ctx: &mut BoxIntrinsicsContext<'_>,
     height: f64,
 ) -> crate::error::RenderResult<f64> {
     if ctx.child_count() == 0 {
@@ -28,7 +29,7 @@ pub fn forward_min_intrinsic_width(
 /// Maximum intrinsic width: child answer, or `0.0` when childless.
 #[inline]
 pub fn forward_max_intrinsic_width(
-    ctx: &mut BoxIntrinsicsCtx<'_>,
+    ctx: &mut BoxIntrinsicsContext<'_>,
     height: f64,
 ) -> crate::error::RenderResult<f64> {
     if ctx.child_count() == 0 {
@@ -41,7 +42,7 @@ pub fn forward_max_intrinsic_width(
 /// Minimum intrinsic height: child answer, or `0.0` when childless.
 #[inline]
 pub fn forward_min_intrinsic_height(
-    ctx: &mut BoxIntrinsicsCtx<'_>,
+    ctx: &mut BoxIntrinsicsContext<'_>,
     width: f64,
 ) -> crate::error::RenderResult<f64> {
     if ctx.child_count() == 0 {
@@ -54,7 +55,7 @@ pub fn forward_min_intrinsic_height(
 /// Maximum intrinsic height: child answer, or `0.0` when childless.
 #[inline]
 pub fn forward_max_intrinsic_height(
-    ctx: &mut BoxIntrinsicsCtx<'_>,
+    ctx: &mut BoxIntrinsicsContext<'_>,
     width: f64,
 ) -> crate::error::RenderResult<f64> {
     if ctx.child_count() == 0 {
@@ -69,7 +70,7 @@ pub fn forward_max_intrinsic_height(
 #[inline]
 pub fn forward_dry_layout(
     constraints: BoxConstraints,
-    ctx: &mut BoxDryLayoutCtx<'_>,
+    ctx: &mut BoxDryLayoutContext<'_>,
 ) -> crate::error::RenderResult<Size> {
     if ctx.child_count() == 0 {
         Ok(constraints.smallest())
@@ -84,7 +85,7 @@ pub fn forward_dry_layout(
 pub fn forward_dry_baseline(
     constraints: BoxConstraints,
     baseline: TextBaseline,
-    ctx: &mut BoxDryBaselineCtx<'_>,
+    ctx: &mut BoxDryBaselineContext<'_>,
 ) -> crate::error::RenderResult<Option<f64>> {
     if ctx.child_count() == 0 {
         Ok(None)
@@ -140,7 +141,7 @@ macro_rules! forward_single_child_intrinsics {
         fn compute_min_intrinsic_width(
             &self,
             height: f64,
-            ctx: &mut $crate::context::BoxIntrinsicsCtx<'_>,
+            ctx: &mut $crate::context::BoxIntrinsicsContext<'_>,
         ) -> $crate::RenderResult<f64> {
             $crate::context::proxy_queries::forward_min_intrinsic_width(ctx, height)
         }
@@ -148,7 +149,7 @@ macro_rules! forward_single_child_intrinsics {
         fn compute_max_intrinsic_width(
             &self,
             height: f64,
-            ctx: &mut $crate::context::BoxIntrinsicsCtx<'_>,
+            ctx: &mut $crate::context::BoxIntrinsicsContext<'_>,
         ) -> $crate::RenderResult<f64> {
             $crate::context::proxy_queries::forward_max_intrinsic_width(ctx, height)
         }
@@ -156,7 +157,7 @@ macro_rules! forward_single_child_intrinsics {
         fn compute_min_intrinsic_height(
             &self,
             width: f64,
-            ctx: &mut $crate::context::BoxIntrinsicsCtx<'_>,
+            ctx: &mut $crate::context::BoxIntrinsicsContext<'_>,
         ) -> $crate::RenderResult<f64> {
             $crate::context::proxy_queries::forward_min_intrinsic_height(ctx, width)
         }
@@ -164,7 +165,7 @@ macro_rules! forward_single_child_intrinsics {
         fn compute_max_intrinsic_height(
             &self,
             width: f64,
-            ctx: &mut $crate::context::BoxIntrinsicsCtx<'_>,
+            ctx: &mut $crate::context::BoxIntrinsicsContext<'_>,
         ) -> $crate::RenderResult<f64> {
             $crate::context::proxy_queries::forward_max_intrinsic_height(ctx, width)
         }
@@ -182,7 +183,7 @@ macro_rules! forward_single_child_baselines {
             &self,
             constraints: $crate::constraints::BoxConstraints,
             baseline: $crate::traits::TextBaseline,
-            ctx: &mut $crate::context::BoxDryBaselineCtx<'_>,
+            ctx: &mut $crate::context::BoxDryBaselineContext<'_>,
         ) -> $crate::RenderResult<Option<f64>> {
             $crate::context::proxy_queries::forward_dry_baseline(constraints, baseline, ctx)
         }
@@ -209,7 +210,7 @@ macro_rules! forward_single_child_box_queries {
         fn compute_dry_layout(
             &self,
             constraints: $crate::constraints::BoxConstraints,
-            ctx: &mut $crate::context::BoxDryLayoutCtx<'_>,
+            ctx: &mut $crate::context::BoxDryLayoutContext<'_>,
         ) -> $crate::RenderResult<$crate::__MacroSize> {
             $crate::context::proxy_queries::forward_dry_layout(constraints, ctx)
         }

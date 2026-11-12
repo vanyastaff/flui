@@ -198,7 +198,7 @@ impl RenderBox for RenderFractionalTranslation {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Single>) {
         if !self.has_child {
             return;
         }

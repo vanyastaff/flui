@@ -39,7 +39,7 @@ use flui_rendering::semantics::{
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{
-    BoxedView, CreationSite, EventCx, EventOutcome, InheritedView, LifecycleContext,
+    BoxedView, CreationSite, EventContext, EventOutcome, InheritedView, LifecycleContext,
     PostFrameHandle, RebuildHandle, RebuildReason, StatefulView, View, ViewExt, ViewState,
     WriterSource, impl_inherited_view,
 };
@@ -107,7 +107,7 @@ pub enum SelectionInput {
 }
 
 /// Told each change of the selection.
-type SelectionCallback = Rc<dyn Fn(&mut EventCx<'_>, &SelectionChange)>;
+type SelectionCallback = Rc<dyn Fn(&mut EventContext<'_>, &SelectionChange)>;
 
 /// Makes the static text beneath it selectable as one document.
 ///
@@ -237,7 +237,7 @@ impl SelectionArea {
     #[must_use]
     pub fn on_selection_changed<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &SelectionChange) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &SelectionChange) -> R + 'static,
         R: EventOutcome,
     {
         self.on_selection_changed = Some(Rc::new(move |ctx, change| {
@@ -573,7 +573,7 @@ impl SelectionModel {
     /// is resumed afterwards.
     fn select(
         &self,
-        ctx: &mut EventCx<'_>,
+        ctx: &mut EventContext<'_>,
         selection: Option<&DocumentSelection>,
         input: SelectionInput,
     ) {
@@ -593,7 +593,7 @@ impl SelectionModel {
     /// change after the area's listener.
     fn commit(
         &self,
-        ctx: &mut EventCx<'_>,
+        ctx: &mut EventContext<'_>,
         selection: Option<&DocumentSelection>,
         cause: SelectionChangeCause,
         caret: CaretMemory,

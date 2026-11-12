@@ -237,7 +237,7 @@ fn fixture() -> Memory {
         pub fn opaque(cx: impl Sync + OpaqueContext) {}
         pub struct S;
         impl S {
-            pub fn layout(&self, _cx: &mut BoxLayoutCtx<'_>) {}
+            pub fn layout(&self, _cx: &mut RawBoxLayoutContext<'_>) {}
             #[cfg(test)]
             fn hidden(cx: &dyn BuildContext) {}
         }
@@ -248,7 +248,7 @@ fn fixture() -> Memory {
         }
 
         // A `ctx`, a coordinate, a destructured pair and a field: none counts.
-        pub fn fine(ctx: &mut EventCx<'_>) {}
+        pub fn fine(ctx: &mut EventContext<'_>) {}
         pub fn centre(cx: f64, cy: f64) { let (cx, cy) = (cx, cy); }
         pub fn size(size: Size) -> i32 { size.cx }
     ";
@@ -277,7 +277,7 @@ const EXPECTED: [&str; 9] = [
     "`cx: SendableContext`",
     "`cx: OpaqueContext`",
     "`cx: BuildContext`",
-    "`cx: BoxLayoutCtx`",
+    "`cx: RawBoxLayoutContext`",
     "`cx: RenderObjectContext`",
     "`cx: LifecycleContext`",
     "`cx: _`",

@@ -2,7 +2,7 @@
 //!
 //! These exercise the **production layout path**:
 //! [`PipelineOwner::layout_dirty_root`] drives `perform_layout_raw`
-//! against a Direct-storage [`BoxLayoutCtx`] populated with the
+//! against a Direct-storage [`RawBoxLayoutContext`] populated with the
 //! parent's child IDs + a recursive [`layout_subtree_raw`] callback. The
 //! tests cover the 2-level happy path (parent + leaf child), the
 //! 3-level grandchild path (Padding → Center → ColoredBox), and the

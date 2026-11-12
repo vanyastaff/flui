@@ -84,7 +84,7 @@ measured it (ADR-0051), and a band that still has not settled when its budget tr
 remainder to the next frame.
 
 **Re-adding a true mid-pass build** (Compose `SubcomposeLayout` style) is a breaking change to
-`SliverLayoutCtxErased` and `ChildLayout`. It returns only with a consumer that measures a real
+`ErasedSliverLayoutContext` and `ChildLayout`. It returns only with a consumer that measures a real
 cost of whole-pass granularity.
 
 ### 3. Eviction has one owner; no recycling pool

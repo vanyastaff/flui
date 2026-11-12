@@ -87,7 +87,7 @@ pub(crate) struct BuildCapabilities {
     pub(crate) reads: ElementReads,
 }
 
-pub(crate) struct BuildCtx<'b> {
+pub(crate) struct LiveBuildContext<'b> {
     element_id: ElementId,
     depth: usize,
     tree: &'b ElementTree,
@@ -101,7 +101,7 @@ pub(crate) struct BuildCtx<'b> {
     capabilities: BuildCapabilities,
 }
 
-impl<'b> BuildCtx<'b> {
+impl<'b> LiveBuildContext<'b> {
     /// Construct a build-time context for `element_id` (at `depth`) over a
     /// borrowed view of `tree`, buffering inherited dependencies into
     /// `dep_sink`.
@@ -155,12 +155,12 @@ impl<'b> BuildCtx<'b> {
     }
 }
 
-impl super::build_context::sealed::Sealed for BuildCtx<'_> {}
+impl super::build_context::sealed::Sealed for LiveBuildContext<'_> {}
 
 /// Every read subscribes the element: this context exists only for the
 /// element's build (and its `init_state`, whose reads the following build's
 /// `begin_element_build` forgets before re-deriving the set).
-impl ReadScope for BuildCtx<'_> {
+impl ReadScope for LiveBuildContext<'_> {
     fn scope(&self) -> ScopeRef<'_> {
         ScopeRef::new(
             self.capabilities.reads.graph(),
@@ -169,7 +169,7 @@ impl ReadScope for BuildCtx<'_> {
     }
 }
 
-impl BuildContext for BuildCtx<'_> {
+impl BuildContext for LiveBuildContext<'_> {
     fn element_id(&self) -> ElementId {
         self.element_id
     }
@@ -359,12 +359,12 @@ impl BuildContext for BuildCtx<'_> {
     }
 
     fn visit_child_elements(&self, visitor: &mut dyn FnMut(ElementId)) {
-        // Forbidden during build: a `BuildCtx` is ALWAYS mid-build, and the
+        // Forbidden during build: a `LiveBuildContext` is ALWAYS mid-build, and the
         // node's `child_ids` here are the PRE-reconcile list — for an update
         // build they may be removed or reordered moments later.
         debug_assert!(
             !self.is_building(),
-            "visit_child_elements cannot be called during build (a BuildCtx is always \
+            "visit_child_elements cannot be called during build (a LiveBuildContext is always \
              mid-build; its child_ids are the stale pre-reconcile list)"
         );
         if let Some(node) = self.tree.get(self.element_id) {
@@ -376,7 +376,7 @@ impl BuildContext for BuildCtx<'_> {
 
     fn mark_needs_build(&self) {
         tracing::warn!(
-            "BuildCtx::mark_needs_build called during build — no-op (an element cannot \
+            "LiveBuildContext::mark_needs_build called during build — no-op (an element cannot \
              be marked dirty during its own build)"
         );
     }
@@ -394,7 +394,7 @@ impl BuildContext for BuildCtx<'_> {
     }
 }
 
-impl LifecycleContext for BuildCtx<'_> {
+impl LifecycleContext for LiveBuildContext<'_> {
     fn rebuild_handle(&self) -> crate::RebuildHandle {
         self.rebuild.clone()
     }
@@ -450,7 +450,7 @@ impl LifecycleContext for BuildCtx<'_> {
         self.capabilities.hit_test_handle.clone()
     }
     fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
-        // `init_state` runs with a `BuildCtx` — the same context type `build`
+        // `init_state` runs with a `LiveBuildContext` — the same context type `build`
         // gets — so this must serve a real lease rather than refuse one. The
         // "never from a frame phase" half is a TYPE rule: `build` sees this
         // context only as `&dyn BuildContext`, which has no `keep_alive_lease`,

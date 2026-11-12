@@ -36,7 +36,7 @@
 //! `canvas().save()/clip_*()` affect only the current run: a child
 //! marker seals the run, and the child's commands replay in a fresh
 //! one. An effect that must cover children — a clip, a shader mask, or
-//! a backdrop filter — goes through [`PaintCx::with_clip_rect`] /
+//! a backdrop filter — goes through [`PaintContext::with_clip_rect`] /
 //! `with_clip_rrect` / `with_clip_path` / `with_shader_mask` /
 //! `with_backdrop_filter`, which all produce real layers. (A
 //! composer-side fast path may later lower non-composited clip layers
@@ -223,7 +223,7 @@ impl PaintFragment {
 
 /// Where a painting node sits relative to its nearest paint anchor
 /// (`RenderObject::is_paint_anchor`), read through
-/// [`PaintCx::paint_anchor`].
+/// [`PaintContext::paint_anchor`].
 ///
 /// The offset accumulates every parent's child offset between the anchor
 /// and the node, across repaint boundaries, in the anchor's untransformed
@@ -251,7 +251,7 @@ pub struct PaintAnchor {
 ///
 /// Constructed by the pipeline per node (origin = the node's position
 /// in the current layer space); handed to `paint` wrapped in the typed
-/// [`PaintCx`]. Sealing is deterministic: the open canvas is finished
+/// [`PaintContext`]. Sealing is deterministic: the open canvas is finished
 /// into a sealed run whenever a child marker or scope
 /// boundary needs ordering, and at [`Self::finish`].
 #[derive(Debug)]
@@ -316,7 +316,7 @@ impl FragmentRecorder {
         self.ops
     }
 
-    /// Records under `anchor`: what [`PaintCx::paint_anchor`] reports to
+    /// Records under `anchor`: what [`PaintContext::paint_anchor`] reports to
     /// the node painting into this recorder.
     #[must_use]
     pub fn with_paint_anchor(mut self, anchor: Option<PaintAnchor>) -> Self {
@@ -396,7 +396,7 @@ impl FragmentRecorder {
 }
 
 // ============================================================================
-// PaintCx
+// PaintContext
 // ============================================================================
 
 /// Typed paint context handed to `RenderBox::paint`.
@@ -406,10 +406,10 @@ impl FragmentRecorder {
 /// time: `Leaf` objects have **no** `paint_child` method at all.
 ///
 /// ```compile_fail
-/// use flui_rendering::context::PaintCx;
+/// use flui_rendering::context::PaintContext;
 /// use flui_foundation::{Leaf, Single};
 ///
-/// fn paint(ctx: &mut PaintCx<'_, Leaf>) {
+/// fn paint(ctx: &mut PaintContext<'_, Leaf>) {
 ///     ctx.paint_child();
 /// }
 /// ```
@@ -417,31 +417,31 @@ impl FragmentRecorder {
 /// The same call is available to a single-child render object's paint method:
 ///
 /// ```
-/// use flui_rendering::context::PaintCx;
+/// use flui_rendering::context::PaintContext;
 /// use flui_foundation::{Leaf, Single};
 ///
-/// fn paint(ctx: &mut PaintCx<'_, Single>) {
+/// fn paint(ctx: &mut PaintContext<'_, Single>) {
 ///     ctx.paint_child();
 /// }
 /// ```
-pub struct PaintCx<'a, A: Arity> {
+pub struct PaintContext<'a, A: Arity> {
     rec: &'a mut FragmentRecorder,
     child_count: usize,
     size: Size,
     _arity: PhantomData<fn() -> A>,
 }
 
-impl<A: Arity> std::fmt::Debug for PaintCx<'_, A> {
+impl<A: Arity> std::fmt::Debug for PaintContext<'_, A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `rec` is the live recording canvas; report the node-scoped scalars.
-        f.debug_struct("PaintCx")
+        f.debug_struct("PaintContext")
             .field("child_count", &self.child_count)
             .field("size", &self.size)
             .finish_non_exhaustive()
     }
 }
 
-impl<'a, A: Arity> PaintCx<'a, A> {
+impl<'a, A: Arity> PaintContext<'a, A> {
     /// Creates a typed context over a recorder.
     ///
     /// Called by the protocol blanket impl (`paint_raw`); render
@@ -683,7 +683,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
 // Arity-gated child painting
 // ============================================================================
 
-impl PaintCx<'_, Single> {
+impl PaintContext<'_, Single> {
     /// Splices the single child at its laid-out offset
     /// (`RenderState.offset`).
     pub fn paint_child(&mut self) {
@@ -701,7 +701,7 @@ impl PaintCx<'_, Single> {
     }
 }
 
-impl PaintCx<'_, Optional> {
+impl PaintContext<'_, Optional> {
     /// Splices the child if one is attached.
     pub fn paint_child_if_present(&mut self) {
         if self.child_count > 0 {
@@ -715,7 +715,7 @@ impl PaintCx<'_, Optional> {
     }
 }
 
-impl PaintCx<'_, Variable> {
+impl PaintContext<'_, Variable> {
     /// Splices child `index` at its laid-out offset. Out-of-range
     /// indices record nothing.
     pub fn paint_child(&mut self, index: usize) {
@@ -789,7 +789,7 @@ mod tests {
 
     fn draws_between_child_markers_split_into_ordered_runs() {
         let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
-        let mut ctx = PaintCx::<Variable>::new(&mut rec, 2, Size::ZERO);
+        let mut ctx = PaintContext::<Variable>::new(&mut rec, 2, Size::ZERO);
 
         ctx.canvas().draw_rect(rect(10.0, 10.0), &fill()); // background
         ctx.paint_child(0);
@@ -827,7 +827,7 @@ mod tests {
 
     fn origin_is_baked_into_run_transforms() {
         let mut rec = FragmentRecorder::new(Offset::new(7.0, 3.0), 1.0);
-        let mut ctx = PaintCx::<Leaf>::new(&mut rec, 0, Size::ZERO);
+        let mut ctx = PaintContext::<Leaf>::new(&mut rec, 0, Size::ZERO);
         ctx.canvas().draw_rect(rect(10.0, 10.0), &fill());
 
         let frag = rec.finish();

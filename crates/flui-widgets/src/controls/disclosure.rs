@@ -137,7 +137,7 @@ impl Disclosure {
     #[must_use]
     pub fn on_changed<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ExpansionState) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ExpansionState) -> R + 'static,
         R: EventOutcome,
     {
         let callback = Terminal::new(callback);
@@ -234,7 +234,7 @@ impl Drop for LiveDisclosure {
 
 fn propose(
     live: &Rc<RefCell<LiveDisclosure>>,
-    ctx: &mut EventCx<'_>,
+    ctx: &mut EventContext<'_>,
     target: Option<ExpansionState>,
 ) -> bool {
     let (handler, writer, target) = {
@@ -464,7 +464,7 @@ impl<T: Intent> Action<T> for DisclosureActivate {
         live.mounted && live.handler.is_some()
     }
 
-    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &T) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &T) -> ActionOutcome {
         if propose(&self.live, ctx, None) {
             ActionOutcome::Performed
         } else {

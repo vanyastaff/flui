@@ -67,7 +67,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return Err(crate::error::RenderError::NodeNotFound(id));
         }
         let walk = QueryWalk::new(render_tree);
-        let mut ctx = QueryPoisonCx::new(
+        let mut ctx = QueryPoisonContext::new(
             layout_poison,
             TextLender::new(text.cell(), text_measurers, text_sizing),
         );
@@ -89,7 +89,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if let Err(e) = &result {
             ctx.note_failure(id, id, e);
         }
-        let QueryPoisonCx {
+        let QueryPoisonContext {
             failures,
             successes,
             ..
@@ -125,7 +125,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return Err(crate::error::RenderError::NodeNotFound(id));
         }
         let walk = QueryWalk::new(render_tree);
-        let mut ctx = QueryPoisonCx::new(
+        let mut ctx = QueryPoisonContext::new(
             layout_poison,
             TextLender::new(text.cell(), text_measurers, text_sizing),
         );
@@ -139,7 +139,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             #[cfg(not(any(test, feature = "testing")))]
             &(),
         );
-        let QueryPoisonCx {
+        let QueryPoisonContext {
             failures,
             successes,
             ..
@@ -178,7 +178,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return Err(crate::error::RenderError::NodeNotFound(id));
         }
         let walk = QueryWalk::new(render_tree);
-        let mut ctx = QueryPoisonCx::new(
+        let mut ctx = QueryPoisonContext::new(
             layout_poison,
             TextLender::new(text.cell(), text_measurers, text_sizing),
         );
@@ -193,7 +193,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             #[cfg(not(any(test, feature = "testing")))]
             &(),
         );
-        let QueryPoisonCx {
+        let QueryPoisonContext {
             failures,
             successes,
             ..
@@ -213,7 +213,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 /// recursive free functions stay readable. Records are drained into
 /// the owner's poison table by [`apply_query_poison_drain`] after the
 /// walk's borrows are released.
-pub(super) struct QueryPoisonCx<'a> {
+pub(super) struct QueryPoisonContext<'a> {
     poison: &'a LayoutPoison,
     /// The UI runtime's text context, lent to every node the query measures;
     /// each loan records the node it was made for.
@@ -227,7 +227,7 @@ pub(super) struct QueryPoisonCx<'a> {
     successes: Vec<RenderId>,
 }
 
-impl<'a> QueryPoisonCx<'a> {
+impl<'a> QueryPoisonContext<'a> {
     fn new(poison: &'a LayoutPoison, text: TextLender<'a>) -> Self {
         Self {
             poison,
@@ -280,7 +280,7 @@ impl<'a> QueryPoisonCx<'a> {
 /// node forever); parent flags are NOT touched here — unlike the
 /// layout walk, an out-of-layout probe never set them.
 ///
-/// Takes the sinks unpacked (rather than the whole [`QueryPoisonCx`])
+/// Takes the sinks unpacked (rather than the whole [`QueryPoisonContext`])
 /// so the caller's shared borrow of the poison table has ended before
 /// `layout_poison` is taken mutably.
 fn apply_query_poison_drain(
@@ -369,7 +369,7 @@ fn parent_data_refs(owned: &[Option<Box<dyn ParentData>>]) -> Vec<Option<&dyn Pa
 /// walk uses.
 pub(super) fn intrinsic_query(
     walk: &QueryWalk<'_>,
-    ctx: &mut QueryPoisonCx<'_>,
+    ctx: &mut QueryPoisonContext<'_>,
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f64,
@@ -383,7 +383,7 @@ pub(super) fn intrinsic_query(
 /// enters through the [`ensure_stack`] probe.
 fn intrinsic_query_impl(
     walk: &QueryWalk<'_>,
-    ctx: &mut QueryPoisonCx<'_>,
+    ctx: &mut QueryPoisonContext<'_>,
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f64,
@@ -471,7 +471,7 @@ fn intrinsic_query_impl(
                         }
                     }
                 };
-            let mut query = crate::context::BoxIntrinsicsCtx::new(
+            let mut query = crate::context::BoxIntrinsicsContext::new(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
@@ -497,7 +497,7 @@ fn intrinsic_query_impl(
 /// budget (out of the intrinsic channel's scope).
 pub(super) fn dry_layout_query(
     walk: &QueryWalk<'_>,
-    ctx: &mut QueryPoisonCx<'_>,
+    ctx: &mut QueryPoisonContext<'_>,
     id: RenderId,
     constraints: crate::constraints::BoxConstraints,
     #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
@@ -510,7 +510,7 @@ pub(super) fn dry_layout_query(
 /// enters through the [`ensure_stack`] probe.
 fn dry_layout_query_impl(
     walk: &QueryWalk<'_>,
-    ctx: &mut QueryPoisonCx<'_>,
+    ctx: &mut QueryPoisonContext<'_>,
     id: RenderId,
     constraints: crate::constraints::BoxConstraints,
     #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
@@ -575,7 +575,7 @@ fn dry_layout_query_impl(
                     }
                 }
             };
-            let mut query = crate::context::BoxDryLayoutCtx::new(
+            let mut query = crate::context::BoxDryLayoutContext::new(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
@@ -599,7 +599,7 @@ fn dry_layout_query_impl(
 /// (see [`dry_layout_query`]).
 pub(super) fn dry_baseline_query(
     walk: &QueryWalk<'_>,
-    ctx: &mut QueryPoisonCx<'_>,
+    ctx: &mut QueryPoisonContext<'_>,
     id: RenderId,
     constraints: crate::constraints::BoxConstraints,
     baseline: crate::traits::TextBaseline,
@@ -615,7 +615,7 @@ pub(super) fn dry_baseline_query(
 /// enters through the [`ensure_stack`] probe.
 fn dry_baseline_query_impl(
     walk: &QueryWalk<'_>,
-    ctx: &mut QueryPoisonCx<'_>,
+    ctx: &mut QueryPoisonContext<'_>,
     id: RenderId,
     constraints: crate::constraints::BoxConstraints,
     baseline: crate::traits::TextBaseline,
@@ -685,7 +685,7 @@ fn dry_baseline_query_impl(
                     }
                 }
             };
-            let mut query = crate::context::BoxDryBaselineCtx::new(
+            let mut query = crate::context::BoxDryBaselineContext::new(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
