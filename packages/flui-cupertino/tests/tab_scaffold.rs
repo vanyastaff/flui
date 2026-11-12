@@ -30,7 +30,7 @@ fn two_tab_bar() -> CupertinoTabBar {
 struct Probe(Rc<Cell<u32>>);
 
 impl View for Probe {
-    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
         flui_sdk::view::element::ElementKind::stateful(self)
     }
 }

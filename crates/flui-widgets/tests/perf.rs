@@ -414,7 +414,7 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
             .collect::<Vec<_>>(),
     );
     let app = Align::new(flui_painting::Alignment::TOP_LEFT)
-        .child(RepaintBoundary::new().child(SlideTransition::new(position, panel)));
+        .child(RepaintBoundary::new().child(SlideTransition::new(position).child(panel)));
     let mut binding = HeadlessBinding::new();
     let root = GestureArenaScope::new(binding.arena().clone(), FocusTreeRoot::new(app_root(app)));
     let _ = binding.mount_root(
@@ -468,7 +468,7 @@ impl StatelessView for ButtonColumn {
         let rows: Vec<_> = (0..self.buttons)
             .map(|row| {
                 RawButton::new(Text::new(format!("Row {row}")))
-                    .on_press(|_cx| {})
+                    .on_press(|_ctx| {})
                     .boxed()
             })
             .collect();
@@ -600,7 +600,7 @@ fn mount_cost(row: fn(usize) -> BoxedView) -> MountCost {
 fn perf_raw_button_over_text() {
     let button_row = |row: usize| {
         RawButton::new(Text::new(format!("Row {row}")))
-            .on_press(|_cx| {})
+            .on_press(|_ctx| {})
             .boxed()
     };
     // What the process and the thread set up once (the font system, lazy
@@ -779,7 +779,7 @@ fn perf_a_caret_blink_in_a_10k_list_costs_the_same_on_any_tree_size() {
 fn perf_semantics_action_over_text() {
     let annotated_row = |row: usize| {
         Semantics::new()
-            .on_click(|_cx| {})
+            .on_click(|_ctx| {})
             .child(Text::new(format!("Row {row}")))
             .boxed()
     };

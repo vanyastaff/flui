@@ -28,9 +28,10 @@
 //! cannot discard a successful recovery view or its attributed record. Public
 //! integration rows exercise these boundaries through actual element builds.
 
-use std::{any::TypeId, panic::AssertUnwindSafe};
+use std::any::TypeId;
 
 use flui_foundation::RenderId;
+use flui_foundation::panic::FirstPanic;
 
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
@@ -121,17 +122,14 @@ pub(crate) fn stamp_sliver_slot(
 ///
 /// # Panic-safety boundary
 ///
-/// `build` is the *only* code under the `catch_unwind`. The closure
+/// `build` is the *only* code under the containment (`FirstPanic::contain`). The closure
 /// captures just the immutable build inputs (`&V` / `&V::State` /
-/// `&BuildContext`) — wrapped in [`AssertUnwindSafe`] because a user
+/// `&BuildContext`) — asserted unwind-safe because a user
 /// `build()` is logically pure and a half-finished one leaks no shared
 /// state into `core`. The child reconcile — the id-reconciler the
 /// surrounding `BuildOwner::build_scope` drives once `build_into_views`
 /// has returned — runs strictly *after* this function, so a panic can
 /// never be observed mid-reconcile (which would leave `core` half-mutated).
-///
-/// `AssertUnwindSafe` is safe code — this crate is
-/// `#![forbid(unsafe_code)]` and the assertion does not change that.
 ///
 /// # Recovery on a caught panic
 ///
@@ -182,11 +180,14 @@ where
     // refused. The caller armed it (`begin_reactive_build`); it is disarmed
     // here on both exits (the panic path below included).
     let building = core.self_id();
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a view's build panic is replaced by an ErrorView, not unwound"
-    )]
-    match std::panic::catch_unwind(AssertUnwindSafe(build)) {
+    // A build panic is replaced by an ErrorView, not unwound.
+    let mut caught = FirstPanic::new();
+    let built = caught.contain(build);
+    match built.ok_or_else(move || {
+        caught
+            .into_payload()
+            .expect("BUG: a build that returned no view holds its panic")
+    }) {
         Ok(child_view) => {
             if let Some(id) = building {
                 owner.reactive.end_element_build(id, true);
@@ -203,20 +204,16 @@ where
                     format!("building {behavior_name}"),
                 );
                 flui_foundation::panic::discard_payload(payload);
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: a panicking log is contained so ErrorView substitution proceeds"
-                )]
-                if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                // A panicking log is contained so ErrorView substitution
+                // proceeds.
+                FirstPanic::new().contain(|| {
                     tracing::error!(
                         behavior_name,
                         panic_message = %error.message,
                         "lifecycle hook panicked outside the slab; substituting ErrorView \
                          (no element id to record)"
                     );
-                })) {
-                    flui_foundation::panic::discard_payload(payload);
-                }
+                });
                 return BoxedView::from(crate::view::ErrorView::build_error_view(
                     &error,
                     owner.capabilities.error_view_builder,

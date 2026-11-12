@@ -49,7 +49,7 @@ fn perform_layout(
 
 The complete leaf implementation in the [crate example](../src/lib.rs) is a
 compiled doctest. Committed size belongs to pipeline storage; paint reads
-`PaintCx::size()` instead of a second render-object copy.
+`PaintContext::size()` instead of a second render-object copy.
 
 A single-child parent propagates measurement before positioning:
 

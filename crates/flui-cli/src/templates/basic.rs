@@ -1,4 +1,4 @@
-use super::{DependencySource, ProjectPlan};
+use super::{DependencySource, FrameworkPackage, ProjectPlan};
 
 pub fn generate(
     name: &str,
@@ -19,13 +19,17 @@ pub fn generate(
 fn cargo_toml(name: &str, source: &DependencySource) -> String {
     let version = env!("CARGO_PKG_VERSION");
 
-    let deps = format!("flui = {}", source.dependency("flui", &[]));
+    let deps = format!(
+        "flui = {}",
+        source.dependency(FrameworkPackage::Facade, &[])
+    );
     let mode_comment = if matches!(source, DependencySource::Local(_)) {
         " (local development)"
     } else {
         ""
     };
     let lib_table = super::LIB_TABLE;
+    let profiles = super::PROFILES;
 
     format!(
         r#"# FLUI Template v{version}{mode_comment}
@@ -44,12 +48,7 @@ rust-version = "1.99"
 [dependencies]
 {deps}
 
-[profile.release]
-opt-level = 3
-lto = "thin"
-codegen-units = 1
-strip = "debuginfo"
-"#
+{profiles}"#
     )
 }
 

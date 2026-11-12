@@ -34,7 +34,7 @@ const FRAME: Duration = Duration::from_millis(50);
 fn control(label: &'static str, activations: &Rc<Cell<u32>>) -> BoxedView {
     let counted = Rc::clone(activations);
     Actions::new(Focus::new(SizedBox::new(40.0, 40.0)).debug_label(label))
-        .action(CallbackAction::new(move |_cx, _: &ActivateIntent| {
+        .action(CallbackAction::new(move |_ctx, _: &ActivateIntent| {
             counted.set(counted.get() + 1);
         }))
         .into_view()
@@ -799,7 +799,7 @@ impl flui_view::StatelessView for FailingPage {
 }
 
 impl flui_view::View for FailingPage {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }

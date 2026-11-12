@@ -31,8 +31,8 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{
-    Child, EventCx, EventOutcome, RebuildHandle, RenderObjectContext, RenderView, WriterSource,
-    impl_render_view,
+    Child, EventContext, EventOutcome, RebuildHandle, RenderObjectContext, RenderView,
+    WriterSource, impl_render_view,
 };
 
 use super::actions::{Action, ActionOutcome, Actions, PasteTextIntent};
@@ -59,12 +59,12 @@ pub enum DropHover {
 /// asked at every enter and move.
 type AcceptFn = Rc<dyn Fn(&DragView<'_>) -> Option<TransferActions>>;
 /// Called with the drop.
-type DropFn = Rc<dyn Fn(&mut EventCx<'_>, &DragView<'_>, DragPoint, TransferActions)>;
+type DropFn = Rc<dyn Fn(&mut EventContext<'_>, &DragView<'_>, DragPoint, TransferActions)>;
 /// Told that a drag left the target without dropping, as the drag machinery
 /// reports it, outside any write.
 type LeaveFn = Rc<dyn Fn(&DragView<'_>)>;
 /// Called when a hover spring-loads the target.
-type SpringFn = Rc<dyn Fn(&mut EventCx<'_>, &DragView<'_>)>;
+type SpringFn = Rc<dyn Fn(&mut EventContext<'_>, &DragView<'_>)>;
 
 /// A widget that receives drops: from a [`Draggable`](crate::Draggable), from
 /// another window of the app, or from another application.
@@ -197,11 +197,11 @@ impl DropTarget {
     #[must_use]
     pub fn on_drop<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &DragView<'_>, DragPoint, TransferActions) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &DragView<'_>, DragPoint, TransferActions) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_drop = Some(Rc::new(move |cx, drag, at, action| {
-            callback(cx, drag, at, action).report();
+        self.on_drop = Some(Rc::new(move |ctx, drag, at, action| {
+            callback(ctx, drag, at, action).report();
         }));
         self
     }
@@ -219,11 +219,11 @@ impl DropTarget {
     #[must_use]
     pub fn spring_loaded<F, R>(mut self, policy: SpringLoading, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &DragView<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &DragView<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.spring_loading = Some(policy);
-        self.on_spring_loaded = Some(Rc::new(move |cx, drag| callback(cx, drag).report()));
+        self.on_spring_loaded = Some(Rc::new(move |ctx, drag| callback(ctx, drag).report()));
         self
     }
 }
@@ -278,7 +278,7 @@ impl TargetReceiver {
         }
     }
 
-    fn write(&self, invoke: impl FnOnce(&mut EventCx<'_>)) {
+    fn write(&self, invoke: impl FnOnce(&mut EventContext<'_>)) {
         let writer = self.writer.borrow().clone();
         if let Some(writer) = writer {
             writer.write(invoke);
@@ -338,7 +338,7 @@ impl DropReceiver for TargetReceiver {
         self.forget(drag);
         let on_drop = self.config.borrow().on_drop.clone();
         if let Some(on_drop) = on_drop {
-            self.write(|cx| on_drop(cx, drag, at, action));
+            self.write(|ctx| on_drop(ctx, drag, at, action));
         }
     }
 
@@ -349,7 +349,7 @@ impl DropReceiver for TargetReceiver {
     fn spring_loaded(&self, drag: &DragView<'_>) {
         let callback = self.config.borrow().on_spring_loaded.clone();
         if let Some(callback) = callback {
-            self.write(|cx| callback(cx, drag));
+            self.write(|ctx| callback(ctx, drag));
         }
     }
 }
@@ -472,7 +472,7 @@ struct Paste {
 }
 
 impl Action<PasteTextIntent> for Paste {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &PasteTextIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &PasteTextIntent) -> ActionOutcome {
         let drag_and_drop = self.place.drag_and_drop.borrow().clone();
         let (Some(drag_and_drop), Some(ticket)) = (drag_and_drop, self.place.ticket.get()) else {
             return ActionOutcome::NotPerformed;
@@ -563,7 +563,7 @@ struct PasteProbe {
 }
 
 impl View for PasteProbe {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

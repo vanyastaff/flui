@@ -51,8 +51,8 @@ use super::actions::{EnclosingActions, FocusRecord};
 use super::focus_host::{FocusConfig, FocusHost, FocusNodeOwnership};
 
 /// Reports whether this widget's node gained or lost the primary focus, with
-/// the dispatch's [`EventCx`] (ADR-0086).
-pub type FocusChangeHandler = Rc<dyn Fn(&mut EventCx<'_>, bool)>;
+/// the dispatch's [`EventContext`] (ADR-0086).
+pub type FocusChangeHandler = Rc<dyn Fn(&mut EventContext<'_>, bool)>;
 
 // ============================================================================
 // The ambient scope
@@ -254,8 +254,8 @@ impl Focus {
 
     /// Called with `true`/`false` as this widget's node gains/loses the
     /// primary focus, and the
-    /// dispatch's `&mut EventCx<'_>`, so it writes a signal directly
-    /// (ADR-0086): `.on_focus_change(move |cx, focused| has_focus.set(cx, focused))`.
+    /// dispatch's `&mut EventContext<'_>`, so it writes a signal directly
+    /// (ADR-0086): `.on_focus_change(move |ctx, focused| has_focus.set(ctx, focused))`.
     ///
     /// Framework autofocus and reconfiguration run in lifecycle hooks outside
     /// the signal build guard, so their focus edges can write too. An application
@@ -264,7 +264,7 @@ impl Focus {
     #[must_use]
     pub fn on_focus_change<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
         self.config.on_focus_change = Some(value_callback(handler));
@@ -281,7 +281,7 @@ impl Focus {
     #[must_use]
     pub fn on_visible_focus_change<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
         self.config.on_visible_focus_change = Some(value_callback(handler));
@@ -297,14 +297,14 @@ impl Focus {
     /// to stop the bubbling without consuming (ADR-0023).
     ///
     /// The handler runs after routing, so it receives the dispatch's
-    /// `&mut EventCx<'_>` and may write signals; it keeps its decision as the
+    /// `&mut EventContext<'_>` and may write signals; it keeps its decision as the
     /// return value, so a write's `Result` is not reported for it: call
     /// [`report`](EventOutcome::report) on a write whose refusal should be
     /// logged (ADR-0086 Â§6).
     #[must_use]
     pub fn on_key_event<F>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &KeyEvent) -> KeyEventResult + 'static,
+        F: Fn(&mut EventContext<'_>, &KeyEvent) -> KeyEventResult + 'static,
     {
         self.config.on_key_event = Some(Rc::new(handler));
         self
@@ -360,7 +360,7 @@ impl std::fmt::Debug for Focus {
 }
 
 impl View for Focus {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -528,7 +528,7 @@ impl ViewState<Focus> for FocusState {
                 .focused(self.host.node().has_primary_focus());
             // Absent once another owner adopted the node (`FocusHost`).
             match self.host.assistive_focus_request() {
-                Some(request) => semantics.on_focus(move |_cx| request()),
+                Some(request) => semantics.on_focus(move |_ctx| request()),
                 None => semantics,
             }
         } else {
@@ -685,7 +685,7 @@ impl std::fmt::Debug for FocusScope {
 }
 
 impl View for FocusScope {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

@@ -129,12 +129,12 @@ pub fn heading_checkbox_tap_selects_all_from_the_indeterminate_state() {
         vec![
             DataRow::new(vec![text_cell("Ada")])
                 .selected(true)
-                .on_select_changed(move |_cx, next| {
+                .on_select_changed(move |_ctx, next| {
                     selected_recorder.borrow_mut().push(("Ada", next));
                 }),
             DataRow::new(vec![text_cell("Grace")])
                 .selected(false)
-                .on_select_changed(move |_cx, next| {
+                .on_select_changed(move |_ctx, next| {
                     unselected_recorder.borrow_mut().push(("Grace", next));
                 }),
         ],

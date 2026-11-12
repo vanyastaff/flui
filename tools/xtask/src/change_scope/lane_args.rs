@@ -19,11 +19,11 @@
 //!   target: source-derived native Cargo targets (mirroring cross-typecheck), and wasm32
 //!   for the wasm-capable packages in scope (mirroring wasm-check; a package
 //!   opts out with `[package.metadata.flui] wasm = false`);
-//! - the per-feature clippy pass (feature-matrix's `cargo hack --each-feature`)
-//!   covers the changed crates that have features, any crate whose Cargo.toml
-//!   changed, and every dependent in scope whose edge to an in-scope package
-//!   only exists under one of its features (optional, or named in a feature):
-//!   the default build never compiles the code on that edge;
+//! - the per-feature clippy pass (`feature-scope`, feature-matrix's
+//!   `cargo hack --each-feature` narrowed) covers the changed crates that have
+//!   features and any crate whose Cargo.toml changed, in the full mode of a
+//!   pull request too (a Cargo.lock change beside a crate's); a dependent's
+//!   feature-gated edge into them is left to main's feature-matrix;
 //! - the flui-app/flui iOS runner gets a macOS clippy leg whenever either is in
 //!   scope, like the Android runner (it needs xcrun and runs locally on macOS);
 //! - rustdoc -D warnings runs over the scope with its packages' `testing`
@@ -95,13 +95,24 @@ impl Lane {
     }
 }
 
-/// `cargo xtask affected`'s outputs (CI's `plan` reads `lane`, `mode` and
-/// `heavy_required`), one field per output, in output order.
+/// `cargo xtask affected`'s outputs (CI's `plan` reads `lane`, `mode`,
+/// `heavy_required`, `trybuild_required`, `size_required` and
+/// `features_required`), one field per output in output order, but
+/// `features_required`, which `hack_args` decides.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LaneArgs {
     pub(super) lane: Lane,
     pub(super) mode: String,
     pub(super) heavy_required: bool,
+    /// A changed file can change a trybuild expectation: a pull request runs
+    /// `test-trybuild`.
+    pub(super) trybuild_required: bool,
+    /// A changed file can move a size `perf --size` holds: a pull request runs
+    /// `size`.
+    pub(super) size_required: bool,
+    /// A changed line can change what `send-positions` reports: a pull
+    /// request runs `api-contracts`.
+    pub(super) send_positions_required: bool,
     pub(super) reason: String,
     pub(super) packages: String,
     pub(super) pkg_args: String,
@@ -121,13 +132,21 @@ pub(super) struct LaneArgs {
 }
 
 impl LaneArgs {
+    /// `feature-scope` runs: `hack_args` names a package.
+    pub(super) fn features_required(&self) -> bool {
+        !self.hack_args.is_empty()
+    }
+
     /// `(key, value)` in output order; booleans as `true`/`false`.
-    pub(super) fn fields(&self) -> [(&'static str, String); 19] {
+    pub(super) fn fields(&self) -> [(&'static str, String); 23] {
         let b = |v: bool| if v { "true" } else { "false" }.to_owned();
         [
             ("lane", self.lane.as_str().to_owned()),
             ("mode", self.mode.clone()),
             ("heavy_required", b(self.heavy_required)),
+            ("trybuild_required", b(self.trybuild_required)),
+            ("size_required", b(self.size_required)),
+            ("send_positions_required", b(self.send_positions_required)),
             ("reason", self.reason.clone()),
             ("packages", self.packages.clone()),
             ("pkg_args", self.pkg_args.clone()),
@@ -146,6 +165,8 @@ impl LaneArgs {
             ("wasm_args", self.wasm_args.clone()),
             ("wasm_facade", b(self.wasm_facade)),
             ("hack_args", self.hack_args.clone()),
+            // the per-feature pass of `feature-scope` runs over `hack_args`
+            ("features_required", b(self.features_required())),
             ("doc_args", self.doc_args.clone()),
             ("doctest_args", self.doctest_args.clone()),
         ]
@@ -197,76 +218,6 @@ pub(super) fn no_wasm_packages(workspace: &Workspace) -> BTreeSet<String> {
         .filter(|package| !package.builds_for_wasm())
         .map(|package| package.name.clone())
         .collect()
-}
-
-/// The feature names `default` turns on, transitively, within `pkg`.
-fn default_features(pkg: &Package) -> BTreeSet<&str> {
-    let mut on = BTreeSet::new();
-    let mut todo = vec!["default"];
-    while let Some(f) = todo.pop() {
-        let Some(values) = pkg.features.get(f) else {
-            continue;
-        };
-        if !on.insert(f) {
-            continue;
-        }
-        todo.extend(
-            values
-                .iter()
-                .map(String::as_str)
-                .filter(|v| !v.contains('/') && !v.starts_with("dep:")),
-        );
-    }
-    on
-}
-
-/// Packages in `scope` whose dependency on another in-scope package is
-/// compiled only under a non-default feature: the dependency is optional and no
-/// default feature activates it, or a non-default feature names it (`dep:x`,
-/// `x/f`, `x?/f`) -- code behind `cfg(feature = ...)` then reaches into it. A
-/// change to that package can break the code on the edge while the default
-/// build stays green.
-fn feature_gated_dependents<'a>(
-    packages: &BTreeMap<String, Package>,
-    scope: &BTreeSet<&'a str>,
-) -> BTreeSet<&'a str> {
-    let mut found = BTreeSet::new();
-    for &name in scope {
-        let Some(pkg) = packages.get(name) else {
-            continue;
-        };
-        let defaults = default_features(pkg);
-        let values = |on: bool| -> Vec<&str> {
-            pkg.features
-                .iter()
-                .filter(|(f, _)| defaults.contains(f.as_str()) == on)
-                .flat_map(|(_, vs)| vs.iter().map(String::as_str))
-                .collect()
-        };
-        let (on_by_default, off_by_default) = (values(true), values(false));
-        for dep in &pkg.dependencies {
-            if !scope.contains(dep.name.as_str())
-                || dep.name == name
-                || dep.kind.as_deref() == Some("dev")
-            {
-                continue;
-            }
-            let key = dep.rename.as_deref().unwrap_or(&dep.name);
-            let names = |vals: &[&str]| {
-                vals.iter().any(|v| {
-                    *v == key
-                        || v.strip_prefix("dep:") == Some(key)
-                        || v.strip_prefix(key)
-                            .is_some_and(|rest| rest.starts_with('/') || rest.starts_with("?/"))
-                })
-            };
-            if (dep.optional && !names(&on_by_default)) || names(&off_by_default) {
-                found.insert(name);
-                break;
-            }
-        }
-    }
-    found
 }
 
 /// The lane for `scope` on `event`, and its scoped arguments.
@@ -348,37 +299,34 @@ pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Res
         }
     }
 
-    // Dependents that compile the change only under a feature get the
-    // per-feature pass: the default build never compiles that edge.
+    // The per-feature clippy pass (`feature-scope`) runs over the crates the
+    // change is in that have features, and every crate whose manifest
+    // changed. A dependent's feature-gated edge into them is left to main's
+    // feature-matrix: for a change to flui-widgets those were 13 more
+    // packages, which doubled the pass.
     let mut hack_args = String::new();
-    if scope.mode == Mode::Packages {
+    if compiles {
         let packages = &repo.workspace()?.packages;
         let featured = |n: &str| {
             packages
                 .get(n)
                 .is_some_and(|pkg| pkg.features.keys().any(|f| f != "default"))
         };
-        let seeds: BTreeSet<&str> = scope.seeds.iter().map(String::as_str).collect();
-        let gated: BTreeSet<&str> = feature_gated_dependents(packages, &set)
-            .into_iter()
-            .filter(|n| featured(n) && !seeds.contains(n))
-            .collect();
-        // per-feature clippy for the crates the change is IN (seeds) that have
-        // features, for any crate whose manifest changed, and for dependents
-        // whose edge into the scope only a feature compiles; other dependents
-        // get the default build only (the wide lane's feature-matrix covers the rest)
-        hack_args = p(seeds
+        hack_args = p(scope
+            .seeds
             .iter()
-            .copied()
+            .map(String::as_str)
             .filter(|n| featured(n))
-            .chain(scope.manifests.iter().map(String::as_str))
-            .chain(gated.iter().copied()));
+            .chain(scope.manifests.iter().map(String::as_str)));
     }
 
     Ok(LaneArgs {
         lane: Lane::decide(event, scope.mode, scope.heavy_required),
         mode: scope.mode.as_str().to_owned(),
         heavy_required: scope.heavy_required,
+        trybuild_required: scope.trybuild_input.is_some(),
+        size_required: scope.size_input.is_some(),
+        send_positions_required: scope.send_positions_input.is_some(),
         reason: scope.reason.clone(),
         packages: scope.packages.join(" "),
         pkg_args: if full {
@@ -509,6 +457,9 @@ mod tests {
             seeds: vec!["flui-native".to_owned()],
             manifests: Vec::new(),
             heavy_required: false,
+            trybuild_input: None,
+            size_input: None,
+            send_positions_input: None,
             reason: String::new(),
         };
         let a = lane_args(repo(), &only_platform, Event::PullRequest).expect("lane args");
@@ -517,12 +468,10 @@ mod tests {
     }
 
     fn a_changed_manifest_gets_the_per_feature_pass() {
-        // the package itself for its changed manifest, and the facade, whose
-        // edge to it only exists under the `material` feature, with the
-        // facade's dependents that have features of their own
+        // a package whose manifest changed, though it has no features of its own
         assert_eq!(
             args(&["packages/flui-material/Cargo.toml"]).hack_args,
-            "-p flui -p flui-material"
+            "-p flui-material"
         );
     }
 
@@ -554,24 +503,33 @@ mod tests {
         assert!(a.wasm_args.contains("-p flui-native"));
     }
 
-    fn per_feature_pass_covers_feature_gated_dependents() {
-        // flui-widgets reaches flui-assets only through its optional
-        // `asset-images` edge: a source-only flui-assets change must compile
-        // that edge, which the default build never does
+    fn per_feature_pass_covers_the_changed_crates() {
+        // the changed crate, not its dependents: flui-widgets reaches
+        // flui-assets only under `asset-images`, which main's feature-matrix
+        // compiles
         let a = args(&["crates/flui-assets/src/lib.rs"]);
-        assert!(a.hack_args.contains("-p flui-assets"));
-        assert!(a.hack_args.contains("-p flui-widgets"));
-        assert!(!a.heavy_required);
+        assert_eq!(a.hack_args, "-p flui-assets");
+        assert!(a.features_required());
+        // a lock-file change makes the scope the whole workspace and still
+        // names the crate beside it: its `cfg(test)` code behind a feature is
+        // what the pass compiles
+        let a = args(&[
+            "Cargo.lock",
+            "crates/flui-runtime/src/presentation_scene.rs",
+        ]);
+        assert_eq!(a.mode, "full");
+        assert_eq!(a.hack_args, "-p flui-runtime");
+        // documentation and tooling alone run no pass
+        assert!(!args(&["tools/xtask/src/main.rs"]).features_required());
     }
 
-    fn a_design_system_change_gets_the_facades_per_feature_pass() {
+    fn a_design_system_change_builds_the_facade_with_its_catalogs() {
         // the facade turns no feature on by default, so its edge to
-        // flui-material only exists under `material`: a Material change must
-        // compile that edge, which the facade's default build never does
-        assert_eq!(
-            args(&["packages/flui-material/src/lib.rs"]).hack_args,
-            "-p flui"
-        );
+        // flui-material only exists under `material`: the scoped clippy and
+        // tests name the catalogs, and flui-material has no features to pass
+        let a = args(&["packages/flui-material/src/lib.rs"]);
+        assert_eq!(a.features, "--features flui/material,flui/cupertino");
+        assert_eq!(a.hack_args, "");
     }
 
     fn ios_leg_when_flui_app_or_the_facade_is_in_scope() {
@@ -749,12 +707,12 @@ mod tests {
                     wasm_scope_skips_packages_that_cannot_target_wasm as fn(),
                 ),
                 (
-                    "per_feature_pass_covers_feature_gated_dependents",
-                    per_feature_pass_covers_feature_gated_dependents as fn(),
+                    "per_feature_pass_covers_the_changed_crates",
+                    per_feature_pass_covers_the_changed_crates as fn(),
                 ),
                 (
-                    "a_design_system_change_gets_the_facades_per_feature_pass",
-                    a_design_system_change_gets_the_facades_per_feature_pass as fn(),
+                    "a_design_system_change_builds_the_facade_with_its_catalogs",
+                    a_design_system_change_builds_the_facade_with_its_catalogs as fn(),
                 ),
                 (
                     "rustdoc_and_doctests_name_the_facades_catalogs_when_it_is_in_scope",

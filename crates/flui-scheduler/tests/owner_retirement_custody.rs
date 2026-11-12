@@ -73,10 +73,10 @@ fn finished_and_cancelled_futures_preserve_caught_failure_custody() {
         let observed = Rc::clone(&sibling_polls);
         let sibling = owner
             .async_driver()
-            .spawn_local(Box::pin(poll_fn(move |cx| {
+            .spawn_local(Box::pin(poll_fn(move |ctx| {
                 observed.set(observed.get() + 1);
                 if observed.get() == 1 {
-                    cx.waker().wake_by_ref();
+                    ctx.waker().wake_by_ref();
                     Poll::Pending
                 } else {
                     Poll::Ready(())

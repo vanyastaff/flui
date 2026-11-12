@@ -17,7 +17,7 @@ use flui_app::app::{
 use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit, StandInRenderer, TeardownStep};
 use flui_foundation::PresentationAddress;
 use flui_foundation::geometry::Size;
-use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
+use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
 use flui_testing::{DropLedger, DropSentinel};
 use flui_view::element::FutureBuilder;
 use flui_view::prelude::*;
@@ -111,12 +111,12 @@ impl std::future::Future for GatedLoad {
 
     fn poll(
         self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        ctx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         if self.gate.open.get() {
             return std::task::Poll::Ready(Ok(()));
         }
-        self.gate.waker.replace(Some(cx.waker().clone()));
+        self.gate.waker.replace(Some(ctx.waker().clone()));
         std::task::Poll::Pending
     }
 }
@@ -152,7 +152,7 @@ impl RenderBox for PaintTripBox {
         Ok(Size::new(40.0, 24.0))
     }
 
-    fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {
         assert!(
             !self.armed.load(Ordering::SeqCst),
             "the leaf's paint failed"
@@ -181,7 +181,7 @@ impl RenderView for PaintTrip {
 }
 
 impl View for PaintTrip {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -253,8 +253,8 @@ fn observed_app(
 ) -> Application<ObservedRoot, impl FnMut(&AppHandle) -> ObservedRoot> {
     let device_reports = Arc::clone(&observed.device_reports);
     let mut config = AppConfig::new()
-        .with_exit_policy(ExitPolicy::OnLastWindowClosed)
-        .with_frame_failure_handler(FrameFailureHandlerFactory::new(move || {
+        .exit_policy(ExitPolicy::OnLastWindowClosed)
+        .frame_failure_handler(FrameFailureHandlerFactory::new(move || {
             let reports = Arc::clone(&device_reports);
             FrameFailureHandler::new(move |report| {
                 if let FrameFailureKind::DeviceLost { recovery, .. } = report.kind {
@@ -266,12 +266,12 @@ fn observed_app(
             })
         }));
     if let Some(handler) = handler {
-        config = config.with_close_request_handler(handler);
+        config = config.close_request_handler(handler);
     }
     Application::new(move |_| ObservedRoot {
         observed: observed.clone(),
     })
-    .with_config(config)
+    .config(config)
     .on_ready(move |handle| {
         ready.replace(Some(handle.clone()));
     })

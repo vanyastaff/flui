@@ -39,7 +39,7 @@ impl StatelessView for DummyChild {
 }
 
 impl View for DummyChild {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -56,7 +56,7 @@ impl StatelessView for Spacer {
 }
 
 impl View for Spacer {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -81,7 +81,7 @@ impl StatelessView for LabeledView {
 }
 
 impl View for LabeledView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }

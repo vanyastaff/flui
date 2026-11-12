@@ -107,12 +107,6 @@ design.md §7; в таблице стоит рекомендуемый вари�
 
 | # | Было | Стало | Почему | alias | Ссылок | Риск |
 |---|---|---|---|---|---|---|
-| R1 | `BoxLayoutCtx`, `SliverLayoutCtx`, `BoxHitTestCtx`, `SliverHitTestCtx` | `RawBoxLayoutContext`, `RawSliverLayoutContext`, `RawBoxHitTestContext`, `RawSliverHitTestContext` | N1; прецедент `RawWaker`/`Waker` | — | 80/27/31/12 | С |
-| R2 | трейты `BoxLayoutCtxErased`, `SliverLayoutCtxErased` | `ErasedBoxLayoutContext`, `ErasedSliverLayoutContext` | N1; словарь `Erased*` для объектно-безопасной формы | — | 51/27 | С |
-| R3 | `ErasedBoxLayoutCtx`, `ErasedSliverLayoutCtx` (драйверная реализация) | `DriverBoxLayoutContext`, `DriverSliverLayoutContext` | Освобождает `Erased*` для трейта R2; док: «driver-native implementation» | — | 13/10 | Н |
-| R4 | `BoxIntrinsicsCtx`, `BoxDryLayoutCtx`, `BoxDryBaselineCtx` | `BoxIntrinsicsContext`, `BoxDryLayoutContext`, `BoxDryBaselineContext` | N1 | — | 212/92/72 | В |
-| R5 | `PaintCx` (`context/paint_cx.rs:351`) | `PaintContext` | N1 | `PaintingContext` | 190 | С |
-| R6 | `TextCx` (`pipeline/text_context.rs:255`) | `TextContextMut` | N1; `TextContext` уже занят, это `RefMut` на него | — | 28 | Н |
 | R7 | `ContainerParentDataMixin<ChildId>`, файл `container_mixin.rs` | `SiblingLinks<ChildId>`, `sibling_links.rs` | `Mixin` (N8) | `ContainerParentDataMixin` | 31 | С |
 | R8 | `SliverMultiBoxAdaptorParentData` | `SliverMultiBoxAdapterParentData` | Одно написание `Adapter` (N6) | `SliverMultiBoxAdaptorParentData` | 80 | С |
 | R9 | `ActualBaselineChildCallback` | `BaselineChildCallback` | `Actual` — слово Flutter | — | ~5 | Н |
@@ -138,7 +132,6 @@ design.md §7; в таблице стоит рекомендуемый вари�
 
 | # | Было | Стало | Почему | alias | Ссылок | Риск |
 |---|---|---|---|---|---|---|
-| V1 | `EventCx<'a>` (`reactive/writer.rs:95`) | `EventContext<'a>` | N1 | — | 509 | В (ADR-0086, 4 ADR, 9 спек) |
 | V2 | `ElementBase` | `ErasedElement` | Корень иерархии классов; словарь `Erased*` | — | 206 | В |
 | V3 | `StatelessElementBase`, `StatefulElementBase`, `ProxyElementBase`, `InheritedElementBase`, `RenderElementBase<A>`, `RootElementBase`, `NotificationElementBase` | `element::kind::{Stateless, Stateful, Proxy, Inherited, Render<A>, Root, Notification}` | Метки варианта, а не базы (ср. `std::marker`) | — | 46 | С |
 | V4 | `ElementCore<V, A>`, модуль `element::generic` | `TypedElement<V, A>`, `element::typed` | `Core`, `generic` (N1) | — | 157 | С |
@@ -281,11 +274,6 @@ RT…HR 9, M 10, C 2; сводные строки фасада, SDK и macros н
 
 | # | Было | Стало | Почему | Ссылок |
 |---|---|---|---|---|
-| X1 | привязки `ctx` (параметры и локальные) любого типа `…Context` | `cx` | N1 владельца | 3559 в 343 файлах |
-| X2 | время жизни `'ctx` | `'cx`; где уже есть `'cx` (`FlowPaintingContext<'ctx, 'cx>`) — вручную | Следует за X1 | 230 |
-| X3 | `flui-rendering/src/context/paint_cx.rs` | `context/paint.rs` | R5 | 1 |
-| X4 | тестовые модули `event_cx` (×4), `event_cx_tests` в `flui-widgets/tests/` | `event_context` | V1 | 5 |
-| X5 | фикстура `flui-view/tests/ui/unit_closure_where_event_cx_expected.{rs,stderr}` | `unit_closure_where_event_context_expected` | V1 | 2 |
 | X6 | `element/behavior_commons.rs` | `element/build_cycle.rs` | `commons` | 16 |
 | X7 | `element/unified.rs` | `element/behavior_element.rs` | `unified` — история | — |
 | X8 | `flui-widgets/src/support.rs` + `support/*` | `callbacks.rs`, `render_view_macro.rs`; раннеры в `testing/` под `cfg(test)` | мешок | 51 |

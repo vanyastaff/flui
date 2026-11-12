@@ -155,14 +155,14 @@ pub trait LayoutContextApi<'ctx, L: LayoutCapability + ?Sized, A: Arity, P: Pare
     ///
     /// # Direct vs Proxy semantic
     ///
-    /// For `BoxLayoutCtx<A, P>` in **Direct** storage mode (constructed
+    /// For `RawBoxLayoutContext<A, P>` in **Direct** storage mode (constructed
     /// via `new` / `with_children` / `with_layout_callback`), this
     /// returns the pre-populated `children[i].size` — writes from
     /// sibling `layout_child` calls (or pipeline pre-layout) are
     /// visible.
     ///
     /// In **Proxy** storage mode (constructed via
-    /// `BoxLayoutCtx::from_erased` inside the
+    /// `RawBoxLayoutContext::from_erased` inside the
     /// `RenderObject<BoxProtocol>` blanket impl), this returns from a
     /// **local cache populated only by THIS Proxy's `layout_child`
     /// calls** — sibling writes through the underlying Direct ctx are
@@ -274,5 +274,5 @@ pub type ProtocolHitResult<P> = <<P as Protocol>::HitTest as HitTestCapability>:
 
 // `ProtocolLayoutCtx` / `ProtocolHitTestCtx` aliases were removed with the
 // dead `ProtocolRenderObject` trait (their only user). The live layout /
-// hit-test path uses the erased `LayoutCtxErased` GAT and the ergonomic
+// hit-test path uses the erased `ErasedLayoutContext` GAT and the ergonomic
 // `BoxLayoutContext` / `SliverLayoutContext` wrappers, not these raw aliases.

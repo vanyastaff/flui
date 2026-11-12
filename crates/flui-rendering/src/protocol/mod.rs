@@ -42,16 +42,16 @@
 
 // `box_protocol` and `sliver_protocol` are `pub` (rather than the
 // historical private `mod`) so the pipeline-seam traits
-// `BoxLayoutCtxErased` / `SliverLayoutCtxErased` are reachable to
+// `ErasedBoxLayoutContext` / `ErasedSliverLayoutContext` are reachable to
 // downstream consumers via the fully-qualified path
-// `crate::protocol::box_protocol::BoxLayoutCtxErased` without
+// `crate::protocol::box_protocol::ErasedBoxLayoutContext` without
 // being pulled into scope by a glob `use crate::protocol::*`.
 // A glob re-export of the erased trait collides with `LayoutContextApi`'s
 // method names (`constraints` / `layout_child` / `position_child` overlap
 // by design) and triggers ambiguous-method E0034 in widget
 // code. The submodule-pub approach surfaces the trait at one explicit
 // path without polluting the common namespace. The most-used surfaces
-// (`BoxLayoutCtx`, `BoxProtocol`, `LayoutContextApi`, …) are still
+// (`RawBoxLayoutContext`, `BoxProtocol`, `LayoutContextApi`, …) are still
 // re-exported at `protocol::*` below for ergonomics.
 pub mod box_protocol;
 mod capabilities;
@@ -72,25 +72,25 @@ pub use box_protocol::{
     BoxConstraintsCacheKey,
     // Hit test
     BoxHitTest,
-    BoxHitTestCtx,
     BoxHitTestEntry,
     BoxHitTestResult,
     // Layout
     BoxLayout,
-    BoxLayoutCtx,
     // Protocol
     BoxProtocol,
     // Per-child layout state (moved here from the deleted
     // children_access.rs)
     ChildState,
     DegradationProbe,
-    ErasedBoxLayoutCtx,
+    DriverBoxLayoutContext,
     ErasedChildState,
+    RawBoxHitTestContext,
+    RawBoxLayoutContext,
 };
 // Erased layout-context trait.
 //
 // **Deliberately NOT re-exported** at the `protocol::*` level:
-// `BoxLayoutCtxErased::constraints` / `layout_child` / `position_child`
+// `ErasedBoxLayoutContext::constraints` / `layout_child` / `position_child`
 // overlap with `LayoutContextApi`'s method names by design (both view
 // the same operations from different angles); putting the trait into
 // `protocol::*` would force user widget code that does
@@ -99,9 +99,9 @@ pub use box_protocol::{
 // module path so a future `pub mod box_protocol;` lift (when an
 // external Protocol impl outside the sealed set is allowed) is a
 // one-line change; today no such consumer exists, so the trait is
-// effectively crate-internal — the blanket impl on `BoxLayoutCtx` and
+// effectively crate-internal — the blanket impl on `RawBoxLayoutContext` and
 // the `from_erased` ctor reach it via the local
-// `super::box_protocol::BoxLayoutCtxErased` path within
+// `super::box_protocol::ErasedBoxLayoutContext` path within
 // `protocol/box_protocol.rs` itself.
 // ============================================================================
 // CAPABILITY EXPORTS
@@ -136,25 +136,25 @@ pub use protocol::{
 // SLIVER PROTOCOL EXPORTS
 // ============================================================================
 pub use sliver_protocol::{
+    DriverSliverLayoutContext,
     // Layout
     ErasedSliverChildState,
-    ErasedSliverLayoutCtx,
     // Hit test
     MainAxisPosition,
+    RawSliverHitTestContext,
+    RawSliverLayoutContext,
     SliverChildState,
     // Cache key
     SliverConstraintsCacheKey,
     SliverHitTest,
-    SliverHitTestCtx,
     SliverHitTestEntry,
     SliverHitTestResult,
     SliverLayout,
-    SliverLayoutCtx,
     // Protocol
     SliverProtocol,
 };
-// Sliver counterpart to `BoxLayoutCtxErased` — same no-public-re-export
-// rationale; see the BoxLayoutCtxErased note above.
+// Sliver counterpart to `ErasedBoxLayoutContext` — same no-public-re-export
+// rationale; see the ErasedBoxLayoutContext note above.
 
 // ============================================================================
 // RENDER OBJECT TRAIT EXPORTS (re-exported from traits module)

@@ -81,7 +81,7 @@ impl RenderView for DenseRenderUpdateLeaf {
 }
 
 impl View for DenseRenderUpdateLeaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 
@@ -143,7 +143,7 @@ impl ViewState<DenseDidUpdateView> for DenseDidUpdateState {
 }
 
 impl View for DenseDidUpdateView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 

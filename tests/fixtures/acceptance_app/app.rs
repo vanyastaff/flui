@@ -222,7 +222,7 @@ pub const DATA_DIR: &str = "dev.flui.acceptance-app";
 pub fn launch() -> flui::AppLaunch {
     let dir = flui::platform::AppDataDir::try_new(DATA_DIR)
         .expect("BUG: the acceptance application's data directory name is valid");
-    flui::AppLaunch::new().config(flui::AppConfig::new().with_storage_dir(dir))
+    flui::AppLaunch::new().config(flui::AppConfig::new().storage_dir(dir))
 }
 
 /// The acceptance application's root view.
@@ -248,12 +248,12 @@ impl AcceptanceApp {
             edits: None,
             loader: Rc::new(|_attempt| {
                 let mut polled = false;
-                Box::pin(poll_fn(move |cx| {
+                Box::pin(poll_fn(move |ctx| {
                     if polled {
                         return Poll::Ready(Ok(()));
                     }
                     polled = true;
-                    cx.waker().wake_by_ref();
+                    ctx.waker().wake_by_ref();
                     Poll::Pending
                 }))
             }),
@@ -290,7 +290,7 @@ impl AcceptanceApp {
 }
 
 impl StatelessView for AcceptanceApp {
-    fn build(&self, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         Root {
             faults: self.faults,
             loader: Rc::clone(&self.loader),
@@ -659,15 +659,15 @@ impl CloseWatch {
 
 impl Shared {
     /// Write the notebook and the compact flag as they stand.
-    fn store(&self, cx: &EventCx<'_>) {
+    fn store(&self, ctx: &EventContext<'_>) {
         let saved = Saved {
             notebook: self
                 .notebook
-                .peek(cx, Clone::clone)
+                .peek(ctx, Clone::clone)
                 .expect("BUG: the loaded state's signals outlive its screens"),
             compact: self
                 .compact
-                .peek(cx, |compact| *compact)
+                .peek(ctx, |compact| *compact)
                 .expect("BUG: the loaded state's signals outlive its screens"),
         };
         // A write that fails is reported by the document's status and kept
@@ -747,20 +747,20 @@ impl StatefulView for Root {
 }
 
 impl ViewState<Root> for RootState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.documents = Some(Documents {
-            data: Persisted::<Saved>::open(cx),
-            session: Persisted::<Session>::open(cx),
+            data: Persisted::<Saved>::open(ctx),
+            session: Persisted::<Session>::open(ctx),
         });
     }
 
-    fn build(&self, view: &Root, cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &Root, ctx: &dyn BuildContext) -> impl IntoView {
         let documents = self
             .documents
             .clone()
             .expect("BUG: init_state precedes build");
         let attempt = self.attempt;
-        let current = attempt.get(cx);
+        let current = attempt.get(ctx);
         let loader = Rc::clone(&view.loader);
         let load = documents.clone();
         let faults = view.faults;
@@ -816,25 +816,25 @@ impl ViewState<Root> for RootState {
                     Ok((saved, place))
                 }) as BoxedResultFuture<Read, LoadFailure>
             }),
-            Rc::new(move |_cx, snapshot| {
+            Rc::new(move |_ctx, snapshot| {
                 if snapshot.connection_state() != ConnectionState::Done {
                     // Reload replaces the load under way: its future is
                     // dropped, so nothing it read is applied.
-                    let reload = TextButton::new(Text::new("Reload")).on_pressed(move |cx| {
-                        attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
+                    let reload = TextButton::new(Text::new("Reload")).on_pressed(move |ctx| {
+                        attempt.update(ctx, |attempt| *attempt = attempt.wrapping_add(1))
                     });
                     return Column::new((Text::new("Loading notes"), reload)).boxed();
                 }
                 if let Some(error) = snapshot.error() {
                     let resume = documents.data.clone();
                     let resuming = Rc::clone(&starting_over);
-                    let retry = TextButton::new(Text::new("Retry")).on_pressed(move |cx| {
+                    let retry = TextButton::new(Text::new("Retry")).on_pressed(move |ctx| {
                         // A fresh start that failed is taken up where it
                         // stopped; the next attempt waits for it.
                         if resuming.get() {
                             resume.retry();
                         }
-                        attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
+                        attempt.update(ctx, |attempt| *attempt = attempt.wrapping_add(1))
                     });
                     let message = Text::new(format!("Load failed: {error}"));
                     if !matches!(error, LoadFailure::Unreadable(_)) {
@@ -843,12 +843,12 @@ impl ViewState<Root> for RootState {
                     let data = documents.data.clone();
                     let starting_over = Rc::clone(&starting_over);
                     let start_over =
-                        TextButton::new(Text::new("Start over")).on_pressed(move |cx| {
+                        TextButton::new(Text::new("Start over")).on_pressed(move |ctx| {
                             // The unreadable notes are kept aside, then the
                             // initial ones are stored and shown.
                             data.start_over();
                             starting_over.set(true);
-                            attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
+                            attempt.update(ctx, |attempt| *attempt = attempt.wrapping_add(1))
                         });
                     return Column::new((message, retry, start_over)).boxed();
                 }
@@ -911,7 +911,7 @@ impl StatefulView for Loaded {
 }
 
 impl ViewState<Loaded> for LoadedState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let (
             (saved, session),
             Documents {
@@ -954,18 +954,18 @@ impl ViewState<Loaded> for LoadedState {
         });
         place.listen();
         self.shared = Some(Shared {
-            notebook: cx.signal(saved.notebook.clone()),
+            notebook: ctx.signal(saved.notebook.clone()),
             editing,
-            compact: cx.signal(saved.compact),
-            status: cx.signal(String::new()),
+            compact: ctx.signal(saved.compact),
+            status: ctx.signal(String::new()),
             draft,
             scroll,
             data,
             session: place.session.clone(),
             place: Rc::downgrade(&place),
-            close: cx
+            close: ctx
                 .close_guard()
-                .zip(cx.async_driver())
+                .zip(ctx.async_driver())
                 .map(|(guard, driver)| CloseWatch::start(guard, &driver)),
             faults: self.faults,
             planter: self.planter.clone(),
@@ -975,9 +975,9 @@ impl ViewState<Loaded> for LoadedState {
         self.place = Some(place);
     }
 
-    fn build(&self, _view: &Loaded, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Loaded, _ctx: &dyn BuildContext) -> impl IntoView {
         let shared = self.shared.clone().expect("BUG: init_state precedes build");
-        let router = Router::from_stack(self.stack.clone(), move |route: &Route, _cx| {
+        let router = Router::from_stack(self.stack.clone(), move |route: &Route, _ctx| {
             Screen {
                 route: route.clone(),
                 shared: shared.clone(),
@@ -1031,29 +1031,29 @@ impl StatefulView for Screen {
 }
 
 impl ViewState<Screen> for ScreenState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        let router = Router::<Route>::handle(cx).expect("BUG: a screen is under the Router");
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        let router = Router::<Route>::handle(ctx).expect("BUG: a screen is under the Router");
         if let Some(place) = self.place.as_ref().and_then(Weak::upgrade) {
             place.attach(router.clone());
         }
         self.router = Some(router);
     }
 
-    fn build(&self, view: &Screen, cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &Screen, ctx: &dyn BuildContext) -> impl IntoView {
         let router = self.router.clone().expect("BUG: init_state precedes build");
         let shared = &view.shared;
         let content = match view.route {
-            Route::Home => home(cx, shared, &router),
+            Route::Home => home(ctx, shared, &router),
             Route::Note { .. } if shared.faults.contains(Fault::Build) => FailingEditor {
                 faults: shared.faults,
             }
             .boxed(),
-            Route::Note { id } => editor(cx, id, shared, &router, &self.form, &self.focus),
-            Route::Settings => settings(cx, shared),
+            Route::Note { id } => editor(ctx, id, shared, &router, &self.form, &self.focus),
+            Route::Settings => settings(ctx, shared),
         };
-        SafeArea::new().child(Column::new((
+        SafeArea::new(Column::new((
             Row::new(header(&view.route, &router)),
-            Text::new(shared.status.get(cx)),
+            Text::new(shared.status.get(ctx)),
             storage_banner(&shared.data),
             place_banner(&shared.session),
             close_decision(shared.close.as_ref()),
@@ -1080,7 +1080,7 @@ struct FailingEditor {
 }
 
 impl StatelessView for FailingEditor {
-    fn build(&self, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         assert!(
             !self.faults.contains(Fault::Build),
             "injected fault: the Note screen's editor panics in build"
@@ -1095,13 +1095,13 @@ fn on_current_page(
     label: &str,
     router: &RouterHandle<Route>,
     route: &Route,
-    action: impl Fn(&mut EventCx<'_>, &RouterHandle<Route>) + 'static,
+    action: impl Fn(&mut EventContext<'_>, &RouterHandle<Route>) + 'static,
 ) -> TextButton {
     let router = router.clone();
     let route = route.clone();
-    TextButton::new(Text::new(label)).on_pressed(move |cx| {
+    TextButton::new(Text::new(label)).on_pressed(move |ctx| {
         if router.current() == route {
-            action(cx, &router);
+            action(ctx, &router);
         }
     })
 }
@@ -1110,7 +1110,7 @@ fn header(route: &Route, router: &RouterHandle<Route>) -> Vec<BoxedView> {
     let mut header = vec![Text::new("Notes").boxed()];
     if *route != Route::Settings {
         header.push(
-            on_current_page("Settings", router, route, |_cx, router| {
+            on_current_page("Settings", router, route, |_ctx, router| {
                 router.push(Route::Settings).expect("BUG: mounted Router");
             })
             .boxed(),
@@ -1118,7 +1118,7 @@ fn header(route: &Route, router: &RouterHandle<Route>) -> Vec<BoxedView> {
     }
     if *route != Route::Home {
         header.push(
-            on_current_page("Back", router, route, |_cx, router| {
+            on_current_page("Back", router, route, |_ctx, router| {
                 router.pop().expect("BUG: mounted Router");
             })
             .boxed(),
@@ -1127,11 +1127,16 @@ fn header(route: &Route, router: &RouterHandle<Route>) -> Vec<BoxedView> {
     header
 }
 
-fn open_note(cx: &mut EventCx<'_>, shared: &Shared, router: &RouterHandle<Route>, id: NoteId) {
+fn open_note(
+    ctx: &mut EventContext<'_>,
+    shared: &Shared,
+    router: &RouterHandle<Route>,
+    id: NoteId,
+) {
     if shared.editing.get() != Some(id) {
         let title = shared
             .notebook
-            .peek(cx, |notebook| notebook.title(id).map(str::to_owned))
+            .peek(ctx, |notebook| notebook.title(id).map(str::to_owned))
             .expect("BUG: the loaded state's signals outlive its screens");
         // The draft names its note before its text changes, so the session
         // written for the new text names the right note.
@@ -1143,11 +1148,11 @@ fn open_note(cx: &mut EventCx<'_>, shared: &Shared, router: &RouterHandle<Route>
         .expect("BUG: mounted Router");
 }
 
-fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) -> BoxedView {
+fn home(ctx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) -> BoxedView {
     let notes: Rc<[Note]> = shared
         .notebook
-        .with(cx, |notebook| notebook.notes.clone().into());
-    let compact = shared.compact.get(cx);
+        .with(ctx, |notebook| notebook.notes.clone().into());
+    let compact = shared.compact.get(ctx);
     let extent = if compact {
         COMPACT_ROW_HEIGHT
     } else {
@@ -1193,22 +1198,22 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
                 },
                 router,
                 &Route::Home,
-                move |cx, _router| {
+                move |ctx, _router| {
                     toggle
                         .compact
-                        .update(cx, |compact| *compact = !*compact)
+                        .update(ctx, |compact| *compact = !*compact)
                         .expect("BUG: the loaded state's signals outlive its screens");
-                    toggle.store(cx);
+                    toggle.store(ctx);
                 },
             )
             .boxed(),
-            on_current_page("New note", router, &Route::Home, move |cx, router| {
+            on_current_page("New note", router, &Route::Home, move |ctx, router| {
                 let id = add
                     .notebook
-                    .update(cx, Notebook::add)
+                    .update(ctx, Notebook::add)
                     .expect("BUG: the loaded state's signals outlive its screens");
-                add.store(cx);
-                open_note(cx, &add, router, id);
+                add.store(ctx);
+                open_note(ctx, &add, router, id);
             })
             .boxed(),
         ]),
@@ -1229,7 +1234,7 @@ struct NoteRow {
 }
 
 impl StatelessView for NoteRow {
-    fn build(&self, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         let id = *self.key.value();
         let shared = self.shared.clone();
         SizedBox::height(self.extent).child(
@@ -1237,8 +1242,8 @@ impl StatelessView for NoteRow {
                 &self.title,
                 &self.router,
                 &Route::Home,
-                move |cx, router| {
-                    open_note(cx, &shared, router, id);
+                move |ctx, router| {
+                    open_note(ctx, &shared, router, id);
                 },
             )
             .style(flat_row()),
@@ -1247,7 +1252,7 @@ impl StatelessView for NoteRow {
 }
 
 impl View for NoteRow {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 
@@ -1265,7 +1270,7 @@ fn flat_row() -> ButtonStyle {
 }
 
 fn editor(
-    cx: &dyn BuildContext,
+    ctx: &dyn BuildContext,
     id: NoteId,
     shared: &Shared,
     router: &RouterHandle<Route>,
@@ -1274,7 +1279,7 @@ fn editor(
 ) -> BoxedView {
     let exists = shared
         .notebook
-        .with(cx, |notebook| notebook.title(id).is_some());
+        .with(ctx, |notebook| notebook.title(id).is_some());
     if !exists {
         return Text::new(format!("Note {id} does not exist")).boxed();
     }
@@ -1296,7 +1301,7 @@ fn editor(
             "Save note",
             router,
             &Route::Note { id },
-            move |cx, _router| {
+            move |ctx, _router| {
                 assert!(
                     !save.faults.contains(Fault::Save),
                     "injected fault: pressing Save note panics"
@@ -1304,20 +1309,20 @@ fn editor(
                 let message = if validate.validate() {
                     let title = save.draft.text();
                     save.notebook
-                        .update(cx, |notebook| {
+                        .update(ctx, |notebook| {
                             if let Some(note) = notebook.notes.iter_mut().find(|note| note.id == id)
                             {
                                 note.title.clone_from(&title);
                             }
                         })
                         .expect("BUG: the loaded state's signals outlive its screens");
-                    save.store(cx);
+                    save.store(ctx);
                     format!("Saved note {id}")
                 } else {
                     "Fix the title".to_owned()
                 };
                 save.status
-                    .set(cx, message)
+                    .set(ctx, message)
                     .expect("BUG: the loaded state's signals outlive its screens");
             },
         ),
@@ -1325,25 +1330,25 @@ fn editor(
             "Delete note",
             router,
             &Route::Note { id },
-            move |cx, router| {
+            move |ctx, router| {
                 delete
                     .notebook
-                    .update(cx, |notebook| notebook.notes.retain(|note| note.id != id))
+                    .update(ctx, |notebook| notebook.notes.retain(|note| note.id != id))
                     .expect("BUG: the loaded state's signals outlive its screens");
                 if delete.editing.get() == Some(id) {
                     delete.editing.set(None);
                 }
-                delete.store(cx);
+                delete.store(ctx);
                 delete
                     .status
-                    .set(cx, format!("Deleted note {id}"))
+                    .set(ctx, format!("Deleted note {id}"))
                     .expect("BUG: the loaded state's signals outlive its screens");
                 router.pop().expect("BUG: mounted Router");
             },
         ),
     )))
     .handle(form.clone())
-    .on_changed(move |_cx| {
+    .on_changed(move |_ctx| {
         if let Some(edits) = &edits {
             edits.set(edits.get() + 1);
         }
@@ -1351,8 +1356,8 @@ fn editor(
     .boxed()
 }
 
-fn settings(cx: &dyn BuildContext, shared: &Shared) -> BoxedView {
-    let compact = if shared.compact.get(cx) { "on" } else { "off" };
+fn settings(ctx: &dyn BuildContext, shared: &Shared) -> BoxedView {
+    let compact = if shared.compact.get(ctx) { "on" } else { "off" };
     Text::new(format!("Compact rows are {compact}")).boxed()
 }
 
@@ -1373,7 +1378,7 @@ fn storage_banner(data: &Persisted<Saved>) -> BoxedView {
             Row::new(vec![
                 Text::new(format!("Saving failed: {error}")).boxed(),
                 TextButton::new(Text::new("Retry saving"))
-                    .on_pressed(move |_cx| data.retry())
+                    .on_pressed(move |_ctx| data.retry())
                     .boxed(),
             ])
             .boxed()
@@ -1395,7 +1400,7 @@ fn place_banner(session: &Persisted<Session>) -> BoxedView {
             Row::new(vec![
                 Text::new(format!("Saving the place failed: {error}")).boxed(),
                 TextButton::new(Text::new("Retry saving the place"))
-                    .on_pressed(move |_cx| session.retry())
+                    .on_pressed(move |_ctx| session.retry())
                     .boxed(),
             ])
             .boxed()
@@ -1420,14 +1425,14 @@ async fn started_over(data: &Persisted<Saved>) -> Result<(), String> {
         data: data.clone(),
         listening: None,
     };
-    poll_fn(move |cx| {
+    poll_fn(move |ctx| {
         if let SaveStatus::Failed(error) = watch.data.status() {
             return Poll::Ready(Err(error.to_string()));
         }
         if watch.data.revision().is_some() {
             return Poll::Ready(Ok(()));
         }
-        *waker.borrow_mut() = Some(cx.waker().clone());
+        *waker.borrow_mut() = Some(ctx.waker().clone());
         if watch.listening.is_none() {
             let waker = Rc::clone(&waker);
             // Taken before waking: the waker's wake may poll again.
@@ -1463,14 +1468,14 @@ fn close_decision(close: Option<&CloseWatch>) -> BoxedView {
         let keep = guard.clone();
         let buttons = Row::new(vec![
             TextButton::new(Text::new("Close without saving"))
-                .on_pressed(move |_cx| {
+                .on_pressed(move |_ctx| {
                     if let Some(pending) = discard.pending() {
                         let _gone: Result<(), StaleClose> = pending.discard_and_close();
                     }
                 })
                 .boxed(),
             TextButton::new(Text::new("Keep open"))
-                .on_pressed(move |_cx| {
+                .on_pressed(move |_ctx| {
                     if let Some(pending) = keep.pending() {
                         let _gone: Result<(), StaleClose> = pending.stay_open();
                     }

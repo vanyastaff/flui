@@ -55,18 +55,18 @@ impl StatefulView for Gauge {
 }
 
 impl View for Gauge {
-    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
         flui_sdk::view::element::ElementKind::stateful(self)
     }
 }
 
 impl ViewState<Gauge> for GaugeState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        let battery = cx.capability::<Battery>().expect("the plugin provides it");
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        let battery = ctx.capability::<Battery>().expect("the plugin provides it");
         self.level.set(Some(battery.level));
     }
 
-    fn build(&self, _view: &Gauge, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Gauge, _ctx: &dyn BuildContext) -> impl IntoView {
         SizedBox::new(10.0, 10.0)
     }
 }

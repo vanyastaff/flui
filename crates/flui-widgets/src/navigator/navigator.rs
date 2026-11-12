@@ -1755,7 +1755,7 @@ impl NavigatorHandle {
 ///
 /// // An argument-carrying request.
 /// let with_id = navigator
-///     .push_named(RouteSettings::named("/details").with_arguments(7_u32))?;
+///     .push_named(RouteSettings::named("/details").arguments(7_u32))?;
 ///
 /// // And the one call that does name a type, to keep the pop result.
 /// let result = navigator.push_named_typed::<i32>("/details")?;
@@ -2577,7 +2577,7 @@ impl fmt::Debug for Navigator {
 }
 
 impl View for Navigator {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

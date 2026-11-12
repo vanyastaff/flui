@@ -20,7 +20,7 @@
 //! # Deferred, and named
 //!
 //! An `ActionDispatcher` as a replaceable object, an
-//! `Actions` handler hook and a do-nothing action (write `CallbackAction::new(|_cx, _| ())`
+//! `Actions` handler hook and a do-nothing action (write `CallbackAction::new(|_ctx, _| ())`
 //! until the propagation-control use case arrives). A `Shortcuts` resolves
 //! from the primary focus's position, the chain each `Focus` records on its
 //! node (ADR-0079).
@@ -36,7 +36,7 @@ use flui_platform::TargetPlatform;
 use flui_view::element::ElementKind;
 
 use flui_view::prelude::*;
-use flui_view::{EventCx, EventOutcome, Provided, ProvidedValue};
+use flui_view::{EventContext, EventOutcome, Provided, ProvidedValue};
 
 use crate::support::{RefCallback, ref_callback};
 
@@ -113,11 +113,11 @@ pub trait Action<T: Intent> {
     }
 
     /// Perform the operation inside the dispatch that resolved it:
-    /// `cx` is the key event's [`EventCx`], so an action writes signals the
+    /// `ctx` is the key event's [`EventContext`], so an action writes signals the
     /// same way every other event callback does (ADR-0086). The
     /// [`ActionOutcome`] reaches the key path through
     /// [`to_key_event_result`](Self::to_key_event_result).
-    fn invoke(&self, cx: &mut EventCx<'_>, intent: &T) -> ActionOutcome;
+    fn invoke(&self, ctx: &mut EventContext<'_>, intent: &T) -> ActionOutcome;
 
     /// What a key event that invoked this action reports.
     ///
@@ -140,7 +140,7 @@ pub trait Action<T: Intent> {
 
 /// An [`Action`] from a closure.
 ///
-/// The closure receives the key event's [`EventCx`] and the intent, and may
+/// The closure receives the key event's [`EventContext`] and the intent, and may
 /// return `()` or a `Result` whose refusal is reported at the dispatch
 /// boundary (ADR-0086):
 ///
@@ -151,7 +151,7 @@ pub trait Action<T: Intent> {
 /// impl Intent for SaveIntent {}
 ///
 /// fn save_action(saves: Signal<u32>) -> CallbackAction<SaveIntent> {
-///     CallbackAction::new(move |cx, _: &SaveIntent| saves.update(cx, |n| *n += 1))
+///     CallbackAction::new(move |ctx, _: &SaveIntent| saves.update(ctx, |n| *n += 1))
 /// }
 /// ```
 pub struct CallbackAction<T: Intent> {
@@ -162,7 +162,7 @@ impl<T: Intent> CallbackAction<T> {
     /// An always-enabled, key-consuming action calling `on_invoke`.
     pub fn new<F, R>(on_invoke: F) -> Self
     where
-        F: for<'a> Fn(&mut EventCx<'_>, &'a T) -> R + 'static,
+        F: for<'a> Fn(&mut EventContext<'_>, &'a T) -> R + 'static,
         R: EventOutcome,
     {
         Self {
@@ -180,8 +180,8 @@ impl<T: Intent> std::fmt::Debug for CallbackAction<T> {
 }
 
 impl<T: Intent> Action<T> for CallbackAction<T> {
-    fn invoke(&self, cx: &mut EventCx<'_>, intent: &T) -> ActionOutcome {
-        (self.on_invoke)(cx, intent);
+    fn invoke(&self, ctx: &mut EventContext<'_>, intent: &T) -> ActionOutcome {
+        (self.on_invoke)(ctx, intent);
         ActionOutcome::Performed
     }
 }
@@ -197,7 +197,7 @@ impl<T: Intent> Action<T> for CallbackAction<T> {
 /// once.
 struct BindingTable {
     is_enabled: fn(&dyn Any, &dyn Any) -> bool,
-    invoke: fn(&dyn Any, &mut EventCx<'_>, &dyn Any) -> ActionOutcome,
+    invoke: fn(&dyn Any, &mut EventContext<'_>, &dyn Any) -> ActionOutcome,
     to_key_event_result: fn(&dyn Any, &dyn Any, ActionOutcome) -> KeyEventResult,
     /// The same binding as a disabled control declares it: never enabled.
     /// `None` on a table that is that already.
@@ -221,7 +221,7 @@ impl<T: Intent, A: Action<T> + 'static> Binding<T, A> {
     ) -> BindingTable {
         BindingTable {
             is_enabled,
-            invoke: |action, cx, intent| bound::<A>(action).invoke(cx, typed::<T>(intent)),
+            invoke: |action, ctx, intent| bound::<A>(action).invoke(ctx, typed::<T>(intent)),
             to_key_event_result: |action, intent, outcome| {
                 bound::<A>(action).to_key_event_result(typed::<T>(intent), outcome)
             },
@@ -294,15 +294,19 @@ impl ErasedAction {
 
     /// Invoke outside a key dispatch: a gesture, a control's press, an
     /// assistive-technology action.
-    pub(crate) fn invoke(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> ActionOutcome {
-        (self.table.invoke)(&*self.action, cx, intent)
+    pub(crate) fn invoke(&self, ctx: &mut EventContext<'_>, intent: &dyn Any) -> ActionOutcome {
+        (self.table.invoke)(&*self.action, ctx, intent)
     }
 
     /// Invoke inside the key event's dispatch, then report what the key
     /// dispatch should do — **one** call, so the key result cannot disagree
     /// with what actually ran.
-    pub(crate) fn invoke_for_key(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> KeyEventResult {
-        let outcome = (self.table.invoke)(&*self.action, cx, intent);
+    pub(crate) fn invoke_for_key(
+        &self,
+        ctx: &mut EventContext<'_>,
+        intent: &dyn Any,
+    ) -> KeyEventResult {
+        let outcome = (self.table.invoke)(&*self.action, ctx, intent);
         (self.table.to_key_event_result)(&*self.action, intent, outcome)
     }
 }
@@ -387,7 +391,7 @@ pub(crate) fn resolve<'c>(chain: &'c ActionChain, intent: &dyn Any) -> Option<&'
 /// intent's type — enabled or not: a disabled
 /// nearer mapping is not skipped in favor of an enclosing scope's mapping for
 /// the same type. A [`Shortcuts`](crate::Shortcuts) dispatches into it from
-/// the keyboard, handing the action the key event's [`EventCx`]. There is no
+/// the keyboard, handing the action the key event's [`EventContext`]. There is no
 /// invoke-from-build entry point: the only place it could be called from is
 /// `build`, which has no event context (ADR-0086).
 #[derive(Clone)]
@@ -427,7 +431,7 @@ impl std::fmt::Debug for Actions {
 }
 
 impl View for Actions {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }
@@ -601,7 +605,7 @@ impl std::fmt::Debug for ActionScope {
 }
 
 impl View for ActionScope {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }
@@ -717,7 +721,7 @@ impl NextFocusAction {
 }
 
 impl Action<NextFocusIntent> for NextFocusAction {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &NextFocusIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &NextFocusIntent) -> ActionOutcome {
         if self.focus_manager.focus_next() {
             ActionOutcome::Performed
         } else {
@@ -742,7 +746,7 @@ impl PreviousFocusAction {
 }
 
 impl Action<PreviousFocusIntent> for PreviousFocusAction {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &PreviousFocusIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &PreviousFocusIntent) -> ActionOutcome {
         if self.focus_manager.focus_previous() {
             ActionOutcome::Performed
         } else {
@@ -773,7 +777,11 @@ impl DirectionalFocusAction {
     }
 }
 impl Action<DirectionalFocusIntent> for DirectionalFocusAction {
-    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &DirectionalFocusIntent) -> ActionOutcome {
+    fn invoke(
+        &self,
+        _ctx: &mut EventContext<'_>,
+        intent: &DirectionalFocusIntent,
+    ) -> ActionOutcome {
         if self.focus_manager.focus_in_direction(intent.0) {
             ActionOutcome::Performed
         } else {

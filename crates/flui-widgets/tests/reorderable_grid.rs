@@ -106,7 +106,7 @@ impl Board {
 struct Desk(Board);
 
 impl View for Desk {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -152,7 +152,7 @@ impl ViewState<Desk> for DeskState {
 struct BoardGrid(Board);
 
 impl View for BoardGrid {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -193,12 +193,12 @@ impl ViewState<BoardGrid> for BoardGridState {
             count,
             move |index| keys[index].clone(),
             move |tile| Text::new(tiles[tile.index()].clone()),
-            move |cx, change| {
+            move |ctx, change| {
                 moved
                     .borrow_mut()
                     .push((change.from, change.to, change.cause));
                 model
-                    .update_in(cx, |items| {
+                    .update_in(ctx, |items| {
                         let item = items.remove(change.from);
                         items.insert(change.to, item);
                     })
@@ -520,7 +520,7 @@ pub(crate) fn the_row_moves_follow_the_rows_the_grid_lays_out() {
 fn tile_alternatives() -> GestureAlternatives {
     let menu = MenuSpec::new(
         GestureCommand::new("Move to the start", ReorderIntent::Start),
-        |_cx, _request| {},
+        |_ctx, _request| {},
     )
     .item(GestureCommand::new("Move up", ReorderIntent::Up))
     .item(GestureCommand::new("Move down", ReorderIntent::Down))

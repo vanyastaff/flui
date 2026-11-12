@@ -31,7 +31,7 @@ use crate::app::{AppConfig, AppLaunch, LaunchError};
 /// #[no_mangle]
 /// fn android_main(app: AndroidApp) {
 ///     let launch = AppLaunch::new()
-///         .config(AppConfig::new().with_title("My App"))
+///         .config(AppConfig::new().title("My App"))
 ///         .capabilities(AppCapabilities::new().plugin(MyPlugin));
 ///     // `run_app_android` logs why it could not start.
 ///     let _started = flui_app::run_app_android(app, MyRootView, launch);

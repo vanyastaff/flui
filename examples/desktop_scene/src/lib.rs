@@ -12,10 +12,10 @@
 //!
 //! # Run the host example with plugin path:
 //! # Linux/macOS:
-//! FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run --example scene_render
+//! FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run -p flui-hot-reload --example scene_render
 //! # Windows:
 //! set FLUI_SCENE_PLUGIN=target\debug\flui_scene.dll
-//! cargo run --example scene_render
+//! cargo run -p flui-hot-reload --example scene_render
 //! ```
 //!
 //! Edit the colors below, rebuild the plugin, and the host will

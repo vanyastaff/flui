@@ -246,7 +246,7 @@ impl ElementNode {
     /// Panics if the element is currently extracted — the transient hole
     /// `build_scope` opens between `take_element` and `put_element` while it
     /// builds the node by value. Any lookup that can run *during* a build
-    /// (every `BuildCtx` ancestor walk) must go through [`Self::element_opt`]
+    /// (every `LiveBuildContext` ancestor walk) must go through [`Self::element_opt`]
     /// instead, so reaching the in-flight node is a clean miss, not a panic.
     pub fn element(&self) -> &dyn ElementBase {
         self.kind.as_ref().expect(Self::ELEMENT_PRESENT).element()
@@ -720,7 +720,7 @@ impl ElementTree {
         pipeline_owner: Option<PipelineCell>,
         owner: &mut crate::ElementOwner<'_>,
     ) -> ElementId {
-        let mut element = view.create_element();
+        let mut element = crate::view::create_element_of(view);
 
         // Pass the pipeline cell to the element BEFORE mounting.
         // This is critical for RenderObjectElements to create their RenderObjects
@@ -977,7 +977,7 @@ impl ElementTree {
         // always did.
         let mut inserted: Option<InsertedChild> = None;
         let mount_result = contain_window(|| -> ElementId {
-            let mut element = view.create_element();
+            let mut element = crate::view::create_element_of(view);
 
             // Read the parent's render-tree propagation context in ONE fresh,
             // immediately-dropped `&ElementTree` borrow, then apply it to the
@@ -1131,7 +1131,7 @@ impl ElementTree {
     /// A mismatch panics with a composition diagnostic (offending
     /// `ParentDataView`, typical ancestor family, actual render parent, element
     /// ancestry) — the same failure in debug and release — rather than reaching
-    /// layout's `BoxLayoutCtx::from_erased` TypeId assert.
+    /// layout's `RawBoxLayoutContext::from_erased` TypeId assert.
     ///
     /// Average case O(1) — for a plain render child the very first ancestor is
     /// the render parent, so the walk stops in one hop and never touches the
@@ -3003,7 +3003,7 @@ mod tests {
     }
 
     impl View for UnitRenderHost {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
         }
     }
@@ -3020,7 +3020,7 @@ mod tests {
     }
 
     impl View for KeyedTransparentView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateless(self)
         }
 
@@ -3064,7 +3064,7 @@ mod tests {
     }
 
     impl View for ActiveRetakePanicsOnActivate {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
 
@@ -3086,7 +3086,7 @@ mod tests {
     }
 
     impl View for TestView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateless(self)
         }
     }
@@ -3107,7 +3107,7 @@ mod tests {
     }
 
     impl View for KeyedTestView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateless(self)
         }
 
@@ -3419,7 +3419,7 @@ mod tests {
     }
 
     impl View for Theme {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::inherited(self)
         }
     }
@@ -3488,7 +3488,7 @@ mod tests {
     }
 
     impl<const N: usize> View for Tier<N> {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::inherited(self)
         }
     }

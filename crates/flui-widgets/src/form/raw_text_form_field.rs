@@ -68,24 +68,24 @@ impl RawTextFormField {
         self
     }
 
-    /// Receive the text when the form saves, with the `&mut EventCx<'_>`
+    /// Receive the text when the form saves, with the `&mut EventContext<'_>`
     /// passed to `FormHandle::save`.
     #[must_use]
     pub fn on_saved<F, R>(mut self, on_saved: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &String) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &String) -> R + 'static,
         R: EventOutcome,
     {
         self.config.on_saved = Some(ref_callback(on_saved));
         self
     }
 
-    /// Called after the field resets, with the `&mut EventCx<'_>` passed to
+    /// Called after the field resets, with the `&mut EventContext<'_>` passed to
     /// the reset.
     #[must_use]
     pub fn on_reset<F, R>(mut self, on_reset: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.config.on_reset = Some(event_callback(on_reset));
@@ -142,12 +142,12 @@ impl RawTextFormField {
         self
     }
 
-    /// Called with the dispatch's `&mut EventCx<'_>` and the text when Enter
+    /// Called with the dispatch's `&mut EventContext<'_>` and the text when Enter
     /// is pressed.
     #[must_use]
     pub fn on_submitted<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &str) -> R + 'static,
         R: EventOutcome,
     {
         self.config.on_submitted = Some(ref_callback(callback));
@@ -164,7 +164,7 @@ impl RawTextFormField {
 }
 
 impl View for RawTextFormField {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -205,7 +205,7 @@ impl ViewState<RawTextFormField> for RawTextFormFieldState {
                 field = field.focus_node(Rc::clone(node));
             }
             if let Some(on_submitted) = input.on_submitted.clone() {
-                field = field.on_submitted(move |cx, text| on_submitted(cx, text));
+                field = field.on_submitted(move |ctx, text| on_submitted(ctx, text));
             }
             with_error_line(field.boxed(), error)
         })

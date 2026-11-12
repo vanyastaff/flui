@@ -46,15 +46,16 @@ use std::fmt::Debug;
 /// - [`Never`] — uninhabited (type-system bottom)
 ///
 /// The trait is sealed — only the markers in this module implement it. The
-/// `Send + Sync + Debug + Copy + Default + 'static` super-bounds let arity
-/// markers cross thread boundaries, derive `Debug`, and be plugged into
-/// generic code that expects a zero-sized type.
+/// `Debug + Copy + Default + 'static` super-bounds let arity markers derive
+/// `Debug` and be plugged into generic code that expects a zero-sized type.
+/// They carry no thread bound: a marker names a child count, which is decided
+/// on the owner thread (ADR-0323 §4).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not an arity marker",
     label = "expected `Leaf`, `Optional`, `Variable`, `Exact<N>`, `AtLeast<N>`, `Range<MIN, MAX>`, or `Never`",
     note = "`Arity` is sealed: only the markers in `flui_foundation::arity` implement it, so a node's child count is checked at compile time rather than at layout"
 )]
-pub trait Arity: sealed::Sealed + Send + Sync + Debug + Copy + Default + 'static {
+pub trait Arity: sealed::Sealed + Debug + Copy + Default + 'static {
     /// Static description of this arity (e.g. `"Leaf"`, `"Exact<N>"`), for
     /// diagnostics.
     const DESCRIPTION: &'static str;

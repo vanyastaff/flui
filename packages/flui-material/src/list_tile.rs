@@ -120,7 +120,7 @@
 //!   helper; a natural, additive follow-up once a caller list-builds
 //!   `ListTile`s (see [`crate::divider`]'s module docs).
 //! - **The `SafeArea`/`IconTheme.merge` wrapper layers ARE
-//!   ported**: `SafeArea::new().top(false).bottom(false).minimum(...)`, and
+//!   ported**: `SafeArea::new(..).top(false).bottom(false).minimum(...)`, and
 //!   `IconTheme::new(IconTheme::of(ctx).color(..), ..)`
 //!   — a genuine merge over the ambient `IconTheme::of(ctx)` snapshot (only
 //!   `color` is overridden; `size`/`opacity`/etc. pass through from whatever
@@ -191,7 +191,7 @@ fn default_tile_height(is_three_line: bool, has_subtitle: bool, is_dense: bool) 
 ///     .leading(Icon::new(IconData::new(0xE87D)))
 ///     .title(Text::new("Inbox"))
 ///     .subtitle(Text::new("12 unread messages"))
-///     .on_tap(|_cx| {});
+///     .on_tap(|_ctx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct ListTile {
@@ -402,7 +402,7 @@ impl ListTile {
     #[must_use]
     pub fn on_tap<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_tap = Some(crate::event_callback::press_callback(callback));
         self
@@ -776,14 +776,13 @@ impl StatelessView for ListTile {
         // field back to `None`, discarding an ambient `size` override an
         // app-level `IconTheme` set above this tile.
         let ambient_icon_theme = IconTheme::of(ctx);
-        let content = SafeArea::new()
-            .top(false)
-            .bottom(false)
-            .minimum(resolved.content_padding)
-            .child(IconTheme::new(
-                ambient_icon_theme.color(resolved.icon_color),
-                build_content_row(self, &resolved),
-            ));
+        let content = SafeArea::new(IconTheme::new(
+            ambient_icon_theme.color(resolved.icon_color),
+            build_content_row(self, &resolved),
+        ))
+        .top(false)
+        .bottom(false)
+        .minimum(resolved.content_padding);
 
         // A selectable tile is an option, the role ARIA gives a selection, and
         // keeps it whether or not it is selected; any other tile declares no
@@ -809,7 +808,7 @@ impl StatelessView for ListTile {
                 .on_tap
                 .clone()
                 .expect("BUG: is_interactive() checked on_tap.is_some()");
-            ink_well = ink_well.on_tap(move |cx| on_tap(cx));
+            ink_well = ink_well.on_tap(move |ctx| on_tap(ctx));
         }
 
         let tile_constraints =

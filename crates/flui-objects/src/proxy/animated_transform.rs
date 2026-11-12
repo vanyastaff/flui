@@ -58,7 +58,7 @@ use flui_foundation::{Single, panic::PanicRecovery};
 use flui_painting::typography::TextDirection;
 use flui_rendering::{
     RenderUpdateImpact,
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
     traits::{PaintEffects, RenderBox},
@@ -558,7 +558,7 @@ impl RenderBox for RenderAnimatedTransform {
         self.current(self.cell.size()).0 == Class::Degenerate
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         // The layered matrix is reported through `paint_effects`, which the
         // pipeline pushes before replaying this fragment; a bare splice here.
         if self.has_child {

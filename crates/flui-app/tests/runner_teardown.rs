@@ -38,8 +38,8 @@ fn one_window_app_with(
     ready: Rc<RefCell<Option<AppHandle>>>,
 ) -> Application<flui_widgets::Text, impl FnMut(&AppHandle) -> flui_widgets::Text> {
     Application::new(|_| -> flui_widgets::Text { panic!("no main window is opened") })
-        .with_startup_window(StartupWindow::None)
-        .with_config(config.with_exit_policy(ExitPolicy::OnLastWindowClosed))
+        .startup_window(StartupWindow::None)
+        .config(config.exit_policy(ExitPolicy::OnLastWindowClosed))
         .on_ready(move |handle| {
             open_secondary_window(AppConfig::new(), WindowPolicy::Isolated)
                 .expect("an isolated window opens on the headless platform");
@@ -136,7 +136,7 @@ pub(crate) fn a_hung_service_and_compute_job_end_within_the_exit_budget() {
     });
     let handle = Rc::new(RefCell::new(None));
     let run = HeadlessRun::start(one_window_app_with(
-        AppConfig::new().with_service(hung),
+        AppConfig::new().service(hung),
         Rc::clone(&handle),
     ));
     // The service and its job reach their workers before the exit starts.
@@ -310,7 +310,7 @@ pub(crate) fn teardown_panic_flushes_the_registry_before_resuming() {
         let _held = &capture;
         panic!("no main window is opened")
     })
-    .with_startup_window(StartupWindow::None);
+    .startup_window(StartupWindow::None);
     let run = HeadlessRun::start(application);
 
     let report = run.join().expect("a terminal panic is no run error");
@@ -353,7 +353,7 @@ fn a_blocking_destructor_ends_the_process_with_the_hung_code() {
         let _held = &blocker;
         panic!("no main window is opened")
     })
-    .with_startup_window(StartupWindow::None)
+    .startup_window(StartupWindow::None)
     .on_ready(move |handle| {
         installed.replace(Some(handle.clone()));
     });
@@ -505,7 +505,7 @@ impl flui_view::ViewState<ComposingField> for ComposingFieldState {
 }
 
 impl flui_view::View for ComposingField {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -530,7 +530,7 @@ pub(crate) fn closing_during_composition_commits_before_detached() {
         notice_delay: Duration::ZERO,
     };
     let application = Application::new(move |_| field.clone())
-        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+        .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
     let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
         flui_testing::RecordingTextStoreHost::new()
             as Rc<dyn flui_platform::text_store::TextStoreHost>
@@ -635,7 +635,7 @@ impl flui_view::ViewState<GuardedView> for GuardedViewState {
 }
 
 impl flui_view::View for GuardedView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -667,7 +667,7 @@ fn guarded_run_with(
         shared: Rc::clone(&shared),
     };
     let application = Application::new(move |_| view.clone())
-        .with_config(config.with_exit_policy(ExitPolicy::OnLastWindowClosed));
+        .config(config.exit_policy(ExitPolicy::OnLastWindowClosed));
     let platform = flui_native::HeadlessPlatform::new();
     let events = platform.host_events();
     let run = HeadlessRun::start_on(application, platform);
@@ -805,7 +805,7 @@ pub(crate) fn a_session_end_asks_the_handler_before_the_guard() {
     });
     let (run, _events, shared) = guarded_run_with(
         HoldOn::Decision,
-        AppConfig::new().with_close_request_handler(handler),
+        AppConfig::new().close_request_handler(handler),
     );
     assert_eq!(
         run.end_session(SessionEndPhase::Query),
@@ -915,7 +915,7 @@ pub(crate) fn session_end_commits_composition_before_the_flush() {
         notice_delay: Duration::ZERO,
     };
     let application = Application::new(move |_| field.clone())
-        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+        .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
     let run = HeadlessRun::start_on(application, platform);
     run.run_owner_turn();
     let composing = Composition {
@@ -963,7 +963,7 @@ pub(crate) fn a_notify_only_session_end_leaves_the_application_running() {
         notice_delay: Duration::ZERO,
     };
     let application = Application::new(move |_| field.clone())
-        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+        .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
     let platform = flui_native::HeadlessPlatform::new()
         .with_session_end_support(flui_platform::SessionEndSupport::NotifyOnly)
         .with_text_store_host(|| {
@@ -1017,7 +1017,7 @@ pub(crate) fn session_end_skips_detached_once_the_notice_spent_the_margin() {
         notice_delay: SPENT_MARGIN,
     };
     let application = Application::new(move |_| field.clone())
-        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+        .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
     let run = HeadlessRun::start_on(application, platform);
     run.run_owner_turn();
 
@@ -1139,7 +1139,7 @@ impl flui_view::ViewState<SlowDetached> for SlowDetachedState {
 }
 
 impl flui_view::View for SlowDetached {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1163,7 +1163,7 @@ pub(crate) fn a_slow_observer_stops_the_session_end_delivery() {
         };
         let (first, second) = (root(&windows[0]), root(&windows[1]));
         let application = Application::new(move |_| first.clone())
-            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed))
+            .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed))
             .on_ready(move |_| {
                 drop(
                     flui_app::open_window(AppConfig::new(), WindowPolicy::Isolated, second)
@@ -1208,7 +1208,7 @@ pub(crate) fn a_refused_session_end_is_released_by_an_explicit_close() {
     });
     let (run, events, _shared) = guarded_run_with(
         HoldOn::Nothing,
-        AppConfig::new().with_close_request_handler(handler),
+        AppConfig::new().close_request_handler(handler),
     );
     assert_eq!(
         run.end_session(SessionEndPhase::Query),
@@ -1236,7 +1236,7 @@ pub(crate) fn a_session_end_handler_panic_refuses() {
     let handler = flui_app::app::CloseRequestHandler::new(|_| panic!("the handler failed"));
     let (run, _events, _shared) = guarded_run_with(
         HoldOn::Nothing,
-        AppConfig::new().with_close_request_handler(handler),
+        AppConfig::new().close_request_handler(handler),
     );
     assert_eq!(
         run.end_session(SessionEndPhase::Query),
@@ -1275,12 +1275,12 @@ pub(crate) fn a_window_closed_during_the_query_does_not_hold_the_session() {
     });
     let config = || {
         AppConfig::new()
-            .with_close_request_handler(handler.clone())
-            .with_exit_policy(ExitPolicy::OnLastWindowClosed)
+            .close_request_handler(handler.clone())
+            .exit_policy(ExitPolicy::OnLastWindowClosed)
     };
     let second = config();
     let application = Application::new(|_| flui_widgets::SizedBox::square(10.0))
-        .with_config(config())
+        .config(config())
         .on_ready(move |_| {
             drop(
                 flui_app::open_window(
@@ -1361,7 +1361,7 @@ impl flui_view::ViewState<TornDown> for TornDownState {
 }
 
 impl flui_view::View for TornDown {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1382,7 +1382,7 @@ pub(crate) fn session_end_tears_down_only_with_time_left() {
             notice_delay,
         };
         let application = Application::new(move |_| root.clone())
-            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+            .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
         let run = HeadlessRun::start_on(application, platform);
         run.run_owner_turn();
 
@@ -1448,7 +1448,7 @@ impl flui_view::ViewState<PanickingSubscriber> for PanickingSubscriberState {
 }
 
 impl flui_view::View for PanickingSubscriber {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1489,7 +1489,7 @@ pub(crate) fn a_notice_subscriber_panic_never_leaves_the_handler() {
         };
         let root = PanickingSubscriber { panics_on };
         let application = Application::new(move |_| root.clone())
-            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+            .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
         let platform = flui_native::HeadlessPlatform::new();
         let events = platform.host_events();
         let run = HeadlessRun::start_on(application, platform);
@@ -1582,7 +1582,7 @@ impl flui_view::ViewState<FailingNote> for FailingNoteState {
 }
 
 impl flui_view::View for FailingNote {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1595,7 +1595,7 @@ fn close_the_last_window_of(
 ) -> flui_app::testing::ExitReport {
     let application =
         Application::new(move |_| flui_widgets::Column::new((first.clone(), second.clone())))
-            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+            .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
     let run = HeadlessRun::start(application);
     run.run_owner_turn();
     let windows = run.open_windows();
@@ -1674,8 +1674,8 @@ type CallbackPanics = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
 fn reporting_callback_panics(panics: &CallbackPanics) -> AppConfig {
     let panics = std::sync::Arc::clone(panics);
     AppConfig::new()
-        .with_exit_policy(ExitPolicy::OnLastWindowClosed)
-        .with_frame_failure_handler(flui_app::app::FrameFailureHandlerFactory::new(move || {
+        .exit_policy(ExitPolicy::OnLastWindowClosed)
+        .frame_failure_handler(flui_app::app::FrameFailureHandlerFactory::new(move || {
             let panics = std::sync::Arc::clone(&panics);
             flui_app::app::FrameFailureHandler::new(move |report| {
                 if let flui_app::app::FrameFailureKind::CallbackPanic { message, .. } = &report.kind
@@ -1723,7 +1723,7 @@ pub(crate) fn a_panicking_tap_handler_reports_once_and_the_next_tap_works() {
             })
             .child(flui_widgets::SizedBox::square(100.0))
     })
-    .with_config(reporting_callback_panics(&panics));
+    .config(reporting_callback_panics(&panics));
     let run = HeadlessRun::start(application);
     run.run_owner_turn();
     let window = run
@@ -1792,7 +1792,7 @@ impl flui_view::ViewState<PostFramePanics> for PostFramePanicsState {
 }
 
 impl flui_view::View for PostFramePanics {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1807,7 +1807,7 @@ pub(crate) fn a_panicking_post_frame_callback_reports_once_and_the_next_frame_bu
         handle: Rc::clone(&handle),
     };
     let application =
-        Application::new(move |_| view.clone()).with_config(reporting_callback_panics(&panics));
+        Application::new(move |_| view.clone()).config(reporting_callback_panics(&panics));
     let run = HeadlessRun::start(application);
     run.run_owner_turn();
     assert_eq!(
@@ -1879,7 +1879,7 @@ impl flui_view::StatelessView for BuildFails {
 }
 
 impl flui_view::View for BuildFails {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -1887,7 +1887,7 @@ impl flui_view::View for BuildFails {
 fn exit_code_of_an_ordinary_close() {
     let report = close_after(
         Application::new(|_| flui_widgets::SizedBox::square(10.0))
-            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed)),
+            .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed)),
         |_, _| {},
     );
     assert_eq!(report.code(), 0);
@@ -1905,7 +1905,7 @@ fn exit_code_after_a_tap_handler_panic() {
             .on_tap(|_| fail_the_tap())
             .child(flui_widgets::SizedBox::square(100.0))
     })
-    .with_config(reporting_callback_panics(&panics));
+    .config(reporting_callback_panics(&panics));
     let report = close_after(application, |run, window| {
         tap(
             run,
@@ -1926,7 +1926,7 @@ fn exit_code_after_a_post_frame_panic() {
         handle: Rc::default(),
     };
     let report = close_after(
-        Application::new(move |_| view.clone()).with_config(reporting_callback_panics(&panics)),
+        Application::new(move |_| view.clone()).config(reporting_callback_panics(&panics)),
         |_, _| {},
     );
     assert_eq!(
@@ -1943,7 +1943,7 @@ fn exit_code_after_a_build_panic() {
     };
     let report = close_after(
         Application::new(move |_| view.clone())
-            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed)),
+            .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed)),
         |_, _| {},
     );
     assert!(builds.get() > 0, "the failing build ran");
@@ -1963,10 +1963,10 @@ fn exit_code_after_a_close_handler_panic() {
         );
         flui_app::app::CloseResponse::Close
     });
-    let application = Application::new(|_| flui_widgets::SizedBox::square(10.0)).with_config(
+    let application = Application::new(|_| flui_widgets::SizedBox::square(10.0)).config(
         AppConfig::new()
-            .with_exit_policy(ExitPolicy::OnLastWindowClosed)
-            .with_close_request_handler(handler),
+            .exit_policy(ExitPolicy::OnLastWindowClosed)
+            .close_request_handler(handler),
     );
     let report = close_after(application, |run, window| {
         assert!(
@@ -1985,7 +1985,7 @@ fn exit_code_after_a_dispose_panic_on_the_last_close() {
             capture_panic: None,
             disposed: Rc::default(),
         })
-        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed)),
+        .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed)),
         |_, _| {},
     );
     assert_eq!(report.code(), flui_app::testing::EXIT_CODE_PANIC);
@@ -1998,7 +1998,7 @@ fn exit_code_after_a_destructor_panic_at_loop_exit() {
             let _held = &capture;
             flui_widgets::SizedBox::square(10.0)
         })
-        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed)),
+        .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed)),
         |_, _| {},
     );
     assert_eq!(report.code(), flui_app::testing::EXIT_CODE_PANIC);
@@ -2154,7 +2154,7 @@ impl flui_view::ViewState<NoteView> for NoteViewState {
 }
 
 impl flui_view::View for NoteView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -2175,14 +2175,14 @@ impl NoteRun {
         let pools = flui_runtime::execution::DeterministicExecutors::new();
         let shared = Rc::new(RefCell::new(NoteShared::default()));
         let view = NoteView(Rc::clone(&shared));
-        let application = Application::new(move |_| view.clone()).with_config(
+        let application = Application::new(move |_| view.clone()).config(
             AppConfig::new()
-                .with_executors(pools.host_executors())
-                .with_storage_dir(
+                .executors(pools.host_executors())
+                .storage_dir(
                     flui_platform::AppDataDir::try_new("session-end")
                         .expect("a plain name is a valid directory"),
                 )
-                .with_exit_policy(ExitPolicy::OnLastWindowClosed),
+                .exit_policy(ExitPolicy::OnLastWindowClosed),
         );
         let platform = flui_native::HeadlessPlatform::new().with_data_root(root.path());
         let events = platform.host_events();

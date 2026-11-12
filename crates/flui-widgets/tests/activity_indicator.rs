@@ -313,7 +313,7 @@ struct KeyedIndicatorState {
 }
 
 impl flui_view::View for KeyedIndicator {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
@@ -542,7 +542,7 @@ fn indicator_unmount_mid_frame_releases_controller() {
 struct VisibleIndicators(flui_view::Signal<usize>);
 
 impl flui_view::View for VisibleIndicators {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -596,7 +596,7 @@ fn indicator_callback_requests_removal(source: usize) {
         move || {
             if !requested.replace(true) {
                 writer
-                    .write(|cx| count.set(cx, 1))
+                    .write(|ctx| count.set(ctx, 1))
                     .expect("callback may update visibility");
             }
         }
@@ -735,23 +735,23 @@ fn refresh_indicator_spins_while_refreshing() {
             VsyncScope::new(
                 vsync.clone(),
                 RefreshIndicator::new(
-                    SingleChildScrollView::new()
-                        .controller(ScrollController::new())
-                        .child(SizedBox::new(250.0, 5000.0)),
                     GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
                         RefreshIntent::command("Refresh"),
                         SizedBox::new(24.0, 24.0),
                     )))
                     .expect("one labelled command"),
+                    SingleChildScrollView::new()
+                        .controller(ScrollController::new())
+                        .child(SizedBox::new(250.0, 5000.0)),
                 )
                 .controller(refresh.clone())
-                .on_refresh(move |_cx| {
+                .on_refresh(move |_ctx| {
                     let (gate, parked) = (Rc::clone(&gate), Rc::clone(&parked));
-                    std::future::poll_fn(move |cx| {
+                    std::future::poll_fn(move |ctx| {
                         if gate.get() {
                             return Poll::Ready(());
                         }
-                        *parked.borrow_mut() = Some(cx.waker().clone());
+                        *parked.borrow_mut() = Some(ctx.waker().clone());
                         Poll::Pending
                     })
                 }),
@@ -857,9 +857,6 @@ fn refresh_style_builds_the_indicator_from_the_phase() {
                         }
                     },
                     RefreshIndicator::new(
-                        SingleChildScrollView::new()
-                            .controller(ScrollController::new())
-                            .child(SizedBox::new(300.0, 5000.0)),
                         GestureAlternatives::try_new(Alternative::VisibleControl(
                             ControlSpec::new(
                                 RefreshIntent::command("Refresh"),
@@ -867,10 +864,13 @@ fn refresh_style_builds_the_indicator_from_the_phase() {
                             ),
                         ))
                         .expect("one labelled command"),
+                        SingleChildScrollView::new()
+                            .controller(ScrollController::new())
+                            .child(SizedBox::new(300.0, 5000.0)),
                     )
                     .controller(refresh.clone())
                     .threshold_px(threshold)
-                    .on_refresh(|_cx| std::future::pending::<()>()),
+                    .on_refresh(|_ctx| std::future::pending::<()>()),
                 ),
             ),
             tight(300.0, 300.0),

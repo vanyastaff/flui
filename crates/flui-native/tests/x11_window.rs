@@ -57,6 +57,10 @@ mod cases {
 
     const CASES: &[(&str, fn())] = &[
         (
+            "the_host_runs_its_io_on_the_runtime_it_is_handed",
+            the_host_runs_its_io_on_the_runtime_it_is_handed,
+        ),
+        (
             "a_decorated_window_is_placed_and_measured_by_its_frame",
             a_decorated_window_is_placed_and_measured_by_its_frame,
         ),
@@ -205,12 +209,12 @@ mod cases {
         }
 
         fn finish(server: Child, display: &str) -> Self {
-            // SAFETY: the harness has started no thread yet; nothing else
-            // reads or writes the environment while it is set.
             #[expect(
                 unsafe_code,
                 reason = "the environment is set before any thread exists"
             )]
+            // SAFETY: the harness has started no thread yet; nothing else
+            // reads or writes the environment while it is set.
             unsafe {
                 std::env::set_var("DISPLAY", display);
                 std::env::remove_var("WAYLAND_DISPLAY");
@@ -377,8 +381,8 @@ mod cases {
         ) -> Self {
             Self::open_with_options(
                 WindowOptions::default()
-                    .with_title(title)
-                    .with_size(Size::new(400.0, 300.0)),
+                    .title(title)
+                    .size(Size::new(400.0, 300.0)),
                 handler,
             )
         }
@@ -626,7 +630,7 @@ mod cases {
         let connection = platform.display_connection();
         let window = platform
             .open_window(
-                WindowOptions::default().with_size(Size::new(64.0, 64.0)),
+                WindowOptions::default().size(Size::new(64.0, 64.0)),
                 RecordingWindowHandler::new(),
             )
             .expect("an X11 window opens");
@@ -673,9 +677,9 @@ mod cases {
         let window = platform
             .open_window(
                 WindowOptions::default()
-                    .with_size(Size::new(320.0, 240.0))
-                    .with_mode(WindowMode::Maximized)
-                    .with_reveal(WindowReveal::AtOpen),
+                    .size(Size::new(320.0, 240.0))
+                    .mode(WindowMode::Maximized)
+                    .reveal(WindowReveal::AtOpen),
                 RecordingWindowHandler::new(),
             )
             .expect("an X11 window opens");
@@ -875,7 +879,7 @@ mod cases {
             let handler = RecordingWindowHandler::new();
             let window = owner
                 .open_window(
-                    WindowOptions::default().with_visible(false),
+                    WindowOptions::default().visible(false),
                     Rc::clone(&handler) as _,
                 )?
                 .try_ready()?;
@@ -1013,7 +1017,7 @@ mod cases {
         log.bootstrap(move |owner| {
             quit_after(owner.proxy(), Duration::from_millis(600));
             let _window = owner
-                .open_window(WindowOptions::default().with_visible(false), opened)?
+                .open_window(WindowOptions::default().visible(false), opened)?
                 .try_ready()?;
             Ok(())
         });
@@ -1031,5 +1035,38 @@ mod cases {
             .filter(|call| matches!(call, HandlerCall::FrameRequested(_)))
             .count();
         assert_eq!(frames, 1, "the deadline asked for one frame");
+    }
+
+    /// A host started on a runtime its creator lends runs its IO there (ADR-0327 §3): the
+    /// input-method bus's task is the lent runtime's, and it ends when the platform is dropped.
+    fn the_host_runs_its_io_on_the_runtime_it_is_handed() {
+        let lent = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("lent-io")
+            .enable_all()
+            .build()
+            .expect("a lent runtime");
+        let metrics = lent.handle().metrics();
+        assert_eq!(metrics.num_alive_tasks(), 0, "the lent runtime starts idle");
+
+        let platform = flui_native::CurrentHost::X11
+            .start_with(flui_native::NativeExecutor::from_tokio(
+                lent.handle().clone(),
+            ))
+            .expect("the X11 platform");
+        assert!(
+            metrics.num_alive_tasks() >= 1,
+            "the host's input-method bus runs on the lent runtime"
+        );
+
+        drop(platform);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while metrics.num_alive_tasks() > 0 {
+            assert!(
+                Instant::now() < deadline,
+                "the host's tasks end when the platform is dropped"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }

@@ -53,7 +53,7 @@ use flui_log::{InstallPolicy, LogBridgePolicy, LogConfig, PlatformLayer, install
 use tracing_subscriber::{Registry, layer::SubscriberExt as _, Layer as _};
 
 let config = LogConfig::builder().directives("info,flui_view=trace").build();
-let filter = config.env_filter()?;
+let filter = config.targets()?;
 
 let subscriber = Registry::default()
     .with(PlatformLayer::platform_default(&config).with_filter(filter));
@@ -119,6 +119,11 @@ filter is attached to the native sink rather than globally to the registry, so
 timeline, metrics, and capture layers can choose independent filters. Within
 the native sink nothing narrows the result afterwards:
 `RUST_LOG=flui_view=trace` really does deliver `TRACE`.
+
+A directive string is `target=level` pairs and one bare level for the rest
+(`info,wgpu=warn,flui_view=trace`), read by `tracing_subscriber`'s `Targets`
+filter, so an application links no regex engine. A span or field directive
+(`[span{field=value}]`) is refused with `DirectiveError::SpanOrField`.
 
 ## Features
 

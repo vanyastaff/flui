@@ -94,8 +94,8 @@ where
     }
 
     fn on_mount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        render_custody::mount(&mut self.render_id, core, owner, |cx| {
-            core.view().create_render_object(cx)
+        render_custody::mount(&mut self.render_id, core, owner, |ctx| {
+            core.view().create_render_object(ctx)
         });
     }
 
@@ -132,17 +132,17 @@ where
             self.render_id,
             core,
             owner,
-            |cx, render_object: &mut V::RenderObject| {
-                state.update_render_object(core.view(), cx, render_object)
+            |ctx, render_object: &mut V::RenderObject| {
+                state.update_render_object(core.view(), ctx, render_object)
             },
         );
 
-        // One clone of the view serves `provide` and `child`, taken before
+        // One handle on the shared view serves `provide` and `child`, taken before
         // the reactive phase is armed: between the two hooks nothing the
         // author wrote runs, so the phase `publish_provided` arms is always
         // handed to `build_or_recover_begun`. The child mounts under what is
         // published here.
-        let view = core.view().clone();
+        let view = std::rc::Rc::clone(core.shared_view());
         publish_provided(&mut self.publication, core, owner, |values| {
             state.provide(&view, ctx, values);
         });
@@ -172,8 +172,8 @@ where
             core,
             owner,
             "StatefulRenderBehavior",
-            |cx, render_object: &mut V::RenderObject| {
-                core.view().did_unmount_render_object(cx, render_object);
+            |ctx, render_object: &mut V::RenderObject| {
+                core.view().did_unmount_render_object(ctx, render_object);
             },
         );
     }

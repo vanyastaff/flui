@@ -28,7 +28,7 @@ use flui_widgets::{
 fn target(side: f64, taps: &Arc<AtomicUsize>) -> GestureDetector {
     let taps = Arc::clone(taps);
     GestureDetector::new()
-        .on_tap(move |_cx| {
+        .on_tap(move |_ctx| {
             taps.fetch_add(1, Ordering::SeqCst);
         })
         .child(SizedBox::new(side, side).child(ColoredBox::new(Color::rgb(10, 20, 30))))

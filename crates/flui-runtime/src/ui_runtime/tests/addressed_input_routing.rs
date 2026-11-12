@@ -24,7 +24,7 @@ struct PanickingKeyReader {
 }
 
 impl flui_view::View for PanickingKeyReader {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -35,8 +35,8 @@ impl StatelessView for PanickingKeyReader {
         let signal = self.signal;
         Focus::new(SizedBox::square(10.0))
             .focus_node(Rc::clone(&self.node))
-            .on_key_event(move |cx, _event| {
-                let _ = signal.update(cx, |value| {
+            .on_key_event(move |ctx, _event| {
+                let _ = signal.update(ctx, |value| {
                     *value = 7;
                     panic!("keyboard updater probe");
                 });
@@ -439,9 +439,9 @@ fn mouse_button(
 fn key(code: Code, key: Key, state: KeyState, repeat: bool) -> PlatformInput {
     PlatformInput::Keyboard(
         KeyEventBuilder::new(code)
-            .with_key(key)
-            .with_state(state)
-            .with_repeat(repeat)
+            .key(key)
+            .state(state)
+            .repeat(repeat)
             .build(),
     )
 }

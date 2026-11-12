@@ -69,9 +69,9 @@ where
     B: ElementBehavior<V, A>,
 {
     /// Create a new Element with the given view and behavior.
-    pub fn new(view: &V, behavior: B) -> Self {
+    pub fn new(view: std::rc::Rc<V>, behavior: B) -> Self {
         Self {
-            core: ElementCore::new(view.clone()),
+            core: ElementCore::new(view),
             behavior,
             _phantom: PhantomData,
         }
@@ -180,10 +180,6 @@ where
         // Forward to `ElementCore::set_self_id` so the
         // Variable-arity reconciler stamp can use the real parent id.
         self.core.set_self_id(id);
-    }
-
-    fn note_source_view(&mut self, source: std::rc::Weak<dyn View>) {
-        self.core.note_source_view(Some(source));
     }
 
     fn lifecycle(&self) -> Lifecycle {
@@ -464,11 +460,11 @@ where
         self.behavior.data()
     }
 
-    /// Get all dependent elements: id -> (depth, fields read) (#1090).
-    pub fn dependents(
-        &self,
-    ) -> &std::collections::HashMap<ElementId, crate::element::DependentEntry> {
-        self.behavior.dependents()
+    /// What `dependent` is recorded as reading from this provider (its depth
+    /// and the fields it read), if it depends on it.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn dependent(&self, dependent: ElementId) -> Option<&crate::element::DependentEntry> {
+        self.behavior.dependent(dependent)
     }
 }
 

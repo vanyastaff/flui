@@ -910,7 +910,7 @@ impl PipelineOwner<PaintPhase> {
                         debug_assert!(
                             false,
                             "fragment child marker {index} out of range ({} children) — \
-                             PaintCx bounds-checks markers, so a mismatch means the \
+                             PaintContext bounds-checks markers, so a mismatch means the \
                              tree changed during paint",
                             child_ids.len(),
                         );

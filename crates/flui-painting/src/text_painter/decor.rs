@@ -37,7 +37,7 @@ pub(crate) struct SpanDecor {
 /// One shadow list and the spans that cast it.
 #[derive(Clone, Debug, PartialEq)]
 struct Casting {
-    list: Box<[Shadow<f64>]>,
+    list: Box<[Shadow]>,
     /// Paragraph span indices, ascending.
     casters: Vec<usize>,
 }

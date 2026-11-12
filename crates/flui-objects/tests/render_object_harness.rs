@@ -154,7 +154,7 @@ use flui_rendering::constraints::AxisDirection;
 use flui_rendering::parent_data::TableCellVerticalAlignment;
 use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints},
-    context::BoxIntrinsicsCtx,
+    context::BoxIntrinsicsContext,
     delegates::{
         CustomPainter, FlowDelegate, FlowPaintingContext, MultiChildLayoutContext,
         MultiChildLayoutDelegate, SingleChildLayoutDelegate, SliverGridDelegate,
@@ -384,7 +384,7 @@ impl RenderBox for RenderTestBox {
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.min_width)
     }
@@ -392,7 +392,7 @@ impl RenderBox for RenderTestBox {
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.max_width)
     }
@@ -400,7 +400,7 @@ impl RenderBox for RenderTestBox {
     fn compute_min_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.min_height)
     }
@@ -408,7 +408,7 @@ impl RenderBox for RenderTestBox {
     fn compute_max_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.max_height)
     }
@@ -1366,7 +1366,7 @@ fn harness_custom_paint_orders_background_child_foreground() {
 /// is detected and the paint phase is rejected rather than producing a broken
 /// display.
 // Debug-only: the imbalance is detected by a `debug_assert_eq!`
-// (`flui-rendering/src/context/paint_cx.rs`), so in release nothing panics,
+// (`flui-rendering/src/context/paint_ctx.rs`), so in release nothing panics,
 // nothing is poisoned, and this test's own `panic!` arm fires instead.
 #[cfg(debug_assertions)]
 fn harness_custom_paint_unbalanced_save_poisons_the_paint_phase() {
@@ -2569,7 +2569,7 @@ fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
                     .is_none()
             );
             let mut recorder = flui_rendering::context::FragmentRecorder::new(Offset::ZERO, 1.0);
-            icon.paint(&mut flui_rendering::context::PaintCx::new(
+            icon.paint(&mut flui_rendering::context::PaintContext::new(
                 &mut recorder,
                 0,
                 Size::new(20.0, 20.0),
@@ -2973,7 +2973,7 @@ fn harness_baseline_positions_text_at_offset() {
 /// fresh answer out — must hold).
 fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
     use flui_foundation::Leaf;
-    use flui_rendering::context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxLayoutContext};
+    use flui_rendering::context::{BoxDryBaselineContext, BoxDryLayoutContext, BoxLayoutContext};
     use flui_rendering::parent_data::BoxParentData;
 
     /// Leaf render object with independently settable per-kind baseline
@@ -3001,7 +3001,7 @@ fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
         fn compute_dry_layout(
             &self,
             constraints: BoxConstraints,
-            _ctx: &mut BoxDryLayoutCtx<'_>,
+            _ctx: &mut BoxDryLayoutContext<'_>,
         ) -> flui_rendering::RenderResult<Size> {
             Ok(constraints.constrain(self.box_size))
         }
@@ -3020,7 +3020,7 @@ fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
             &self,
             _constraints: BoxConstraints,
             baseline: TextBaseline,
-            _ctx: &mut BoxDryBaselineCtx<'_>,
+            _ctx: &mut BoxDryBaselineContext<'_>,
         ) -> flui_rendering::RenderResult<Option<f64>> {
             Ok(match baseline {
                 TextBaseline::Alphabetic => self.alphabetic_offset,
@@ -3122,28 +3122,28 @@ impl RenderBox for SizedBaselineProbe {
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.box_size.width)
     }
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.box_size.width)
     }
     fn compute_min_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.box_size.height)
     }
     fn compute_max_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.box_size.height)
     }
@@ -3162,7 +3162,7 @@ impl RenderBox for SizedBaselineProbe {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         Ok(constraints.constrain(self.box_size))
     }
@@ -3181,7 +3181,7 @@ impl RenderBox for SizedBaselineProbe {
         &self,
         _constraints: BoxConstraints,
         baseline: TextBaseline,
-        _ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         Ok(match baseline {
             TextBaseline::Alphabetic => self.alphabetic_offset,
@@ -3482,7 +3482,7 @@ struct ContainerStackCase {
     child: Size,
     constraints: BoxConstraints,
     color: Option<Color>,
-    decoration: Option<BoxDecoration<f64>>,
+    decoration: Option<BoxDecoration>,
     transform: Option<Matrix4>,
     /// When set, the CHILD itself is wrapped in a `RenderTransform` using
     /// this matrix — distinct from `transform` above, which is the
@@ -5948,7 +5948,7 @@ fn harness_animated_decorated_box_releases_proxy_after_tree_drop() {
             BoxDecoration::with_color(Color::BLUE),
         ),
         parent,
-    )) as std::rc::Rc<dyn Animation<BoxDecoration<f64>>>);
+    )) as std::rc::Rc<dyn Animation<BoxDecoration>>);
     let run = RenderTester::mount(box_node(RenderAnimatedDecoratedBox::new(decoration)))
         .with_size(Size::new(40.0, 40.0))
         .run_frame();
@@ -9515,7 +9515,7 @@ fn harness_sliver_carousel_geometry_and_frames() {
 // The two former stale-out-of-band `hit_test`/`paint` pins
 // (`hit_test_ignores_stale_out_of_band_offset`, `paint_ignores_stale_out_of_band_tile`)
 // pinned an object-level `laid_out_band` gate that only the now-deleted eager
-// grid carried — this render object keeps no such band, and cannot: `PaintCx`
+// grid carried — this render object keeps no such band, and cannot: `PaintContext`
 // exposes neither parent data nor a child's logical index. The hazard is
 // closed at the PIPELINE instead, and structurally rather than by discipline:
 // a layout stamps its own generation onto the children it laid out, and the
@@ -10181,8 +10181,8 @@ fn placement_clock() -> (AnimationController, AnimationController, MotionSpec) {
     clock.set_value(1.0).expect("no build is running");
     let driver = clock.clone();
     let motion = MotionSpec::default()
-        .with_duration(Duration::from_millis(100))
-        .with_curve(curves::LINEAR);
+        .duration(Duration::from_millis(100))
+        .curve(curves::LINEAR);
     (clock, driver, motion)
 }
 
@@ -11543,7 +11543,7 @@ fn harness_intrinsic_width_shrink_wrapping_width_oracle() {
     }
 }
 
-/// Verify that `BoxDryLayoutCtx::child_max_intrinsic_width` (the new intrinsic
+/// Verify that `BoxDryLayoutContext::child_max_intrinsic_width` (the new intrinsic
 /// dry-intrinsics channel) routes through the real memoized
 /// `intrinsic_query` and returns the same value as a standalone
 /// `max_intrinsic_width` call on the child.
@@ -11558,7 +11558,7 @@ fn harness_dry_layout_child_intrinsic_channel_matches_standalone_query() {
     use flui_foundation::Single;
     use flui_rendering::{
         constraints::BoxConstraints,
-        context::{BoxDryLayoutCtx, BoxIntrinsicsCtx},
+        context::{BoxDryLayoutContext, BoxIntrinsicsContext},
         parent_data::BoxParentData,
         traits::RenderBox,
     };
@@ -11594,7 +11594,7 @@ fn harness_dry_layout_child_intrinsic_channel_matches_standalone_query() {
         fn compute_max_intrinsic_width(
             &self,
             _height: f64,
-            _ctx: &mut BoxIntrinsicsCtx<'_>,
+            _ctx: &mut BoxIntrinsicsContext<'_>,
         ) -> flui_rendering::RenderResult<f64> {
             Ok(0.0)
         }
@@ -11602,7 +11602,7 @@ fn harness_dry_layout_child_intrinsic_channel_matches_standalone_query() {
         fn compute_dry_layout(
             &self,
             constraints: BoxConstraints,
-            ctx: &mut BoxDryLayoutCtx<'_>,
+            ctx: &mut BoxDryLayoutContext<'_>,
         ) -> flui_rendering::RenderResult<Size> {
             Ok({
                 // Read the child's max intrinsic width through the new channel.

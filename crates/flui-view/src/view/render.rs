@@ -21,7 +21,7 @@ use crate::{ElementBase, InheritedView};
 /// capabilities a render-object widget needs to register owner-local
 /// interaction callbacks while keeping the render object itself data-only and
 /// `Send + Sync`, and the [`WriterSource`] those callbacks open their
-/// [`EventCx`](crate::EventCx) from (ADR-0086 §3).
+/// [`EventContext`](crate::EventContext) from (ADR-0086 §3).
 ///
 /// `build` cannot reach it: the element creates and updates the render object
 /// outside the build pass, so a render view has no path to a writer inside
@@ -794,14 +794,14 @@ pub trait RenderView: Clone + 'static + Sized {
 macro_rules! impl_render_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> $crate::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> $crate::element::ElementKind {
                 $crate::element::ElementKind::render_variable(self)
             }
         }
     };
     ($ty:ty, site = $field:ident) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> $crate::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> $crate::element::ElementKind {
                 $crate::element::ElementKind::render_variable(self)
             }
 

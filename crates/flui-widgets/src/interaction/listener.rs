@@ -20,16 +20,16 @@ use flui_objects::RenderListener;
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    Child, EventCx, EventOutcome, IntoView, RenderObjectContext, RenderView, WriterSource,
+    Child, EventContext, EventOutcome, IntoView, RenderObjectContext, RenderView, WriterSource,
     impl_render_view,
 };
 
 use crate::support::{RefCallback, ref_callback};
 
-/// A pointer-event callback: receives the dispatch's [`EventCx`] and the event
+/// A pointer-event callback: receives the dispatch's [`EventContext`] and the event
 /// that landed on the [`Listener`] in both spaces — see [`PointerDispatch`].
 /// Stored already adapted to report its outcome.
-pub(super) type PointerCallback = Rc<dyn Fn(&mut EventCx<'_>, PointerDispatch<'_>)>;
+pub(super) type PointerCallback = Rc<dyn Fn(&mut EventContext<'_>, PointerDispatch<'_>)>;
 
 /// A trackpad pan/zoom callback routed from a [`PointerEvent::PanZoom`] update.
 type PointerPanZoomCallback = RefCallback<PanZoomEvent>;
@@ -47,12 +47,14 @@ pub(super) struct ContactCallbacks {
 /// Store a pointer callback, adapted to report its outcome.
 pub(super) fn pointer_callback<F, R>(callback: F) -> PointerCallback
 where
-    F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+    F: Fn(&mut EventContext<'_>, PointerDispatch<'_>) -> R + 'static,
     R: EventOutcome,
 {
-    Rc::new(move |cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
-        callback(cx, dispatch).report();
-    })
+    Rc::new(
+        move |ctx: &mut EventContext<'_>, dispatch: PointerDispatch<'_>| {
+            callback(ctx, dispatch).report();
+        },
+    )
 }
 
 /// An arbitrated scroll-signal handler: returns
@@ -111,13 +113,13 @@ impl RecognizerInput {
 ///
 /// # What a callback receives
 ///
-/// Each `on_pointer_*` callback receives the dispatch's `&mut EventCx<'_>`
+/// Each `on_pointer_*` callback receives the dispatch's `&mut EventContext<'_>`
 /// first, so it writes a signal directly (ADR-0086):
-/// `.on_pointer_down(move |cx, _dispatch| presses.update(cx, |n| *n += 1))`.
+/// `.on_pointer_down(move |ctx, _dispatch| presses.update(ctx, |n| *n += 1))`.
 /// The listener has no `init_state`; it takes the owner's [`WriterSource`]
 /// from the [`RenderObjectContext`] that registers its handler, and opens one
 /// write per event. The two claim callbacks decide during routing and receive
-/// no `cx` (ADR-0086 §6).
+/// no `ctx` (ADR-0086 §6).
 ///
 /// Then it is handed a [`PointerDispatch`], which carries
 /// the event in two spaces: `local` (this listener's own box, the value to
@@ -199,14 +201,14 @@ impl RawCallbacks {
                 if let Some(callback) = &self.pan_zoom_update
                     && matches!(pan_zoom.phase, PanZoomPhase::Update(_))
                 {
-                    writer.write(|cx| callback(cx, pan_zoom));
+                    writer.write(|ctx| callback(ctx, pan_zoom));
                 }
                 return;
             }
             _ => return,
         };
         if let Some(callback) = callback {
-            writer.write(|cx| callback(cx, dispatch));
+            writer.write(|ctx| callback(ctx, dispatch));
         }
     }
 }
@@ -330,7 +332,7 @@ impl Listener {
     #[must_use]
     pub fn on_pointer_down<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerDispatch<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_pointer_down = Some(pointer_callback(callback));
@@ -341,7 +343,7 @@ impl Listener {
     #[must_use]
     pub fn on_pointer_up<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerDispatch<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_pointer_up = Some(pointer_callback(callback));
@@ -352,7 +354,7 @@ impl Listener {
     #[must_use]
     pub fn on_pointer_move<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerDispatch<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_pointer_move = Some(pointer_callback(callback));
@@ -366,7 +368,7 @@ impl Listener {
     #[must_use]
     pub fn on_pointer_hover<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerDispatch<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_pointer_hover = Some(pointer_callback(callback));
@@ -378,7 +380,7 @@ impl Listener {
     #[must_use]
     pub fn on_pointer_cancel<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerDispatch<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_pointer_cancel = Some(pointer_callback(callback));
@@ -398,7 +400,7 @@ impl Listener {
     #[must_use]
     pub fn on_pointer_signal<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerDispatch<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_pointer_signal = Some(pointer_callback(callback));
@@ -414,7 +416,7 @@ impl Listener {
     #[must_use]
     pub fn on_pointer_revise<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerDispatch<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_pointer_revise = Some(pointer_callback(callback));
@@ -472,7 +474,7 @@ impl Listener {
     #[must_use]
     pub fn on_pointer_pan_zoom_update<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &PanZoomEvent) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &PanZoomEvent) -> R + 'static,
         R: EventOutcome,
     {
         self.on_pointer_pan_zoom_update = Some(ref_callback(callback));

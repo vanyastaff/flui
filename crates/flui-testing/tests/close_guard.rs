@@ -49,21 +49,23 @@ impl StatefulView for Guarded {
 }
 
 impl View for Guarded {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
 
 impl ViewState<Guarded> for GuardedState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let seen = self.view.seen.clone();
-        let guard = cx.close_guard().expect("a hosted presentation has a guard");
+        let guard = ctx
+            .close_guard()
+            .expect("a hosted presentation has a guard");
         if self.view.hold {
             seen.holds.borrow_mut().push(guard.hold());
         }
         seen.guard.replace(Some(guard));
         let detached = Rc::clone(&seen.detached);
-        let (_, observation) = cx
+        let (_, observation) = ctx
             .lifecycle_handle()
             .expect("a hosted presentation has a lifecycle")
             .subscribe(move |state| {
@@ -75,7 +77,7 @@ impl ViewState<Guarded> for GuardedState {
         self.observation = Some(observation);
     }
 
-    fn build(&self, _view: &Guarded, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Guarded, _ctx: &dyn BuildContext) -> impl IntoView {
         flui_widgets::SizedBox::new(10.0, 10.0)
     }
 }

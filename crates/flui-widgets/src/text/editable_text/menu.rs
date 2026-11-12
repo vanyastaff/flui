@@ -75,7 +75,7 @@ impl EditableText {
 /// owner code failed, and the first failure is resumed after the popup
 /// opened.
 pub(super) fn secondary_press(
-    cx: &mut EventCx<'_>,
+    ctx: &mut EventContext<'_>,
     menu: &MenuHost,
     position: Offset<f64>,
     at: Option<usize>,
@@ -96,7 +96,7 @@ pub(super) fn secondary_press(
         calls.run(|| controller.set_caret_byte_offset(at));
     }
     calls.run(|| {
-        menu.open(cx, MenuCause::SecondaryClick, Some(position));
+        menu.open(ctx, MenuCause::SecondaryClick, Some(position));
     });
     calls.resume();
 }
@@ -111,9 +111,9 @@ pub(super) fn with_secondary_tap(
     field: (Rc<RefCell<TextEditingController>>, Rc<FocusNode>),
     commit: CompositionCommit,
 ) -> GestureDetector {
-    detector.on_secondary_tap(move |cx| {
+    detector.on_secondary_tap(move |ctx| {
         if let Some((position, at)) = menu.take_secondary() {
-            secondary_press(cx, &menu, position, at, (&field.0, &field.1), &commit);
+            secondary_press(ctx, &menu, position, at, (&field.0, &field.1), &commit);
         }
     })
 }

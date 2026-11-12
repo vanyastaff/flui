@@ -38,7 +38,7 @@ impl RenderView for Leaf {
 }
 
 impl View for Leaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -87,43 +87,43 @@ fn logging(log: &Log, entry: &'static str) -> Box<dyn FnOnce()> {
 }
 
 impl ViewState<Hooked> for HookedState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         match self.hooks {
             Hooks::Two => {
                 self.kept = vec![
-                    cx.on_unmount(logging(&self.log, "first")),
-                    cx.on_unmount(logging(&self.log, "second")),
+                    ctx.on_unmount(logging(&self.log, "first")),
+                    ctx.on_unmount(logging(&self.log, "second")),
                 ];
             }
             Hooks::FirstPanics => {
                 let log = Rc::clone(&self.log);
                 self.kept = vec![
-                    cx.on_unmount(Box::new(move || {
+                    ctx.on_unmount(Box::new(move || {
                         log.borrow_mut().push("first");
                         panic!("unmount hook failure");
                     })),
-                    cx.on_unmount(logging(&self.log, "second")),
+                    ctx.on_unmount(logging(&self.log, "second")),
                 ];
             }
             Hooks::DroppedAndForgotten => {
-                drop(cx.on_unmount(logging(&self.log, "dropped")));
-                cx.on_unmount(logging(&self.log, "forgotten")).forget();
+                drop(ctx.on_unmount(logging(&self.log, "dropped")));
+                ctx.on_unmount(logging(&self.log, "forgotten")).forget();
             }
             Hooks::FirstDropsSecond => {
                 let second = Rc::new(RefCell::new(None::<UnmountHook>));
                 let log = Rc::clone(&self.log);
                 let slot = Rc::clone(&second);
-                cx.on_unmount(Box::new(move || {
+                ctx.on_unmount(Box::new(move || {
                     log.borrow_mut().push("first");
                     drop(slot.borrow_mut().take());
                 }))
                 .forget();
-                *second.borrow_mut() = Some(cx.on_unmount(logging(&self.log, "second")));
+                *second.borrow_mut() = Some(ctx.on_unmount(logging(&self.log, "second")));
             }
         }
     }
 
-    fn build(&self, _view: &Hooked, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Hooked, _ctx: &dyn BuildContext) -> impl IntoView {
         Leaf.boxed()
     }
 
@@ -133,7 +133,7 @@ impl ViewState<Hooked> for HookedState {
 }
 
 impl View for Hooked {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }

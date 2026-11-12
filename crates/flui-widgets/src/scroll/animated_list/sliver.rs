@@ -135,7 +135,7 @@ impl<T, K> Clone for SliverAnimatedList<T, K> {
 impl<T, K> SliverAnimatedList<T, K>
 where
     T: 'static,
-    K: Clone + Eq + Hash + fmt::Debug + Send + Sync + 'static,
+    K: Clone + Eq + Hash + fmt::Debug + 'static,
 {
     /// A list of `items`, each keyed by `key` and shown by `builder`.
     ///
@@ -272,7 +272,7 @@ impl<T, K: fmt::Debug> fmt::Debug for SliverAnimatedListState<T, K> {
 impl<T, K> StatefulView for SliverAnimatedList<T, K>
 where
     T: 'static,
-    K: Clone + Eq + Hash + fmt::Debug + Send + Sync + 'static,
+    K: Clone + Eq + Hash + fmt::Debug + 'static,
 {
     type State = SliverAnimatedListState<T, K>;
 
@@ -313,7 +313,7 @@ where
 impl<T, K> SliverAnimatedListState<T, K>
 where
     T: 'static,
-    K: Clone + Eq + Hash + fmt::Debug + Send + Sync + 'static,
+    K: Clone + Eq + Hash + fmt::Debug + 'static,
 {
     /// Bind every driver and the clock to `vsync` in one update.
     fn rebind(&mut self) {
@@ -413,7 +413,7 @@ where
 impl<T, K> ViewState<SliverAnimatedList<T, K>> for SliverAnimatedListState<T, K>
 where
     T: 'static,
-    K: Clone + Eq + Hash + fmt::Debug + Send + Sync + 'static,
+    K: Clone + Eq + Hash + fmt::Debug + 'static,
 {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
@@ -535,7 +535,7 @@ struct ItemView {
 impl ItemView {
     fn build<T, K>(&self, key: &K, shown: &Shown<T>) -> BoxedView
     where
-        K: Clone + Eq + Hash + fmt::Debug + Send + Sync + 'static,
+        K: Clone + Eq + Hash + fmt::Debug + 'static,
     {
         let mut child = Animate::transition(self.transition.clone(), shown.view())
             .trigger(Trigger::Controller(Rc::clone(&shown.progress)))
@@ -564,16 +564,16 @@ impl ItemView {
 /// Carries an item's key into the sliver, so the item keeps its element
 /// wherever it moves, leaving included.
 #[derive(Clone)]
-struct KeyedItem<K: Clone + Eq + Hash + Send + Sync + 'static> {
+struct KeyedItem<K: Clone + Eq + Hash + 'static> {
     key: ValueKey<K>,
     child: BoxedView,
 }
 
 impl<K> View for KeyedItem<K>
 where
-    K: Clone + Eq + Hash + fmt::Debug + Send + Sync + 'static,
+    K: Clone + Eq + Hash + fmt::Debug + 'static,
 {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 
@@ -584,7 +584,7 @@ where
 
 impl<K> StatelessView for KeyedItem<K>
 where
-    K: Clone + Eq + Hash + fmt::Debug + Send + Sync + 'static,
+    K: Clone + Eq + Hash + fmt::Debug + 'static,
 {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         self.child.clone()

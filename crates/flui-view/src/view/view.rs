@@ -97,7 +97,7 @@ pub trait View: Downcast + DynClone + 'static {
     /// # Returns
     ///
     /// A boxed Element that will manage this View's lifecycle.
-    fn create_element(&self) -> crate::element::ElementKind;
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind;
 
     /// Get the type ID of this View for runtime type checking.
     ///
@@ -481,15 +481,6 @@ pub trait ElementBase: Downcast + 'static {
         // overrides this; hand-rolled element impls (test fixtures,
         // future custom elements) opt in by overriding.
     }
-
-    /// Record the shared view this element was created from.
-    ///
-    /// [`BoxedView::create_element`](crate::BoxedView) calls it right after
-    /// `View::create_element`, so that the first update which offers the same
-    /// shared view again is already recognised as a no-op. Default: ignore;
-    /// the unified `Element<V, A, B>` keeps it, hand-rolled element impls opt
-    /// in by overriding.
-    fn note_source_view(&mut self, _source: std::rc::Weak<dyn View>) {}
 
     /// Get the slot position in parent's child list.
     fn slot(&self) -> usize {
@@ -914,10 +905,12 @@ pub trait ElementBase: Downcast + 'static {
     /// applies the returned impact to the render parent.
     ///
     /// ```
+    /// use std::rc::Rc;
+    ///
     /// use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData};
     /// use flui_view::{ElementBase, ErrorView, View};
     ///
-    /// let element = ErrorView::new("ordinary element").create_element();
+    /// let element = Rc::new(ErrorView::new("ordinary element")).create_element();
     /// let mut parent_data = BoxParentData::default();
     /// assert_eq!(
     ///     element.apply_parent_data_config(&mut parent_data),

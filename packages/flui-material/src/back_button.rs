@@ -55,7 +55,7 @@ pub fn back_arrow_icon_data() -> IconData {
 /// use flui_material::BackButton;
 ///
 /// let _default = BackButton::new();
-/// let _overridden = BackButton::new().on_pressed(|_cx| { /* custom pop */ });
+/// let _overridden = BackButton::new().on_pressed(|_ctx| { /* custom pop */ });
 /// ```
 #[derive(Clone, Default, StatelessView)]
 pub struct BackButton {
@@ -83,7 +83,7 @@ impl BackButton {
     #[must_use]
     pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_pressed = Some(crate::event_callback::press_callback(callback));
         self
@@ -96,9 +96,9 @@ impl StatelessView for BackButton {
         let mut button = IconButton::new(icon);
 
         if let Some(on_pressed) = self.on_pressed.clone() {
-            button = button.on_pressed(move |cx| on_pressed(cx));
+            button = button.on_pressed(move |ctx| on_pressed(ctx));
         } else if let Some(navigator) = NavigatorHandle::maybe_of(ctx) {
-            button = button.on_pressed(move |_cx| {
+            button = button.on_pressed(move |_ctx| {
                 navigator.maybe_pop();
             });
         }

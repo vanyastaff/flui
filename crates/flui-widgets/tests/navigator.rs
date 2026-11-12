@@ -75,7 +75,7 @@ struct Host {
 }
 
 impl View for Host {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }
@@ -229,7 +229,7 @@ pub(crate) fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
         let outcomes = Arc::clone(&outcomes_for_scope);
         let scope = PopScope::new(SizedBox::new(10.0, 10.0))
             .can_pop(!blocking_for_page.load(Ordering::SeqCst))
-            .on_pop_invoked(move |_cx, did_pop| outcomes.lock().push(did_pop));
+            .on_pop_invoked(move |_ctx, did_pop| outcomes.lock().push(did_pop));
         scope.into_view().boxed()
     }));
     harness.tick();
@@ -284,7 +284,7 @@ pub(crate) mod local_history {
     }
 
     impl View for HandleProbe {
-        fn create_element(&self) -> ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
             ElementKind::stateful(self)
         }
     }
@@ -416,7 +416,7 @@ pub(crate) mod local_history {
     }
 
     impl View for PopsInBuild {
-        fn create_element(&self) -> ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
             ElementKind::stateful(self)
         }
     }
@@ -487,7 +487,7 @@ pub(crate) mod local_history {
         // Arm the pop and rebuild the page: its `build` pops the entry.
         pops.set(1);
         writer
-            .write(|cx| count.set(cx, 1))
+            .write(|ctx| count.set(ctx, 1))
             .expect("a write from the test");
         harness.tick();
         assert_eq!(pops.get(), 0, "the page popped inside its build");
@@ -497,7 +497,7 @@ pub(crate) mod local_history {
             [Ok(())],
             "on_remove ran once, after the build, and its write was accepted"
         );
-        assert_eq!(writer.write(|cx| count.peek(cx, |n| *n)), Ok(5));
+        assert_eq!(writer.write(|ctx| count.peek(ctx, |n| *n)), Ok(5));
     }
 
     /// Every write an `on_remove` made, in order.
@@ -516,7 +516,7 @@ pub(crate) mod local_history {
         LocalHistoryEntry::new().on_remove(move || {
             written
                 .borrow_mut()
-                .push(writer.write(|cx| count.set(cx, value)));
+                .push(writer.write(|ctx| count.set(ctx, value)));
         })
     }
 
@@ -571,7 +571,7 @@ pub(crate) mod local_history {
 
         pops.set(2);
         writer
-            .write(|cx| count.set(cx, 1))
+            .write(|ctx| count.set(ctx, 1))
             .expect("a write from the test");
         let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| harness.tick()));
         if let Err(payload) = frame {
@@ -590,14 +590,14 @@ pub(crate) mod local_history {
             [Ok(())],
             "the removal after the panicking one still ran, and its write landed"
         );
-        assert_eq!(writer.write(|cx| count.peek(cx, |n| *n)), Ok(5));
+        assert_eq!(writer.write(|ctx| count.peek(ctx, |n| *n)), Ok(5));
 
         // The next operation after containment.
         let _next = local.add(writing_entry(&written, &writer, count, 7));
         assert!(handle.maybe_pop(), "the new entry absorbs the pop");
         harness.tick();
         assert_eq!(*written.borrow(), [Ok(()), Ok(())]);
-        assert_eq!(writer.write(|cx| count.peek(cx, |n| *n)), Ok(7));
+        assert_eq!(writer.write(|ctx| count.peek(ctx, |n| *n)), Ok(7));
         assert_eq!(
             handle.route_ids().len(),
             2,
@@ -615,7 +615,7 @@ pub(crate) mod local_history {
     }
 
     impl View for Stage {
-        fn create_element(&self) -> ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
             ElementKind::stateless(self)
         }
     }
@@ -675,7 +675,7 @@ pub(crate) mod local_history {
             let _ = &capture;
             removal_writes
                 .borrow_mut()
-                .push(removal_writer.write(|cx| count.set(cx, 5)));
+                .push(removal_writer.write(|ctx| count.set(ctx, 5)));
         }));
 
         harness.swap_root(stage(false));

@@ -45,7 +45,7 @@ use flui_painting::{
 use flui_foundation::inspect::{Fields, Unit};
 use flui_rendering::{
     RenderUpdateImpact,
-    context::{BoxHitTestContext, PaintCx},
+    context::{BoxHitTestContext, PaintContext},
     hit_testing::{PathClipTarget, resolve_path_clip_target},
     parent_data::BoxParentData,
     traits::RenderBox,
@@ -78,9 +78,9 @@ pub trait PhysicalClipShape: Clone + fmt::Debug + 'static {
     /// inside `f`, child subtree included.
     fn with_clip_scope(
         &self,
-        ctx: &mut PaintCx<'_, Single>,
+        ctx: &mut PaintContext<'_, Single>,
         clip_behavior: Clip,
-        f: impl FnOnce(&mut PaintCx<'_, Single>),
+        f: impl FnOnce(&mut PaintContext<'_, Single>),
     );
 }
 
@@ -99,9 +99,9 @@ impl PhysicalClipShape for RRect {
 
     fn with_clip_scope(
         &self,
-        ctx: &mut PaintCx<'_, Single>,
+        ctx: &mut PaintContext<'_, Single>,
         clip_behavior: Clip,
-        f: impl FnOnce(&mut PaintCx<'_, Single>),
+        f: impl FnOnce(&mut PaintContext<'_, Single>),
     ) {
         ctx.with_clip_rrect(*self, clip_behavior, f);
     }
@@ -125,9 +125,9 @@ impl PhysicalClipShape for Path {
 
     fn with_clip_scope(
         &self,
-        ctx: &mut PaintCx<'_, Single>,
+        ctx: &mut PaintContext<'_, Single>,
         clip_behavior: Clip,
-        f: impl FnOnce(&mut PaintCx<'_, Single>),
+        f: impl FnOnce(&mut PaintContext<'_, Single>),
     ) {
         ctx.with_clip_path(self.clone(), clip_behavior, f);
     }
@@ -615,7 +615,7 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
         Some(self.clip_source.compute_clip(size).shadow_path().bounds())
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         // No child means nothing is drawn at all, not even the shadow or fill.
         if ctx.child_count() == 0 {
             return;

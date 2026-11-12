@@ -1,7 +1,7 @@
 use flui_foundation::geometry::{Matrix4, Size};
 use flui_rendering::{
     RenderResult,
-    context::{BoxIntrinsicsCtx, FragmentRecorder},
+    context::{BoxIntrinsicsContext, FragmentRecorder},
     protocol::{BoxProtocol, Protocol, ProtocolPosition},
     storage::IntrinsicDimension,
     traits::{HitTestOutcome, RenderObject},
@@ -15,7 +15,7 @@ impl flui_foundation::inspect::Inspect for RawConsumer { fn kind(&self) -> &'sta
 impl RenderObject<BoxProtocol> for RawConsumer {
     fn perform_layout_raw(
         &mut self,
-        _ctx: &mut <BoxProtocol as Protocol>::LayoutCtxErased<'_>,
+        _ctx: &mut <BoxProtocol as Protocol>::ErasedLayoutContext<'_>,
     ) -> RenderResult<Size> {
         Ok(Size::ZERO)
     }
@@ -40,7 +40,7 @@ impl RenderObject<BoxProtocol> for RawConsumer {
         &self,
         dimension: IntrinsicDimension,
         extent: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> RenderResult<f64> {
         let mut text = ctx.text()?;
         let width = ctx.child_intrinsic(0, dimension, extent)?;

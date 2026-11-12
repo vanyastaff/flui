@@ -627,7 +627,7 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
 // ============================================================================
 
 impl<R: LazyMultiBoxRender> View for SliverMultiBoxAdaptor<R> {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         // Creates the adaptor element with the custom behavior instead of the
         // generic `RenderBehavior::new()` produced by `impl_render_view!`.
         // This is required so on_mount registers the ChildManager — which the
@@ -635,8 +635,8 @@ impl<R: LazyMultiBoxRender> View for SliverMultiBoxAdaptor<R> {
         // in this element's own on_mount instead. Routes through the
         // `RenderVariable` variant via the blanket impl below.
         crate::element::ElementKind::RenderVariable(Box::new(SliverAdaptorElement::<R>::new(
-            self,
-            SliverAdaptorBehavior::<R>::new(self),
+            std::rc::Rc::clone(&self),
+            SliverAdaptorBehavior::<R>::new(&self),
         )))
     }
 }
@@ -1892,7 +1892,7 @@ mod tests {
     }
 
     impl View for ItemView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
         }
     }

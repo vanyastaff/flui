@@ -34,14 +34,14 @@ impl MotionRequest {
 
     /// Set the requested playback rate.
     #[must_use]
-    pub const fn with_rate(mut self, rate: f64) -> Self {
+    pub const fn rate(mut self, rate: f64) -> Self {
         self.rate = Some(rate);
         self
     }
 
     /// Set the requested forward step.
     #[must_use]
-    pub const fn with_step_ms(mut self, step_ms: u64) -> Self {
+    pub const fn step_ms(mut self, step_ms: u64) -> Self {
         self.step_ms = Some(step_ms);
         self
     }

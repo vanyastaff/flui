@@ -23,7 +23,7 @@ use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxIntrinsicsCtx, BoxLayoutContext},
+    context::{BoxDryBaselineContext, BoxDryLayoutContext, BoxIntrinsicsContext, BoxLayoutContext},
     parent_data::BoxParentData,
     storage::IntrinsicDimension,
     traits::RenderBox,
@@ -267,7 +267,7 @@ impl RenderBox for RenderIntrinsicWidth {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.compute_max_intrinsic_width(height, ctx)
     }
@@ -275,7 +275,7 @@ impl RenderBox for RenderIntrinsicWidth {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -287,7 +287,7 @@ impl RenderBox for RenderIntrinsicWidth {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -304,7 +304,7 @@ impl RenderBox for RenderIntrinsicWidth {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -321,7 +321,7 @@ impl RenderBox for RenderIntrinsicWidth {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
             return Ok(constraints.smallest());
@@ -341,13 +341,13 @@ impl RenderBox for RenderIntrinsicWidth {
         &self,
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
             return Ok(None);
         }
         // Same child_constraints helper; the intrinsic closure routes through
-        // BoxDryBaselineCtx's intrinsic channel.
+        // BoxDryBaselineContext's intrinsic channel.
         let child_constraints = self.child_constraints(constraints, |dim, extent| {
             ctx.child_intrinsic(0, dim, extent)
         })?;

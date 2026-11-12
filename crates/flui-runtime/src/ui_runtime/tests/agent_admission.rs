@@ -158,7 +158,7 @@ fn agent_motion_sets_rate_and_steps_a_paused_window() {
     )]
     let motion =
         |request| window.call::<method::MotionSet>(MotionParams::new(window.id(), request));
-    let mut paused = motion(MotionRequest::new().with_rate(0.0)).expect("enqueued");
+    let mut paused = motion(MotionRequest::new().rate(0.0)).expect("enqueued");
     assert!(
         paused.try_take().is_none(),
         "a worker cannot mutate the clock inline"
@@ -169,7 +169,7 @@ fn agent_motion_sets_rate_and_steps_a_paused_window() {
         .expect("owner answered")
         .expect("valid motion request");
     assert_eq!(state.rate, 0.0);
-    let mut stepped = motion(MotionRequest::new().with_step_ms(100)).expect("enqueued");
+    let mut stepped = motion(MotionRequest::new().step_ms(100)).expect("enqueued");
     assert_eq!(runtime.drain_commands().invoked, 1);
     let next = stepped
         .try_take()
@@ -178,8 +178,7 @@ fn agent_motion_sets_rate_and_steps_a_paused_window() {
     assert_eq!(next.rate, 0.0);
     assert!((next.time_ms - state.time_ms - 100.0).abs() < 1e-9);
     for rate in [-1.0, f64::NAN, f64::INFINITY] {
-        let mut refused =
-            motion(MotionRequest::new().with_rate(rate).with_step_ms(500)).expect("enqueued");
+        let mut refused = motion(MotionRequest::new().rate(rate).step_ms(500)).expect("enqueued");
         assert_eq!(runtime.drain_commands().invoked, 1);
         assert_eq!(
             refused

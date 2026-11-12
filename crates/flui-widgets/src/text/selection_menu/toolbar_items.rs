@@ -190,7 +190,7 @@ impl fmt::Debug for ToolbarItems {
 }
 
 impl View for ToolbarItems {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 
@@ -319,7 +319,7 @@ fn plain_button(controller: &ToolbarItemsController, ctx: &dyn BuildContext) -> 
         .child(
             GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)
-                .on_tap(move |_cx| controller.toggle())
+                .on_tap(move |_ctx| controller.toggle())
                 .child(
                     Padding::symmetric(12.0, 8.0)
                         .child(ExcludeSemantics::new().child(Text::new(glyph))),
@@ -348,7 +348,7 @@ impl fmt::Debug for ToolbarRow {
 }
 
 impl View for ToolbarRow {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::render_variable(self)
     }
 }

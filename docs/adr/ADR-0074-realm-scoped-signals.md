@@ -22,7 +22,7 @@
   go through `SignalWriteExt`); its §5 removes the `signals` feature. The write signature is
   ADR-0086's.
 - **Amended-by:** [ADR-0086](ADR-0086-signal-writes-through-event-context.md) — writes take any
-  `WriteTarget` (in a callback, the `&mut EventCx` it receives) beside the `&Reactive` of §5.1,
+  `WriteTarget` (in a callback, the `&mut EventContext` it receives) beside the `&Reactive` of §5.1,
   which stays a target until ADR-0086 §8 step 3 replaces §5.1; the run-time guard of §5.2 stays
   authoritative.
 
@@ -121,10 +121,10 @@ pub struct Signal<T: 'static> { /* SignalSlot */ }
 
 impl<T> Signal<T> {
     // build-time reads: the building element becomes a reader
-    pub fn get(self, cx: &dyn BuildContext) -> T where T: Clone;  // panics on a stale handle
-    pub fn with<R>(self, cx: &dyn BuildContext, f: impl FnMut(&T) -> R) -> R;
-    pub fn try_get(self, cx: &dyn BuildContext) -> Result<T, SignalError>;
-    pub fn try_with<R>(self, cx: &dyn BuildContext, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
+    pub fn get(self, ctx: &dyn BuildContext) -> T where T: Clone;  // panics on a stale handle
+    pub fn with<R>(self, ctx: &dyn BuildContext, f: impl FnMut(&T) -> R) -> R;
+    pub fn try_get(self, ctx: &dyn BuildContext) -> Result<T, SignalError>;
+    pub fn try_with<R>(self, ctx: &dyn BuildContext, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
     // outside build: callbacks, tests, UI runtime commands
     pub fn peek<R>(self, r: &Reactive, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
     pub fn set(self, r: &Reactive, value: T) -> Result<(), SignalError>;  // marks readers, equal or not
@@ -137,13 +137,13 @@ impl<T> Signal<T> {
 `SignalError` is `Released`, `ForeignGraph`, `WrittenDuringBuild`, `CreatedDuringBuild`,
 `Reentrant` (`#[non_exhaustive]`).
 
-- **Creation is owned.** The idiom is `cx.signal(value)` from `create_state` (or
+- **Creation is owned.** The idiom is `ctx.signal(value)` from `create_state` (or
   `did_change_dependencies`): the slot is owned by that element and released when it unmounts.
   App-level state uses `Reactive::signal(value)`, released with the UI runtime;
   `Reactive::signal_owned_by(element, value)` is the explicit form. All have `try_` variants.
   Creating a slot inside `build` is `SignalError::CreatedDuringBuild` (one slot per rebuild would
   leak).
-- **`Reactive`** is the UI runtime's graph, reachable as `cx.reactive()` and from the headless driver;
+- **`Reactive`** is the UI runtime's graph, reachable as `ctx.reactive()` and from the headless driver;
   `!Send + !Sync`, lives beside `BuildOwner`, dropped with the UI runtime. Each graph has a
   process-unique id carried by its slots, so a handle used against another UI runtime is
   `SignalError::ForeignGraph`, never a read of someone else's value.
@@ -155,10 +155,10 @@ impl<T> Signal<T> {
 
 ### 5.2 Read-is-subscribe through the existing `BuildContext`
 
-- `ElementBuildContext` knows the building `ElementId`. `Signal::get(cx)` subscribes it,
+- `ElementBuildContext` knows the building `ElementId`. `Signal::get(ctx)` subscribes it,
   appending `slot → element` to the reader set — exactly what `depend_on_inherited` does for a
   provider, with a signal slot in place of a provider node. (ADR-0085 §2 routes this through
-  the context's `ReadScope` and a sink bound to the element; the method `cx.signal_read(slot)`
+  the context's `ReadScope` and a sink bound to the element; the method `ctx.signal_read(slot)`
   it replaced is gone.)
 - Reader sets are **cleared and rebuilt on every build of that element** (Compose's and Solid's
   rule): a build that no longer reads a signal stops depending on it. A build that unwinds
@@ -246,8 +246,8 @@ Unifying the two registries is #1254's question.
 - `InheritedBehavior::dependents` stores `DependentEntry { depth, mask, lifecycle_mask }`;
   `on_view_updated` schedules a dependent only if `mask | lifecycle_mask` intersects the changed
   set. `depend_on::<T, _>` records `FieldSet::ALL` through the same path.
-- Field accessors: `MediaQuery::size_of(cx)`, `text_scale_factor_of`, …, `Theme::color_scheme_of`,
-  `text_theme_of`, and the general `depend_on_fields(cx, mask, f)`; `MediaQuery::of`/`Theme::of`
+- Field accessors: `MediaQuery::size_of(ctx)`, `text_scale_factor_of`, …, `Theme::color_scheme_of`,
+  `text_theme_of`, and the general `depend_on_fields(ctx, mask, f)`; `MediaQuery::of`/`Theme::of`
   keep the whole-provider dependency.
 
 **Mapping decision — reset-on-build (deliberate divergence from Flutter).** Flutter's
@@ -284,17 +284,17 @@ struct CounterState { count: Signal<u32> }
 
 impl StatefulView for Counter {
     type State = CounterState;
-    fn create_state(&self, cx: &dyn LifecycleContext) -> CounterState {
-        CounterState { count: cx.signal(0u32) }              // owned by this element
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> CounterState {
+        CounterState { count: ctx.signal(0u32) }              // owned by this element
     }
 }
 
 impl ViewState<Counter> for CounterState {
-    fn build(&self, _v: &Counter, cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _v: &Counter, ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count;
-        let r = cx.reactive();
+        let r = ctx.reactive();
         Column::new((
-            Text::new(format!("{}", count.get(cx))),         // this element is a reader
+            Text::new(format!("{}", count.get(ctx))),         // this element is a reader
             Button::new("+1").on_tap(move || { let _ = count.update(&r, |c| *c += 1); }),
         ))
     }
@@ -313,7 +313,7 @@ A headless test builds the model with the binding's `reactive()`, writes with
 
 ### 5.7 Rules without hooks
 
-- A signal is created explicitly (`cx.signal(v)` in `create_state`, or `r.signal(v)` at the app
+- A signal is created explicitly (`ctx.signal(v)` in `create_state`, or `r.signal(v)` at the app
   root) and held in a field. There is no `use_signal()` whose identity is its call index; `build`
   may read signals in any order, conditionally, or in loops.
 - `build` stays a pure function of `(View, State, reads)`; reads are recorded, not ordered.

@@ -290,7 +290,7 @@ impl std::fmt::Debug for HandlesView {
 }
 
 impl View for HandlesView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -416,17 +416,17 @@ fn handle(
         .behavior(HitTestBehavior::Opaque)
         .drag(
             DragSlot::pan()
-                .on_start(move |_cx, details| {
+                .on_start(move |_ctx, details| {
                     if let Some(model) = start.upgrade() {
                         model.handle_drag_started(side, details.global_position);
                     }
                 })
-                .on_update(move |_cx, details| {
+                .on_update(move |_ctx, details| {
                     if let Some(model) = update.upgrade() {
                         model.handle_dragged(side, details.global_position);
                     }
                 })
-                .on_end(move |_cx, details| {
+                .on_end(move |_ctx, details| {
                     if let Some(model) = end.upgrade() {
                         // A release ends where the finger lifted, which no
                         // update may have reported yet. The drag ends, and

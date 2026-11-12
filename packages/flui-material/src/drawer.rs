@@ -418,7 +418,7 @@ impl DrawerHandle {
 }
 
 /// Signature for [`DrawerController::on_open_changed`].
-type DrawerCallback = Rc<dyn Fn(&mut EventCx<'_>, bool)>;
+type DrawerCallback = Rc<dyn Fn(&mut EventContext<'_>, bool)>;
 type BoundDrawerCallback = Rc<dyn Fn(bool)>;
 
 /// Provides interactive behavior for [`Drawer`] content: open/close
@@ -486,7 +486,7 @@ impl DrawerController {
     #[must_use]
     pub fn on_open_changed<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
         self.on_open_changed = Some(crate::event_callback::value_callback(callback));
@@ -774,7 +774,7 @@ impl ViewState<DrawerController> for DrawerControllerState {
             .clone()
             .expect("BUG: drawer lifecycle precedes build");
         let callback = view.on_open_changed.clone().map(|callback| {
-            Rc::new(move |opened| writer.write(|cx| callback(cx, opened))) as Rc<dyn Fn(bool)>
+            Rc::new(move |opened| writer.write(|ctx| callback(ctx, opened))) as Rc<dyn Fn(bool)>
         });
         self.core.replace_callback(callback);
 
@@ -802,7 +802,7 @@ impl ViewState<DrawerController> for DrawerControllerState {
 }
 
 impl View for DrawerController {
-    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
         flui_sdk::view::element::ElementKind::stateful(self)
     }
 
@@ -847,11 +847,11 @@ fn drawer_surface(
         GestureDetector::new()
             .drag(
                 DragSlot::horizontal()
-                    .on_down(move |_cx, _details| {
+                    .on_down(move |_ctx, _details| {
                         let _ = down_core.controller.stop();
                     })
-                    .on_update(move |_cx, details| move_core.move_by(details.primary_delta))
-                    .on_end(move |_cx, details| {
+                    .on_update(move |_ctx, details| move_core.move_by(details.primary_delta))
+                    .on_end(move |_ctx, details| {
                         settle_core.settle(match details.reason {
                             GestureEndReason::Completed => {
                                 details.fling_velocity().pixels_per_second.dx
@@ -859,7 +859,7 @@ fn drawer_surface(
                             GestureEndReason::Cancelled => 0.0,
                         });
                     })
-                    .on_cancel(move |_cx| cancel_core.handle_drag_cancel()),
+                    .on_cancel(move |_ctx| cancel_core.handle_drag_cancel()),
             )
             .behavior(if closed {
                 HitTestBehavior::Translucent
@@ -876,7 +876,7 @@ fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl 
     let mut scrim_detector = GestureDetector::new();
     if view.barrier_dismissible {
         let close_core = Rc::clone(core);
-        scrim_detector = scrim_detector.on_tap(move |_cx| close_core.close());
+        scrim_detector = scrim_detector.on_tap(move |_ctx| close_core.close());
     }
     // `Stack` gives a non-positioned child LOOSE constraints (the default
     // `StackFit.loose`) — a bare `ColoredBox` (no size of its own)
@@ -884,17 +884,17 @@ fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl 
     // `SizedBox` needed `f64::INFINITY` above. `SizedBox::expand` clamps to
     // the Stack's own (bounded — the drawer slot is always tight) size, so
     // the scrim genuinely covers, and is tappable across, the whole area.
-    let scrim = scrim_detector.child(FadeTransition::new(
-        Rc::clone(&animation),
-        SizedBox::expand().child(ColoredBox::new(view.scrim_color.unwrap_or(BLACK54))),
-    ));
+    let scrim = scrim_detector.child(
+        FadeTransition::new(Rc::clone(&animation))
+            .child(SizedBox::expand().child(ColoredBox::new(view.scrim_color.unwrap_or(BLACK54)))),
+    );
     let position = Tween::new(
         TranslationFraction::new(-core.direction_factor(), 0.0),
         TranslationFraction::ZERO,
     )
     .animate(animation);
     let panel = Align::new(outer_alignment(view.alignment))
-        .child(SlideTransition::new(Rc::new(position), view.child.clone()));
+        .child(SlideTransition::new(Rc::new(position)).child(view.child.clone()));
 
     DrawerAlignmentScope {
         alignment: view.alignment,

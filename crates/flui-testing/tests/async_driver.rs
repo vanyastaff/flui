@@ -30,12 +30,12 @@ struct Signal {
 impl std::future::Future for Signal {
     type Output = ();
 
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<()> {
+    fn poll(self: std::pin::Pin<&mut Self>, ctx: &mut std::task::Context<'_>) -> Poll<()> {
         self.polls.fetch_add(1, Ordering::Relaxed);
         if self.done.load(Ordering::Acquire) {
             Poll::Ready(())
         } else {
-            let _prev = self.waker.lock().replace(cx.waker().clone());
+            let _prev = self.waker.lock().replace(ctx.waker().clone());
             Poll::Pending
         }
     }
@@ -109,11 +109,11 @@ struct WorkerGate {
 impl WorkerGate {
     fn wait(&self) -> impl std::future::Future<Output = ()> + use<> {
         let gate = self.clone();
-        std::future::poll_fn(move |cx| {
+        std::future::poll_fn(move |ctx| {
             if gate.done.load(Ordering::Acquire) {
                 Poll::Ready(())
             } else {
-                let _previous = gate.waker.lock().replace(cx.waker().clone());
+                let _previous = gate.waker.lock().replace(ctx.waker().clone());
                 Poll::Pending
             }
         })

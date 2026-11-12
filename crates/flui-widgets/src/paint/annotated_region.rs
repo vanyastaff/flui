@@ -81,7 +81,7 @@ impl<T> flui_view::View for AnnotatedRegion<T>
 where
     T: PartialEq + fmt::Debug + Send + Sync + 'static,
 {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }

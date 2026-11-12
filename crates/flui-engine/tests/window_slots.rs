@@ -27,8 +27,12 @@ struct Rig {
 }
 
 fn rig() -> Rig {
+    rig_on(std::rc::Rc::new(flui_foundation::SystemClock))
+}
+
+fn rig_on(clock: std::rc::Rc<dyn flui_foundation::MonotonicClock>) -> Rig {
     let backend = ScriptedSlots::new();
-    let (executor, sender) = RasterExecutor::new(backend.clone(), || {});
+    let (executor, sender) = RasterExecutor::new(backend.clone(), clock, || {});
     let display: Arc<dyn DisplayConnection> = Arc::new(FakeDisplay);
     Rig {
         executor,
@@ -418,6 +422,20 @@ impl flui_engine::SlotBackend for RestoresDuringRender {
     fn reclaim(&mut self, level: flui_foundation::memory::MemoryPressureLevel) {
         self.inner.reclaim(level);
     }
+
+    fn device_lost(&self) -> bool {
+        self.inner.device_lost()
+    }
+
+    fn rebuild_device(
+        &mut self,
+    ) -> flui_engine::EngineResult<Vec<(flui_engine::SlotId, flui_engine::EngineError)>> {
+        self.inner.rebuild_device()
+    }
+
+    fn rebuilds_inline(&self) -> bool {
+        self.inner.rebuilds_inline()
+    }
 }
 
 /// A restore sent from inside a frame that then loses its surface carries the
@@ -436,7 +454,11 @@ fn a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation() {
         inner: inner.clone(),
         restore: std::rc::Rc::clone(&restore),
     };
-    let (executor, sender) = RasterExecutor::new(backend, || {});
+    let (executor, sender) = RasterExecutor::new(
+        backend,
+        std::rc::Rc::new(flui_foundation::SystemClock),
+        || {},
+    );
     let display: Arc<dyn DisplayConnection> = Arc::new(FakeDisplay);
     let factory = noop_surface_factory(display);
     let surface = || {
@@ -504,4 +526,116 @@ fn a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation() {
     let _ = sender.send(frame(required, 1)).expect("accepted");
     let _ = executor.turn();
     assert_eq!(drain(), [(1, RasterVerdict::Presented)]);
+}
+
+/// A window the rebuilt device cannot present to drops its surface: its
+/// record asks the owner for another, with why, and a restore answers it.
+#[test]
+fn a_window_the_rebuilt_device_cannot_present_to_asks_for_a_new_surface() {
+    let mut rig = rig();
+    let (slot, _) = rig.sized_window();
+    rig.backend.lose_device();
+    rig.backend
+        .refuse_on_rebuild(slot, EngineError::IncompatibleSurface);
+    let _ = rig.executor.turn();
+    assert!(
+        rig.sender.record(slot).expect("held").wants_surface,
+        "the owner makes a new surface"
+    );
+    assert!(matches!(
+        rig.sender.take_failure(slot),
+        Some(SlotFailure::Refused(EngineError::IncompatibleSurface))
+    ));
+    let SendReceipt::Configured(restored) = rig.send(RasterCommand::Restore {
+        slot,
+        surface: rig.surface(),
+    }) else {
+        panic!("a restore of a sized window mints a generation");
+    };
+    let _ = rig.frame(slot, restored, 1);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(1, RasterVerdict::Presented)]);
+    assert!(!rig.sender.record(slot).expect("held").wants_surface);
+}
+
+/// A window over the rebuilt device's size limit keeps its surface: its
+/// record holds why and asks for no new surface, and a size that fits
+/// renders again.
+#[test]
+fn a_window_over_the_rebuilt_device_limit_waits_for_a_size_that_fits() {
+    let mut rig = rig();
+    let (slot, _) = rig.sized_window();
+    rig.backend.lose_device();
+    rig.backend.refuse_on_rebuild(
+        slot,
+        EngineError::InvalidTargetSize {
+            width: 32,
+            height: 16,
+        },
+    );
+    let _ = rig.executor.turn();
+    assert!(
+        !rig.sender.record(slot).expect("held").wants_surface,
+        "the surface is kept"
+    );
+    assert!(matches!(
+        rig.sender.take_failure(slot),
+        Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
+    ));
+    let SendReceipt::Configured(resized) = rig.send(RasterCommand::Configure {
+        slot,
+        change: SlotChange::Size(DeviceSize::new(16, 8)),
+    }) else {
+        panic!("a positive size mints a generation");
+    };
+    let _ = rig.frame(slot, resized, 1);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(1, RasterVerdict::Presented)]);
+}
+
+/// A clock that panics once its timeline passes `after`: the owner's code
+/// failing on a read the executor makes.
+#[derive(Debug)]
+struct PanicsPast {
+    clock: flui_foundation::ManualClock,
+    after: std::time::Duration,
+}
+
+impl flui_foundation::MonotonicClock for PanicsPast {
+    fn now(&self) -> std::time::Instant {
+        assert!(self.clock.elapsed() <= self.after, "injected clock panic");
+        flui_foundation::MonotonicClock::now(&self.clock)
+    }
+}
+
+/// A rebuild that succeeds is committed before the executor reads the
+/// owner's clock again: a clock that panics once the slow attempt has ended
+/// cannot drop the refusal the attempt answered, so the window still asks for
+/// a new surface.
+#[test]
+fn a_rebuild_refusal_is_committed_before_the_clock_is_read_again() {
+    let clock = flui_foundation::ManualClock::new();
+    let mut rig = rig_on(std::rc::Rc::new(PanicsPast {
+        clock: clock.clone(),
+        after: std::time::Duration::from_secs(1),
+    }));
+    let (slot, _) = rig.sized_window();
+    rig.backend.lose_device();
+    rig.backend
+        .rebuilds_take(&clock, std::time::Duration::from_secs(2));
+    rig.backend
+        .refuse_on_rebuild(slot, EngineError::IncompatibleSurface);
+    let mut caught = flui_foundation::panic::FirstPanic::new();
+    let _ = caught.contain(|| rig.executor.turn());
+    if let Some(payload) = caught.into_payload() {
+        flui_foundation::panic::discard_payload(payload);
+    }
+    assert!(
+        rig.sender.record(slot).expect("held").wants_surface,
+        "the owner makes a new surface"
+    );
+    assert!(matches!(
+        rig.sender.take_failure(slot),
+        Some(SlotFailure::Refused(EngineError::IncompatibleSurface))
+    ));
 }

@@ -8,13 +8,15 @@
 //!    Without this, a job added without editing that list ran, passed or
 //!    failed, and gated nothing.
 //! 2. EXACTLY THE EXPECTED SKIPS -- which jobs run is decided by `plan`'s
-//!    `lane` alone, and the aggregator recomputes it instead of trusting each
-//!    job's `if:`. Every lane runs `checks` and `plan`; then:
+//!    `lane` and, for the [`ON_DEMAND`] jobs, by the `plan` output each
+//!    names; the aggregator recomputes it instead of trusting each job's
+//!    `if:`. Every lane runs `checks` and `plan`; then:
 //!    - `docs`: nothing else;
 //!    - `tooling`: `deps`;
 //!    - `wide`: `deps` and the `HEAVY_JOBS` list (every Linux job), and
-//!      no native host jobs;
-//!    - `full`: `wide` plus `FULL_JOBS` (additional Linux checks).
+//!      no native host jobs; an on-demand job when its output is `true`;
+//!    - `full`: `wide` plus `FULL_JOBS` (additional Linux checks) and the
+//!      on-demand jobs marked `in_full`.
 //!
 //!    Every other declared job must skip. Any other skip (a drifted `if:`, a
 //!    cancellation) or a job that ran where it should have skipped fails the
@@ -44,6 +46,70 @@ pub(super) const WIDE_CONDITION: &str =
 /// it: they pin `FULL_JOBS` to the jobs it gates.
 #[cfg(test)]
 pub(super) const FULL_CONDITION: &str = "needs.plan.outputs.lane == 'full'";
+
+/// A job a `wide`-lane pull request runs only when `plan` finds its inputs in
+/// the diff, so a pull request that leaves them alone spends nothing on it
+/// (ADR-0303 §9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct OnDemand {
+    pub(super) job: &'static str,
+    /// The `plan` output that asks for it (`true`/`false`); `ci-verify` reads
+    /// it from the environment variable of the same name in capitals.
+    pub(super) output: &'static str,
+    /// Whether the `full` lane runs it too.
+    pub(super) in_full: bool,
+}
+
+/// The on-demand jobs: the trybuild suites when a changed file can change an
+/// expectation, the release size builds when a changed file can move a size
+/// past a code change (`perf --size`), the per-feature clippy of the changed
+/// packages that have features (main's `feature-matrix` runs it over the whole
+/// workspace), and the API contracts when a changed line can change what
+/// `send-positions` reports (a pull request runs that half; `api-closure` stays
+/// on `main`).
+pub(super) const ON_DEMAND: [OnDemand; 4] = [
+    OnDemand {
+        job: "test-trybuild",
+        output: "trybuild_required",
+        in_full: true,
+    },
+    OnDemand {
+        job: "size",
+        output: "size_required",
+        in_full: true,
+    },
+    OnDemand {
+        job: "feature-scope",
+        output: "features_required",
+        in_full: false,
+    },
+    OnDemand {
+        job: "api-contracts",
+        output: "send_positions_required",
+        in_full: true,
+    },
+];
+
+impl OnDemand {
+    /// The job's `if:` in ci.yml; the tests pin each job to it.
+    #[cfg(test)]
+    pub(super) fn condition(&self) -> String {
+        let asked = format!(
+            "needs.plan.outputs.lane == 'wide' && needs.plan.outputs.{} == 'true'",
+            self.output
+        );
+        if self.in_full {
+            format!("needs.plan.outputs.lane == 'full' || ({asked})")
+        } else {
+            asked
+        }
+    }
+
+    /// The environment variable `ci-verify` reads [`Self::output`] from.
+    pub(super) fn env(&self) -> String {
+        self.output.to_uppercase()
+    }
+}
 
 /// One job of ci.yml, as far as the aggregator reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,6 +244,8 @@ pub(super) struct Plan<'a> {
     pub(super) result: Option<&'a str>,
     /// `docs`, `tooling`, `wide` or `full`.
     pub(super) lane: &'a str,
+    /// The [`OnDemand::output`]s `plan` set to `true`.
+    pub(super) asked: BTreeSet<&'static str>,
 }
 
 /// Python-style repr of a string, as the aggregator's messages print it:
@@ -216,6 +284,12 @@ fn planned_runs(plan: &Plan<'_>, lanes: &LaneJobs) -> Option<BTreeSet<String>> {
             runs.extend(lanes.wide.iter().cloned());
             if plan.lane == "full" {
                 runs.extend(lanes.full.iter().cloned());
+            }
+            for on_demand in ON_DEMAND {
+                let full = plan.lane == "full" && on_demand.in_full;
+                if full || (plan.lane == "wide" && plan.asked.contains(on_demand.output)) {
+                    runs.insert(on_demand.job.to_owned());
+                }
             }
         }
         _ => return None,
@@ -367,16 +441,22 @@ mod tests {
     /// Job -> result, for the jobs not at `success`.
     type Results = BTreeMap<String, &'static str>;
 
-    /// What a run looks like: its lane and the event that started it.
+    /// What a run looks like: its lane, the event that started it and the
+    /// on-demand outputs its plan set.
     struct Run<'a> {
         lane: &'a str,
         event: &'a str,
+        asked: &'static [&'static str],
     }
 
     const PR: &str = "pull_request";
 
     fn run(lane: &str) -> Run<'_> {
-        Run { lane, event: PR }
+        Run {
+            lane,
+            event: PR,
+            asked: &[],
+        }
     }
 
     /// Runs the rule with every gated job at `success` unless `results` says otherwise.
@@ -391,6 +471,7 @@ mod tests {
         let plan = Plan {
             result: Some(result_of("plan")),
             lane: r.lane,
+            asked: r.asked.iter().copied().collect(),
         };
         verify(&w.gated, &needs, &w.lanes, &plan, r.event)
     }
@@ -402,6 +483,92 @@ mod tests {
 
     fn names(jobs: &[&str]) -> Vec<String> {
         jobs.iter().map(|&j| j.to_owned()).collect()
+    }
+
+    /// Every [`ON_DEMAND`] job.
+    fn on_demand() -> Vec<String> {
+        ON_DEMAND.iter().map(|d| d.job.to_owned()).collect()
+    }
+
+    /// What a `full` run skips: the on-demand jobs only a pull request runs.
+    fn full_skips() -> Results {
+        let only_pr: Vec<String> = ON_DEMAND
+            .iter()
+            .filter(|d| !d.in_full)
+            .map(|d| d.job.to_owned())
+            .collect();
+        skipping(&only_pr)
+    }
+
+    /// Each on-demand job's `if:` is the one [`planned_runs`] runs it under,
+    /// it is in neither lane list, and the `ci` job hands `ci-verify` the
+    /// output that asks for it.
+    fn on_demand_jobs_are_gated_on_their_output() {
+        let w = workflow();
+        let text = super::super::classify::read_normalised(
+            &crate::util::repo_root().join(".github/workflows/ci.yml"),
+        )
+        .expect("ci.yml");
+        let ci = text.split("\n  ci:\n").nth(1).expect("a `ci` job");
+        for d in ON_DEMAND {
+            let job = w
+                .jobs
+                .iter()
+                .find(|j| j.name == d.job)
+                .unwrap_or_else(|| panic!("ci.yml has `{}`", d.job));
+            assert_eq!(job.condition.as_deref(), Some(d.condition().as_str()));
+            assert!(w.gated.contains(d.job), "{}", d.job);
+            assert!(!w.lanes.wide.contains(d.job) && !w.lanes.full.contains(d.job));
+            let hand_off = format!("{}: ${{{{ needs.plan.outputs.{} }}}}", d.env(), d.output);
+            assert!(ci.contains(&hand_off), "the ci job sets `{hand_off}`");
+        }
+    }
+
+    /// A pull request runs an on-demand job exactly when its plan asked for
+    /// it; `full` runs the ones it holds whatever the plan says.
+    fn an_on_demand_job_runs_exactly_when_asked() {
+        let w = workflow();
+        let quiet = skipping(w.lanes.full.iter().chain(&on_demand()));
+        green(&run("wide"), &quiet);
+        let asked = Run {
+            asked: &["trybuild_required"],
+            ..run("wide")
+        };
+        let trybuild = without(quiet.clone(), "test-trybuild");
+        green(&asked, &trybuild);
+        red(
+            &asked,
+            &quiet,
+            "'test-trybuild': 'skipped, but this plan (lane=wide) requires it to run'",
+        );
+        red(&run("wide"), &trybuild, "'test-trybuild': 'ran (success)");
+        let features = Run {
+            asked: &["features_required"],
+            ..run("wide")
+        };
+        green(&features, &without(quiet.clone(), "feature-scope"));
+        red(&features, &quiet, "'feature-scope': 'skipped");
+        let positions = Run {
+            asked: &["send_positions_required"],
+            ..run("wide")
+        };
+        green(&positions, &without(quiet.clone(), "api-contracts"));
+        red(&positions, &quiet, "'api-contracts': 'skipped");
+        red(
+            &run("wide"),
+            &without(quiet.clone(), "api-contracts"),
+            "'api-contracts': 'ran (success)",
+        );
+        let main = Run {
+            event: "push",
+            ..run("full")
+        };
+        red(&main, &Results::new(), "'feature-scope': 'ran (success)");
+        red(
+            &main,
+            &with(full_skips(), "test-trybuild", "skipped"),
+            "'test-trybuild': 'skipped",
+        );
     }
 
     fn with(mut base: Results, job: &str, result: &'static str) -> Results {
@@ -457,6 +624,7 @@ mod tests {
             .filter(|j| w.gated.contains(&j.name))
             .filter(|j| !["checks", "plan"].contains(&j.name.as_str()))
             .filter(|j| !w.lanes.wide.contains(&j.name) && !w.lanes.full.contains(&j.name))
+            .filter(|j| !ON_DEMAND.iter().any(|d| d.job == j.name))
             .map(|j| (j.name.as_str(), j.condition.as_deref().unwrap_or("")))
             .collect();
         assert_eq!(actual, expected);
@@ -470,7 +638,7 @@ mod tests {
 
     fn wide_lane_skips_platform_jobs() {
         let w = workflow();
-        let wide = skipping(&w.lanes.full);
+        let wide = skipping(w.lanes.full.iter().chain(&on_demand()));
         green(&run("wide"), &wide);
         red(
             &run("wide"),
@@ -485,7 +653,7 @@ mod tests {
             event: "push",
             ..run("full")
         };
-        let full = Results::new();
+        let full = full_skips();
         green(&main, &full);
         red(&main, &with(full.clone(), "miri", "skipped"), "miri");
         red(&main, &with(full.clone(), "test", "failure"), "test");
@@ -536,7 +704,14 @@ mod tests {
 
     fn tooling_and_docs_lanes() {
         let w = workflow();
-        let compiling: Vec<String> = w.lanes.wide.iter().chain(&w.lanes.full).cloned().collect();
+        let compiling: Vec<String> = w
+            .lanes
+            .wide
+            .iter()
+            .chain(&w.lanes.full)
+            .chain(&on_demand())
+            .cloned()
+            .collect();
         let tooling = skipping(&compiling);
         green(&run("tooling"), &tooling);
         red(
@@ -600,6 +775,7 @@ mod tests {
         let plan = Plan {
             result: Some("success"),
             lane: "full",
+            asked: BTreeSet::new(),
         };
         let (ok, log) = verify(&w.gated, &needs, &w.lanes, &plan, "push");
         assert!(!ok);
@@ -622,6 +798,7 @@ mod tests {
         let plan = Plan {
             result: Some("success"),
             lane: "full",
+            asked: BTreeSet::new(),
         };
         let (ok, log) = verify(&gated, &needs, &w.lanes, &plan, "push");
         assert!(!ok && log.contains("'new-job': 'ran (success)"), "{log}");
@@ -631,7 +808,14 @@ mod tests {
         // every job the narrow lane skips did skip, so rule 2 alone is green:
         // only the event's floor catches a plan that under-ran main
         let w = workflow();
-        let whole: Vec<String> = w.lanes.wide.iter().chain(&w.lanes.full).cloned().collect();
+        let whole: Vec<String> = w
+            .lanes
+            .wide
+            .iter()
+            .chain(&w.lanes.full)
+            .chain(&on_demand())
+            .cloned()
+            .collect();
         let tooling = skipping(&whole);
         green(&run("tooling"), &tooling);
         for event in ["push", "merge_group", "workflow_dispatch"] {
@@ -644,7 +828,7 @@ mod tests {
                 &format!("event={event} must take lane full, but plan chose lane='tooling'"),
             );
         }
-        let wide = skipping(&w.lanes.full);
+        let wide = skipping(w.lanes.full.iter().chain(&on_demand()));
         red(
             &Run {
                 event: "push",
@@ -659,7 +843,7 @@ mod tests {
                     event,
                     ..run("full")
                 },
-                &Results::new(),
+                &full_skips(),
             );
         }
     }
@@ -717,6 +901,14 @@ mod tests {
                     wide_lane_skips_platform_jobs as fn(),
                 ),
                 ("full_lane", full_lane as fn()),
+                (
+                    "on_demand_jobs_are_gated_on_their_output",
+                    on_demand_jobs_are_gated_on_their_output as fn(),
+                ),
+                (
+                    "an_on_demand_job_runs_exactly_when_asked",
+                    an_on_demand_job_runs_exactly_when_asked as fn(),
+                ),
                 (
                     "red_main_notifications_have_auth_and_repository_context",
                     red_main_notifications_have_auth_and_repository_context as fn(),

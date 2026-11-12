@@ -5,7 +5,7 @@ use flui::geometry::{Offset, Point, Rect, Size};
 use flui::painting::{Canvas, CustomPainter, DrawOp, Paint};
 use flui::prelude::*;
 use flui::rendering::{
-    BoxConstraints, BoxDryLayoutCtx, BoxLayoutContext, BoxParentData, BoxProtocol, Leaf, PaintCx,
+    BoxConstraints, BoxDryLayoutContext, BoxLayoutContext, BoxParentData, BoxProtocol, Leaf, PaintContext,
     RenderBox, RenderUpdateImpact, Single,
 };
 use flui::testing::widgets::{lay_out, loose};
@@ -207,12 +207,12 @@ impl RenderBox for SolidLeaf {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut BoxDryLayoutCtx<'_>,
+        _ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui::rendering::RenderResult<Size> {
         Ok(constraints.constrain(Size::new(24.0, 16.0)))
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         let size = ctx.size();
         RectanglePainter.paint(ctx.canvas(), size);
         self.paints.fetch_add(1, Ordering::SeqCst);
@@ -271,7 +271,7 @@ impl RenderBox for TransparentProxy {
     flui::rendering::forward_single_child_box_queries!();
     flui::rendering::forward_single_child_box_hit_test!();
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 }
@@ -338,7 +338,7 @@ fn pointer_input_schedules_a_widget_rebuild() {
         let notification = notification.clone();
         let count = count.clone();
         GestureDetector::new()
-            .on_tap(move |_cx| {
+            .on_tap(move |_ctx| {
                 count.fetch_add(1, Ordering::SeqCst);
                 notification.notify_listeners();
             })
@@ -366,7 +366,7 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
     let tree = lay_out(
         GestureDetector::new()
             .drag(flui::widgets::DragSlot::horizontal().on_down(
-                move |_cx, _details: flui::widgets::DragDownDetails| {
+                move |_ctx, _details: flui::widgets::DragDownDetails| {
                     observed.fetch_add(1, Ordering::SeqCst);
                 },
             ))
@@ -700,7 +700,7 @@ impl ViewState<FocusCapabilityView> for FocusCapabilityState {
         let changes = self.0.changes.clone();
         flui::widgets::Focus::new(SizedBox::new(30.0, 30.0))
             .focus_node(self.0.node.clone())
-            .on_focus_change(move |_cx, focused| changes.borrow_mut().push(focused))
+            .on_focus_change(move |_ctx, focused| changes.borrow_mut().push(focused))
     }
 }
 
@@ -851,7 +851,7 @@ fn presentation_lifecycle_capability_is_absent_when_not_installed() {
         &view,
         flui::testing::MountOwners::fresh(),
         flui::testing::MountOptions::loose(100.0)
-            .with_capabilities(flui::testing::BuildCapabilities::AsyncDriverOnly),
+            .capabilities(flui::testing::BuildCapabilities::AsyncDriverOnly),
     );
     assert!(view.initialized.get());
     assert!(view.captured.borrow().is_none());

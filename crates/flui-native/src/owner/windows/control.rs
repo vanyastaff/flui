@@ -534,9 +534,10 @@ impl OwnerControl {
         self.close_signal();
         let address = self.gate.address.lock().take();
         if let Some(address) = address {
-            // SAFETY: native destruction occurs on the recorded owner, outside
-            // the address/state locks. WM_NCDESTROY owns userdata reclamation.
             if self.signal.owner() == std::thread::current().id() {
+                // SAFETY: native destruction occurs on the recorded owner,
+                // outside the address/state locks. WM_NCDESTROY owns userdata
+                // reclamation.
                 if let Err(error) = unsafe { DestroyWindow(HWND(address as *mut _)) } {
                     tracing::error!(%error, "owner message window destruction failed");
                 }

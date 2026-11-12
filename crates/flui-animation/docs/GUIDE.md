@@ -24,7 +24,7 @@ presentation's `FrameTick` through that Vsync registry.
 
 ## Motion preferences
 
-Use `AppConfig::with_motion_override` to choose FollowSystem, Reduce or Full
+Use `AppConfig::motion_override` to choose FollowSystem, Reduce or Full
 for an application. Widgets read the resolved `MediaQuery::motion_of`; they
 do not subscribe to another host preference producer. Under FollowSystem,
 Normal motion takes the host duration scale into account. Preserve motion

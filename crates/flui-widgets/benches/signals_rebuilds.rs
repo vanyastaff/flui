@@ -392,7 +392,7 @@ fn scenarios() -> Vec<Scenario> {
             variant: "B signals",
             laid,
             change: Box::new(move |_, i| {
-                w.write(|cx| row.set(cx, 100 + (i as u32 % 2)))
+                w.write(|ctx| row.set(ctx, 100 + (i as u32 % 2)))
                     .expect("row alive");
             }),
         });
@@ -442,7 +442,7 @@ fn scenarios() -> Vec<Scenario> {
             laid,
             change: Box::new(move |_, i| {
                 let rows = if i % 2 == 0 { LIST_ROWS + 1 } else { LIST_ROWS };
-                w.write(|cx| count.set(cx, rows)).expect("count alive");
+                w.write(|ctx| count.set(ctx, rows)).expect("count alive");
             }),
         });
     }
@@ -483,7 +483,7 @@ fn scenarios() -> Vec<Scenario> {
             variant: "B signals",
             laid,
             change: Box::new(move |_, i| {
-                w.write(|cx| field7.set(cx, 5 + (i % 2) as u32))
+                w.write(|ctx| field7.set(ctx, 5 + (i % 2) as u32))
                     .expect("field alive");
             }),
         });
@@ -513,7 +513,7 @@ fn scenarios() -> Vec<Scenario> {
             variant: "B signals",
             laid,
             change: Box::new(move |_, i| {
-                w.write(|cx| unit.set(cx, 1 + (i as u32 % 2)))
+                w.write(|ctx| unit.set(ctx, 1 + (i as u32 % 2)))
                     .expect("unit alive");
             }),
         });

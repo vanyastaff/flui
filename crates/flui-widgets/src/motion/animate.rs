@@ -518,16 +518,18 @@ impl ViewState<Animate> for AnimateState {
             child = ShimmerMaskTransition::new(Rc::clone(sweep), child).boxed();
         }
         if let Some(turns) = &self.stages.rotate {
-            child = RotationTransition::new(Rc::clone(turns), child).boxed();
+            child = RotationTransition::new(Rc::clone(turns))
+                .child(child)
+                .boxed();
         }
         if let Some(scale) = &self.stages.scale {
-            child = ScaleTransition::new(Rc::clone(scale), child).boxed();
+            child = ScaleTransition::new(Rc::clone(scale)).child(child).boxed();
         }
         if let Some(slide) = &self.stages.slide {
-            child = SlideTransition::new(Rc::clone(slide), child).boxed();
+            child = SlideTransition::new(Rc::clone(slide)).child(child).boxed();
         }
         if let Some(opacity) = &self.stages.fade {
-            child = FadeTransition::new(Rc::clone(opacity), child).boxed();
+            child = FadeTransition::new(Rc::clone(opacity)).child(child).boxed();
         }
         child
     }

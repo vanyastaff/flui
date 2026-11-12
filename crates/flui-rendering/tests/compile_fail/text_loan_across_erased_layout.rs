@@ -15,7 +15,7 @@ impl flui_foundation::inspect::Inspect for RawConsumer { fn kind(&self) -> &'sta
 impl RenderObject<BoxProtocol> for RawConsumer {
     fn perform_layout_raw(
         &mut self,
-        ctx: &mut <BoxProtocol as Protocol>::LayoutCtxErased<'_>,
+        ctx: &mut <BoxProtocol as Protocol>::ErasedLayoutContext<'_>,
     ) -> RenderResult<Size> {
         let mut text = ctx.text()?;
         let size = ctx.layout_child(0, BoxConstraints::new(0.0, 100.0, 0.0, 100.0))?;

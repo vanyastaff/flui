@@ -43,8 +43,8 @@ enum FilledButtonVariant {
 /// use flui_material::FilledButton;
 /// use flui_sdk::widgets::Text;
 ///
-/// let _filled = FilledButton::new(Text::new("Confirm")).on_pressed(|_cx| {});
-/// let _tonal = FilledButton::tonal(Text::new("Confirm")).on_pressed(|_cx| {});
+/// let _filled = FilledButton::new(Text::new("Confirm")).on_pressed(|_ctx| {});
+/// let _tonal = FilledButton::tonal(Text::new("Confirm")).on_pressed(|_ctx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct FilledButton {
@@ -92,7 +92,7 @@ impl FilledButton {
     #[must_use]
     pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_pressed = Some(crate::event_callback::press_callback(callback));
         self

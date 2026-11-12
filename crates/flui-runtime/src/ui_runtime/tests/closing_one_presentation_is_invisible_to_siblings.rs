@@ -111,7 +111,7 @@ impl View for CloseObserver {
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
         Some(&self.key)
     }
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -274,7 +274,7 @@ impl View for KeyedCloseView {
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
         Some(&self.0)
     }
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -447,7 +447,7 @@ impl ViewState<SiblingProbe> for SiblingProbe {
 }
 
 impl View for SiblingProbe {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1514,13 +1514,13 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
             observer_graph.try_signal(12_u32).expect_err("closed graph"),
             flui_view::SignalError::OwnerClosed
         );
-        captured.writer.write(|cx| {
+        captured.writer.write(|ctx| {
             assert_eq!(
-                captured.signal.peek(cx, |value| *value),
+                captured.signal.peek(ctx, |value| *value),
                 Err(flui_view::SignalError::OwnerClosed)
             );
             assert_eq!(
-                captured.writer.check_context(cx),
+                captured.writer.check_context(ctx),
                 Err(flui_view::EventContextError::Detached)
             );
         });
@@ -1536,8 +1536,8 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         );
         let held = Rc::clone(&probe);
         assert_eq!(
-            captured.writer.write(|cx| {
-                flui_view::SignalWriteExt::update(captured.signal, cx, move |value| {
+            captured.writer.write(|ctx| {
+                flui_view::SignalWriteExt::update(captured.signal, ctx, move |value| {
                     let _ = &held;
                     *value
                 })
@@ -1797,7 +1797,7 @@ impl std::future::Future for PanicsOnDropFuture {
 
     fn poll(
         self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
+        _ctx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         std::task::Poll::Pending
     }

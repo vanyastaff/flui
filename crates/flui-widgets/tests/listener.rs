@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use crate::common::{lay_out, tight};
 use flui_interaction::PointerDispatch;
-use flui_view::EventCx;
+use flui_view::EventContext;
 use flui_widgets::prelude::HitTestBehavior;
 use flui_widgets::{Listener, SizedBox};
 
@@ -184,13 +184,13 @@ pub(crate) fn a_press_on_a_list_row_reaches_the_listeners_above_the_list() {
 /// A counter callback + a readable handle.
 fn counter() -> (
     Rc<Cell<usize>>,
-    impl Fn(&mut EventCx<'_>, PointerDispatch<'_>) + 'static,
+    impl Fn(&mut EventContext<'_>, PointerDispatch<'_>) + 'static,
 ) {
     let count = Rc::new(Cell::new(0));
     let in_cb = Rc::clone(&count);
     (
         count,
-        move |_cx: &mut EventCx<'_>, _event: PointerDispatch<'_>| {
+        move |_ctx: &mut EventContext<'_>, _event: PointerDispatch<'_>| {
             in_cb.set(in_cb.get() + 1);
         },
     )
@@ -634,7 +634,7 @@ pub(crate) fn custom_recognizer_competes_through_a_listener() {
     #[derive(Clone)]
     struct Attached(Rc<RefCell<Vec<&'static str>>>);
     impl View for Attached {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateful(self)
         }
     }
@@ -695,7 +695,7 @@ pub(crate) fn custom_recognizer_competes_through_a_listener() {
 // from its render-object context and opens one write per event.
 // ============================================================================
 
-pub(crate) mod event_cx {
+pub(crate) mod event_context {
 
     use crate::common::{ProbeSignals, SignalProbe, lay_out, tight};
     use flui_painting::styling::Color;
@@ -709,7 +709,7 @@ pub(crate) mod event_cx {
     pub(crate) fn a_refused_write_in_a_pointer_callback_is_reported_not_panicked() {
         let probe = SignalProbe::new(|ProbeSignals { released, .. }| {
             Listener::new()
-                .on_pointer_down(move |cx, _dispatch| released.set(cx, 1))
+                .on_pointer_down(move |ctx, _dispatch| released.set(ctx, 1))
                 .child(target())
         });
         let app = lay_out(probe.view(), tight(100.0, 100.0));

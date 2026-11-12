@@ -66,7 +66,7 @@ impl RenderView for PlainLeaf {
 }
 
 impl View for PlainLeaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -97,12 +97,21 @@ impl RenderView for KeyedPlainLeaf {
 }
 
 impl View for KeyedPlainLeaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 
     fn key(&self) -> Option<&dyn ViewKey> {
         Some(&self.key)
+    }
+}
+
+/// A panic payload whose own `Drop` panics.
+struct DropPanics;
+
+impl Drop for DropPanics {
+    fn drop(&mut self) {
+        panic!("induced payload drop panic (lifecycle containment test)");
     }
 }
 
@@ -112,12 +121,15 @@ struct InitStatePanicChild {
     failed_id: Rc<Cell<Option<ElementId>>>,
     init_calls: Rc<Cell<u32>>,
     dispose_calls: Rc<Cell<u32>>,
+    /// Panic with a payload whose own `Drop` panics.
+    payload_drop_panics: bool,
 }
 
 struct InitStatePanicChildState {
     failed_id: Rc<Cell<Option<ElementId>>>,
     init_calls: Rc<Cell<u32>>,
     dispose_calls: Rc<Cell<u32>>,
+    payload_drop_panics: bool,
 }
 
 impl StatefulView for InitStatePanicChild {
@@ -128,6 +140,7 @@ impl StatefulView for InitStatePanicChild {
             failed_id: self.failed_id.clone(),
             init_calls: self.init_calls.clone(),
             dispose_calls: self.dispose_calls.clone(),
+            payload_drop_panics: self.payload_drop_panics,
         }
     }
 }
@@ -136,6 +149,9 @@ impl ViewState<InitStatePanicChild> for InitStatePanicChildState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.failed_id.set(Some(ctx.element_id()));
         self.init_calls.set(self.init_calls.get() + 1);
+        if self.payload_drop_panics {
+            std::panic::panic_any(DropPanics);
+        }
         panic!("induced child init_state panic");
     }
 
@@ -149,7 +165,7 @@ impl ViewState<InitStatePanicChild> for InitStatePanicChildState {
 }
 
 impl View for InitStatePanicChild {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 
@@ -199,7 +215,7 @@ impl RenderView for Row {
 }
 
 impl View for Row {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -254,7 +270,7 @@ impl ViewState<DisposeCounter> for DisposeCounterState {
 }
 
 impl View for DisposeCounter {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 
@@ -315,6 +331,7 @@ pub(crate) fn child_init_state_panic_is_replaced_in_place_and_the_build_scope_co
                     failed_id: failed_id.clone(),
                     init_calls: init_calls.clone(),
                     dispose_calls: dispose_calls.clone(),
+                    payload_drop_panics: false,
                 }
                 .boxed(),
                 KeyedPlainLeaf {
@@ -403,6 +420,55 @@ pub(crate) fn child_init_state_panic_is_replaced_in_place_and_the_build_scope_co
         tree.get(parent).expect("parent stays live").child_ids(),
         children
     );
+}
+
+/// A child's `init_state` that panics with a payload whose own `Drop` panics
+/// is still replaced in place: the payload is destroyed under containment
+/// and the build scope returns.
+pub(crate) fn a_child_init_state_panic_payload_is_destroyed_under_containment() {
+    let failed_id = Rc::new(Cell::new(None));
+    let pipeline = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+    let parent = tree.mount_root_with_pipeline_owner(
+        &Row {
+            children: vec![
+                InitStatePanicChild {
+                    key: GlobalKey::new(),
+                    failed_id: failed_id.clone(),
+                    init_calls: Rc::new(Cell::new(0)),
+                    dispose_calls: Rc::new(Cell::new(0)),
+                    payload_drop_panics: true,
+                }
+                .boxed(),
+            ],
+        },
+        Some(pipeline),
+        &mut owner.element_owner_mut(),
+    );
+    owner.schedule_build_for(parent, 0, RebuildReason::InitialMount);
+
+    owner.build_scope(&mut tree);
+
+    let failed = failed_id.get().expect("init_state records its element id");
+    assert!(tree.get(failed).is_none());
+    let children = tree
+        .get(parent)
+        .expect("parent stays live")
+        .child_ids()
+        .to_vec();
+    assert_eq!(
+        tree.get(children[0])
+            .expect("replacement stays live")
+            .element()
+            .view_type_id(),
+        TypeId::of::<ErrorView>(),
+    );
+    let recovered = owner.take_recovered_panics();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].hook, LifecycleHook::InitState);
 }
 // Inline removal: an unkeyed dispose panic is contained during the
 // id-reconcile that drops the child, and the freed slot never re-disposes.
@@ -609,7 +675,7 @@ impl InheritedView for CountProvider {
 }
 
 impl View for CountProvider {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::inherited(self)
     }
 }
@@ -667,7 +733,7 @@ impl ViewState<DeactivateCounter> for DeactivateCounterState {
 }
 
 impl View for DeactivateCounter {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 
@@ -692,7 +758,7 @@ impl StatelessView for BuildCountingLeaf {
 }
 
 impl View for BuildCountingLeaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }

@@ -5,10 +5,9 @@
 //! view-specific logic while the unified Element handles all common operations.
 
 use flui_rendering::parent_data::SliverSlot;
-use std::{
-    any::TypeId, collections::HashMap, marker::PhantomData, panic::AssertUnwindSafe, rc::Rc,
-};
+use std::{any::TypeId, marker::PhantomData, rc::Rc};
 
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ElementId, Listenable, RenderId};
 
 use super::{
@@ -17,7 +16,7 @@ use super::{
     provided::{Provided, Publication},
 };
 use crate::{
-    context::{BuildContext, BuildCtx, LifecycleContext},
+    context::{BuildContext, LifecycleContext, LiveBuildContext},
     owner::LifecycleHook,
     view::{
         AnimatedView, BoxedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView,
@@ -29,19 +28,19 @@ use crate::{
 ///
 /// During a [`BuildOwner::build_scope`](crate::BuildOwner) drain the owner
 /// carries a [`BuildHandle`](crate::ElementOwner) — a borrowed live view of
-/// the real tree — so the variant resolves to [`BuildCtx`] and ancestor
+/// the real tree — so the variant resolves to [`LiveBuildContext`] and ancestor
 /// walks / `depend_on` hit real nodes (PR-K). A component build outside a
 /// `build_scope` drain is a framework bug: it would otherwise resurrect the
 /// inert `new_minimal` context and make `InheritedView` reads silently fail.
 ///
 /// Holding the concrete value in a local lets the caller hand out a
 /// `&dyn BuildContext` whose borrow outlives the user `build()` closure.
-pub(crate) enum BuildCtxChoice<'a> {
+pub(crate) enum LiveBuildContextChoice<'a> {
     /// Live context over the borrowed real tree (inside `build_scope`).
-    Live(BuildCtx<'a>),
+    Live(LiveBuildContext<'a>),
 }
 
-impl BuildCtxChoice<'_> {
+impl LiveBuildContextChoice<'_> {
     /// Borrow the chosen context as `build` sees it: no presentation
     /// capabilities.
     pub(crate) fn as_ctx(&self) -> &dyn BuildContext {
@@ -96,23 +95,20 @@ pub(super) fn armed_state_hook<V, A>(
     A: ElementArity,
 {
     let sink_start = lifecycle_sink_len(owner);
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a state hook's panic is recorded against its element, then resumed"
-    )]
-    let outcome = std::panic::catch_unwind(AssertUnwindSafe(run));
+    let mut caught = FirstPanic::new();
+    caught.contain(run);
     mark_lifecycle_records(owner, sink_start);
-    if let Err(payload) = outcome {
+    if let Some(payload) = caught.held() {
         owner.record_armed_lifecycle_panic(
             core.self_id(),
             core.creation_site(),
             TypeId::of::<V>(),
             hook,
-            payload.as_ref(),
+            payload,
             context,
         );
-        std::panic::resume_unwind(payload);
     }
+    caught.resume();
 }
 
 /// Creates and initializes a state at its element's first build:
@@ -133,37 +129,32 @@ where
     A: ElementArity,
 {
     let sink_start = lifecycle_sink_len(owner);
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a state's create_state or init_state panic is recorded and the element recovers"
-    )]
-    let outcome = std::panic::catch_unwind(AssertUnwindSafe(create_and_init));
+    let mut caught = FirstPanic::new();
+    let made = caught.contain(create_and_init);
     mark_lifecycle_records(owner, sink_start);
-    match outcome {
-        Ok(state) => state,
-        Err(payload) => {
-            owner.record_armed_lifecycle_panic(
-                core.self_id(),
-                core.creation_site(),
-                TypeId::of::<V>(),
-                LifecycleHook::InitState,
-                payload.as_ref(),
-                context,
-            );
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a released value's destructor panic must not replace the initialization panic"
-            )]
-            if let Some(element) = core.self_id()
-                && let Err(release) = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    owner.release_reactive(element);
-                }))
-            {
-                flui_foundation::panic::discard_payload(release);
-            }
-            std::panic::resume_unwind(payload)
-        }
+    if let Some(state) = made {
+        return state;
     }
+    if let Some(payload) = caught.held() {
+        owner.record_armed_lifecycle_panic(
+            core.self_id(),
+            core.creation_site(),
+            TypeId::of::<V>(),
+            LifecycleHook::InitState,
+            payload,
+            context,
+        );
+    }
+    // A released value's destructor panic is discarded behind the
+    // initialization panic, which stays the first.
+    if let Some(element) = core.self_id() {
+        caught.contain(|| owner.release_reactive(element));
+    }
+    std::panic::resume_unwind(
+        caught
+            .into_payload()
+            .expect("BUG: a state that was not made holds its panic"),
+    )
 }
 
 /// Runs a state's hook on the way out (`deactivate`, `dispose`): a panic is
@@ -179,20 +170,19 @@ pub(super) fn contained_state_hook<V, A>(
     V: Clone + 'static,
     A: ElementArity,
 {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a leaving state's hook panic is recorded; later elements still leave"
-    )]
-    if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(run)) {
+    // Recorded, then destroyed under containment when `caught` drops: later
+    // elements still leave.
+    let mut caught = FirstPanic::new();
+    caught.contain(run);
+    if let Some(payload) = caught.held() {
         owner.record_hook_panic(
             core.self_id(),
             core.creation_site(),
             TypeId::of::<V>(),
             hook,
-            payload.as_ref(),
+            payload,
             context,
         );
-        flui_foundation::panic::discard_payload(payload);
     }
 }
 
@@ -217,14 +207,9 @@ pub(super) fn publish_provided<V, A>(
     A: ElementArity,
 {
     super::behavior_commons::begin_reactive_build(core, owner);
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a provide hook's panic is recorded and the element recovers"
-    )]
-    let published = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        publication.publish(owner, provide);
-    }));
-    if let Err(payload) = published {
+    let mut caught = FirstPanic::new();
+    caught.contain(|| publication.publish(owner, provide));
+    if let Some(payload) = caught.held() {
         if let Some(id) = core.self_id() {
             owner.reactive.end_element_build(id, false);
         }
@@ -233,23 +218,23 @@ pub(super) fn publish_provided<V, A>(
             core.creation_site(),
             TypeId::of::<V>(),
             LifecycleHook::Provide,
-            payload.as_ref(),
+            payload,
             "publishing the element's values",
         );
-        std::panic::resume_unwind(payload);
     }
+    caught.resume();
 }
 
 /// Pick the build context for `core`'s `build()` from `owner`.
 ///
 /// `BuildHandle` is `Copy`, so reading `owner.build_view` lifts the borrowed
 /// tree/sink references (lifetime `'a`, tied to the data — not to this `&`
-/// borrow of `owner`) out cleanly; the returned `BuildCtxChoice<'a>` does not
+/// borrow of `owner`) out cleanly; the returned `LiveBuildContextChoice<'a>` does not
 /// keep `owner` borrowed, so the caller can still pass `owner` on mutably.
 pub(crate) fn make_build_ctx<'a, V, A>(
     core: &ElementCore<V, A>,
     owner: &crate::ElementOwner<'a>,
-) -> BuildCtxChoice<'a>
+) -> LiveBuildContextChoice<'a>
 where
     V: Clone + 'static,
     A: ElementArity,
@@ -282,7 +267,7 @@ where
     // (`ElementNode::element` panics in that window), so a `BuildContext` cannot
     // look itself up. `ElementCore` holds the same `PipelineCell` the node would
     // have.
-    BuildCtxChoice::Live(BuildCtx::new(
+    LiveBuildContextChoice::Live(LiveBuildContext::new(
         element_id,
         tree_depth,
         handle.tree,
@@ -527,6 +512,8 @@ where
     /// built-in stateless behavior therefore reports `NONE`:
     ///
     /// ```
+    /// use std::rc::Rc;
+    ///
     /// use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData};
     /// use flui_foundation::Single;
     /// use flui_view::{BuildContext, ErrorView, IntoView, StatelessView};
@@ -542,7 +529,7 @@ where
     /// }
     ///
     /// let behavior = StatelessBehavior::new();
-    /// let core = ElementCore::<OrdinaryView, Single>::new(OrdinaryView);
+    /// let core = ElementCore::<OrdinaryView, Single>::new(Rc::new(OrdinaryView));
     /// let mut parent_data = BoxParentData::default();
     /// let impact = behavior.apply_parent_data_config(&core, &mut parent_data);
     /// assert_eq!(impact, RenderUpdateImpact::NONE);
@@ -699,12 +686,12 @@ where
         // mutable `owner` reborrow for `build_or_recover` is still free.
         let ctx_choice = make_build_ctx(core, owner);
         let ctx = ctx_choice.as_ctx();
-        // One clone of the view serves `provide` and `build`, taken before the
+        // One handle on the shared view serves `provide` and `build`, taken before the
         // reactive phase is armed: between the two hooks nothing the author
         // wrote runs (no `Clone`, no `Drop`), so the phase `publish_provided`
         // arms is always handed to `build_or_recover_begun`. The children
         // this build returns mount under what is published here.
-        let view = core.view().clone();
+        let view = std::rc::Rc::clone(core.shared_view());
         publish_provided(&mut self.publication, core, owner, |values| {
             view.provide(ctx, values);
         });
@@ -977,12 +964,12 @@ where
             );
             self.apply_pending = false;
         }
-        // One clone of the view serves `provide` and `build`, taken before the
+        // One handle on the shared view serves `provide` and `build`, taken before the
         // reactive phase is armed: between the two hooks nothing the author
         // wrote runs (no `Clone`, no `Drop`), so the phase `publish_provided`
         // arms is always handed to `build_or_recover_begun`. The children
         // this build returns mount under what is published here.
-        let view = core.view().clone();
+        let view = std::rc::Rc::clone(core.shared_view());
         let state = self
             .state
             .as_ref()
@@ -1373,16 +1360,16 @@ use super::provided::Dependents;
 pub struct InheritedBehavior<V: InheritedView> {
     /// Cached data for dependents.
     pub data: V::Data,
-    /// Cached clone of the inherited view itself.
+    /// The inherited view itself, in the core's shared allocation.
     ///
     /// `BuildContext::depend_on_inherited` must hand a `&V` to the
     /// caller's typed callback (the view itself, not just its data). The
     /// unified element's view lives in `ElementCore`, but the
     /// [`InheritedElementAccess`](crate::element::InheritedElementAccess)
     /// trait surface only carries `&mut InheritedBehavior<V>` through
-    /// the behavior-trait routing — so we cache a clone of the view
-    /// here, refreshed on every `on_view_updated`.
-    pub view_cache: V,
+    /// the behavior-trait routing — so the behavior shares the core's
+    /// allocation of the view, refreshed on every `on_view_updated`.
+    view_cache: std::rc::Rc<V>,
     /// Elements that depend on this InheritedElement.
     dependents: Dependents,
     /// Marker for view type.
@@ -1390,12 +1377,12 @@ pub struct InheritedBehavior<V: InheritedView> {
 }
 
 impl<V: InheritedView> InheritedBehavior<V> {
-    /// Create a new InheritedBehavior by extracting data + view clone
-    /// from the source view.
-    pub fn new(view: &V) -> Self {
+    /// Create a new InheritedBehavior by extracting data and sharing the
+    /// source view's allocation.
+    pub fn new(view: &std::rc::Rc<V>) -> Self {
         Self {
             data: view.data().clone(),
-            view_cache: view.clone(),
+            view_cache: std::rc::Rc::clone(view),
             dependents: Dependents::default(),
             _phantom: PhantomData,
         }
@@ -1406,9 +1393,11 @@ impl<V: InheritedView> InheritedBehavior<V> {
         &self.data
     }
 
-    /// Get all dependent elements (id -> depth + fields read).
-    pub fn dependents(&self) -> &HashMap<ElementId, DependentEntry> {
-        self.dependents.map()
+    /// What `dependent` is recorded as reading from this provider, if it
+    /// depends on it.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn dependent(&self, dependent: ElementId) -> Option<&DependentEntry> {
+        self.dependents.get(dependent)
     }
 }
 
@@ -1421,10 +1410,10 @@ where
     }
 
     fn provided(&self, type_id: TypeId) -> Option<crate::element::ProvidedRef<'_>> {
-        // The cached view-clone is the value: the caller's typed downcast
+        // The shared view is the value: the caller's typed downcast
         // (`.downcast_ref::<V>()`) succeeds inside `BuildContextExt::depend_on`.
         (type_id == TypeId::of::<V>()).then_some(crate::element::ProvidedRef {
-            value: &self.view_cache as &dyn std::any::Any,
+            value: &*self.view_cache as &dyn std::any::Any,
             field: None,
         })
     }
@@ -1504,9 +1493,9 @@ where
         old_view: &V,
         owner: &mut crate::ElementOwner<'_>,
     ) {
-        // Refresh cached data + view-clone each update.
+        // Refresh cached data and the shared view each update.
         self.data = core.view().data().clone();
-        self.view_cache = core.view().clone();
+        self.view_cache = std::rc::Rc::clone(core.shared_view());
 
         // Field-granular (#1090): the provider reports WHICH fields changed
         // (`ALL` for a provider that never opted in — the

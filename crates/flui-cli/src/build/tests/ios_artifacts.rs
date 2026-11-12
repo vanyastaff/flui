@@ -174,12 +174,12 @@ fn worker(root: PathBuf, case: &str) {
         root.clone()
     };
     let ctx = BuilderContextBuilder::new(cwd)
-        .with_platform(Platform::Ios {
+        .platform(Platform::Ios {
             targets: selected_targets,
         })
-        .with_profile(Profile::Debug)
-        .with_target(unit)
-        .with_output_dir(root.join("staged"))
+        .profile(Profile::Debug)
+        .target(unit)
+        .output_dir(root.join("staged"))
         .build();
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
     let builder = IosBuilder::new();

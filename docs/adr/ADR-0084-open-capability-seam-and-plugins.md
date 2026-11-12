@@ -55,7 +55,7 @@ The platform side already has more than the widget side can reach:
   It now has a caller: every UI runtime takes the platform clipboard at construction
   (`runner::host::runtime_clipboard`) and installs a `ClipboardHandle` in each presentation's
   build owner, reached through `LifecycleContext::clipboard_handle`. That closed method is the
-  interim route; it is replaced by `cx.capability::<Clipboard>()` when this seam lands, and
+  interim route; it is replaced by `ctx.capability::<Clipboard>()` when this seam lands, and
   `ClipboardHandle` stays the capability's handle, so only the acquisition line in
   `EditableText` changes.
 - **Data transfer.** ADR-0038 §7 names `DataTransferHandle` "a lifecycle capability on
@@ -83,12 +83,12 @@ the registry stood in `crates/flui-view/src/capability/` in place of `flui-platf
   - `capability_erased` on the sealed trait plus the blanket `LifecycleContextExt` compiled.
     `cargo check --workspace --all-targets --all-features` is green, and the 136 sites are
     untouched (a grep counts 138; the extra 2 are doc lines).
-  - Only `ElementBuildContext` and `BuildCtx` implement the method.
-  - A `compile_fail,E0599` doctest covers `cx.capability::<Clipboard>()` on
+  - Only `ElementBuildContext` and `LiveBuildContext` implement the method.
+  - A `compile_fail,E0599` doctest covers `ctx.capability::<Clipboard>()` on
     `&dyn BuildContext`.
   - A crate outside the workspace registered a capability and received it in `init_state`;
     without its plugin it got `NotRegistered`.
-  - 3 of 5 external tests fail when `BuildCtx::capability_erased` ignores the scope.
+  - 3 of 5 external tests fail when `LiveBuildContext::capability_erased` ignores the scope.
 - **Narrower than the success metric.**
   - The fixture depended on `flui-view`, `flui-native` and `flui-types`, not on
     `flui-platform` and `flui-sdk`.
@@ -123,7 +123,7 @@ the registry stood in `crates/flui-view/src/capability/` in place of `flui-platf
   transfer, haptics, file dialogs, camera, share sheets and the like. These are **never**
   methods on `LifecycleContext`. They form an open set, declared by any crate and reached through
   one object-safe method. Platform capabilities come in two classes, core-required and optional
-  (§5); both are reached through the same door, `cx.capability::<C>()`.
+  (§5); both are reached through the same door, `ctx.capability::<C>()`.
 
 ### 2. The seam
 
@@ -200,7 +200,7 @@ impl<T: LifecycleContext + ?Sized> LifecycleContextExt for T {}
 
 `LifecycleContext` stays sealed, so only `flui-view`'s contexts implement `capability_erased`,
 and they forward to the UI runtime. `LifecycleContextExt` is in the prelude. Because the method lives
-on `LifecycleContext`, `cx.capability::<Haptics>()` inside `build` is still a compile error, the
+on `LifecycleContext`, `ctx.capability::<Haptics>()` inside `build` is still a compile error, the
 same `E0599` ADR-0078 relies on. The 136 `&dyn LifecycleContext` sites are untouched.
 
 ### 3. The registry is per UI runtime, a parameter of UI runtime construction
@@ -367,7 +367,7 @@ Everything else is optional: a service some supported platform legitimately lack
 applications use.
 
 **How a capability moves between classes.** Each move is a new ADR that amends this section, and
-the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not change.
+the capability keeps its type `C`, so `ctx.capability::<C>()` call sites do not change.
 
 - *Optional to core-required*, when a Stable-surface widget starts to depend on it and every
   supported backend implements it: the method is added to the backend trait (a breaking change for
@@ -429,7 +429,7 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
   (`crates/flui-app/src/app/application.rs:22`), so this is not a break.
 - The "Platform capability" row of `docs/extending.md` states the classification rule of §5, so a contributor
   adding a capability knows which class to put it in.
-- ADR-0038 §7's `DataTransferHandle` is acquired as `cx.capability::<DataTransfer>()`.
+- ADR-0038 §7's `DataTransferHandle` is acquired as `ctx.capability::<DataTransfer>()`.
 - Registered capabilities are data the UI runtime can list; ADR-0095's protocol can expose that list
   to tools and agents.
 - The seam depends on ADR-0082 (for `flui-platform`) and ADR-0083 (for the UI runtime's
@@ -444,7 +444,7 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
 
 | Test | What it asserts | Why it fails today |
 |---|---|---|
-| `compile_fail,E0599`: `cx.capability::<C>()` on `&dyn BuildContext`, plus a compiling twin on `&dyn LifecycleContext` (prototype) | The build/lifecycle split holds | No seam |
+| `compile_fail,E0599`: `ctx.capability::<C>()` on `&dyn BuildContext`, plus a compiling twin on `&dyn LifecycleContext` (prototype) | The build/lifecycle split holds | No seam |
 | `cargo check --workspace --all-targets --all-features` (prototype) | The 136 `&dyn LifecycleContext` sites are unaffected | — |
 | An out-of-workspace fixture on **`flui-platform` and `flui-sdk` only**: `a_plugin_capability_reaches_init_state`, `without_the_plugin_the_capability_is_not_registered` | A third-party capability is declared, registered through a plugin and acquired in `init_state`; without the plugin it is `NotRegistered`. Still outstanding: the prototype used stand-ins | The crates do not exist |
 | `a_capability_conflict_fails_run_before_any_window_opens` (`flui-app`, headless runner) | `Application::run` returns `Err(AppRunError::CapabilityConflict(..))` with `first: Plugin(a)`, `second: Plugin(b)`, and zero windows opened | No plugin API; the prototype's quit path was never run |

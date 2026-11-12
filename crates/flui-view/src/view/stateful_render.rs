@@ -40,16 +40,16 @@ pub trait StatefulRenderView: Clone + 'static + Sized {
     type State: RenderViewState<Self>;
 
     /// Creates the state, once, at the element's first build and right
-    /// before `init_state`, from the view the element holds then. `cx` is
+    /// before `init_state`, from the view the element holds then. `ctx` is
     /// the context `init_state` receives: the state's signals and the
     /// capabilities it keeps are created here, as in
     /// [`StatefulView::create_state`](crate::StatefulView::create_state). A
     /// panic here or in `init_state` drops the state and releases its
     /// signals; the next build creates it again.
-    fn create_state(&self, cx: &dyn LifecycleContext) -> Self::State;
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State;
 
     /// Creates the render object, once, when the element mounts.
-    fn create_render_object(&self, cx: &RenderObjectContext<'_>) -> Self::RenderObject;
+    fn create_render_object(&self, ctx: &RenderObjectContext<'_>) -> Self::RenderObject;
 
     /// Releases what the render object holds in the owner's runtime, such as
     /// the targets registered for it, before it is removed from the render
@@ -58,7 +58,7 @@ pub trait StatefulRenderView: Clone + 'static + Sized {
     /// registered is released either way.
     fn did_unmount_render_object(
         &self,
-        _cx: &RenderObjectContext<'_>,
+        _ctx: &RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
     ) {
     }
@@ -89,11 +89,11 @@ pub trait StatefulRenderView: Clone + 'static + Sized {
 pub trait RenderViewState<V: StatefulRenderView>: 'static {
     /// Called once, at the element's first build. Presentation capabilities
     /// are acquired here or in `did_change_dependencies` (ADR-0078).
-    fn init_state(&mut self, _cx: &dyn LifecycleContext) {}
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {}
 
     /// Called when an inherited value this state read in a lifecycle hook
     /// changed.
-    fn did_change_dependencies(&mut self, _cx: &dyn LifecycleContext) {}
+    fn did_change_dependencies(&mut self, _ctx: &dyn LifecycleContext) {}
 
     /// Called when the parent replaced the view.
     fn did_update_view(&mut self, _old: &V, _new: &V) {}
@@ -103,19 +103,19 @@ pub trait RenderViewState<V: StatefulRenderView>: 'static {
     fn update_render_object(
         &self,
         view: &V,
-        cx: &RenderObjectContext<'_>,
+        ctx: &RenderObjectContext<'_>,
         render_object: &mut V::RenderObject,
     ) -> RenderUpdateImpact;
 
     /// Publishes values to the subtree, as [`ViewState::provide`] does.
     ///
     /// [`ViewState::provide`]: crate::ViewState::provide
-    fn provide(&self, view: &V, cx: &dyn BuildContext, values: &mut crate::Provided<'_>) {
-        let _ = (view, cx, values);
+    fn provide(&self, view: &V, ctx: &dyn BuildContext, values: &mut crate::Provided<'_>) {
+        let _ = (view, ctx, values);
     }
 
     /// Builds the render object's child.
-    fn child(&self, view: &V, cx: &dyn BuildContext) -> impl IntoView;
+    fn child(&self, view: &V, ctx: &dyn BuildContext) -> impl IntoView;
 
     /// Called when the element leaves the tree and may return in the same
     /// frame.
@@ -140,14 +140,14 @@ pub trait RenderViewState<V: StatefulRenderView>: 'static {
 macro_rules! impl_stateful_render_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> $crate::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> $crate::element::ElementKind {
                 $crate::element::ElementKind::stateful_render(self)
             }
         }
     };
     ($ty:ty, site = $field:ident) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> $crate::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> $crate::element::ElementKind {
                 $crate::element::ElementKind::stateful_render(self)
             }
 

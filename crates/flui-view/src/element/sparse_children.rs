@@ -11,10 +11,10 @@
 //! from parent-data alone (ADR-0003), so children may be attached in any order —
 //! there is no insertion cursor.
 
-use std::any::{Any, TypeId};
+use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::panic::AssertUnwindSafe;
 
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ElementId, RenderId, SaltedKey, ViewKey};
 use flui_rendering::pipeline::PipelineCell;
 
@@ -704,23 +704,6 @@ pub(crate) fn replace_failed_resident(
     replacement
 }
 
-/// Call `builder(index)` under a panic boundary, with no recovery or
-/// reporting of its own — the raw window every caller of the item builder
-/// shares. `Err` carries the unconverted panic payload so each caller builds
-/// its own `FrameworkError`/`RecoveredPanic` exactly once, instead of the
-/// payload being converted here and thrown away by a caller that does not
-/// want it (the count probes).
-fn try_build_item(
-    builder: &dyn Fn(usize) -> Option<BoxedView>,
-    index: usize,
-) -> Result<Option<BoxedView>, Box<dyn Any + Send>> {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a user item builder's panic is handed back to be recorded once"
-    )]
-    std::panic::catch_unwind(AssertUnwindSafe(|| builder(index)))
-}
-
 /// Whether `builder` yields an item at `index`, for `sliver_adaptor.rs`'s two
 /// COUNT-PROBE callers (`regrown_item_count` and `probe_item_count`), which
 /// build the view and discard it purely to learn whether an index exists.
@@ -737,15 +720,12 @@ fn try_build_item(
 /// caller) — which DOES report it — or it is never mounted at all (an index
 /// past the retained band), in which case there is no production content
 /// this panic ever affected. Reporting it here too would count one failing
-/// builder as two failures for the indices that go on to be mounted.
+/// builder as two failures for the indices that go on to be mounted. Its
+/// payload is destroyed under containment.
 pub(crate) fn item_exists(builder: &dyn Fn(usize) -> Option<BoxedView>, index: usize) -> bool {
-    match try_build_item(builder, index) {
-        Ok(view) => view.is_some(),
-        Err(payload) => {
-            flui_foundation::panic::discard_payload(payload);
-            true
-        }
-    }
+    FirstPanic::new()
+        .contain(|| builder(index))
+        .is_none_or(|view| view.is_some())
 }
 
 /// Build the item at `index` through `builder`, substituting the registered
@@ -774,24 +754,27 @@ pub(crate) fn build_item_or_report(
     host_view_type_id: TypeId,
     owner: &mut ElementOwner<'_>,
 ) -> Option<BoxedView> {
-    match try_build_item(builder, index) {
-        Ok(view) => view,
-        Err(payload) => {
-            let panic = RecoveredPanic::from_payload(
-                RecoveredAt::LazyDelegate {
-                    host,
-                    index: Some(index),
-                },
-                host_view_type_id,
-                LifecycleHook::Build,
-                payload.as_ref(),
-                format!("building lazy sliver child {index}"),
-            );
-            let substitute = recovery_view_for(&panic.error, owner.capabilities.error_view_builder);
-            owner.push_recovered_panic(panic);
-            Some(substitute)
-        }
-    }
+    let mut caught = FirstPanic::new();
+    let built = caught.contain(|| builder(index));
+    let Some(payload) = caught.held() else {
+        return built.flatten();
+    };
+    let panic = RecoveredPanic::from_payload(
+        RecoveredAt::LazyDelegate {
+            host,
+            index: Some(index),
+        },
+        host_view_type_id,
+        LifecycleHook::Build,
+        payload,
+        format!("building lazy sliver child {index}"),
+    );
+    // Classified, the payload is destroyed under containment before the
+    // error-view factory, which is user code, runs.
+    drop(caught);
+    let substitute = recovery_view_for(&panic.error, owner.capabilities.error_view_builder);
+    owner.push_recovered_panic(panic);
+    Some(substitute)
 }
 
 /// Consult a user `find_index_by_key` callback under the same panic boundary
@@ -805,23 +788,20 @@ fn find_index_or_none(
     host_view_type_id: TypeId,
     owner: &mut ElementOwner<'_>,
 ) -> Option<usize> {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a user key finder's panic is recorded and the lookup yields none"
-    )]
-    match std::panic::catch_unwind(AssertUnwindSafe(|| find(key))) {
-        Ok(index) => index,
-        Err(payload) => {
-            owner.push_recovered_panic(RecoveredPanic::from_payload(
-                RecoveredAt::LazyDelegate { host, index: None },
-                host_view_type_id,
-                LifecycleHook::LazyIndexLookup,
-                payload.as_ref(),
-                "resolving a lazy sliver child index by key",
-            ));
-            None
-        }
+    // A key finder's panic is recorded, its payload destroyed under
+    // containment, and the lookup yields none.
+    let mut caught = FirstPanic::new();
+    let found = caught.contain(|| find(key));
+    if let Some(payload) = caught.held() {
+        owner.push_recovered_panic(RecoveredPanic::from_payload(
+            RecoveredAt::LazyDelegate { host, index: None },
+            host_view_type_id,
+            LifecycleHook::LazyIndexLookup,
+            payload,
+            "resolving a lazy sliver child index by key",
+        ));
     }
+    found.flatten()
 }
 
 /// Whether `existing`'s live element can be updated in place by `new`.

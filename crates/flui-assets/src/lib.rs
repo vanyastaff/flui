@@ -22,7 +22,7 @@
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a registry
-//! let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+//! let registry = AssetRegistryBuilder::new().default_capacity().build();
 //!
 //! // Load a font
 //! let font = FontAsset::file("assets/font.ttf");
@@ -54,7 +54,7 @@
 //!
 //! // ✅ This compiles
 //! let registry = AssetRegistryBuilder::new()
-//!     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity")))
+//!     .capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity")))
 //!     .build();
 //!
 //! // ❌ This doesn't compile - cannot build without capacity
@@ -70,7 +70,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! # let registry = flui_assets::AssetRegistryBuilder::new().with_default_capacity().build();
+//! # let registry = flui_assets::AssetRegistryBuilder::new().default_capacity().build();
 //! # let font = FontAsset::file("assets/font.ttf");
 //! let handle = registry.load(font).await?;
 //!

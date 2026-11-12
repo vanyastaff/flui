@@ -1,0 +1,27 @@
+error[E0277]: `(dyn Platform + 'static)` cannot be shared between threads safely
+ --> tests/ui/platform_is_not_send.rs:9:19
+  |
+9 |     assert_send::<Arc<dyn Platform>>();
+  |                   ^^^^^^^^^^^^^^^^^ `(dyn Platform + 'static)` cannot be shared between threads safely
+  |
+  = help: the trait `Sync` is not implemented for `(dyn Platform + 'static)`
+  = note: required for `Arc<(dyn Platform + 'static)>` to implement `Send`
+note: required by a bound in `assert_send`
+ --> tests/ui/platform_is_not_send.rs:4:19
+  |
+4 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `(dyn Platform + 'static)` cannot be sent between threads safely
+ --> tests/ui/platform_is_not_send.rs:9:19
+  |
+9 |     assert_send::<Arc<dyn Platform>>();
+  |                   ^^^^^^^^^^^^^^^^^ `(dyn Platform + 'static)` cannot be sent between threads safely
+  |
+  = help: the trait `Send` is not implemented for `(dyn Platform + 'static)`
+  = note: required for `Arc<(dyn Platform + 'static)>` to implement `Send`
+note: required by a bound in `assert_send`
+ --> tests/ui/platform_is_not_send.rs:4:19
+  |
+4 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`

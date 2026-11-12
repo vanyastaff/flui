@@ -38,7 +38,7 @@ impl StatelessView for Spacer {
 }
 
 impl View for Spacer {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -91,7 +91,7 @@ impl ViewState<KeyedCounter> for KeyedCounterState {
 }
 
 impl View for KeyedCounter {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 
@@ -139,7 +139,7 @@ impl flui_view::RenderView for DuplicateHost {
 
 #[cfg(debug_assertions)]
 impl View for DuplicateHost {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }

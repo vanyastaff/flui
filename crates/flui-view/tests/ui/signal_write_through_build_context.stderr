@@ -7,16 +7,16 @@ error[E0277]: `dyn flui_view::BuildContext` cannot write a signal
   |                   required by a bound introduced by this call
   |
   = help: the trait `WriteTarget` is not implemented for `dyn flui_view::BuildContext`
-  = note: a signal write takes the `&mut EventCx` an event callback receives: `move |cx| count.set(cx, v)`
-  = note: outside a callback, acquire a `WriterSource` in `init_state` and call `source.write(|cx| ..)`; `build` has none
+  = note: a signal write takes the `&mut EventContext` an event callback receives: `move |ctx| count.set(ctx, v)`
+  = note: outside a callback, acquire a `WriterSource` in `init_state` and call `source.write(|ctx| ..)`; `build` has none
 help: the following other types implement trait `WriteTarget`
  --> src/reactive/writer.rs
   |
   | impl WriteTarget for Writer {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Writer`
 ...
-  | impl WriteTarget for EventCx<'_> {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `EventCx<'_>`
+  | impl WriteTarget for EventContext<'_> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `EventContext<'_>`
 note: required by a bound in `set`
  --> src/reactive/mod.rs
   |

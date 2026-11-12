@@ -65,8 +65,8 @@ mod cases {
 
     fn hidden() -> WindowOptions {
         WindowOptions::default()
-            .with_title("os extensions")
-            .with_visible(false)
+            .title("os extensions")
+            .visible(false)
     }
 
     /// Runs `check` on a window of each host other than the OS's own, naming
@@ -126,14 +126,14 @@ mod cases {
             (WindowsCornerPreference::DoNotRound, WindowsTheme::Dark),
             (WindowsCornerPreference::RoundSmall, WindowsTheme::Light),
         ] {
-            let options = OsWindowOptions::default().with_windows(
+            let options = OsWindowOptions::default().windows(
                 Win32WindowOptions::default()
-                    .with_corner_preference(corners)
-                    .with_theme(theme),
+                    .corner_preference(corners)
+                    .theme(theme),
             );
             let window = platform
                 .open_window(
-                    hidden().with_os_options(options),
+                    hidden().os_options(options),
                     flui_testing::window_handler::RecordingWindowHandler::new(),
                 )
                 .expect("a Win32 window opens");

@@ -62,7 +62,7 @@ type PageBuilder<R> = Rc<dyn Fn(&R, &dyn BuildContext) -> BoxedView>;
 ///     }
 /// }
 ///
-/// let router = Router::new(AppRoute::Home, |route: &AppRoute, _cx| match route {
+/// let router = Router::new(AppRoute::Home, |route: &AppRoute, _ctx| match route {
 ///     AppRoute::Home => Text::new("Home").into_view().boxed(),
 ///     AppRoute::About => Text::new("About").into_view().boxed(),
 /// });
@@ -222,21 +222,21 @@ impl<R: Routable> Router<R> {
     ///
     /// ```compile_fail,E0308
     /// # use flui_widgets::prelude::*; use flui_widgets::{Router, Routable};
-    /// fn acquire_handle<R: Routable>(cx: &dyn BuildContext) { let _ = Router::<R>::handle(cx); }
+    /// fn acquire_handle<R: Routable>(ctx: &dyn BuildContext) { let _ = Router::<R>::handle(ctx); }
     /// ```
     ///
     /// while the same call from a lifecycle context does:
     ///
     /// ```
     /// # use flui_widgets::prelude::*; use flui_widgets::{Router, Routable};
-    /// fn acquire_handle<R: Routable>(cx: &dyn LifecycleContext) { let _ = Router::<R>::handle(cx); }
+    /// fn acquire_handle<R: Routable>(ctx: &dyn LifecycleContext) { let _ = Router::<R>::handle(ctx); }
     /// ```
     ///
     /// # Errors
     ///
-    /// [`RouterError::NoRouter`] when no `Router<R>` is above `cx`.
-    pub fn handle(cx: &dyn LifecycleContext) -> Result<RouterHandle<R>, RouterError> {
-        cx.find_state::<RouterState<R>, _>(|state| RouterHandle::new(Rc::clone(&state.shared)))
+    /// [`RouterError::NoRouter`] when no `Router<R>` is above `ctx`.
+    pub fn handle(ctx: &dyn LifecycleContext) -> Result<RouterHandle<R>, RouterError> {
+        ctx.find_state::<RouterState<R>, _>(|state| RouterHandle::new(Rc::clone(&state.shared)))
             .ok_or(RouterError::NoRouter {
                 route_type: type_name::<R>(),
             })
@@ -244,7 +244,7 @@ impl<R: Routable> Router<R> {
 }
 
 impl<R: Routable> View for Router<R> {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -331,7 +331,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     /// this router's handle, the facade, a back gesture or a barrier — reaches
     /// the stack; then seed the initial pages, which the navigator flushes
     /// once when it mounts.
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.mounted.set(true);
         self.shared
             .navigator
@@ -339,7 +339,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
         self.seed_initial_pages();
         // The stack it opens on is not a change.
         let announcer = &self.shared.announcer;
-        *announcer.driver.borrow_mut() = cx.async_driver();
+        *announcer.driver.borrow_mut() = ctx.async_driver();
         *announcer.told.borrow_mut() = self.shared.page_ids();
         // An unmounted router tells nobody again. Its queued delivery and its
         // listeners go at the unmount, not with the shared state: a listener
@@ -347,7 +347,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
         // The delivery goes first, so a listener capture's `Drop` that panics
         // leaves nothing queued.
         let shared = Rc::downgrade(&*self.shared);
-        cx.on_unmount(Box::new(move || {
+        ctx.on_unmount(Box::new(move || {
             let Some(shared) = shared.upgrade() else {
                 return;
             };
@@ -360,7 +360,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
         .forget();
     }
 
-    fn build(&self, _view: &Router<R>, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Router<R>, _ctx: &dyn BuildContext) -> impl IntoView {
         Navigator::new(self.shared.navigator.clone())
     }
 
@@ -474,7 +474,7 @@ impl<R: Routable> RouterShared<R> {
         let builder = Terminal::new(Rc::clone(&self.page));
         let value = Terminal::new(route.clone());
         let label = route.semantics_label();
-        let mut page = PageRoute::<T>::new(move |cx, _animation, _secondary| {
+        let mut page = PageRoute::<T>::new(move |ctx, _animation, _secondary| {
             let page = builder.borrow().clone();
             let mut semantics = Semantics::new()
                 .scopes_route(true)
@@ -482,16 +482,16 @@ impl<R: Routable> RouterShared<R> {
             if let Some(label) = &label {
                 semantics = semantics.names_route(true).label(label.clone());
             }
-            semantics.child(page(&value, cx)).boxed()
+            semantics.child(page(&value, ctx)).boxed()
         })
         .named(route.to_path().as_str());
         // Read at each build, so new transitions reach this page; with none,
         // the page's own default, a jump cut.
         let transitions = Terminal::new(Rc::clone(&self.transitions));
-        page = page.transitions(move |cx, animation, secondary, child| {
+        page = page.transitions(move |ctx, animation, secondary, child| {
             let current = transitions.borrow().clone();
             match current {
-                Some(transitions) => transitions(cx, animation, secondary, child),
+                Some(transitions) => transitions(ctx, animation, secondary, child),
                 None => child,
             }
         });

@@ -474,9 +474,9 @@ impl SelectionModel {
         let writer = self.writer.borrow().clone();
         if let Some(writer) = writer {
             failure.contain(|| {
-                writer.write(|cx| {
+                writer.write(|ctx| {
                     self.commit(
-                        cx,
+                        ctx,
                         selection.as_ref(),
                         SelectionChangeCause::User(input),
                         caret,
@@ -628,7 +628,7 @@ impl SelectionModel {
     }
 
     /// Select every presented text whole.
-    fn select_all(&self, cx: &mut EventCx<'_>) -> ActionOutcome {
+    fn select_all(&self, ctx: &mut EventContext<'_>) -> ActionOutcome {
         let ordered = self.ordered();
         let (Some(first), Some(last)) = (ordered.first(), ordered.last()) else {
             return ActionOutcome::NotPerformed;
@@ -637,7 +637,7 @@ impl SelectionModel {
             DocumentPosition::new(first.entry.anchor.clone(), 0),
             DocumentPosition::new(last.entry.anchor.clone(), last.shown),
         );
-        self.select(cx, Some(&selection), SelectionInput::Keyboard);
+        self.select(ctx, Some(&selection), SelectionInput::Keyboard);
         ActionOutcome::Performed
     }
 
@@ -663,7 +663,7 @@ impl SelectionModel {
     /// character, by word with the platform's word modifier, to the line's
     /// edge, or a line up or down, crossing into the neighbouring text at an
     /// edge. Any key takes a touch's toolbar away.
-    pub(super) fn key(&self, cx: &mut EventCx<'_>, event: &KeyEvent) -> KeyEventResult {
+    pub(super) fn key(&self, ctx: &mut EventContext<'_>, event: &KeyEvent) -> KeyEventResult {
         if event.state() != KeyState::Down {
             return KeyEventResult::Ignored;
         }
@@ -739,7 +739,7 @@ impl SelectionModel {
         if let Some(focus) = focus {
             let selection = DocumentSelection::new(selection.anchor().clone(), focus);
             self.commit(
-                cx,
+                ctx,
                 Some(&selection),
                 SelectionChangeCause::User(SelectionInput::Keyboard),
                 next_memory,
@@ -853,10 +853,10 @@ fn line_of(lines: &[LineMetrics], byte: usize, upstream: bool) -> Option<&LineMe
 pub(super) struct AreaAction(pub(super) Weak<SelectionModel>);
 
 impl Action<SelectAllTextIntent> for AreaAction {
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &SelectAllTextIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &SelectAllTextIntent) -> ActionOutcome {
         self.0
             .upgrade()
-            .map_or(ActionOutcome::NotPerformed, |model| model.select_all(cx))
+            .map_or(ActionOutcome::NotPerformed, |model| model.select_all(ctx))
     }
 }
 
@@ -869,7 +869,11 @@ impl Action<CopySelectionTextIntent> for AreaAction {
                 .is_some_and(|model| model.selection.borrow().is_some())
     }
 
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &CopySelectionTextIntent) -> ActionOutcome {
+    fn invoke(
+        &self,
+        _ctx: &mut EventContext<'_>,
+        _intent: &CopySelectionTextIntent,
+    ) -> ActionOutcome {
         self.0
             .upgrade()
             .map_or(ActionOutcome::NotPerformed, |model| model.copy())
@@ -902,13 +906,13 @@ impl Action<DismissIntent> for AreaDismiss {
                 .is_some_and(|enclosing| enclosing.is_enabled(intent))
     }
 
-    fn invoke(&self, cx: &mut EventCx<'_>, intent: &DismissIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventContext<'_>, intent: &DismissIntent) -> ActionOutcome {
         if let Some(model) = self.selecting() {
-            model.select(cx, None, SelectionInput::Keyboard);
+            model.select(ctx, None, SelectionInput::Keyboard);
             return ActionOutcome::Performed;
         }
         match &self.enclosing {
-            Some(enclosing) if enclosing.is_enabled(intent) => enclosing.invoke(cx, intent),
+            Some(enclosing) if enclosing.is_enabled(intent) => enclosing.invoke(ctx, intent),
             _ => ActionOutcome::NotPerformed,
         }
     }
@@ -930,7 +934,7 @@ impl std::fmt::Debug for SelectionGestures {
 }
 
 impl View for SelectionGestures {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1075,7 +1079,7 @@ impl SelectionGesturesState {
                     };
                     let writer = model.writer.borrow().clone();
                     if let Some(writer) = writer {
-                        writer.write(|cx| model.secondary_tapped(cx, details.global_position));
+                        writer.write(|ctx| model.secondary_tapped(ctx, details.global_position));
                     }
                 })
                 .build()
@@ -1159,7 +1163,7 @@ impl ViewState<SelectionGestures> for SelectionGesturesState {
         // start in a margin.
         let listener = Listener::new()
             .behavior(HitTestBehavior::Translucent)
-            .on_pointer_down(move |_cx, dispatch| {
+            .on_pointer_down(move |_ctx, dispatch| {
                 if let (Some(model), PointerEvent::Down(press)) = (shift.upgrade(), dispatch.local)
                 {
                     model

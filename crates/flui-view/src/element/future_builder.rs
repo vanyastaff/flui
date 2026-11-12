@@ -148,7 +148,7 @@ where
     /// It is applied **only** at
     /// `init_state`; a later key change does not re-apply it.
     #[must_use]
-    pub fn with_initial_data(mut self, initial_data: InitialDataFactory<T>) -> Self {
+    pub fn initial_data(mut self, initial_data: InitialDataFactory<T>) -> Self {
         self.initial_data = Some(initial_data);
         self
     }
@@ -185,7 +185,7 @@ where
     T: 'static,
     E: 'static,
 {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::stateful(self)
     }
 }
@@ -395,12 +395,12 @@ mod tests {
     impl Future for Controlled {
         type Output = Result<Payload, Boom>;
 
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
             let result = self.result.lock().take();
             if let Some(result) = result {
                 Poll::Ready(result)
             } else {
-                let _prev = self.waker.lock().replace(cx.waker().clone());
+                let _prev = self.waker.lock().replace(ctx.waker().clone());
                 Poll::Pending
             }
         }

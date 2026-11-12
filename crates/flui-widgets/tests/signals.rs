@@ -121,7 +121,7 @@ impl ViewState<WriterInBuild> for WriterInBuildState {
         let sig = self.view.sig;
         self.view
             .outcome
-            .set(Some(writer.write(|cx| sig.set(cx, 99))));
+            .set(Some(writer.write(|ctx| sig.set(ctx, 99))));
         // Same for a slot creation in build.
         self.view
             .created
@@ -153,7 +153,7 @@ pub(crate) fn writing_a_signal_rebuilds_exactly_its_readers() {
     assert_eq!(r.readers_of(a.slot()).len(), 1, "one element reads a");
     assert_eq!(r.readers_of(b.slot()).len(), 1, "one element reads b");
 
-    w.write(|cx| a.set(cx, 30)).unwrap();
+    w.write(|ctx| a.set(ctx, 30)).unwrap();
     laid.tick();
 
     assert_eq!(
@@ -171,7 +171,7 @@ pub(crate) fn writing_a_signal_rebuilds_exactly_its_readers() {
     assert_eq!(laid.size(laid.child(root, 1)), size(20.0, 20.0));
 
     // Equality is opt-in: an equal plain write still rebuilds the reader.
-    w.write(|cx| a.set(cx, 30)).unwrap();
+    w.write(|ctx| a.set(ctx, 30)).unwrap();
     laid.tick();
     assert_eq!(
         count(&builds_a),
@@ -179,7 +179,7 @@ pub(crate) fn writing_a_signal_rebuilds_exactly_its_readers() {
         "a plain equal write marks readers"
     );
 
-    assert!(!w.write(|cx| a.set_if_changed(cx, 30)).unwrap());
+    assert!(!w.write(|ctx| a.set_if_changed(ctx, 30)).unwrap());
     laid.tick();
     assert_eq!(
         count(&builds_a),
@@ -198,16 +198,16 @@ struct OrderedReader {
 }
 
 impl StatelessView for OrderedReader {
-    fn build(&self, cx: &dyn BuildContext) -> impl IntoView {
-        let _ = self.sig.get(cx);
-        let _ = cx.depend_on::<Level, _>(|level| level.value);
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let _ = self.sig.get(ctx);
+        let _ = ctx.depend_on::<Level, _>(|level| level.value);
         self.log.borrow_mut().push(self.index);
         SizedBox::square(1.0)
     }
 }
 
 impl View for OrderedReader {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -232,7 +232,7 @@ impl InheritedView for Level {
 }
 
 impl View for Level {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::inherited(self)
     }
 }
@@ -265,7 +265,7 @@ fn reader_rebuild_orders() -> (Vec<usize>, Vec<usize>) {
     log.borrow_mut().clear();
 
     laid.with_build_owner_mut(|owner| owner.writer_source())
-        .write(|cx| sig.set(cx, 1))
+        .write(|ctx| sig.set(ctx, 1))
         .unwrap();
     laid.tick();
     let after_write = log.take();
@@ -355,7 +355,7 @@ pub(crate) fn writes_and_creations_inside_build_are_refused_by_the_runtime() {
     );
 
     laid.with_build_owner_mut(|owner| owner.writer_source())
-        .write(|cx| sig.set(cx, 2))
+        .write(|ctx| sig.set(ctx, 2))
         .unwrap();
     assert_eq!(sig.peek(&r, |v| *v), Ok(2));
 }

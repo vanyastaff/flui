@@ -147,10 +147,13 @@ define_class!(
         }
     }
 
+    // SAFETY: NSObjectProtocol has no additional requirements.
     unsafe impl NSObjectProtocol for TextInputView {}
 
     /// The focused field's traits ([`keyboard_traits`]): UIKit reads them as
     /// the view becomes first responder and again on `reloadInputViews`.
+    // SAFETY: the methods below carry UIKit's selectors and signatures for
+    // this protocol and run on the main thread, where UIKit calls them.
     unsafe impl UITextInputTraits for TextInputView {
         #[unsafe(method(isSecureTextEntry))]
         fn is_secure_text_entry(&self) -> bool {
@@ -194,6 +197,8 @@ define_class!(
         }
     }
 
+    // SAFETY: the methods below carry UIKit's selectors and signatures for
+    // this protocol and run on the main thread, where UIKit calls them.
     unsafe impl UIKeyInput for TextInputView {
         /// Always yes: a no would stop the keyboard sending the delete a
         /// field the store could not be read for still needs. A delete with
@@ -222,6 +227,8 @@ define_class!(
         }
     }
 
+    // SAFETY: the methods below carry UIKit's selectors and signatures for
+    // this protocol and run on the main thread, where UIKit calls them.
     unsafe impl UITextInput for TextInputView {
         #[unsafe(method_id(textInRange:))]
         fn text_in_range(&self, range: &UITextRange) -> Option<Retained<NSString>> {

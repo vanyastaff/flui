@@ -188,7 +188,7 @@ pub struct PredictiveBackEvent {
 ///         println!("App lifecycle changed to: {:?}", state);
 ///     }
 ///
-///     fn did_pop_route(&self) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+///     fn did_pop_route(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
 ///         Box::pin(async {
 ///             // Handle back navigation
 ///             true // We handled it
@@ -206,7 +206,7 @@ pub trait WidgetsBindingObserver {
     /// This is triggered by the system back button or back gesture.
     /// Return `true` if handled (e.g., by closing a dialog), `false` otherwise.
     /// If no observer returns `true`, the application may quit.
-    fn did_pop_route(&self) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+    fn did_pop_route(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
         Box::pin(async { false })
     }
 
@@ -216,7 +216,7 @@ pub trait WidgetsBindingObserver {
     fn did_push_route_information(
         &self,
         _route: &RouteInformation,
-    ) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = bool> + '_>> {
         Box::pin(async { false })
     }
 
@@ -1641,7 +1641,7 @@ mod tests {
     }
 
     impl View for LeafView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
         }
     }
@@ -1673,7 +1673,7 @@ mod tests {
     }
 
     impl View for RegistryStateView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
 
@@ -1727,7 +1727,7 @@ mod tests {
     }
 
     impl View for LookupInBuild {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateless(self)
         }
     }
@@ -1755,7 +1755,7 @@ mod tests {
     }
 
     impl View for KeyedLookupParent {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
 
@@ -1861,7 +1861,7 @@ mod tests {
     }
 
     impl View for DisposeMarkerView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
     }
@@ -1889,7 +1889,7 @@ mod tests {
         }
 
         impl View for ParentOfDisposeMarker {
-            fn create_element(&self) -> crate::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
                 crate::element::ElementKind::stateless(self)
             }
         }

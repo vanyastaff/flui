@@ -39,7 +39,7 @@ fn tap_and_read(
     let button = find(&read(ui_runtime, window), "Increment").id;
     window
         .call::<method::SemanticsAct>(
-            act_params(window, button, ActionName::Invoke).with_snapshot(snapshot),
+            act_params(window, button, ActionName::Invoke).snapshot(snapshot),
         )
         .expect("the inbox has room")
 }
@@ -134,7 +134,7 @@ fn an_action_that_dirtied_nothing_still_reads_back_after_a_frame() {
     let _ = ui_runtime.take_redraw_pending_for_test(presentation);
     let mut reply = window
         .call::<method::SemanticsAct>(
-            act_params(&window, element, ActionName::Invoke).with_snapshot(Snapshot::Delta),
+            act_params(&window, element, ActionName::Invoke).snapshot(Snapshot::Delta),
         )
         .expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
@@ -183,7 +183,7 @@ fn a_window_that_closes_first_leaves_an_outcome_that_ran_without_a_reading() {
         .expect("an accessibility id is non-zero");
     let mut reply = window
         .call::<method::SemanticsAct>(
-            act_params(&window, element, ActionName::Invoke).with_snapshot(Snapshot::Delta),
+            act_params(&window, element, ActionName::Invoke).snapshot(Snapshot::Delta),
         )
         .expect("the inbox has room");
     let _report = ui_runtime.drain_commands();

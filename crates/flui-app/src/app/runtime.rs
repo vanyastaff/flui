@@ -183,7 +183,7 @@ pub enum ExitPolicy {
 
 /// What a second top-level window shares with the windows already open on
 /// this thread. Chosen when the window opens
-/// ([`super::runner::open_secondary_window`]); nothing in its widget tree or
+/// (`open_secondary_window`, under `unstable-windows`); nothing in its widget tree or
 /// its `BuildContext` names the policy afterwards.
 ///
 /// FLUI calls the unit a window belongs to a *UI runtime*: its own widget state,
@@ -207,14 +207,20 @@ pub enum ExitPolicy {
 #[doc(alias = "ui_runtime")]
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-// iOS is the only target where this is genuinely dead: its public re-export
-// is gated out there (see `lib.rs`), while android and wasm32 keep the
-// re-export and therefore a reachable path.
+// Only the desktop's secondary windows read it; elsewhere its one path is the
+// public re-export, which iOS never has and every target has only under
+// `unstable-windows` (see `lib.rs`).
 #[cfg_attr(
-    target_os = "ios",
+    any(
+        target_os = "ios",
+        all(
+            not(feature = "unstable-windows"),
+            any(target_os = "android", target_arch = "wasm32")
+        )
+    ),
     expect(
         dead_code,
-        reason = "secondary-window policy; its iOS re-export is gated out"
+        reason = "secondary-window policy; its re-export is gated out on this target"
     )
 )]
 pub enum WindowPolicy {

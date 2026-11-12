@@ -7,8 +7,7 @@ use flui_animation::{Animation, ProxyAnimation};
 use flui_objects::RenderSliverAnimatedOpacity;
 use flui_rendering::protocol::SliverProtocol;
 use flui_view::{
-    BoxedView, IntoView, RenderObjectContext, RenderView, View, ViewExt, ViewState,
-    impl_render_view,
+    Child, IntoView, RenderObjectContext, RenderView, ViewState, impl_render_view,
     prelude::{BuildContext, StatefulView},
 };
 
@@ -22,16 +21,23 @@ use super::proxy_slot::ProxySlot;
 #[derive(Clone, StatefulView)]
 pub struct SliverFadeTransition {
     opacity: Rc<dyn Animation<f64>>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl SliverFadeTransition {
-    /// Fades `child`, a sliver, with the caller-owned opacity animation.
-    pub fn new(opacity: Rc<dyn Animation<f64>>, child: impl IntoView) -> Self {
+    /// Fades a sliver by the caller-owned opacity animation, with no sliver yet.
+    pub fn new(opacity: Rc<dyn Animation<f64>>) -> Self {
         Self {
             opacity,
-            child: child.into_view().boxed(),
+            child: Child::empty(),
         }
+    }
+
+    /// Sets the sliver the transition animates.
+    #[must_use]
+    pub fn sliver(mut self, sliver: impl IntoView) -> Self {
+        self.child = Child::some(sliver.into_view());
+        self
     }
 }
 
@@ -74,7 +80,7 @@ impl ViewState<SliverFadeTransition> for SliverFadeTransitionState {
 #[derive(Clone)]
 struct SliverFadeRenderView {
     opacity: ProxyAnimation<f64>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl std::fmt::Debug for SliverFadeRenderView {
@@ -101,13 +107,7 @@ impl RenderView for SliverFadeRenderView {
         flui_rendering::RenderUpdateImpact::NONE
     }
 
-    fn has_children(&self) -> bool {
-        true
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        visitor(&self.child);
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(SliverFadeRenderView);

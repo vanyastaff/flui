@@ -56,17 +56,17 @@ impl<C: Capability> StatefulView for Acquirer<C> {
 }
 
 impl<C: Capability> View for Acquirer<C> {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
 
 impl<C: Capability> ViewState<Acquirer<C>> for AcquirerState<C> {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        self.acquired.replace(Some(cx.capability::<C>()));
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.acquired.replace(Some(ctx.capability::<C>()));
     }
 
-    fn build(&self, _view: &Acquirer<C>, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Acquirer<C>, _ctx: &dyn BuildContext) -> impl IntoView {
         flui_widgets::SizedBox::new(10.0, 10.0)
     }
 }
@@ -201,8 +201,8 @@ impl ClipboardBackend for OtherThreadBackend {
 }
 
 impl CapabilityProvider<ClipboardCapability> for OtherThread {
-    fn provide(&self, cx: &ProviderContext<'_>) -> Result<ClipboardHandle, Unsupported> {
-        Ok(ClipboardHandle::new(OtherThreadBackend, cx))
+    fn provide(&self, ctx: &ProviderContext<'_>) -> Result<ClipboardHandle, Unsupported> {
+        Ok(ClipboardHandle::new(OtherThreadBackend, ctx))
     }
 }
 
@@ -578,8 +578,8 @@ impl Drop for ExplodingProvider {
 }
 
 impl CapabilityProvider<ClipboardCapability> for ExplodingProvider {
-    fn provide(&self, cx: &ProviderContext<'_>) -> Result<ClipboardHandle, Unsupported> {
-        self.0.provide(cx)
+    fn provide(&self, ctx: &ProviderContext<'_>) -> Result<ClipboardHandle, Unsupported> {
+        self.0.provide(ctx)
     }
 }
 

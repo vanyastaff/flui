@@ -12,9 +12,11 @@ use std::{
 
 use crossbeam_channel::{Sender, TrySendError};
 use flui_foundation::{SurfaceGeneration, geometry::DeviceSize, memory::MemoryPressureLevel};
+use parking_lot::{Mutex, MutexGuard};
+use web_time::Instant;
 
 use super::{
-    SlotId,
+    DeviceHealth, SlotId,
     command::{
         ExecutorHealth, RasterCommand, RasterSendError, SendReceipt, SlotChange, SlotConfig,
         SlotSettlement, SlotTarget,
@@ -22,7 +24,10 @@ use super::{
     inbox::{SlotFailure, SlotInbox, SlotPhase, SlotRecord},
     slot::SlotMint,
 };
-use crate::{UnconfiguredSurface, error::EngineResult};
+use crate::{
+    UnconfiguredSurface,
+    error::{EngineError, EngineResult},
+};
 
 /// A lifecycle command as it travels the queue: the owner's command plus the
 /// inbox it shares with the executor.
@@ -49,6 +54,7 @@ pub(crate) enum Lifecycle {
         slot: SlotId,
         inbox: Arc<SlotInbox>,
     },
+    RetryDevice,
 }
 
 impl Lifecycle {
@@ -69,13 +75,25 @@ impl Lifecycle {
             Self::Release { slot } => RasterCommand::Release { slot },
             Self::Restore { slot, surface, .. } => RasterCommand::Restore { slot, surface },
             Self::Detach { slot, .. } => RasterCommand::Detach { slot },
+            Self::RetryDevice => RasterCommand::RetryDevice,
         }
     }
 }
 
+/// The context's device as the executor last published it.
+#[derive(Default)]
+pub(crate) struct DeviceRecord {
+    pub(crate) health: DeviceHealth,
+    /// When the next rebuild may run, for the owner's wake.
+    pub(crate) next_attempt_at: Option<Instant>,
+    /// Why the last rebuild failed, until the owner takes it.
+    pub(crate) failure: Option<EngineError>,
+}
+
 /// What the owner and the executor share: the lifecycle queue, the coalesced
-/// trim and the executor's health. No lock: the queue is a
-/// bounded channel and the rest are atomics.
+/// trim, the executor's health and the device's. The queue is a bounded
+/// channel and the executor's state atomics; the device's record has a lock,
+/// held only to swap values, since its failure is an error value.
 pub(crate) struct Shared {
     lifecycle: Sender<Lifecycle>,
     health: AtomicU8,
@@ -84,6 +102,7 @@ pub(crate) struct Shared {
     sending: AtomicUsize,
     /// The strongest trim asked for since the last turn: 0 for none.
     trim: AtomicU8,
+    device: Mutex<DeviceRecord>,
 }
 
 const RUNNING: u8 = 0;
@@ -96,7 +115,13 @@ impl Shared {
             health: AtomicU8::new(RUNNING),
             sending: AtomicUsize::new(0),
             trim: AtomicU8::new(0),
+            device: Mutex::new(DeviceRecord::default()),
         }
+    }
+
+    /// The device's record, locked to swap a value.
+    pub(crate) fn device(&self) -> MutexGuard<'_, DeviceRecord> {
+        self.device.lock()
     }
 
     pub(crate) fn health(&self) -> ExecutorHealth {
@@ -286,7 +311,32 @@ impl RasterSender {
                 self.shared.ask_trim(level);
                 Ok(SendReceipt::Accepted)
             }
+            RasterCommand::RetryDevice => self
+                .shared
+                .send_lifecycle(Lifecycle::RetryDevice)
+                .map(|()| SendReceipt::Accepted),
         }
+    }
+
+    /// Where the context's device stands, as the executor's last turn left
+    /// it.
+    #[must_use]
+    pub fn device_health(&self) -> DeviceHealth {
+        self.shared.device().health
+    }
+
+    /// When the executor may next rebuild the lost device: the owner runs a
+    /// turn then. `None` while the device renders or its rebuild is given up.
+    #[must_use]
+    pub fn device_retry_at(&self) -> Option<Instant> {
+        self.shared.device().next_attempt_at
+    }
+
+    /// Why the device's last rebuild failed, once: the owner reports it
+    /// (ADR-0267).
+    #[must_use]
+    pub fn take_device_failure(&self) -> Option<EngineError> {
+        self.shared.device().failure.take()
     }
 
     /// The record of `slot`; `None` for an id the owner does not hold.

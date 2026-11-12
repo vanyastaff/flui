@@ -102,21 +102,21 @@ impl StatefulRenderView for Fade {
     type RenderObject = RenderOpacity;
     type State = FadeState;
 
-    fn create_state(&self, _cx: &dyn flui_view::LifecycleContext) -> Self::State {
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         FadeState {
             wires: self.wires.clone(),
             fail: self.fail,
         }
     }
 
-    fn create_render_object(&self, _cx: &RenderObjectContext<'_>) -> Self::RenderObject {
+    fn create_render_object(&self, _ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
         self.wires.log.borrow_mut().push("create");
         RenderOpacity::new(self.opacity)
     }
 
     fn did_unmount_render_object(
         &self,
-        _cx: &RenderObjectContext<'_>,
+        _ctx: &RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
     ) {
         self.wires.log.borrow_mut().push("release");
@@ -124,10 +124,10 @@ impl StatefulRenderView for Fade {
 }
 
 impl RenderViewState<Fade> for FadeState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.wires.log.borrow_mut().push("init");
         assert!(self.fail != Fail::InitState, "init_state failure");
-        *self.wires.rebuild.borrow_mut() = Some(cx.rebuild_handle());
+        *self.wires.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
     }
 
     fn did_update_view(&mut self, _old: &Fade, new: &Fade) {
@@ -138,7 +138,7 @@ impl RenderViewState<Fade> for FadeState {
     fn update_render_object(
         &self,
         view: &Fade,
-        _cx: &RenderObjectContext<'_>,
+        _ctx: &RenderObjectContext<'_>,
         render_object: &mut RenderOpacity,
     ) -> RenderUpdateImpact {
         self.wires.log.borrow_mut().push("update");
@@ -146,12 +146,12 @@ impl RenderViewState<Fade> for FadeState {
         render_object.set_opacity(view.opacity * self.wires.factor.get())
     }
 
-    fn provide(&self, view: &Fade, _cx: &dyn BuildContext, values: &mut Provided<'_>) {
+    fn provide(&self, view: &Fade, _ctx: &dyn BuildContext, values: &mut Provided<'_>) {
         self.wires.log.borrow_mut().push("provide");
         values.value(Tint(view.tint));
     }
 
-    fn child(&self, _view: &Fade, _cx: &dyn BuildContext) -> impl IntoView {
+    fn child(&self, _view: &Fade, _ctx: &dyn BuildContext) -> impl IntoView {
         self.wires.log.borrow_mut().push("child");
         Reader(self.wires.clone())
     }
@@ -169,14 +169,14 @@ flui_view::impl_stateful_render_view!(Fade);
 struct Reader(Wires);
 
 impl StatelessView for Reader {
-    fn build(&self, cx: &dyn BuildContext) -> impl IntoView {
-        self.0.seen.set(cx.depend_on::<Tint, _>(|tint| tint.0));
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        self.0.seen.set(ctx.depend_on::<Tint, _>(|tint| tint.0));
         Leaf
     }
 }
 
 impl View for Reader {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -188,13 +188,13 @@ impl RenderView for Leaf {
     type Protocol = BoxProtocol;
     type RenderObject = RenderSizedBox;
 
-    fn create_render_object(&self, _cx: &RenderObjectContext<'_>) -> Self::RenderObject {
+    fn create_render_object(&self, _ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
         RenderSizedBox::shrink()
     }
 
     fn update_render_object(
         &self,
-        _cx: &RenderObjectContext<'_>,
+        _ctx: &RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
     ) -> RenderUpdateImpact {
         RenderUpdateImpact::NONE
@@ -387,13 +387,13 @@ fn a_state_hook_failure_is_recorded_against_its_hook() {
 struct Under(Fade);
 
 impl StatelessView for Under {
-    fn build(&self, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         self.0.clone()
     }
 }
 
 impl View for Under {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }

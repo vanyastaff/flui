@@ -257,6 +257,7 @@ fn lifecycle_panic_containment_matrix() {
             ("lifecycle_hook_payload_retirement::deactivate_payload_cannot_replace_incoming_unwind", lifecycle_hook_payload_retirement::deactivate_payload_cannot_replace_incoming_unwind as fn()),
             ("lifecycle_hook_payload_retirement::render_unmount_payload_cannot_replace_incoming_unwind", lifecycle_hook_payload_retirement::render_unmount_payload_cannot_replace_incoming_unwind as fn()),
             ("lifecycle_panic_containment::child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues", lifecycle_panic_containment::child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues as fn()),
+            ("lifecycle_panic_containment::a_child_init_state_panic_payload_is_destroyed_under_containment", lifecycle_panic_containment::a_child_init_state_panic_payload_is_destroyed_under_containment),
             ("lifecycle_panic_containment::a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed", lifecycle_panic_containment::a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed as fn()),
             ("lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry", lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry as fn()),
             ("lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive", lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive as fn()),
@@ -313,6 +314,7 @@ fn element_lifecycle_and_dependency_matrix() {
             ("inherited_dependency::inherited_update_notifies_dependents", inherited_dependency::inherited_update_notifies_dependents as fn()),
             ("inherited_dependency::missing_inherited_reads_refresh_lifecycle_and_survive_build_recovery", inherited_dependency::missing_inherited_reads_refresh_lifecycle_and_survive_build_recovery),
             ("inherited_dependency::unmounted_dependent_is_removed_from_provider_before_next_notification", inherited_dependency::unmounted_dependent_is_removed_from_provider_before_next_notification as fn()),
+            ("inherited_dependency::a_provider_with_many_dependents_keeps_exactly_the_mounted_ones", inherited_dependency::a_provider_with_many_dependents_keeps_exactly_the_mounted_ones as fn()),
             ("inherited_dependency::a_failing_frame_request_while_a_provider_notifies_keeps_its_subtree", inherited_dependency::a_failing_frame_request_while_a_provider_notifies_keeps_its_subtree),
             ("provided_values::provided_value_change_notifies_like_inherited_element", provided_values::provided_value_change_notifies_like_inherited_element as fn()),
             ("provided_values::provided_value_follows_a_moved_subtree", provided_values::provided_value_follows_a_moved_subtree),
@@ -462,3 +464,7 @@ fn signal_read_and_write_matrix() {
         ],
     );
 }
+
+// Keys, stream builders and binding observers carry no thread bound (ADR-0323 §4).
+#[path = "owner_local.rs"]
+mod owner_local;

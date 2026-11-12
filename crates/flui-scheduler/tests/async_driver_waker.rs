@@ -18,11 +18,11 @@ fn retained_waker_lifecycle(eager: bool, complete: bool) {
     let task_finish = Arc::clone(&finish);
     let observed = Arc::new(Mutex::new(Vec::<Waker>::new()));
     let task_observed = Arc::clone(&observed);
-    let future = Box::pin(std::future::poll_fn(move |cx| {
+    let future = Box::pin(std::future::poll_fn(move |ctx| {
         task_observed
             .lock()
             .expect("waker observations")
-            .push(cx.waker().clone());
+            .push(ctx.waker().clone());
         if task_finish.load(Ordering::Acquire) {
             Poll::Ready(())
         } else {
@@ -116,9 +116,9 @@ fn pending_waker_does_not_retain_driver() {
     let guard = Retired(Arc::clone(&retired));
     let observed = Arc::new(Mutex::new(None::<Waker>));
     let task_observed = Arc::clone(&observed);
-    let token = driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
+    let token = driver.spawn_local(Box::pin(std::future::poll_fn(move |ctx| {
         let _guard = &guard;
-        *task_observed.lock().expect("waker observation") = Some(cx.waker().clone());
+        *task_observed.lock().expect("waker observation") = Some(ctx.waker().clone());
         Poll::<()>::Pending
     })));
     assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);

@@ -53,7 +53,7 @@ impl RenderView for LeafView {
 }
 
 impl View for LeafView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -102,7 +102,7 @@ impl ViewState<LifecycleTrackingView> for LifecycleTrackingState {
 }
 
 impl View for LifecycleTrackingView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -413,9 +413,9 @@ pub(crate) fn a_change_recorded_under_a_hold_wakes_on_the_owner_turn() {
     let _saving = guard.hold();
     let counter = flui_foundation::testing::CountingWaker::new().shared();
     let waker = Waker::from(Arc::clone(&counter));
-    let mut cx = Context::from_waker(&waker);
+    let mut ctx = Context::from_waker(&waker);
     let mut changed = std::pin::pin!(guard.changed());
-    let pending_before = changed.as_mut().poll(&mut cx).is_pending();
+    let pending_before = changed.as_mut().poll(&mut ctx).is_pending();
 
     let _ = source.refuses(CloseReason::User);
     let after_refuses = counter.count();
@@ -430,7 +430,7 @@ pub(crate) fn a_change_recorded_under_a_hold_wakes_on_the_owner_turn() {
     );
     assert_eq!(after_refuses, 0, "nothing wakes inside the change");
     assert_eq!(after_settle, 0, "settle wakes nothing itself");
-    assert!(pending_before && changed.as_mut().poll(&mut cx).is_ready());
+    assert!(pending_before && changed.as_mut().poll(&mut ctx).is_ready());
     assert!(
         signals
             .lock()
@@ -450,9 +450,9 @@ pub(crate) fn a_change_taken_across_the_release_wakes_on_the_owner_turn() {
     let _ = source.refuses(CloseReason::User);
     let counter = flui_foundation::testing::CountingWaker::new().shared();
     let waker = Waker::from(Arc::clone(&counter));
-    let mut cx = Context::from_waker(&waker);
+    let mut ctx = Context::from_waker(&waker);
     let mut changed = std::pin::pin!(guard.changed());
-    let _ = changed.as_mut().poll(&mut cx);
+    let _ = changed.as_mut().poll(&mut ctx);
 
     drop(saving);
     let after_release = counter.count();

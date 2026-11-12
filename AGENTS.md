@@ -47,10 +47,11 @@ and edits its row.
 |------|-----|-----|
 | An owner changes its state, then runs code it does not own | `flui_foundation::panic::commit` / `commit_into` and `Outbox` (ADR-0287) | calling the listener, waker or `Drop` with the borrow or guard still held |
 | Keep the first of several caught panics and resume it after cleanup | `FirstPanic`; a payload nobody resumes goes to `discard_payload` (ADR-0281) | a crate-local first-failure fold, `PanicRecovery` outside `flui-foundation`, retaining or `mem::forget`ting a payload |
-| State only the owner thread touches | `Rc` with `Cell`/`RefCell`; a re-entry that finds it busy gets a typed outcome (ADR-0266) | `Arc<Mutex<_>>`, atomics, `try_lock` as a re-entrancy detector, `Send + Sync` on a callback that never leaves the thread |
+| State only the owner thread touches | `Rc` with `Cell`/`RefCell`; a re-entry that finds it busy gets a typed outcome (ADR-0323 §1) | `Arc<Mutex<_>>`, atomics, `try_lock` as a re-entrancy detector, `Send + Sync` on a callback that never leaves the thread |
 | A list of listeners | `Notifier<Arg>`, `ChangeNotifier`; a listener's owned handle is a `Subscription` from its channel's `listen` | a hand-rolled `Vec` of callbacks guarded by a `notifying: bool` |
 | A new identity | `IdMint<I>` and `IdExhausted` (`flui_foundation::sequence`), its `AtomicIdMint` where two threads mint one id domain, or a generational key whose slot generations `GenSlots` carries (ADR-0313) | `wrapping_add`, a `pub` integer field, an ID derived from an OS handle or pointer |
 | A state's signals and capability handles | created in `StatefulView::create_state(&self, ctx)`, so the state is born bound | an `Option` field that `init_state` fills with `Some(ctx.…)` ([gaps](docs/gaps.md#widget-states-still-fill-their-handles-in-init_state)) |
+| An element holds the view it was built from | the shared `Rc<V>` that `View::create_element(self: Rc<Self>)` receives; a `BoxedView` hands its `Rc` on, so an element never copies its view (ADR-0245) | a clone of the view kept beside the parent's `BoxedView`, a `Weak` back to the source to compare identity |
 | A test that drives an application's frames | `flui_testing::HeadlessHost` over `UiRuntime::pump` and its manual clock | `HeadlessBinding::pump_frame`, which ADR-0083 removes |
 | Which crate may depend on which | `tier`, `order` and `reach` (ADR-0081) | reasoning from `layer = N`, which ADR-0081 removed |
 | The platform whose conventions a widget follows (chords, handles, menus, transitions) | `flui_view::environment::PlatformConvention::of`, installed by the runtime above every root; a test names its platform with `HeadlessWindow::with_platform` or a `PlatformConvention` wrapper (ADR-0028) | `TargetPlatform::current()` outside the app runner, a theme's platform field, a `Default` that reads the build host |
@@ -63,8 +64,8 @@ and edits its row.
 
 - only `flui-app` depends on `flui-native`, and `windows::*`/`objc2::*` types stay in it
   (ADR-0082); `flui-runtime` has no host, platform or GPU edge (ADR-0083);
-- official packages build on `flui-sdk` alone (ADR-0088); `flui-hot-reload` is one, still under
-  `crates/`, reached only through `DevReloadHook`;
+- official packages build on `flui-sdk` alone (ADR-0088); `flui-hot-reload` is one, which an
+  application adds itself and the framework reaches only through `DevReloadHook`;
 - a crate's invariants are in its `ARCHITECTURE.md` (in the crate's `docs/` for
   `flui-animation`, `flui-assets`, `flui-interaction`).
 
@@ -110,6 +111,15 @@ conversation:
 - Commits are `area: what changed`. Pull-request CI executes Linux and wasm32 only; Windows,
   macOS, the iOS Simulator and an Android emulator run nightly on main
   (`nightly-platforms.yml`), so native and GPU changes are run locally before the PR.
+- A job only main runs has a narrow form, which a pull request runs when its diff reaches what the
+  job reads: a row of `ON_DEMAND` in `tools/xtask/src/change_scope/aggregator.rs`, decided by
+  `cargo xtask affected` (ADR-0303 §9). `test-trybuild` runs when the diff touches a file a
+  `*.stderr` cites, a case, a runner, a procedural macro or a message an expectation copies,
+  `feature-scope` runs over the changed crates' features, `size` runs when the diff reaches a
+  manifest, `Cargo.lock`, the toolchain, a `flui create` template or `perf/size.toml`, and
+  `send-positions` runs when a changed line of the facade's crates names `Send`, `Sync`, a
+  `pub use`/`pub mod` or a listed item. A new main-only job that a pull request can break gets
+  such a row.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
@@ -149,9 +159,11 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
 | Every `static`/`thread_local!` outside tests has a `globals` entry (an ADR that removes it, or an ADR-0097 grant) | `xtask globals` |
 | Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit handler, a closure handed to the OS) is a constant or one call of `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16) | `xtask panic-boundary` |
-| A value crosses a thread because the compiler proves it may: every `unsafe impl Send`/`Sync` is listed and the list only shrinks; `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed under ADR-0136 §3 | `xtask send-impls`, `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
+| A value crosses a thread because the compiler proves it may: every `unsafe impl Send`/`Sync` is listed and the list only shrinks; `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed under ADR-0323 §3 | `xtask send-impls`, `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
 | Test support is named `testing`; a hand-written `pump`/`advance`/`tick` or a `Mock*`/`Fake*`/`Scripted*`/`Recording*`/`Probe*` type in test code is in a kit or counted in the allowlist (ADR-0243) | `xtask testing` |
 | A constructor that can fail is `try_new`: every `new` returning `Result` or `Option` is listed and the list only shrinks | `xtask try-new` |
+| A context is bound as `ctx`, never `cx`, whatever its kind | `xtask context-names` (ADR-0325) |
+| A description type's builder method (a view, `Application`, a `…Config/Options/Settings/Request/Builder/Params/Spec`) has the bare name, never `with_`; the list of the ones left only shrinks | `xtask builder-names` (ADR-0325) |
 | A production `expect` or `panic!` names its invariant (`BUG: `) or its `try_` twin; the per-file counts of the ones that do not only go down | `xtask panic-messages` |
 | User code runs through `flui_foundation::panic` (`commit`, `FirstPanic`) and an OS entry through `os_entry`: `std::panic::catch_unwind` is a disallowed method, and a site that still catches by hand carries `#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]` on its statement or function (ADR-0303 §6) | clippy (`disallowed-methods`) |
 

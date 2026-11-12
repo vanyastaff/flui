@@ -123,20 +123,18 @@ fn deny_warnings(cmd: Cmd) -> Cmd {
     cmd.args(["--", "-D", "warnings"])
 }
 
-/// The facade's `hot-reload` feature on wasm32: it has no web runner, but
-/// enabling it must stay a well-formed build rather than expose native-only
-/// imports.
-fn wasm_facade_check() -> Cmd {
+/// `flui-hot-reload` with every feature on wasm32: it has no web runner, but an
+/// application that keeps the package in a cross-target build must still build
+/// for the web rather than meet native-only imports.
+fn wasm_hot_reload_check() -> Cmd {
     Cmd::cargo([
         "check",
         "-p",
-        "flui",
+        "flui-hot-reload",
         "--locked",
         "--target",
         WASM_TARGET,
-        "--no-default-features",
-        "--features",
-        "hot-reload",
+        "--all-features",
     ])
 }
 
@@ -483,9 +481,7 @@ fn cross_typecheck_plan(host: Host) -> anyhow::Result<Vec<Step>> {
 
 /// CI's `test-features` job: the suites behind features the default run never
 /// enables (flui-assets and flui-widgets default to `default = []`). The
-/// facade's catalogs, neither on by default, are in [`TEST_SCOPE`]. The
-/// `signals` features of flui-view, flui-testing, flui-widgets and flui-app
-/// are empty (signals are always compiled, ADR-0085 §5), so no run names them.
+/// facade's catalogs, neither on by default, are in [`TEST_SCOPE`].
 fn test_features_plan() -> Vec<Step> {
     let nextest =
         |args: &[&str]| Step::from(Cmd::cargo(["nextest", "run"]).args(args.iter().copied()));
@@ -614,7 +610,9 @@ fn native_feature_slice_plan(target: Option<&str>) -> Vec<Step> {
 
 /// Local `gpu-test` gate: engine readbacks and path-recording allocations, then the facade's
 /// composited-layer update readback (it needs the render pipeline and the
-/// headless renderer, which only the facade depends on together).
+/// headless renderer, which only the facade depends on together); that test is
+/// `#[ignore]`d in ordinary runs, which have no adapter, so this run names
+/// `--run-ignored all`.
 /// `--test-threads 1`: each test builds its own `wgpu::Device`, and a software
 /// rasterizer serializes submission, so parallel tests saturate it.
 fn gpu_test_plan(backend: Option<GpuBackend>) -> Vec<Step> {
@@ -630,7 +628,7 @@ fn gpu_test_plan(backend: Option<GpuBackend>) -> Vec<Step> {
         "raster_backpressure_allocation",
     ]);
     let facade = Cmd::cargo(["nextest", "run", "-p", "flui", "--no-default-features"])
-        .args(["--features", "gpu-readback-tests"])
+        .args(["--run-ignored", "all"])
         .args(["--test", "composited_layer_update_readback"]);
     [engine, facade]
         .into_iter()
@@ -976,6 +974,12 @@ pub(crate) struct FeatureMatrixArgs {
     /// (shard k of N of the per-feature passes).
     #[arg(long, default_value = "all", value_parser = Slice::parse)]
     slice: Slice,
+    /// Instead of the workspace, the per-feature passes over these packages
+    /// only (`-p a -p b`, the `hack_args` of `cargo xtask affected`): what a
+    /// pull request's `feature-scope` job runs, a `k/N` slice of them per
+    /// runner.
+    #[arg(long, allow_hyphen_values = true)]
+    packages: Option<String>,
     #[command(flatten)]
     pub(crate) run: RunOpts,
 }
@@ -983,9 +987,30 @@ pub(crate) struct FeatureMatrixArgs {
 /// `cargo xtask feature-matrix`: clippy every feature on its own (cargo-hack).
 ///
 /// `facade-combos`, then the per-feature passes; `--slice` picks the part one
-/// CI runner does. Needs cargo-hack.
+/// CI runner does, `--packages` narrows the passes to the packages a change
+/// touches. Needs cargo-hack.
 pub(crate) fn feature_matrix(args: &FeatureMatrixArgs) -> anyhow::Result<ExitCode> {
-    done(feature_matrix_stage(args.run.runner(), args.slice))
+    match &args.packages {
+        Some(packages) => done(
+            args.run
+                .runner()
+                .every(&feature_scope_plan(packages, args.slice)?),
+        ),
+        None => done(feature_matrix_stage(args.run.runner(), args.slice)),
+    }
+}
+
+/// The per-feature passes over `packages` alone (`-p a -p b`), or `slice`'s
+/// share of them.
+fn feature_scope_plan(packages: &str, slice: Slice) -> anyhow::Result<Vec<Step>> {
+    let packages = match slice {
+        Slice::All => packages.to_owned(),
+        Slice::Shard { index, count } => format!("{packages} --partition {index}/{count}"),
+        Slice::Combinations => {
+            anyhow::bail!("--packages narrows the per-feature passes, not the facade combinations")
+        }
+    };
+    Ok(hack_passes(&packages).map(Step::from).into())
 }
 
 /// Arguments for `cargo xtask native-features`.
@@ -1240,14 +1265,14 @@ mod tests {
             lines(&gpu_test_plan(None)),
             [
                 "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui-engine --features testing --lib --test raster_backpressure_allocation --locked --no-fail-fast --test-threads 1",
-                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
+                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui --no-default-features --run-ignored all --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
             ]
         );
         assert_eq!(
             lines(&gpu_test_plan(Some(GpuBackend::Gl))),
             [
                 "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui-engine --features testing --lib --test raster_backpressure_allocation --locked --no-fail-fast --test-threads 1",
-                "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
+                "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui --no-default-features --run-ignored all --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
             ]
         );
     }
@@ -1474,6 +1499,47 @@ mod tests {
         }
     }
 
+    /// `--packages` runs the two per-feature passes over the packages given,
+    /// no combination and no shard of the workspace.
+    fn feature_scope_lints_each_feature_of_the_given_packages() {
+        let packages = "-p flui-runtime -p flui-app";
+        let pass = |rest: &str| {
+            format!("$ cargo hack clippy {packages}{rest} --locked --each-feature --keep-going")
+        };
+        let both = |rest: &str| {
+            [
+                format!("{} -- -D warnings", pass(rest)),
+                format!("{} --tests --benches --examples -- -D warnings", pass(rest)),
+            ]
+        };
+        let plan = |slice| lines(&feature_scope_plan(packages, slice).expect("a pass slice"));
+        assert_eq!(plan(Slice::All), both(""));
+        // a runner's share of the same commands, as main's shards split the workspace
+        assert_eq!(
+            plan(Slice::Shard { index: 2, count: 3 }),
+            both(" --partition 2/3")
+        );
+        assert!(feature_scope_plan(packages, Slice::Combinations).is_err());
+        // the invocation CI's `feature-scope` job writes: a value that starts
+        // with `-p`, beside a slice
+        #[derive(clap::Parser)]
+        struct FeatureMatrixCli {
+            #[command(flatten)]
+            args: FeatureMatrixArgs,
+        }
+        use clap::Parser as _;
+        let parsed = FeatureMatrixCli::try_parse_from([
+            "feature-matrix",
+            "--packages",
+            packages,
+            "--slice",
+            "2/3",
+        ])
+        .expect("the job's arguments parse");
+        assert_eq!(parsed.args.packages.as_deref(), Some(packages));
+        assert_eq!(parsed.args.slice, Slice::Shard { index: 2, count: 3 });
+    }
+
     fn native_feature_slices_lint_each_feature_alone_with_and_without_all_targets() {
         let plan = lines(&native_feature_slice_plan(None));
         assert_eq!(plan.len(), 8);
@@ -1535,6 +1601,10 @@ mod tests {
                 (
                     "feature_matrix_slices_parse",
                     feature_matrix_slices_parse as fn(),
+                ),
+                (
+                    "feature_scope_lints_each_feature_of_the_given_packages",
+                    feature_scope_lints_each_feature_of_the_given_packages as fn(),
                 ),
                 (
                     "native_feature_slices_lint_each_feature_alone_with_and_without_all_targets",

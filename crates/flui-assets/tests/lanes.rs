@@ -29,10 +29,10 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
     let waker = CountingWaker::calling(move || thread.unpark())
         .shared()
         .waker();
-    let mut cx = Context::from_waker(&waker);
+    let mut ctx = Context::from_waker(&waker);
     let deadline = Instant::now() + BLOCK_ON_BUDGET;
     loop {
-        if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut ctx) {
             return output;
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -245,7 +245,7 @@ impl QueuedLanes {
         let wakes = CountingWaker::new().shared();
         let waker = wakes.waker();
         let mut seen = None;
-        let mut cx = Context::from_waker(&waker);
+        let mut ctx = Context::from_waker(&waker);
         loop {
             let mut ran = false;
             if compute {
@@ -262,7 +262,7 @@ impl QueuedLanes {
             if self.fresh.swap(false, Ordering::SeqCst) || woken {
                 // Polled outside the queue's lock: a future may spawn.
                 let mut futures = std::mem::take(&mut *self.io.lock());
-                futures.retain_mut(|future| future.as_mut().poll(&mut cx).is_pending());
+                futures.retain_mut(|future| future.as_mut().poll(&mut ctx).is_pending());
                 self.io.lock().extend(futures);
                 ran = true;
             }
@@ -296,12 +296,12 @@ impl Executor for QueuedLanes {
 
     fn room(&self, lane: Lane) -> RoomFuture {
         let refusals = Arc::clone(&self.refusals);
-        RoomFuture::new(std::future::poll_fn(move |cx| {
+        RoomFuture::new(std::future::poll_fn(move |ctx| {
             let refusal = *refusals.of(lane).lock();
             match refusal {
                 None => Poll::Ready(Ok(())),
                 Some(SpawnError::Saturated) => {
-                    refusals.room.lock().push(cx.waker().clone());
+                    refusals.room.lock().push(ctx.waker().clone());
                     Poll::Pending
                 }
                 Some(refusal) => Poll::Ready(Err(refusal)),

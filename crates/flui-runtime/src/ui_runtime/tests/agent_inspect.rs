@@ -300,7 +300,7 @@ fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resu
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use flui_foundation::geometry::Size;
-    use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
+    use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
     use flui_view::{IntoView, RenderView, View};
     use flui_widgets::{Stack, Text};
 
@@ -326,7 +326,7 @@ fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resu
         ) -> flui_rendering::RenderResult<Size> {
             Ok(Size::new(10.0, 10.0))
         }
-        fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+        fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
     }
 
     #[derive(Clone)]
@@ -349,7 +349,7 @@ fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resu
         }
     }
     impl View for PanicsWhenNamed {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::render_variable(self)
         }
     }

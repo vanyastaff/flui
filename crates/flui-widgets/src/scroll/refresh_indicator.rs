@@ -65,7 +65,7 @@ use flui_platform::TargetPlatform;
 use flui_platform::keyboard::NamedKey;
 use flui_view::prelude::StatefulView;
 use flui_view::{
-    AsyncDriver, BoxedTask, BoxedView, BuildContext, BuildContextExt, EventCx, InheritedView,
+    AsyncDriver, BoxedTask, BoxedView, BuildContext, BuildContextExt, EventContext, InheritedView,
     IntoView, LifecycleContext, PostFrameHandle, RebuildHandle, RebuildReason, TaskToken, View,
     ViewExt, ViewState, WriterSource, impl_inherited_view,
 };
@@ -318,7 +318,7 @@ impl_inherited_view!(RefreshIndicatorStyle);
 // ---------------------------------------------------------------------------
 
 /// Starts a refresh: the future that completes it.
-type RefreshCallback = Rc<dyn Fn(&mut EventCx<'_>) -> BoxedTask>;
+type RefreshCallback = Rc<dyn Fn(&mut EventContext<'_>) -> BoxedTask>;
 
 /// Pull to refresh over the scrollables in its child (see the
 /// `refresh_indicator` module documentation).
@@ -335,10 +335,10 @@ type RefreshCallback = Rc<dyn Fn(&mut EventCx<'_>) -> BoxedTask>;
 /// )))
 /// .expect("one labelled command");
 /// let inbox = RefreshIndicator::new(
-///     SingleChildScrollView::new().child(SizedBox::new(300.0, 1400.0)),
 ///     alternatives,
+///     SingleChildScrollView::new().child(SizedBox::new(300.0, 1400.0)),
 /// )
-/// .on_refresh(|_cx| async { /* fetch the messages */ });
+/// .on_refresh(|_ctx| async { /* fetch the messages */ });
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct RefreshIndicator {
@@ -364,12 +364,12 @@ impl RefreshIndicator {
     /// Pull to refresh over the scrollables in `child`, reached without the
     /// pull through `alternatives`, whose first command performs
     /// [`RefreshIntent`].
-    pub fn new(child: impl IntoView, alternatives: GestureAlternatives) -> Self {
+    pub fn new(alternatives: GestureAlternatives, child: impl IntoView) -> Self {
         Self {
             child: child.into_view().boxed(),
             alternatives,
             controller: None,
-            on_refresh: Rc::new(|_cx| Box::pin(std::future::ready(()))),
+            on_refresh: Rc::new(|_ctx| Box::pin(std::future::ready(()))),
             threshold_px: DEFAULT_THRESHOLD_PX,
             axis: Axis::Vertical,
         }
@@ -378,11 +378,14 @@ impl RefreshIndicator {
     /// Start the refresh: called with the event's context when one starts,
     /// on any path. The refresh runs until the returned future completes.
     #[must_use]
-    pub fn on_refresh<F>(mut self, on_refresh: impl Fn(&mut EventCx<'_>) -> F + 'static) -> Self
+    pub fn on_refresh<F>(
+        mut self,
+        on_refresh: impl Fn(&mut EventContext<'_>) -> F + 'static,
+    ) -> Self
     where
         F: Future<Output = ()> + 'static,
     {
-        self.on_refresh = Rc::new(move |cx| Box::pin(on_refresh(cx)));
+        self.on_refresh = Rc::new(move |ctx| Box::pin(on_refresh(ctx)));
         self
     }
 
@@ -590,12 +593,12 @@ impl Refresher {
         let command = self.command.borrow().clone();
         let writer = self.writer.borrow().clone();
         if let (Some(command), Some(writer)) = (command, writer) {
-            writer.write(|cx| command.perform(cx));
+            writer.write(|ctx| command.perform(ctx));
         }
     }
 
     /// Start one refresh, unless one runs.
-    fn start(&self, cx: &mut EventCx<'_>) -> ActionOutcome {
+    fn start(&self, ctx: &mut EventContext<'_>) -> ActionOutcome {
         let controller = self.controller();
         if !self.mounted.get() || controller.is_refreshing() {
             return ActionOutcome::NotPerformed;
@@ -604,7 +607,7 @@ impl Refresher {
         controller.set_refreshing(true, &mut recovery);
         let on_refresh = Rc::clone(&*self.on_refresh.borrow());
         let mut future = None;
-        recovery.run(|| future = Some(on_refresh(cx)));
+        recovery.run(|| future = Some(on_refresh(ctx)));
         let driver = self.driver.borrow().clone();
         match (future, driver) {
             (Some(future), Some(driver)) if self.mounted.get() => {
@@ -725,10 +728,12 @@ struct RefreshAction {
 }
 
 impl Action<RefreshIntent> for RefreshAction {
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &RefreshIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &RefreshIntent) -> ActionOutcome {
         self.refresher
             .upgrade()
-            .map_or(ActionOutcome::NotPerformed, |refresher| refresher.start(cx))
+            .map_or(ActionOutcome::NotPerformed, |refresher| {
+                refresher.start(ctx)
+            })
     }
 }
 

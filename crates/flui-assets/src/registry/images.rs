@@ -871,7 +871,7 @@ async fn fetch_over_http(url: Arc<str>, http: Option<Http>) -> Result<Vec<u8>> {
         source,
     };
     let response = http
-        .send(HttpRequest::get(url.as_ref()).with_body_limit(MAX_ENCODED_FILE_BYTES))
+        .send(HttpRequest::get(url.as_ref()).body_limit(MAX_ENCODED_FILE_BYTES))
         .await
         .map_err(failed)?;
     let status = response.status();
@@ -940,12 +940,12 @@ async fn read_in_chunks(path: Arc<str>) -> Result<Vec<u8>> {
 /// Pending once, waking itself: the run's poller gets a turn to drop it.
 fn yield_now() -> impl Future<Output = ()> {
     let mut yielded = false;
-    std::future::poll_fn(move |cx| {
+    std::future::poll_fn(move |ctx| {
         if yielded {
             Poll::Ready(())
         } else {
             yielded = true;
-            cx.waker().wake_by_ref();
+            ctx.waker().wake_by_ref();
             Poll::Pending
         }
     })
@@ -954,12 +954,12 @@ fn yield_now() -> impl Future<Output = ()> {
 /// Runs `run` until it finishes or `cancel` resolves, whichever is first;
 /// `cancel` resolves when its sender is sent on or dropped.
 async fn until_cancelled(mut run: Run, mut cancel: oneshot::Receiver<()>) {
-    std::future::poll_fn(move |cx| {
+    std::future::poll_fn(move |ctx| {
         // The signal first: a cancelled load never reaches its next step.
-        if Pin::new(&mut cancel).poll(cx).is_ready() {
+        if Pin::new(&mut cancel).poll(ctx).is_ready() {
             return Poll::Ready(());
         }
-        run.as_mut().poll(cx)
+        run.as_mut().poll(ctx)
     })
     .await;
 }
@@ -1100,11 +1100,11 @@ impl Subscription {
     /// is parked, or its claim channel closed without telling, which leaves
     /// it to look rather than miss a run. Looking finds nothing when none is
     /// parked for its load.
-    fn poll_told(&mut self, cx: &mut Context<'_>) -> bool {
+    fn poll_told(&mut self, ctx: &mut Context<'_>) -> bool {
         let Some(claim) = &mut self.claim else {
             return false;
         };
-        match Pin::new(claim).poll(cx) {
+        match Pin::new(claim).poll(ctx) {
             Poll::Pending => false,
             Poll::Ready(_) => {
                 self.claim = None;
@@ -1114,8 +1114,10 @@ impl Subscription {
     }
 
     /// What the load delivers; `None` when it closed unsettled.
-    fn poll_outcome(&mut self, cx: &mut Context<'_>) -> Poll<Option<Delivery>> {
-        Pin::new(&mut self.rx).poll(cx).map(std::result::Result::ok)
+    fn poll_outcome(&mut self, ctx: &mut Context<'_>) -> Poll<Option<Delivery>> {
+        Pin::new(&mut self.rx)
+            .poll(ctx)
+            .map(std::result::Result::ok)
     }
 }
 
@@ -1164,11 +1166,11 @@ impl ImageLoad {
 
     /// Drives the load's parked run here, if this subscriber was just told
     /// of it and no other claimed it first.
-    fn claim_parked(&mut self, cx: &mut Context<'_>) -> bool {
+    fn claim_parked(&mut self, ctx: &mut Context<'_>) -> bool {
         let LoadState::Waiting(subscription) = &mut self.state else {
             return false;
         };
-        if !subscription.poll_told(cx) {
+        if !subscription.poll_told(ctx) {
             return false;
         }
         let Some(run) = self.images.claim(subscription) else {
@@ -1219,9 +1221,9 @@ impl std::fmt::Debug for ImageLoad {
 impl Future for ImageLoad {
     type Output = Result<Image>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            if self.claim_parked(cx) {
+            if self.claim_parked(ctx) {
                 continue;
             }
             let settled = match &mut self.state {
@@ -1236,14 +1238,14 @@ impl Future for ImageLoad {
                             .expect("BUG: an image load was polled after it completed"),
                     );
                 }
-                LoadState::Waiting(subscription) => subscription.poll_outcome(cx),
+                LoadState::Waiting(subscription) => subscription.poll_outcome(ctx),
                 LoadState::Leading { run, subscription } => {
                     if let Some(future) = run
-                        && future.as_mut().poll(cx).is_ready()
+                        && future.as_mut().poll(ctx).is_ready()
                     {
                         *run = None;
                     }
-                    subscription.poll_outcome(cx)
+                    subscription.poll_outcome(ctx)
                 }
             };
             match settled {

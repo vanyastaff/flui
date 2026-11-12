@@ -147,10 +147,10 @@ fn worker(root: PathBuf, case: &str) {
         root.clone()
     };
     let ctx = BuilderContextBuilder::new(cwd)
-        .with_platform(Platform::Desktop { target: None })
-        .with_profile(Profile::Debug)
-        .with_target(unit)
-        .with_output_dir(root.join("staged"))
+        .platform(Platform::Desktop { target: None })
+        .profile(Profile::Debug)
+        .target(unit)
+        .output_dir(root.join("staged"))
         .build();
     let builder = DesktopBuilder::new();
     let result = runtime.block_on(builder.build_rust(&ctx));

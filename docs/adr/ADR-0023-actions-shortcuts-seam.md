@@ -41,16 +41,16 @@ and source composition prevents ordinary matching. `CallbackShortcuts` binds act
 `Focus::new(child).can_request_focus(false).on_key_event(…)` wrapper, as Flutter builds it: the
 first matching binding fires, and the key is handled iff one fired.
 
-*Amended by ADR-0086:* a binding's callback is `Fn(&mut EventCx<'_>) -> R` with `R:
-EventOutcome`, and receives the key event's `EventCx` from the `Focus` key handler it runs in.
+*Amended by ADR-0086:* a binding's callback is `Fn(&mut EventContext<'_>) -> R` with `R:
+EventOutcome`, and receives the key event's `EventContext` from the `Focus` key handler it runs in.
 
 **3. `Intent` / `Action` / `Actions`.** `trait Intent: Any` is a marker keyed by `TypeId`, as
 Flutter keys by `Type`; the downcast happens inside a typed wrapper, never against a view.
 `Action<T: Intent>` has `is_enabled`, `invoke(&T) -> ActionOutcome` and a defaulted
 `to_key_event_result` (ADR-0026 §4); `CallbackAction<T>` wraps a closure. *Amended by ADR-0086:*
-`invoke` is `invoke(&self, cx: &mut EventCx<'_>, intent: &T)` — the action runs inside the key
-event's dispatch and writes through its `EventCx` — and `CallbackAction::new` takes
-`Fn(&mut EventCx<'_>, &T) -> R`. `Actions::maybe_invoke` is removed: its only caller could be
+`invoke` is `invoke(&self, ctx: &mut EventContext<'_>, intent: &T)` — the action runs inside the key
+event's dispatch and writes through its `EventContext` — and `CallbackAction::new` takes
+`Fn(&mut EventContext<'_>, &T) -> R`. `Actions::maybe_invoke` is removed: its only caller could be
 `build`, which has no event context; `is_enabled` and `to_key_event_result` stay queries. Each
 `Actions` widget
 publishes at provide time a link that shares its bindings and names the enclosing chain. A lookup

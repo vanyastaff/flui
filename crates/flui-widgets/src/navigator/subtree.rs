@@ -149,7 +149,7 @@ impl RouteSubtreeAnchor {
 }
 
 impl View for RouteSubtreeAnchor {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

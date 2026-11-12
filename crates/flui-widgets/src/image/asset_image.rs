@@ -22,7 +22,7 @@ use super::provider::{ImageProvider, ImageProviderError, ImageServices};
 /// registry keeps the decoded images: two `AssetImage`s for one path share a
 /// decode only when they share a registry, and the registry gives them back
 /// under memory pressure once the application registers it
-/// (`AppConfig::with_memory_reclaim` in `flui-app`).
+/// (`AppConfig::memory_reclaim` in `flui-app`).
 ///
 /// Prefer [`Image::asset`](crate::Image::asset) as the ergonomic constructor.
 #[derive(Debug, Clone)]

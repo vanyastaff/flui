@@ -123,6 +123,35 @@ pub mod linux {
         "text-scale-out-of-range",
     ];
 
+    std::thread_local! {
+        /// The platform the owner thread reads from inside its wake callback: the
+        /// callback is `Send`, the platform is not, so the callback finds it here.
+        static OWNER_PLATFORM: std::cell::RefCell<std::sync::Weak<X11Platform>> =
+            const { std::cell::RefCell::new(std::sync::Weak::new()) };
+    }
+
+    /// Makes `platform` what [`owner_preferences`] reads on this thread.
+    fn read_on_owner(platform: &Arc<X11Platform>) {
+        OWNER_PLATFORM.with(|slot| *slot.borrow_mut() = Arc::downgrade(platform));
+    }
+
+    /// The X11 platform on the harness's X server, shared as `run_shared` takes it.
+    #[expect(
+        clippy::arc_with_non_send_sync,
+        reason = "ADR-0327 §1: `run_shared` takes `Rc<Self>` once every host is owner-local (§5)"
+    )]
+    fn x11_platform() -> Arc<X11Platform> {
+        Arc::new(X11Platform::try_new().expect("the X11 platform on the harness's X server"))
+    }
+
+    /// The preferences the owner thread's platform observes now.
+    fn owner_preferences() -> flui_platform::SystemPreferences {
+        let platform = OWNER_PLATFORM
+            .with(|slot| slot.borrow().upgrade())
+            .expect("the wake runs on the owner thread while its platform lives");
+        platform.preferences().expect("live owner observation")
+    }
+
     /// The parent runs each case with `LANG=fr_CA.UTF-8` and `LANGUAGE=fr_CA:en`.
     fn assert_environment_languages(preferences: &flui_platform::SystemPreferences) {
         assert_eq!(
@@ -357,9 +386,8 @@ pub mod linux {
             eprintln!("Linux preference owner did not complete within 30 seconds");
             std::process::exit(2);
         });
-        let platform =
-            Arc::new(X11Platform::try_new().expect("the X11 platform on the harness's X server"));
-        let reader = Arc::clone(&platform);
+        let platform = x11_platform();
+        read_on_owner(&platform);
         let changed = Arc::new(AtomicBool::new(false));
         let witness = Arc::clone(&changed);
         let after = after.observation();
@@ -373,7 +401,7 @@ pub mod linux {
                 assert_environment_languages(&initial);
                 let proxy = owner.proxy();
                 owner.on_wake(Box::new(move || {
-                    let current = reader.preferences().expect("live owner observation");
+                    let current = owner_preferences();
                     if after.observed(&current) {
                         witness.store(true, Ordering::SeqCst);
                         proxy.request_quit().expect("value owner quit");
@@ -432,15 +460,19 @@ pub mod linux {
         Recovering,
     }
 
+    /// Reads the owner thread's platform when the wake callback holding it is
+    /// retired.
     struct RetireCheck {
-        platform: Arc<X11Platform>,
         refused: Arc<AtomicBool>,
     }
 
     impl Drop for RetireCheck {
         fn drop(&mut self) {
+            let platform = OWNER_PLATFORM
+                .with(|slot| slot.borrow().upgrade())
+                .expect("the callback retires on the owner thread while its platform lives");
             self.refused
-                .store(self.platform.preferences().is_err(), Ordering::SeqCst);
+                .store(platform.preferences().is_err(), Ordering::SeqCst);
         }
     }
 
@@ -516,10 +548,9 @@ pub mod linux {
                 }
             })
             .expect("isolated portal service");
-        let platform =
-            Arc::new(X11Platform::try_new().expect("the X11 platform on the harness's X server"));
+        let platform = x11_platform();
         let stopped = Arc::clone(&platform);
-        let reader = Arc::clone(&platform);
+        read_on_owner(&platform);
         let (start, begin) = tokio::sync::oneshot::channel::<PlatformProxy>();
         let (late_send, late_receive) = tokio::sync::oneshot::channel::<PlatformProxy>();
         let late_proxy = case == "late-proxy";
@@ -594,7 +625,6 @@ pub mod linux {
         let delivery_failed = Arc::new(AtomicBool::new(false));
         let callback_failed = Arc::clone(&delivery_failed);
         let capture = RetireCheck {
-            platform: Arc::clone(&platform),
             refused: Arc::clone(&refused),
         };
         platform
@@ -618,21 +648,11 @@ pub mod linux {
                         "no text scale key is unobserved"
                     );
                 }
-                let foreign = std::thread::scope(|scope| {
-                    scope
-                        .spawn(|| reader.preferences())
-                        .join()
-                        .expect("foreign read")
-                });
-                assert!(
-                    foreign.is_err(),
-                    "foreign reads cannot become a second source"
-                );
                 if scheme {
                     let handler = flui_testing::window_handler::RecordingWindowHandler::new();
                     let window = owner
                         .open_window(
-                            flui_platform::WindowOptions::default().with_visible(false),
+                            flui_platform::WindowOptions::default().visible(false),
                             handler.clone(),
                         )?
                         .try_ready()?;
@@ -661,10 +681,7 @@ pub mod linux {
                     let mut phase = Live::Seed;
                     owner.on_wake(Box::new(move || {
                         let _ = &capture;
-                        let motion = reader
-                            .preferences()
-                            .expect("live owner observation")
-                            .motion();
+                        let motion = owner_preferences().motion();
                         let fail = |expected: MotionPreference| {
                             eprintln!(
                                 "owner delivered {motion:?} in {phase:?}; expected {expected:?}"

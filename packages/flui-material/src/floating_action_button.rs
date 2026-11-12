@@ -142,7 +142,7 @@ fn fab_shape() -> MaterialShape {
 /// use flui_material::FloatingActionButton;
 /// use flui_sdk::widgets::Text;
 ///
-/// let _fab = FloatingActionButton::new(Text::new("+")).on_pressed(|_cx| {});
+/// let _fab = FloatingActionButton::new(Text::new("+")).on_pressed(|_ctx| {});
 /// let _disabled = FloatingActionButton::new(Text::new("+"));
 /// ```
 #[derive(Clone, StatefulView)]
@@ -168,7 +168,7 @@ impl FloatingActionButton {
     #[must_use]
     pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_pressed = Some(crate::event_callback::press_callback(callback));
         self
@@ -352,7 +352,7 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
             .overlay_color(overlay_color)
             .states_controller(self.states.clone());
         if let Some(on_pressed) = view.on_pressed.clone() {
-            ink_well = ink_well.on_tap(move |cx| on_pressed(cx));
+            ink_well = ink_well.on_tap(move |ctx| on_pressed(ctx));
         }
 
         let constraints = BoxConstraints::tight(Size::new(FAB_SIZE, FAB_SIZE));

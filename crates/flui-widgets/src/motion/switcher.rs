@@ -264,7 +264,7 @@ impl AnimatedSwitcher {
         child: BoxedView,
         animation: std::rc::Rc<dyn Animation<f64>>,
     ) -> BoxedView {
-        FadeTransition::new(animation, child).boxed()
+        FadeTransition::new(animation).child(child).boxed()
     }
 
     /// The default `layout_builder`: a [`Stack`] centering every
@@ -321,7 +321,7 @@ impl std::fmt::Debug for KeyedEntry {
 }
 
 impl View for KeyedEntry {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 
@@ -730,7 +730,7 @@ mod retirement_tests {
     }
 
     impl View for Capture {
-        fn create_element(&self) -> ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
             ElementKind::stateless(self)
         }
     }

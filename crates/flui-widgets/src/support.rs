@@ -1,12 +1,12 @@
 //! Support helpers shared across widget families. The impl macro is also
 //! exported, doc-hidden, through [`crate::__private`] for the sibling
 //! `flui-*` widget crates. The event-callback adapters store a user's
-//! `Fn(&mut EventCx<'_>, ..) -> R` so that its outcome is reported.
+//! `Fn(&mut EventContext<'_>, ..) -> R` so that its outcome is reported.
 
 use std::rc::Rc;
 
 use flui_platform::keyboard::Modifiers;
-use flui_view::{EventCx, EventOutcome};
+use flui_view::{EventContext, EventOutcome};
 
 #[cfg(test)]
 pub(crate) mod child_process;
@@ -50,7 +50,7 @@ macro_rules! __generic_render_view_element {
         where
             C: ::flui_view::seq::ViewSeq + ::core::clone::Clone + 'static,
         {
-            fn create_element(&self) -> ::flui_view::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> ::flui_view::element::ElementKind {
                 ::flui_view::element::ElementKind::render_variable(self)
             }
         }
@@ -60,7 +60,7 @@ macro_rules! __generic_render_view_element {
         where
             C: ::flui_view::seq::ViewSeq + ::core::clone::Clone + 'static,
         {
-            fn create_element(&self) -> ::flui_view::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> ::flui_view::element::ElementKind {
                 ::flui_view::element::ElementKind::render_variable(self)
             }
 
@@ -74,19 +74,19 @@ macro_rules! __generic_render_view_element {
 pub(crate) use crate::__generic_render_view_element as generic_render_view_element;
 
 /// A stored no-argument event callback.
-pub(crate) type EventCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
+pub(crate) type EventCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 
 /// A stored event callback that also receives a value.
-pub(crate) type ValueCallback<D> = Rc<dyn Fn(&mut EventCx<'_>, D)>;
+pub(crate) type ValueCallback<D> = Rc<dyn Fn(&mut EventContext<'_>, D)>;
 
 /// Store a no-argument event callback, adapted to report its outcome: a
 /// refused signal write is logged at the dispatch boundary (ADR-0086).
 pub(crate) fn event_callback<F, R>(callback: F) -> EventCallback
 where
-    F: Fn(&mut EventCx<'_>) -> R + 'static,
+    F: Fn(&mut EventContext<'_>) -> R + 'static,
     R: EventOutcome,
 {
-    Rc::new(move |cx: &mut EventCx<'_>| callback(cx).report())
+    Rc::new(move |ctx: &mut EventContext<'_>| callback(ctx).report())
 }
 
 /// [`event_callback`] for a callback that also receives a value by value
@@ -94,22 +94,22 @@ where
 pub(crate) fn value_callback<D, F, R>(callback: F) -> ValueCallback<D>
 where
     D: 'static,
-    F: Fn(&mut EventCx<'_>, D) -> R + 'static,
+    F: Fn(&mut EventContext<'_>, D) -> R + 'static,
     R: EventOutcome,
 {
-    Rc::new(move |cx: &mut EventCx<'_>, value: D| callback(cx, value).report())
+    Rc::new(move |ctx: &mut EventContext<'_>, value: D| callback(ctx, value).report())
 }
 
 /// A stored event callback that also receives a borrowed value.
-pub(crate) type RefCallback<T> = Rc<dyn Fn(&mut EventCx<'_>, &T)>;
+pub(crate) type RefCallback<T> = Rc<dyn Fn(&mut EventContext<'_>, &T)>;
 
 /// [`event_callback`] for a callback that also receives a borrowed value
 /// (the field's text, a pan-zoom event, a form field's value).
 pub(crate) fn ref_callback<T, F, R>(callback: F) -> RefCallback<T>
 where
     T: ?Sized + 'static,
-    F: for<'a> Fn(&mut EventCx<'_>, &'a T) -> R + 'static,
+    F: for<'a> Fn(&mut EventContext<'_>, &'a T) -> R + 'static,
     R: EventOutcome,
 {
-    Rc::new(move |cx: &mut EventCx<'_>, value: &T| callback(cx, value).report())
+    Rc::new(move |ctx: &mut EventContext<'_>, value: &T| callback(ctx, value).report())
 }

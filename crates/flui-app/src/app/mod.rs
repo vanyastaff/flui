@@ -75,12 +75,14 @@ pub use runner::EXIT_CODE_HUNG;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+#[cfg(feature = "unstable-windows")]
 pub use runner::open_secondary_window;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+#[cfg(feature = "unstable-windows")]
 pub use runner::open_window;
 #[cfg(target_os = "android")]
 pub use runner::run_app_android;
@@ -89,7 +91,9 @@ pub use runner::{FontRegistrationError, register_font};
 #[cfg(not(target_os = "ios"))]
 pub use runner::{request_presentation_close, window_handle};
 #[cfg(not(target_os = "ios"))]
-pub use runtime::{ExitPolicy, WindowPolicy};
+pub use runtime::ExitPolicy;
+#[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
+pub use runtime::WindowPolicy;
 
 // The execution services live in the frame runtime (ADR-0083); their public
 // paths stay `flui_app::…`.

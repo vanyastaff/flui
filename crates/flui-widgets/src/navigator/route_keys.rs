@@ -14,7 +14,7 @@
 //! navigator handles is reported unperformed, so the key reaches the host.
 
 use flui_view::element::ElementKind;
-use flui_view::{BoxedView, BuildContext, EventCx, IntoView, StatelessView, View, ViewExt};
+use flui_view::{BoxedView, BuildContext, EventContext, IntoView, StatelessView, View, ViewExt};
 
 use super::navigator::NavigatorHandle;
 use crate::interaction::{Action, ActionOutcome, Actions, BackIntent, DismissIntent};
@@ -31,7 +31,7 @@ impl Action<BackIntent> for PopOnBack {
             .any(|navigator| navigator.can_pop())
     }
 
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &BackIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &BackIntent) -> ActionOutcome {
         if self
             .0
             .self_and_enclosing()
@@ -48,7 +48,7 @@ impl Action<BackIntent> for PopOnBack {
 struct PopOnDismiss(NavigatorHandle);
 
 impl Action<DismissIntent> for PopOnDismiss {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &DismissIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &DismissIntent) -> ActionOutcome {
         if self.0.maybe_pop() {
             ActionOutcome::Performed
         } else {
@@ -72,7 +72,7 @@ pub(super) struct RouteKeys {
 }
 
 impl View for RouteKeys {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }

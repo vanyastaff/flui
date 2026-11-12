@@ -1,4 +1,4 @@
-use super::{DependencySource, ProjectPlan};
+use super::{DependencySource, FrameworkPackage, ProjectPlan};
 
 pub fn generate(
     name: &str,
@@ -19,14 +19,21 @@ pub fn generate(
 fn cargo_toml(name: &str, source: &DependencySource) -> String {
     let version = env!("CARGO_PKG_VERSION");
 
-    let deps = format!("flui = {}", source.dependency("flui", &[]));
-    let test_deps = format!("flui = {}", source.dependency("flui", &["testing"]));
+    let deps = format!(
+        "flui = {}",
+        source.dependency(FrameworkPackage::Facade, &[])
+    );
+    let test_deps = format!(
+        "flui = {}",
+        source.dependency(FrameworkPackage::Facade, &["testing"])
+    );
     let mode_comment = if matches!(source, DependencySource::Local(_)) {
         " (local development)"
     } else {
         ""
     };
     let lib_table = super::LIB_TABLE;
+    let profiles = super::PROFILES;
 
     format!(
         r#"# FLUI Template v{version}{mode_comment}
@@ -48,12 +55,7 @@ rust-version = "1.99"
 [dev-dependencies]
 {test_deps}
 
-[profile.release]
-opt-level = 3
-lto = "thin"
-codegen-units = 1
-strip = "debuginfo"
-"#
+{profiles}"#
     )
 }
 
@@ -94,7 +96,7 @@ impl ViewState<CounterView> for CounterState {
     fn build(&self, _view: &CounterView, ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count;
 
-        SafeArea::new().child(
+        SafeArea::new(
             Center::new().child(
                 Column::new((
                     Text::new("You have pushed the button this many times:"),
@@ -102,7 +104,7 @@ impl ViewState<CounterView> for CounterState {
                     Text::new(count.get(ctx).to_string()),
                     SizedBox::height(16.0),
                     RawButton::new(Text::new("Increment"))
-                        .on_press(move |cx| count.update(cx, |n| *n += 1)),
+                        .on_press(move |ctx| count.update(ctx, |n| *n += 1)),
                 ))
                 .main_axis_alignment(MainAxisAlignment::Center),
             ),

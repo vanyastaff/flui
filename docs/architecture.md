@@ -91,7 +91,7 @@ The pipeline is **on-demand**. The platform event loop waits (`ControlFlow::Wait
 
 ### Threading & ownership model
 
-One owner thread hosts every UI runtime ([ADR-0266](adr/ADR-0266-one-owner-thread-ui-runtimes-isolate.md)). A `UiRuntime` is a unit of isolation, not of parallelism: an `!Send + !Sync` single-writer owner of its state, keys and scheduling, run in turn with the others. What crosses a thread is the bounded typed mailboxes committed at Idle and the owned `SceneSnapshot` handed to the raster executor, one per `GpuContext` ([ADR-0091](adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md), [ADR-0305](adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)); decode, shaping, IO and raster run in parallel outside the UI transaction. The ownership levels are [ADR-0027](adr/ADR-0027-owner-affine-ui-realms.md)'s, and the owner-local surface and its `Send` gates are [ADR-0136](adr/ADR-0136-owner-local-ui-surfaces.md)'s.
+One owner thread hosts every UI runtime ([ADR-0266](adr/ADR-0266-one-owner-thread-ui-runtimes-isolate.md)). A `UiRuntime` is a unit of isolation, not of parallelism: an `!Send + !Sync` single-writer owner of its state, keys and scheduling, run in turn with the others. A value stays on the owner thread unless its signature names what crosses ([ADR-0323](adr/ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md)). What crosses a thread is the bounded typed mailboxes committed at Idle and the owned `SceneSnapshot` handed to the raster executor, one per `GpuContext` ([ADR-0091](adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md), [ADR-0305](adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)); decode, shaping, IO and raster run in parallel outside the UI transaction. The ownership levels are [ADR-0027](adr/ADR-0027-owner-affine-ui-realms.md)'s, and the owner-local surface and its `Send` gates are [ADR-0136](adr/ADR-0136-owner-local-ui-surfaces.md)'s.
 
 ## Type-Safe Children: the Arity System
 
@@ -135,8 +135,9 @@ self.nodes.get(id.get() - 1);
 `flui-native`, the core host, exposes one `Platform` trait over its native and headless hosts:
 
 ```rust
-// Sealed: `HostPlatform<H>` over a host's table is its one implementation.
-pub trait Platform: sealed::Sealed + Send + Sync + 'static {
+// Sealed: `HostPlatform<H>` over a host's table is its one implementation. It stays on its
+// owner thread (ADR-0327); another thread reaches it through its `PlatformProxy`.
+pub trait Platform: sealed::Sealed + 'static {
     // Lifecycle
     // The handler hears and answers what the platform has for the application:
     // its bootstrap, the quit, a reopen, a session end, a notice, the exit

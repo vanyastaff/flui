@@ -290,7 +290,7 @@ pub struct InputDecorationThemeData {
     /// Overrides the bottom underline indicator's color/width, per state.
     /// `None` falls through to the M3 default state table — see
     /// `input_decorator.rs`'s `default_active_indicator`.
-    pub active_indicator: Option<WidgetStateProperty<Option<BorderSide<f64>>>>,
+    pub active_indicator: Option<WidgetStateProperty<Option<BorderSide>>>,
     /// Overrides the hint text style, per state. `None` falls through to the
     /// M3 default (disabled/enabled `onSurfaceVariant`).
     pub hint_style: Option<WidgetStateProperty<Option<TextStyle>>>,
@@ -433,7 +433,7 @@ pub struct CheckboxThemeData {
     pub overlay_color: Option<StateColor>,
     /// Overrides [`Checkbox`](crate::Checkbox)'s default border side, per
     /// state.
-    pub side: Option<WidgetStateProperty<Option<BorderSide<f64>>>>,
+    pub side: Option<WidgetStateProperty<Option<BorderSide>>>,
 }
 
 /// Overrides [`Chip`](crate::Chip)/[`FilterChip`](crate::FilterChip)'s
@@ -511,7 +511,7 @@ pub struct ChipThemeData {
     pub checkmark_color: Option<Color>,
     /// Overrides the container's border side. `None` falls through to the
     /// M3 default (see `chip.rs`'s `chip_default_side`).
-    pub side: Option<BorderSide<f64>>,
+    pub side: Option<BorderSide>,
     /// Overrides the container's shape. `None` falls through to the M3
     /// default (an 8dp rounded rectangle).
     pub shape: Option<MaterialShape>,
@@ -686,7 +686,7 @@ pub struct RadioThemeData {
 pub struct DataTableThemeData {
     /// Overrides the table's background/border decoration. Defaults to no
     /// decoration.
-    pub decoration: Option<BoxDecoration<f64>>,
+    pub decoration: Option<BoxDecoration>,
     /// Overrides the data rows' background color, per state (`Selected`
     /// resolves the M3 default: `colorScheme.primary` at 8% opacity).
     pub data_row_color: Option<StateColor>,

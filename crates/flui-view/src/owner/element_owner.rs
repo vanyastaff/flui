@@ -63,7 +63,7 @@ use rustc_hash::FxHashMap;
 /// `build_scope` drain runs an element's `build()` (PR-K).
 ///
 /// Lets a behavior construct a live
-/// [`BuildCtx`](crate::context::BuildCtx) — reading the real tree and
+/// [`LiveBuildContext`](crate::context::LiveBuildContext) — reading the real tree and
 /// buffering inherited dependents — WITHOUT changing the object-safe
 /// `build_into_views` signature: the handle rides on the `ElementOwner`
 /// that is already threaded into every build. `dep_sink` collects the
@@ -233,7 +233,7 @@ pub struct ElementOwner<'a> {
     /// Live-tree access during a `build_scope` drain (PR-K). `Some` only
     /// while an element's `build()` runs; `None` on every other lifecycle
     /// path (mount / unmount / update / reconcile). The behavior reads it
-    /// to build a live [`BuildCtx`](crate::context::BuildCtx).
+    /// to build a live [`LiveBuildContext`](crate::context::LiveBuildContext).
     pub(crate) build_view: Option<BuildHandle<'a>>,
 
     /// Registry of live lazy-sliver `ChildManager`s, keyed by sliver `RenderId`.
@@ -252,29 +252,29 @@ pub struct ElementOwner<'a> {
 
     /// The exact focus manager owned by the surrounding `BuildOwner`.
     ///
-    /// Cloned into each live `BuildCtx`; it is never looked up through
+    /// Cloned into each live `LiveBuildContext`; it is never looked up through
     /// process-global or thread-local state.
     pub(crate) focus_manager: &'a Rc<FocusManager>,
     pub(crate) lifecycle_handle: &'a Option<crate::LifecycleHandle>,
     pub(crate) window_handle: &'a Option<crate::WindowHandle>,
 
     /// The binding's async task driver, or `None` when no
-    /// binding installed one. Cloned into the live `BuildCtx` so a
+    /// binding installed one. Cloned into the live `LiveBuildContext` so a
     /// `ViewState::init_state` can spawn a subscription.
     pub(crate) async_driver: &'a Option<flui_scheduler::AsyncDriver>,
     /// The binding's post-frame capability, threaded into every
-    /// `BuildCtx` so a `ViewState` can acquire it from a lifecycle hook.
+    /// `LiveBuildContext` so a `ViewState` can acquire it from a lifecycle hook.
     pub(crate) post_frame_handle: &'a Option<flui_scheduler::PostFrameHandle>,
 
     /// The binding's owner-local post-frame capability, threaded into every
-    /// `BuildCtx` the same way `post_frame_handle` is.
+    /// `LiveBuildContext` the same way `post_frame_handle` is.
 
-    /// The presentation capabilities, threaded into every `BuildCtx` the same
+    /// The presentation capabilities, threaded into every `LiveBuildContext` the same
     /// way `post_frame_handle` is; the recovery windows read the error view
     /// factory from it.
     pub(crate) capabilities: &'a super::PresentationCapabilities,
 
-    /// The host's flush registry, threaded into every `BuildCtx` the same way
+    /// The host's flush registry, threaded into every `LiveBuildContext` the same way
     /// `capabilities` is; crate-private, for `Persisted`.
     pub(crate) flush_registry: &'a Option<crate::flush_registry::FlushRegistry>,
 
@@ -287,7 +287,7 @@ pub struct ElementOwner<'a> {
     pub(crate) collects_semantics: bool,
 
     /// This presentation's fresh-hit-test capability, threaded into every
-    /// `BuildCtx` the same way `text_input_handle` is.
+    /// `LiveBuildContext` the same way `text_input_handle` is.
     pub(crate) hit_test_handle: &'a Option<flui_interaction::HitTestHandle>,
 
     /// This owner's identity for [`GlobalKeyScope`] claim tagging (ADR-0043).

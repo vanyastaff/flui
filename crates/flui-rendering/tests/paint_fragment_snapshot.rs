@@ -15,7 +15,7 @@
 //!    child's picture.
 //!
 //! Refs:
-//!   * crates/flui-rendering/src/context/paint_cx.rs (recording side)
+//!   * crates/flui-rendering/src/context/paint.rs (recording side)
 
 use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
@@ -24,7 +24,7 @@ use flui_objects::{RenderClipRect, RenderColoredBox, RenderPadding, RenderRepain
 use flui_painting::{Paint, styling::Color};
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     pipeline::PipelineOwner,
     testing::{SceneHost, inspect},
@@ -108,7 +108,7 @@ impl RenderBox for FramedRow {
         })
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let rect = Rect::from_origin_size(Point::ZERO, ctx.size());
         ctx.canvas()
             .draw_rect(rect, &Paint::fill(Color::rgb(0, 255, 0)));

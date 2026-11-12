@@ -12,7 +12,8 @@
   the capability; the capability and its loop scope stay); and
   [ADR-0152](ADR-0152-capability-seam-revised.md) for §5 (the synchronous `Clipboard` trait is
   gone: each host's clipboard is an owner-local `NativeClipboard` that `OwnerPlatform` hands out,
-  and widgets reach it through the clipboard capability).
+  and widgets reach it through the clipboard capability); and
+  [ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) for §2 only (`Platform` is owner-local; `data_transfer` moves to `OwnerPlatform`), and for §1's `shared()`, which ADR-0327 §2 removes.
 
 ## Context
 
@@ -59,12 +60,14 @@ proves the thread at compile time. Loop liveness stays a runtime `Result`
 It carries the operations that are owner-affine on at least one real OS and
 implemented by at least one backend: `open_window`, `active_window`,
 `display_snapshot` (ADR-0236; formerly `displays` and `primary_display`), `activate`, `window_appearance`,
-`keyboard_layout`, `quit`, `on_wake`; plus `shared()` and `proxy()`.
+`keyboard_layout`, `quit`, `on_wake`, `request_exit_policy_reevaluation`; plus `proxy()`.
 
-- `shared()` returns `SharedPlatform`, a `Clone + Send + Sync` wrapper exposing
-  only the thread-safe surface (§2). Returning `&dyn Platform` would let a
-  caller carry it across a thread boundary and call an owner-affine method in
-  safe code; `SharedPlatform`'s method list is the fence.
+- `proxy()` returns `PlatformProxy`, the one `Clone + Send + Sync` handle another
+  thread holds. Each of its requests is posted to the owner and settled in the
+  owner's turn (wake, quit, window open, exit-policy request), so it reaches no
+  method of `Platform` from that thread; its method list is the fence. Returning
+  `&dyn Platform` would let a caller carry it across a thread boundary and call
+  an owner-affine method in safe code.
 - `OwnerPlatform` is not `Clone`. The runtime stores it once and lends
   `&OwnerPlatform` through a scoped accessor (§6).
 - `Platform` is effectively sealed: an out-of-crate implementor cannot mint the
@@ -92,11 +95,13 @@ backend's state lock or mutate the window map mid-frame. Errors are typed and
 
 ### 2. What stays on `Platform`
 
-`run`, `capabilities`/`name`,
+`Platform` is owner-local ([ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) §1). It keeps `run`, `capabilities`/`name`,
 `app_path`, the `on_*` registrations (registration writes a `Send` callback;
-delivery is owner-thread by construction), `clipboard()` and `data_transfer()`
-(resolution is thread-safe; §5), and the shell dispatches
-`open_url`/`reveal_path`/`open_path` (OS calls usable from any thread).
+delivery is owner-thread by construction), `clipboard()`
+(§5), and the shell dispatches
+`open_url`/`reveal_path`/`open_path`. `data_transfer()`, `data_store()` and `launch_value()` are
+`OwnerPlatform`'s, where every caller
+is.
 
 `prompt_for_paths`/`prompt_for_new_path` keep their seat unchanged. The one
 real implementation (Windows) already runs its dialog on a dedicated STA
@@ -120,6 +125,8 @@ closures:
 - `request_quit()` — a coalesced flag that bypasses queue capacity, so
   shutdown never waits behind backpressure
 - `wake()` — a window-independent owner turn (§7)
+- `request_exit_policy_reevaluation()` — a coalesced flag the owner's next turn settles by
+  asking the platform's exit policy again (ADR-0049)
 - `is_owner_thread()` — diagnostic only; correctness rests on the types
 
 `ProxySendError` is a closed vocabulary: `Full { capacity, rejected }`,
@@ -248,7 +255,7 @@ cross-thread UI closures.
 ## Implementation status
 
 Built: `OwnerAffinity` debug assertions on macOS and Windows; `OwnerPlatform`,
-`SharedPlatform`, `PlatformProxy`, `PendingWindow` and the claim slot; the
+`PlatformProxy`, `PendingWindow` and the claim slot; the
 fallible ready callback on every backend; owner signals; loop-owned pending
 windows; the resident main window; the owner lane behind
 `PlatformProxy::open_window` on every host (`flui-native`'s `ARCHITECTURE.md`,

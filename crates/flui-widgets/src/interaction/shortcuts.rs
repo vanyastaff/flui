@@ -32,7 +32,7 @@ use flui_platform::keyboard::{
 };
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_view::{EventCx, EventOutcome};
+use flui_view::{EventContext, EventOutcome};
 
 use super::actions::{
     Actions, ActivateIntent, ActivationPressIntent, BackIntent, CopySelectionTextIntent,
@@ -44,8 +44,8 @@ use super::focus::Focus;
 use crate::support::{command_modifiers, event_callback};
 
 /// A callback bound to a [`SingleActivator`] in [`CallbackShortcuts`]: it
-/// receives the key event's [`EventCx`] (ADR-0086).
-pub type ShortcutCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
+/// receives the key event's [`EventContext`] (ADR-0086).
+pub type ShortcutCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 
 // ============================================================================
 // SingleActivator
@@ -355,11 +355,11 @@ impl CallbackShortcuts {
 
     /// Fire `callback` whenever `activator` matches a key the focused subtree
     /// ignored. It runs inside the key event's dispatch and receives its
-    /// `cx`, so it writes signals like any other event callback (ADR-0086).
+    /// `ctx`, so it writes signals like any other event callback (ADR-0086).
     #[must_use]
     pub fn binding<F, R>(mut self, activator: SingleActivator, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.bindings.push((activator, event_callback(callback)));
@@ -383,7 +383,7 @@ impl std::fmt::Debug for CallbackShortcuts {
 }
 
 impl View for CallbackShortcuts {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }
@@ -396,11 +396,11 @@ impl StatelessView for CallbackShortcuts {
         Focus::new(self.child.clone())
             .can_request_focus(false)
             .debug_label("CallbackShortcuts")
-            .on_key_event(move |cx, event| {
+            .on_key_event(move |ctx, event| {
                 let mut handled = false;
                 for (activator, callback) in &bindings {
                     if activator.matches(event) {
-                        callback(cx);
+                        callback(ctx);
                         handled = true;
                     }
                 }
@@ -549,7 +549,7 @@ impl ViewState<Shortcuts> for ShortcutsState {
         focus
             .can_request_focus(false)
             .debug_label("Shortcuts")
-            .on_key_event(move |cx, event| {
+            .on_key_event(move |ctx, event| {
                 // The FIRST matching activator decides; an unresolvable
                 // intent falls through as ignored, it does not try later
                 // activators.
@@ -583,7 +583,7 @@ impl ViewState<Shortcuts> for ShortcutsState {
                     // One call: invoke and read `to_key_event_result` off what
                     // it actually did, so the key result cannot disagree with
                     // the invocation.
-                    Some(action) => action.invoke_for_key(cx, intent),
+                    Some(action) => action.invoke_for_key(ctx, intent),
                     None => KeyEventResult::Ignored,
                 }
             })

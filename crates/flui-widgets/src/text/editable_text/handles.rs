@@ -1228,7 +1228,7 @@ impl std::fmt::Debug for HandlesView {
 }
 
 impl View for HandlesView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -1283,17 +1283,17 @@ fn handle(
         .behavior(HitTestBehavior::Opaque)
         .drag(
             DragSlot::pan()
-                .on_start(move |_cx, details| {
+                .on_start(move |_ctx, details| {
                     if let Some(handles) = start.upgrade() {
                         handles.drag_started(side, details.global_position);
                     }
                 })
-                .on_update(move |_cx, details| {
+                .on_update(move |_ctx, details| {
                     if let Some(handles) = update.upgrade() {
                         handles.dragged(side, details.global_position);
                     }
                 })
-                .on_end(move |_cx, details| {
+                .on_end(move |_ctx, details| {
                     if let Some(handles) = end.upgrade() {
                         // A release ends where the finger lifted, which no
                         // update may have reported yet.
@@ -1317,12 +1317,12 @@ fn handle(
         Rc::downgrade(handles),
     );
     let held = Listener::new()
-        .on_pointer_down(move |_cx, _dispatch| {
+        .on_pointer_down(move |_ctx, _dispatch| {
             if let Some(handles) = down.upgrade() {
                 handles.held(true);
             }
         })
-        .on_pointer_up(move |_cx, _dispatch| {
+        .on_pointer_up(move |_ctx, _dispatch| {
             if let Some(handles) = up.upgrade() {
                 handles.held(false);
                 // A finger that lifts from the caret's handle without
@@ -1332,7 +1332,7 @@ fn handle(
                 }
             }
         })
-        .on_pointer_cancel(move |_cx, _dispatch| {
+        .on_pointer_cancel(move |_ctx, _dispatch| {
             if let Some(handles) = cancel.upgrade() {
                 handles.held(false);
             }

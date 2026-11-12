@@ -360,14 +360,14 @@ impl<R> PersistentHeaderView<R> {
 
     /// Attach the widget layer's snap controller. See the field doc.
     #[must_use]
-    pub fn with_snap_controller(mut self, controller: Option<AnimationController>) -> Self {
+    pub fn snap_controller(mut self, controller: Option<AnimationController>) -> Self {
         self.snap_controller = controller;
         self
     }
 
     /// Attach the widget layer's current snap command. See the field doc.
     #[must_use]
-    pub fn with_snap_command(mut self, command: Option<SnapCommand>) -> Self {
+    pub fn snap_command(mut self, command: Option<SnapCommand>) -> Self {
         self.snap_command = command;
         self
     }
@@ -436,7 +436,7 @@ impl<R: PersistentHeaderRenderObject> RenderView for PersistentHeaderView<R> {
 }
 
 impl<R: PersistentHeaderRenderObject> View for PersistentHeaderView<R> {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         // Custom behavior (not the generic `RenderBehavior`) so `on_mount`
         // mints + installs + registers the shrink cell and `build_into_views`
         // builds from the published shrink state.
@@ -545,7 +545,7 @@ impl<R: PersistentHeaderRenderObject> ElementBehavior<PersistentHeaderView<R>, V
 
         let ctx_choice = make_build_ctx(core, owner);
         let ctx = ctx_choice.as_ctx();
-        let view = core.view().clone();
+        let view = std::rc::Rc::clone(core.shared_view());
         let child_view = build_or_recover(core, owner, "PersistentHeaderElement", move || {
             view.delegate
                 .build(ctx, shrink.shrink_offset, shrink.overlaps_content)

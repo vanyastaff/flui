@@ -12,7 +12,7 @@ use flui_foundation::inspect::{Fields, Inspect, Unit};
 use flui_painting::paint::Clip;
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
-    context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
+    context::{PaintContext, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverMultiBoxAdaptorParentData,
     protocol::ChildLayout,
     traits::{RenderSliver, SemanticsClip},
@@ -460,7 +460,7 @@ impl RenderSliver for RenderSliverCarousel {
         Ok(sliver)
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         for item in &self.shown {
             if item.mask_extent <= 0.0 {
                 continue;

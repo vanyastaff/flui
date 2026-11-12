@@ -52,17 +52,17 @@ impl<C: Capability> StatefulView for Acquire<C> {
 }
 
 impl<C: Capability> View for Acquire<C> {
-    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
         flui_sdk::view::element::ElementKind::stateful(self)
     }
 }
 
 impl<C: Capability> ViewState<Acquire<C>> for AcquireState<C> {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        *self.slot.borrow_mut() = Some(cx.capability::<C>());
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.slot.borrow_mut() = Some(ctx.capability::<C>());
     }
 
-    fn build(&self, _view: &Acquire<C>, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Acquire<C>, _ctx: &dyn BuildContext) -> impl IntoView {
         SizedBox::new(10.0, 10.0)
     }
 }

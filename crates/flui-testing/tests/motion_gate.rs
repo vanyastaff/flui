@@ -61,7 +61,8 @@ fn padding(vsync: &Vsync, animated: bool) -> Recording {
         vsync,
         |inset| {
             let content = if animated {
-                AnimatedPadding::new(EdgeInsets::all(inset), square())
+                AnimatedPadding::new(EdgeInsets::all(inset))
+                    .child(square())
                     .duration(RUN)
                     .boxed()
             } else {
@@ -139,7 +140,10 @@ pub(crate) fn an_opacity_change_snaps_unless_it_fades() {
             vsync,
             |value| {
                 let content = if animated {
-                    AnimatedOpacity::new(value, square()).duration(RUN).boxed()
+                    AnimatedOpacity::new(value)
+                        .child(square())
+                        .duration(RUN)
+                        .boxed()
                 } else {
                     Opacity::new(value).child(square()).boxed()
                 };
@@ -167,7 +171,8 @@ pub(crate) fn an_opacity_change_snaps_unless_it_fades() {
 /// A square shown (`opacity` = its entry opacity) or not, at the root of the tree.
 fn maybe_square(vsync: &Vsync, shown: bool, opacity: f64) -> impl View {
     let content = if shown {
-        AnimatedOpacity::new(opacity, square())
+        AnimatedOpacity::new(opacity)
+            .child(square())
             .duration(RUN)
             .boxed()
     } else {
@@ -248,7 +253,9 @@ pub(crate) fn an_opacity_dip_that_comes_back_flickers() {
     let tree = |value: f64| {
         VsyncScope::new(
             vsync.clone(),
-            AnimatedOpacity::new(value, square()).duration(Duration::from_millis(100)),
+            AnimatedOpacity::new(value)
+                .child(square())
+                .duration(Duration::from_millis(100)),
         )
     };
     let mut laid = lay_out_animated(tree(1.0), loose(200.0), vsync.clone());
@@ -331,7 +338,9 @@ pub(crate) fn a_bouncy_spring_overshoots_and_a_critical_one_does_not() {
             |inset| {
                 VsyncScope::new(
                     vsync.clone(),
-                    AnimatedPadding::new(EdgeInsets::all(inset), square()).spring(description),
+                    AnimatedPadding::new(EdgeInsets::all(inset))
+                        .child(square())
+                        .spring(description),
                 )
             },
             0.0,
@@ -370,9 +379,13 @@ pub(crate) fn a_bouncy_spring_overshoots_and_a_critical_one_does_not() {
         |inset| {
             VsyncScope::new(
                 vsync.clone(),
-                SizedBox::new(100.0, 100.0).child(ClipRect::new().clipper(Rect::ZERO).child(
-                    AnimatedPadding::new(EdgeInsets::all(inset), square()).spring(description),
-                )),
+                SizedBox::new(100.0, 100.0).child(
+                    ClipRect::new().clipper(Rect::ZERO).child(
+                        AnimatedPadding::new(EdgeInsets::all(inset))
+                            .child(square())
+                            .spring(description),
+                    ),
+                ),
             )
         },
         0.0,
@@ -390,7 +403,9 @@ pub(crate) fn motion_still_running_at_the_end_never_settles() {
     let tree = |value: f64| {
         VsyncScope::new(
             vsync.clone(),
-            AnimatedOpacity::new(value, square()).duration(Duration::from_secs(5)),
+            AnimatedOpacity::new(value)
+                .child(square())
+                .duration(Duration::from_secs(5)),
         )
     };
     let mut laid = lay_out_animated(tree(1.0), loose(200.0), vsync.clone());
@@ -430,8 +445,11 @@ pub(crate) fn frames_asked_for_after_the_motion_ends_wake_after_end() {
     let tree = |value: f64| {
         VsyncScope::new(
             vsync.clone(),
-            Opacity::new(0.0)
-                .child(AnimatedOpacity::new(value, square()).duration(Duration::from_secs(10))),
+            Opacity::new(0.0).child(
+                AnimatedOpacity::new(value)
+                    .child(square())
+                    .duration(Duration::from_secs(10)),
+            ),
         )
     };
     let mut laid = lay_out_animated(tree(1.0), loose(200.0), vsync.clone());
@@ -455,11 +473,9 @@ pub(crate) fn wakes_after_end_reads_what_the_window_shows() {
                         .alignment(Alignment::TOP_LEFT)
                         .child(
                             Padding::only(60.0, 0.0, 0.0, 0.0).child(
-                                AnimatedPadding::new(
-                                    EdgeInsets::only_left(inset),
-                                    SizedBox::new(20.0, 20.0),
-                                )
-                                .duration(Duration::from_secs(10)),
+                                AnimatedPadding::new(EdgeInsets::only_left(inset))
+                                    .child(SizedBox::new(20.0, 20.0))
+                                    .duration(Duration::from_secs(10)),
                             ),
                         ),
                 ),
@@ -522,7 +538,8 @@ pub(crate) fn wakes_after_end_reads_what_the_window_shows() {
     let tree = |inset: f64| {
         VsyncScope::new(
             vsync.clone(),
-            AnimatedPadding::new(EdgeInsets::only_left(inset), square())
+            AnimatedPadding::new(EdgeInsets::only_left(inset))
+                .child(square())
                 .duration(Duration::from_secs(10)),
         )
     };
@@ -728,9 +745,9 @@ impl StatelessView for Follower {
         let signal = self.x;
         Listener::new()
             .behavior(HitTestBehavior::Opaque)
-            .on_pointer_move(move |cx, event| {
+            .on_pointer_move(move |ctx, event| {
                 if let PointerEvent::Move(event) = event.global {
-                    let _ = signal.set(cx, event.current().position.get().x);
+                    let _ = signal.set(ctx, event.current().position.get().x);
                 }
             })
             .child(
@@ -819,7 +836,7 @@ struct Tagged {
 }
 
 impl View for Tagged {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 

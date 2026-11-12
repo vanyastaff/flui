@@ -64,7 +64,7 @@ impl StatelessView for DummyChild {
 }
 
 impl View for DummyChild {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -93,7 +93,7 @@ impl InheritedView for ThemeProvider {
 }
 
 impl View for ThemeProvider {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::inherited(self)
     }
 }
@@ -129,7 +129,7 @@ impl RenderView for LeafView {
 }
 
 impl View for LeafView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -228,7 +228,7 @@ pub(crate) fn missing_inherited_reads_refresh_lifecycle_and_survive_build_recove
     }
     struct ProbeState(std::rc::Rc<std::cell::Cell<usize>>);
     impl View for Probe {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateful(self)
         }
     }
@@ -356,7 +356,7 @@ pub(crate) fn unmounted_dependent_is_removed_from_provider_before_next_notificat
             .downcast_ref::<InheritedElement<ThemeProvider>>()
             .expect("provider is InheritedElement<ThemeProvider>");
         assert!(
-            !provider.dependents().contains_key(&child_id),
+            provider.dependent(child_id).is_none(),
             "unmount must remove the dependent from the provider immediately",
         );
     }
@@ -378,6 +378,70 @@ pub(crate) fn unmounted_dependent_is_removed_from_provider_before_next_notificat
         owner.borrow().dirty_count(),
         0,
         "a provider update must not enqueue an already-unmounted dependent",
+    );
+}
+
+/// A provider read by more dependents than it scans keeps every one of them
+/// through removals in any order, and an update schedules exactly the ones
+/// still mounted.
+pub(crate) fn a_provider_with_many_dependents_keeps_exactly_the_mounted_ones() {
+    let (tree, owner) = create_tree_and_owner();
+    let provider_id = tree.borrow_mut().mount_root(
+        &ThemeProvider {
+            theme: MyTheme { color: 1 },
+            child: DummyChild,
+        },
+        &mut owner.borrow_mut().element_owner_mut(),
+    );
+    let children: Vec<_> = (0..20)
+        .map(|slot| {
+            let child = tree.borrow_mut().insert(
+                &DummyChild,
+                provider_id,
+                slot,
+                &mut owner.borrow_mut().element_owner_mut(),
+            );
+            let ctx = ElementBuildContext::for_element(child, tree.clone(), owner.clone())
+                .expect("the child element is live");
+            let _ = ctx.depend_on::<ThemeProvider, ()>(|_| ());
+            child
+        })
+        .collect();
+    // Remove from the front, the back and the middle, past the point where
+    // the holes outnumber the live entries.
+    let removed: Vec<usize> = vec![0, 19, 7, 8, 9, 10, 11, 12, 13, 1, 2, 3];
+    for &slot in &removed {
+        tree.borrow_mut()
+            .remove(children[slot], &mut owner.borrow_mut().element_owner_mut());
+    }
+    {
+        let tree_guard = tree.borrow();
+        let provider = tree_guard
+            .get(provider_id)
+            .expect("provider exists")
+            .element()
+            .downcast_ref::<InheritedElement<ThemeProvider>>()
+            .expect("provider is InheritedElement<ThemeProvider>");
+        for (slot, child) in children.iter().enumerate() {
+            assert_eq!(
+                provider.dependent(*child).is_some(),
+                !removed.contains(&slot),
+                "dependent in slot {slot}"
+            );
+        }
+    }
+    tree.borrow_mut().update(
+        provider_id,
+        &ThemeProvider {
+            theme: MyTheme { color: 2 },
+            child: DummyChild,
+        },
+        &mut owner.borrow_mut().element_owner_mut(),
+    );
+    assert_eq!(
+        owner.borrow().dirty_count(),
+        children.len() - removed.len(),
+        "an update schedules every mounted dependent and no removed one",
     );
 }
 
@@ -459,7 +523,7 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl View for PanicDcd {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateful(self)
         }
     }
@@ -487,7 +551,7 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl View for PanicThemeProvider {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::inherited(self)
         }
     }
@@ -526,7 +590,7 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl View for DcdHost {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::render_variable(self)
         }
     }
@@ -542,7 +606,7 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl View for CountingSibling {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateless(self)
         }
     }
@@ -706,7 +770,7 @@ pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtre
         }
     }
     impl View for Shade {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::inherited(self)
         }
     }
@@ -719,7 +783,7 @@ pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtre
     }
     struct DependentState(Rc<Cell<usize>>);
     impl View for Dependent {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateful(self)
         }
     }
@@ -756,7 +820,7 @@ pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtre
         }
     }
     impl View for Host {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateless(self)
         }
     }

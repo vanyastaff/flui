@@ -31,7 +31,7 @@ and the readers of it in `flui-rendering` and `flui-engine`. At `e5ba8fe8f`:
 | `Path` is an `Arc<BezPath>`, a shape hint (104 bytes, since it can hold an `RRect`), a fill type and cached `Option<Rect<f64>>` bounds: 160 bytes, not ADR-0066's 32 | `crates/flui-painting/src/paint/path.rs:47-52`, `:75-87` |
 | The largest payloads: `ImageRegion` 216 bytes (an `Image`, three rectangles and an inline `Option<ColorFilter>` of 84), `DRRect` 200, `Shadow` 184, `Path` and `ClipPath` 168, `ImageFiltered` 144; then `RRect`, `ClipRRect`, `ClipRSuperellipse`, `Vertices` and `Atlas` at 104 | `command.rs:186-202`, `:284-291`, `:257-264`, `:149-154`, `:94-101`, `:229-238`, `:123-128`, `:305-316`, `:333-346`; `crates/flui-painting/src/paint/image.rs:27-37`, `:442-476`; `crates/flui-painting/src/paint/effects.rs:111-114` |
 | `DrawOp` is therefore 216 to 224 bytes (by where the compiler puts the discriminant) and a command 344 to 352, against ADR-0066's 128 and 192; 200,000 recorded operations hold about 70 MB of commands. No `size_of` assertion exists, and the crate's architecture document still states 128, 192 and a `Vec`-backed path | `rg 'size_of::<(DrawOp\|DrawCommand)>'` finds none; `crates/flui-painting/ARCHITECTURE.md:55-57` |
-| Render objects already draw in local coordinates: the paint recorder translates each fresh canvas to the render object's origin in its layer, so the origin reaches every command through that command's own copy of the CTM | `crates/flui-rendering/src/context/paint_cx.rs:300-308`; `crates/flui-rendering/src/pipeline/owner/paint.rs:771-772`, `:874-882` |
+| Render objects already draw in local coordinates: the paint recorder translates each fresh canvas to the render object's origin in its layer, so the origin reaches every command through that command's own copy of the CTM | `crates/flui-rendering/src/context/paint.rs:300-308`; `crates/flui-rendering/src/pipeline/owner/paint.rs:771-772`, `:874-882` |
 | The runs of inline render objects merge into one picture per boundary, so nothing holds a render object's position once | `paint.rs:804`, `:1501-1503` |
 | The engine reinstalls the CTM unless the matrix equals the previous command's (16 comparisons per command); it composes in `f64` and narrows to `f32` after composing | `crates/flui-engine/src/layer_dispatcher.rs:134-161`; `crates/flui-engine/src/batches/shapes.rs:35`, `:60`, `:69`; `crates/flui-engine/src/batches/text.rs:67-83` |
 | A non-finite rectangle is recorded as given; the engine refuses it with `GeometryError::NonFinite`, and the layer walk returns that error, so the frame is not drawn | `drawing.rs:42-46`; `crates/flui-engine/src/clip_geometry.rs:257-275`; `crates/flui-engine/src/layer_walk.rs:105-108`, `:186` |
@@ -110,10 +110,10 @@ six fields.
 fields keep their types (`Rect<f64>`, `RRect`, `RSuperellipse`, `Point<f64>`, `Offset<f64>`,
 `f64`): no `f32` geometry type and no local twin of a geometry type exists, the engine stays the one
 narrowing point, and the compile-fail fixtures (`crates/flui-painting/tests/compile_fail/`) keep
-their meaning. An op holds what the painter drew, in the painter's coordinates. `PaintCx` exposes
-no position of its render object except `paint_anchor()` (`paint_cx.rs:410-713`), so the origin
+their meaning. An op holds what the painter drew, in the painter's coordinates. `PaintContext` exposes
+no position of its render object except `paint_anchor()` (`paint.rs:410-713`), so the origin
 reaches a list only through a transform: the recorder's translation of a fresh canvas
-(`paint_cx.rs:300-308`), which interns it as the run's one entry, or a placement its consumer
+(`paint.rs:300-308`), which interns it as the run's one entry, or a placement its consumer
 composes at replay. Neither changes `Canvas`'s public API, which stays `f64` logical. A list holds
 no state from outside its recording: the clip, transform and opacity above it belong to whoever
 replays it; what the engine bakes from them into its own IR is the engine's (ADR-0006), not this
@@ -250,7 +250,7 @@ code, after the list is complete.
   of one copy.
 - Neutral, because a painter that draws in anchor coordinates
   (`crates/flui-objects/src/proxy/skeleton.rs:203`) bakes its position into its ops by choice and
-  repaints when it moves, as `PaintAnchor` documents (`paint_cx.rs:224-244`).
+  repaints when it moves, as `PaintAnchor` documents (`paint.rs:224-244`).
 - Neutral, because ADR-0098 §2 is unchanged: the narrowing stays in the engine.
 
 ### Confirmation
@@ -309,7 +309,7 @@ code, after the list is complete.
   `crates/flui-painting/src/display_list/paragraph.rs:233`, `:255`). An ancestor's zoom multiplies
   it further: under a 64-times scale it is a quarter of a device pixel, a whole glyph bin and a
   quarter of a hairline's one-pixel width (ADR-0098 §6). The recorder knows the ratio
-  (`PaintCx::dpr`, `paint_cx.rs:437`) but not its ancestors' transforms; the engine composes in
+  (`PaintContext::dpr`, `paint.rs:437`) but not its ancestors' transforms; the engine composes in
   `f64` first, so what it narrows is a visible coordinate of target size (`shapes.rs:35`, `:69`).
 - Bad, because rebasing an op past the bound has to move what lies outside the op in the same
   frame: a paint's shader coordinates (`crates/flui-engine/src/batches/gradients.rs:403-404`), an

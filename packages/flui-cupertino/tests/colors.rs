@@ -68,7 +68,7 @@ pub fn static_color_resolves_to_itself_through_a_real_context() {
 struct RetainedChild(BoxedView);
 
 impl View for RetainedChild {
-    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
         flui_sdk::view::element::ElementKind::proxy(self)
     }
 
