@@ -102,7 +102,7 @@ fn pager_alternatives() -> GestureAlternatives {
     GestureAlternatives::try_new(Alternative::ContextMenu(
         MenuSpec::new(
             GestureCommand::new("Previous page", PageIntent::Previous),
-            |_cx, _request| {},
+            |_ctx, _request| {},
         )
         .item(GestureCommand::new("Next page", PageIntent::Next)),
     ))

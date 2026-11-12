@@ -945,16 +945,16 @@ impl ViewState<Scrollbar> for ScrollbarState {
             .allowed_devices(PointerKindSet::all())
             // The contact the drag follows: a second finger that lands
             // elsewhere does not change where this one went down.
-            .on_down(move |_cx, details| {
+            .on_down(move |_ctx, details| {
                 pressed.pressed.set(pressed.takes(details.local_position));
             })
-            .on_start(move |_cx, _details| {
+            .on_start(move |_ctx, _details| {
                 if started.pressed.get() == Some(Landing::Thumb) {
                     started.dragging.set(true);
                     started.appear();
                 }
             })
-            .on_update(move |_cx, details| {
+            .on_update(move |_ctx, details| {
                 if moved.dragging.get()
                     && let Some(shown) = moved.shown()
                 {
@@ -964,7 +964,7 @@ impl ViewState<Scrollbar> for ScrollbarState {
                     });
                 }
             })
-            .on_end(move |_cx, _details| {
+            .on_end(move |_ctx, _details| {
                 if ended.dragging.replace(false) {
                     let scrolling = ended
                         .shown()
@@ -985,7 +985,7 @@ impl ViewState<Scrollbar> for ScrollbarState {
                 }))
                 .behavior(HitTestBehavior::DeferToChild)
                 .drag(slot)
-                .on_tap_up(move |_cx, details| tapped.page_toward(details.local_position))
+                .on_tap_up(move |_ctx, details| tapped.page_toward(details.local_position))
                 .child(CustomPaint::new().foreground_painter(painter).child(
                     ScrollObserverScope::new(
                         ctx,

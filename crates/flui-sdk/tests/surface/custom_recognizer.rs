@@ -134,8 +134,8 @@ struct ThresholdDragFactory(Spec);
 impl GestureRecognizerFactory for ThresholdDragFactory {
     type Recognizer = ThresholdDrag;
 
-    fn create(&self, cx: &RecognizerContext) -> Rc<ThresholdDrag> {
-        let arena = cx.arena().clone();
+    fn create(&self, ctx: &RecognizerContext) -> Rc<ThresholdDrag> {
+        let arena = ctx.arena().clone();
         Rc::new_cyclic(|this: &Weak<ThresholdDrag>| ThresholdDrag {
             born: self.0.label,
             config: RefCell::new(self.0.clone()),
@@ -143,7 +143,7 @@ impl GestureRecognizerFactory for ThresholdDragFactory {
             contact: PrimaryContact::new(
                 ArenaMembership::new(arena, this.clone()).with_motion_role(MotionRole::Free),
             ),
-            settings: cx.settings().clone(),
+            settings: ctx.settings().clone(),
         })
     }
 

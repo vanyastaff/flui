@@ -457,7 +457,7 @@ impl std::future::Future for TransferRequest {
 
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        ctx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         use std::task::Poll;
         assert!(
@@ -468,7 +468,7 @@ impl std::future::Future for TransferRequest {
             RequestState::Ready(result) => {
                 result.take().expect("BUG: ready transfer lost its result")
             }
-            RequestState::Pending(handle) => match std::pin::Pin::new(handle).poll(cx) {
+            RequestState::Pending(handle) => match std::pin::Pin::new(handle).poll(ctx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(ClaimOutcome::Delivered(result)) => result,
                 Poll::Ready(ClaimOutcome::OwnerGone) => Err(TransferError::SourceGone),

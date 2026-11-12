@@ -149,7 +149,7 @@ type RadioChangeCallback<T> = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, T)>;
 ///     Summer,
 /// }
 ///
-/// let _selected = Radio::new(Season::Spring, Some(Season::Spring)).on_changed(|_cx, _next| { /* ... */ });
+/// let _selected = Radio::new(Season::Spring, Some(Season::Spring)).on_changed(|_ctx, _next| { /* ... */ });
 /// let _unselected = Radio::new(Season::Summer, Some(Season::Spring));
 /// ```
 #[derive(Clone, StatefulView)]
@@ -325,12 +325,12 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
         .states_controller(self.states.clone())
         .focus_indicator(FocusIndicator::Halo);
         if interactive {
-            ink_well = ink_well.on_tap(move |cx| {
+            ink_well = ink_well.on_tap(move |ctx| {
                 if selected {
                     return;
                 }
                 if let Some(handler) = &on_changed {
-                    handler(cx, next_value.clone());
+                    handler(ctx, next_value.clone());
                 }
             });
         }

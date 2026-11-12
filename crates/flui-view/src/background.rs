@@ -7,9 +7,9 @@
 //! turn boundary, never inline in the call that started it.
 //!
 //! ```rust,ignore
-//! fn init_state(&mut self, cx: &dyn LifecycleContext) {
-//!     let background = cx.capability::<BackgroundCapability>().expect("a host runs background work");
-//!     let rebuild = cx.rebuild_handle();
+//! fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+//!     let background = ctx.capability::<BackgroundCapability>().expect("a host runs background work");
+//!     let rebuild = ctx.rebuild_handle();
 //!     let decoded = Rc::clone(&self.decoded);
 //!     background
 //!         .compute(move || decode(&bytes))
@@ -32,7 +32,7 @@ use flui_platform::capability::{Abandoned, Capability, Completion, CompletionSou
 use flui_platform::executor::{ComputeJob, Executor, IoFuture, SpawnError};
 use parking_lot::Mutex;
 
-/// The background-work capability: `cx.capability::<BackgroundCapability>()`
+/// The background-work capability: `ctx.capability::<BackgroundCapability>()`
 /// hands out a [`Background`].
 ///
 /// The framework provides it over the host's execution services; an
@@ -371,12 +371,12 @@ struct Cancellable<T: 'static> {
 impl<T: Send + 'static> Future for Cancellable<T> {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
         let this = &mut *self;
         let Some(answer) = this.answer.as_ref() else {
             return Poll::Ready(());
         };
-        let waker = cx.waker().clone();
+        let waker = ctx.waker().clone();
         // The waker this one replaces drops after the lock is released: its
         // destructor may reach a `cancel`, which takes the same lock.
         let replaced = answer.cancel.waker.lock().replace(waker);
@@ -390,7 +390,7 @@ impl<T: Send + 'static> Future for Cancellable<T> {
                 .expect("BUG: a Cancellable keeps its future until it answers");
             // A polled future's panic becomes the task's error, not an unwind.
             let mut caught = FirstPanic::new();
-            match caught.contain(|| future.as_mut().poll(cx)) {
+            match caught.contain(|| future.as_mut().poll(ctx)) {
                 Some(Poll::Pending) => return Poll::Pending,
                 Some(Poll::Ready(value)) => Ok(value),
                 None => {

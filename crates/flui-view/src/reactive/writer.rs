@@ -9,7 +9,7 @@
 //! (ADR-0078). So a write in `build` has no writer to name:
 //!
 //! ```rust,ignore
-//! RawButton::new(Text::new("+")).on_press(move |cx| count.update(cx, |n| *n += 1))
+//! RawButton::new(Text::new("+")).on_press(move |ctx| count.update(ctx, |n| *n += 1))
 //! ```
 //!
 //! The types narrow the run-time guard; they do not replace it. A widget that
@@ -89,9 +89,9 @@ impl ReadGraph for Writer {
 ///
 /// It dereferences to the [`Writer`] and carries nothing else: no tree
 /// position, no UI runtime id. A signal write takes it directly:
-/// `count.set(cx, 3)`, `count.update(cx, |n| *n += 1)`. Passing `cx` to a
+/// `count.set(ctx, 3)`, `count.update(ctx, |n| *n += 1)`. Passing `ctx` to a
 /// write reborrows it, so one callback can make several writes.
-/// Current values can be inspected with `signal.peek(cx, |value| ...)`.
+/// Current values can be inspected with `signal.peek(ctx, |value| ...)`.
 /// These reads neither subscribe an element nor schedule a rebuild.
 pub struct EventCx<'a> {
     writer: &'a mut Writer,
@@ -180,7 +180,7 @@ impl ReadGraph for EventCx<'_> {
 /// Acquire it in `create_state` (or `init_state`) with
 /// [`LifecycleContext::writer_source`](crate::LifecycleContext::writer_source)
 /// and keep it in the state. A widget wraps a recognizer callback with it
-/// (`source.write(|cx| user_callback(cx))`), and so does code that receives
+/// (`source.write(|ctx| user_callback(ctx))`), and so does code that receives
 /// a callback shaped `Fn()` or `Fn(&str)` and has to write from it.
 ///
 /// It is bound to the graph of one `BuildOwner`, so to one presentation: a
@@ -195,7 +195,7 @@ impl ReadGraph for EventCx<'_> {
 ///
 /// fn keep(source: &WriterSource) -> &'static mut Writer {
 ///     let mut out = None;
-///     source.write(|cx| out = Some(&mut **cx));
+///     source.write(|ctx| out = Some(&mut **ctx));
 ///     out.expect("written")
 /// }
 /// ```
@@ -213,11 +213,11 @@ impl WriterSource {
     /// state. This checks presentation identity and the signal build guard,
     /// but is not a transaction or proof that the target widget is mounted.
     /// The target must separately invalidate its stored source on disposal.
-    pub fn check_context(&self, cx: &EventCx<'_>) -> Result<(), EventContextError> {
+    pub fn check_context(&self, ctx: &EventCx<'_>) -> Result<(), EventContextError> {
         if self.graph.inner.borrow().closed {
             return Err(EventContextError::Detached);
         }
-        if self.graph.id() != cx.writer.graph.id() {
+        if self.graph.id() != ctx.writer.graph.id() {
             return Err(EventContextError::ForeignPresentation);
         }
         if let Some(element) = self.graph.inner.borrow().building {
@@ -233,8 +233,8 @@ impl WriterSource {
     /// [`SignalError::WrittenDuringBuild`].
     pub fn write<R>(&self, f: impl FnOnce(&mut EventCx<'_>) -> R) -> R {
         let mut writer = Writer::new(self.graph.clone());
-        let mut cx = EventCx::new(&mut writer);
-        f(&mut cx)
+        let mut ctx = EventCx::new(&mut writer);
+        f(&mut ctx)
     }
 }
 
@@ -262,8 +262,8 @@ impl fmt::Debug for WriterSource {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot write a signal",
     label = "not a write context",
-    note = "a signal write takes the `&mut EventCx` an event callback receives: `move |cx| count.set(cx, v)`",
-    note = "outside a callback, acquire a `WriterSource` in `init_state` and call `source.write(|cx| ..)`; `build` has none"
+    note = "a signal write takes the `&mut EventCx` an event callback receives: `move |ctx| count.set(ctx, v)`",
+    note = "outside a callback, acquire a `WriterSource` in `init_state` and call `source.write(|ctx| ..)`; `build` has none"
 )]
 pub trait WriteTarget: sealed::Sealed {
     /// The graph the write lands in. Callable only inside `flui-view`.
@@ -287,7 +287,7 @@ impl WriteTarget for EventCx<'_> {
 
 /// What an event callback may return: `()`, or a `Result` with
 /// [`SignalError`], [`EventContextError`] or their union [`EventError`].
-/// Thus `move |cx| count.set(cx, v)` needs no `let _`.
+/// Thus `move |ctx| count.set(ctx, v)` needs no `let _`.
 ///
 /// Sealed. A refused write is not lost silently: [`EventOutcome::report`]
 /// logs it at the dispatch boundary, the same way the guard logs a write
@@ -346,19 +346,19 @@ impl<T> EventOutcome for Result<T, EventError> {
 ///
 /// A closure written inline where `Fn(&mut EventCx<'_>)` is expected gets the
 /// right signature from that bound. A closure bound with `let` first does
-/// not: nothing tells it what `cx` is, the write infers `&_` for it, and
+/// not: nothing tells it what `ctx` is, the write infers `&_` for it, and
 /// passing it on fails with E0631, "type mismatch in closure arguments".
-/// Wrap it here (annotating `|cx: &mut EventCx<'_>|` also works):
+/// Wrap it here (annotating `|ctx: &mut EventCx<'_>|` also works):
 ///
 /// ```
 /// use flui_view::{EventCx, Signal, SignalError, SignalWriteExt, WriterSource, callback};
 ///
 /// fn wire(source: &WriterSource, a: Signal<u32>, b: Signal<u32>) -> Result<(), SignalError> {
-///     let press = callback(move |cx| {
-///         a.set(cx, 1)?;
-///         b.update(cx, |n| *n += 1)
+///     let press = callback(move |ctx| {
+///         a.set(ctx, 1)?;
+///         b.update(ctx, |n| *n += 1)
 ///     });
-///     source.write(|cx| press(cx))
+///     source.write(|ctx| press(ctx))
 /// }
 /// ```
 pub fn callback<F, R>(f: F) -> F
@@ -370,7 +370,7 @@ where
 }
 
 /// [`callback`] for an event callback that also receives a value: a
-/// `let`-bound closure shaped `|cx, details| ..`.
+/// `let`-bound closure shaped `|ctx, details| ..`.
 ///
 /// The value is passed by value (`DragUpdateDetails`, `bool`, a `DeviceId`).
 /// For a borrowed argument (`&str`, `&KeyEvent`), use [`callback_ref`].
@@ -379,11 +379,11 @@ where
 /// use flui_view::{Signal, SignalError, SignalWriteExt, WriterSource, callback_with};
 ///
 /// fn wire(source: &WriterSource, a: Signal<u32>, b: Signal<u32>) -> Result<(), SignalError> {
-///     let moved = callback_with(move |cx, delta: u32| {
-///         a.update(cx, |n| *n += delta)?;
-///         b.set(cx, delta)
+///     let moved = callback_with(move |ctx, delta: u32| {
+///         a.update(ctx, |n| *n += delta)?;
+///         b.set(ctx, delta)
 ///     });
-///     source.write(|cx| moved(cx, 4))
+///     source.write(|ctx| moved(ctx, 4))
 /// }
 /// ```
 pub fn callback_with<A, F, R>(f: F) -> F
@@ -395,7 +395,7 @@ where
 }
 
 /// [`callback`] for an event callback that also receives a borrowed value: a
-/// `let`-bound closure shaped `|cx, text| ..` where `text: &str`.
+/// `let`-bound closure shaped `|ctx, text| ..` where `text: &str`.
 ///
 /// [`callback_with`] cannot express it, because its argument type is one
 /// fixed type and a borrowed argument has to accept every lifetime.
@@ -408,12 +408,12 @@ where
 ///     text: Signal<String>,
 ///     edits: Signal<u32>,
 /// ) -> Result<(), SignalError> {
-///     let changed = callback_ref(move |cx, value: &str| {
-///         text.set(cx, value.to_owned())?;
-///         edits.update(cx, |n| *n += 1)
+///     let changed = callback_ref(move |ctx, value: &str| {
+///         text.set(ctx, value.to_owned())?;
+///         edits.update(ctx, |n| *n += 1)
 ///     });
 ///     let typed = String::from("hello");
-///     source.write(|cx| changed(cx, &typed))
+///     source.write(|ctx| changed(ctx, &typed))
 /// }
 /// ```
 pub fn callback_ref<T, F, R>(f: F) -> F
@@ -464,7 +464,7 @@ mod tests {
         r.register_element_reader(b.slot(), e2);
         let source = WriterSource::new(r.clone());
 
-        assert_eq!(source.write(|cx| a.set(cx, 10)), Ok(()));
+        assert_eq!(source.write(|ctx| a.set(ctx, 10)), Ok(()));
 
         assert_eq!(scheduled(&inbox), vec![e1]);
         assert!(

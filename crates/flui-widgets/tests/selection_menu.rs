@@ -158,14 +158,14 @@ impl Scene {
             Rc::clone(&self.log),
         );
         let home = Actions::new(content)
-            .action(CallbackAction::new(move |_cx, _: &Shout| {
+            .action(CallbackAction::new(move |_ctx, _: &Shout| {
                 shout.borrow_mut().push("shout");
             }))
-            .action(CallbackAction::new(move |_cx, _: &Whisper| {
+            .action(CallbackAction::new(move |_ctx, _: &Whisper| {
                 whisper.borrow_mut().push("whisper");
             }))
             .action(CallbackAction::new(
-                move |_cx, _: &ShowContextMenuIntent| {
+                move |_ctx, _: &ShowContextMenuIntent| {
                     menu.borrow_mut().push("menu");
                 },
             ));
@@ -809,7 +809,7 @@ pub(crate) fn a_field_rebuilt_with_other_commands_closes_the_popup() {
     };
     let log: Rc<RefCell<Vec<&'static str>>> = Rc::default();
     let home = Actions::new(Column::new((probe.view(),)))
-        .action(CallbackAction::new(|_cx, _: &Whisper| {}));
+        .action(CallbackAction::new(|_ctx, _: &Whisper| {}));
     let page = Column::new((SizedBox::new(400.0, 80.0), home));
     let mut laid = lay_out(WidgetsApp::new(page), tight(400.0, 300.0));
     laid.enable_semantics();
@@ -832,7 +832,7 @@ pub(crate) fn a_field_rebuilt_with_other_commands_closes_the_popup() {
     whisper.set(true);
     let signal = count.borrow().expect("the probe built");
     probe
-        .write(|cx| signal.set(cx, 1))
+        .write(|ctx| signal.set(ctx, 1))
         .expect("the probe's signal takes it");
     scene.settle();
     assert_eq!(scene.popup(), Vec::<String>::new());
@@ -884,7 +884,7 @@ pub(crate) fn a_field_rebuilt_without_its_menu_takes_its_toolbar_away() {
     off.set(true);
     let signal = count.borrow().expect("the probe built");
     probe
-        .write(|cx| signal.set(cx, 1))
+        .write(|ctx| signal.set(ctx, 1))
         .expect("the probe's signal takes it");
     scene.settle();
     assert_eq!(scene.toolbar(), Vec::<String>::new());

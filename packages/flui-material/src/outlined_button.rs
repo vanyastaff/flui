@@ -39,7 +39,7 @@ use crate::theme::Theme;
 /// use flui_material::OutlinedButton;
 /// use flui_sdk::widgets::Text;
 ///
-/// let _button = OutlinedButton::new(Text::new("Cancel")).on_pressed(|_cx| {});
+/// let _button = OutlinedButton::new(Text::new("Cancel")).on_pressed(|_ctx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct OutlinedButton {

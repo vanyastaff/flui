@@ -140,7 +140,7 @@ pub trait Document: Sized + 'static {
 }
 pub struct Persisted<D: Document> { /* Rc: owner-local, !Send, Clone */ }
 impl<D: Document> Persisted<D> {
-    pub fn open(cx: &dyn LifecycleContext) -> Self;
+    pub fn open(ctx: &dyn LifecycleContext) -> Self;
     pub fn load(&self) -> impl Future<Output = Result<Rc<D>, PersistError>> + 'static;
     pub fn set(&self, value: D) -> Result<Revision, PersistError>;
     pub fn committed(&self) -> Option<Revision>;

@@ -431,9 +431,9 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         // Root pass-through: the view draws nothing itself and splices
         // every child subtree in order — `size` is only forwarded to
         // the child-painting context.
-        let mut cx =
+        let mut ctx =
             crate::context::PaintCx::<flui_foundation::Variable>::new(recorder, child_count, size);
-        cx.paint_children();
+        ctx.paint_children();
     }
 
     fn hit_test_raw(

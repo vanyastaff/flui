@@ -188,7 +188,7 @@ async fn exchange(
     let limit = request.body_limit();
     let exchange = Aborting(start(&request));
     let head = JsFuture::from(exchange.0.head());
-    let Some(head) = unless_closed(head, poll_fn(|cx| head_tx.poll_closed(cx))).await else {
+    let Some(head) = unless_closed(head, poll_fn(|ctx| head_tx.poll_closed(ctx))).await else {
         return;
     };
     let head = head.map_err(|reason| match failure(reason) {
@@ -346,11 +346,11 @@ async fn unless_closed<T>(
 ) -> Option<T> {
     let mut work = pin!(work);
     let mut closed = pin!(closed);
-    poll_fn(|cx| {
-        if closed.as_mut().poll(cx).is_ready() {
+    poll_fn(|ctx| {
+        if closed.as_mut().poll(ctx).is_ready() {
             return Poll::Ready(None);
         }
-        work.as_mut().poll(cx).map(Some)
+        work.as_mut().poll(ctx).map(Some)
     })
     .await
 }
@@ -373,12 +373,12 @@ struct Chunks {
 impl BodySource for Chunks {
     fn poll_chunk(
         mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        ctx: &mut Context<'_>,
     ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
         if self.ended {
             return Poll::Ready(None);
         }
-        Poll::Ready(match std::task::ready!(self.receiver.poll_recv(cx)) {
+        Poll::Ready(match std::task::ready!(self.receiver.poll_recv(ctx)) {
             Some(Chunk::Bytes(bytes)) => Some(Ok(bytes)),
             Some(Chunk::End) => {
                 self.ended = true;

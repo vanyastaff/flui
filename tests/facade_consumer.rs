@@ -323,7 +323,7 @@ fn cross_thread_handles_stay_sendable() {
 }
 
 /// An unannotated closure handed to each family of event setter writes a
-/// signal through the `cx` the framework passes (ADR-0086 §6), through the
+/// signal through the `ctx` the framework passes (ADR-0086 §6), through the
 /// facade with both catalogs.
 #[test]
 fn event_setters_infer_cx_through_the_facade() {

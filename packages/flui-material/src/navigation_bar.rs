@@ -261,7 +261,7 @@ impl std::fmt::Debug for NavigationDestination {
 ///     NavigationDestination::new(Icon::new(IconData::new(0xE7FD)), "Profile"),
 /// ])
 /// .selected_index(0)
-/// .on_destination_selected(|_cx, index| {
+/// .on_destination_selected(|_ctx, index| {
 ///     let _ = index;
 /// });
 /// ```
@@ -572,9 +572,9 @@ fn build_destination(
     let mut ink_well = InkWell::new(column).overlay_color(overlay_color.clone());
     if enabled {
         let callback = on_destination_selected.cloned();
-        ink_well = ink_well.on_tap(move |cx| {
+        ink_well = ink_well.on_tap(move |ctx| {
             if let Some(callback) = &callback {
-                callback(cx, index);
+                callback(ctx, index);
             }
         });
     }

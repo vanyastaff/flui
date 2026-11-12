@@ -89,8 +89,8 @@ impl TextFormField {
         F: Fn(&mut EventCx<'_>, &String) -> R + 'static,
         R: EventOutcome,
     {
-        self.config.on_saved = Some(Rc::new(move |cx: &mut EventCx<'_>, value: &String| {
-            on_saved(cx, value).report();
+        self.config.on_saved = Some(Rc::new(move |ctx: &mut EventCx<'_>, value: &String| {
+            on_saved(ctx, value).report();
         }));
         self
     }
@@ -103,8 +103,8 @@ impl TextFormField {
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        self.config.on_reset = Some(Rc::new(move |cx: &mut EventCx<'_>| {
-            on_reset(cx).report();
+        self.config.on_reset = Some(Rc::new(move |ctx: &mut EventCx<'_>| {
+            on_reset(ctx).report();
         }));
         self
     }
@@ -167,8 +167,8 @@ impl TextFormField {
         F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
         R: EventOutcome,
     {
-        self.config.on_submitted = Some(Rc::new(move |cx: &mut EventCx<'_>, text: &str| {
-            callback(cx, text).report();
+        self.config.on_submitted = Some(Rc::new(move |ctx: &mut EventCx<'_>, text: &str| {
+            callback(ctx, text).report();
         }));
         self
     }
@@ -230,7 +230,7 @@ impl ViewState<TextFormField> for TextFormFieldState {
                 field = field.focus_node(Rc::clone(node));
             }
             if let Some(on_submitted) = input.on_submitted.clone() {
-                field = field.on_submitted(move |cx, text| on_submitted(cx, text));
+                field = field.on_submitted(move |ctx, text| on_submitted(ctx, text));
             }
             field.boxed()
         })

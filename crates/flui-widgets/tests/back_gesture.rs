@@ -346,7 +346,7 @@ pub(crate) fn replacing_authored_back_swipe_policy_cancels_the_outgoing_contact(
         "outgoing swipe has actually crossed halfway"
     );
     probe
-        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .write(|ctx| signal.get().expect("mounted probe").set(ctx, 1))
         .expect("publish equal authored back swipe policy");
     laid.pump();
     assert!(
@@ -355,7 +355,7 @@ pub(crate) fn replacing_authored_back_swipe_policy_cancels_the_outgoing_contact(
     );
     threshold.set(100.0);
     probe
-        .write(|cx| signal.get().expect("mounted probe").set(cx, 2))
+        .write(|ctx| signal.get().expect("mounted probe").set(ctx, 2))
         .expect("replace authored back swipe policy");
     laid.pump();
     for _ in 0..40 {

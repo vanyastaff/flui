@@ -228,7 +228,7 @@ fn tap_node(tree: &A11yTree) -> flui_testing::NodeId {
 #[test]
 fn an_action_sent_off_thread_is_applied_by_the_next_harness_pump() {
     let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
-        labelled(GestureDetector::new().on_tap(move |cx| count.update(cx, |n| *n += 1)))
+        labelled(GestureDetector::new().on_tap(move |ctx| count.update(ctx, |n| *n += 1)))
     });
     let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
     laid.enable_semantics();
@@ -551,7 +551,7 @@ pub fn logical_render_root_tracks_replacement_and_build_recovery() {
 pub fn a_signal_probe_reads_and_writes_its_current_mount_after_remount() {
     let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
         GestureDetector::new()
-            .on_tap(move |cx| count.update(cx, |value| *value += 1))
+            .on_tap(move |ctx| count.update(ctx, |value| *value += 1))
             .child(ColoredBox::new(Color::WHITE))
     });
     let mut first = lay_out(probe.view(), tight(100.0, 100.0));

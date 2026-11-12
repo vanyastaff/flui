@@ -48,7 +48,7 @@ fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
                         SaveIntent,
                     ),
             )
-            .action(CallbackAction::new(move |_cx, _intent: &SaveIntent| {
+            .action(CallbackAction::new(move |_ctx, _intent: &SaveIntent| {
                 action_saves.set(action_saves.get() + 1);
             })),
             160.0,
@@ -666,12 +666,12 @@ fn accessibility_input_reaches_the_semantics_owner() {
                 Semantics::new()
                     .container(true)
                     .label("Send")
-                    .on_click(move |_cx| clicked.set(clicked.get() + 1))
+                    .on_click(move |_ctx| clicked.set(clicked.get() + 1))
                     .child(SizedBox::new(10.0, 10.0)),
                 Semantics::new()
                     .container(true)
                     .label("Boom")
-                    .on_click(|_cx| {
+                    .on_click(|_ctx| {
                         // Typed `()`: a handler that only diverges has no outcome.
                         if std::hint::black_box(true) {
                             std::panic::panic_any("assistive handler failure");

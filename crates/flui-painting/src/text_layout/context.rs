@@ -1256,10 +1256,10 @@ mod tests {
         (fonts, path)
     }
 
-    /// The key of the face `cx` shapes "Hamburg" in, registering it when a
+    /// The key of the face `ctx` shapes "Hamburg" in, registering it when a
     /// registry is given.
     fn roboto_face(
-        cx: &mut TextContext,
+        ctx: &mut TextContext,
         registry: Option<&mut crate::glyphs::FontRegistry>,
     ) -> crate::glyphs::FaceKey {
         let style = TextStyle {
@@ -1267,7 +1267,7 @@ mod tests {
             ..TextStyle::default()
         };
         let spans: Vec<(String, Option<TextStyle>)> = vec![("Hamburg".to_owned(), Some(style))];
-        let paragraph = cx
+        let paragraph = ctx
             .shape(&ParagraphSpec {
                 font_weight_adjustment: 0,
                 spans: &spans,
@@ -1299,10 +1299,10 @@ mod tests {
             (MemoryPressureLevel::Critical, true),
         ] {
             let (fonts, path) = file_backed_roboto(&format!("trim-{level:?}"));
-            let mut cx = TextContext::new(&fonts);
-            let before = roboto_face(&mut cx, None);
-            cx.reclaim(level);
-            let after = roboto_face(&mut cx, None);
+            let mut ctx = TextContext::new(&fonts);
+            let before = roboto_face(&mut ctx, None);
+            ctx.reclaim(level);
+            let after = roboto_face(&mut ctx, None);
             let _ = std::fs::remove_file(&path);
             assert_eq!(before != after, reloads, "{level:?}");
         }
@@ -1317,14 +1317,14 @@ mod tests {
     fn a_held_blob_keeps_its_keys_across_a_prune() {
         use crate::glyphs::FontRegistry;
 
-        let pruned = |cx: &mut TextContext| cx.font_cx.source_cache.prune(0, true);
+        let pruned = |ctx: &mut TextContext| ctx.font_cx.source_cache.prune(0, true);
 
         let (fonts, path) = file_backed_roboto("held");
-        let mut cx = TextContext::new(&fonts);
+        let mut ctx = TextContext::new(&fonts);
         let mut registry = FontRegistry::new();
-        let held = roboto_face(&mut cx, Some(&mut registry));
-        pruned(&mut cx);
-        let again = roboto_face(&mut cx, None);
+        let held = roboto_face(&mut ctx, Some(&mut registry));
+        pruned(&mut ctx);
+        let again = roboto_face(&mut ctx, None);
         let _ = std::fs::remove_file(&path);
 
         let (fonts, path) = file_backed_roboto("control");

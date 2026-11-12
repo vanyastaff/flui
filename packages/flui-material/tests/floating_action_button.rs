@@ -35,7 +35,7 @@ pub fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     let laid = lay_out(
         Theme::new(
             theme,
-            FloatingActionButton::new(SizedBox::square(24.0)).on_pressed(|_cx| {}),
+            FloatingActionButton::new(SizedBox::square(24.0)).on_pressed(|_ctx| {}),
         ),
         tight(56.0, 56.0),
     );
@@ -70,7 +70,7 @@ pub fn mounted_geometry_in_a_scaffold_slot_is_exactly_56_by_56_at_the_end_float_
                 Scaffold::new()
                     .body(SizedBox::new(10.0, 10.0))
                     .floating_action_button(
-                        FloatingActionButton::new(SizedBox::square(24.0)).on_pressed(|_cx| {}),
+                        FloatingActionButton::new(SizedBox::square(24.0)).on_pressed(|_ctx| {}),
                     ),
             ),
         ),

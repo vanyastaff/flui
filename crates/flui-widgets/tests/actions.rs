@@ -69,11 +69,11 @@ pub(crate) fn the_nearest_enabled_action_wins_and_receives_the_payload() {
     let inner_counter = Arc::clone(&inner_sum);
     let harness = mount(
         Actions::new(Actions::new(invoker(5, &field)).action(CallbackAction::new(
-            move |_cx, intent: &AddToCounter| {
+            move |_ctx, intent: &AddToCounter| {
                 inner_counter.fetch_add(intent.0, Ordering::SeqCst);
             },
         )))
-        .action(CallbackAction::new(move |_cx, intent: &AddToCounter| {
+        .action(CallbackAction::new(move |_ctx, intent: &AddToCounter| {
             outer_counter.fetch_add(intent.0, Ordering::SeqCst);
         })),
     );
@@ -95,13 +95,13 @@ pub(crate) fn the_nearest_enabled_action_wins_and_receives_the_payload() {
 }
 
 /// A `CallbackAction` runs inside the key event's dispatch: it writes a
-/// signal through the `cx` it receives, and the signal's reader rebuilds.
+/// signal through the `ctx` it receives, and the signal's reader rebuilds.
 pub(crate) fn callback_action_writes_through_the_key_events_cx() {
     let field = FocusNode::with_debug_label("writing-field");
     let probe_field = Rc::clone(&field);
     let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
         Actions::new(invoker(3, &probe_field)).action(CallbackAction::new(
-            move |cx, intent: &AddToCounter| count.update(cx, |n| *n += intent.0 as u32),
+            move |ctx, intent: &AddToCounter| count.update(ctx, |n| *n += intent.0 as u32),
         ))
     });
     let mut harness = mount(probe.view());
@@ -119,7 +119,7 @@ pub(crate) fn a_refused_write_in_a_callback_action_is_reported_not_panicked() {
     let probe_field = Rc::clone(&field);
     let probe = SignalProbe::new(move |ProbeSignals { released, .. }| {
         Actions::new(invoker(1, &probe_field)).action(CallbackAction::new(
-            move |cx, _: &AddToCounter| released.set(cx, 1),
+            move |ctx, _: &AddToCounter| released.set(ctx, 1),
         ))
     });
     let mut harness = mount(probe.view());

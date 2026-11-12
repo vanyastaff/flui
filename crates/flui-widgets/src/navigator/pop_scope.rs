@@ -174,7 +174,7 @@ impl_inherited_view!(PopEntryScope);
 /// # use flui_widgets::prelude::*;
 /// let _ = PopScope::new(Text::new("unsaved changes"))
 ///     .can_pop(false)
-///     .on_pop_invoked(|_cx, did_pop| {
+///     .on_pop_invoked(|_ctx, did_pop| {
 ///         if !did_pop {
 ///             // show the "discard changes?" dialog
 ///         }
@@ -229,7 +229,7 @@ impl PopScope {
         mut self,
         callback: impl Fn(&mut EventCx<'_>, bool) -> R + 'static,
     ) -> Self {
-        self.on_pop_invoked = Some(Rc::new(move |cx, did_pop| callback(cx, did_pop).report()));
+        self.on_pop_invoked = Some(Rc::new(move |ctx, did_pop| callback(ctx, did_pop).report()));
         self
     }
 }
@@ -333,7 +333,7 @@ impl PopScopeState {
         let callback = self.callback.clone().map(|callback| {
             let callback = crate::navigator::lifecycle::Terminal::new(callback);
             let writer = crate::navigator::lifecycle::Terminal::new(writer);
-            Rc::new(move |did_pop| writer.write(|cx| callback(cx, did_pop))) as Rc<dyn Fn(bool)>
+            Rc::new(move |did_pop| writer.write(|ctx| callback(ctx, did_pop))) as Rc<dyn Fn(bool)>
         });
         let previous = std::mem::replace(&mut *self.entry.on_pop_invoked.lock(), callback);
         drop(previous);

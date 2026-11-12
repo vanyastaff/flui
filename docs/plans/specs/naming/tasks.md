@@ -281,8 +281,6 @@ RT…HR 9, M 10, C 2; сводные строки фасада, SDK и macros н
 
 | # | Было | Стало | Почему | Ссылок |
 |---|---|---|---|---|
-| X1 | привязки `ctx` (параметры и локальные) любого типа `…Context` | `cx` | N1 владельца | 3559 в 343 файлах |
-| X2 | время жизни `'ctx` | `'cx`; где уже есть `'cx` (`FlowPaintingContext<'ctx, 'cx>`) — вручную | Следует за X1 | 230 |
 | X3 | `flui-rendering/src/context/paint_cx.rs` | `context/paint.rs` | R5 | 1 |
 | X4 | тестовые модули `event_cx` (×4), `event_cx_tests` в `flui-widgets/tests/` | `event_context` | V1 | 5 |
 | X5 | фикстура `flui-view/tests/ui/unit_closure_where_event_cx_expected.{rs,stderr}` | `unit_closure_where_event_context_expected` | V1 | 2 |

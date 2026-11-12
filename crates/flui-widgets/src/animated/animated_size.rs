@@ -96,7 +96,7 @@ impl AnimatedSize {
         mut self,
         on_end: impl Fn(&mut EventCx<'_>) -> R + 'static,
     ) -> Self {
-        self.on_end = Some(Rc::new(move |cx| on_end(cx).report()));
+        self.on_end = Some(Rc::new(move |ctx| on_end(ctx).report()));
         self
     }
 }
@@ -173,7 +173,7 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
                         if mounted.get() {
                             let on_end = callback.borrow().clone();
                             if let Some(on_end) = on_end {
-                                writer.write(|cx| on_end(cx));
+                                writer.write(|ctx| on_end(ctx));
                             }
                         }
                     }) {

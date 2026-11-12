@@ -1,7 +1,7 @@
 //! The system's open and save dialogs.
 //!
 //! A widget acquires [`FileDialogs`] through
-//! `cx.capability::<FileDialogCapability>()` in a lifecycle hook of a
+//! `ctx.capability::<FileDialogCapability>()` in a lifecycle hook of a
 //! widget in a window. The handle is bound to that window: the dialog is
 //! modal to it, and the window holds at most one dialog at a time.
 
@@ -16,7 +16,7 @@ use flui_platform::{Unsupported, UnsupportedReason, WindowId};
 
 pub use request::{FileFilter, OpenRequest, PickedFile, SaveRequest};
 
-/// The file dialog capability: `cx.capability::<FileDialogCapability>()`
+/// The file dialog capability: `ctx.capability::<FileDialogCapability>()`
 /// hands out [`FileDialogs`].
 #[derive(Debug)]
 #[allow(
@@ -119,7 +119,7 @@ pub struct FileDialogs {
 }
 
 impl FileDialogs {
-    /// A handle over `backend` for the acquisition `cx`, bound to the
+    /// A handle over `backend` for the acquisition `ctx`, bound to the
     /// acquiring widget's window.
     ///
     /// # Errors
@@ -128,16 +128,16 @@ impl FileDialogs {
     /// is in no window: a dialog is modal to one.
     pub fn try_new(
         backend: impl FileDialogBackend,
-        cx: &ProviderContext<'_>,
+        ctx: &ProviderContext<'_>,
     ) -> Result<Self, Unsupported> {
-        let window = cx.window().ok_or(Unsupported::of::<FileDialogCapability>(
+        let window = ctx.window().ok_or(Unsupported::of::<FileDialogCapability>(
             UnsupportedReason::NoWindow,
         ))?;
         Ok(Self {
             backend: Rc::new(backend),
-            completions: cx.completions().clone(),
+            completions: ctx.completions().clone(),
             window,
-            open: cx.runtime_local::<OpenDialogs>(),
+            open: ctx.runtime_local::<OpenDialogs>(),
         })
     }
 

@@ -70,7 +70,7 @@ pub(crate) fn nested_write_panics_inside_an_event_cx() {
         "the nested write stays applied"
     );
     assert_eq!(
-        source.write(|cx| a.set(cx, 3)),
+        source.write(|ctx| a.set(ctx, 3)),
         Ok(()),
         "the source opens the next write"
     );
@@ -119,7 +119,7 @@ impl flui_view::ViewState<WriteReader> for WriteReaderState {
         let writer = ctx.writer_source();
         let write = move |value: u32| {
             writer
-                .write(|cx| written.set(cx, value))
+                .write(|ctx| written.set(ctx, value))
                 .expect("the callback's write lands on the owner");
         };
         match &self.view.trigger {

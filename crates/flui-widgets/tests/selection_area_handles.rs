@@ -72,7 +72,7 @@ impl Scene {
     fn area(heard: &Heard, handles: Option<Marked>) -> SelectionArea {
         let recorded = Rc::clone(heard);
         let area =
-            menuless(Column::new((Text::new(WORDS),))).on_selection_changed(move |_cx, change| {
+            menuless(Column::new((Text::new(WORDS),))).on_selection_changed(move |_ctx, change| {
                 recorded.borrow_mut().push(
                     change
                         .selected
@@ -351,7 +351,7 @@ pub(crate) fn a_controller_selection_hides_the_handles() {
     let (recorded, noted) = (Rc::clone(&heard), Rc::clone(&causes));
     let area = menuless(Column::new((Text::new(WORDS),)))
         .controller(controller.clone())
-        .on_selection_changed(move |_cx, change| {
+        .on_selection_changed(move |_ctx, change| {
             recorded.borrow_mut().push(
                 change
                     .selected
@@ -399,7 +399,7 @@ pub(crate) fn a_listener_selecting_elsewhere_leaves_no_handles() {
     let (recorded, redirect) = (Rc::clone(&heard), controller.clone());
     let area = menuless(Column::new((Text::new(WORDS),)))
         .controller(controller)
-        .on_selection_changed(move |_cx, change| {
+        .on_selection_changed(move |_ctx, change| {
             recorded.borrow_mut().push(
                 change
                     .selected
@@ -470,7 +470,7 @@ pub(crate) fn a_panicking_listener_still_shows_the_handles() {
     let heard: Heard = Rc::default();
     let recorded = Rc::clone(&heard);
     let area = menuless(Column::new((Text::new(WORDS),)))
-        .on_selection_changed(move |_cx, change| {
+        .on_selection_changed(move |_ctx, change| {
             recorded.borrow_mut().push(
                 change
                     .selected
@@ -525,7 +525,7 @@ pub(crate) fn an_end_at_a_text_edge_drags_from_where_its_handle_is() {
     let heard: Heard = Rc::default();
     let recorded = Rc::clone(&heard);
     let area = menuless(Column::new((Text::new(WORDS), Text::new(NEXT))))
-        .on_selection_changed(move |_cx, change| {
+        .on_selection_changed(move |_ctx, change| {
             recorded.borrow_mut().push(
                 change
                     .selected
@@ -771,7 +771,7 @@ pub(crate) fn an_end_inside_a_new_cluster_sits_where_the_highlight_ends() {
     let area = |text: &'static str, heard: &Heard| {
         let recorded = Rc::clone(heard);
         menuless(Column::new((Text::new(text),)))
-            .on_selection_changed(move |_cx, change| {
+            .on_selection_changed(move |_ctx, change| {
                 recorded.borrow_mut().push(
                     change
                         .selected
@@ -920,7 +920,7 @@ pub(crate) fn a_listener_taking_the_focus_away_leaves_no_handles() {
     let elsewhere = FocusNode::with_debug_label("elsewhere");
     let (recorded, moved) = (Rc::clone(&heard), Rc::clone(&elsewhere));
     let area = menuless(Column::new((Text::new(WORDS),)))
-        .on_selection_changed(move |_cx, change| {
+        .on_selection_changed(move |_ctx, change| {
             recorded.borrow_mut().push(
                 change
                     .selected
@@ -1005,7 +1005,7 @@ pub(crate) fn a_handle_scrolled_out_of_view_takes_no_touch() {
         .handles(Marked::default())
         .on_selection_changed({
             let recorded = Rc::clone(&heard);
-            move |_cx, change| {
+            move |_ctx, change| {
                 recorded.borrow_mut().push(
                     change
                         .selected
@@ -1150,7 +1150,7 @@ pub(crate) fn a_long_press_extends_by_words_as_the_touch_moves() {
     let (recorded, noted) = (Rc::clone(&heard), Rc::clone(&causes));
     let area = menuless(Column::new((Text::new(WORDS),)))
         .handles(Marked::default())
-        .on_selection_changed(move |_cx, change| {
+        .on_selection_changed(move |_ctx, change| {
             recorded.borrow_mut().push(
                 change
                     .selected
@@ -1200,7 +1200,7 @@ pub(crate) fn losing_the_focus_ends_a_long_press_extension() {
     let elsewhere = FocusNode::with_debug_label("elsewhere");
     let (recorded, moved) = (Rc::clone(&heard), Rc::clone(&elsewhere));
     let area = menuless(Column::new((Text::new(WORDS),)))
-        .on_selection_changed(move |_cx, change| {
+        .on_selection_changed(move |_ctx, change| {
             let selected = change
                 .selected
                 .as_ref()

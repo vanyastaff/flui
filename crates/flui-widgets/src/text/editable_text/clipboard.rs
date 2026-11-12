@@ -70,7 +70,7 @@ impl Action<CopySelectionTextIntent> for ClipboardTextAction {
             && self.controller.borrow().has_selection()
     }
 
-    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &CopySelectionTextIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, intent: &CopySelectionTextIntent) -> ActionOutcome {
         let Some(clipboard) = &self.clipboard else {
             return ActionOutcome::NotPerformed;
         };
@@ -97,7 +97,7 @@ impl Action<PasteTextIntent> for ClipboardTextAction {
     /// Commits an active composition first, keeping its text, so the paste
     /// lands after it (ADR-0142 item 4); the paste runs though the commit's
     /// owner code failed, and that failure is resumed after it.
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &PasteTextIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &PasteTextIntent) -> ActionOutcome {
         let Some(clipboard) = &self.clipboard else {
             return ActionOutcome::NotPerformed;
         };

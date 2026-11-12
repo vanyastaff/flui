@@ -171,11 +171,11 @@ impl HttpClient for ScriptedHttp {
             id,
             answered: false,
         };
-        Box::pin(std::future::poll_fn(move |cx| {
+        Box::pin(std::future::poll_fn(move |ctx| {
             // Cloned, and every replaced or unused waker dropped, outside the
             // lock: a waker's clone and drop run its owner's code, which may
             // call back here.
-            let waker = cx.waker().clone();
+            let waker = ctx.waker().clone();
             let mut state = lock_state(&pending.state);
             if state.holding.contains(&url) {
                 let replaced = state.held.insert(pending.id, (url.clone(), waker));
@@ -209,7 +209,7 @@ struct Script(Option<Vec<u8>>);
 impl crate::http::BodySource for Script {
     fn poll_chunk(
         mut self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
+        _ctx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
         Poll::Ready(self.0.take().filter(|body| !body.is_empty()).map(Ok))
     }

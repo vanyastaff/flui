@@ -365,7 +365,7 @@ impl UiCommandSender {
     ) -> Result<(), CommandSendError> {
         self.send(UiCommand::SignalWrite {
             target: target.slot(),
-            apply: Box::new(move |cx| apply(target.attach(), cx)),
+            apply: Box::new(move |ctx| apply(target.attach(), ctx)),
         })
     }
 
@@ -767,7 +767,7 @@ impl UiRuntime {
                         clippy::disallowed_methods,
                         reason = "ADR-0287: a signal write callback runs contained so the tail stays live"
                     )]
-                    let outcome = catch_unwind(AssertUnwindSafe(|| source.write(|cx| apply(cx))));
+                    let outcome = catch_unwind(AssertUnwindSafe(|| source.write(|ctx| apply(ctx))));
                     // Keep the command envelope outside the caught invocation.
                     // Consuming a boxed `FnOnce` there would destroy captures
                     // during a callback unwind, where a panicking destructor

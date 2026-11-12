@@ -47,7 +47,7 @@ impl Scene {
     fn area(content: impl Into<BoxedView>, heard: &Heard) -> WidgetsApp {
         let recorded = Rc::clone(heard);
         WidgetsApp::new(SelectionArea::new(content.into()).on_selection_changed(
-            move |_cx, change| {
+            move |_ctx, change| {
                 recorded.borrow_mut().push(
                     change
                         .selected
@@ -585,7 +585,7 @@ pub(crate) fn a_panicking_blur_listener_keeps_the_clicked_selection() {
     let failing = Rc::clone(&armed);
     let elsewhere = Focus::new(SizedBox::new(10.0, 10.0))
         .focus_node(Rc::clone(&node))
-        .on_focus_change(move |_cx, focused| {
+        .on_focus_change(move |_ctx, focused| {
             assert!(focused || !failing.get(), "the blur listener fails");
         });
     let mut scene = Scene::over(Column::new((elsewhere, Text::new(FIRST))).boxed());
@@ -755,7 +755,7 @@ pub(crate) fn esc_clears_then_reaches_the_enclosing_dismiss() {
     let heard: Heard = Rc::default();
     let recorded = Rc::clone(&heard);
     let area = SelectionArea::new(Column::new((Text::new(FIRST),)).boxed()).on_selection_changed(
-        move |_cx, change| {
+        move |_ctx, change| {
             recorded.borrow_mut().push(
                 change
                     .selected
@@ -765,7 +765,7 @@ pub(crate) fn esc_clears_then_reaches_the_enclosing_dismiss() {
         },
     );
     let outer = Actions::new(area).action::<DismissIntent>(CallbackAction::new(
-        move |_cx, _: &DismissIntent| counted.set(counted.get() + 1),
+        move |_ctx, _: &DismissIntent| counted.set(counted.get() + 1),
     ));
     let mut laid = lay_out(WidgetsApp::new(outer), tight(400.0, 300.0));
     laid.pump();
@@ -799,7 +799,7 @@ pub(crate) fn a_panicking_listener_keeps_what_the_keys_remember() {
     let area = SelectionArea::new(
         Column::new((SizedBox::width(width).child(Text::new("aaaa b aaaa")),)).boxed(),
     )
-    .on_selection_changed(move |_cx, change| {
+    .on_selection_changed(move |_ctx, change| {
         recorded.borrow_mut().push(
             change
                 .selected

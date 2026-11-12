@@ -258,7 +258,7 @@ impl SnackBarController {
             };
             let writer = messenger.writer.borrow().clone();
             if let Some(writer) = writer {
-                writer.write(|cx| callback(cx, reason).report());
+                writer.write(|ctx| callback(ctx, reason).report());
             }
         }));
     }

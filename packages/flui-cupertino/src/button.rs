@@ -294,7 +294,7 @@ impl CupertinoButton {
         mut self,
         callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
     ) -> Self {
-        self.on_pressed = Some(Rc::new(move |cx| callback(cx).report()));
+        self.on_pressed = Some(Rc::new(move |ctx| callback(ctx).report()));
         self
     }
 
@@ -307,7 +307,7 @@ impl CupertinoButton {
         mut self,
         callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
     ) -> Self {
-        self.on_long_press = Some(Rc::new(move |cx| callback(cx).report()));
+        self.on_long_press = Some(Rc::new(move |ctx| callback(ctx).report()));
         self
     }
 
@@ -590,18 +590,18 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
                     .map(|owner| owner.controller().clone());
                 let rebuild = self.rebuild.clone();
                 let pressed_opacity = view.pressed_opacity;
-                gesture_detector = gesture_detector.on_tap(move |cx| {
+                gesture_detector = gesture_detector.on_tap(move |ctx| {
                     if let Some(controller) = &controller
                         && let Some(future) =
                             start_press_fade(controller, pressed_opacity, rebuild.as_ref())
                     {
                         chain_release_fade(controller, future);
                     }
-                    on_pressed(cx);
+                    on_pressed(ctx);
                 });
             }
             if let Some(on_long_press) = view.on_long_press.clone() {
-                gesture_detector = gesture_detector.on_long_press(move |cx| on_long_press(cx));
+                gesture_detector = gesture_detector.on_long_press(move |ctx| on_long_press(ctx));
             }
         }
 

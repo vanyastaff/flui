@@ -60,7 +60,7 @@ pub fn pointer_and_keyboard_activation_write_the_owning_signal() {
     let probe = common::SignalProbe::new(move |signals| {
         InkWell::new(SizedBox::new(80.0, 40.0))
             .focus_node(Rc::clone(&child_node))
-            .on_tap(move |cx| signals.count.update(cx, |count| *count += 1))
+            .on_tap(move |ctx| signals.count.update(ctx, |count| *count += 1))
     });
     let mut laid = lay_out(probe.view(), tight(80.0, 40.0));
     laid.dispatch_pointer_down(40.0, 20.0);
@@ -132,7 +132,7 @@ fn tab() -> KeyEvent {
 }
 
 /// Enter on a focused `ElevatedButton` reaches its `InkWell`'s activation
-/// action, which runs inside the key event's own dispatch and hands its `cx`
+/// action, which runs inside the key event's own dispatch and hands its `ctx`
 /// to `on_pressed` — no separate writer bridge. The write lands at dispatch
 /// and the signal's reader rebuilds on the next frame (a tick, which dirties
 /// nothing itself).
@@ -144,7 +144,7 @@ pub fn enter_on_a_focused_elevated_button_writes_a_signal_and_rebuilds_its_reade
         Theme::new(
             ThemeData::light(),
             ElevatedButton::new(Text::new("Save"))
-                .on_pressed(move |cx| signals.count.update(cx, |count| *count += 1)),
+                .on_pressed(move |ctx| signals.count.update(ctx, |count| *count += 1)),
         )
     });
     let mut laid = lay_out(probe.view(), tight(120.0, 48.0));
@@ -253,7 +253,7 @@ pub fn a_well_shows_focus_only_when_the_keyboard_is_in_use() {
 /// A checkbox shows its focus with the M3 halo, so it draws no ring.
 pub fn a_checkbox_shows_focus_with_its_halo_not_a_ring() {
     let mut laid = lay_out(
-        themed(Checkbox::new(false).on_changed(|_cx, _value| {})),
+        themed(Checkbox::new(false).on_changed(|_ctx, _value| {})),
         tight(48.0, 48.0),
     );
     let manager = laid.focus_manager();
@@ -304,23 +304,23 @@ impl StatelessView for WrapperWell {
                 (Rc::clone(on_tap), Rc::clone(on_tap), Rc::clone(on_tap));
             actions = actions
                 .action(CallbackAction::new(
-                    move |cx, _: &flui_sdk::widgets::ActivateIntent| activate(cx),
+                    move |ctx, _: &flui_sdk::widgets::ActivateIntent| activate(ctx),
                 ))
-                .action(CallbackAction::new(move |cx, _: &ButtonActivateIntent| {
-                    button_activate(cx);
+                .action(CallbackAction::new(move |ctx, _: &ButtonActivateIntent| {
+                    button_activate(ctx);
                 }));
             detector = detector
-                .on_tap_down(|_cx, _details| {})
-                .on_tap_up(|_cx, _details| {})
-                .on_tap(move |cx| tap(cx))
-                .on_tap_cancel(|_cx, _details| {});
+                .on_tap_down(|_ctx, _details| {})
+                .on_tap_up(|_ctx, _details| {})
+                .on_tap(move |ctx| tap(ctx))
+                .on_tap_cancel(|_ctx, _details| {});
         }
         let surface = MouseRegion::new().child(actions);
         if enabled {
             detector
                 .child(
                     Listener::new()
-                        .on_pointer_up(|_cx, _dispatch| {})
+                        .on_pointer_up(|_ctx, _dispatch| {})
                         .child(surface),
                 )
                 .boxed()
@@ -335,7 +335,7 @@ fn well(made: Made, on_tap: Option<OnTap>, child: impl IntoView) -> BoxedView {
         Made::Well => {
             let mut well = InkWell::new(child);
             if let Some(on_tap) = on_tap {
-                well = well.on_tap(move |cx| on_tap(cx));
+                well = well.on_tap(move |ctx| on_tap(ctx));
             }
             well.boxed()
         }
@@ -351,7 +351,7 @@ type TapLog = Rc<std::cell::RefCell<Vec<&'static str>>>;
 
 fn logging(log: &TapLog, entry: &'static str) -> OnTap {
     let log = Rc::clone(log);
-    Rc::new(move |_cx| log.borrow_mut().push(entry))
+    Rc::new(move |_ctx| log.borrow_mut().push(entry))
 }
 
 /// A well's accessibility tree is the wrappers' tree, enabled and disabled,
@@ -529,7 +529,7 @@ pub fn a_disabled_ink_well_is_disabled_in_every_part() {
     impl IntentAction<ActivateIntent> for Outer {
         fn invoke(
             &self,
-            _cx: &mut flui_sdk::view::EventCx<'_>,
+            _ctx: &mut flui_sdk::view::EventCx<'_>,
             _intent: &ActivateIntent,
         ) -> ActionOutcome {
             self.0.borrow_mut().push("outer");
@@ -544,7 +544,7 @@ pub fn a_disabled_ink_well_is_disabled_in_every_part() {
     let mut laid = lay_out(
         Actions::new(Stack::new((
             GestureDetector::new()
-                .on_tap(move |cx| beneath(cx))
+                .on_tap(move |ctx| beneath(ctx))
                 .child(SizedBox::new(80.0, 40.0)),
             InkWell::new(Focus::new(SizedBox::new(80.0, 40.0)).focus_node(Rc::clone(&inner)))
                 .states_controller(states.clone()),
@@ -632,7 +632,7 @@ struct ToggledWellState {
 
 impl StatefulView for ToggledWell {
     type State = ToggledWellState;
-    fn create_state(&self, _cx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         ToggledWellState {
             enabled: self.enabled.clone(),
             generation: self.generation.clone(),
@@ -654,7 +654,7 @@ impl ViewState<ToggledWell> for ToggledWellState {
         let states = if self.first.get(ctx) { first } else { second };
         let well = InkWell::new(SizedBox::new(80.0, 40.0)).states_controller(states.clone());
         if self.enabled.get(ctx) {
-            well.on_tap(move |_cx| {
+            well.on_tap(move |_ctx| {
                 let _ = generation;
             })
         } else {
