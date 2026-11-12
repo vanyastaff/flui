@@ -72,8 +72,8 @@ impl ViewState<Counter> for CounterState {
         let released = self.released;
         let button = RawButton::new(Text::new("Press"));
         let button = match view.press {
-            Press::Add(step) => button.on_press(move |ctx| count.update(ctx, |n| *n += step)),
-            Press::Released => button.on_press(move |ctx| released.set(ctx, 1)),
+            Press::Add(step) => button.on_pressed(move |ctx| count.update(ctx, |n| *n += step)),
+            Press::Released => button.on_pressed(move |ctx| released.set(ctx, 1)),
         };
         Column::new((Text::new(count.get(ctx).to_string()), button))
     }
@@ -173,7 +173,7 @@ pub(crate) fn a_refused_write_in_a_press_is_reported_not_panicked() {
 
 /// The keyboard reaches an enabled button the way a tap does: Tab focuses it,
 /// Enter and Space activate it, and so does a shortcut bound to
-/// `ButtonActivateIntent`. A button without `on_press` takes no focus.
+/// `ButtonActivateIntent`. A button without `on_pressed` takes no focus.
 pub(crate) fn raw_button_activates_from_the_keyboard() {
     use std::cell::Cell;
 
@@ -190,7 +190,7 @@ pub(crate) fn raw_button_activates_from_the_keyboard() {
         Shortcuts::new(Row::new((
             RawButton::new(SizedBox::new(40.0, 40.0)),
             RawButton::new(SizedBox::new(40.0, 40.0))
-                .on_press(move |_ctx| counted.set(counted.get() + 1)),
+                .on_pressed(move |_ctx| counted.set(counted.get() + 1)),
         )))
         .shortcut(SingleActivator::character("b"), ButtonActivateIntent),
     );
@@ -234,7 +234,7 @@ type OnPress = Rc<dyn Fn(&mut EventContext<'_>)>;
 /// (ADR-0322 §6).
 #[derive(Clone, StatelessView)]
 struct WrapperButton {
-    on_press: Option<OnPress>,
+    on_pressed: Option<OnPress>,
     child: BoxedView,
 }
 
@@ -244,8 +244,8 @@ struct WrapperPress(Option<OnPress>);
 impl WrapperPress {
     fn run(&self, ctx: &mut EventContext<'_>) -> ActionOutcome {
         match &self.0 {
-            Some(on_press) => {
-                on_press(ctx);
+            Some(on_pressed) => {
+                on_pressed(ctx);
                 ActionOutcome::Performed
             }
             None => ActionOutcome::NotPerformed,
@@ -289,8 +289,8 @@ impl IntentAction<ActivationPressIntent> for WrapperPress {
 
 impl StatelessView for WrapperButton {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        let enabled = self.on_press.is_some();
-        let press = WrapperPress(self.on_press.clone());
+        let enabled = self.on_pressed.is_some();
+        let press = WrapperPress(self.on_pressed.clone());
         let actions = Actions::new(
             Focus::new(FocusRing::new(self.child.clone()))
                 .can_request_focus(enabled)
@@ -302,7 +302,7 @@ impl StatelessView for WrapperButton {
         let mut detector = GestureDetector::new()
             .behavior(HitTestBehavior::Opaque)
             .child(actions);
-        if let Some(handler) = self.on_press.clone() {
+        if let Some(handler) = self.on_pressed.clone() {
             detector = detector.on_tap(move |ctx| handler(ctx));
         }
         Semantics::new()
@@ -313,18 +313,18 @@ impl StatelessView for WrapperButton {
     }
 }
 
-/// A button over `child`, made as `made` says; `on_press` absent disables it.
-fn button(made: Made, on_press: Option<OnPress>, child: impl IntoView) -> BoxedView {
+/// A button over `child`, made as `made` says; `on_pressed` absent disables it.
+fn button(made: Made, on_pressed: Option<OnPress>, child: impl IntoView) -> BoxedView {
     match made {
         Made::Raw => {
             let button = RawButton::new(child);
-            match on_press {
-                Some(on_press) => button.on_press(move |ctx| on_press(ctx)).boxed(),
+            match on_pressed {
+                Some(on_pressed) => button.on_pressed(move |ctx| on_pressed(ctx)).boxed(),
                 None => button.boxed(),
             }
         }
         Made::Wrappers => WrapperButton {
-            on_press,
+            on_pressed,
             child: child.into_view().boxed(),
         }
         .boxed(),
@@ -352,11 +352,11 @@ pub(crate) fn raw_button_a11y_tree_matches_wrappers() {
         for focused in [false, true] {
             let tree = |made: Made| {
                 let log = PressLog::default();
-                let on_press = enabled.then(|| logging(&log, "press"));
+                let on_pressed = enabled.then(|| logging(&log, "press"));
                 let mut app = lay_out(
                     Column::new((
                         Text::new("Above"),
-                        button(made, on_press, Text::new("Press")),
+                        button(made, on_pressed, Text::new("Press")),
                     )),
                     loose(400.0),
                 );
@@ -555,10 +555,10 @@ impl ViewState<Switched> for SwitchedState {
     }
 
     fn build(&self, view: &Switched, ctx: &dyn BuildContext) -> impl IntoView {
-        let on_press = self.enabled.get(ctx).then(|| logging(&view.log, "press"));
+        let on_pressed = self.enabled.get(ctx).then(|| logging(&view.log, "press"));
         Actions::new(button(
             Made::Raw,
-            on_press,
+            on_pressed,
             flui_widgets::SizedBox::new(120.0, 60.0).child(Text::new("Press")),
         ))
         .action::<ActivateIntent>(Outer(Rc::clone(&view.log)))
@@ -708,7 +708,7 @@ impl ViewState<Stated> for StatedState {
             RawButton::new(flui_widgets::SizedBox::new(120.0, 60.0).child(Text::new("Press")))
                 .states_controller(controller.clone());
         if self.enabled.get(ctx) {
-            button = button.on_press(|_ctx: &mut EventContext<'_>| {});
+            button = button.on_pressed(|_ctx: &mut EventContext<'_>| {});
         }
         button.boxed()
     }
@@ -941,7 +941,7 @@ pub(crate) fn hover_repaints_without_rebuilding() {
                 ),
             )
             .states_controller(states.clone())
-            .on_press(|_ctx: &mut EventContext<'_>| {}),
+            .on_pressed(|_ctx: &mut EventContext<'_>| {}),
             Text::new("A neighbour"),
         )),
         loose(400.0),
@@ -1125,7 +1125,7 @@ impl ViewState<Toggled> for ToggledState {
         let button = RawButton::new(flui_widgets::SizedBox::new(120.0, 60.0))
             .states_controller(view.states.clone());
         if self.enabled.get(ctx) {
-            button.on_press(|_ctx| {}).boxed()
+            button.on_pressed(|_ctx| {}).boxed()
         } else {
             button.boxed()
         }

@@ -352,7 +352,7 @@ fn menu_buttons(request: &MenuRequest, menu: &SharedSignal<Option<MenuRequest>>)
                     .label(item.label().to_owned())
                     .child(SizedBox::new(120.0, 30.0)),
             )
-            .on_press(move |ctx| {
+            .on_pressed(move |ctx| {
                 menu.set_in(ctx, None)
                     .expect("the inbox menu slot is alive while its button is mounted");
                 let _ = item.perform(ctx);
@@ -1469,7 +1469,7 @@ impl ViewState<PageButtons> for PageButtonsState {
                     .anchor(anchor.clone())
                     .child(SizedBox::new(48.0, 48.0)),
             )
-            .on_press(move |_ctx| {
+            .on_pressed(move |_ctx| {
                 let curve = flui_animation::SharedCurve::new(flui_animation::curves::EASE_IN_OUT);
                 if forward {
                     pager.next_page(Duration::from_millis(300), curve);

@@ -301,7 +301,7 @@ impl ViewState<WindowCaptionButton> for WindowChromeState {
         {
             Some(window) => {
                 let pressed = view.button;
-                RawButton::new(content).on_press(move |_ctx: &mut EventContext<'_>| {
+                RawButton::new(content).on_pressed(move |_ctx: &mut EventContext<'_>| {
                     press(&window, pressed);
                 })
             }

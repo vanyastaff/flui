@@ -20,5 +20,5 @@
 - **Assistive focus on a text field is shown** (`flui-widgets`): an assistive technology's
   Focus action on `EditableText` makes focus visible, as it does on any `Focus` control.
 - **Enabling or disabling a `GestureDetector`'s tap keeps its child** (`flui-widgets`): setting
-  or clearing `on_tap` (a `RawButton` toggling `on_press`) no longer rebuilds the detector's
+  or clearing `on_tap` (a `RawButton` toggling `on_pressed`) no longer rebuilds the detector's
   whole subtree, so the child's state, gestures in flight and semantics identities survive.

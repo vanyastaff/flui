@@ -1053,6 +1053,9 @@ cargo xtask test --nested --nested-group trybuild             # test-trybuild: c
 cargo xtask platform-test                                    # native platform suites, default and all features
 cargo xtask cli-test                                         # native CLI suite
 cargo test --workspace --locked --doc
+cargo +nightly miri test -p flui-foundation --lib             # miri job: every unit test of the
+cargo +nightly miri test -p flui-log --lib                    # two base crates, and the render-node
+cargo +nightly miri test -p flui-rendering --lib storage::    # arena; `cargo xtask miri` runs them all
 cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # miri job; NARROW — every
                                                               # unit test under that module, including PipelineCell
                                                               # checkout, an owner-local run_frame traversal, a
@@ -1072,8 +1075,8 @@ runs `checks`, `plan` and the `ci` aggregator:
 |---|---|---|
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling | `deps` |
-| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`) over the whole workspace, and the on-demand jobs its diff asks for (below) |
-| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `miri`, `doc-test`, `perf-gates` (all Linux), and `test-trybuild` and `api-contracts` always; in `clippy` and `test` it also turns on the `native-features` and `gpu-test --backend gl` steps |
+| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`, `public-api`) over the whole workspace, and the on-demand jobs its diff asks for (below) |
+| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `doc-test`, `perf-gates` (all Linux), and `test-trybuild`, `api-contracts` and `miri` always; in `clippy` and `test` it also turns on the `native-features` and `gpu-test --backend gl` steps |
 
 - **Wide lane**: every pull request that compiles anything runs every Linux
   job, in parallel, over the whole workspace. One serial job over the
@@ -1140,7 +1143,13 @@ reaches what the check reads. `plan` decides this in its outputs, and each job i
   A change to the list, `tools/xtask/src/send_positions.rs` or the rustdoc JSON loader
   (`api_closure`) sets it too. The list is read from `tools/xtask/allowlists/send-positions.toml` on each run.
 
-A pull request that reaches none of them skips all three.
+- `miri` runs when `miri_required` is set: a changed file under a source the job interprets whole
+  (`crates/flui-foundation/src/`, `crates/flui-log/src/`, `crates/flui-rendering/src/storage/`),
+  or a change to its plan (`tools/xtask/src/tasks.rs`) or this rule
+  (`tools/xtask/src/change_scope/miri_scope.rs`). A change that reaches only the job's narrower
+  filters is left to main.
+
+A pull request that reaches none of them skips all four.
 
 
 **Only `full` checks these**, so a pull request can merge green and still
@@ -1175,6 +1184,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `test-trybuild` | `cargo xtask test --nested --nested-group trybuild` | compile-fail suites; plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
 | `doc` | `cargo xtask doc-strict` (in `gate`) | — |
+| `public-api` | `cargo xtask public-api` | nightly (rustdoc JSON); `cargo xtask public-api --write` restates `api/flui.txt` when a change to the facade's API is meant (ADR-0324) |
 | `deps` | `cargo xtask deps` | CI runs `--only policy` and `--only advisories` as two steps, with `--strict` (a missing cargo-deny or cargo-shear fails instead of being skipped); every lane but `docs` runs it; the advisories step blocks on main and on a pull request whose change is workspace-wide or touches `deny.toml`, and only reports on other pull requests, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
 | `doc-test` | `cargo test --workspace --locked --doc` (in `cargo xtask ci`) | — |
 | `miri` | `cargo xtask miri` | nightly + miri |

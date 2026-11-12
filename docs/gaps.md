@@ -567,3 +567,11 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 - `flui-native` and `flui-system` speak D-Bus through zbus 6, while `accesskit_unix` 0.24.1, the newest release, reaches zbus 5 through `atspi`, so the default graph on Linux carries both with their `zvariant`, `zbus_names` and macro crates (`cargo tree -p flui -i zbus@5.19.0`). Moving FLUI's own D-Bus code back to zbus 5 would trade a current API for an unmaintained one (RUSTSEC-2026-0370 to -0372 in `deny.toml`).
 - The entry closes when `accesskit_unix` moves to zbus 6: then the workspace resolves one zbus, the three advisories leave `deny.toml`, and `crates_linux` in `perf/size.toml` falls.
+
+### Shaders are parsed from WGSL on every launch
+
+> **Environments:** Windows, macOS, Linux, Android, iOS · **Who it hurts:** Every native application, which links naga's WGSL front end and parses its shaders before the first frame · **Parity:** none (build graph)
+
+- `flui-engine` hands WGSL text to `create_shader_module`, so the first frame pays naga's parse and validation: 6.6 ms and 0.8 ms for the engine's 20 standalone modules (release, best of 20). Lowering them to `naga::Module` at build time would cut module creation from about 0.7–1.0 ms to 0.1 ms each on lavapipe, but buys no size: wgpu 30 enables `wgpu-core/wgsl` on every native target, because `wgpu-core` parses its own indirect-validation and timestamp shaders, so the front end stays linked (4,149,240 B with text, 4,191,296 B with `naga-ir` alone), and a serialized module adds 1.7 MiB of decoder.
+- Driver pipeline compilation (6–10 ms a pipeline) dwarfs the parse, so the first-frame cost is taken by creating the first frame's modules and pipelines off the owner thread while the window opens, with `wgpu::PipelineCache` on Vulkan.
+- The entry closes when wgpu lets a native build drop the WGSL front end and the engine's shaders reach it as IR generated at build time, with the binary size and first-frame time measured before and after.

@@ -753,7 +753,7 @@ impl ViewState<Carousel> for CarouselState {
                 ),
             ),
         )
-        .on_press(move |_ctx| controller.set_paused(!controller.is_paused()));
+        .on_pressed(move |_ctx| controller.set_paused(!controller.is_paused()));
         let end = match Directionality::maybe_of(ctx) {
             Some(TextDirection::Rtl) => Alignment::CENTER_LEFT,
             _ => Alignment::CENTER_RIGHT,

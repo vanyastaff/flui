@@ -538,6 +538,10 @@ fn recording_contract() {
                 recording::isolated_append_preserves_bounds_and_scopes_the_run,
             ),
             (
+                "isolated_append_scopes_only_a_run_that_changes_replay_state",
+                recording::isolated_append_scopes_only_a_run_that_changes_replay_state,
+            ),
+            (
                 "interning_shares_arc_for_identical_paints",
                 recording::interning_shares_arc_for_identical_paints,
             ),
