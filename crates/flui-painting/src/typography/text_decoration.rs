@@ -352,7 +352,7 @@ impl TextDecorationConfig {
     /// Sets the decoration style.
     #[must_use]
     #[inline]
-    pub fn with_style(mut self, style: TextDecorationStyle) -> Self {
+    pub fn style(mut self, style: TextDecorationStyle) -> Self {
         self.style = style;
         self
     }
@@ -360,7 +360,7 @@ impl TextDecorationConfig {
     /// Sets the decoration color.
     #[must_use]
     #[inline]
-    pub fn with_color(mut self, color: Color) -> Self {
+    pub fn color(mut self, color: Color) -> Self {
         self.color = Some(color);
         self
     }
@@ -368,7 +368,7 @@ impl TextDecorationConfig {
     /// Sets the decoration thickness.
     #[must_use]
     #[inline]
-    pub fn with_thickness(mut self, thickness: f64) -> Self {
+    pub fn thickness(mut self, thickness: f64) -> Self {
         self.thickness = Some(thickness);
         self
     }

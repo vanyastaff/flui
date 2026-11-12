@@ -341,7 +341,7 @@ impl PendingWrite {
 impl Future for PendingWrite {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
         let this = &mut *self;
         let Some(slot) = &this.slot else {
             return Poll::Ready(());
@@ -350,7 +350,7 @@ impl Future for PendingWrite {
             slot.storage
                 .publish(&this.key.name, slot.bytes.to_vec(), this.mode)
         });
-        let Poll::Ready(result) = answer.as_mut().poll(cx) else {
+        let Poll::Ready(result) = answer.as_mut().poll(ctx) else {
             return Poll::Pending;
         };
         this.answer = None;
@@ -388,9 +388,9 @@ impl Wake for Unpark {
 /// `false` when the deadline passed first. Polled at least once.
 fn poll_until(mut future: Pin<&mut PendingWrite>, deadline: Instant) -> bool {
     let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
-    let mut cx = Context::from_waker(&waker);
+    let mut ctx = Context::from_waker(&waker);
     loop {
-        if future.as_mut().poll(&mut cx).is_ready() {
+        if future.as_mut().poll(&mut ctx).is_ready() {
             return true;
         }
         let now = Instant::now();
@@ -561,12 +561,12 @@ impl fmt::Debug for FlushChanged {
 impl Future for FlushChanged {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
         let mut slots = self.shared.slots.lock();
         if slots.settled > self.taken_at {
             return Poll::Ready(());
         }
-        let waker = cx.waker();
+        let waker = ctx.waker();
         if !slots
             .waiters
             .iter()
@@ -897,9 +897,9 @@ mod tests {
         let registry = host.registry();
         let counter = flui_foundation::testing::CountingWaker::new().shared();
         let waker = Waker::from(Arc::clone(&counter));
-        let mut cx = Context::from_waker(&waker);
+        let mut ctx = Context::from_waker(&waker);
         let mut changed = std::pin::pin!(registry.changed());
-        let _ = changed.as_mut().poll(&mut cx);
+        let _ = changed.as_mut().poll(&mut ctx);
 
         registry.publisher(SESSION, Arc::clone(&store)).publish(
             Arc::from(&b"open"[..]),
@@ -927,7 +927,7 @@ mod tests {
         );
         assert_eq!(after_write, 0, "the finished write wakes nothing itself");
         assert_eq!(after_settle, 0, "settle wakes nothing itself");
-        assert!(changed.as_mut().poll(&mut cx).is_ready());
+        assert!(changed.as_mut().poll(&mut ctx).is_ready());
     }
 
     /// A failed write keeps its bytes: the flush writes them later, and

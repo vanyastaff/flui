@@ -75,7 +75,7 @@ pub struct Container {
     alignment: Option<Alignment>,
     padding: Option<EdgeInsets>,
     color: Option<Color>,
-    decoration: Option<BoxDecoration<f64>>,
+    decoration: Option<BoxDecoration>,
     width: Option<f64>,
     height: Option<f64>,
     constraints: Option<BoxConstraints>,
@@ -118,7 +118,7 @@ impl Container {
 
     /// Paint a [`BoxDecoration`] behind the child.
     #[must_use]
-    pub fn decoration(mut self, decoration: BoxDecoration<f64>) -> Self {
+    pub fn decoration(mut self, decoration: BoxDecoration) -> Self {
         self.decoration = Some(decoration);
         self
     }
@@ -163,6 +163,13 @@ impl Container {
     #[must_use]
     pub fn child(mut self, child: impl IntoView) -> Self {
         self.child = Child::some(child.into_view());
+        self
+    }
+
+    /// Hands over an optional child as it is, for a widget that wraps this
+    /// one and keeps its own child slot.
+    pub(crate) fn child_slot(mut self, child: Child) -> Self {
+        self.child = child;
         self
     }
 

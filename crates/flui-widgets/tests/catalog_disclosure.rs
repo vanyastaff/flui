@@ -42,7 +42,7 @@ fn section(
     match proposals {
         Some(proposals) => {
             let proposals = Rc::clone(proposals);
-            view.on_changed(move |_cx, state| proposals.borrow_mut().push(state))
+            view.on_changed(move |_ctx, state| proposals.borrow_mut().push(state))
         }
         None => view,
     }
@@ -79,8 +79,8 @@ fn key(app: &LaidOut, key: Key) -> bool {
                 manager
                     .dispatch_key_event(
                         &KeyEventBuilder::new(Code::Unidentified)
-                            .with_key(key.clone())
-                            .with_state(state)
+                            .key(key.clone())
+                            .state(state)
                             .build(),
                     )
                     .is_handled()
@@ -711,7 +711,7 @@ fn drop_case(header_fails: bool, body_fails: bool, callback_fails: bool) {
             clone_fails: false,
         },
     )
-    .on_changed(move |_cx, _state| callback.observe());
+    .on_changed(move |_ctx, _state| callback.observe());
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(view)));
     assert_eq!(
         failure.is_err(),
@@ -759,17 +759,17 @@ fn geometry(constraints: BoxConstraints, ambient: TextDirection, explicit: Optio
         ExpansionState::Expanded,
         SizedBox::new(60.0, 24.0),
         OverflowBox::new()
-            .with_min_width(90.0)
-            .with_max_width(90.0)
-            .with_min_height(90.0)
-            .with_max_height(90.0)
+            .min_width(90.0)
+            .max_width(90.0)
+            .min_height(90.0)
+            .max_height(90.0)
             .child(
                 GestureDetector::new()
                     .on_tap(move |_| body_taps.set(body_taps.get() + 1))
                     .child(ColoredBox::new(Color::RED)),
             ),
     )
-    .on_changed(move |_cx, target| changed.borrow_mut().push(target))
+    .on_changed(move |_ctx, target| changed.borrow_mut().push(target))
     .indicator_color(Color::BLUE);
     if let Some(explicit) = explicit {
         view = view.text_direction(explicit);

@@ -284,7 +284,7 @@ impl WidgetsApp<RouterForm> {
     ///     Note { id: u32 },
     /// }
     ///
-    /// let app = WidgetsApp::router(Router::new(AppRoute::Home, |route: &AppRoute, _cx| {
+    /// let app = WidgetsApp::router(Router::new(AppRoute::Home, |route: &AppRoute, _ctx| {
     ///     match route {
     ///         AppRoute::Home => Text::new("Home").into_view().boxed(),
     ///         AppRoute::Note { id } => Text::new(format!("Note {id}")).into_view().boxed(),

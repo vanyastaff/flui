@@ -32,7 +32,7 @@ pub fn a_tap_on_an_action_fires_its_handler() {
             ThemeData::light(),
             AlertDialog::new().title(Text::new("Delete?")).actions(vec![
                 GestureDetector::new()
-                    .on_tap(move |_cx| {
+                    .on_tap(move |_ctx| {
                         counted.fetch_add(1, Ordering::SeqCst);
                     })
                     .child(

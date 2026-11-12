@@ -25,7 +25,7 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_platform::Locale;
 use flui_view::prelude::*;
@@ -43,7 +43,7 @@ use super::widgets_localizations::{DefaultWidgetsLocalizations, WidgetsLocalizat
 pub trait LocalizationsDelegate: fmt::Debug {
     /// The localized-resource type this delegate produces. Retrieved later
     /// with `Localizations::of::<Self::Resources>`.
-    type Resources: Send + Sync + 'static;
+    type Resources: 'static;
 
     /// Whether this delegate can produce resources for `locale`.
     fn is_supported(&self, locale: &Locale) -> bool;
@@ -55,18 +55,18 @@ pub trait LocalizationsDelegate: fmt::Debug {
 
 /// Object-safe erasure of [`LocalizationsDelegate`], implemented for every
 /// delegate via the blanket impl below. Confines the delegate's associated
-/// `Resources` type behind a `TypeId` + `Arc<dyn Any + Send + Sync>` pair so
+/// `Resources` type behind a `TypeId` + `Rc<dyn Any>` pair so
 /// heterogeneous delegates can share one `Vec` — see
 /// [`BoxedLocalizationsDelegate`].
-trait ErasedLocalizationsDelegate: fmt::Debug + Send + Sync {
+trait ErasedLocalizationsDelegate: fmt::Debug {
     fn resource_type_id(&self) -> TypeId;
     fn is_supported(&self, locale: &Locale) -> bool;
-    fn load(&self, locale: &Locale) -> Arc<dyn Any + Send + Sync>;
+    fn load(&self, locale: &Locale) -> Rc<dyn Any>;
 }
 
 impl<D> ErasedLocalizationsDelegate for D
 where
-    D: LocalizationsDelegate + Send + Sync + 'static,
+    D: LocalizationsDelegate + 'static,
 {
     fn resource_type_id(&self) -> TypeId {
         TypeId::of::<D::Resources>()
@@ -76,8 +76,8 @@ where
         LocalizationsDelegate::is_supported(self, locale)
     }
 
-    fn load(&self, locale: &Locale) -> Arc<dyn Any + Send + Sync> {
-        Arc::new(LocalizationsDelegate::load(self, locale))
+    fn load(&self, locale: &Locale) -> Rc<dyn Any> {
+        Rc::new(LocalizationsDelegate::load(self, locale))
     }
 }
 
@@ -85,22 +85,22 @@ where
 /// sit in a [`Localizations::new`] delegate list alongside delegates that
 /// produce unrelated resource types.
 #[derive(Clone)]
-pub struct BoxedLocalizationsDelegate(Arc<dyn ErasedLocalizationsDelegate>);
+pub struct BoxedLocalizationsDelegate(Rc<dyn ErasedLocalizationsDelegate>);
 
 impl BoxedLocalizationsDelegate {
     /// Erase `delegate` for storage in a [`Localizations`] delegate list.
     #[must_use]
     pub fn new<D>(delegate: D) -> Self
     where
-        D: LocalizationsDelegate + Send + Sync + 'static,
+        D: LocalizationsDelegate + 'static,
     {
-        Self(Arc::new(delegate))
+        Self(Rc::new(delegate))
     }
 }
 
 impl<D> From<D> for BoxedLocalizationsDelegate
 where
-    D: LocalizationsDelegate + Send + Sync + 'static,
+    D: LocalizationsDelegate + 'static,
 {
     fn from(delegate: D) -> Self {
         Self::new(delegate)
@@ -138,7 +138,7 @@ impl BoxedWidgetsLocalizations {
     /// [`Localizations::new`]'s invariant). Use
     /// [`maybe_of`](Self::maybe_of) for a non-panicking variant.
     #[must_use]
-    pub fn of(ctx: &dyn BuildContext) -> Arc<Self> {
+    pub fn of(ctx: &dyn BuildContext) -> Rc<Self> {
         Localizations::of::<Self>(ctx)
     }
 
@@ -147,7 +147,7 @@ impl BoxedWidgetsLocalizations {
     /// if there is no `Localizations` ancestor, or none of its delegates
     /// produce this resource type.
     #[must_use]
-    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<Arc<Self>> {
+    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<Rc<Self>> {
         Localizations::maybe_of::<Self>(ctx)
     }
 }
@@ -180,11 +180,11 @@ impl LocalizationsDelegate for DefaultWidgetsLocalizationsDelegate {
 
 /// The resolved, immutable snapshot a [`LocalizationsScope`] publishes:
 /// the locale it was resolved for, and every delegate's loaded resources
-/// keyed by resource type. Cheap to `Clone` (two `Arc`/`String` clones).
+/// keyed by resource type. Cheap to `Clone` (two `Rc`/`String` clones).
 #[derive(Clone)]
 struct LocalizationsSnapshot {
     locale: Locale,
-    resources: Arc<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
+    resources: Rc<HashMap<TypeId, Rc<dyn Any>>>,
 }
 
 /// Private inherited scope publishing the resolved [`LocalizationsSnapshot`]
@@ -227,7 +227,7 @@ impl_inherited_view!(LocalizationsScope);
 #[derive(Clone, StatelessView)]
 pub struct Localizations {
     locale: Locale,
-    delegates: Arc<[BoxedLocalizationsDelegate]>,
+    delegates: Rc<[BoxedLocalizationsDelegate]>,
     child: BoxedView,
 }
 
@@ -307,14 +307,14 @@ impl Localizations {
     ///
     /// Never panics; see [`of`](Self::of) for the panicking variant.
     #[must_use]
-    pub fn maybe_of<R: Send + Sync + 'static>(ctx: &dyn BuildContext) -> Option<Arc<R>> {
+    pub fn maybe_of<R: 'static>(ctx: &dyn BuildContext) -> Option<Rc<R>> {
         let erased = ctx
             .depend_on::<LocalizationsScope, _>(|scope| {
                 scope.snapshot.resources.get(&TypeId::of::<R>()).cloned()
             })
             .flatten()?;
         // Retrieves the delegate-declared `R` from the type-erased
-        // `Arc<dyn Any + Send + Sync>` resource map by the caller's
+        // `Rc<dyn Any>` resource map by the caller's
         // requested resource type — the sole sanctioned resource-map
         // downcast site for the localizations substrate, mirroring
         // ADR-0019's `RouteRecord::did_complete` boundary.
@@ -330,7 +330,7 @@ impl Localizations {
     /// its delegates produce `R`. Use [`maybe_of`](Self::maybe_of) for a
     /// non-panicking variant.
     #[must_use]
-    pub fn of<R: Send + Sync + 'static>(ctx: &dyn BuildContext) -> Arc<R> {
+    pub fn of<R: 'static>(ctx: &dyn BuildContext) -> Rc<R> {
         Self::maybe_of::<R>(ctx).unwrap_or_else(|| {
             panic!(
                 "BUG: Localizations::of::<{0}> found no {0} on the tree — either there is no \
@@ -346,7 +346,7 @@ impl Localizations {
 impl StatelessView for Localizations {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         // Sync-only v1: no deferred-first-frame gap — see module docs.
-        let mut resources: HashMap<TypeId, Arc<dyn Any + Send + Sync>> =
+        let mut resources: HashMap<TypeId, Rc<dyn Any>> =
             HashMap::with_capacity(self.delegates.len());
         for delegate in self.delegates.iter() {
             // Only the first delegate of a given resource type loads.
@@ -373,7 +373,7 @@ impl StatelessView for Localizations {
         LocalizationsScope {
             snapshot: LocalizationsSnapshot {
                 locale: self.locale.clone(),
-                resources: Arc::new(resources),
+                resources: Rc::new(resources),
             },
             child: Directionality::new(text_direction, self.child.clone()).boxed(),
         }

@@ -875,19 +875,19 @@ fn motion_spec_changes_keep_the_other_half() {
     }
     let cases = [
         (
-            curve(500, flui_animation::curves::LINEAR).with_duration(Duration::from_millis(80)),
+            curve(500, flui_animation::curves::LINEAR).duration(Duration::from_millis(80)),
             curve(80, flui_animation::curves::LINEAR),
         ),
         (
-            curve(500, flui_animation::curves::LINEAR).with_curve(flui_animation::curves::EASE_IN),
+            curve(500, flui_animation::curves::LINEAR).curve(flui_animation::curves::EASE_IN),
             curve(500, flui_animation::curves::EASE_IN),
         ),
         (
-            spring.clone().with_duration(Duration::from_millis(80)),
+            spring.clone().duration(Duration::from_millis(80)),
             curve(80, flui_animation::curves::EASE_IN_OUT),
         ),
         (
-            spring.with_curve(flui_animation::curves::EASE_IN),
+            spring.curve(flui_animation::curves::EASE_IN),
             curve(200, flui_animation::curves::EASE_IN),
         ),
         (

@@ -36,7 +36,7 @@ impl ViewState<CounterView> for CounterState {
             Text::new(count.get(ctx).to_string()),
             SizedBox::height(16.0),
             RawButton::new(Text::new("Increment"))
-                .on_pressed(move |cx| count.update(cx, |n| *n += 1)),
+                .on_press(move |ctx| count.update(ctx, |n| *n += 1)),
         )))
     }
 }

@@ -222,7 +222,7 @@ impl GestureCommand {
     }
 
     /// Perform the intent through `chain`.
-    fn perform(&self, cx: &mut EventCx<'_>, chain: Option<&ActionChain>) -> ActionOutcome {
+    fn perform(&self, ctx: &mut EventContext<'_>, chain: Option<&ActionChain>) -> ActionOutcome {
         let intent: &dyn Any = &*self.intent;
         let Some(action) = chain.and_then(|chain| resolve(chain, intent)) else {
             if chain.is_none_or(|chain| !chain.declares(intent.type_id())) {
@@ -236,7 +236,7 @@ impl GestureCommand {
             }
             return ActionOutcome::NotPerformed;
         };
-        action.invoke(cx, intent)
+        action.invoke(ctx, intent)
     }
 
     /// Report this command's keys reserved on `platform`, except those
@@ -282,8 +282,8 @@ pub struct CommandHandle {
 
 impl CommandHandle {
     /// Perform the command: what the gesture does when it completes.
-    pub fn perform(&self, cx: &mut EventCx<'_>) -> ActionOutcome {
-        self.command.perform(cx, self.chain.as_ref())
+    pub fn perform(&self, ctx: &mut EventContext<'_>) -> ActionOutcome {
+        self.command.perform(ctx, self.chain.as_ref())
     }
 }
 
@@ -383,7 +383,7 @@ impl fmt::Debug for ControlSpec {
 
 /// Shows a context menu: called with each [`MenuRequest`], it presents the
 /// request's items until one is chosen or the menu is dismissed.
-pub type MenuPresenter = Rc<dyn Fn(&mut EventCx<'_>, MenuRequest)>;
+pub type MenuPresenter = Rc<dyn Fn(&mut EventContext<'_>, MenuRequest)>;
 
 /// The items of [`Alternative::ContextMenu`], the first performing the
 /// widget's gesture command, and the presenter that shows them.
@@ -409,7 +409,7 @@ pub struct MenuSpec {
 }
 
 /// Closes the menu a [`MenuPresenter`] shows.
-type MenuDismiss = Rc<dyn Fn(&mut EventCx<'_>)>;
+type MenuDismiss = Rc<dyn Fn(&mut EventContext<'_>)>;
 
 impl MenuSpec {
     /// A menu whose first item is `first`, the gesture's command, shown by
@@ -417,7 +417,7 @@ impl MenuSpec {
     #[must_use]
     pub fn new(
         first: GestureCommand,
-        presenter: impl Fn(&mut EventCx<'_>, MenuRequest) + 'static,
+        presenter: impl Fn(&mut EventContext<'_>, MenuRequest) + 'static,
     ) -> Self {
         Self {
             items: vec![first],
@@ -437,7 +437,7 @@ impl MenuSpec {
     /// hands its contact to a drag. Without it the menu stays open behind
     /// the drag.
     #[must_use]
-    pub fn dismiss(mut self, dismiss: impl Fn(&mut EventCx<'_>) + 'static) -> Self {
+    pub fn dismiss(mut self, dismiss: impl Fn(&mut EventContext<'_>) + 'static) -> Self {
         self.dismiss = Some(Rc::new(dismiss));
         self
     }
@@ -598,7 +598,7 @@ impl Default for AlternativeKind {
 impl AlternativeKind {
     /// A context menu shown by `presenter`.
     #[must_use]
-    pub fn context_menu(presenter: impl Fn(&mut EventCx<'_>, MenuRequest) + 'static) -> Self {
+    pub fn context_menu(presenter: impl Fn(&mut EventContext<'_>, MenuRequest) + 'static) -> Self {
         Self::ContextMenu(Rc::new(presenter))
     }
 }
@@ -758,9 +758,9 @@ impl MenuItem {
     /// Perform the item's command, as choosing it does. A menu that hears
     /// of the choice hears of it though the command panics; the panic
     /// resumes after.
-    pub fn perform(&self, cx: &mut EventCx<'_>) -> ActionOutcome {
+    pub fn perform(&self, ctx: &mut EventContext<'_>) -> ActionOutcome {
         let mut failure = flui_foundation::panic::FirstPanic::new();
-        let outcome = failure.contain(|| self.command.perform(cx, self.chain.as_ref()));
+        let outcome = failure.contain(|| self.command.perform(ctx, self.chain.as_ref()));
         if let Some(chosen) = &self.chosen {
             failure.contain(|| chosen());
         }
@@ -928,7 +928,7 @@ impl GestureAlternatives {
     /// Open the menu's long press as `hold`, whose successor the mounting
     /// widget's own long-press drag is, instead of composing a hold of its
     /// own. Ignored by visible controls.
-    pub(crate) fn with_hold(mut self, hold: Option<Rc<SequencedBranch>>) -> Self {
+    pub(crate) fn hold(mut self, hold: Option<Rc<SequencedBranch>>) -> Self {
         self.hold = hold;
         self
     }
@@ -939,7 +939,7 @@ impl GestureAlternatives {
     pub(crate) fn present_menu_with(
         mut self,
         presenter: MenuPresenter,
-        dismiss: impl Fn(&mut EventCx<'_>) + 'static,
+        dismiss: impl Fn(&mut EventContext<'_>) + 'static,
     ) -> Self {
         if let Alternative::ContextMenu(spec) = &mut self.alternative {
             spec.presenter = presenter;
@@ -993,7 +993,7 @@ impl fmt::Debug for GestureAlternatives {
 }
 
 /// Opens the menu with the cause and pointer position.
-type MenuOpener = Rc<dyn Fn(&mut EventCx<'_>, MenuCause, Option<Offset<f64>>)>;
+type MenuOpener = Rc<dyn Fn(&mut EventContext<'_>, MenuCause, Option<Offset<f64>>)>;
 
 impl StatefulView for GestureAlternatives {
     type State = GestureAlternativesState;
@@ -1001,7 +1001,7 @@ impl StatefulView for GestureAlternatives {
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         GestureAlternativesState {
             warned_for: Cell::new(None),
-            opener: OpenerSlot::new(Rc::new(|_cx, _cause, _position| {})),
+            opener: OpenerSlot::new(Rc::new(|_ctx, _cause, _position| {})),
             menu: self.is_menu(),
             given_hold: self.hold.clone(),
             policy: None,
@@ -1171,7 +1171,7 @@ fn menu_long_press(
         .allowed_devices(LONG_PRESS_DEVICES)
         .on_long_press_start(move |details: LongPressStartDetails| {
             let open = opener.get();
-            open_writer.write(|cx| open(cx, MenuCause::LongPress, Some(details.global_position)));
+            open_writer.write(|ctx| open(ctx, MenuCause::LongPress, Some(details.global_position)));
         });
     if let Some(branch) = branch {
         let (branch, settings, writer) = (Rc::clone(branch), settings.clone(), writer.clone());
@@ -1187,7 +1187,7 @@ fn menu_long_press(
             if contacts.into_iter().any(|pointer| branch.hand_off(pointer))
                 && let Some(dismiss) = menu.dismiss()
             {
-                writer.write(|cx| dismiss(cx));
+                writer.write(|ctx| dismiss(ctx));
             }
         });
     }
@@ -1308,8 +1308,8 @@ impl GestureAlternatives {
             semantics = semantics.custom_action_when(
                 command.label().to_owned(),
                 move || gate.is_offered_in(gate_chain.as_ref()),
-                move |cx| {
-                    let _ = command.perform(cx, chain.as_ref());
+                move |ctx| {
+                    let _ = command.perform(ctx, chain.as_ref());
                 },
             );
         }
@@ -1325,8 +1325,8 @@ impl GestureAlternatives {
                             command.label().to_owned(),
                             content.clone(),
                             min_target,
-                            move |cx| {
-                                let _ = command.perform(cx, chain.as_ref());
+                            move |ctx| {
+                                let _ = command.perform(ctx, chain.as_ref());
                             },
                         )
                     })
@@ -1388,9 +1388,9 @@ impl GestureAlternatives {
                     .map(|command| MenuItem::new(command.clone(), chain.clone()))
                     .collect();
                 let presenter = Rc::clone(&menu.presenter);
-                let opener: MenuOpener = Rc::new(move |cx, cause, position| {
+                let opener: MenuOpener = Rc::new(move |ctx, cause, position| {
                     presenter(
-                        cx,
+                        ctx,
                         MenuRequest {
                             items: Rc::clone(&items),
                             cause,
@@ -1399,8 +1399,8 @@ impl GestureAlternatives {
                     );
                 });
                 let assistive = Rc::clone(&opener);
-                semantics = semantics.on_show_context_menu(move |cx| {
-                    assistive(cx, MenuCause::Assistive, None);
+                semantics = semantics.on_show_context_menu(move |ctx| {
+                    assistive(ctx, MenuCause::Assistive, None);
                 });
                 let localizations = BoxedWidgetsLocalizations::maybe_of(ctx);
                 let label = localizations.as_deref().map_or_else(
@@ -1435,7 +1435,7 @@ impl GestureAlternatives {
         let revealed = Rc::clone(&state.control_revealed);
         let focus = Focus::new(row)
             .debug_label("GestureAlternatives")
-            .on_focus_change(move |_cx, in_row| {
+            .on_focus_change(move |_ctx, in_row| {
                 if !in_row {
                     revealed.set(false);
                 }
@@ -1461,7 +1461,7 @@ fn control_button(
     label: String,
     content: BoxedView,
     min_target: f64,
-    on_pressed: impl Fn(&mut EventCx<'_>) + 'static,
+    on_press: impl Fn(&mut EventContext<'_>) + 'static,
 ) -> BoxedView {
     let side = if min_target.is_finite() {
         min_target.max(0.0)
@@ -1510,8 +1510,8 @@ fn more_glyph() -> BoxedView {
 struct OpenMenu(MenuOpener);
 
 impl Action<ShowContextMenuIntent> for OpenMenu {
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ShowContextMenuIntent) -> ActionOutcome {
-        (self.0)(cx, MenuCause::Key, None);
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &ShowContextMenuIntent) -> ActionOutcome {
+        (self.0)(ctx, MenuCause::Key, None);
         ActionOutcome::Performed
     }
 }
@@ -1610,12 +1610,13 @@ impl ViewState<FocusDecorations> for FocusDecorationsState {
         });
         if revealed && let Some(MenuControl { label, opener, .. }) = &view.menu_control {
             let opener = Rc::clone(opener);
-            let control = control_button(label.clone(), more_glyph(), view.min_target, move |cx| {
-                opener(cx, MenuCause::Control, None);
-            });
+            let control =
+                control_button(label.clone(), more_glyph(), view.min_target, move |ctx| {
+                    opener(ctx, MenuCause::Control, None);
+                });
             let pressed = Rc::clone(&self.control_pressed);
             let control = Listener::new()
-                .on_pointer_down(move |_cx, _dispatch| pressed.set(true))
+                .on_pointer_down(move |_ctx, _dispatch| pressed.set(true))
                 .child(control);
             let trailing = Positioned::directional(control)
                 .top(0.0)
@@ -1635,7 +1636,7 @@ impl ViewState<FocusDecorations> for FocusDecorationsState {
             .clone()
             .expect("BUG: focus decorations built before init_state captured their rebuild handle");
         Listener::new()
-            .on_pointer_down(move |_cx, _dispatch| {
+            .on_pointer_down(move |_ctx, _dispatch| {
                 if !pressed.replace(false) && revealed.replace(false) {
                     rebuild.schedule(RebuildReason::StateChange);
                 }
@@ -1670,15 +1671,19 @@ struct SecondaryClickTrigger(OpenerSlot);
 impl GestureRecognizerFactory for SecondaryClickTrigger {
     type Recognizer = TapGestureRecognizer;
 
-    fn create(&self, cx: &RecognizerContext) -> Rc<Self::Recognizer> {
+    fn create(&self, ctx: &RecognizerContext) -> Rc<Self::Recognizer> {
         let opener = self.0.clone();
-        let writer = cx.writer().clone();
-        TapGestureRecognizer::builder(cx.arena().clone())
-            .settings(cx.settings().clone())
+        let writer = ctx.writer().clone();
+        TapGestureRecognizer::builder(ctx.arena().clone())
+            .settings(ctx.settings().clone())
             .on_secondary_tap(move |details: TapUpDetails| {
                 let open = opener.get();
-                writer.write(|cx| {
-                    open(cx, MenuCause::SecondaryClick, Some(details.global_position));
+                writer.write(|ctx| {
+                    open(
+                        ctx,
+                        MenuCause::SecondaryClick,
+                        Some(details.global_position),
+                    );
                 });
             })
             .build()
@@ -1702,7 +1707,7 @@ impl GestureAlternativesState {
             Rc::downgrade(&self.pressed),
         );
         Listener::new()
-            .on_pointer_down(move |_cx, dispatch| {
+            .on_pointer_down(move |_ctx, dispatch| {
                 if let (Some(pressed), PointerEvent::Down(press)) =
                     (pressed.upgrade(), dispatch.local)
                 {
@@ -1711,8 +1716,8 @@ impl GestureAlternativesState {
                     contacts.push(press.pointer.id);
                 }
             })
-            .on_pointer_up(move |_cx, dispatch| forget_contact(&lifted, dispatch.local))
-            .on_pointer_cancel(move |_cx, dispatch| forget_contact(&cancelled, dispatch.local))
+            .on_pointer_up(move |_ctx, dispatch| forget_contact(&lifted, dispatch.local))
+            .on_pointer_cancel(move |_ctx, dispatch| forget_contact(&cancelled, dispatch.local))
             .recognizer(&self.hold_attachment)
             .child(child)
             .boxed()

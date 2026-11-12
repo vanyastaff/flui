@@ -40,8 +40,8 @@ use flui_rendering::constraints::AxisDirection;
 use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::element::ElementKind;
 use flui_view::{
-    AnimatedView, BoxedView, BuildContext, EventCx, IntoView, LifecycleContext, StatefulView, View,
-    ViewExt, ViewState,
+    AnimatedView, BoxedView, BuildContext, Child, EventContext, IntoView, LifecycleContext,
+    StatefulView, View, ViewExt, ViewState,
 };
 
 use super::ScrollView;
@@ -1058,14 +1058,14 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
         if let Some(target) = anchors.after(from) {
             let slot = Rc::clone(&controller.inner.slot);
             let pipeline = Rc::clone(&self.pipeline);
-            semantics = semantics.on_increment(move |_cx| {
+            semantics = semantics.on_increment(move |_ctx| {
                 Self::assistive_move(&slot, &pipeline, target);
             });
         }
         if let Some(target) = anchors.before(from) {
             let slot = Rc::clone(&controller.inner.slot);
             let pipeline = Rc::clone(&self.pipeline);
-            semantics = semantics.on_decrement(move |_cx| {
+            semantics = semantics.on_decrement(move |_ctx| {
                 Self::assistive_move(&slot, &pipeline, target);
             });
         }
@@ -1121,7 +1121,7 @@ impl<K: Copy + Eq + 'static> Action<AnchorIntent> for AnchorAction<K> {
         Some(ChangeNotifier::clone(&self.controller.inner.notifier))
     }
 
-    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &AnchorIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, intent: &AnchorIntent) -> ActionOutcome {
         let Some(target) = self.target(*intent) else {
             return ActionOutcome::NotPerformed;
         };
@@ -1251,7 +1251,7 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
                         },
                         transform_hit_tests: true,
                         text_direction: TextDirection::Ltr,
-                        child: child.clone(),
+                        child: Child::some(child.clone()),
                     },
                 ),
             )

@@ -55,7 +55,7 @@ use flui_foundation::inspect::{Fields, Inspect};
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, grid_child_paint_offset},
-    context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
+    context::{PaintContext, SliverHitTestContext, SliverLayoutContext},
     delegates::{SliverGridDelegate, SliverGridLayout},
     parent_data::SliverMultiBoxAdaptorParentData,
     pipeline::LocalRenderInvalidationHandle,
@@ -691,7 +691,7 @@ impl RenderSliver for RenderSliverGrid {
         self.placement.detach();
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         // A pinned tile is placed, so only this skip keeps it off screen.
         for slot in 0..ctx.child_count() {
             if !self.pinned.is_pinned_slot(slot) {

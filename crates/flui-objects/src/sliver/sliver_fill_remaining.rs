@@ -15,7 +15,7 @@ use flui_rendering::constraints::AxisDirection::{
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry},
-    context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
+    context::{PaintContext, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     traits::RenderSliver,
 };
@@ -103,7 +103,7 @@ impl RenderSliver for RenderSliverFillRemaining {
         -constraints.scroll_offset
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 
@@ -196,7 +196,7 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
         -constraints.scroll_offset
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 
@@ -283,7 +283,7 @@ impl RenderSliver for RenderSliverFillRemainingWithScrollable {
         -constraints.scroll_offset
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 

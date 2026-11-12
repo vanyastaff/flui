@@ -30,8 +30,8 @@ fn an_app_launched_without_an_endpoint_starts_no_agent() {
     let ready = Rc::clone(&opened);
     let application =
         Application::new(|_| -> flui_widgets::Text { panic!("no main window is opened") })
-            .with_startup_window(StartupWindow::None)
-            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed))
+            .startup_window(StartupWindow::None)
+            .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed))
             .on_ready(move |_| {
                 open_secondary_window(AppConfig::new(), WindowPolicy::Isolated)
                     .expect("an isolated window opens on the headless platform");

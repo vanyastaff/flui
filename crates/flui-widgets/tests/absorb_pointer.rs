@@ -23,7 +23,7 @@ pub(crate) fn absorbing_true_blocks_the_tap_from_reaching_a_child_gesture_detect
     let laid = lay_out(
         AbsorbPointer::new().child(
             GestureDetector::new()
-                .on_tap(move |_cx| {
+                .on_tap(move |_ctx| {
                     in_cb.fetch_add(1, Ordering::SeqCst);
                 })
                 .child(target()),

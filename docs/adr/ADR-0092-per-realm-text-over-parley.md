@@ -933,7 +933,7 @@ The gate 1 prototype exists on `spike/parley_atlas` (not merged). Everything bel
 - Every pipeline is built with a text context (§10 step 3b): the `compile_fail` doctests on
   `PipelineOwner::new`; in `crates/flui-rendering/tests/frame_unwind.rs`,
   `a_frame_that_unwinds_leaves_the_pipeline_its_owner`; in
-  `crates/flui-hot-reload/tests/plugin_pipeline_text.rs` (under `app-plugin`),
+  `packages/flui-hot-reload/tests/plugin_pipeline_text.rs` (under `app-plugin`),
   `a_plugin_pipeline_measures_through_the_context_it_is_given`, and in
   `plugin_pipeline_layout.rs`, `a_plugin_pipeline_lays_out_at_the_size_of_each_frame`.
 - The host's faces in the collection (§10 step 3c): in

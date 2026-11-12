@@ -5,7 +5,7 @@ use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxLayoutContext},
+    context::{BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
     traits::{RenderBox, TextBaseline},
 };
@@ -128,7 +128,7 @@ impl RenderBox for RenderBaseline {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
             return Ok(constraints.smallest());
@@ -164,7 +164,7 @@ impl RenderBox for RenderBaseline {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
             return Ok(None);

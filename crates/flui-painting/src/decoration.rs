@@ -77,7 +77,7 @@ enum Silhouette {
 /// ([`WARN_CIRCLE_BORDER_RADIUS`]): this function is called from both
 /// `paint_box_decoration` (every frame) and `box_decoration_hit_test`
 /// (every pointer event), and an ungated warn would spam at that rate.
-fn resolve_silhouette(rect: Rect<f64>, decoration: &BoxDecoration<f64>) -> Silhouette {
+fn resolve_silhouette(rect: Rect<f64>, decoration: &BoxDecoration) -> Silhouette {
     if decoration.shape.is_circle() {
         if decoration.border_radius.is_some() {
             WARN_CIRCLE_BORDER_RADIUS.call_once(|| {
@@ -137,7 +137,7 @@ impl DecorationPaintOptions {
 pub fn paint_box_decoration(
     canvas: &mut Canvas,
     rect: Rect<f64>,
-    decoration: &BoxDecoration<f64>,
+    decoration: &BoxDecoration,
     options: DecorationPaintOptions,
 ) {
     let silhouette = resolve_silhouette(rect, decoration);
@@ -296,7 +296,7 @@ pub fn paint_box_decoration(
 #[must_use]
 pub fn box_decoration_hit_test(
     rect: Rect<f64>,
-    decoration: &BoxDecoration<f64>,
+    decoration: &BoxDecoration,
     position: Offset<f64>,
 ) -> bool {
     let point = Point::new(position.dx, position.dy);
@@ -311,7 +311,7 @@ pub fn box_decoration_hit_test(
 }
 
 /// The decoration's rounded rect, when a border radius is set.
-fn decoration_rrect(rect: Rect<f64>, decoration: &BoxDecoration<f64>) -> Option<RRect> {
+fn decoration_rrect(rect: Rect<f64>, decoration: &BoxDecoration) -> Option<RRect> {
     decoration.border_radius.map(|radius| {
         RRect::from_rect_and_corners(
             rect,
@@ -342,7 +342,7 @@ fn decoration_rrect(rect: Rect<f64>, decoration: &BoxDecoration<f64>) -> Option<
 /// of this function. Clamping the circle path does not introduce a new
 /// inconsistency; it just avoids a shadow radius nearly an order of
 /// magnitude larger than the box it decorates.
-fn paint_circle_shadow(canvas: &mut Canvas, circle: Circle<f64>, shadow: &BoxShadow<f64>) {
+fn paint_circle_shadow(canvas: &mut Canvas, circle: Circle<f64>, shadow: &BoxShadow) {
     let silhouette = circle
         .inflate(shadow.spread_radius)
         .translate(shadow.offset.into());
@@ -392,11 +392,7 @@ fn paint_circle_shadow(canvas: &mut Canvas, circle: Circle<f64>, shadow: &BoxSha
 /// [`WARN_CIRCLE_NON_UNIFORM_BORDER`]) and paints nothing. Falling
 /// through to the per-side strip painter below is not an option either:
 /// that draws a square frame around a circular fill.
-fn paint_circle_border(
-    canvas: &mut Canvas,
-    circle: Circle<f64>,
-    border: &crate::styling::Border<f64>,
-) {
+fn paint_circle_border(canvas: &mut Canvas, circle: Circle<f64>, border: &crate::styling::Border) {
     if !border.is_uniform() {
         WARN_CIRCLE_NON_UNIFORM_BORDER.call_once(|| {
             tracing::warn!(
@@ -447,12 +443,7 @@ fn paint_circle_border(
 /// inflated by the spread radius and displaced by the offset; the blur
 /// radius rides as the shadow primitive's elevation (the engine's blur
 /// input).
-fn paint_shadow(
-    canvas: &mut Canvas,
-    rect: Rect<f64>,
-    rrect: Option<RRect>,
-    shadow: &BoxShadow<f64>,
-) {
+fn paint_shadow(canvas: &mut Canvas, rect: Rect<f64>, rrect: Option<RRect>, shadow: &BoxShadow) {
     let base = rrect.unwrap_or_else(|| RRect::from_rect_circular(rect, 0.0));
     let mut silhouette = base.inflate(shadow.spread_radius);
     silhouette.rect = silhouette.rect.translate_offset(shadow.offset);
@@ -554,7 +545,7 @@ pub(crate) fn paint_border(
     canvas: &mut Canvas,
     rect: Rect<f64>,
     rrect: Option<RRect>,
-    border: &crate::styling::Border<f64>,
+    border: &crate::styling::Border,
 ) {
     if border.is_uniform() {
         // Uniform ⇒ all four sides are the same `Some` (or all `None`,
@@ -571,12 +562,11 @@ pub(crate) fn paint_border(
         return;
     }
 
-    let side_width = |side: &Option<crate::styling::BorderSide<f64>>| {
+    let side_width = |side: &Option<crate::styling::BorderSide>| {
         side.filter(|s| s.style.is_solid()).map_or(0.0, |s| s.width)
     };
-    let side_color = |side: &Option<crate::styling::BorderSide<f64>>| {
-        side.map_or(Color::TRANSPARENT, |s| s.color)
-    };
+    let side_color =
+        |side: &Option<crate::styling::BorderSide>| side.map_or(Color::TRANSPARENT, |s| s.color);
     let (l, t, r, b) = (
         side_width(&border.left),
         side_width(&border.top),

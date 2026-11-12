@@ -1687,12 +1687,14 @@ pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
                 .controller(scroll.clone())
                 .child(SizedBox::new(300.0, 5000.0))
                 .boxed(),
-            _ => InteractiveViewer::new(crate::common::viewer_alternatives())
-                .controller(transform.clone())
-                .boundary_margin(EdgeInsets::all(1000.0))
-                .scale_enabled(false)
-                .child(SizedBox::new(300.0, 300.0))
-                .boxed(),
+            _ => InteractiveViewer::new(
+                crate::common::viewer_alternatives(),
+                SizedBox::new(300.0, 300.0),
+            )
+            .controller(transform.clone())
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .scale_enabled(false)
+            .boxed(),
         };
         let pixels = || {
             if family == "viewer" {
@@ -1799,11 +1801,13 @@ pub(crate) fn a_repeated_frame_does_not_cancel_viewer_inertia() {
     let vsync = Vsync::new();
     let content = VsyncScope::new(
         vsync.clone(),
-        InteractiveViewer::new(crate::common::viewer_alternatives())
-            .controller(controller.clone())
-            .boundary_margin(EdgeInsets::all(1000.0))
-            .scale_enabled(false)
-            .child(SizedBox::new(300.0, 300.0)),
+        InteractiveViewer::new(
+            crate::common::viewer_alternatives(),
+            SizedBox::new(300.0, 300.0),
+        )
+        .controller(controller.clone())
+        .boundary_margin(EdgeInsets::all(1000.0))
+        .scale_enabled(false),
     );
     let mut laid = crate::common::lay_out_animated(content, tight(300.0, 300.0), vsync);
     let fling = |laid: &LaidOut| {
@@ -4937,7 +4941,7 @@ pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
     let _listener = controller
         .position()
         .add_activity_listener(Rc::new(move || {
-            seen.set(Some(writer.write(|cx| signal.set(cx, 1))));
+            seen.set(Some(writer.write(|ctx| signal.set(ctx, 1))));
         }));
     controller
         .animate_to(

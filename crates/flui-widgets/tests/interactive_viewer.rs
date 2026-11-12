@@ -35,11 +35,13 @@ use crate::nested_scroll::{
 const PAGE: f64 = 300.0;
 
 fn photo(controller: &TransformationController) -> InteractiveViewer {
-    InteractiveViewer::new(viewer_alternatives())
-        .controller(controller.clone())
-        .double_tap_zoom(false)
-        .max_scale(4.0)
-        .child(ColoredBox::new(Color::rgb(20, 40, 60)))
+    InteractiveViewer::new(
+        viewer_alternatives(),
+        ColoredBox::new(Color::rgb(20, 40, 60)),
+    )
+    .controller(controller.clone())
+    .double_tap_zoom(false)
+    .max_scale(4.0)
 }
 
 /// A three-page horizontal pager whose first page is `viewer`, in
@@ -59,7 +61,7 @@ fn photo_pager(
         vsync.clone(),
         Directionality::new(
             direction,
-            PageView::new(pages, crate::common::pager_alternatives()).controller(pager.clone()),
+            PageView::new(crate::common::pager_alternatives(), pages).controller(pager.clone()),
         ),
     )
     .boxed()
@@ -132,7 +134,7 @@ pub(crate) fn a_turned_photo_at_its_edge_frees_the_axis_it_cannot_pan() {
     ];
     let tree = VsyncScope::new(
         vsync.clone(),
-        PageView::new(pages, crate::common::pager_alternatives()).controller(pager.clone()),
+        PageView::new(crate::common::pager_alternatives(), pages).controller(pager.clone()),
     )
     .boxed();
     let mut laid = mounted(tree, vsync);
@@ -490,11 +492,10 @@ fn wheel(dy: f64, modifiers: Modifiers) -> PointerEvent {
 /// around it, while Ctrl+wheel still zooms.
 pub(crate) fn plain_wheel_pans_the_viewer_then_leaves_its_edge_to_the_list() {
     let (transform, list) = (TransformationController::new(), ScrollController::new());
-    let viewer = InteractiveViewer::new(viewer_alternatives())
+    let viewer = InteractiveViewer::new(viewer_alternatives(), SizedBox::new(300.0, 300.0))
         .controller(transform.clone())
         .wheel_scale_gate(WheelScaleGate::CtrlWheel)
-        .boundary_margin(EdgeInsets::all(60.0))
-        .child(SizedBox::new(300.0, 300.0));
+        .boundary_margin(EdgeInsets::all(60.0));
     let mut laid = lay_out(
         SingleChildScrollView::new()
             .controller(list.clone())
@@ -559,10 +560,9 @@ pub(crate) fn viewer_keys_pan_and_zoom_from_the_focused_row() {
             .child(flui_widgets::Column::new(vec![
                 SizedBox::new(300.0, 300.0)
                     .child(
-                        InteractiveViewer::new(viewer_alternatives())
+                        InteractiveViewer::new(viewer_alternatives(), SizedBox::new(300.0, 300.0))
                             .controller(transform.clone())
-                            .boundary_margin(EdgeInsets::all(100.0))
-                            .child(SizedBox::new(300.0, 300.0)),
+                            .boundary_margin(EdgeInsets::all(100.0)),
                     )
                     .boxed(),
                 SizedBox::new(300.0, 700.0).boxed(),
@@ -622,13 +622,15 @@ pub(crate) fn keys_typed_in_a_field_inside_the_viewer_stay_in_the_field() {
     let transform = TransformationController::new();
     let field = FocusNode::with_debug_label("field");
     let harness = crate::common::harness::mount_with_ime(
-        InteractiveViewer::new(viewer_alternatives())
-            .controller(transform.clone())
-            .boundary_margin(EdgeInsets::all(100.0))
-            .child(SizedBox::new(300.0, 50.0).child(EditableText::new(
+        InteractiveViewer::new(
+            viewer_alternatives(),
+            SizedBox::new(300.0, 50.0).child(EditableText::new(
                 TextEditingController::new(),
                 Rc::clone(&field),
-            ))),
+            )),
+        )
+        .controller(transform.clone())
+        .boundary_margin(EdgeInsets::all(100.0)),
     );
     let _ = field.request_focus();
     assert!(field.has_primary_focus(), "the field has the focus");
@@ -686,12 +688,11 @@ fn request(laid: &LaidOut, action: Action, data: Option<ActionData>) {
 pub(crate) fn viewer_assistive_actions_zoom_and_pan() {
     let transform = TransformationController::new();
     let mut laid = lay_out(
-        InteractiveViewer::new(viewer_alternatives())
+        InteractiveViewer::new(viewer_alternatives(), SizedBox::new(300.0, 300.0))
             .controller(transform.clone())
             .min_scale(0.5)
             .max_scale(3.0)
-            .boundary_margin(EdgeInsets::all(f64::INFINITY))
-            .child(SizedBox::new(300.0, 300.0)),
+            .boundary_margin(EdgeInsets::all(f64::INFINITY)),
         tight(300.0, 300.0),
     );
     laid.enable_semantics();
@@ -789,11 +790,10 @@ pub(crate) fn viewer_double_tap_zooms_about_the_tap_and_back_out_at_the_maximum(
     for (gesture, script) in gestures {
         let transform = TransformationController::new();
         let mut laid = lay_out(
-            InteractiveViewer::new(viewer_alternatives())
+            InteractiveViewer::new(viewer_alternatives(), SizedBox::new(300.0, 300.0))
                 .controller(transform.clone())
                 .min_scale(1.0)
-                .max_scale(2.0)
-                .child(SizedBox::new(300.0, 300.0)),
+                .max_scale(2.0),
             tight(300.0, 300.0),
         );
         laid.replay(&script);
@@ -822,10 +822,9 @@ pub(crate) fn viewer_degenerate_geometry_and_bounds_publish_finite_transforms() 
     // A zero-size child.
     let transform = TransformationController::new();
     let mut laid = lay_out(
-        InteractiveViewer::new(viewer_alternatives())
+        InteractiveViewer::new(viewer_alternatives(), SizedBox::new(0.0, 0.0))
             .controller(transform.clone())
-            .boundary_margin(EdgeInsets::all(100.0))
-            .child(SizedBox::new(0.0, 0.0)),
+            .boundary_margin(EdgeInsets::all(100.0)),
         crate::common::loose(300.0),
     );
     laid.enable_semantics();
@@ -839,12 +838,11 @@ pub(crate) fn viewer_degenerate_geometry_and_bounds_publish_finite_transforms() 
     // Equal bounds: a pinch and a native zoom keep the scale, a pan works.
     let transform = TransformationController::new();
     let mut laid = lay_out(
-        InteractiveViewer::new(viewer_alternatives())
+        InteractiveViewer::new(viewer_alternatives(), SizedBox::new(300.0, 300.0))
             .controller(transform.clone())
             .min_scale(1.0)
             .max_scale(1.0)
-            .boundary_margin(EdgeInsets::all(100.0))
-            .child(SizedBox::new(300.0, 300.0)),
+            .boundary_margin(EdgeInsets::all(100.0)),
         tight(300.0, 300.0),
     );
     laid.replay(&PointerScript::pinch(at(150.0, 150.0), 40.0, 120.0, 8));
@@ -895,11 +893,10 @@ pub(crate) fn viewer_degenerate_geometry_and_bounds_publish_finite_transforms() 
     ] {
         let transform = TransformationController::new();
         let mut laid = lay_out(
-            InteractiveViewer::new(viewer_alternatives())
+            InteractiveViewer::new(viewer_alternatives(), SizedBox::new(300.0, 300.0))
                 .controller(transform.clone())
                 .min_scale(0.5)
-                .max_scale(4.0)
-                .child(SizedBox::new(300.0, 300.0)),
+                .max_scale(4.0),
             tight(300.0, 300.0),
         );
         for _ in 0..2 {
@@ -939,15 +936,14 @@ impl flui_view::StatelessView for Rebuilding {
         let (signal, updates) = (self.max_scale, Rc::clone(&self.updates));
         NestedScroll::new(
             self.probe.connection(),
-            InteractiveViewer::new(viewer_alternatives())
+            InteractiveViewer::new(viewer_alternatives(), SizedBox::new(300.0, 300.0))
                 .controller(self.transform.clone())
                 .max_scale(self.max_scale.get(ctx))
                 .boundary_margin(EdgeInsets::all(f64::INFINITY))
-                .on_interaction_update(move |cx, _details| {
+                .on_interaction_update(move |ctx, _details| {
                     *updates.borrow_mut() += 1;
-                    signal.set(cx, 2.0 + f64::from(*updates.borrow()))
-                })
-                .child(SizedBox::new(300.0, 300.0)),
+                    signal.set(ctx, 2.0 + f64::from(*updates.borrow()))
+                }),
         )
     }
 }
@@ -1037,12 +1033,11 @@ pub(crate) fn viewer_pan_past_its_boundary_stretches_and_snaps_back() {
 pub(crate) fn viewer_pinch_past_the_scale_bounds_stretches_and_snaps_back() {
     for (from, to, bound) in [(40.0, 200.0, 2.0), (200.0, 40.0, 1.0)] {
         let (transform, vsync) = (TransformationController::new(), Vsync::new());
-        let viewer = InteractiveViewer::new(viewer_alternatives())
+        let viewer = InteractiveViewer::new(viewer_alternatives(), SizedBox::new(300.0, 300.0))
             .controller(transform.clone())
             .min_scale(1.0)
             .max_scale(2.0)
-            .boundary_margin(EdgeInsets::all(f64::INFINITY))
-            .child(SizedBox::new(300.0, 300.0));
+            .boundary_margin(EdgeInsets::all(f64::INFINITY));
         let mut laid = mounted(VsyncScope::new(vsync.clone(), viewer).boxed(), vsync);
         let mut furthest = 1.0_f64;
         laid.replay_with(
@@ -1113,12 +1108,11 @@ fn rotation_of(controller: &TransformationController) -> f64 {
 pub(crate) fn viewer_touch_twist_rotates_only_when_rotation_is_enabled() {
     for enabled in [true, false] {
         let (transform, vsync) = (TransformationController::new(), Vsync::new());
-        let viewer = InteractiveViewer::new(viewer_alternatives())
+        let viewer = InteractiveViewer::new(viewer_alternatives(), SizedBox::new(300.0, 300.0))
             .controller(transform.clone())
             .double_tap_zoom(false)
             .rotation_enabled(enabled)
-            .boundary_margin(EdgeInsets::all(f64::INFINITY))
-            .child(SizedBox::new(300.0, 300.0));
+            .boundary_margin(EdgeInsets::all(f64::INFINITY));
         let mut laid = mounted(VsyncScope::new(vsync.clone(), viewer).boxed(), vsync);
         laid.replay(&twist(12));
         settle(&mut laid);
@@ -1235,10 +1229,9 @@ pub(crate) fn viewer_contact_gives_it_the_keys() {
     for device in ALL_DEVICES {
         let transform = TransformationController::new();
         let mut laid = lay_out(
-            InteractiveViewer::new(viewer_alternatives())
+            InteractiveViewer::new(viewer_alternatives(), SizedBox::new(300.0, 300.0))
                 .controller(transform.clone())
-                .boundary_margin(EdgeInsets::all(100.0))
-                .child(SizedBox::new(300.0, 300.0)),
+                .boundary_margin(EdgeInsets::all(100.0)),
             tight(300.0, 300.0),
         );
         laid.replay(&slow(device, at(150.0, 150.0), at(150.0, 120.0)));

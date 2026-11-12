@@ -240,16 +240,12 @@ impl PageTransitionBuilder for FadeForwards {
     ) -> BoxedView {
         let entering = curved(primary, curves::EASE_IN_OUT_CUBIC_EMPHASIZED);
         let covered = curved(secondary, curves::EASE_IN_OUT_CUBIC_EMPHASIZED);
-        let page = SlideTransition::new(
-            slid(Rc::clone(&entering), 0.25, 0.0),
-            FadeTransition::new(entering, child),
-        );
-        SlideTransition::new(
-            slid(Rc::clone(&covered), 0.0, -0.25),
-            FadeTransition::new(tweened(covered, 1.0, 0.0), page),
-        )
-        .transform_hit_tests(false)
-        .boxed()
+        let page = SlideTransition::new(slid(Rc::clone(&entering), 0.25, 0.0))
+            .child(FadeTransition::new(entering).child(child));
+        SlideTransition::new(slid(Rc::clone(&covered), 0.0, -0.25))
+            .child(FadeTransition::new(tweened(covered, 1.0, 0.0)).child(page))
+            .transform_hit_tests(false)
+            .boxed()
     }
 }
 
@@ -279,11 +275,9 @@ impl PageTransitionBuilder for Zoom {
             1.0,
             1.05,
         );
-        ScaleTransition::new(
-            scale_away,
-            FadeTransition::new(fade_in, ScaleTransition::new(scale_in, child)),
-        )
-        .boxed()
+        ScaleTransition::new(scale_away)
+            .child(FadeTransition::new(fade_in).child(ScaleTransition::new(scale_in).child(child)))
+            .boxed()
     }
 }
 
@@ -310,7 +304,7 @@ impl PageTransitionBuilder for SharedAxisTransition {
         );
         let entering = curves::FAST_OUT_SLOW_IN.transform(primary.value());
         let leaving = curves::FAST_OUT_SLOW_IN.transform(secondary.value());
-        let page = FadeTransition::new(fade_in, child);
+        let page = FadeTransition::new(fade_in).child(child);
         let moved = match self.0 {
             SharedAxis::Scaled => {
                 let scale_in = 0.8 + 0.2 * entering;
@@ -330,7 +324,7 @@ impl PageTransitionBuilder for SharedAxisTransition {
                 Transform::translate(dx, dy).child(page).boxed()
             }
         };
-        FadeTransition::new(fade_out, moved).boxed()
+        FadeTransition::new(fade_out).child(moved).boxed()
     }
 }
 
@@ -358,11 +352,9 @@ impl PageTransitionBuilder for FadeThrough {
             1.0,
             0.0,
         );
-        let page = FadeTransition::new(
-            Rc::clone(&entering),
-            ScaleTransition::new(tweened(entering, 0.92, 1.0), child),
-        );
-        FadeTransition::new(fade_out, page).boxed()
+        let page = FadeTransition::new(Rc::clone(&entering))
+            .child(ScaleTransition::new(tweened(entering, 0.92, 1.0)).child(child));
+        FadeTransition::new(fade_out).child(page).boxed()
     }
 }
 
@@ -400,6 +392,8 @@ impl PageTransitionBuilder for DialogFade {
         _secondary: &RouteAnimation,
         child: BoxedView,
     ) -> BoxedView {
-        FadeTransition::new(curved(primary, curves::EASE_OUT), child).boxed()
+        FadeTransition::new(curved(primary, curves::EASE_OUT))
+            .child(child)
+            .boxed()
     }
 }

@@ -30,7 +30,7 @@ use flui_assets::{AssetRegistryBuilder, CacheCapacity};
 use std::num::NonZeroU64;
 
 let registry = AssetRegistryBuilder::new()
-    .with_capacity(CacheCapacity::Entries(NonZeroU64::new(256).expect("nonzero entry limit")))
+    .capacity(CacheCapacity::Entries(NonZeroU64::new(256).expect("nonzero entry limit")))
     .build();
 ```
 

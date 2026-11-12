@@ -45,42 +45,42 @@ impl OverflowBox {
 
     /// Sets the alignment of the child within the overflow box.
     #[must_use]
-    pub fn with_alignment(mut self, alignment: Alignment) -> Self {
+    pub fn alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
         self
     }
 
     /// Overrides the minimum width constraint passed to the child.
     #[must_use]
-    pub fn with_min_width(mut self, min_width: f64) -> Self {
+    pub fn min_width(mut self, min_width: f64) -> Self {
         self.min_width = Some(min_width);
         self
     }
 
     /// Overrides the maximum width constraint passed to the child.
     #[must_use]
-    pub fn with_max_width(mut self, max_width: f64) -> Self {
+    pub fn max_width(mut self, max_width: f64) -> Self {
         self.max_width = Some(max_width);
         self
     }
 
     /// Overrides the minimum height constraint passed to the child.
     #[must_use]
-    pub fn with_min_height(mut self, min_height: f64) -> Self {
+    pub fn min_height(mut self, min_height: f64) -> Self {
         self.min_height = Some(min_height);
         self
     }
 
     /// Overrides the maximum height constraint passed to the child.
     #[must_use]
-    pub fn with_max_height(mut self, max_height: f64) -> Self {
+    pub fn max_height(mut self, max_height: f64) -> Self {
         self.max_height = Some(max_height);
         self
     }
 
     /// Sets the fit policy (how this widget reports its own size).
     #[must_use]
-    pub fn with_fit(mut self, fit: OverflowBoxFit) -> Self {
+    pub fn fit(mut self, fit: OverflowBoxFit) -> Self {
         self.fit = fit;
         self
     }

@@ -26,7 +26,7 @@ const STYLE: FocusRingStyle = FocusRingStyle {
 /// A themed button labelled `Go`.
 fn app() -> LaidOut {
     let mut app = lay_out(
-        DefaultFocusRingStyle::new(STYLE, RawButton::new(Text::new("Go")).on_pressed(|_cx| {})),
+        DefaultFocusRingStyle::new(STYLE, RawButton::new(Text::new("Go")).on_press(|_ctx| {})),
         loose(400.0),
     );
     app.pump();
@@ -175,7 +175,7 @@ fn visible_focus_change_reports_each_edge() {
     let edges = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&edges);
     let mut app = lay_out(
-        Focus::new(Text::new("Go")).on_visible_focus_change(move |_cx, shown| {
+        Focus::new(Text::new("Go")).on_visible_focus_change(move |_ctx, shown| {
             recorded.borrow_mut().push(shown);
         }),
         loose(400.0),

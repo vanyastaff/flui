@@ -380,7 +380,9 @@ impl Inspect for RenderViewAdapter {
 impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewAdapter {
     fn perform_layout_raw(
         &mut self,
-        ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
+        ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::ErasedLayoutContext<
+            '_,
+        >,
     ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>>
     {
         // The INCOMING constraints are authoritative — they carry the
@@ -390,7 +392,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         // newly exposed pixel unpainted. The root fills whatever the
         // window gives it (tight root constraints), and
         // children get that size as tight constraints at the origin.
-        let typed_inner = crate::protocol::BoxLayoutCtx::<
+        let typed_inner = crate::protocol::RawBoxLayoutContext::<
             flui_foundation::Variable,
             crate::parent_data::BoxParentData,
         >::from_erased(ctx);
@@ -431,9 +433,12 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         // Root pass-through: the view draws nothing itself and splices
         // every child subtree in order — `size` is only forwarded to
         // the child-painting context.
-        let mut cx =
-            crate::context::PaintCx::<flui_foundation::Variable>::new(recorder, child_count, size);
-        cx.paint_children();
+        let mut ctx = crate::context::PaintContext::<flui_foundation::Variable>::new(
+            recorder,
+            child_count,
+            size,
+        );
+        ctx.paint_children();
     }
 
     fn hit_test_raw(

@@ -63,19 +63,19 @@ fn platform() -> WindowsPlatform {
 
 fn options() -> WindowOptions {
     WindowOptions::default()
-        .with_title("window commands")
-        .with_size(CONTENT)
-        .with_position(Some(Point::new(100.0, 80.0)))
+        .title("window commands")
+        .size(CONTENT)
+        .position(Some(Point::new(100.0, 80.0)))
 }
 
 fn hidden() -> WindowOptions {
-    options().with_visible(false)
+    options().visible(false)
 }
 
 fn deferred() -> WindowOptions {
     options()
-        .with_visible(true)
-        .with_reveal(WindowReveal::AfterFirstFrame)
+        .visible(true)
+        .reveal(WindowReveal::AfterFirstFrame)
 }
 
 fn open(platform: &WindowsPlatform, options: WindowOptions) -> Opened {
@@ -205,8 +205,8 @@ fn a_maximized_window_is_first_seen_maximized() {
     let window = open(
         &platform,
         deferred()
-            .with_mode(WindowMode::Maximized)
-            .with_normal_geometry(Some(normal)),
+            .mode(WindowMode::Maximized)
+            .normal_geometry(Some(normal)),
     );
     assert!(!shown(&window));
     window.reveal_after_first_frame();
@@ -222,7 +222,7 @@ fn a_maximized_window_is_first_seen_maximized() {
 
 fn a_hidden_window_shown_later_is_shown_in_its_opening_mode() {
     let platform = platform();
-    let window = open(&platform, hidden().with_mode(WindowMode::Maximized));
+    let window = open(&platform, hidden().mode(WindowMode::Maximized));
     assert!(!shown(&window));
     apply(&window, WindowCommand::Show);
     // SAFETY: a plain query of the live window.
@@ -232,7 +232,7 @@ fn a_hidden_window_shown_later_is_shown_in_its_opening_mode() {
 
 fn a_mode_set_on_a_hidden_window_decides_how_it_is_first_shown() {
     let platform = platform();
-    let window = open(&platform, hidden().with_mode(WindowMode::Maximized));
+    let window = open(&platform, hidden().mode(WindowMode::Maximized));
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
     assert!(!shown(&window), "setting the normal mode shows nothing");
     apply(&window, WindowCommand::Show);
@@ -243,7 +243,7 @@ fn a_mode_set_on_a_hidden_window_decides_how_it_is_first_shown() {
 
 fn a_fullscreen_window_covers_its_monitor_before_it_is_shown() {
     let platform = platform();
-    let window = open(&platform, deferred().with_mode(WindowMode::Fullscreen));
+    let window = open(&platform, deferred().mode(WindowMode::Fullscreen));
     assert!(!shown(&window));
     assert!(covers_its_monitor(&window), "entered while hidden");
     assert_eq!(window.state().mode, WindowMode::Fullscreen);
@@ -352,7 +352,7 @@ fn a_position_set_while_fullscreen_is_where_it_returns_to() {
 
 fn the_frame_follows_resizable_and_the_system_frame_and_keeps_the_content() {
     let platform = platform();
-    let window = open(&platform, hidden().with_resizable(false));
+    let window = open(&platform, hidden().resizable(false));
     assert_eq!(style(&window) & (WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0), 0);
     assert!(!window.state().resizable);
     apply(&window, WindowCommand::SetResizable(true));
@@ -390,7 +390,7 @@ fn an_app_title_bar_drops_the_caption_and_keeps_the_content() {
     let platform = platform();
     let requested =
         WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(SystemControls::Hidden));
-    let window = open(&platform, hidden().with_frame(requested));
+    let window = open(&platform, hidden().frame(requested));
     let opened = window.state();
     assert_eq!(opened.frame, requested);
     assert_eq!(
@@ -432,7 +432,7 @@ fn the_system_hit_test_answers_from_the_chrome_regions() {
     let platform = platform();
     let frame =
         WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(SystemControls::Hidden));
-    let window = open(&platform, hidden().with_frame(frame));
+    let window = open(&platform, hidden().frame(frame));
     let logical = |left, top, right, bottom| Rect::from_ltrb(left, top, right, bottom);
     window
         .set_input_regions(&[
@@ -496,8 +496,8 @@ fn the_limits_hold_against_resizing() {
     let window = open(
         &platform,
         hidden()
-            .with_min_size(Some(Size::new(400.0, 300.0)))
-            .with_max_size(Some(Size::new(800.0, 600.0))),
+            .min_size(Some(Size::new(400.0, 300.0)))
+            .max_size(Some(Size::new(800.0, 600.0))),
     );
     apply(&window, WindowCommand::SetSize(Size::new(100.0, 100.0)));
     assert!(
@@ -578,7 +578,7 @@ fn normal_on_a_hidden_maximized_window_restores_it_without_showing() {
 
 fn a_size_set_under_limits_while_maximized_still_restores_within_them() {
     let platform = platform();
-    let window = open(&platform, options().with_frame(WindowFrame::None));
+    let window = open(&platform, options().frame(WindowFrame::None));
     apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
     apply(
         &window,
@@ -607,7 +607,7 @@ fn a_frame_changed_while_maximized_keeps_the_content_it_restores_to() {
 fn limits_set_while_maximized_hold_when_it_is_restored() {
     let platform = platform();
     // Without a sizing border the system does not ask for the limits on its own.
-    let window = open(&platform, options().with_frame(WindowFrame::None));
+    let window = open(&platform, options().frame(WindowFrame::None));
     apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
     apply(
         &window,
@@ -680,10 +680,7 @@ fn a_maximum_caps_maximizing() {
 
 fn fullscreen_ignores_the_limits() {
     let platform = platform();
-    let window = open(
-        &platform,
-        options().with_max_size(Some(Size::new(500.0, 400.0))),
-    );
+    let window = open(&platform, options().max_size(Some(Size::new(500.0, 400.0))));
     apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
     assert!(covers_its_monitor(&window));
 }
@@ -781,8 +778,8 @@ fn a_window_without_a_sizing_border_holds_its_limits() {
     let window = open(
         &platform,
         hidden()
-            .with_frame(WindowFrame::None)
-            .with_max_size(Some(Size::new(500.0, 400.0))),
+            .frame(WindowFrame::None)
+            .max_size(Some(Size::new(500.0, 400.0))),
     );
     apply(&window, WindowCommand::SetSize(Size::new(900.0, 700.0)));
     let content = window.state().content_size;
@@ -987,7 +984,7 @@ fn a_show_asked_for_while_a_hidden_window_is_restored_is_kept() {
 
 fn a_window_first_shown_minimized_is_never_reported_visible() {
     let platform = platform();
-    let window = open(&platform, deferred().with_mode(WindowMode::Minimized));
+    let window = open(&platform, deferred().mode(WindowMode::Minimized));
     let events = record_visibility(&window);
     window.reveal_after_first_frame();
     // SAFETY: a plain query of the live window.
@@ -998,7 +995,7 @@ fn a_window_first_shown_minimized_is_never_reported_visible() {
         "told visible while it waited for a frame, it is then told it is not"
     );
 
-    let window = open(&platform, hidden().with_mode(WindowMode::Minimized));
+    let window = open(&platform, hidden().mode(WindowMode::Minimized));
     let events = record_visibility(&window);
     apply(&window, WindowCommand::Show);
     assert!(events.lock().expect("log").is_empty());

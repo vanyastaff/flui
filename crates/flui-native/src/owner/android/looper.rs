@@ -658,7 +658,7 @@ impl host::Loop for AndroidLoop {
         let mut handler = Some(handler);
         // No owner lane on this backend: every `OwnerPlatform::open_window`
         // call creates directly and is always `Ready`.
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+        let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
             Arc::clone(&platform),
             Arc::clone(&self.owner_signal),
         ));
@@ -986,10 +986,9 @@ impl host::Loop for AndroidLoop {
                 // live in this frame until the loop ends.
                 self.app_delivery.bind(handler, &platform, &hooks);
                 self.app_delivery.resume_through_signal(&self.owner_signal);
-                let ready = self.app_delivery.ready(OwnerPlatform::new(
-                    Arc::clone(&platform),
-                    Arc::clone(&hooks),
-                ));
+                let ready = self
+                    .app_delivery
+                    .ready(OwnerPlatform::new(Arc::clone(&platform), Rc::clone(&hooks)));
                 if let Err(error) = ready {
                     tracing::error!(%error, "on_ready bootstrap failed; stopping the event loop");
                     bootstrap_error = Some(error);

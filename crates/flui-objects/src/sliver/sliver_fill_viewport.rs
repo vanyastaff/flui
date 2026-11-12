@@ -5,7 +5,7 @@ use flui_foundation::inspect::{Fields, Inspect};
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
-    context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
+    context::{PaintContext, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     traits::RenderSliver,
 };
@@ -142,7 +142,7 @@ impl RenderSliver for RenderSliverFillViewport {
         Ok(geometry)
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         ctx.paint_children();
     }
 

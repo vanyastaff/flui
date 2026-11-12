@@ -111,7 +111,7 @@ impl RenderBox for RenderColoredBox {
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.preferred_size.width)
     }
@@ -119,7 +119,7 @@ impl RenderBox for RenderColoredBox {
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.preferred_size.width)
     }
@@ -127,7 +127,7 @@ impl RenderBox for RenderColoredBox {
     fn compute_min_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.preferred_size.height)
     }
@@ -135,7 +135,7 @@ impl RenderBox for RenderColoredBox {
     fn compute_max_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.preferred_size.height)
     }
@@ -143,12 +143,12 @@ impl RenderBox for RenderColoredBox {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         Ok(constraints.constrain(self.preferred_size))
     }
 
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Leaf>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Leaf>) {
         // Local coordinates — the recorder pre-translates to this
         // node's origin. Size comes from RenderState via `ctx.size()`.
         let rect = Rect::from_origin_size(Point::ZERO, ctx.size());

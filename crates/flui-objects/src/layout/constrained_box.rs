@@ -148,7 +148,7 @@ impl RenderBox for RenderConstrainedBox {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let ac = &self.additional_constraints;
         if ac.has_bounded_width() && ac.has_tight_width() {
@@ -173,7 +173,7 @@ impl RenderBox for RenderConstrainedBox {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let ac = &self.additional_constraints;
         if ac.has_bounded_width() && ac.has_tight_width() {
@@ -198,7 +198,7 @@ impl RenderBox for RenderConstrainedBox {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let ac = &self.additional_constraints;
         if ac.has_bounded_height() && ac.has_tight_height() {
@@ -223,7 +223,7 @@ impl RenderBox for RenderConstrainedBox {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let ac = &self.additional_constraints;
         if ac.has_bounded_height() && ac.has_tight_height() {
@@ -248,7 +248,7 @@ impl RenderBox for RenderConstrainedBox {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         let combined = self.additional_constraints.enforce(&constraints);
         if ctx.child_count() > 0 {
@@ -262,7 +262,7 @@ impl RenderBox for RenderConstrainedBox {
         &self,
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
-        ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         let combined = self.additional_constraints.enforce(&constraints);
         if ctx.child_count() > 0 {

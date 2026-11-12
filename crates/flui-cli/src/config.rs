@@ -123,7 +123,7 @@ pub(crate) fn project_floors(root: &Path) -> CliResult<AppFloors> {
 /// When present, `flui run` keeps the host process alive, rebuilds only the
 /// worker `cdylib` on source changes, and relies on the
 /// `flui_hot_reload::WorkerReloadHook` the host installs with
-/// `AppConfig::with_dev_reload` to apply the reload.
+/// `AppConfig::dev_reload` to apply the reload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct HotReloadConfig {
     /// Host binary crate (`cargo run -p …`).
@@ -137,6 +137,12 @@ pub(crate) struct HotReloadConfig {
     /// Optional shared types crate; changes trigger a full host restart.
     #[serde(default)]
     pub(crate) types_watch: Option<String>,
+    /// The host feature that installs the reload hook. When set, `flui run`
+    /// builds and runs the host with it and with the host's default features
+    /// off, so a host whose default build links the logic crate loads the
+    /// worker library instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reload_feature: Option<String>,
 }
 
 /// The identifier a `flui.toml` written before `[app] id` existed would have

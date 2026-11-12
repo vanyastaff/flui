@@ -1,8 +1,8 @@
 //! Signal reads through the `ReadScope` contract (ADR-0085 §2).
 //!
-//! - every context shape a view author writes accepts `sig.get(cx)`;
+//! - every context shape a view author writes accepts `sig.get(ctx)`;
 //! - a read in `build` subscribes the building element through the context
-//!   production builds with (`BuildCtx`, reached by a real mount), and a write
+//!   production builds with (`LiveBuildContext`, reached by a real mount), and a write
 //!   rebuilds exactly that element;
 //! - a handle of the wrong type is a typed error on every path, never a panic,
 //!   and a write through one marks no reader.
@@ -197,14 +197,14 @@ pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
         // while both membership directions have more than four entries.
         let label = (round * 5) % readers.len();
         writer
-            .write(|cx| readers[label].trigger.set(cx, round as u32))
+            .write(|ctx| readers[label].trigger.set(ctx, round as u32))
             .expect("live");
         binding.pump_frame(FRAME);
         expected.retain(|value| *value != label);
         expected.push(label);
         order.borrow_mut().clear();
         writer
-            .write(|cx| signals[8].set(cx, round as u32))
+            .write(|ctx| signals[8].set(ctx, round as u32))
             .expect("live");
         binding.pump_frame(FRAME);
         assert_eq!(*order.borrow(), expected, "peer order after re-reading");
@@ -223,13 +223,13 @@ pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
         for reader in &readers {
             reader.count.set(count);
             writer
-                .write(|cx| reader.trigger.set(cx, count as u32))
+                .write(|ctx| reader.trigger.set(ctx, count as u32))
                 .expect("live");
         }
         binding.pump_frame(FRAME);
         order.borrow_mut().clear();
         writer
-            .write(|cx| signals[8].set(cx, count as u32))
+            .write(|ctx| signals[8].set(ctx, count as u32))
             .expect("live");
         binding.pump_frame(FRAME);
         let expected = if count == 9 {
@@ -244,7 +244,7 @@ pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
     assert_eq!(graph.readers_of(replacement.slot()), [] as [ElementId; 0]);
     order.borrow_mut().clear();
     writer
-        .write(|cx| replacement.set(cx, 43))
+        .write(|ctx| replacement.set(ctx, 43))
         .expect("replacement is live");
     binding.pump_frame(FRAME);
     assert!(order.borrow().is_empty(), "slot reuse inherits no readers");
@@ -292,7 +292,7 @@ pub(crate) fn explicit_release_allows_destructor_reentry_and_slot_reuse() {
         .get()
         .expect("destructor allocated a replacement");
     writer
-        .write(|cx| next.set(cx, 9))
+        .write(|ctx| next.set(ctx, 9))
         .expect("replacement is writable");
     assert_eq!(next.peek(&graph, |value| *value), Ok(9));
     graph.release(signal.slot());
@@ -359,7 +359,7 @@ pub(crate) fn owner_release_commits_the_batch_before_the_first_destructor_failur
         .get()
         .expect("first destructor reentered the graph");
     writer
-        .write(|cx| next.set(cx, 11))
+        .write(|ctx| next.set(ctx, 11))
         .expect("the next write succeeds after containment");
     assert_eq!(next.peek(&graph, |value| *value), Ok(11));
 }
@@ -645,7 +645,7 @@ pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
     binding.mount_root(&root, owners, MountOptions::tight(100.0, 100.0));
     let writer = binding.writer_source().expect("tree-bound");
     assert_eq!(
-        writer.write(|cx| flui_view::ReadGraph::graph_id(cx)),
+        writer.write(|ctx| flui_view::ReadGraph::graph_id(ctx)),
         graph.id(),
         "the binding writes the owner's graph"
     );
@@ -659,7 +659,7 @@ pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
     assert_eq!(graph.readers_of(sig.slot()), [reader]);
 
     writer
-        .write(|cx| sig.set(cx, 2))
+        .write(|ctx| sig.set(ctx, 2))
         .expect("a write outside the frame phases");
     binding.pump_frame(FRAME);
 
@@ -695,8 +695,8 @@ pub(crate) fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader
     binding.pump_frame(FRAME);
 
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        writer.write(|cx| {
-            signal.update(cx, |value| {
+        writer.write(|ctx| {
+            signal.update(ctx, |value| {
                 *value = 9;
                 panic!("update probe");
             })
@@ -807,7 +807,7 @@ pub(crate) fn run_released_loan_child() -> bool {
         assert_eq!(graph.live_slot_count(), 0);
         let next = graph.signal(3u32);
         writer
-            .write(|cx| next.set(cx, 5))
+            .write(|ctx| next.set(ctx, 5))
             .expect("next write after failed release");
         assert_eq!(next.peek(&graph, |value| *value), Ok(5));
         return true;
@@ -858,8 +858,8 @@ pub(crate) fn run_released_loan_child() -> bool {
     let callback_graph = graph.clone();
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if update {
-            writer.write(move |cx| {
-                signal.update(cx, move |_| {
+            writer.write(move |ctx| {
+                signal.update(ctx, move |_| {
                     let _keep_capture = &capture;
                     callback_graph.release(signal.slot());
                     assert!(!callback_fails, "primary callback failure");
@@ -904,7 +904,7 @@ pub(crate) fn run_released_loan_child() -> bool {
     );
     let fresh = graph.signal(10u32);
     writer
-        .write(|cx| fresh.update(cx, |value| *value += 1))
+        .write(|ctx| fresh.update(ctx, |value| *value += 1))
         .expect("next live update");
     assert_eq!(fresh.peek(&graph, |value| *value), Ok(11));
     true

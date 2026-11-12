@@ -97,9 +97,9 @@ impl ViewState<Inbox> for InboxState {
             .into_iter()
             .map(|name| {
                 Dismissible::new(
+                    row_alternatives(view.rows, name, &view.menu),
                     SizedBox::new(300.0, 50.0)
                         .child(ColoredBox::new(Color::rgb(10, 20, 30)).child(Text::new(name))),
-                    row_alternatives(view.rows, name, &view.menu),
                 )
                 .direction(DismissDirection::Horizontal)
                 .boxed()
@@ -141,8 +141,8 @@ fn row_alternatives(
         Rows::Menu => {
             let menu = menu.clone();
             Alternative::ContextMenu(
-                MenuSpec::new(delete, move |cx, request| {
-                    menu.set_in(cx, Some(request))
+                MenuSpec::new(delete, move |ctx, request| {
+                    menu.set_in(ctx, Some(request))
                         .expect("the inbox menu slot is alive while its row is mounted");
                 })
                 .item(GestureCommand::new(
@@ -352,10 +352,10 @@ fn menu_buttons(request: &MenuRequest, menu: &SharedSignal<Option<MenuRequest>>)
                     .label(item.label().to_owned())
                     .child(SizedBox::new(120.0, 30.0)),
             )
-            .on_pressed(move |cx| {
-                menu.set_in(cx, None)
+            .on_press(move |ctx| {
+                menu.set_in(ctx, None)
                     .expect("the inbox menu slot is alive while its button is mounted");
-                let _ = item.perform(cx);
+                let _ = item.perform(ctx);
             })
             .boxed()
         })
@@ -366,14 +366,16 @@ fn menu_buttons(request: &MenuRequest, menu: &SharedSignal<Option<MenuRequest>>)
 fn mailbox_actions(mailbox: &SharedSignal<Mailbox>, child: BoxedView) -> BoxedView {
     let (delete, archive) = (mailbox.clone(), mailbox.clone());
     Actions::new(child)
-        .action(CallbackAction::new(move |cx, intent: &Delete| {
+        .action(CallbackAction::new(move |ctx, intent: &Delete| {
             delete
-                .update_in(cx, |mailbox| mailbox.inbox.retain(|name| *name != intent.0))
+                .update_in(ctx, |mailbox| {
+                    mailbox.inbox.retain(|name| *name != intent.0);
+                })
                 .expect("the mailbox is alive while its actions are mounted");
         }))
-        .action(CallbackAction::new(move |cx, intent: &Archive| {
+        .action(CallbackAction::new(move |ctx, intent: &Archive| {
             archive
-                .update_in(cx, |mailbox| {
+                .update_in(ctx, |mailbox| {
                     mailbox.inbox.retain(|name| *name != intent.0);
                     mailbox.archived.push(intent.0);
                 })
@@ -392,8 +394,8 @@ fn swipe_row(
         SwipeRows::PlainMenu => SwipeAlternative::ContextMenu,
         SwipeRows::PresentedMenu => {
             let menu = menu.clone();
-            SwipeAlternative::PresentedMenu(std::rc::Rc::new(move |cx, request| {
-                menu.set_in(cx, Some(request))
+            SwipeAlternative::PresentedMenu(std::rc::Rc::new(move |ctx, request| {
+                menu.set_in(ctx, Some(request))
                     .expect("the inbox menu slot is alive while its row is mounted");
             }))
         }
@@ -513,11 +515,13 @@ pub(crate) fn interactive_viewer_with_zoom_controls() {
         // Zoomed in one step, so both commands change the scale.
         transform.set_value(flui_foundation::geometry::Matrix4::scaling(2.0, 2.0, 1.0));
         let model = transform.clone();
-        let view = InteractiveViewer::new(alternatives.clone())
-            .controller(transform)
-            .min_scale(1.0)
-            .max_scale(8.0)
-            .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+        let view = InteractiveViewer::new(
+            alternatives.clone(),
+            ColoredBox::new(Color::rgb(10, 20, 30)),
+        )
+        .controller(transform)
+        .min_scale(1.0)
+        .max_scale(8.0);
         AlternativesSubject::new(view, &alternatives, move || {
             let m = model.value().to_col_major_array();
             // The scale, in thousandths: every path zooms about some point,
@@ -562,11 +566,13 @@ pub(crate) fn interactive_viewer_with_pan_controls() {
         .expect("four distinct labels");
         let transform = TransformationController::new();
         let model = transform.clone();
-        let view = InteractiveViewer::new(alternatives.clone())
-            .controller(transform)
-            .double_tap_zoom(false)
-            .boundary_margin(flui_foundation::geometry::EdgeInsets::all(200.0))
-            .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+        let view = InteractiveViewer::new(
+            alternatives.clone(),
+            ColoredBox::new(Color::rgb(10, 20, 30)),
+        )
+        .controller(transform)
+        .double_tap_zoom(false)
+        .boundary_margin(flui_foundation::geometry::EdgeInsets::all(200.0));
         AlternativesSubject::new(view, &alternatives, move || {
             let (x, y, _) = model.value().translation_component();
             ((x * 1000.0).round() as i64, (y * 1000.0).round() as i64)
@@ -618,7 +624,7 @@ pub(crate) fn page_view_with_page_controls() {
         let pages: Vec<BoxedView> = (0..3_u8)
             .map(|index| ColoredBox::new(Color::rgb(40 * index, 20, 30)).boxed())
             .collect();
-        let view = PageView::new(pages, alternatives.clone()).controller(controller);
+        let view = PageView::new(alternatives.clone(), pages).controller(controller);
         AlternativesSubject::new(view, &alternatives, move || {
             model.page().map(|page| (page * 1000.0).round() as i64)
         })
@@ -859,7 +865,7 @@ pub(crate) fn the_revealed_menu_control_follows_focus_and_reading_direction() {
         let case = format!("{entry:?} / {direction:?}");
         let alternatives = GestureAlternatives::try_new(Alternative::ContextMenu(MenuSpec::new(
             GestureCommand::new("Delete Alice", Delete("Alice")),
-            |_cx, _request| {},
+            |_ctx, _request| {},
         )))
         .expect("one labelled command")
         .target("Alice");
@@ -999,7 +1005,7 @@ pub(crate) fn labels_name_one_action_each() {
     ];
     for (label, key) in overlapping {
         let shared_key = GestureAlternatives::try_new(Alternative::ContextMenu(
-            MenuSpec::new(keyed("Delete"), |_cx, _request| {})
+            MenuSpec::new(keyed("Delete"), |_ctx, _request| {})
                 .item(GestureCommand::new("Archive", Delete("Alice")).key(key.clone())),
         ));
         assert_eq!(
@@ -1009,7 +1015,7 @@ pub(crate) fn labels_name_one_action_each() {
         );
     }
     let distinct = GestureAlternatives::try_new(Alternative::ContextMenu(
-        MenuSpec::new(keyed("Delete"), |_cx, _request| {}).item(
+        MenuSpec::new(keyed("Delete"), |_ctx, _request| {}).item(
             GestureCommand::new("Archive", Delete("Alice"))
                 .key(SingleActivator::character("d").control().shift()),
         ),
@@ -1017,7 +1023,7 @@ pub(crate) fn labels_name_one_action_each() {
     assert!(distinct.is_ok(), "Ctrl+Shift+D is another key press");
     let repeated_on_one = GestureAlternatives::try_new(Alternative::ContextMenu(MenuSpec::new(
         keyed("Delete").key(SingleActivator::character("d").control()),
-        |_cx, _request| {},
+        |_ctx, _request| {},
     )));
     assert!(
         repeated_on_one.is_ok(),
@@ -1036,7 +1042,7 @@ pub(crate) fn labels_name_one_action_each() {
         })
     );
     let menu = GestureAlternatives::try_new(Alternative::ContextMenu(
-        MenuSpec::new(control("Delete"), |_cx, _request| {}).item(control("Delete")),
+        MenuSpec::new(control("Delete"), |_ctx, _request| {}).item(control("Delete")),
     ));
     assert!(matches!(
         menu,
@@ -1095,14 +1101,16 @@ fn single_row(mailbox: SharedSignal<Mailbox>, alternatives: GestureAlternatives)
         mailbox,
         child: Actions::new(
             Dismissible::new(
-                SizedBox::new(300.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
                 alternatives,
+                SizedBox::new(300.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
             )
             .boxed(),
         )
-        .action(CallbackAction::new(move |cx, intent: &Delete| {
+        .action(CallbackAction::new(move |ctx, intent: &Delete| {
             delete
-                .update_in(cx, |mailbox| mailbox.inbox.retain(|name| *name != intent.0))
+                .update_in(ctx, |mailbox| {
+                    mailbox.inbox.retain(|name| *name != intent.0);
+                })
                 .expect("the mailbox is alive while its actions are mounted");
         }))
         .boxed(),
@@ -1216,7 +1224,7 @@ pub(crate) fn the_revealed_menu_control_names_its_target() {
     for (target, label, localized) in rows {
         let alternatives = GestureAlternatives::try_new(Alternative::ContextMenu(MenuSpec::new(
             GestureCommand::new("Delete Alice", Delete("Alice")),
-            |_cx, _request| {},
+            |_ctx, _request| {},
         )))
         .expect("one labelled command");
         let alternatives = match target {
@@ -1276,7 +1284,7 @@ pub(crate) fn the_revealed_menu_control_draws_its_glyph_on_its_own_surface() {
 
     let alternatives = GestureAlternatives::try_new(Alternative::ContextMenu(MenuSpec::new(
         GestureCommand::new("Delete Alice", Delete("Alice")),
-        |_cx, _request| {},
+        |_ctx, _request| {},
     )))
     .expect("one labelled command");
     // A ring in colours nothing else paints, to find its bands among the ops.
@@ -1461,7 +1469,7 @@ impl ViewState<PageButtons> for PageButtonsState {
                     .anchor(anchor.clone())
                     .child(SizedBox::new(48.0, 48.0)),
             )
-            .on_pressed(move |_cx| {
+            .on_press(move |_ctx| {
                 let curve = flui_animation::SharedCurve::new(flui_animation::curves::EASE_IN_OUT);
                 if forward {
                     pager.next_page(Duration::from_millis(300), curve);
@@ -1519,7 +1527,7 @@ fn buttons_over_pager(
         .map(|index| ColoredBox::new(Color::rgb(40 * index, 20, 30)).boxed())
         .collect();
     let pager =
-        PageView::new(pages, companion_page_alternatives(link)).controller(controller.clone());
+        PageView::new(companion_page_alternatives(link), pages).controller(controller.clone());
     let mut column = vec![Expanded::new(pager).boxed()];
     if buttons {
         let row = PageButtons {

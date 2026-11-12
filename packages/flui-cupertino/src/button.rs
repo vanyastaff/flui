@@ -69,7 +69,7 @@ use crate::theme::CupertinoTheme;
 
 /// A user tap/long-press handler. `Rc`-based (owner-local, per ADR-0027) —
 /// matches `GestureDetector::on_tap`'s own callback shape.
-type ButtonCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
+type ButtonCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>;
 
 /// The press-in fade's duration.
 pub const K_FADE_OUT_DURATION: Duration = Duration::from_millis(120);
@@ -292,9 +292,9 @@ impl CupertinoButton {
     #[must_use]
     pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
-        self.on_pressed = Some(Rc::new(move |cx| callback(cx).report()));
+        self.on_pressed = Some(Rc::new(move |ctx| callback(ctx).report()));
         self
     }
 
@@ -305,9 +305,9 @@ impl CupertinoButton {
     #[must_use]
     pub fn on_long_press<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
-        self.on_long_press = Some(Rc::new(move |cx| callback(cx).report()));
+        self.on_long_press = Some(Rc::new(move |ctx| callback(ctx).report()));
         self
     }
 
@@ -579,7 +579,8 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
         if let Some(identifier) = &view.identifier {
             semantics = semantics.identifier(std::sync::Arc::clone(identifier));
         }
-        let faded = ConstrainedBox::new(constraints).child(FadeTransition::new(opacity, decorated));
+        let faded =
+            ConstrainedBox::new(constraints).child(FadeTransition::new(opacity).child(decorated));
 
         let mut gesture_detector = GestureDetector::new();
         if enabled {
@@ -590,18 +591,18 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
                     .map(|owner| owner.controller().clone());
                 let rebuild = self.rebuild.clone();
                 let pressed_opacity = view.pressed_opacity;
-                gesture_detector = gesture_detector.on_tap(move |cx| {
+                gesture_detector = gesture_detector.on_tap(move |ctx| {
                     if let Some(controller) = &controller
                         && let Some(future) =
                             start_press_fade(controller, pressed_opacity, rebuild.as_ref())
                     {
                         chain_release_fade(controller, future);
                     }
-                    on_pressed(cx);
+                    on_pressed(ctx);
                 });
             }
             if let Some(on_long_press) = view.on_long_press.clone() {
-                gesture_detector = gesture_detector.on_long_press(move |cx| on_long_press(cx));
+                gesture_detector = gesture_detector.on_long_press(move |ctx| on_long_press(ctx));
             }
         }
 

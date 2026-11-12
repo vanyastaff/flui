@@ -148,9 +148,9 @@ fn owner_local_values_fit_every_flip_position() {
     let shared: Shared = Rc::new(Cell::new(0));
 
     // Curves: the motion spec, and a widget setter.
-    let spec = MotionSpec::default().with_curve(CountingCurve(shared.clone()));
+    let spec = MotionSpec::default().curve(CountingCurve(shared.clone()));
     let MotionSpec::Curve { curve, .. } = &spec else {
-        panic!("with_curve makes curve motion");
+        panic!("curve makes curve motion");
     };
     assert_eq!(curve.transform(0.5), 0.25);
     assert_eq!(shared.get(), 1, "the erased curve evaluates the owner-local one");

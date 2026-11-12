@@ -5,7 +5,7 @@ use std::{any::Any, fmt, sync::Arc};
 
 use flui_foundation::Single;
 use flui_rendering::{
-    context::PaintCx, layer::AnnotationValue, parent_data::BoxParentData, traits::RenderBox,
+    context::PaintContext, layer::AnnotationValue, parent_data::BoxParentData, traits::RenderBox,
 };
 
 /// A pass-through proxy whose box carries a type-erased annotation.
@@ -83,7 +83,7 @@ impl RenderBox for RenderAnnotatedRegion {
         self.has_child
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         if ctx.child_count() == 0 {
             return;
         }

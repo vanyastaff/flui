@@ -21,13 +21,13 @@ use crate::EventTime;
 ///
 /// let vsync = EventTime::from_nanos(16_000_000);
 /// let shown = EventTime::from_nanos(33_000_000);
-/// let request = FrameRequest::new(vsync).with_target_present(shown);
+/// let request = FrameRequest::new(vsync).target_present(shown);
 /// assert_eq!(request.vsync, vsync);
 /// assert_eq!(request.target_present, Some(shown));
 /// assert_eq!(FrameRequest::new(vsync).target_present, None);
 ///
 /// let earlier = FramePresented::new(EventTime::from_nanos(9_000_000));
-/// let request = FrameRequest::new(vsync).with_presented(earlier);
+/// let request = FrameRequest::new(vsync).presented(earlier);
 /// assert_eq!(request.presented, Some(earlier));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,14 +57,14 @@ impl FrameRequest {
 
     /// The same request with the platform's target present time.
     #[must_use]
-    pub const fn with_target_present(mut self, target_present: EventTime) -> Self {
+    pub const fn target_present(mut self, target_present: EventTime) -> Self {
         self.target_present = Some(target_present);
         self
     }
 
     /// The same request carrying the platform's report of an earlier frame shown.
     #[must_use]
-    pub const fn with_presented(mut self, presented: FramePresented) -> Self {
+    pub const fn presented(mut self, presented: FramePresented) -> Self {
         self.presented = Some(presented);
         self
     }

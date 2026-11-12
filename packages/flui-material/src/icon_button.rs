@@ -148,7 +148,7 @@ pub const ICON_BUTTON_ICON_SIZE: f64 = 24.0;
 /// use flui_material::IconButton;
 /// use flui_sdk::widgets::{Icon, IconData};
 ///
-/// let _button = IconButton::new(Icon::new(IconData::new(0xE87D))).on_pressed(|_cx| {});
+/// let _button = IconButton::new(Icon::new(IconData::new(0xE87D))).on_pressed(|_ctx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct IconButton {
@@ -190,7 +190,7 @@ impl IconButton {
     #[must_use]
     pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_pressed = Some(crate::event_callback::press_callback(callback));
         self
@@ -225,7 +225,7 @@ impl IconButton {
     /// let _button = IconButton::new(Icon::new(IconData::new(0xE87E)))
     ///     .selected_icon(Icon::new(IconData::new(0xE87D)))
     ///     .selected(favorite)
-    ///     .on_pressed(|_cx| {});
+    ///     .on_pressed(|_ctx| {});
     /// ```
     #[must_use]
     pub fn selected(mut self, selected: bool) -> Self {

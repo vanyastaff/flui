@@ -12,7 +12,7 @@ use flui_painting::paint::Image;
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxLayoutContext, PaintCx},
+    context::{BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -269,7 +269,7 @@ impl RenderBox for RenderImage {
         Ok(self.compute_size(ctx.constraints()))
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         // Nothing to draw without a source image.
         let Some(image) = self.image.as_ref() else {
             return;
@@ -296,7 +296,7 @@ impl RenderBox for RenderImage {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if self.width.is_none() && self.height.is_none() {
             return Ok(0.0);
@@ -309,7 +309,7 @@ impl RenderBox for RenderImage {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self
             .compute_size(&BoxConstraints::tight_for_finite(f64::INFINITY, height))
@@ -319,7 +319,7 @@ impl RenderBox for RenderImage {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if self.width.is_none() && self.height.is_none() {
             return Ok(0.0);
@@ -332,7 +332,7 @@ impl RenderBox for RenderImage {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self
             .compute_size(&BoxConstraints::tight_for_finite(width, f64::INFINITY))
@@ -344,7 +344,7 @@ impl RenderBox for RenderImage {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         Ok(self.compute_size(&constraints))
     }

@@ -440,7 +440,7 @@ fn linked_paragraph(opened: &Rc<RefCell<Vec<String>>>) -> flui_widgets::RichText
             .with_child(TextSpan::new("link").with_link("app://terms"))
             .with_child(TextSpan::new(" help").with_mouse_cursor(CursorIcon::Help)),
     )
-    .on_link(move |_cx, link| opened.borrow_mut().push(link.to_string()))
+    .on_link(move |_ctx, link| opened.borrow_mut().push(link.to_string()))
 }
 
 /// The window rectangles of the paragraph's glyphs for the plain-text bytes
@@ -741,7 +741,7 @@ fn links_between_buttons(
     let (opened, after) = (Rc::clone(opened), Rc::clone(after));
     Column::new(vec![
         RawButton::new(Text::new("before"))
-            .on_pressed(|_cx| {})
+            .on_press(|_ctx| {})
             .boxed(),
         SizedBox::new(width, 100.0)
             .child(
@@ -751,11 +751,11 @@ fn links_between_buttons(
                         .with_child(TextSpan::new(" or "))
                         .with_child(TextSpan::new("second link").with_link("app://second")),
                 )
-                .on_link(move |_cx, link| opened.borrow_mut().push(link.to_string())),
+                .on_link(move |_ctx, link| opened.borrow_mut().push(link.to_string())),
             )
             .boxed(),
         RawButton::new(Text::new("after"))
-            .on_pressed(move |_cx| after.set(after.get() + 1))
+            .on_press(move |_ctx| after.set(after.get() + 1))
             .boxed(),
     ])
 }
@@ -983,7 +983,7 @@ pub(crate) fn tab_to_a_link_below_the_view_scrolls_it_into_view() {
                         .with_child(TextSpan::new(filler))
                         .with_child(TextSpan::new("bottom").with_link("app://bottom")),
                 )
-                .on_link(|_cx, _link| {}),
+                .on_link(|_ctx, _link| {}),
             ),
         ),
         loose(400.0),
@@ -1028,22 +1028,22 @@ pub(crate) fn a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read()
     let mut laid = lay_out(
         Column::new(vec![
             RawButton::new(Text::new("before"))
-                .on_pressed(|_cx| {})
+                .on_press(|_ctx| {})
                 .boxed(),
             RichText::new(
                 TextSpan::with_children(vec![TextSpan::new("inner").with_link("app://inner")])
                     .with_link("app://outer"),
             )
-            .on_link(move |_cx, link| record.borrow_mut().push(link.to_string()))
+            .on_link(move |_ctx, link| record.borrow_mut().push(link.to_string()))
             .boxed(),
             RichText::new(
                 TextSpan::with_children(vec![TextSpan::new("terms").with_link("app://terms")])
                     .with_semantics_label("Read "),
             )
-            .on_link(|_cx, _link| {})
+            .on_link(|_ctx, _link| {})
             .boxed(),
             RawButton::new(Text::new("after"))
-                .on_pressed(move |_cx| pressed.set(pressed.get() + 1))
+                .on_press(move |_ctx| pressed.set(pressed.get() + 1))
                 .boxed(),
         ]),
         loose(400.0),
@@ -1091,9 +1091,9 @@ pub(crate) fn select_opens_a_link_and_space_activates_nothing_around_it() {
             RichText::new(
                 TextSpan::new("see ").with_child(TextSpan::new("help").with_link("app://help")),
             )
-            .on_link(move |_cx, link| record.borrow_mut().push(link.to_string())),
+            .on_link(move |_ctx, link| record.borrow_mut().push(link.to_string())),
         )
-        .on_pressed(move |_cx| count.set(count.get() + 1)),
+        .on_press(move |_ctx| count.set(count.get() + 1)),
         loose(400.0),
     );
     laid.pump();
@@ -1127,7 +1127,7 @@ pub(crate) fn a_link_the_layout_cut_takes_no_focus() {
     let mut laid = lay_out(
         Column::new(vec![
             RawButton::new(Text::new("before"))
-                .on_pressed(|_cx| {})
+                .on_press(|_ctx| {})
                 .boxed(),
             SizedBox::new(80.0, 100.0)
                 .child(
@@ -1138,11 +1138,11 @@ pub(crate) fn a_link_the_layout_cut_takes_no_focus() {
                             .with_child(TextSpan::new("cut").with_link("app://cut")),
                     )
                     .max_lines(1)
-                    .on_link(move |_cx, link| record.borrow_mut().push(link.to_string())),
+                    .on_link(move |_ctx, link| record.borrow_mut().push(link.to_string())),
                 )
                 .boxed(),
             RawButton::new(Text::new("after"))
-                .on_pressed(move |_cx| pressed.set(pressed.get() + 1))
+                .on_press(move |_ctx| pressed.set(pressed.get() + 1))
                 .boxed(),
         ]),
         loose(400.0),
@@ -1174,7 +1174,7 @@ fn named_links(opened: &Rc<RefCell<Vec<String>>>, names: &[&str]) -> flui_widget
     }
     let opened = Rc::clone(opened);
     flui_widgets::RichText::new(TextSpan::with_children(spans))
-        .on_link(move |_cx, link| opened.borrow_mut().push(link.to_string()))
+        .on_link(move |_ctx, link| opened.borrow_mut().push(link.to_string()))
 }
 
 /// A link is the same link across rebuilds by what it links to: a link
@@ -1243,7 +1243,7 @@ pub(crate) fn unmounting_a_linked_paragraph_releases_its_links() {
                 flui_painting::typography::TextSpan::new("more").with_link("app://more"),
             ),
         )
-        .on_link(move |_cx, link| {
+        .on_link(move |_ctx, link| {
             std::hint::black_box(&captured);
             record.borrow_mut().push(link.to_string());
         }),

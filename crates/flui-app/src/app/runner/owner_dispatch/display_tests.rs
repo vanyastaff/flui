@@ -38,7 +38,7 @@ struct Rig {
 fn boot() -> Rig {
     let clear = OwnerHostClearGuard::arm();
     let platform = HeadlessPlatform::new().with_displays(vec![
-        DisplaySpec::new("Left", 1920, 1080).with_refresh_period(Duration::from_millis(16)),
+        DisplaySpec::new("Left", 1920, 1080).refresh_period(Duration::from_millis(16)),
         DisplaySpec::new("Right", 2560, 1440),
     ]);
     let controls = platform.display_controls();

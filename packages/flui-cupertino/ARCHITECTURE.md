@@ -47,7 +47,7 @@ variants remain stored but unresolved; no interface-level source is implemented.
 ### Event callbacks borrow the originating dispatch's write context
 
 `CupertinoButton` press/long-press and `CupertinoTabBar` selection handlers
-take `&mut EventCx` and return an `EventOutcome` (ADR-0086). Gesture wrappers
+take `&mut EventContext` and return an `EventOutcome` (ADR-0086). Gesture wrappers
 forward their context without opening a new writer. `CupertinoTabScaffold`
 updates its controller before forwarding the same context and selected
 index to the caller. Tab builders remain read-only queries.

@@ -192,11 +192,11 @@ fn the_future_adapter_wakes_when_the_value_settles() {
     let owner = Owner::new();
     let (completion, resolver) = owner.source.pending::<u32>();
     let mut future = pin!(completion.into_future());
-    let mut cx = Context::from_waker(Waker::noop());
-    assert_eq!(future.as_mut().poll(&mut cx), Poll::Pending);
+    let mut ctx = Context::from_waker(Waker::noop());
+    assert_eq!(future.as_mut().poll(&mut ctx), Poll::Pending);
     resolver.resolve(9).expect("owner live");
     owner.turn();
-    assert_eq!(future.as_mut().poll(&mut cx), Poll::Ready(Ok(9)));
+    assert_eq!(future.as_mut().poll(&mut ctx), Poll::Ready(Ok(9)));
 }
 
 enum Gauge {}
@@ -275,13 +275,13 @@ fn a_leaf_crate_declares_registers_and_acquires_on_the_contract_alone() {
         assert_eq!(entries[0].name(), Vibration::NAME);
         assert_eq!(entries[0].capability(), std::any::TypeId::of::<Vibration>());
         let locals = flui_platform::capability::RuntimeLocals::new();
-        let cx = flui_platform::capability::ProviderContext::new(
+        let ctx = flui_platform::capability::ProviderContext::new(
             owner.source.poster(),
             &owner.source,
             &locals,
             None,
         );
-        entries[0].provide(&cx).map(|handle| {
+        entries[0].provide(&ctx).map(|handle| {
             *handle
                 .downcast::<VibrationHandle>()
                 .expect("the provider answers its capability's handle")

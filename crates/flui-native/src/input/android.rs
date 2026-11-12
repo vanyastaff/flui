@@ -1318,12 +1318,12 @@ fn motion_device(
             replaced: false,
         };
     }
-    // SAFETY: AndroidApp owns the running Android VM for its entire lifetime.
-    // JavaVM is a borrowed VM handle; constructing it does not destroy the VM.
     #[expect(
         unsafe_code,
         reason = "AndroidApp supplies the live VM handle required by JNI"
     )]
+    // SAFETY: AndroidApp owns the running Android VM for its entire lifetime.
+    // JavaVM is a borrowed VM handle; constructing it does not destroy the VM.
     let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
     let result = vm.attach_current_thread(|env| -> jni::errors::Result<_> {
         let result = (|| {

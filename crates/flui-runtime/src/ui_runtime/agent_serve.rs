@@ -44,7 +44,7 @@ const STRICT_CANDIDATES: u32 = 10;
 pub(super) enum Answer<T> {
     /// The answer, sent at this drain.
     Now(Result<T, AgentError>),
-    /// The handler kept the reply ([`ServeCx::park`]) and answers later.
+    /// The handler kept the reply ([`ServeContext::park`]) and answers later.
     Later,
 }
 
@@ -64,7 +64,7 @@ impl PanicAnswer {
 }
 
 /// What a handler serves one request with. Owner thread only.
-pub(super) struct ServeCx<'a, T> {
+pub(super) struct ServeContext<'a, T> {
     pub(super) runtime: &'a UiRuntime,
     pub(super) state: &'a PresentationState,
     pub(super) window: WindowId,
@@ -82,7 +82,7 @@ pub(super) struct ServeCx<'a, T> {
     wake_after: bool,
 }
 
-impl<T> ServeCx<'_, T> {
+impl<T> ServeContext<'_, T> {
     /// The reply, for a handler that answers later. The context keeps a clone, so a panic
     /// after this still answers; the first answer sent is the one taken.
     pub(super) fn park(&self) -> ReplySender<T> {
@@ -109,8 +109,11 @@ pub(super) trait Serve: WindowMethod {
     /// Records the element handles an answer reports.
     fn record(_output: &Self::Output, _issued: &mut IssuedHandles) {}
 
-    /// Serve `params` in `cx`'s presentation.
-    fn serve(cx: &mut ServeCx<'_, Self::Output>, params: Self::Params) -> Answer<Self::Output>;
+    /// Serve `params` in `ctx`'s presentation.
+    fn serve(
+        ctx: &mut ServeContext<'_, Self::Output>,
+        params: Self::Params,
+    ) -> Answer<Self::Output>;
 }
 
 impl UiRuntime {
@@ -131,7 +134,7 @@ impl UiRuntime {
             return;
         };
         let issued = super::agent::issued_of(state);
-        let mut cx = ServeCx {
+        let mut ctx = ServeContext {
             runtime: self,
             state,
             window,
@@ -146,14 +149,14 @@ impl UiRuntime {
             clippy::disallowed_methods,
             reason = "ADR-0287: a method's serve runs contained so its caller is answered"
         )]
-        let served = catch_unwind(AssertUnwindSafe(|| M::serve(&mut cx, params)));
-        let ServeCx {
+        let served = catch_unwind(AssertUnwindSafe(|| M::serve(&mut ctx, params)));
+        let ServeContext {
             reply,
             if_panics,
             caught,
             wake_after,
             ..
-        } = cx;
+        } = ctx;
         match (served, caught.into_payload()) {
             (Ok(answer), None) => {
                 let stale = matches!(answer, Answer::Now(Err(AgentError::PresentationGone)));
@@ -241,7 +244,7 @@ macro_rules! not_answered {
         impl Serve for method::$ty {
             const ANSWERS: bool = false;
 
-            fn serve(_: &mut ServeCx<'_, Self::Output>, _: Self::Params) -> Answer<Self::Output> {
+            fn serve(_: &mut ServeContext<'_, Self::Output>, _: Self::Params) -> Answer<Self::Output> {
                 Answer::Now(Err(AgentError::NotSupported {
                     capability: Self::NAME,
                     reason: "this app's windows do not answer it yet",
@@ -267,10 +270,10 @@ impl Serve for method::SemanticsRead {
         record_issued(tree, issued);
     }
 
-    fn serve(cx: &mut ServeCx<'_, Tree>, params: ReadParams) -> Answer<Tree> {
+    fn serve(ctx: &mut ServeContext<'_, Tree>, params: ReadParams) -> Answer<Tree> {
         let query = params.query;
-        let issued = query.root.is_none_or(|root| cx.was_issued(root));
-        Answer::Now(agent::read_tree(cx.state, cx.window, &query, issued))
+        let issued = query.root.is_none_or(|root| ctx.was_issued(root));
+        Answer::Now(agent::read_tree(ctx.state, ctx.window, &query, issued))
     }
 }
 
@@ -281,8 +284,8 @@ impl Serve for method::InputInject {
 
     /// Plays the actions through the call's lease, one tick per frame boundary, and answers once
     /// a frame has passed since the last one, with the reading the call asks for.
-    fn serve(cx: &mut ServeCx<'_, ActOutcome>, params: InputParams) -> Answer<ActOutcome> {
-        let Some(lease) = cx.lease else {
+    fn serve(ctx: &mut ServeContext<'_, ActOutcome>, params: InputParams) -> Answer<ActOutcome> {
+        let Some(lease) = ctx.lease else {
             return Answer::Now(Err(AgentError::InvalidArgument {
                 reason: "input.inject is asked through an input lease",
             }));
@@ -299,25 +302,25 @@ impl Serve for method::InputInject {
             Ok(plan) => plan,
             Err(error) => return Answer::Now(Err(error)),
         };
-        let before = match agent::tree_before(cx.state, cx.window, params.snapshot) {
+        let before = match agent::tree_before(ctx.state, ctx.window, params.snapshot) {
             Ok(before) => before,
             Err(error) => return Answer::Now(Err(error)),
         };
-        cx.runtime
-            .queue_injection(cx.state, lease, plan, params.snapshot, before, cx.park());
+        ctx.runtime
+            .queue_injection(ctx.state, lease, plan, params.snapshot, before, ctx.park());
         Answer::Later
     }
 }
 
 impl Serve for method::InputRelease {
     /// Lets go what the call's lease holds once the work queued before it has run.
-    fn serve(cx: &mut ServeCx<'_, Released>, _: WindowParams) -> Answer<Released> {
-        let Some(lease) = cx.lease else {
+    fn serve(ctx: &mut ServeContext<'_, Released>, _: WindowParams) -> Answer<Released> {
+        let Some(lease) = ctx.lease else {
             return Answer::Now(Err(AgentError::InvalidArgument {
                 reason: "input.release is asked through an input lease",
             }));
         };
-        cx.runtime.queue_release(cx.state, lease, cx.park());
+        ctx.runtime.queue_release(ctx.state, lease, ctx.park());
         Answer::Later
     }
 }
@@ -327,8 +330,8 @@ impl Serve for method::SemanticsLocate {
         record_issued_matches(matches, issued);
     }
 
-    fn serve(cx: &mut ServeCx<'_, Matches>, params: LocateParams) -> Answer<Matches> {
-        Answer::Now(agent::locate(cx.state, cx.window, &params))
+    fn serve(ctx: &mut ServeContext<'_, Matches>, params: LocateParams) -> Answer<Matches> {
+        Answer::Now(agent::locate(ctx.state, ctx.window, &params))
     }
 }
 
@@ -339,11 +342,11 @@ impl Serve for method::SemanticsAct {
 
     /// The target is resolved and the action run in this one turn, so the element acted on is
     /// the one the locator matched on the tree the action starts on.
-    fn serve(cx: &mut ServeCx<'_, ActOutcome>, params: ActParams) -> Answer<ActOutcome> {
+    fn serve(ctx: &mut ServeContext<'_, ActOutcome>, params: ActParams) -> Answer<ActOutcome> {
         let (element, issued) = match params.target {
-            Target::Element(element) => (element.element, cx.was_issued(element.element)),
+            Target::Element(element) => (element.element, ctx.was_issued(element.element)),
             // The element comes from the tree the action runs on.
-            Target::Locator(locator) => match resolve(cx, &locator) {
+            Target::Locator(locator) => match resolve(ctx, &locator) {
                 Ok(element) => (element, true),
                 Err(error) => return Answer::Now(Err(error)),
             },
@@ -361,20 +364,20 @@ impl Serve for method::SemanticsAct {
         };
         let mut request = ActionRequest::new(element, params.action);
         request.value = params.value;
-        cx.if_panics.set(AgentError::ResolvePanicked { element });
+        ctx.if_panics.set(AgentError::ResolvePanicked { element });
         let served = agent::act(
-            cx.state,
-            cx.window,
+            ctx.state,
+            ctx.window,
             &request,
             params.snapshot,
             issued,
-            &cx.if_panics,
+            &ctx.if_panics,
         );
         match served {
             Ok(Served::Answered(outcome)) => Answer::Now(Ok(outcome)),
             Ok(Served::Reading(owed)) => {
                 // The reading is owed once the effect settled; the reply waits with it.
-                cx.runtime.park_act_read(cx.state, owed, cx.park());
+                ctx.runtime.park_act_read(ctx.state, owed, ctx.park());
                 Answer::Later
             }
             Err(error) => Answer::Now(Err(error)),
@@ -382,9 +385,9 @@ impl Serve for method::SemanticsAct {
     }
 }
 
-/// The one element `locator` matches in `cx`'s tree now, as its pick says.
+/// The one element `locator` matches in `ctx`'s tree now, as its pick says.
 fn resolve<T>(
-    cx: &ServeCx<'_, T>,
+    ctx: &ServeContext<'_, T>,
     locator: &Locator,
 ) -> Result<flui_protocol::ElementId, AgentError> {
     let strict = locator.pick == Pick::Strict;
@@ -392,7 +395,7 @@ fn resolve<T>(
     if strict {
         params.max_matches = Some(STRICT_CANDIDATES);
     }
-    let matches = agent::locate(cx.state, cx.window, &params)?;
+    let matches = agent::locate(ctx.state, ctx.window, &params)?;
     match matches.matches.as_slice() {
         [] => Err(AgentError::NoMatch),
         [only] => Ok(only.element.element),
@@ -411,16 +414,16 @@ fn resolve<T>(
 
 impl Serve for method::ElementActionability {
     fn serve(
-        cx: &mut ServeCx<'_, flui_protocol::Actionability>,
+        ctx: &mut ServeContext<'_, flui_protocol::Actionability>,
         params: ActionabilityParams,
     ) -> Answer<flui_protocol::Actionability> {
         let element = params.element.element;
-        cx.if_panics.set(AgentError::ResolvePanicked { element });
+        ctx.if_panics.set(AgentError::ResolvePanicked { element });
         Answer::Now(agent::actionability(
-            cx.state,
-            cx.window,
+            ctx.state,
+            ctx.window,
             &params,
-            &mut cx.caught,
+            &mut ctx.caught,
         ))
     }
 }
@@ -431,65 +434,65 @@ impl Serve for method::WaitUntil {
     }
 
     /// It answers itself: now if the condition holds, else after a frame or at its deadline.
-    fn serve(cx: &mut ServeCx<'_, WaitOutcome>, params: WaitParams) -> Answer<WaitOutcome> {
-        cx.if_panics.set(AgentError::Malformed);
-        cx.runtime.park_agent_wait(cx.state, params, cx.park());
+    fn serve(ctx: &mut ServeContext<'_, WaitOutcome>, params: WaitParams) -> Answer<WaitOutcome> {
+        ctx.if_panics.set(AgentError::Malformed);
+        ctx.runtime.park_agent_wait(ctx.state, params, ctx.park());
         Answer::Later
     }
 }
 
 /// Serves a read of the element or render tree at the owner's turn.
 fn inspect_now(
-    cx: &ServeCx<'_, InspectReading>,
+    ctx: &ServeContext<'_, InspectReading>,
     target: InspectTarget,
     params: &InspectParams,
 ) -> Answer<InspectReading> {
     // A render object's `debug_name` or an `inspect` override is app code.
-    cx.if_panics.set(AgentError::InspectPanicked);
-    Answer::Now(super::agent_inspect::inspect(cx.state, target, params))
+    ctx.if_panics.set(AgentError::InspectPanicked);
+    Answer::Now(super::agent_inspect::inspect(ctx.state, target, params))
 }
 
 impl Serve for method::InspectWidgets {
     fn serve(
-        cx: &mut ServeCx<'_, InspectReading>,
+        ctx: &mut ServeContext<'_, InspectReading>,
         params: InspectParams,
     ) -> Answer<InspectReading> {
-        inspect_now(cx, InspectTarget::Widgets, &params)
+        inspect_now(ctx, InspectTarget::Widgets, &params)
     }
 }
 
 impl Serve for method::InspectRender {
     fn serve(
-        cx: &mut ServeCx<'_, InspectReading>,
+        ctx: &mut ServeContext<'_, InspectReading>,
         params: InspectParams,
     ) -> Answer<InspectReading> {
-        inspect_now(cx, InspectTarget::Render, &params)
+        inspect_now(ctx, InspectTarget::Render, &params)
     }
 }
 
 impl Serve for method::InspectLayers {
     /// Parked for the next scene the window shows.
     fn serve(
-        cx: &mut ServeCx<'_, InspectReading>,
+        ctx: &mut ServeContext<'_, InspectReading>,
         params: InspectParams,
     ) -> Answer<InspectReading> {
-        cx.runtime
-            .park_agent_layer_read(cx.state, &params, cx.park());
+        ctx.runtime
+            .park_agent_layer_read(ctx.state, &params, ctx.park());
         Answer::Later
     }
 }
 
 impl Serve for method::MotionSet {
-    fn serve(cx: &mut ServeCx<'_, MotionState>, params: MotionParams) -> Answer<MotionState> {
-        let applied = cx.state.apply_motion(params.request);
+    fn serve(ctx: &mut ServeContext<'_, MotionState>, params: MotionParams) -> Answer<MotionState> {
+        let applied = ctx.state.apply_motion(params.request);
         let result = match applied {
             Ok((state, demand)) => {
                 if demand {
                     // An accepted inspection sample outlives animation pause or run completion.
-                    cx.state
+                    ctx.state
                         .clock()
                         .mark_demand(flui_scheduler::DemandKind::Host);
-                    cx.wake_frame_after();
+                    ctx.wake_frame_after();
                 }
                 Ok(state)
             }
@@ -503,10 +506,10 @@ impl Serve for method::MotionSet {
 
 impl Serve for method::SemanticsAnnouncements {
     fn serve(
-        cx: &mut ServeCx<'_, AnnouncementJournal>,
+        ctx: &mut ServeContext<'_, AnnouncementJournal>,
         params: AnnouncementsParams,
     ) -> Answer<AnnouncementJournal> {
-        Answer::Now(Ok(cx.state.pipeline().with(|pipeline| {
+        Answer::Now(Ok(ctx.state.pipeline().with(|pipeline| {
             pipeline
                 .semantics_owner()
                 .map(|owner| owner.announcement_journal(&params))
@@ -516,7 +519,7 @@ impl Serve for method::SemanticsAnnouncements {
 }
 
 impl Serve for method::InputJournal {
-    fn serve(cx: &mut ServeCx<'_, Journal>, params: JournalParams) -> Answer<Journal> {
-        Answer::Now(Ok(agent_journal::read(cx.state, &params)))
+    fn serve(ctx: &mut ServeContext<'_, Journal>, params: JournalParams) -> Answer<Journal> {
+        Answer::Now(Ok(agent_journal::read(ctx.state, &params)))
     }
 }

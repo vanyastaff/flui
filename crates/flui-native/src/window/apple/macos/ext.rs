@@ -40,7 +40,7 @@ use crate::host_window::HostWindow;
 /// }
 ///
 /// // A headless window is not an AppKit window: nothing is asked of it.
-/// let window = headless_platform().open_window(WindowOptions::default().with_visible(false))?;
+/// let window = headless_platform().open_window(WindowOptions::default().visible(false))?;
 /// assert!(!sidebar(window.as_ref()));
 /// # Ok::<(), flui_native::OpenWindowError>(())
 /// ```

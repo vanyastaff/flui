@@ -319,7 +319,7 @@ fn plain_button(controller: &ToolbarItemsController, ctx: &dyn BuildContext) -> 
         .child(
             GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)
-                .on_tap(move |_cx| controller.toggle())
+                .on_tap(move |_ctx| controller.toggle())
                 .child(
                     Padding::symmetric(12.0, 8.0)
                         .child(ExcludeSemantics::new().child(Text::new(glyph))),

@@ -748,7 +748,7 @@ impl StatelessView for HandleProbe {
         let _prev = self.slot.borrow_mut().replace(handle.clone());
         let on_tap = Rc::clone(&self.on_tap);
         GestureDetector::new()
-            .on_tap(move |_cx| on_tap(&handle))
+            .on_tap(move |_ctx| on_tap(&handle))
             .child(SizedBox::new(20.0, 20.0))
     }
 }

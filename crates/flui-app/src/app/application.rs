@@ -104,13 +104,13 @@ where
     }
     /// Set window and loop service configuration.
     #[must_use = "the builder returns the updated application; assign or chain it"]
-    pub fn with_config(mut self, config: AppConfig) -> Self {
+    pub fn config(mut self, config: AppConfig) -> Self {
         self.config = config;
         self
     }
     /// Select whether startup reserves an initial main window.
     #[must_use = "the builder returns the updated application; assign or chain it"]
-    pub fn with_startup_window(mut self, startup: StartupWindow) -> Self {
+    pub fn startup_window(mut self, startup: StartupWindow) -> Self {
         self.startup = startup;
         self
     }
@@ -129,7 +129,7 @@ where
     }
     /// Provide the capability `C` with `provider`, in place of the built-in
     /// provider and of any plugin's (ADR-0152). A widget acquires it with
-    /// `cx.capability::<C>()` in a lifecycle hook.
+    /// `ctx.capability::<C>()` in a lifecycle hook.
     ///
     /// Overriding one capability twice fails [`run`](Self::run) with
     /// [`AppRunError::CapabilityConflict`] before any window opens.

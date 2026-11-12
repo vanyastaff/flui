@@ -63,8 +63,8 @@ mod narrowing {
 
     fn hidden() -> WindowOptions {
         WindowOptions::default()
-            .with_title("flui::native")
-            .with_visible(false)
+            .title("flui::native")
+            .visible(false)
     }
 
     /// Every extension `flui::native` publishes answers `None` for a window
@@ -107,11 +107,11 @@ mod narrowing {
         let platform = flui_native::WindowsPlatform::try_new().expect("the Win32 platform");
         let window = flui_native::Platform::open_window(
             &platform,
-            hidden().with_os_options(
-                OsWindowOptions::default().with_windows(
+            hidden().os_options(
+                OsWindowOptions::default().windows(
                     Win32WindowOptions::default()
-                        .with_corner_preference(WindowsCornerPreference::DoNotRound)
-                        .with_theme(WindowsTheme::Dark),
+                        .corner_preference(WindowsCornerPreference::DoNotRound)
+                        .theme(WindowsTheme::Dark),
                 ),
             ),
             flui_testing::window_handler::RecordingWindowHandler::new(),

@@ -141,7 +141,7 @@ pub(crate) fn a_retained_frame_matches_what_a_full_repaint_produces() {
 pub(crate) fn the_content_of_a_clean_boundary_is_not_repainted() {
     use flui_foundation::Leaf;
     use flui_rendering::{
-        context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+        context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
         parent_data::BoxParentData,
         traits::RenderBox,
     };
@@ -173,7 +173,7 @@ pub(crate) fn the_content_of_a_clean_boundary_is_not_repainted() {
             Ok(ctx.constrain(Size::new(10.0, 10.0)))
         }
 
-        fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {
+        fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
 
@@ -279,7 +279,7 @@ impl flui_rendering::traits::RenderBox for PaintCounter {
         Ok(ctx.constrain(Size::new(10.0, 10.0)))
     }
 
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, flui_foundation::Leaf>) {
         self.0.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -424,7 +424,10 @@ pub(crate) fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
             Ok(ctx.constrain(Size::new(10.0, 10.0)))
         }
 
-        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
+        fn paint(
+            &self,
+            _ctx: &mut flui_rendering::context::PaintContext<'_, flui_foundation::Leaf>,
+        ) {
             assert!(
                 !self.0.load(Ordering::Relaxed),
                 "PoisonOnDemand: armed, poisoning this paint pass on purpose",

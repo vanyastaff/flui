@@ -41,7 +41,7 @@
 //!   inside a scroll-notification listener — there is no scroll-notification
 //!   bubbling yet. The controller's listener records a change when
 //!   `round(page)` moves; the callback runs on the local post-frame lane with
-//!   the `EventCx` its writes need, one frame after the change, every recorded
+//!   the `EventContext` its writes need, one frame after the change, every recorded
 //!   page in order (ADR-0086; mapping decision 37 in
 //!   `crates/flui-widgets/ARCHITECTURE.md`).
 //! - **Non-snapping mode, `reverse`, end padding, implicit scrolling, page
@@ -70,8 +70,8 @@ use flui_rendering::view::{CacheExtentStyle, DimensionChangePolicy, ScrollPositi
 use flui_view::prelude::StatefulView;
 use flui_view::seq::ViewSeq;
 use flui_view::{
-    BoxedView, BuildContext, EventCx, EventOutcome, IntoView, LifecycleContext, PostFrameHandle,
-    RebuildHandle, RebuildReason, ViewExt, ViewState, WriterSource,
+    BoxedView, BuildContext, EventContext, EventOutcome, IntoView, LifecycleContext,
+    PostFrameHandle, RebuildHandle, RebuildReason, ViewExt, ViewState, WriterSource,
 };
 
 use crate::localization::{
@@ -360,7 +360,7 @@ impl Action<PageIntent> for PageAction {
         Some(self.turns_change.clone())
     }
 
-    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &PageIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, intent: &PageIntent) -> ActionOutcome {
         let Some(page) = self.target(*intent) else {
             return ActionOutcome::NotPerformed;
         };
@@ -379,7 +379,7 @@ impl Action<PageIntent> for PageAction {
 // ============================================================================
 
 /// A callback fired when the displayed page changes: the dispatch's
-/// `EventCx` and the new page (ADR-0086).
+/// `EventContext` and the new page (ADR-0086).
 type OnPageChanged = ValueCallback<usize>;
 
 /// A scrollable list that works page by page.
@@ -411,8 +411,8 @@ type OnPageChanged = ValueCallback<usize>;
 /// ))
 /// .expect("two distinct labels");
 /// let pager = PageView::new(
-///     vec![SizedBox::expand(), SizedBox::expand(), SizedBox::expand()],
 ///     alternatives,
+///     vec![SizedBox::expand(), SizedBox::expand(), SizedBox::expand()],
 /// );
 /// ```
 #[derive(Clone, StatefulView)]
@@ -437,7 +437,7 @@ impl PageView {
     /// without a swipe through `alternatives`, whose commands name
     /// [`PageIntent`] or an intent the surroundings answer. By default [`PageView::cache_extent`] keeps no
     /// neighbouring pages laid out.
-    pub fn new(children: impl ViewSeq, alternatives: GestureAlternatives) -> Self {
+    pub fn new(alternatives: GestureAlternatives, children: impl ViewSeq) -> Self {
         Self {
             alternatives,
             controller: None,
@@ -476,7 +476,7 @@ impl PageView {
     /// Called whenever the page in the center of the viewport changes —
     /// when `round(page)` differs from the last reported page.
     ///
-    /// The callback receives an `EventCx` and may write signals. It runs
+    /// The callback receives an `EventContext` and may write signals. It runs
     /// after the frame that next rebuilds this page view, never inside a
     /// build, with every recorded page delivered in order. A change observed
     /// during build or input (a drag, `jump_to_page`) is delivered after that
@@ -486,7 +486,7 @@ impl PageView {
     #[must_use]
     pub fn on_page_changed<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, usize) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, usize) -> R + 'static,
         R: EventOutcome,
     {
         self.on_page_changed = Some(value_callback(callback));
@@ -626,7 +626,7 @@ impl PageChangeDelivery {
         // that rebuilds this page view cannot collide with it.
         let callback = self.callback.borrow().clone();
         if let Some(callback) = callback {
-            self.writer.write(|cx| callback(cx, page));
+            self.writer.write(|ctx| callback(ctx, page));
         }
     }
 }

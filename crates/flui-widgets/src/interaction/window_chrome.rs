@@ -19,7 +19,8 @@ use flui_rendering::input_regions::{CaptionButton, InputRegionKind, ResizeEdge};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::*;
 use flui_view::{
-    Child, EventCx, RebuildReason, RenderView, WindowHandle, WindowSubscription, impl_render_view,
+    Child, EventContext, RebuildReason, RenderView, WindowHandle, WindowSubscription,
+    impl_render_view,
 };
 
 use crate::localization::{
@@ -300,7 +301,7 @@ impl ViewState<WindowCaptionButton> for WindowChromeState {
         {
             Some(window) => {
                 let pressed = view.button;
-                RawButton::new(content).on_pressed(move |_cx: &mut EventCx<'_>| {
+                RawButton::new(content).on_press(move |_ctx: &mut EventContext<'_>| {
                     press(&window, pressed);
                 })
             }

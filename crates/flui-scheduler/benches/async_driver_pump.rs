@@ -83,10 +83,10 @@ fn ready_heavy(c: &mut Criterion) {
         let driver = frame.async_driver();
         let mut tokens = Vec::with_capacity(ready);
         for _ in 0..ready {
-            tokens.push(driver.spawn_local(Box::pin(std::future::poll_fn(|cx| {
+            tokens.push(driver.spawn_local(Box::pin(std::future::poll_fn(|ctx| {
                 // Re-arms itself every poll: `R` stays `ready` for every
                 // iteration criterion runs, not just the first.
-                cx.waker().wake_by_ref();
+                ctx.waker().wake_by_ref();
                 Poll::<()>::Pending
             }))));
         }

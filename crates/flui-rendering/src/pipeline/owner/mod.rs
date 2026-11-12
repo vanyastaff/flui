@@ -937,7 +937,7 @@ mod tests {
     impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for PanickingPaintBox {
         fn perform_layout_raw(
             &mut self,
-            _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<
+            _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::ErasedLayoutContext<
                 '_,
             >,
         ) -> crate::error::RenderResult<
@@ -997,7 +997,7 @@ mod tests {
     impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for PanickingLayoutBox {
         fn perform_layout_raw(
             &mut self,
-            _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<
+            _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::ErasedLayoutContext<
                 '_,
             >,
         ) -> crate::error::RenderResult<

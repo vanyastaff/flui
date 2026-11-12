@@ -1331,7 +1331,7 @@ with baked device-space references and rejects a meaningful non-axis rotation.
 Directional affine blur,
 foreground input outside the viewport and backdrop filter chains remain open.
 
-The [scene renderer example](../../examples/scene_render.rs) accepts `--effects`
+The [scene renderer example](../../packages/flui-hot-reload/examples/scene_render.rs) accepts `--effects`
 for a native six-panel gallery and `--capture-effects <PNG path>` for the same
 scene through headless capture. With feature `testing` and
 `FLUI_READBACK_DUMP_DIR` set, `layer_effects_capture_as_specified` also writes

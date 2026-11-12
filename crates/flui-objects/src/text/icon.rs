@@ -7,11 +7,12 @@ use flui_painting::typography::{InlineSpan, TextDirection, TextSpan, TextStyle};
 use flui_painting::{TextBaseline as PainterBaseline, TextPainter, TextResolvedSize, TextSizing};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::context::{
-    BoxDryBaselineCtx, BoxDryLayoutCtx, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx,
+    BoxDryBaselineContext, BoxDryLayoutContext, BoxIntrinsicsContext, BoxLayoutContext,
+    PaintContext,
 };
 use flui_rendering::parent_data::BoxParentData;
 use flui_rendering::traits::{RenderBox, TextBaseline};
-use flui_rendering::{RenderResult, RenderUpdateImpact, TextCx};
+use flui_rendering::{RenderResult, RenderUpdateImpact, TextContextMut};
 
 /// A leaf icon whose authored side resolves during measurement, even without a glyph.
 #[derive(Debug)]
@@ -108,7 +109,7 @@ impl RenderIcon {
         RenderUpdateImpact::LAYOUT
     }
 
-    fn resolve_side(&self, text: &TextCx<'_>) -> RenderResult<Option<TextResolvedSize>> {
+    fn resolve_side(&self, text: &TextContextMut<'_>) -> RenderResult<Option<TextResolvedSize>> {
         if self.glyph.is_none() && self.side == 0.0 {
             return Ok(None);
         }
@@ -207,7 +208,7 @@ impl RenderBox for RenderIcon {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> RenderResult<Size> {
         let side = self
             .resolve_side(&ctx.text()?)?
@@ -219,7 +220,7 @@ impl RenderBox for RenderIcon {
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> RenderResult<f64> {
         Ok(self
             .resolve_side(&ctx.text()?)?
@@ -230,7 +231,7 @@ impl RenderBox for RenderIcon {
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> RenderResult<f64> {
         Ok(self
             .resolve_side(&ctx.text()?)?
@@ -241,7 +242,7 @@ impl RenderBox for RenderIcon {
     fn compute_min_intrinsic_height(
         &self,
         _width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> RenderResult<f64> {
         Ok(self
             .resolve_side(&ctx.text()?)?
@@ -252,7 +253,7 @@ impl RenderBox for RenderIcon {
     fn compute_max_intrinsic_height(
         &self,
         _width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> RenderResult<f64> {
         Ok(self
             .resolve_side(&ctx.text()?)?
@@ -264,7 +265,7 @@ impl RenderBox for RenderIcon {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> RenderResult<Option<f64>> {
         let mut text = ctx.text()?;
         let resolved_side = self.resolve_side(&text)?;
@@ -293,7 +294,7 @@ impl RenderBox for RenderIcon {
         }))
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         if self.painter.has_layout() {
             if self.mirrored {
                 // Flip about the box's vertical centre: x -> width - x.

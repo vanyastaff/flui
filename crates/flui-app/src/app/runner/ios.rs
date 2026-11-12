@@ -250,11 +250,9 @@ where
         // the simulator launch named an endpoint. A driver ends the app with
         // `simctl terminate`, so a disconnect asks no quit here.
         let mut config = config;
-        let launch = with_owner_platform(flui_native::OwnerPlatform::shared)
-            .expect("BUG: owner installed above");
         let served = crate::app::agent::install_from_launch(
             &mut config,
-            |key| launch.launch_value(key),
+            |key| with_owner_platform(|owner| owner.launch_value(key)).flatten(),
             &std::sync::Arc::default(),
             super::journals_native(),
         );

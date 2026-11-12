@@ -5,7 +5,7 @@ use std::rc::Rc;
 use flui_animation::{MotionSpec, ProxyAnimation};
 use flui_foundation::geometry::Angle;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
+use flui_view::{Child, IntoView, ViewState};
 
 use crate::RotationTransition;
 use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
@@ -40,7 +40,7 @@ pub enum RotationPath {
 /// use flui_foundation::geometry::Angle;
 /// use flui_widgets::{AnimatedRotation, MotionBuilder, RotationPath, SizedBox};
 ///
-/// let dial = AnimatedRotation::new(Angle::from_degrees(270.0), SizedBox::new(40.0, 40.0))
+/// let dial = AnimatedRotation::new(Angle::from_degrees(270.0)).child(SizedBox::new(40.0, 40.0))
 ///     .path(RotationPath::Shorter)
 ///     .duration(Duration::from_millis(300));
 /// # let _ = dial;
@@ -50,19 +50,26 @@ pub struct AnimatedRotation {
     angle: Angle,
     path: RotationPath,
     motion: MotionSpec,
-    child: BoxedView,
+    child: Child,
 }
 
 impl AnimatedRotation {
-    /// Rotate `child` to `angle`, turning numerically, over the 200 ms default duration
+    /// Rotate to `angle`, with no child yet, turning numerically, over the 200 ms default duration
     /// along an ease-in-out curve.
-    pub fn new(angle: Angle, child: impl IntoView) -> Self {
+    pub fn new(angle: Angle) -> Self {
         Self {
             angle,
             path: RotationPath::default(),
             motion: MotionSpec::default(),
-            child: child.into_view().boxed(),
+            child: Child::empty(),
         }
+    }
+
+    /// Sets the child.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
     }
 
     /// Choose how the rotation reaches a new angle.
@@ -99,7 +106,7 @@ pub struct AnimatedRotationState {
     /// The path the running motion was laid out for.
     path: RotationPath,
     proxy: ProxyAnimation<f64>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl StatefulView for AnimatedRotation {
@@ -129,7 +136,7 @@ impl ViewState<AnimatedRotation> for AnimatedRotationState {
     }
 
     fn build(&self, _view: &AnimatedRotation, _ctx: &dyn BuildContext) -> impl IntoView {
-        RotationTransition::new(Rc::new(self.proxy.clone()), self.child.clone())
+        RotationTransition::new(Rc::new(self.proxy.clone())).child_slot(self.child.clone())
     }
 
     fn did_update_view(&mut self, _old_view: &AnimatedRotation, new_view: &AnimatedRotation) {

@@ -108,12 +108,12 @@ impl Prepared {
         until("the compositor's socket", || {
             self.runtime.0.join(socket).exists()
         });
-        // SAFETY: no thread has started; nothing reads the environment
-        // while it is set.
         #[expect(
             unsafe_code,
             reason = "the environment is set before any thread exists"
         )]
+        // SAFETY: no thread has started; nothing reads the environment
+        // while it is set.
         unsafe {
             std::env::set_var("XDG_RUNTIME_DIR", &self.runtime.0);
             std::env::set_var("WAYLAND_DISPLAY", socket);

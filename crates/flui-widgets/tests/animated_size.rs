@@ -21,7 +21,7 @@ use flui_animation::{MotionSpec, SharedCurve, SpringDescription, Vsync, curves};
 use flui_painting::Alignment;
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::{BuildContext, StatefulView};
-use flui_view::{EventCx, IntoView, ViewState};
+use flui_view::{EventContext, IntoView, ViewState};
 use flui_widgets::{AnimatedSize, MotionBuilder, SizedBox};
 use parking_lot::Mutex;
 
@@ -29,7 +29,7 @@ use parking_lot::Mutex;
 const FRAME: Duration = Duration::from_millis(20);
 const RUN: Duration = Duration::from_millis(100);
 
-type EndCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
+type EndCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 
 #[derive(Clone, StatefulView)]
 struct SizeProbe {
@@ -69,7 +69,7 @@ impl ViewState<SizeProbe> for SizeProbeState {
             .alignment(alignment)
             .child(SizedBox::new(side, side));
         if let Some(on_end) = self.on_end.clone() {
-            animated = animated.on_end(move |cx| on_end(cx));
+            animated = animated.on_end(move |ctx| on_end(ctx));
         }
         VsyncScope::new(self.vsync.clone(), animated)
     }
@@ -177,7 +177,7 @@ pub(crate) fn animated_size_completion_writes_a_signal_after_build() {
             AnimatedSize::new()
                 .duration(RUN)
                 .curve(curves::LINEAR)
-                .on_end(move |cx| count.update(cx, |value| *value += 1))
+                .on_end(move |ctx| count.update(ctx, |value| *value += 1))
                 .child(SizedBox::square(side.get()))
         })
     };
@@ -240,10 +240,10 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
                 if delivery == "late" && generation == 1 {
                     return size.boxed();
                 }
-                size.on_end(move |cx| {
+                size.on_end(move |ctx| {
                     events.borrow_mut().push((generation, "completion"));
                     assert!(!panic_pending.replace(false), "size completion failure");
-                    count.update(cx, |value| *value += 1)
+                    count.update(ctx, |value| *value += 1)
                 })
                 .boxed()
             })
@@ -507,7 +507,7 @@ pub(crate) fn a_spring_finishing_before_layout_completes_once() {
         let side = Rc::clone(&side);
         SignalProbe::new(move |ProbeSignals { count, .. }| {
             AnimatedSize::new()
-                .on_end(move |cx| count.update(cx, |value| *value += 1))
+                .on_end(move |ctx| count.update(ctx, |value| *value += 1))
                 .child(SizedBox::square(side.get()))
         })
     };
@@ -604,7 +604,7 @@ pub(crate) fn a_size_and_motion_change_together_complete_one_resize() {
         SignalProbe::new(move |ProbeSignals { count, .. }| {
             AnimatedSize::new()
                 .motion(motion.borrow().clone())
-                .on_end(move |cx| count.update(cx, |value| *value += 1))
+                .on_end(move |ctx| count.update(ctx, |value| *value += 1))
                 .child(SizedBox::square(side.get()))
         })
     };

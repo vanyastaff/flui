@@ -116,7 +116,7 @@ watch the count go up. Close the window to terminate the process.
 | Example | Command | Purpose |
 |---------|---------|---------|
 | `counter` | `cargo run --example counter` | Minimal stateful app — one `Signal` and a `RawButton` that writes it (start here) |
-| `scene_render` | `cargo run --example scene_render` | Scene graph rendering |
+| `scene_render` | `cargo run -p flui-hot-reload --example scene_render` | Scene graph rendering |
 | `desktop_scene` | `cargo build -p flui-desktop-scene` | Build the hot-reload scene library; this plugin is loaded by a host, not run as an executable |
 
 ### Web (WASM) examples

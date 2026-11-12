@@ -55,7 +55,7 @@ pub fn tristate_cycle_survives_a_rebuild_between_each_tap() {
     let observed: Rc<RefCell<Option<bool>>> = Rc::new(RefCell::new(None));
 
     let build = |value: Option<bool>, sink: Rc<RefCell<Option<bool>>>| {
-        themed(Checkbox::tristate(value).on_changed(move |_cx, next| {
+        themed(Checkbox::tristate(value).on_changed(move |_ctx, next| {
             *sink.borrow_mut() = next;
         }))
     };
@@ -83,7 +83,7 @@ pub fn tristate_cycle_survives_a_rebuild_between_each_tap() {
 /// AccessKit toggle state announced for that label.
 fn announced_toggled(checkbox: Checkbox, label: &str) -> Option<Toggled> {
     let mut laid = lay_out(
-        themed(checkbox.semantic_label(label).on_changed(|_cx, _| {})),
+        themed(checkbox.semantic_label(label).on_changed(|_ctx, _| {})),
         constraints(),
     );
     laid.enable_semantics();

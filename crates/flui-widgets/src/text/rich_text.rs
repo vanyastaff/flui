@@ -8,7 +8,7 @@ use flui_rendering::semantics::SemanticsAnchor;
 use flui_view::CreationSite;
 use flui_view::element::ElementKind;
 use flui_view::{
-    BoxedView, BuildContext, EventCx, EventOutcome, IntoView, RenderView, StatelessView, View,
+    BoxedView, BuildContext, EventContext, EventOutcome, IntoView, RenderView, StatelessView, View,
     ViewExt, impl_render_view,
 };
 
@@ -62,7 +62,7 @@ use flui_view::environment::MediaQuery;
 /// let _ = RichText::new(
 ///     TextSpan::new("Read the ").with_child(TextSpan::new("terms").with_link("app://terms")),
 /// )
-/// .on_link(|_cx, link| println!("open {link}"));
+/// .on_link(|_ctx, link| println!("open {link}"));
 /// ```
 #[derive(Clone)]
 pub struct RichText {
@@ -125,11 +125,11 @@ impl RichText {
 
     /// Call `handler` with a link's [`TextLink`] when a tap or assistive
     /// technology activates that link. It receives the activation's
-    /// [`EventCx`], so it writes signals as any event callback does.
+    /// [`EventContext`], so it writes signals as any event callback does.
     #[must_use]
     pub fn on_link<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &TextLink) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &TextLink) -> R + 'static,
         R: EventOutcome,
     {
         self.on_link = Some(ref_callback(handler));

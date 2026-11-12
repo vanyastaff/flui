@@ -15,7 +15,7 @@
   steps and a fling into the top never pull; a cancelled contact settles back
   without refreshing; a pull released short of the threshold settles back over
   200 ms instead of snapping.
-- `RefreshIndicator::new(child, alternatives)` takes the scrollable child and
+- `RefreshIndicator::new(alternatives, child)` takes the scrollable child and
   its `GestureAlternatives`, whose first command performs `RefreshIntent`:
   assistive technology's custom action, the command's keys and its visible
   control or menu refresh as the pull does.

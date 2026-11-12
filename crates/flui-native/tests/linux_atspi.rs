@@ -193,12 +193,12 @@ mod cases {
             let wayland = available("weston");
             // Set before the session bus starts, so a program it activates
             // runs in this session too.
-            // SAFETY: no thread has started; nothing reads the environment
-            // while it is set.
             #[expect(
                 unsafe_code,
                 reason = "the environment is set before any thread exists"
             )]
+            // SAFETY: no thread has started; nothing reads the environment
+            // while it is set.
             unsafe {
                 std::env::set_var("DISPLAY", &display);
                 if wayland {
@@ -596,7 +596,7 @@ mod cases {
     fn open<P: Platform>(platform: &P) -> Rc<dyn HostWindow> {
         platform
             .open_window(
-                WindowOptions::default().with_size(Size::new(400.0, 300.0)),
+                WindowOptions::default().size(Size::new(400.0, 300.0)),
                 RecordingWindowHandler::new() as _,
             )
             .expect("a window opens")

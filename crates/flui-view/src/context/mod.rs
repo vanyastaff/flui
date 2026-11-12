@@ -11,7 +11,7 @@ pub use build_context::{BuildContext, BuildContextExt, LifecycleContext, Lifecyc
 // Build-time borrowed context + its deferred dependent-record. Crate
 // -internal: constructed by the behaviors during `build_scope`, applied by
 // `BuildOwner`.
-pub(crate) use element_build_context::{BuildCapabilities, BuildCtx, DependentRecord};
+pub(crate) use element_build_context::{BuildCapabilities, DependentRecord, LiveBuildContext};
 // The detached test context in `crate::testing` acquires capabilities the same way.
 #[cfg(any(test, feature = "testing"))]
 pub(crate) use element_build_context::acquire_capability;

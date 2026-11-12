@@ -9,17 +9,17 @@ or another `Listenable`.
 `flui::prelude::Signal<T>` (ADR-0074, placed by ADR-0085) is a `Copy` handle to a value in the
 presentation's reactive graph. `examples/counter.rs` keeps its count in one: created in `create_state`
 (`count: ctx.signal(0)`), read in `build` (`count.get(ctx)`, which subscribes the element), and written
-from an event callback through the `cx` it receives (ADR-0086):
+from an event callback through the `ctx` it receives (ADR-0086):
 
 ```rust,ignore
 RawButton::new(Text::new("Increment"))
-    .on_pressed(move |cx| count.update(cx, |n| *n += 1)),
+    .on_press(move |ctx| count.update(ctx, |n| *n += 1)),
 ```
 
-*(from `examples/counter.rs` — copied verbatim.)* `build` has no `cx`, so `count.set(cx, ..)`
+*(from `examples/counter.rs` — copied verbatim.)* `build` has no `ctx`, so `count.set(ctx, ..)`
 cannot be written there; a write from `build` through another route is refused at run time
-(`SignalError::WrittenDuringBuild`). A widget that has to write from a callback with no `cx`
-takes a `WriterSource` in `init_state` and opens one: `source.write(|cx| count.set(cx, 0))`. A write rebuilds exactly the
+(`SignalError::WrittenDuringBuild`). A widget that has to write from a callback with no `ctx`
+takes a `WriterSource` in `init_state` and opens one: `source.write(|ctx| count.set(ctx, 0))`. A write rebuilds exactly the
 elements that read the signal.
 
 ## `InheritedView`

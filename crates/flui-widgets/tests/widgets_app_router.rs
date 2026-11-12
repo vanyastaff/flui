@@ -90,20 +90,20 @@ struct HomeState {
 }
 
 impl ViewState<Home> for HomeState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let probe = &self.probe;
         probe.inits.set(probe.inits.get() + 1);
-        *probe.handle.borrow_mut() = Some(Router::<AppRoute>::handle(cx));
-        *probe.nearest.borrow_mut() = NavigatorHandle::maybe_of(cx);
-        *probe.root.borrow_mut() = NavigatorHandle::maybe_of_root(cx);
+        *probe.handle.borrow_mut() = Some(Router::<AppRoute>::handle(ctx));
+        *probe.nearest.borrow_mut() = NavigatorHandle::maybe_of(ctx);
+        *probe.root.borrow_mut() = NavigatorHandle::maybe_of_root(ctx);
     }
 
-    fn build(&self, _view: &Home, cx: &dyn BuildContext) -> impl IntoView {
-        self.probe.direction.set(Directionality::maybe_of(cx));
-        *self.probe.locale.borrow_mut() = Localizations::maybe_locale_of(cx);
-        *self.probe.focus_scope.borrow_mut() = Some(FocusScope::of(cx));
+    fn build(&self, _view: &Home, ctx: &dyn BuildContext) -> impl IntoView {
+        self.probe.direction.set(Directionality::maybe_of(ctx));
+        *self.probe.locale.borrow_mut() = Localizations::maybe_locale_of(ctx);
+        *self.probe.focus_scope.borrow_mut() = Some(FocusScope::of(ctx));
         let router = self.probe.handle();
-        RawButton::new(ColoredBox::new(Color::rgb(10, 20, 30))).on_pressed(move |_cx| {
+        RawButton::new(ColoredBox::new(Color::rgb(10, 20, 30))).on_press(move |_ctx| {
             router
                 .push(AppRoute::Note { id: 1 })
                 .expect("BUG: Home's button fires only while its Router is mounted");
@@ -114,7 +114,7 @@ impl ViewState<Home> for HomeState {
 /// The page builder; `version` tags the Note page's text.
 fn router(probe: &Probe, version: u32, initial: &str) -> Router<AppRoute> {
     let probe = probe.clone();
-    Router::from_location(initial, move |route: &AppRoute, _cx| match route {
+    Router::from_location(initial, move |route: &AppRoute, _ctx| match route {
         AppRoute::Home => Home {
             probe: probe.clone(),
         }
@@ -181,7 +181,7 @@ const CONTROLS: [&str; 4] = ["Back", "Save", "Share", "Reload"];
 /// levels below the route like a real button's `Focus`.
 fn controls_router(probe: &Probe) -> Router<AppRoute> {
     let probe = probe.clone();
-    Router::from_location("/", move |route: &AppRoute, _cx| match route {
+    Router::from_location("/", move |route: &AppRoute, _ctx| match route {
         AppRoute::Home => Home {
             probe: probe.clone(),
         }

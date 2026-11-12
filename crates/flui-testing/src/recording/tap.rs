@@ -184,7 +184,7 @@ impl<W: Write> JoinWriter<W> for Sink<W> {
     }
 }
 
-/// A factory for [`AppConfig::with_input_tap`](https://docs.rs/flui-app):
+/// A factory for [`AppConfig::input_tap`](https://docs.rs/flui-app):
 /// each runtime records into the writer `make` returns, for the runtime's
 /// life. `make` gets the header that runtime's recording starts from, on
 /// the monotonic clock: its windows with their scales and gesture values and

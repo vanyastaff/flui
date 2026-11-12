@@ -45,7 +45,8 @@ use flui_foundation::RenderId;
 use flui_rendering::{
     constraints::SliverGeometry,
     context::{
-        BoxHitTestContext, BoxLayoutContext, PaintCx, SliverHitTestContext, SliverLayoutContext,
+        BoxHitTestContext, BoxLayoutContext, PaintContext, SliverHitTestContext,
+        SliverLayoutContext,
     },
     parent_data::{BoxParentData, SliverPhysicalParentData},
     traits::{RenderBox, RenderSliver},
@@ -193,7 +194,7 @@ impl RenderBox for RenderSubtreeAnchor {
         }
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 

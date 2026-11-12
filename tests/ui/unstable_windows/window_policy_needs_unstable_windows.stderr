@@ -1,0 +1,15 @@
+error[E0432]: unresolved import `flui::WindowPolicy`
+ --> tests/ui/unstable_windows/window_policy_needs_unstable_windows.rs:4:5
+  |
+4 | use flui::WindowPolicy;
+  |     ^^^^^^------------
+  |           |
+  |           no `WindowPolicy` in the root
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
+  |                                   ---------------------------- the item is gated behind the `unstable-windows` feature
+  | pub use flui_app::app::WindowPolicy;
+  |                        ^^^^^^^^^^^^

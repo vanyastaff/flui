@@ -32,7 +32,7 @@ use flui_painting::paint::{BlendMode, ImageFilter};
 use flui_rendering::layer::BackdropGroupKey;
 
 use flui_rendering::{
-    context::{BoxHitTestContext, PaintCx},
+    context::{BoxHitTestContext, PaintContext},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -194,7 +194,7 @@ impl RenderBox for RenderBackdropFilter {
         self.has_child
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         // Gate 1 — bypasses the filter machinery
         // ENTIRELY, independent of gate 2 below. A child, if present,
         // still paints unfiltered; `paint_child()` is itself a no-op

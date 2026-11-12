@@ -124,11 +124,11 @@ impl Drop for OnOwnerQueueGuard {
 pub(crate) fn on_owner_thread(owner: &'static dispatch::Queue, owner_is_main: bool) -> bool {
     on_owner_queue(owner)
         || (owner_is_main && {
+            let cls = AnyClass::get(c"NSThread").expect("BUG: NSThread is always registered");
             // SAFETY: `+[NSThread isMainThread]` is a documented thread-safe
             // class method with no arguments and a BOOL return; it may be
             // called from any thread at any time. objc2's `msg_send!` takes
             // the class object itself as the receiver for a class method.
-            let cls = AnyClass::get(c"NSThread").expect("BUG: NSThread is always registered");
             let is_main: bool = unsafe { msg_send![cls, isMainThread] };
             is_main
         })

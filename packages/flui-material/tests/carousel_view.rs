@@ -206,7 +206,7 @@ pub fn a_tap_reports_its_card_and_cards_are_buttons_only_with_on_tap() {
     let scopes = Scopes::default();
     let tapped = {
         let taps = Rc::clone(&taps);
-        view(10, &scopes).on_tap(move |_cx, index| taps.borrow_mut().push(index))
+        view(10, &scopes).on_tap(move |_ctx, index| taps.borrow_mut().push(index))
     };
     let mut laid = mount(tapped);
     laid.enable_semantics();

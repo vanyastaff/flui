@@ -255,7 +255,7 @@ pub fn theme_installs_the_focus_ring_style() {
     use flui_sdk::widgets::{RawButton, Text};
 
     let mut laid = lay_out(
-        themed(RawButton::new(Text::new("Go")).on_pressed(|_cx| {})),
+        themed(RawButton::new(Text::new("Go")).on_press(|_ctx| {})),
         loose(400.0),
     );
     let manager = laid.focus_manager();
@@ -264,7 +264,7 @@ pub fn theme_installs_the_focus_ring_style() {
             &flui_interaction::testing::input::KeyEventBuilder::new(
                 flui_interaction::events::Code::Tab,
             )
-            .with_key(flui_interaction::events::Key::Named(
+            .key(flui_interaction::events::Key::Named(
                 flui_interaction::events::NamedKey::Tab,
             ))
             .build(),
