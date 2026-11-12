@@ -33,9 +33,3 @@ crate = "flui-log"
 type = "FilterConfig"
 method = "with_env_var"
 reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-testing"
-type = "MountOptions"
-method = "with_capabilities"
-reason = "written before the rule had a gate; its crate's rename removes it"
