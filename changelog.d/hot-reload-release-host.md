@@ -5,4 +5,6 @@
   no reload hook and needs no library beside the binary. `flui run` builds the host with its
   `reload` feature and its default features off, as `flui.toml`'s new
   `[hot_reload] reload_feature` names it. The logic crate builds as `cdylib` and `rlib`, and
-  `CounterApp` carries where its build function comes from (`CounterBuild`).
+  `CounterApp` carries where its build function comes from (`CounterBuild`). A tap in the linked
+  build rebuilds through the counter element's `RebuildHandle` (`CounterRebuild`), and the logic
+  crate ships a test that taps the counter and reads the new count.

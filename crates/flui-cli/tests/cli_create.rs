@@ -192,11 +192,6 @@ const GENERATED_COUNTER_TESTS: &[&str] = &[
     "tests::counter_content_is_centred",
 ];
 
-/// Run the generated counter's own test binary and require every test in it.
-///
-/// The binary runs whole — no `--exact`, no test-name filter — so the harness
-/// cannot pin itself to a subset of the template's tests and report a pass for
-/// the rest.
 /// A hot-reload project's host carries the reload hook only in the build
 /// `flui run` makes (`reload_feature`, default features off): its default
 /// build, which `flui build --release` and `cargo build --release` make, links
@@ -223,6 +218,7 @@ fn assert_reload_only_in_the_reload_build(cargo: &str, project: &Path, target: &
             .args([
                 "tree",
                 "--offline",
+                "--locked",
                 "-p",
                 &host,
                 "--edges",
@@ -268,7 +264,7 @@ fn assert_reload_only_in_the_reload_build(cargo: &str, project: &Path, target: &
     );
 
     let output = std::process::Command::new(cargo)
-        .args(["check", "--offline", "-p", &host])
+        .args(["check", "--offline", "--locked", "-p", &host])
         .args(&reload_build)
         .arg("--target-dir")
         .arg(target.join("cli-template-check"))
@@ -280,8 +276,29 @@ fn assert_reload_only_in_the_reload_build(cargo: &str, project: &Path, target: &
         "the hot-reload host's reload build does not compile:\n{}",
         String::from_utf8_lossy(&output.stderr),
     );
+
+    // The linked build has no reload hook, so its counter must rebuild through
+    // the framework: the logic crate's own test taps it and reads the count.
+    let output = std::process::Command::new(cargo)
+        .args(["test", "--offline", "--locked", "-p", &logic, "--lib"])
+        .arg("--target-dir")
+        .arg(target.join("cli-template-check"))
+        .current_dir(project)
+        .output()
+        .expect("run the logic crate's tests");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("tests::a_tap_shows_the_new_count ... ok"),
+        "the linked counter must show the new count after a tap:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
 }
 
+/// Run the generated counter's own test binary and require every test in it.
+///
+/// The binary runs whole — no `--exact`, no test-name filter — so the harness
+/// cannot pin itself to a subset of the template's tests and report a pass for
+/// the rest.
 fn run_generated_counter_tests(cargo: &str, project: &Path, target: &Path) {
     // The tests live in the library (so does the app; main.rs only mounts
     // it), and `--lib` is exactly that one target.

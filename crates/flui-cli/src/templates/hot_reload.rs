@@ -32,14 +32,17 @@ fn member_dep(sibling: &str) -> String {
 fn optional_member_dep(sibling: &str) -> String {
     let mut dependency = member_dep_table(sibling);
     if let toml::Value::Table(table) = &mut dependency {
-        table.insert("optional".into(), true.into());
+        table.insert(String::from("optional"), toml::Value::Boolean(true));
     }
     dependency.to_string()
 }
 
 fn member_dep_table(sibling: &str) -> toml::Value {
     let mut dependency = toml::Table::new();
-    dependency.insert("path".into(), format!("../{sibling}").into());
+    dependency.insert(
+        String::from("path"),
+        toml::Value::String(format!("../{sibling}")),
+    );
     toml::Value::Table(dependency)
 }
 
@@ -175,6 +178,7 @@ fn logic_plan(
     source: &DependencySource,
 ) -> ProjectPlan {
     let facade_dep = source.dependency(FrameworkPackage::Facade, &[]);
+    let test_facade_dep = source.dependency(FrameworkPackage::Facade, &["testing"]);
     let reload_dep = source.dependency(FrameworkPackage::HotReload, &["app-plugin"]);
     let types_dep = member_dep(types_package);
     let types_crate = types_package.replace('-', "_");
@@ -197,6 +201,9 @@ name = "{worker_lib}"
 flui = {facade_dep}
 flui-hot-reload = {reload_dep}
 {types_package} = {types_dep}
+
+[dev-dependencies]
+flui = {test_facade_dep}
 "#
     );
 
@@ -318,8 +325,9 @@ use std::sync::{
     atomic::{AtomicI32, Ordering},
 };
 
-use flui_hot_reload::{WorkerBuildEnv, get_worker_build_ptr};
+use flui_hot_reload::{WorkerBuildEnv, get_worker_build_ptr, request_rebuild};
 use flui::prelude::*;
+use flui::view::{RebuildHandle, RebuildReason};
 
 /// Stable-layout fingerprint. Bump when the shared types change shape.
 pub const TYPE_FINGERPRINT: u64 = 0xF10A_0001;
@@ -369,10 +377,31 @@ pub struct CounterApp {
     pub build: CounterBuild,
 }
 
+/// How a change to the count asks for the counter to be built again.
+#[derive(Clone, Debug)]
+pub enum CounterRebuild {
+    /// The counter element's own rebuild handle (the host's `linked` feature).
+    Element(RebuildHandle),
+    /// The reload hook, which rebuilds the tree on its next poll (the host's
+    /// `reload` feature).
+    ReloadHook,
+}
+
+impl CounterRebuild {
+    /// Schedule the counter's next build.
+    pub fn request(&self) {
+        match self {
+            Self::Element(handle) => handle.schedule(RebuildReason::StateChange),
+            Self::ReloadHook => request_rebuild(),
+        }
+    }
+}
+
 /// Persistent state owned by the host element tree.
 #[derive(Debug)]
 pub struct CounterState {
     count: Arc<AtomicI32>,
+    rebuild: CounterRebuild,
 }
 
 impl CounterState {
@@ -380,15 +409,25 @@ impl CounterState {
     pub fn count(&self) -> &Arc<AtomicI32> {
         &self.count
     }
+
+    /// What a tap calls after it changes the count.
+    pub fn rebuild(&self) -> &CounterRebuild {
+        &self.rebuild
+    }
 }
 
 impl StatefulView for CounterApp {
     type State = CounterState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         self.count.store(self.initial, Ordering::Relaxed);
+        let rebuild = match self.build {
+            CounterBuild::Linked(_) => CounterRebuild::Element(ctx.rebuild_handle()),
+            CounterBuild::Reloadable => CounterRebuild::ReloadHook,
+        };
         CounterState {
             count: Arc::clone(&self.count),
+            rebuild,
         }
     }
 }
@@ -427,7 +466,7 @@ use std::sync::{
     atomic::{AtomicI32, Ordering},
 };
 
-use flui_hot_reload::{WorkerBuildEnv, hot_reload_worker, request_rebuild};
+use flui_hot_reload::{WorkerBuildEnv, hot_reload_worker};
 use flui::painting::styling::Color;
 use flui::prelude::*;
 use flui::widgets::{ColoredBox, Column, GestureDetector, Padding, Text};
@@ -446,13 +485,14 @@ pub fn build_counter_ui(
 ) -> BoxedView {
     let count = state.count().load(Ordering::Relaxed);
     let count_for_tap: Arc<AtomicI32> = Arc::clone(state.count());
+    let rebuild = state.rebuild().clone();
 
     Column::new(vec![
         Text::new(format!("Count: {count}")).boxed(),
         GestureDetector::new()
             .on_tap(move |_ctx| {
                 count_for_tap.fetch_add(1, Ordering::Relaxed);
-                request_rebuild();
+                rebuild.request();
             })
             .child(
                 Padding::all(12.0).child(
@@ -469,6 +509,44 @@ fn init_counter_worker(register: flui_hot_reload::RegisterWorkerBuildFn) {
 }
 
 hot_reload_worker!(init_counter_worker, fingerprint: TYPE_FINGERPRINT);
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, atomic::AtomicI32};
+
+    use flui::testing::widgets::{lay_out, tight};
+    use __TYPES_CRATE__::{CounterApp, CounterBuild};
+
+    use super::{INCREMENT_LABEL, build_counter_ui};
+
+    /// The linked build (a release host) shows the new count after a tap,
+    /// with no reload hook installed.
+    #[test]
+    fn a_tap_shows_the_new_count() {
+        let mut app = lay_out(
+            CounterApp {
+                initial: 0,
+                count: Arc::new(AtomicI32::new(0)),
+                build: CounterBuild::Linked(build_counter_ui),
+            },
+            tight(480.0, 320.0),
+        );
+        let button = app
+            .find_text(INCREMENT_LABEL)
+            .expect("the increment button is laid out");
+        let origin = app.absolute_offset(button);
+        let size = app.size(button);
+        let (x, y) = (origin.dx + size.width / 2.0, origin.dy + size.height / 2.0);
+
+        app.dispatch_pointer_down(x, y);
+        app.dispatch_pointer_up(x, y);
+        // A frame that rebuilds only what was scheduled (`pump` would rebuild
+        // the root whatever the tap did).
+        app.tick();
+
+        assert!(app.find_text("Count: 1").is_some(), "the tap must rebuild the count");
+    }
+}
 "#;
 
 const HOST_MAIN: &str = r#"//! Host binary for the hot-reload app.
