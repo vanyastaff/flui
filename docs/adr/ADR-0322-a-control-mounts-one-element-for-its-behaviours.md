@@ -186,7 +186,11 @@ states it wrote from the one it stops writing to, so a shared controller keeps n
 control that is gone. A controller given later starts at what the node is: the five states are the
 node's, so one that arrives holding any of them keeps only what is true of this control, and a
 press or a hover under way follows its contact or its pointers to it. A control that hands its node
-another controller under a hold takes a hold on the new one before it drops the old.
+another controller under a hold takes a hold on the new one before it drops the old, and a control
+that becomes disabled drops its holds. Before it subscribes to a controller, a control may set
+`Disabled` on it to the value the node will write in the next build (Flutter's
+`initStatesController`), so the node's write notifies nobody while the control builds; it writes no
+other state.
 
 The two focus edges are delivered each on its own: a handler of one that panics does not cost the
 other, and the first failure is the one resumed (ADR-0281).

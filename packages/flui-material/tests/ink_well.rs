@@ -747,4 +747,17 @@ pub fn the_press_hold_survives_a_rebuild_and_a_disable_ends_it() {
         WidgetStates::DISABLED,
         "and the hold's end changes nothing"
     );
+
+    enabled.set(true);
+    laid.pump();
+    laid.dispatch_pointer_down(40.0, 20.0);
+    laid.dispatch_pointer_up(40.0, 20.0);
+    enabled.set(false);
+    laid.pump();
+    enabled.set(true);
+    laid.pump();
+    assert!(
+        !pressed(&states),
+        "a disable inside the delay ends the hold, so enabling again shows no press"
+    );
 }

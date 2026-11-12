@@ -242,12 +242,12 @@ pub struct InkWellState {
     /// Refreshed every `build()`, so an activation always calls the
     /// *current* handler.
     tap_slot: Rc<RefCell<Option<TapCallback>>>,
-    /// The ambient vsync, resolved once in `init_state` — `None` means no
+    /// The ambient vsync, resolved in `create_state` and again on each
+    /// dependency change — `None` means no
     /// `VsyncScope` ancestor, so the press-deactivation delay degrades to
     /// immediate (see the module doc).
     vsync: Option<Vsync>,
-    /// `Some` once `init_state` has run — always the case by `build`.
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
     /// The last activation: its hold on `Pressed` and the timer that ends
     /// it, shared with the activation closure and the timer's listener.
     activation: Rc<RefCell<Activation>>,
@@ -316,7 +316,7 @@ impl InkWellState {
 impl StatefulView for InkWell {
     type State = InkWellState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let states = self.states_controller.clone().unwrap_or_default();
         let indication = Indication::new(
             states.clone(),
@@ -333,8 +333,10 @@ impl StatefulView for InkWell {
             states,
             states_listener: None,
             tap_slot: Rc::new(RefCell::new(self.on_tap.clone())),
-            vsync: None,
-            rebuild: None,
+            // Fired later, from the states-controller listener and the
+            // press-deactivation timer, never from `build` (ADR-0018).
+            rebuild: ctx.rebuild_handle(),
+            vsync: VsyncScope::maybe_of(ctx),
             activation: Rc::default(),
             indication,
         }
@@ -343,11 +345,6 @@ impl StatefulView for InkWell {
 
 impl ViewState<InkWell> for InkWellState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // ADR-0018: `rebuild_handle()` is acquired here, fired later (from
-        // the states-controller listener and the press-deactivation status
-        // listener below) — never called from `build`.
-        let rebuild = ctx.rebuild_handle();
-
         // The node writes `Disabled` (ADR-0322 §2) when it mounts, inside this
         // well's first build. Seeding the same value here, before the listener
         // exists, keeps that write from notifying the well while it builds.
@@ -359,11 +356,10 @@ impl ViewState<InkWell> for InkWellState {
 
         // From here on every real change of the states set (hover/focus/
         // press/disabled) moves the state layer and rebuilds.
-        self.listen_to_states(rebuild.clone());
+        self.listen_to_states(self.rebuild.clone());
 
         self.read_ambient(ctx);
-        self.indication.set_rebuild(rebuild.clone());
-        self.rebuild = Some(rebuild);
+        self.indication.set_rebuild(self.rebuild.clone());
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
@@ -386,6 +382,12 @@ impl ViewState<InkWell> for InkWellState {
     }
 
     fn did_update_view(&mut self, old_view: &InkWell, new_view: &InkWell) {
+        // A disabled well ends its activation: the hold goes with it, so
+        // enabling the well again inside the delay shows no press.
+        if !new_view.is_interactive() {
+            Self::cancel_pending_deactivation(&self.activation);
+            Self::release_press_hold(&self.activation);
+        }
         // Re-home the states controller when the caller swaps in a
         // genuinely different one. A rebuild that re-clones the SAME
         // external controller, or leaves both `None` (keeping the private
@@ -416,11 +418,7 @@ impl ViewState<InkWell> for InkWellState {
             self.states
                 .update(WidgetState::Disabled, !new_view.is_interactive());
 
-            let rebuild = self
-                .rebuild
-                .clone()
-                .expect("BUG: init_state runs before the first did_update_view");
-            self.listen_to_states(rebuild);
+            self.listen_to_states(self.rebuild.clone());
         } else if new_view.is_interactive() != old_view.is_interactive() {
             // The node writes the new `Disabled` during this build; seeded
             // here, that write notifies nobody mid-build.
@@ -441,10 +439,7 @@ impl ViewState<InkWell> for InkWellState {
         let enabled = view.is_interactive();
         self.tap_slot.borrow_mut().clone_from(&view.on_tap);
 
-        let rebuild = self
-            .rebuild
-            .clone()
-            .expect("init_state runs before the first build");
+        let rebuild = self.rebuild.clone();
 
         // One activation for a tap and for the keyboard: the oracle's
         // `activateOnIntent` (`ink_well.dart` `:883-900`) is both what its
