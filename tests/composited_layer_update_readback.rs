@@ -966,6 +966,7 @@ fn run_cases(family: &str, cases: &[(&str, fn())]) {
 /// `paint_child` splits the picture, and a running slide moves pixels without
 /// rebuilding. The rows run in turn on the available GPU adapter.
 #[test]
+#[ignore = "needs a GPU adapter; `cargo xtask gpu-test` runs it"]
 fn composited_layer_update_readbacks() {
     run_cases(
         "composited_layer_update_readbacks",

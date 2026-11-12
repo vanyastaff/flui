@@ -771,9 +771,7 @@ cannot push it below 1x.
 
 **Replacement tests:** the pixel oracle,
 `the_clip_update_path_and_a_repaint_produce_the_same_pixels`
-(`tests/composited_layer_update_readback.rs`; `cargo nextest run -p flui
---features gpu-readback-tests --no-default-features --test
-composited_layer_update_readback --locked --test-threads 1`). The layer-tree
+(`tests/composited_layer_update_readback.rs`, which `cargo xtask gpu-test` runs). The layer-tree
 side — a border-radius change updating the clip layer without repainting the
 subtree, two path clips under one boundary resolving in paint order, and a
 different radius producing different pixels: **Unasserted:** no test pins

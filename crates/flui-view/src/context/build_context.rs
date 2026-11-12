@@ -37,7 +37,7 @@ pub(crate) mod sealed {
 /// - Dependency injection (InheritedView lookups)
 /// - Ancestor lookups (find ancestors by type)
 /// - Dirty marking for rebuilds
-/// - Signal reads (`signals` feature)
+/// - Signal reads
 ///
 /// Presentation capabilities (rebuild scheduling, post-frame work, focus, text
 /// input, keep-alive, the render tree) live on [`LifecycleContext`], which only
