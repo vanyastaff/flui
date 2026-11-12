@@ -8,7 +8,7 @@ use flui_animation::{Animation, ProxyAnimation};
 use flui_objects::{TransformMotion, TranslationFraction};
 use flui_painting::typography::TextDirection;
 use flui_view::prelude::{BuildContext, StatefulView};
-use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
+use flui_view::{Child, IntoView, ViewState};
 
 use super::transform_view::AnimatedTransformView;
 
@@ -39,7 +39,7 @@ use super::transform_view::AnimatedTransformView;
 /// let controller = AnimationController::builder(Duration::from_millis(300)).build();
 /// let tween = Tween::new(TranslationFraction::new(-1.0, 0.0), TranslationFraction::ZERO);
 /// let position = Rc::new(tween.animate(Rc::new(controller.clone())));
-/// let slide = SlideTransition::new(position, Text::new("hi"));
+/// let slide = SlideTransition::new(position).child(Text::new("hi"));
 /// controller.forward(); // each frame moves the child's transform layer
 /// ```
 #[derive(Clone, StatefulView)]
@@ -47,21 +47,32 @@ pub struct SlideTransition {
     position: std::rc::Rc<dyn Animation<TranslationFraction>>,
     transform_hit_tests: bool,
     text_direction: Option<TextDirection>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl SlideTransition {
-    /// A slide driven by `position`, translating `child`.
-    pub fn new(
-        position: std::rc::Rc<dyn Animation<TranslationFraction>>,
-        child: impl IntoView,
-    ) -> Self {
+    /// A slide driven by `position`, with no child yet.
+    pub fn new(position: std::rc::Rc<dyn Animation<TranslationFraction>>) -> Self {
         Self {
             position,
             transform_hit_tests: true,
             text_direction: None,
-            child: child.into_view().boxed(),
+            child: Child::empty(),
         }
+    }
+
+    /// Sets the child the transition animates.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
+    }
+
+    /// Hands over an optional child as it is, for a widget that wraps this
+    /// transition and keeps its own child slot.
+    pub(crate) fn child_slot(mut self, child: Child) -> Self {
+        self.child = child;
+        self
     }
 
     /// Sets whether hit-testing follows the painted translation (default

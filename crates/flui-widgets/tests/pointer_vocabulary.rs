@@ -24,11 +24,13 @@ fn viewer(
 ) -> flui_widgets::InteractiveViewer {
     use flui_painting::styling::Color;
     use flui_widgets::{ColoredBox, InteractiveViewer};
-    InteractiveViewer::new(crate::common::viewer_alternatives())
-        .controller(controller)
-        .boundary_margin(EdgeInsets::all(1000.0))
-        .on_interaction_update(move |_, details| scales.borrow_mut().push(details.scale))
-        .child(ColoredBox::new(Color::rgb(10, 20, 30)))
+    InteractiveViewer::new(
+        crate::common::viewer_alternatives(),
+        ColoredBox::new(Color::rgb(10, 20, 30)),
+    )
+    .controller(controller)
+    .boundary_margin(EdgeInsets::all(1000.0))
+    .on_interaction_update(move |_, details| scales.borrow_mut().push(details.scale))
 }
 
 fn pan_zoom(phase: PanZoomPhase) -> PointerEvent {
@@ -118,17 +120,19 @@ pub(crate) fn viewer_native_session_reports_one_start_and_one_terminal() {
     let updates = log.clone();
     let ends = log.clone();
     let laid = lay_out(
-        InteractiveViewer::new(crate::common::viewer_alternatives())
-            .boundary_margin(EdgeInsets::all(1000.0))
-            .on_interaction_start(move |_, _| starts.borrow_mut().push("start"))
-            .on_interaction_update(move |_, _| updates.borrow_mut().push("update"))
-            .on_interaction_end(move |_, details| {
-                ends.borrow_mut().push(match details.reason {
-                    GestureEndReason::Completed => "completed",
-                    GestureEndReason::Cancelled => "cancelled",
-                });
-            })
-            .child(SizedBox::new(100.0, 100.0)),
+        InteractiveViewer::new(
+            crate::common::viewer_alternatives(),
+            SizedBox::new(100.0, 100.0),
+        )
+        .boundary_margin(EdgeInsets::all(1000.0))
+        .on_interaction_start(move |_, _| starts.borrow_mut().push("start"))
+        .on_interaction_update(move |_, _| updates.borrow_mut().push("update"))
+        .on_interaction_end(move |_, details| {
+            ends.borrow_mut().push(match details.reason {
+                GestureEndReason::Completed => "completed",
+                GestureEndReason::Cancelled => "cancelled",
+            });
+        }),
         tight(100.0, 100.0),
     );
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
@@ -158,11 +162,13 @@ pub(crate) fn viewer_repeated_native_start_retires_the_previous_generation() {
     let reasons = Rc::new(RefCell::new(Vec::new()));
     let log = reasons.clone();
     let laid = lay_out(
-        InteractiveViewer::new(crate::common::viewer_alternatives())
-            .controller(controller.clone())
-            .boundary_margin(EdgeInsets::all(1000.0))
-            .on_interaction_end(move |_, details| log.borrow_mut().push(details.reason))
-            .child(SizedBox::new(100.0, 100.0)),
+        InteractiveViewer::new(
+            crate::common::viewer_alternatives(),
+            SizedBox::new(100.0, 100.0),
+        )
+        .controller(controller.clone())
+        .boundary_margin(EdgeInsets::all(1000.0))
+        .on_interaction_end(move |_, details| log.borrow_mut().push(details.reason)),
         tight(100.0, 100.0),
     );
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
@@ -192,21 +198,23 @@ pub(crate) fn viewer_native_owner_survives_descendant_enable_during_rebuild() {
     let tree = |inner_enabled| {
         let outer_log = outer_ends.clone();
         let inner_log = inner_ends.clone();
-        InteractiveViewer::new(crate::common::viewer_alternatives())
-            .controller(outer.clone())
-            .boundary_margin(EdgeInsets::all(1000.0))
-            .on_interaction_end(move |_, details| outer_log.borrow_mut().push(details.reason))
-            .child(
-                InteractiveViewer::new(crate::common::viewer_alternatives())
-                    .controller(inner.clone())
-                    .scale_enabled(inner_enabled)
-                    .pan_enabled(false)
-                    .boundary_margin(EdgeInsets::all(1000.0))
-                    .on_interaction_end(move |_, details| {
-                        inner_log.borrow_mut().push(details.reason);
-                    })
-                    .child(SizedBox::new(200.0, 200.0)),
+        InteractiveViewer::new(
+            crate::common::viewer_alternatives(),
+            InteractiveViewer::new(
+                crate::common::viewer_alternatives(),
+                SizedBox::new(200.0, 200.0),
             )
+            .controller(inner.clone())
+            .scale_enabled(inner_enabled)
+            .pan_enabled(false)
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .on_interaction_end(move |_, details| {
+                inner_log.borrow_mut().push(details.reason);
+            }),
+        )
+        .controller(outer.clone())
+        .boundary_margin(EdgeInsets::all(1000.0))
+        .on_interaction_end(move |_, details| outer_log.borrow_mut().push(details.reason))
     };
     let mut laid = lay_out(tree(false), tight(200.0, 200.0));
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
@@ -247,12 +255,14 @@ pub(crate) fn viewer_pan_transitions_to_pinch_without_contact_count_jumps() {
     let start_log = lifecycle.clone();
     let end_log = lifecycle.clone();
     let mut laid = lay_out(
-        InteractiveViewer::new(crate::common::viewer_alternatives())
-            .controller(controller.clone())
-            .boundary_margin(EdgeInsets::all(1000.0))
-            .on_interaction_start(move |_, _| start_log.borrow_mut().push("start"))
-            .on_interaction_end(move |_, _| end_log.borrow_mut().push("end"))
-            .child(SizedBox::new(200.0, 200.0)),
+        InteractiveViewer::new(
+            crate::common::viewer_alternatives(),
+            SizedBox::new(200.0, 200.0),
+        )
+        .controller(controller.clone())
+        .boundary_margin(EdgeInsets::all(1000.0))
+        .on_interaction_start(move |_, _| start_log.borrow_mut().push("start"))
+        .on_interaction_end(move |_, _| end_log.borrow_mut().push("end")),
         tight(200.0, 200.0),
     );
     let first = PointerId::try_from(21_u64).expect("nonzero contact");
@@ -310,11 +320,13 @@ pub(crate) fn viewer_native_rotation_preserves_the_scene_pivot() {
     use flui_widgets::{InteractiveViewer, TransformationController};
     let controller = TransformationController::new();
     let mut laid = lay_out(
-        InteractiveViewer::new(crate::common::viewer_alternatives())
-            .controller(controller.clone())
-            .rotation_enabled(true)
-            .boundary_margin(EdgeInsets::all(1000.0))
-            .child(SizedBox::new(100.0, 100.0)),
+        InteractiveViewer::new(
+            crate::common::viewer_alternatives(),
+            SizedBox::new(100.0, 100.0),
+        )
+        .controller(controller.clone())
+        .rotation_enabled(true)
+        .boundary_margin(EdgeInsets::all(1000.0)),
         tight(100.0, 100.0),
     );
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
@@ -330,11 +342,13 @@ pub(crate) fn viewer_native_rotation_preserves_the_scene_pivot() {
     assert_scale(transformed.1, 65.0);
     let rotated = controller.value();
     laid.pump_widget(
-        InteractiveViewer::new(crate::common::viewer_alternatives())
-            .controller(controller.clone())
-            .rotation_enabled(true)
-            .boundary_margin(EdgeInsets::all(1000.0))
-            .child(SizedBox::new(100.0, 100.0)),
+        InteractiveViewer::new(
+            crate::common::viewer_alternatives(),
+            SizedBox::new(100.0, 100.0),
+        )
+        .controller(controller.clone())
+        .rotation_enabled(true)
+        .boundary_margin(EdgeInsets::all(1000.0)),
     );
     laid.pump();
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Update(
@@ -355,11 +369,13 @@ pub(crate) fn viewer_rotation_refuses_an_unfittable_quad_then_recovers() {
     let updates = Rc::new(RefCell::new(Vec::new()));
     let log = updates.clone();
     let laid = lay_out(
-        InteractiveViewer::new(crate::common::viewer_alternatives())
-            .controller(controller.clone())
-            .rotation_enabled(true)
-            .on_interaction_update(move |_, details| log.borrow_mut().push(details.scale))
-            .child(SizedBox::new(100.0, 100.0)),
+        InteractiveViewer::new(
+            crate::common::viewer_alternatives(),
+            SizedBox::new(100.0, 100.0),
+        )
+        .controller(controller.clone())
+        .rotation_enabled(true)
+        .on_interaction_update(move |_, details| log.borrow_mut().push(details.scale)),
         tight(100.0, 100.0),
     );
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
@@ -463,11 +479,13 @@ fn viewer_focal_inertia_uses_profile(native: bool) {
             settings.provider(),
             VsyncScope::new(
                 vsync.clone(),
-                InteractiveViewer::new(crate::common::viewer_alternatives())
-                    .controller(controller.clone())
-                    .boundary_margin(EdgeInsets::all(1000.0))
-                    .on_interaction_end(move |_, details| recorder.borrow_mut().push(details))
-                    .child(SizedBox::new(200.0, 200.0)),
+                InteractiveViewer::new(
+                    crate::common::viewer_alternatives(),
+                    SizedBox::new(200.0, 200.0),
+                )
+                .controller(controller.clone())
+                .boundary_margin(EdgeInsets::all(1000.0))
+                .on_interaction_end(move |_, details| recorder.borrow_mut().push(details)),
             ),
         ),
         tight(200.0, 200.0),
@@ -598,11 +616,13 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
     let mut laid = lay_out(
         VsyncScope::new(
             vsync.clone(),
-            InteractiveViewer::new(crate::common::viewer_alternatives())
-                .controller(controller.clone())
-                .boundary_margin(EdgeInsets::all(1000.0))
-                .on_interaction_end(move |_, details| ends.borrow_mut().push(details.velocity))
-                .child(SizedBox::new(200.0, 200.0)),
+            InteractiveViewer::new(
+                crate::common::viewer_alternatives(),
+                SizedBox::new(200.0, 200.0),
+            )
+            .controller(controller.clone())
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .on_interaction_end(move |_, details| ends.borrow_mut().push(details.velocity)),
         ),
         tight(200.0, 200.0),
     );
@@ -684,11 +704,13 @@ fn viewer_focal_fling_without_clock_preserves_the_scene() {
         let vsync = Vsync::new();
         let tree = |bound| {
             let ends = released.clone();
-            let viewer = InteractiveViewer::new(crate::common::viewer_alternatives())
-                .controller(controller.clone())
-                .boundary_margin(EdgeInsets::all(1000.0))
-                .on_interaction_end(move |_, details| ends.borrow_mut().push(details.velocity))
-                .child(SizedBox::new(200.0, 200.0));
+            let viewer = InteractiveViewer::new(
+                crate::common::viewer_alternatives(),
+                SizedBox::new(200.0, 200.0),
+            )
+            .controller(controller.clone())
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .on_interaction_end(move |_, details| ends.borrow_mut().push(details.velocity));
             if bound {
                 VsyncScope::new(vsync.clone(), viewer)
             } else {
@@ -795,10 +817,12 @@ pub(crate) fn viewer_focal_fling_rebuild_preserves_or_retires_geometry() {
             VsyncScope::new(
                 vsync.clone(),
                 SizedBox::new(width, 200.0).child(
-                    InteractiveViewer::new(crate::common::viewer_alternatives())
-                        .controller(controller.clone())
-                        .boundary_margin(EdgeInsets::all(margin))
-                        .child(SizedBox::new(200.0, 200.0)),
+                    InteractiveViewer::new(
+                        crate::common::viewer_alternatives(),
+                        SizedBox::new(200.0, 200.0),
+                    )
+                    .controller(controller.clone())
+                    .boundary_margin(EdgeInsets::all(margin)),
                 ),
             )
         };
@@ -897,10 +921,12 @@ pub(crate) fn viewer_reports_scale_velocity_separately_from_focal_velocity() {
     let ends = Rc::new(RefCell::new(Vec::new()));
     let log = ends.clone();
     let laid = lay_out(
-        InteractiveViewer::new(crate::common::viewer_alternatives())
-            .boundary_margin(EdgeInsets::all(1000.0))
-            .on_interaction_end(move |_, details| log.borrow_mut().push(details))
-            .child(SizedBox::new(200.0, 200.0)),
+        InteractiveViewer::new(
+            crate::common::viewer_alternatives(),
+            SizedBox::new(200.0, 200.0),
+        )
+        .boundary_margin(EdgeInsets::all(1000.0))
+        .on_interaction_end(move |_, details| log.borrow_mut().push(details)),
         tight(200.0, 200.0),
     );
     let packet = |millis: u64, phase, pan: f64| {
@@ -1146,7 +1172,7 @@ pub(crate) fn viewer_raw_detents_zoom_without_stealing_plain_scrolls() {
                 .controller(scroll.clone())
                 .child(
                     SizedBox::new(300.0, 1000.0).child(
-                        InteractiveViewer::new(crate::common::viewer_alternatives())
+                        InteractiveViewer::new(crate::common::viewer_alternatives(), SizedBox::new(300.0, 1000.0))
                         .controller(transform.clone())
                         .wheel_scale_gate(WheelScaleGate::CtrlWheel)
                         // A plain tick pans a viewer that can move; this
@@ -1157,7 +1183,7 @@ pub(crate) fn viewer_raw_detents_zoom_without_stealing_plain_scrolls() {
                         .on_interaction_update(move |_, details| {
                             updates.borrow_mut().push(details.scale);
                         })
-                        .child(SizedBox::new(300.0, 1000.0)),
+                        ,
                     ),
                 );
             let mut laid = lay_out(
@@ -1234,9 +1260,11 @@ pub(crate) fn viewer_page_zoom_resolves_against_the_actual_viewport() {
     for height in [100.0, 275.0] {
         let controller = TransformationController::new();
         let laid = lay_out(
-            InteractiveViewer::new(crate::common::viewer_alternatives())
-                .controller(controller.clone())
-                .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            InteractiveViewer::new(
+                crate::common::viewer_alternatives(),
+                ColoredBox::new(Color::rgb(10, 20, 30)),
+            )
+            .controller(controller.clone()),
             tight(100.0, height),
         );
         let scroll = ScrollEvent::new(

@@ -423,7 +423,7 @@ pub(crate) fn consuming_and_overriding_padding_updates_its_sources() {
 pub(crate) fn safe_area_reserves_the_home_indicator_only_while_the_keyboard_is_down() {
     use flui_widgets::SafeArea;
 
-    let safe_area = || SafeArea::new().child(SizedBox::new(10.0, 10.0));
+    let safe_area = || SafeArea::new(SizedBox::new(10.0, 10.0));
     let mut laid = lay_out(
         MediaQuery::new(keyboard_over_home_indicator(0.0), safe_area()),
         loose(4000.0),

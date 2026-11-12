@@ -50,6 +50,8 @@ mod back_gesture;
 mod binding_animation;
 #[path = "carousel.rs"]
 mod carousel;
+#[path = "child_form.rs"]
+mod child_form;
 #[path = "child_type_swap.rs"]
 mod child_type_swap;
 #[path = "collection_semantics.rs"]

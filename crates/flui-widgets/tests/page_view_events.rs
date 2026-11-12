@@ -29,7 +29,7 @@ fn pages() -> Vec<BoxedView> {
 }
 
 fn page_view(controller: &PageController) -> PageView {
-    PageView::new(pages(), pager_alternatives()).controller(controller.clone())
+    PageView::new(pager_alternatives(), pages()).controller(controller.clone())
 }
 
 fn mounted(probe: &SignalProbe) -> LaidOut {

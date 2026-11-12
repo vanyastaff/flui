@@ -546,7 +546,7 @@ impl StatelessView for AppBar {
 
         // The app bar pads itself against the top safe-area inset — see the
         // module docs' "consumes the top inset itself" section.
-        let safe_toolbar = SafeArea::new().bottom(false).child(toolbar_and_bottom);
+        let safe_toolbar = SafeArea::new(toolbar_and_bottom).bottom(false);
 
         // The flexible space paints ABOVE this bar's own Material and BELOW
         // the toolbar. Outside that slot order the bar's opaque surface either

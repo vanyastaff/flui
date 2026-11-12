@@ -212,32 +212,28 @@ fn tick_without_rebuilding<V, E, F>(
 
 pub(crate) fn slide_ticks_without_rebuilding() {
     let c = controller();
-    let view = SlideTransition::new(
-        fraction(&c, TranslationFraction::new(1.0, 0.5)),
-        child_box(),
-    );
+    let view =
+        SlideTransition::new(fraction(&c, TranslationFraction::new(1.0, 0.5))).child(child_box());
     tick_without_rebuilding(view, &c, 1, |v| slide_by(v, 0.5 * v), "slide");
 }
 
 pub(crate) fn slide_rtl_mirrors_dx_without_rebuilding() {
     let c = controller();
-    let view = SlideTransition::new(
-        fraction(&c, TranslationFraction::new(1.0, 0.5)),
-        child_box(),
-    )
-    .text_direction(TextDirection::Rtl);
+    let view = SlideTransition::new(fraction(&c, TranslationFraction::new(1.0, 0.5)))
+        .child(child_box())
+        .text_direction(TextDirection::Rtl);
     tick_without_rebuilding(view, &c, 1, |v| slide_by(-v, 0.5 * v), "rtl slide");
 }
 
 pub(crate) fn scale_ticks_without_rebuilding() {
     let c = controller();
-    let view = ScaleTransition::new(scalar(&c), child_box());
+    let view = ScaleTransition::new(scalar(&c)).child(child_box());
     tick_without_rebuilding(view, &c, 1, scale_by, "scale");
 }
 
 pub(crate) fn rotation_ticks_without_rebuilding() {
     let c = controller();
-    let view = RotationTransition::new(scalar(&c), child_box());
+    let view = RotationTransition::new(scalar(&c)).child(child_box());
     tick_without_rebuilding(view, &c, 1, rotate_by, "rotation");
 }
 
@@ -318,7 +314,7 @@ fn assert_between(value: f64, low: f64, high: f64, what: &str) {
 /// clipped child overflows the shrunken box equally at both ends.
 pub(crate) fn size_ticks_without_rebuilding() {
     let c = controller();
-    let view = SizeTransition::new(scalar(&c), child_box());
+    let view = SizeTransition::new(scalar(&c)).child(child_box());
     ticks_without_rebuilding(view, &c, "size", |tree, v| {
         let (size, origin) = tree.node_geometry("RenderAnimatedAlign");
         assert_eq!(size, Size::new(200.0, SIDE * v), "size at {v}");
@@ -378,7 +374,7 @@ pub(crate) fn positioned_ticks_without_rebuilding() {
 
 pub(crate) fn decorated_box_ticks_without_rebuilding() {
     let c = controller();
-    let decoration: std::rc::Rc<dyn Animation<BoxDecoration<f64>>> = std::rc::Rc::new(
+    let decoration: std::rc::Rc<dyn Animation<BoxDecoration>> = std::rc::Rc::new(
         Tween::new(
             BoxDecoration::with_color(Color::RED),
             BoxDecoration::with_color(Color::BLUE),
@@ -423,7 +419,7 @@ pub(crate) fn reduced_motion_lands_on_the_end_value() {
         (laid, owner)
     }
 
-    let (laid, _owner) = settle(|t| SizeTransition::new(t, child_box()));
+    let (laid, _owner) = settle(|t| SizeTransition::new(t).child(child_box()));
     let node = laid.find_by_render_type("RenderAnimatedAlign");
     assert_eq!(laid.size(node).height, SIDE);
 
@@ -478,8 +474,8 @@ pub(crate) fn reduced_motion_lands_on_the_end_value() {
 pub(crate) fn shared_controller_moves_both_transitions_on_one_tick() {
     let c = controller();
     let view = Column::new((
-        ScaleTransition::new(scalar(&c), child_box()).boxed(),
-        ScaleTransition::new(scalar(&c), child_box()).boxed(),
+        ScaleTransition::new(scalar(&c)).child(child_box()).boxed(),
+        ScaleTransition::new(scalar(&c)).child(child_box()).boxed(),
     ));
     tick_without_rebuilding(view, &c, 2, scale_by, "shared controller");
 }
@@ -491,7 +487,7 @@ pub(crate) fn virtual_time_ticks_follow_the_controller_value() {
     let vsync = flui_animation::Vsync::new();
     let owner = AnimationController::builder(Duration::from_millis(300)).build_on(Some(&vsync));
     let c = owner.controller();
-    let mut tree = Headless::mount(ScaleTransition::new(scalar(c), child_box()));
+    let mut tree = Headless::mount(ScaleTransition::new(scalar(c)).child(child_box()));
     tree.binding.adopt_vsync(vsync);
     c.forward().expect("a fresh controller forwards");
     tree.binding.pump_frame_report(FRAME);
@@ -578,11 +574,9 @@ pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
                     .push((local.sample.position.get(), global.sample.position.get()));
             })
             .child(child_box());
-        let slide = SlideTransition::new(
-            fraction(controller, TranslationFraction::new(2.0, 0.0)),
-            listener,
-        )
-        .text_direction(direction);
+        let slide = SlideTransition::new(fraction(controller, TranslationFraction::new(2.0, 0.0)))
+            .child(listener)
+            .text_direction(direction);
         let root = GestureArenaScope::new(
             binding.arena().clone(),
             FocusTreeRoot::new(app_root(Align::new(Alignment::CENTER).child(slide))),
@@ -640,7 +634,8 @@ pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
 pub(crate) fn hit_test_follows_the_painted_transform() {
     let slide = |transform_hit_tests: bool| {
         move |c: &AnimationController, child: GestureDetector| -> BoxedView {
-            let view = SlideTransition::new(fraction(c, TranslationFraction::new(1.0, 0.0)), child)
+            let view = SlideTransition::new(fraction(c, TranslationFraction::new(1.0, 0.0)))
+                .child(child)
                 .transform_hit_tests(transform_hit_tests);
             view.boxed()
         }
@@ -656,7 +651,7 @@ pub(crate) fn hit_test_follows_the_painted_transform() {
         "transform_hit_tests(false) keeps hits at the laid-out position"
     );
     let scale = |c: &AnimationController, child: GestureDetector| -> BoxedView {
-        let view = ScaleTransition::new(scalar(c), child);
+        let view = ScaleTransition::new(scalar(c)).child(child);
         view.boxed()
     };
     assert_eq!(
@@ -679,11 +674,11 @@ pub(crate) fn swapping_the_animation_keeps_the_render_object() {
     let second = controller();
     second.set_value(1.0).expect("no build is running");
     let mut laid = lay_out(
-        ScaleTransition::new(scalar(&first), child_box()),
+        ScaleTransition::new(scalar(&first)).child(child_box()),
         loose(200.0),
     );
     let before = transform_node(&laid, 0);
-    laid.pump_widget(ScaleTransition::new(scalar(&second), child_box()));
+    laid.pump_widget(ScaleTransition::new(scalar(&second)).child(child_box()));
     assert_eq!(
         transform_node(&laid, 0),
         before,
@@ -715,16 +710,16 @@ pub(crate) fn unmounted_transition_leaves_its_sibling_ticking() {
     let c = controller();
     let mut laid = lay_out(
         Column::new((
-            ScaleTransition::new(scalar(&c), child_box()).boxed(),
-            ScaleTransition::new(scalar(&c), child_box()).boxed(),
+            ScaleTransition::new(scalar(&c)).child(child_box()).boxed(),
+            ScaleTransition::new(scalar(&c)).child(child_box()).boxed(),
         )),
         loose(200.0),
     );
     c.set_value(0.5).expect("no build is running");
     laid.tick();
-    laid.pump_widget(Column::new((
-        ScaleTransition::new(scalar(&c), child_box()).boxed(),
-    )));
+    laid.pump_widget(Column::new((ScaleTransition::new(scalar(&c))
+        .child(child_box())
+        .boxed(),)));
     assert_eq!(
         laid.find_all_by_render_type("RenderAnimatedTransform")
             .len(),
@@ -743,7 +738,10 @@ pub(crate) fn the_animation_is_released_after_unmount() {
     let animation = fraction(&c, TranslationFraction::new(1.0, 0.0));
     let weak: std::rc::Weak<dyn Animation<TranslationFraction>> =
         std::rc::Rc::downgrade(&animation);
-    let mut laid = lay_out(SlideTransition::new(animation, child_box()), loose(200.0));
+    let mut laid = lay_out(
+        SlideTransition::new(animation).child(child_box()),
+        loose(200.0),
+    );
     assert!(
         weak.upgrade().is_some(),
         "the mounted transition keeps its animation"

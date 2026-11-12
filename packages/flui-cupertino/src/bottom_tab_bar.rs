@@ -161,7 +161,7 @@ pub struct CupertinoTabBar {
     inactive_color: CupertinoColor,
     icon_size: f64,
     height: f64,
-    border: Option<Border<f64>>,
+    border: Option<Border>,
     /// Whether `border` still holds the un-overridden default. If so,
     /// `build` resolves [`default_border_color`]'s light/dark variant fresh
     /// against the ambient brightness every time, rather than using a color
@@ -277,7 +277,7 @@ impl CupertinoTabBar {
     /// Overrides the top border, or removes it with `None`. Defaults to
     /// the hairline border.
     #[must_use]
-    pub fn border(mut self, border: Option<Border<f64>>) -> Self {
+    pub fn border(mut self, border: Option<Border>) -> Self {
         self.border = border;
         self.border_is_default = false;
         self

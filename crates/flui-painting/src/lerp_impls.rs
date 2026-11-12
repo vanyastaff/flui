@@ -31,7 +31,7 @@ impl Lerp for Alignment {
     }
 }
 
-/// [`BoxDecoration::lerp`], so `Tween<BoxDecoration<f64>>` drives a
+/// [`BoxDecoration::lerp`], so `Tween<BoxDecoration>` drives a
 /// decoration animation without a decoration-specific tween type.
 ///
 /// The decoration is the property that owns its domain (see the trait's
@@ -39,7 +39,7 @@ impl Lerp for Alignment {
 /// extrapolates with `t`, while colors, border widths, radii and shadows
 /// saturate at the endpoints, because an overshooting blur or border width
 /// would leave the range a painter accepts.
-impl Lerp for BoxDecoration<f64> {
+impl Lerp for BoxDecoration {
     #[inline]
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
         BoxDecoration::lerp(self, other, t)
@@ -86,7 +86,7 @@ impl Lerp for crate::typography::TextStyle {
                         ),
                         blur_radius: scalar(&a.blur_radius, &b.blur_radius).max(0.0),
                     })
-                    .collect::<Vec<crate::styling::Shadow<f64>>>(),
+                    .collect::<Vec<crate::styling::Shadow>>(),
             ),
             _ => near.shadows.clone(),
         };

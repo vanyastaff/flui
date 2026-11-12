@@ -279,7 +279,7 @@ impl ViewState<TabBarView> for TabBarViewState {
             .into_view()
             .boxed();
         }
-        Actions::new(PageView::new(pages, controller.step_alternatives()).controller(pager))
+        Actions::new(PageView::new(controller.step_alternatives(), pages).controller(pager))
             .action(TabStepAction { controller })
     }
 }

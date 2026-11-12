@@ -312,6 +312,6 @@ fn resolve_style(
 /// The line's fill: `color`, optionally rounded to `radius` — see the module
 /// docs' "Composition" section for why a filled rect stands in for the
 /// oracle's full-height bottom border.
-fn decoration(color: Color, radius: Option<BorderRadius>) -> BoxDecoration<f64> {
+fn decoration(color: Color, radius: Option<BorderRadius>) -> BoxDecoration {
     BoxDecoration::with_color(color).set_border_radius(radius)
 }

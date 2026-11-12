@@ -335,8 +335,8 @@ type RefreshCallback = Rc<dyn Fn(&mut EventContext<'_>) -> BoxedTask>;
 /// )))
 /// .expect("one labelled command");
 /// let inbox = RefreshIndicator::new(
-///     SingleChildScrollView::new().child(SizedBox::new(300.0, 1400.0)),
 ///     alternatives,
+///     SingleChildScrollView::new().child(SizedBox::new(300.0, 1400.0)),
 /// )
 /// .on_refresh(|_ctx| async { /* fetch the messages */ });
 /// ```
@@ -364,7 +364,7 @@ impl RefreshIndicator {
     /// Pull to refresh over the scrollables in `child`, reached without the
     /// pull through `alternatives`, whose first command performs
     /// [`RefreshIntent`].
-    pub fn new(child: impl IntoView, alternatives: GestureAlternatives) -> Self {
+    pub fn new(alternatives: GestureAlternatives, child: impl IntoView) -> Self {
         Self {
             child: child.into_view().boxed(),
             alternatives,

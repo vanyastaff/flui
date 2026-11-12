@@ -1589,6 +1589,7 @@ fn layout_and_render_object_wiring() {
             ("flex_parent_data::vertical_direction_updates_mounted_flex_children", crate::flex_parent_data::vertical_direction_updates_mounted_flex_children),
             ("composition::nested_padding_accumulates_insets_through_levels", crate::composition::nested_padding_accumulates_insets_through_levels),
             ("custom_multi_child_layout::custom_multi_child_layout_mounts_render_object_and_positions_layout_id_children", crate::custom_multi_child_layout::custom_multi_child_layout_mounts_render_object_and_positions_layout_id_children),
+            ("child_form::optional_child_is_a_builder_and_may_be_absent", crate::child_form::optional_child_is_a_builder_and_may_be_absent),
             ("child_type_swap::a_replaced_root_render_object_is_laid_out_in_the_frame_it_is_mounted", crate::child_type_swap::a_replaced_root_render_object_is_laid_out_in_the_frame_it_is_mounted),
             ("unchanged_child::a_child_handed_back_unchanged_is_built_only_when_something_it_reads_changes", crate::unchanged_child::a_child_handed_back_unchanged_is_built_only_when_something_it_reads_changes),
             ("unchanged_child::a_lazily_mounted_item_handed_back_unchanged_is_not_built_again", crate::unchanged_child::a_lazily_mounted_item_handed_back_unchanged_is_not_built_again),

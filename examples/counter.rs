@@ -36,7 +36,7 @@ impl ViewState<CounterView> for CounterState {
     fn build(&self, _view: &CounterView, ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count;
 
-        SafeArea::new().child(
+        SafeArea::new(
             Center::new().child(
                 Column::new((
                     Text::new("You have pushed the button this many times:"),

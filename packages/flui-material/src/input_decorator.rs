@@ -151,7 +151,7 @@ fn default_fill_color(colors: &ColorScheme, states: &WidgetStates) -> Color {
 /// M3 default `activeIndicatorBorder` (the bottom underline) —
 /// `_InputDecoratorDefaultsM3.activeIndicatorBorder`
 /// (`input_decorator.dart:5972-5992`).
-fn default_active_indicator(colors: &ColorScheme, states: &WidgetStates) -> BorderSide<f64> {
+fn default_active_indicator(colors: &ColorScheme, states: &WidgetStates) -> BorderSide {
     if states.contains_state(WidgetState::Disabled) {
         BorderSide::new(
             colors.on_surface.with_opacity(0.38),

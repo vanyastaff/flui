@@ -1,9 +1,9 @@
 //! Test support for code that drives the raster executor without a GPU
 //! (ADR-0243: the fake sits beside its contract, [`SlotBackend`]).
 
-use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
-use flui_foundation::{geometry::DeviceSize, memory::MemoryPressureLevel};
+use flui_foundation::{ManualClock, geometry::DeviceSize, memory::MemoryPressureLevel};
 use flui_layer::{DamageRegion, Scene};
 use flui_platform::DisplayColor;
 
@@ -55,6 +55,8 @@ pub enum SlotCall {
     Detach(SlotId),
     /// `reclaim`.
     Reclaim(MemoryPressureLevel),
+    /// `rebuild_device`.
+    RebuildDevice,
 }
 
 #[derive(Default)]
@@ -64,6 +66,14 @@ struct Script {
     resizes: VecDeque<ScriptedAnswer>,
     restores: VecDeque<ScriptedAnswer>,
     renders: VecDeque<ScriptedAnswer>,
+    rebuilds: VecDeque<ScriptedAnswer>,
+    /// The slots the next successful rebuild cannot present to.
+    rebuild_refusals: Vec<(SlotId, EngineError)>,
+    device_lost: bool,
+    lose_in_next_render: bool,
+    no_inline_rebuild: bool,
+    /// The clock each rebuild advances, and by how much.
+    rebuild_takes: Option<(ManualClock, Duration)>,
 }
 
 /// A [`SlotBackend`] with no GPU: it logs every call and answers from a
@@ -111,6 +121,48 @@ impl ScriptedSlots {
         self.script.borrow_mut().restores.push_back(answer);
     }
 
+    /// Lose the device: every render fails
+    /// [`EngineError::DeviceLost`] until a rebuild succeeds.
+    pub fn lose_device(&self) {
+        self.script.borrow_mut().device_lost = true;
+    }
+
+    /// Lose the device inside the next render, which fails
+    /// [`EngineError::DeviceLost`], as wgpu's device-lost callback can fire
+    /// while a frame records.
+    pub fn lose_device_in_next_render(&self) {
+        self.script.borrow_mut().lose_in_next_render = true;
+    }
+
+    /// Answer that no device rebuild can succeed where the executor runs, as
+    /// the web's context does.
+    pub fn cannot_rebuild_inline(&self) {
+        self.script.borrow_mut().no_inline_rebuild = true;
+    }
+
+    /// Every device rebuild from now on advances `clock` by `took`, as a
+    /// driver that blocks the attempt does.
+    pub fn rebuilds_take(&self, clock: &ManualClock, took: Duration) {
+        self.script.borrow_mut().rebuild_takes = Some((clock.clone(), took));
+    }
+
+    /// Answer the next unanswered device rebuild with `answer`; one the
+    /// script does not answer succeeds. A [`ScriptedAnswer::Panic`] panics
+    /// once the new device is in place, so the backend no longer reports the
+    /// device lost.
+    pub fn script_rebuild(&self, answer: ScriptedAnswer) {
+        self.script.borrow_mut().rebuilds.push_back(answer);
+    }
+
+    /// The next successful rebuild answers that the new device cannot
+    /// present to `slot`, for `error`.
+    pub fn refuse_on_rebuild(&self, slot: SlotId, error: EngineError) {
+        self.script
+            .borrow_mut()
+            .rebuild_refusals
+            .push((slot, error));
+    }
+
     /// Every call so far, oldest first.
     #[must_use]
     pub fn calls(&self) -> Vec<SlotCall> {
@@ -144,6 +196,7 @@ impl ScriptedSlots {
             | SlotCall::Latency(..)
             | SlotCall::Detach(_)
             | SlotCall::Reclaim(_) => None,
+            SlotCall::RebuildDevice => script.rebuilds.pop_front(),
         }
     }
 
@@ -202,6 +255,16 @@ impl SlotBackend for ScriptedSlots {
         _scene: &Scene,
         damage: DamageRegion,
     ) -> EngineResult<PresentDisposition> {
+        {
+            let mut script = self.script.borrow_mut();
+            if std::mem::take(&mut script.lose_in_next_render) {
+                script.device_lost = true;
+            }
+            if script.device_lost {
+                script.calls.push(SlotCall::Render(slot, damage));
+                return Err(EngineError::DeviceLost);
+            }
+        }
         match self.answer(SlotCall::Render(slot, damage)) {
             None => Ok(PresentDisposition::Presented),
             Some(ScriptedAnswer::Answer(disposition)) => Ok(disposition),
@@ -216,6 +279,34 @@ impl SlotBackend for ScriptedSlots {
 
     fn reclaim(&mut self, level: MemoryPressureLevel) {
         let _none = self.answer(SlotCall::Reclaim(level));
+    }
+
+    fn device_lost(&self) -> bool {
+        self.script.borrow().device_lost
+    }
+
+    fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
+        let takes = self.script.borrow().rebuild_takes.clone();
+        if let Some((clock, took)) = takes {
+            clock.advance(took);
+        }
+        match self.answer(SlotCall::RebuildDevice) {
+            None | Some(ScriptedAnswer::Answer(_)) => {
+                let mut script = self.script.borrow_mut();
+                script.device_lost = false;
+                Ok(std::mem::take(&mut script.rebuild_refusals))
+            }
+            Some(ScriptedAnswer::Fail(error)) => Err(error),
+            Some(ScriptedAnswer::Panic) => {
+                // The new device is in place when the rebuild unwinds.
+                self.script.borrow_mut().device_lost = false;
+                panic!("scripted device rebuild panic")
+            }
+        }
+    }
+
+    fn rebuilds_inline(&self) -> bool {
+        !self.script.borrow().no_inline_rebuild
     }
 }
 

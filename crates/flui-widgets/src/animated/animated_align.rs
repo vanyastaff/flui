@@ -8,7 +8,7 @@ use flui_animation::{
 use flui_foundation::ChangeNotifier;
 use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
+use flui_view::{Child, IntoView, ViewState};
 
 use crate::animated::implicitly_animated::MotionBuilder;
 use crate::animated::property_motion::{PropertyMotion, observed_property};
@@ -28,7 +28,7 @@ pub struct AnimatedAlign {
     width_factor: Option<f64>,
     height_factor: Option<f64>,
     motion: MotionSpec,
-    child: BoxedView,
+    child: Child,
 }
 
 impl AnimatedAlign {
@@ -53,16 +53,23 @@ impl AnimatedAlign {
         self
     }
 
-    /// Animate `child` toward `alignment`, with the 200 ms default duration and
+    /// Animate toward `alignment`, with no child yet, with the 200 ms default duration and
     /// an ease-in-out curve.
-    pub fn new(alignment: Alignment, child: impl IntoView) -> Self {
+    pub fn new(alignment: Alignment) -> Self {
         Self {
             alignment,
             width_factor: None,
             height_factor: None,
             motion: MotionSpec::default(),
-            child: child.into_view().boxed(),
+            child: Child::empty(),
         }
+    }
+
+    /// Sets the child.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
     }
 }
 
@@ -93,7 +100,7 @@ pub struct AnimatedAlignState {
     height_factor: PropertyMotion<f64>,
     notifications: Rc<ChangeNotifier>,
     vsync: Option<Vsync>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl StatefulView for AnimatedAlign {
@@ -171,7 +178,7 @@ impl ViewState<AnimatedAlign> for AnimatedAlignState {
             if let Some(factor) = &height_factor {
                 align = align.height_factor(factor.value().max(0.0));
             }
-            align.child(child.clone())
+            align.child_slot(child.clone())
         })
     }
 

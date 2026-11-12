@@ -137,7 +137,8 @@ pub(crate) fn page_route_paints_its_separate_entrance_and_exit_durations() {
                     .boxed()
             })
             .transitions(|_, animation, _, child| {
-                FadeTransition::new(Rc::clone(animation), child)
+                FadeTransition::new(Rc::clone(animation))
+                    .child(child)
                     .into_view()
                     .boxed()
             })
