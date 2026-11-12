@@ -26,7 +26,9 @@ use crate::send_positions::{ALLOWLIST, ROOTS, listed_items};
 /// - a changed line, in the file that defines an item the list names, that
 ///   holds a name of the item's path there (`AppConfig`,
 ///   `with_memory_reclaim`): a rename or a move takes the path off its entry,
-///   on whichever line the bound sits. Without a diff, any change to that
+///   on whichever line the bound sits. A method its type's module file does
+///   not declare is looked for in that module's directory. Without a diff,
+///   any change to that
 ///   file.
 ///
 /// A bound that becomes public through a change elsewhere (a private item
@@ -209,6 +211,11 @@ fn defining_files(
         .map(|p| (p.name.replace('-', "_"), p.dir(&repo.root)))
         .collect();
     let mut files: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // A listed function its module's file does not declare, by that module's
+    // directory: a method can be declared in a child module's `impl` block
+    // (`pipeline/owner/accessors.rs` for `PipelineOwner`), so each file there
+    // that declares it is a defining file too.
+    let mut functions: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for item in listed_items(&text)? {
         // `impl Trait for Type` and `impl Type` name their paths among other
         // words: each workspace path in the label resolves on its own
@@ -227,6 +234,20 @@ fn defining_files(
                     .find(|file| repo.root.join(file).is_file())
                     .map(|file| (file, &segments[k..]))
             }) {
+                if let Some(last) = inside
+                    .last()
+                    .filter(|name| name.starts_with(|c: char| c.is_ascii_lowercase()))
+                {
+                    let source = std::fs::read_to_string(repo.root.join(&file)).unwrap_or_default();
+                    if !declares_fn(&source, last)
+                        && let Some(module_dir) = module_dir(&file)
+                    {
+                        functions
+                            .entry(module_dir)
+                            .or_default()
+                            .insert((*last).to_owned());
+                    }
+                }
                 files
                     .entry(file)
                     .or_default()
@@ -234,7 +255,57 @@ fn defining_files(
             }
         }
     }
+    for (module_dir, names) in functions {
+        for entry in walkdir::WalkDir::new(repo.root.join(&module_dir))
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file() && e.path().extension() == Some("rs".as_ref()))
+        {
+            let Ok(source) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            let declared: Vec<&String> = names
+                .iter()
+                .filter(|name| declares_fn(&source, name))
+                .collect();
+            if declared.is_empty() {
+                continue;
+            }
+            let Ok(relative) = entry.path().strip_prefix(&repo.root) else {
+                continue;
+            };
+            let file = relative.to_string_lossy().replace('\\', "/");
+            files
+                .entry(file)
+                .or_default()
+                .extend(declared.into_iter().cloned());
+        }
+    }
     Ok(files)
+}
+
+/// Whether `source` declares a function called `name` (`fn name(`, `fn name<`).
+fn declares_fn(source: &str, name: &str) -> bool {
+    let needle = format!("fn {name}");
+    source.match_indices(&needle).any(|(at, _)| {
+        let before = source[..at].chars().next_back();
+        let after = source[at + needle.len()..].chars().next();
+        !before.is_some_and(|c| c.is_alphanumeric() || c == '_') && matches!(after, Some('(' | '<'))
+    })
+}
+
+/// The directory of the module a file holds: `a/b/` for `a/b.rs` and
+/// `a/b/mod.rs`, the crate's `src/` for `lib.rs`.
+fn module_dir(file: &str) -> Option<String> {
+    let path = Path::new(file);
+    let stem = path.file_stem()?.to_str()?;
+    let parent = path.parent()?;
+    let dir = if matches!(stem, "mod" | "lib") {
+        parent.to_path_buf()
+    } else {
+        parent.join(stem)
+    };
+    Some(dir.to_string_lossy().replace('\\', "/"))
 }
 
 /// The files that can hold the module `path` of the crate in `dir`.
@@ -326,6 +397,11 @@ mod tests {
         let lifecycle = "crates/flui-app/src/app/lifecycle.rs";
         let method = Some("-    pub fn spawn_io<T, F, Fut>(");
         assert_eq!(reaches(lifecycle, method).as_deref(), Some(lifecycle));
+        // a method declared in another file of the crate than its type's module
+        let accessors = "crates/flui-rendering/src/pipeline/owner/accessors.rs";
+        let elsewhere = Some("-    pub fn set_on_need_visual_update<F>(&mut self, callback: F)");
+        assert_eq!(reaches(accessors, elsewhere).as_deref(), Some(accessors));
+        assert_eq!(reaches(accessors, Some("+    let frames = 3;")), None);
         assert_eq!(
             reaches("crates/flui-widgets/src/container.rs", rename),
             None
