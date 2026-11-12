@@ -59,7 +59,7 @@ impl Drop for InstallRollback {
 /// open, because nothing in them would ever perform the reveal.
 pub(super) fn rendered_window_options(config: &AppConfig) -> flui_platform::WindowOptions {
     let mut options = flui_platform::WindowOptions::from(config)
-        .with_reveal(flui_platform::WindowReveal::AfterFirstFrame);
+        .reveal(flui_platform::WindowReveal::AfterFirstFrame);
     // Read before the window opens, so its first reveal is already in place.
     super::placement::restore(&mut options, config);
     options

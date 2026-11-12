@@ -136,13 +136,13 @@ Branch `spike/readscope`, commits `28ed25536` (variant A, reads take `&dyn ReadS
     breaks [`docs/PANIC-POLICY.md`](../PANIC-POLICY.md).
   - `ReadGraph::register_reader` and `ScopeRef::new(graph, Some(reader))` let any holder of a
     `Reactive` (through `ctx.reactive()`) subscribe an arbitrary `ElementId` or `RenderId`.
-  - `PaintCx` became `!Send`/`!Sync`.
+  - `PaintContext` became `!Send`/`!Sync`.
   - The render reader is recorded but not marked on write.
-  - `PaintCx::with_read_scope` has no production caller.
+  - `PaintContext::with_read_scope` has no production caller.
   - The trybuild snapshot `tests/ui/build_context_is_sealed.stderr` lists every `ReadScope`
     implementor.
   - The new tests go through `ElementBuildContext`, which production never constructs
-    (production uses `BuildCtx`).
+    (production uses `LiveBuildContext`).
 
 ## Decision
 
@@ -241,7 +241,7 @@ pub struct SignalSender<T: 'static>; // Send + Sync; attach() -> Signal<T>; slot
   enough for `peek`, and never `ReaderSink`. Sinks are private types in `flui-view`. Today the
   one sink is `ElementReads` (a graph plus one `ElementId`), minted by `make_build_ctx` for the
   element about to build and by `ElementBuildContext` for its own element; from §6 step 2 the
-  drivers of §3 mint them (`ElementDriver` for `BuildCtx` during `build`, `RenderDriver` for
+  drivers of §3 mint them (`ElementDriver` for `LiveBuildContext` during `build`, `RenderDriver` for
   layout and paint). A `ScopeRef` built outside `flui-view` can subscribe only through a sink
   its builder was given, so a forged scope reads and cannot subscribe anyone on a real graph.
 - **A handle of the wrong `T` is a typed error.** `try_with`/`try_get` return
@@ -274,8 +274,8 @@ graph no longer imports anything from `flui-view`'s owner module.
 
 `PipelineOwner` reaches its `RenderDriver` through dependency inversion: a trait object whose
 trait `flui-rendering` declares and `flui-view` implements, so `flui-rendering` never names the
-graph. The driver mints the layout and paint `ScopeRef`s, and `PaintCx` exposes the one it is
-given through `PaintCx::with_read_scope(self, scope: ScopeRef<'a>) -> Self`, not a
+graph. The driver mints the layout and paint `ScopeRef`s, and `PaintContext` exposes the one it is
+given through `PaintContext::with_read_scope(self, scope: ScopeRef<'a>) -> Self`, not a
 `(graph, node)` pair as in the prototype. The drivers are also what mint the `ReaderSink`s of
 §2.
 
@@ -362,10 +362,10 @@ The ordering is three steps, each shippable alone, all in `flui-view` plus the c
    has none until a render reader exists, `ElementDriver` would only restate the `pub(crate)`
    visibility of today's hooks, and `RebuildSink` changes no behaviour.
 3. **The first render-phase subscriber.** A render-object field read in `paint` through
-   `PaintCx: ReadScope`, with the scope minted by `RenderDriver`, written outside the frame
+   `PaintContext: ReadScope`, with the scope minted by `RenderDriver`, written outside the frame
    phases, with a test that fails without the change and observes the repaint itself, not the
    existence of a subscription. This is the first production caller of
-   `PaintCx::with_read_scope`, which does not merge before this step.
+   `PaintContext::with_read_scope`, which does not merge before this step.
 
 `ScrollPosition` is not the first subscriber: the viewport writes it from `perform_layout`
 (`crates/flui-objects/src/sliver/viewport.rs:1057`, `:1104`, `:1827-1828`) and there is no
@@ -374,13 +374,13 @@ policy for writes during layout yet. `CustomPainter` is not either: the trait is
 `Signal<T>` without an API change of its own.
 
 If no render-phase subscriber exists by the B1 milestone, `Reader::Layout`/`Paint`,
-`RenderDriver` and `PaintCx: ReadScope` are removed rather than kept as unwired surface. The
+`RenderDriver` and `PaintContext: ReadScope` are removed rather than kept as unwired surface. The
 foundation contract stays, because production element reads use it.
 
 **Why the graph is not extracted.**
 
 - **The motivation for extraction is met without it.** The prototype compiled
-  `PaintCx: ReadScope` with no manifest change, so render and animation code can name
+  `PaintContext: ReadScope` with no manifest change, so render and animation code can name
   `Signal<T>` and read through `ReadScope` while the graph stays in `flui-view`.
 - **Extraction would make the frequent edit more expensive.** A graph edit where the graph is
   re-checks 3 crates in 3.07 s. A `flui-reactive` crate would have to sit below
@@ -448,7 +448,7 @@ foundation contract stays, because production element reads use it.
   `cfg(feature = "signals")` and the facade's `signals` feature disappear; downstream manifests
   that enable `flui/signals` must drop it. `BuildContext::reactive()` disappears in ADR-0086's
   change, not here.
-- `PaintCx` becomes `!Send`/`!Sync` once it holds a scope. Nothing requires `Send` of it today;
+- `PaintContext` becomes `!Send`/`!Sync` once it holds a scope. Nothing requires `Send` of it today;
   the frame path is owner-thread (ADR-0091).
 - The contract enters the facade's Stable closure (the promise follows the item,
   [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §1): `flui::view` re-exports
@@ -489,18 +489,18 @@ What exists:
   and for a foreign graph, and the owning presentation's frame request.
 
 - §2, in `crates/flui-view/tests/signal_reads.rs` (the `view_it` binary). The production read
-  path (`make_build_ctx`, `BuildCtx::scope`) has no `debug_assertions` branch, so the file runs
+  path (`make_build_ctx`, `LiveBuildContext::scope`) has no `debug_assertions` branch, so the file runs
   in the debug profile only; the one debug-gated read branch, `ElementBuildContext::is_building`,
   belongs to the test seam, which subscribes nobody in release:
   - `sig.get(ctx)` for `&dyn BuildContext`, `&&dyn BuildContext`, `&Box<dyn BuildContext>`,
     generic `C: BuildContext` with and without `?Sized`, `&dyn ReadScope`,
     `&dyn LifecycleContext` and a closure. **Unasserted:** no test pins this.
   - `a_read_in_build_subscribes_through_the_production_context`: a real mount, so the build
-    goes through `make_build_ctx` and `BuildCtx`; a write rebuilds the reader and not its
+    goes through `make_build_ctx` and `LiveBuildContext`; a write rebuilds the reader and not its
     parent, and the reader stays subscribed. The frame report shows two builds: one
     `SignalChange` (the reader) and one `ParentUpdate` (the leaf under it, updated by the
     reader's rebuild, as for any rebuild). That second build is expected, not a second
-    subscriber. With `BuildCtx::scope` passing no sink it fails on the reader set.
+    subscriber. With `LiveBuildContext::scope` passing no sink it fails on the reader set.
   - A write through a handle of the wrong `T` to a slot with a mounted reader returns
     `TypeMismatch`, and the next frame rebuilds nothing for `SignalChange`.
     **Unasserted:** no test pins this.

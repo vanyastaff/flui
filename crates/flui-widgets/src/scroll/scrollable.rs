@@ -77,7 +77,7 @@ use flui_rendering::pipeline::WeakPipelineCell;
 use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_view::prelude::StatefulView;
 use flui_view::{
-    BoxedView, BuildContext, Child, EventCx, IntoView, LifecycleContext, ViewExt, ViewState,
+    BoxedView, BuildContext, Child, EventContext, IntoView, LifecycleContext, ViewExt, ViewState,
 };
 
 use crate::interaction::focus_reveal::{
@@ -1239,7 +1239,7 @@ impl ScrollableState {
     fn inertia_cancel(
         &self,
         applied: &Applied,
-    ) -> impl Fn(&mut EventCx<'_>, PointerDispatch<'_>) + use<> {
+    ) -> impl Fn(&mut EventContext<'_>, PointerDispatch<'_>) + use<> {
         let moving = self.fling_controller.controller().clone();
         let owner = Rc::clone(&applied.owner);
         let pipeline = self.pipeline.clone();
@@ -1529,7 +1529,7 @@ impl ScrollableState {
         &self,
         view: &Scrollable,
         applied: &Applied,
-    ) -> impl Fn(&mut EventCx<'_>, &KeyEvent) -> KeyEventResult + use<> {
+    ) -> impl Fn(&mut EventContext<'_>, &KeyEvent) -> KeyEventResult + use<> {
         let wheel_distances = view.config.wheel_distances;
         let scroll_direction = view.config.scroll_direction;
         let anchored = view.anchored.is_some();
@@ -1543,7 +1543,7 @@ impl ScrollableState {
         let key_pipeline = self.pipeline.clone();
         let key_controller = self.scroll_controller.clone();
         let key_post_frame = self.post_frame.clone();
-        move |_ctx: &mut EventCx<'_>, event: &KeyEvent| {
+        move |_ctx: &mut EventContext<'_>, event: &KeyEvent| {
             let pipeline = key_pipeline.as_ref();
             if event.state() == KeyState::Up {
                 key_owner.key_released(event.code);

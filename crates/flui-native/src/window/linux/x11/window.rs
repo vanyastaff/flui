@@ -1796,7 +1796,7 @@ impl X11Windows {
         // frame's inset.
         let window_capabilities = capabilities(support);
         let frame = options.frame.at_open(&window_capabilities);
-        let options = options.with_frame(frame);
+        let options = options.frame(frame);
         let snapshot = owner.displays().snapshot().ok();
         let placement = PlacementDisplay::choose(snapshot.as_ref(), options.display);
         let plan = OpenPlan::new(

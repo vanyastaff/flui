@@ -1,11 +1,12 @@
 //! Owner-thread affinity — the runtime floor under ADR-0039's capability model.
 //!
 //! Native platform backends (`AppKit`, Win32) own an event loop whose OS
-//! objects are thread-affine, yet the `Platform` trait is `Send + Sync` with
-//! `&self` methods — nothing stops a worker thread from calling `open_window`
-//! on macOS, which is undefined-behavior-class misuse of `AppKit`. The full
-//! fix is the `!Send` `OwnerPlatform` capability (ADR-0039); this module is
-//! the runtime backstop beneath it: a recordable owner identity plus a debug
+//! objects are thread-affine: a worker thread calling `open_window` on macOS
+//! is undefined-behavior-class misuse of `AppKit`. The types keep a worker
+//! thread out — the `!Send` `OwnerPlatform` capability (ADR-0039) and a
+//! `Platform` without thread bounds (ADR-0327) — and this module is the
+//! runtime backstop beneath them, for host state that still crosses threads
+//! until its owner-local step: a recordable owner identity plus a debug
 //! assertion backends place at the entry of their affine operations.
 //!
 //! It lives in `flui-foundation` — not `flui-native` — so its behavior is

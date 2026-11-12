@@ -871,7 +871,7 @@ async fn fetch_over_http(url: Arc<str>, http: Option<Http>) -> Result<Vec<u8>> {
         source,
     };
     let response = http
-        .send(HttpRequest::get(url.as_ref()).with_body_limit(MAX_ENCODED_FILE_BYTES))
+        .send(HttpRequest::get(url.as_ref()).body_limit(MAX_ENCODED_FILE_BYTES))
         .await
         .map_err(failed)?;
     let status = response.status();

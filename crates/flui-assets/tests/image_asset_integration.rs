@@ -53,7 +53,7 @@ fn png_declaring(width: u32, height: u32) -> Vec<u8> {
 #[tokio::test]
 async fn decoded_pixels_are_bounded_before_decoding() {
     let huge = png_declaring(9_000, 9_000);
-    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+    let registry = AssetRegistryBuilder::new().default_capacity().build();
     fn refused_by_size<T>(result: &Result<T, flui_assets::AssetError>) -> bool {
         matches!(result, Err(flui_assets::AssetError::LoadFailed { reason, .. })
             if reason.contains("larger than"))
@@ -91,7 +91,7 @@ async fn decoded_pixels_are_bounded_before_decoding() {
 #[tokio::test]
 async fn image_asset_file_loads_a_committed_png_fixture_to_its_real_dimensions() {
     let registry = AssetRegistryBuilder::new()
-        .with_capacity(flui_assets::CacheCapacity::Entries(
+        .capacity(flui_assets::CacheCapacity::Entries(
             std::num::NonZeroU64::new(102).expect("nonzero test capacity"),
         ))
         .build();

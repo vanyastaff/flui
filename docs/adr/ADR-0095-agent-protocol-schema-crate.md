@@ -132,7 +132,7 @@ This settles ADR-0080's open item:
 
 - *The seam.* `flui-devtools` is an official package and cannot name `flui-runtime`, and
   `flui-app` cannot name an official package. So the application installs the server as a
-  `flui_view::dev_agent::DevAgentHook` on its configuration (`AppConfig::with_dev_agent`), which
+  `flui_view::dev_agent::DevAgentHook` on its configuration (`AppConfig::dev_agent`), which
   the package reaches through `flui-sdk`; the first event loop that starts with it takes it, attaches it and hands it
   an `AgentWindow` per window with content. `flui_runtime::dev_agent::DevAgentHost` holds the
   hook's containment for every host (the desktop, iOS and Android runners, and `flui-testing`'s headless

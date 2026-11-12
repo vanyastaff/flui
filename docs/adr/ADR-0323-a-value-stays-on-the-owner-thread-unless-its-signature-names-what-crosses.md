@@ -29,7 +29,7 @@ whether it stays. The measured state on `main` at `e13b7ce`:
 |---|---|
 | The public API of `flui` and `flui-sdk` has 240 listed `Send`/`Sync` positions on about 140 items; 15 name the kind of value that crosses | `tools/xtask/allowlists/send-positions.toml` |
 | The four kinds do not cover work handed to a worker, a committed scene, or an error's source, although such positions are listed and are right | `flui_view::background::Background::compute`, `flui_layer`'s `AnnotationValue`, `flui_app::app::launch::LaunchError` |
-| Widget signatures ask for `Send + Sync` on values no other thread reads | `Localizations::of<R: Send + Sync>() -> Arc<R>` (`crates/flui-widgets/src/localization/localizations.rs`), `RouteSettings::with_arguments<T: Any + Send + Sync>` (`navigator/route.rs`), `StreamBuilder<K, T, E>` (`crates/flui-view/src/element/stream_builder.rs`), `AnimatedList<K: Send + Sync>` |
+| Widget signatures ask for `Send + Sync` on values no other thread reads | `Localizations::of<R: Send + Sync>() -> Arc<R>` (`crates/flui-widgets/src/localization/localizations.rs`), `RouteSettings::arguments<T: Any + Send + Sync>` (`navigator/route.rs`), `StreamBuilder<K, T, E>` (`crates/flui-view/src/element/stream_builder.rs`), `AnimatedList<K: Send + Sync>` |
 | Owner-thread state sits behind locks | `Mutex`/`RwLock` outside tests in `flui-widgets/src/navigator/navigator.rs`, `flui-view/src/element/future_builder.rs`, `flui-scheduler/src/scheduler.rs`, `flui-interaction/src/pointer/resampler.rs`, `flui-view/src/owner/build_owner.rs`, `flui-interaction/src/gesture/arena/mod.rs` |
 
 A bound an application author meets in a widget signature is a promise the framework has to keep
@@ -149,7 +149,7 @@ positions keeps all of them unless a marker is named.
 | `panic-payload` | `flui_foundation::panic::{FirstPanic::{held, fold, record, into_payload}, discard_payload, payload_text}`, `flui_view::view::error::FrameworkError::from_panic`, `flui_platform::capability::owner::PendingCompletions::retire`, `…::runtime_local::RuntimeLocals::retire`, `flui_platform::text_store::lock::CommitGate::{defer_failure, take_failure}`, `…::owner_calls::OwnerCalls::{into_failure, keep}` |
 | `waker` | `flui_foundation::claim_slot::claim_slot`, `flui_foundation::testing::CountingWaker::{calling, retiring_waker}`, `flui_platform::surface_target::RedrawRequester` and its blanket impl, `flui_platform::capability::owner::OwnerPoster::new`, `flui_scheduler::scheduler::UpdateScheduler::set_on_frame_scheduled`, `flui_view::dev_reload::ReloadWake::new`, `flui_view::owner::build_owner::BuildOwner::set_on_build_scheduled`, `flui_rendering::pipeline::owner::PipelineOwner::set_on_need_visual_update`, `flui_hot_reload::dispatch::register_request_rebuild` |
 | `job` and `worker-result` | `flui_view::background::Background::{compute, io}`, `flui_app::app::lifecycle::{TaskSpawner::{spawn_compute, spawn_io, spawn_worker}, WorkerHandle, ServiceFuture, ServiceDefinition::new, CancellationSignal::cancelled, ServicePublisher, service_events}`, `flui_platform::executor::{ComputeJob, IoFuture, RoomFuture::new}`, `flui_platform::http::{HttpFuture, BodySource}`, `flui_platform::storage::StorageFuture`, `flui_platform::capability::owner::OwnerPoster::post`, `flui_platform::capability::completion::{CompletionSource::pending, Resolver}`, `flui_widgets::image::provider::{DecodeJob::{decode, read_then_decode}, ImageProvider::resolve_async}` and its two implementations |
-| `handle` | `flui_platform::executor::Executor`, `flui_runtime::execution::{HostComputePool, HostIoPool}`, `flui_platform::http::{HttpClient, HttpAuthority::of}`, `flui_platform::storage::Storage`, `flui_platform::surface_target::{SurfaceTarget, DisplayConnection}`, `flui_runtime::frame_failure::FrameFailureHandlerFactory::new`, `flui_runtime::input_tap::InputTapFactory::new`, `flui_view::dev_reload::DevReloadHook` and `flui_view::dev_agent::DevAgentHook` (`Send` only, until ADR-0311's factories carry it), `flui_app::app::config::AppConfig::with_memory_reclaim` (`Send` only), `flui_devtools::capture::Capture::{on_frame, on_frame_open}` (a tracing layer is shared by every thread that emits), `flui_hot_reload::dynlib::DynLib` |
+| `handle` | `flui_platform::executor::Executor`, `flui_runtime::execution::{HostComputePool, HostIoPool}`, `flui_platform::http::{HttpClient, HttpAuthority::of}`, `flui_platform::storage::Storage`, `flui_platform::surface_target::{SurfaceTarget, DisplayConnection}`, `flui_runtime::frame_failure::FrameFailureHandlerFactory::new`, `flui_runtime::input_tap::InputTapFactory::new`, `flui_view::dev_reload::DevReloadHook` and `flui_view::dev_agent::DevAgentHook` (`Send` only, until ADR-0311's factories carry it), `flui_app::app::config::AppConfig::memory_reclaim` (`Send` only), `flui_devtools::capture::Capture::{on_frame, on_frame_open}` (a tracing layer is shared by every thread that emits), `flui_hot_reload::dynlib::DynLib` |
 | `snapshot` | `flui_widgets::paint::annotated_region::AnnotatedRegion` and its `View` and `RenderView` impls |
 | `error` | `flui_app::app::launch::LaunchError::{Platform, Service}::source`, `flui_app::app::application_control::AppWindowError::{Mount, Native, Renderer, Show}::source` |
 
@@ -173,7 +173,7 @@ positions keeps all of them unless a marker is named.
 | `flui_platform::{data_transfer::DragTransport, drag::PlatformDragSource, haptics::PlatformHaptics, system_chrome::PlatformSystemChrome, text_input::PlatformTextInput}` | no thread supertrait: each is reached through a `PlatformWindow` on the owner thread |
 | `flui_app::app::close_request::CloseRequestHandler::new` | `impl Fn(&CloseRequest) -> CloseResponse + 'static`, held as `Rc`; the wrong-thread branch of its call goes with the bound |
 | `flui_app::app::direct::run_direct` | `impl FnMut(&mut SceneBuilder, f64, f64) + 'static` |
-| `flui_app::app::config::AppConfig::with_memory_reclaim` (`Sync`) | `impl ReclaimMemory + Send + 'static` |
+| `flui_app::app::config::AppConfig::memory_reclaim` (`Sync`) | `impl ReclaimMemory + Send + 'static` |
 | `flui_hot_reload::pipeline::PluginPipeline::mount` | `V: View + StatelessView + Clone + 'static` |
 | `flui_painting::typography::text_spans::InlineSpan::as_trait` | `&dyn InlineSpanTrait` |
 
@@ -197,7 +197,7 @@ are owed this, `build_owner.rs` last, since two other lines of work edit it.
   removal with its replacement written down.
 - Good, because a re-entry into owner state is a typed outcome or a `RefCell` panic at the site,
   not a deadlock.
-- Bad, because `Localizations::of`, `RouteSettings::with_arguments`, `ObjectKey::new` and the
+- Bad, because `Localizations::of`, `RouteSettings::arguments`, `ObjectKey::new` and the
   platform capability traits change their signatures, and every caller with them.
 - Bad, because an application that kept one value for both a widget and a worker now holds two:
   the `Rc` the widget reads and the owned copy the job takes.

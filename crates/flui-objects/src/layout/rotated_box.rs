@@ -31,7 +31,8 @@ use flui_foundation::geometry::{Matrix4, Offset, Size};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext,
     },
     parent_data::BoxParentData,
     traits::{PaintEffects, RenderBox},
@@ -254,7 +255,7 @@ impl RenderBox for RenderRotatedBox {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -269,7 +270,7 @@ impl RenderBox for RenderRotatedBox {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -284,7 +285,7 @@ impl RenderBox for RenderRotatedBox {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -299,7 +300,7 @@ impl RenderBox for RenderRotatedBox {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -314,7 +315,7 @@ impl RenderBox for RenderRotatedBox {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
             // Same answer as `perform_layout`'s childless branch: the turn
@@ -362,7 +363,7 @@ impl RenderBox for RenderRotatedBox {
         &self,
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 || self.is_vertical() {
             return Ok(None);

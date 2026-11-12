@@ -1,0 +1,29 @@
+# Every `with_` builder method of a description type (a view, `Application`, a
+# `…Config/Options/Settings/Request/Builder/Params/Spec`), written by
+# `cargo xtask builder-names --seed`. Such a method has the bare name (ADR-0325);
+# the list only shrinks: the scan fails on a builder it does not name and on an
+# entry that is no longer one.
+
+[[allow]]
+crate = "flui-interaction"
+type = "GestureSettings"
+method = "with_double_tap_timeout"
+reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"
+
+[[allow]]
+crate = "flui-interaction"
+type = "GestureSettings"
+method = "with_long_press_timeout"
+reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"
+
+[[allow]]
+crate = "flui-interaction"
+type = "GestureSettings"
+method = "with_position_smoothing"
+reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"
+
+[[allow]]
+crate = "flui-interaction"
+type = "GestureSettings"
+method = "with_velocity_estimator"
+reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"

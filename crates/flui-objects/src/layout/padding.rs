@@ -156,7 +156,7 @@ impl RenderBox for RenderPadding {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let deflated_height = (height - self.padding.vertical_total()).max(0.0);
         if ctx.child_count() == 0 {
@@ -168,7 +168,7 @@ impl RenderBox for RenderPadding {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let deflated_height = (height - self.padding.vertical_total()).max(0.0);
         if ctx.child_count() == 0 {
@@ -180,7 +180,7 @@ impl RenderBox for RenderPadding {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let deflated_width = (width - self.padding.horizontal_total()).max(0.0);
         if ctx.child_count() == 0 {
@@ -192,7 +192,7 @@ impl RenderBox for RenderPadding {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let deflated_width = (width - self.padding.horizontal_total()).max(0.0);
         if ctx.child_count() == 0 {
@@ -204,7 +204,7 @@ impl RenderBox for RenderPadding {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
             return Ok(constraints.constrain(Size::new(
@@ -224,7 +224,7 @@ impl RenderBox for RenderPadding {
         &self,
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
-        ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
             return Ok(None);

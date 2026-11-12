@@ -903,7 +903,7 @@ fn decoration_interior_fallbacks() {
     let empty = BoxDecoration::new();
     let mut replaced = overshot.clone();
     replaced.gradient.clone_from(&start.gradient);
-    let record = |decoration: &BoxDecoration<f64>, height| {
+    let record = |decoration: &BoxDecoration, height| {
         let mut canvas = flui_painting::Canvas::new();
         flui_painting::paint_box_decoration(
             &mut canvas,

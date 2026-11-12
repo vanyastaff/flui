@@ -13,7 +13,7 @@ fn font(name: &str) -> FontAsset {
 #[tokio::test]
 async fn trimming_drops_completed_entries_but_not_handles_already_given_out() {
     for level in [MemoryPressureLevel::Moderate, MemoryPressureLevel::Critical] {
-        let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+        let registry = AssetRegistryBuilder::new().default_capacity().build();
         let key = font("trimmed").key();
         let before = registry.load(font("trimmed")).await.expect("loads");
         assert!(registry.get::<FontAsset>(&key).await.is_some());

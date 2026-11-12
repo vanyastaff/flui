@@ -60,7 +60,10 @@ use flui_painting::paint::Clip;
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
+    context::{
+        BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext, BoxLayoutContext,
+        PaintContext,
+    },
     delegates::{FlowDelegate, FlowPaintingContext},
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
@@ -312,7 +315,7 @@ impl RenderBox for RenderFlow {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut BoxDryLayoutCtx<'_>,
+        _ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         // Children are never touched for dry layout either.
         Ok(self.get_size(constraints))
@@ -321,7 +324,7 @@ impl RenderBox for RenderFlow {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.intrinsic_width(height))
     }
@@ -329,7 +332,7 @@ impl RenderBox for RenderFlow {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.intrinsic_width(height))
     }
@@ -337,7 +340,7 @@ impl RenderBox for RenderFlow {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.intrinsic_height(width))
     }
@@ -345,7 +348,7 @@ impl RenderBox for RenderFlow {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.intrinsic_height(width))
     }
@@ -384,7 +387,7 @@ impl RenderBox for RenderFlow {
         transforms.get(child_slot).is_some_and(Option::is_some)
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         // The clip (when any) is reported through `paint_effects` above and
         // opened by the pipeline around this whole fragment; only the
         // delegate's per-child transform scopes are recorded here.

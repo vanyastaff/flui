@@ -59,9 +59,9 @@ fn main() -> Result<(), LaunchError> {
     };
 
     let config = AppConfig::new()
-        .with_title("FLUI Hot-Reload Counter")
-        .with_size(480, 320)
-        .with_dev_reload(WorkerReloadHook::new(worker_path));
+        .title("FLUI Hot-Reload Counter")
+        .size(480, 320)
+        .dev_reload(WorkerReloadHook::new(worker_path));
 
     Application::new().config(config).run(root)?;
 

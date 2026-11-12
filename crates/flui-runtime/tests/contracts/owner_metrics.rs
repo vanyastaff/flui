@@ -22,14 +22,14 @@ struct OpacityTarget(Rc<Cell<f64>>);
 
 impl StatelessView for OpacityTarget {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        flui_widgets::AnimatedOpacity::new(
-            self.0.get(),
-            flui_widgets::ColoredBox::new(flui_painting::styling::Color::rgb(255, 0, 0)),
-        )
-        .duration(std::time::Duration::from_secs(1))
-        .curve(flui_animation::SharedCurve::new(
-            flui_animation::curves::LINEAR,
-        ))
+        flui_widgets::AnimatedOpacity::new(self.0.get())
+            .child(flui_widgets::ColoredBox::new(
+                flui_painting::styling::Color::rgb(255, 0, 0),
+            ))
+            .duration(std::time::Duration::from_secs(1))
+            .curve(flui_animation::SharedCurve::new(
+                flui_animation::curves::LINEAR,
+            ))
     }
 }
 

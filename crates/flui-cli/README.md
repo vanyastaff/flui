@@ -416,6 +416,8 @@ worker_package = "my_app-logic"
 worker_lib = "my_app_logic"
 logic_watch = "logic/src"
 types_watch = "types/src"
+# The host feature `flui run` builds with, default features off.
+reload_feature = "reload"
 
 # Optional: the lowest release the app runs on, above FLUI's floor.
 [platforms.ios]

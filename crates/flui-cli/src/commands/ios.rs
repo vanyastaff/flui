@@ -202,18 +202,18 @@ pub(super) fn run(udid: &str, release: bool, profile: Option<&str>) -> CliResult
     let bundle = configured_bundle(&root)?;
     let floors = crate::config::project_floors(&root)?;
     let mut context = BuilderContextBuilder::new(root)
-        .with_floors(floors)
-        .with_platform(Platform::Ios {
+        .floors(floors)
+        .platform(Platform::Ios {
             targets: vec![simulator.triple.clone()],
         })
-        .with_target(BuildUnit::DefaultBinary)
-        .with_profile(if release || profile == Some("release") {
+        .target(BuildUnit::DefaultBinary)
+        .profile(if release || profile == Some("release") {
             Profile::Release
         } else {
             Profile::Debug
         });
     if let Some(bundle) = bundle {
-        context = context.with_bundle(bundle);
+        context = context.bundle(bundle);
     }
     let context = context.build();
     let runtime = tokio::runtime::Runtime::new().context("start build runtime")?;

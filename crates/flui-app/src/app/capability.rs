@@ -454,7 +454,7 @@ impl CapabilityProvider<StorageCapability> for HostStorageProvider {
             tracing::warn!(
                 "a widget asked for storage, but the application has no identifier: set \
                  `AppIdentity::with_app_id` (`flui build` does from flui.toml) or \
-                 `AppConfig::with_storage_dir`"
+                 `AppConfig::storage_dir`"
             );
         }
         Err(refusal)

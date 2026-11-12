@@ -18,21 +18,24 @@
 //! settled by the frame that superseded it; a detached slot's pending frame
 //! leaves with its presentation.
 //!
-//! The executor is inline: the owner runs its turn. One lock exists, each
-//! slot's inbox's, held only to swap values: nothing that can run user code
-//! (a destructor, the host's wake, a `tracing` event) runs under it.
+//! The executor is inline: the owner runs its turn. Two locks exist, each
+//! slot's inbox's and the device's record's, held only to swap values:
+//! nothing that can run user code (a destructor, the host's wake, a `tracing`
+//! event) runs under them.
 
 mod backend;
 mod command;
+mod device_health;
 mod inbox;
 mod sender;
 mod slot;
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use crossbeam_channel::{Receiver, bounded};
 use flui_foundation::{
     SurfaceGeneration,
+    clock::MonotonicClock,
     panic::{FirstPanic, discard_payload},
 };
 use flui_layer::{DamageRegion, FullReason, ResyncReason, SceneSnapshot};
@@ -42,12 +45,14 @@ pub use command::{
     ExecutorHealth, LIFECYCLE_CAPACITY, RasterCommand, RasterSendError, RasterVerdict, SendReceipt,
     SlotChange, SlotConfig, SlotSettlement, SlotTarget, SlotVisibility,
 };
+pub use device_health::DeviceHealth;
 pub use inbox::{SlotFailure, SlotPhase, SlotRecord};
 pub use sender::RasterSender;
 pub(crate) use slot::SlotMint;
 pub use slot::{SlotDomain, SlotId};
 
 use self::{
+    device_health::{DeviceRebuilds, FailedRebuild},
     inbox::{INLINE_DEPTH, SlotInbox},
     sender::{Lifecycle, Shared},
 };
@@ -81,6 +86,9 @@ struct ExecSlot {
     /// The size the backend last refused, so a size refused again on every
     /// turn or every send warns once.
     refused_size: Option<flui_foundation::geometry::DeviceSize>,
+    /// Whether the slot presents to a window's surface, which only its owner
+    /// can replace.
+    window: bool,
 }
 
 /// The raster executor: owns the backend and every slot, and renders them on
@@ -93,10 +101,18 @@ pub struct RasterExecutor<B: SlotBackend = crate::GpuContext> {
     shared: Arc<Shared>,
     /// The lifecycle queue; dropped once the executor stopped and drained it.
     lifecycle: Option<Receiver<Lifecycle>>,
-    /// The host's wake: called once a turn wrote a settlement, with no lock
-    /// held and contained. Owner-local, as the inline executor is; the
-    /// threaded placement asks `Send` of it at its spawn (ADR-0305 §11).
+    /// The host's wake: called once a turn wrote a settlement or moved the
+    /// device's health, with no lock held and contained. Owner-local, as the
+    /// inline executor is; the threaded placement asks `Send` of it at its
+    /// spawn (ADR-0305 §11).
     wake: Box<dyn Fn()>,
+    /// The time the device's rebuilds are paced on: the UI runtime's clock,
+    /// so a manual one walks the backoff without sleeping.
+    clock: Rc<dyn MonotonicClock>,
+    /// The clock's last answer, which a read that panics falls back to.
+    read_at: std::cell::Cell<web_time::Instant>,
+    /// The context's device rebuilds (ADR-0305 §8).
+    rebuilds: DeviceRebuilds,
     slots: Vec<Option<ExecSlot>>,
 }
 
@@ -104,6 +120,7 @@ impl<B: SlotBackend> std::fmt::Debug for RasterExecutor<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RasterExecutor")
             .field("health", &self.shared.health())
+            .field("device", &self.rebuilds.health())
             .field("slots", &self.slots.iter().flatten().count())
             .finish_non_exhaustive()
     }
@@ -112,9 +129,14 @@ impl<B: SlotBackend> std::fmt::Debug for RasterExecutor<B> {
 impl<B: SlotBackend> RasterExecutor<B> {
     /// An inline executor over `backend`, and the owner's sender for it.
     ///
-    /// `wake` is the host's: the executor calls it once a turn wrote a
-    /// settlement, with no lock held and contained.
-    pub fn new(backend: B, wake: impl Fn() + 'static) -> (Self, RasterSender) {
+    /// `clock` paces the rebuilds of a lost device; `wake` is the host's: the
+    /// executor calls it once a turn wrote a settlement or moved the device's
+    /// health, with no lock held and contained.
+    pub fn new(
+        backend: B,
+        clock: Rc<dyn MonotonicClock>,
+        wake: impl Fn() + 'static,
+    ) -> (Self, RasterSender) {
         let (lifecycle_tx, lifecycle) = bounded(LIFECYCLE_CAPACITY);
         let shared = Arc::new(Shared::new(lifecycle_tx));
         let sender = RasterSender::new(Arc::clone(&shared));
@@ -124,6 +146,9 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 shared,
                 lifecycle: Some(lifecycle),
                 wake: Box::new(wake),
+                read_at: std::cell::Cell::new(clock.now()),
+                clock,
+                rebuilds: DeviceRebuilds::default(),
                 slots: Vec::new(),
             },
             sender,
@@ -195,12 +220,20 @@ impl<B: SlotBackend> RasterExecutor<B> {
                     self.detach(slot, &inbox, &mut first);
                     0
                 }
+                Lifecycle::RetryDevice => {
+                    self.rebuilds.retry();
+                    0
+                }
             };
         }
+        let mut device_moved = self.recover_device(&mut first);
         for index in 0..self.slots.len() {
             outcome.settled += self.service(index, &mut first);
         }
-        if outcome.settled > 0 {
+        // A loss this turn's own frames met is published now, so the owner
+        // knows a rebuild is due without waiting for another turn to see it.
+        device_moved |= self.note_loss(&mut first);
+        if outcome.settled > 0 || device_moved {
             first.contain(|| (self.wake)());
         }
         first.resume();
@@ -229,7 +262,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
                     first.contain(move || drop(target));
                     inbox
                 }
-                Lifecycle::Release { .. } => continue,
+                Lifecycle::Release { .. } | Lifecycle::RetryDevice => continue,
                 Lifecycle::Restore { surface, .. } => {
                     first.contain(move || drop(surface));
                     continue;
@@ -264,6 +297,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
         first: &mut FirstPanic,
     ) -> usize {
         let mut caught = FirstPanic::new();
+        let window = matches!(target, SlotTarget::Window(_));
         let failure = match caught.contain(|| self.backend.attach(slot, target, config)) {
             Some(Ok(())) => None,
             Some(Err(error)) => Some(SlotFailure::Refused(error)),
@@ -286,6 +320,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 visibility: config.visibility,
                 full_redraw: Some(FullReason::FirstFrame),
                 refused_size: None,
+                window,
             });
             return 0;
         };
@@ -306,6 +341,176 @@ impl<B: SlotBackend> RasterExecutor<B> {
         retire(frame, extra, first);
         report(Report::Refused { slot, cause }, first);
         settled
+    }
+
+    /// See whether the device is lost, rebuild it when its backoff allows,
+    /// and publish its health; answers whether the health moved, so the
+    /// owner is woken to read it.
+    ///
+    /// A rebuild that fails or panics counts toward the backoff. Its error
+    /// waits in the device's record for the owner; its panic is resumed at
+    /// the end of the turn, once every slot is served.
+    fn recover_device(&mut self, first: &mut FirstPanic) -> bool {
+        let before = self.rebuilds.health();
+        let lost = self.backend.device_lost();
+        let mut rebuilt = false;
+        if lost {
+            self.rebuilds.note_lost();
+        } else if before.is_lost() {
+            // The backend renders again without a rebuild this executor saw
+            // succeed (one that panicked after its device was in place): the
+            // slots are restamped all the same, so "healthy after lost" always
+            // means every frame stamped before the loss is refused.
+            self.rebuilds.recovered();
+            self.after_rebuild(Vec::new(), first);
+            rebuilt = true;
+        }
+        let mut failure = None;
+        let mut failed = None;
+        let mut now = self.now(first);
+        if self.rebuilds.due(now) {
+            if self.backend.rebuilds_inline() {
+                let attempt = first.contain(|| self.backend.rebuild_device());
+                // A failed attempt blocked for as long as the driver took: the
+                // next waits out its backoff from when this one ended. The
+                // clock is read only once the attempt's own answer is committed.
+                match attempt {
+                    Some(Ok(refused)) => {
+                        self.rebuilds.recovered();
+                        // The slots are restamped before the health says the
+                        // device renders, so no owner stamps a frame for the
+                        // old device after reading it.
+                        self.after_rebuild(refused, first);
+                        rebuilt = true;
+                    }
+                    Some(Err(error)) => {
+                        failure = Some(error);
+                        now = self.now(first);
+                        failed = Some(self.rebuilds.record_failure(now));
+                    }
+                    None => {
+                        now = self.now(first);
+                        failed = Some(self.rebuilds.record_failure(now));
+                    }
+                }
+                if failed.is_some() && !self.backend.device_lost() {
+                    // The rebuild failed with its new device in place: the
+                    // slots are restamped before this turn serves them, as
+                    // after a rebuild that succeeded.
+                    self.rebuilds.recovered();
+                    self.after_rebuild(Vec::new(), first);
+                    rebuilt = true;
+                }
+            } else {
+                // No attempt can succeed here: give up at once instead of
+                // walking the backoff (the web, ADR-0305 §8).
+                self.rebuilds.give_up();
+                failure = Some(EngineError::GpuUnavailable);
+                failed = Some(FailedRebuild::GivenUp);
+            }
+        }
+        let after = self.publish_device(failure, now, first);
+        if lost && !before.is_lost() {
+            report(Report::DeviceLost, first);
+        }
+        if let Some(failed) = failed {
+            report(Report::RebuildFailed(failed, after), first);
+        } else if rebuilt {
+            report(Report::DeviceRebuilt, first);
+        }
+        before != after || rebuilt
+    }
+
+    /// See whether this turn's frames lost the device while it was published
+    /// healthy, and publish the loss with its rebuild due now; answers
+    /// whether it did.
+    fn note_loss(&mut self, first: &mut FirstPanic) -> bool {
+        if self.rebuilds.health().is_lost() || !self.backend.device_lost() {
+            return false;
+        }
+        self.rebuilds.note_lost();
+        let now = self.now(first);
+        let _published = self.publish_device(None, now, first);
+        report(Report::DeviceLost, first);
+        true
+    }
+
+    /// The clock's time, read under containment: the clock is the owner's
+    /// code, and a read that panics answers the last time it gave, so the
+    /// turn still publishes the device's record and wakes its owner before
+    /// the panic is resumed.
+    fn now(&self, first: &mut FirstPanic) -> web_time::Instant {
+        match first.contain(|| self.clock.now()) {
+            Some(now) => {
+                self.read_at.set(now);
+                now
+            }
+            None => self.read_at.get(),
+        }
+    }
+
+    /// Write the device's health, its next attempt and a new failure into the
+    /// record the owner reads; answers the health written. The failure it
+    /// replaces is dropped outside the lock and contained.
+    fn publish_device(
+        &mut self,
+        failure: Option<EngineError>,
+        now: web_time::Instant,
+        first: &mut FirstPanic,
+    ) -> DeviceHealth {
+        let health = self.rebuilds.health();
+        let replaced = {
+            let mut record = self.shared.device();
+            record.health = health;
+            record.next_attempt_at = self.rebuilds.next_attempt_at(now);
+            failure.and_then(|error| record.failure.replace(error))
+        };
+        if let Some(error) = replaced {
+            let _dropped = first.contain(move || drop(error));
+        }
+        health
+    }
+
+    /// The device was rebuilt: every frame stamped before it is refused on
+    /// its generation, as after a restore, and every slot redraws in full. A
+    /// size still pending or refused keeps its barrier: only a size the
+    /// backend accepts authorises frames laid out for it. A slot the new
+    /// device cannot present to waits for a new surface from its owner.
+    fn after_rebuild(&mut self, refused: Vec<(SlotId, EngineError)>, first: &mut FirstPanic) {
+        for slot in self.slots.iter_mut().flatten() {
+            slot.owe_full(RESET);
+            let mut state = slot.inbox.lock();
+            // A window slot that never had a size has no frame to refuse.
+            if state.generation != SurfaceGeneration::ZERO {
+                state.generation = state.generation.next();
+                if state.size.is_none() && slot.refused_size.is_none() {
+                    slot.applied = state.generation;
+                }
+            }
+        }
+        for (id, error) in refused {
+            let Some(slot) = self.attached(id) else {
+                let _dropped = first.contain(move || drop(error));
+                continue;
+            };
+            let extra = {
+                let mut state = slot.inbox.lock();
+                // A window slot dropped its surface or failed to configure it,
+                // and the owner makes another; a slot over the new device's
+                // limit, window or offscreen, waits for a size that fits.
+                state.wants_surface |=
+                    slot.window && !matches!(error, EngineError::InvalidTargetSize { .. });
+                state.hold_failure(SlotFailure::Refused(error))
+            };
+            retire(None, extra, first);
+            report(
+                Report::Refused {
+                    slot: id,
+                    cause: "refused",
+                },
+                first,
+            );
+        }
     }
 
     fn detach(&mut self, slot: SlotId, inbox: &SlotInbox, first: &mut FirstPanic) {
@@ -643,6 +848,12 @@ enum Report {
         error: EngineError,
         verdict: RasterVerdict,
     },
+    /// The device was seen lost.
+    DeviceLost,
+    /// A rebuild failed; the device's record holds why.
+    RebuildFailed(FailedRebuild, DeviceHealth),
+    /// The device renders again.
+    DeviceRebuilt,
 }
 
 /// What kind of failure a slot's record holds, for a report that must not
@@ -686,6 +897,28 @@ fn report(report: Report, first: &mut FirstPanic) {
             error,
             verdict,
         } => tracing::warn!(?slot, %error, ?verdict, "raster executor: frame failed"),
+        Report::DeviceLost => tracing::error!("raster executor: GPU device lost; rebuilding it"),
+        // The first failure, the backoff reaching its ceiling and the
+        // rebuild given up are errors; a failure between them is not news.
+        Report::RebuildFailed(FailedRebuild::First, health) => tracing::error!(
+            ?health,
+            "raster executor: GPU device rebuild failed; retrying with backoff; the sender holds why"
+        ),
+        Report::RebuildFailed(FailedRebuild::ReachedCap, health) => tracing::error!(
+            ?health,
+            "raster executor: GPU device rebuild still failing at the backoff's ceiling"
+        ),
+        Report::RebuildFailed(FailedRebuild::Again { wait }, health) => tracing::debug!(
+            ?health,
+            ?wait,
+            "raster executor: GPU device rebuild failed; retrying"
+        ),
+        Report::RebuildFailed(FailedRebuild::GivenUp, health) => tracing::error!(
+            ?health,
+            "raster executor: GPU device rebuild given up; the slots render again once the \
+             owner sends RetryDevice"
+        ),
+        Report::DeviceRebuilt => tracing::warn!("raster executor: GPU device rebuilt"),
     });
 }
 

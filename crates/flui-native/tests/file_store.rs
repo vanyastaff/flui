@@ -1,4 +1,4 @@
-//! The file store behind `AppConfig::with_storage_dir`: directories created on the
+//! The file store behind `AppConfig::storage_dir`: directories created on the
 //! first write, values replaced atomically, inaccessible paths reported apart
 //! from corrupt ones, a write based on a stale version refused, and a value
 //! copied aside under a name no value can have. Native only: on wasm32 the

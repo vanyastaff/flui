@@ -65,10 +65,10 @@ use crate::{
     protocol::{
         BoxProtocol, Protocol, SliverProtocol,
         box_protocol::{
-            ActualBaselineChildCallback, BoxLayoutCtxErased, LayoutChildCallback,
+            ActualBaselineChildCallback, ErasedBoxLayoutContext, LayoutChildCallback,
             SliverLayoutChildCallback,
         },
-        sliver_protocol::{SliverChildLayoutCallback, SliverLayoutCtxErased},
+        sliver_protocol::{ErasedSliverLayoutContext, SliverChildLayoutCallback},
     },
     storage::{ErasedConstraints, RenderEntry, RenderNode, RenderTree},
 };
@@ -824,7 +824,7 @@ unsafe fn build_intrinsic_child_parent_data(
 ///
 /// Reborrows one [`NodePtr`] from the pre-acquired [`SubtreeArena`]
 /// at each call level, drives `perform_layout_raw` against a typed
-/// `BoxLayoutCtx`, and recurses via a closure that captures
+/// `RawBoxLayoutContext`, and recurses via a closure that captures
 /// `&SubtreeArena` — no `Send`/`Sync` needed; the closure runs to
 /// completion on the constructing thread, synchronously, and never
 /// crosses a thread boundary. Distinct call levels reborrow distinct
@@ -1224,7 +1224,7 @@ unsafe fn layout_subtree_borrowed_impl(
             // Capture `&SubtreeArena` for the recursive callback. Neither the
             // capture nor the closure it is captured into needs `Send`/`Sync`:
             // `LayoutChildCallback` carries no such bound (dropped along with
-            // `BoxLayoutCtxErased`'s own `Send + Sync` supertrait), and
+            // `ErasedBoxLayoutContext`'s own `Send + Sync` supertrait), and
             // `SubtreeArena` is `!Send + !Sync` regardless (pinned by
             // `assert_not_impl_any!` in this module's tests) — this closure
             // simply never crosses a thread boundary; it runs to completion on
@@ -1420,13 +1420,13 @@ unsafe fn layout_subtree_borrowed_impl(
 
             // Construct the driver-side PARENT-DATA-ERASED context.  The walk
             // cannot name the parent's ParentData type (it holds dyn nodes);
-            // the typed blanket bridge reconstructs BoxLayoutCtx<T::Arity,
+            // the typed blanket bridge reconstructs RawBoxLayoutContext<T::Arity,
             // T::ParentData> per node and lazily creates each child's
             // parent-data slot with T::ParentData::default() — Flex/Stack and
             // every other non-BoxParentData parent now lay out in production
             // (the former ChildState<BoxParentData> hardcode panicked them in
             // from_erased).
-            let mut ctx = crate::protocol::ErasedBoxLayoutCtx::new(
+            let mut ctx = crate::protocol::DriverBoxLayoutContext::new(
                 constraints,
                 &mut child_states,
                 &child_ids,
@@ -1439,7 +1439,7 @@ unsafe fn layout_subtree_borrowed_impl(
                 )),
                 arena.text.source(id),
             );
-            let erased: &mut dyn BoxLayoutCtxErased = &mut ctx;
+            let erased: &mut dyn ErasedBoxLayoutContext = &mut ctx;
 
             // Invoke perform_layout_raw wrapped in catch_unwind (symmetric
             // with the leaf path's layout_leaf_only — third-party panics
@@ -1749,7 +1749,7 @@ unsafe fn box_intrinsic_query_borrowed_impl(
                 }
             }
         };
-        let mut query = crate::context::BoxIntrinsicsCtx::new(
+        let mut query = crate::context::BoxIntrinsicsContext::new(
             child_ids.len(),
             &child_parent_data_refs,
             &mut child_query,
@@ -1919,7 +1919,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // `RenderSliverList`) starts with zero attached children and must
     // call `request_child_build` on its first frame to schedule
     // initial requests via `pending_child_requests`.  The
-    // `ErasedSliverLayoutCtx` path is always taken for slivers so that the
+    // `DriverSliverLayoutContext` path is always taken for slivers so that the
     // context's `pending_child_requests` / `pending_retain_bands` sinks are
     // wired in — even when the current child list is empty.
     let mut child_states = arena.buffers.sliver_children.checkout(child_ids.len());
@@ -2140,7 +2140,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         let box_intrinsic_cb_ref: crate::protocol::sliver_protocol::BoxChildIntrinsicCallback<'_> =
             &box_intrinsic_cb_owned;
 
-        let mut ctx = crate::protocol::ErasedSliverLayoutCtx::new(
+        let mut ctx = crate::protocol::DriverSliverLayoutContext::new(
             constraints,
             &mut child_states,
             &child_ids,
@@ -2154,7 +2154,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                 &arena.degradation_events,
             )),
         );
-        let erased: &mut dyn SliverLayoutCtxErased = &mut ctx;
+        let erased: &mut dyn ErasedSliverLayoutContext = &mut ctx;
 
         let debug_name = entry.render_object().debug_name();
         // See the box twin: the delta over this call is this subtree's.
@@ -2309,7 +2309,7 @@ mod tests {
             ) -> crate::RenderResult<Size> {
                 Ok(Size::new(10.0, 10.0))
             }
-            fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {}
+            fn paint(&self, _ctx: &mut crate::context::PaintContext<'_, Leaf>) {}
         }
 
         #[test]

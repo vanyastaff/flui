@@ -38,7 +38,7 @@ fn a_window_opens_with_balanced_input_unless_it_asks_for_low_latency() {
     );
     assert_eq!(
         WindowOptions::default()
-            .with_input_latency(InputLatency::Low)
+            .input_latency(InputLatency::Low)
             .input_latency,
         InputLatency::Low
     );

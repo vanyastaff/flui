@@ -27,7 +27,7 @@ fn an_app_launched_without_an_endpoint_starts_no_agent() {
     let opened = Rc::new(RefCell::new(false));
     let ready = Rc::clone(&opened);
     let application = Application::new()
-        .config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed))
+        .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed))
         .on_ready(move |_| {
             open_secondary_window(AppConfig::new(), WindowPolicy::Isolated)
                 .expect("an isolated window opens on the headless platform");

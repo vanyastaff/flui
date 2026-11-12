@@ -133,9 +133,9 @@ impl Scene {
 
     fn key(&mut self, key: Key, code: Code, modifiers: Modifiers) -> bool {
         let event: KeyEvent = KeyEventBuilder::new(code)
-            .with_key(key)
-            .with_state(KeyState::Down)
-            .with_modifiers(modifiers)
+            .key(key)
+            .state(KeyState::Down)
+            .modifiers(modifiers)
             .build();
         let handled = self
             .laid

@@ -1982,7 +1982,7 @@ graph LR
   `ScreenPeriods::period_of` период не строит, а выбирает, чей опубликованный период несёт экран
   (первого живого окна), — это учёт iOS, он остался, а строитель `link_rate` (`LinkPeriod::observe`)
   переведён; `refresh_estimate` остался как оценщик (усечённое среднее, выбросы), ушли его построение
-  периода и полоса. headless (`DisplaySpec::with_refresh_period(Duration)`) остался на
+  периода и полоса. headless (`DisplaySpec::refresh_period(Duration)`) остался на
   `TryFrom<Duration>`: это период, заданный тестом, не отчёт ОС. Расхождений копии не имели — все шли
   через конструкторы контракта; полоса браузера считается теперь в секундах, а не в миллисекундах
   (округление расходится лишь на самой границе, тесты её не задевают); 1 Гц из `dmDisplayFrequency`
@@ -2215,8 +2215,8 @@ graph LR
   10), `Unrecognized { request, value }`, `NotOnThisHost` (значение контракта новее хоста);
   переименованы `set_snap_layouts`, `snap_layouts`, `set_blur_behind`, `dark_mode`; удалён дубль
   `set_caption_color`. (6) Слот — структура: `WindowOptions::os_options: OsWindowOptions { windows:
-  Option<Win32WindowOptions> }` (`with_os_options`, `OsWindowOptions::with_windows`), то же имя в
-  `AppConfig` (`os_options`, `with_os_options`); опции двух ОС больше не вытесняют друг друга.
+  Option<Win32WindowOptions> }` (`os_options`, `OsWindowOptions::windows`), то же имя в
+  `AppConfig` (`os_options`); опции двух ОС больше не вытесняют друг друга.
   (7) Типы — в публичном модуле контракта `flui_platform::os_options`, не в корне; все
   `#[non_exhaustive]`. ADR-0089 даёт уровень крейту, не модулю (§1: обещание следует за элементом),
   так что они Stable; выбрана наименее обязывающая форма — `#[non_exhaustive]`, построение от
@@ -2840,7 +2840,7 @@ graph LR
   ставится, когда появляется представление; ввод до маршрута отвечает результатом по умолчанию,
   возможности сохраняются и отдаются маршруту ввода; `closed`, услышанное раньше маршрута, запускает
   его сразу; маршрут, который запаниковал, остаётся. `RouteBook` в `AppRuntime` по `WindowId`.
-  Регистраций колбэков нет. `AppConfig::input_latency` (`with_input_latency`) попадает в
+  Регистраций колбэков нет. `AppConfig::input_latency` попадает в
   `WindowOptions`, их читают Web и Android. **Тестовый набор.** `flui_testing::window_handler` —
   `RecordingWindowHandler` (`react_to_*`, `calls`, `inputs`, `count`) и `HandlerCall`; открытия
   окон в тестах всех крейтов перешли на него.
@@ -4199,7 +4199,7 @@ graph LR
   новейшего; без протокола — `NotOnThisDevice`. X11 — `NotYetOnThisHost` (`_ICC_PROFILE` не
   читается). Web: `matchMedia` по `(dynamic-range: high)` и `(color-gamut: p3|rec2020)`,
   слушатели `change` помечают снимок устаревшим; запас — `NotOnThisPlatform`, цвет прочих
-  экранов списка — `NotOnThisPlatform`. Headless: `DisplaySpec::with_color` (по умолчанию SDR
+  экранов списка — `NotOnThisPlatform`. Headless: `DisplaySpec::color` (по умолчанию SDR
   sRGB) и `DisplayChange::Color`. **Движок.** `flui-engine` зависит от `flui-platform` (R → C,
   разрешено); `Renderer::with_surface_color(target, color, display: Option<DisplayColor>)`,
   `ResolvedSurfaceColor::resolve(.., display, hdr, ..)`: при цвете платформы диапазон и запас

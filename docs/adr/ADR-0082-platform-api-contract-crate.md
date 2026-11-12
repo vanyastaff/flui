@@ -9,6 +9,7 @@
   step of §4 (the registrations become handler methods) and for the raw-handle impls on
   `dyn PlatformWindow` and `dyn HostWindow` in §3. The remaining sections are
   unchanged.
+  Also [ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) for §4 only (an owner-only callback is kept sound by the compiler, not by `OwnerSlot`'s refusal).
 - **Amended by:** [ADR-0213](ADR-0213-input-capabilities.md) (§5: `PlatformCapabilities` is
   replaced by handle-derived availability and `InputCapabilities`)
 - **Amends:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §2,
@@ -116,7 +117,7 @@ release, not in the move.
 ### 2. `flui-native` keeps the backends and the host-facing surface
 
 `flui-native` becomes tier H, kind `internal`. It keeps every OS backend, the host-facing
-`Platform` trait, `OwnerPlatform`, `SharedPlatform`, `PlatformProxy`, `PendingWindow`/`WindowOpen`,
+`Platform` trait, `OwnerPlatform`, `PlatformProxy`, `PendingWindow`/`WindowOpen`,
 the prompt APIs, and, until the amendment below, `PlatformAccessibility` (its signatures are
 AccessKit's). Only composition
 roots depend on it: `flui-app`, and tests that drive a backend.
@@ -221,11 +222,12 @@ A trait signature cannot differ per backend, so the order is:
 2. one change drops `+ Send` from the signatures once every backend stores callbacks owner-only
    **and** registration is reachable only through types that prove the owner thread.
 
-The refusal in step 1 is what keeps step 2 sound. `Platform`, `PlatformWindow` and
-`SharedPlatform` are `Send + Sync` and their registrations take `&self`, so without it any thread
+While the host is `Send + Sync`, the refusal in step 1 is what keeps step 2 sound; once the host
+is owner-local ([ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) §1) the compiler keeps it sound and the refusal goes. `Platform` and `PlatformWindow`
+are `Send + Sync` and their registrations take `&self`, so without it any thread
 could hand over a closure that captures an `Rc` and have it run on the owner while the `Rc`'s
 other handle stays on the registering thread. Step 2 therefore also moves registration behind
-owner-proof types: the platform hooks (`on_quit`, `on_window_event`, …) from `SharedPlatform` to
+owner-proof types: the platform hooks (`on_quit`, `on_window_event`, …) onto
 `OwnerPlatform`, and window callbacks through an owner-minted `!Send` registrar — for example
 `OwnerPlatform::window(&self, &Arc<dyn PlatformWindow>) -> OwnerWindow<'_>`, which fits the
 host-side window subtrait of §3's second change.
@@ -257,7 +259,9 @@ the callback dropped on the thread that made it, and a slot dropped elsewhere le
 the owner thread's exit. Win32 keeps it in its `WindowContext` as above. With every backend
 owner-only for this callback, `PlatformWindow::on_input` takes `Box<dyn FnMut(PlatformInput) ->
 DispatchEventResult>` without `Send` (ADR-0207 §8); the refusal, not a registrar type, is what
-keeps that sound, and the other `on_*` callbacks keep `+ Send` until their slots move the same way.
+keeps that sound while the window is `Send`, and the other `on_*` callbacks keep `+ Send` until their
+slots move the same way. Once the window is owner-local (ADR-0327 §1), a callback is reached only
+through an `Rc` window, the compiler refuses the off-owner registration, and `OwnerSlot` is deleted.
 `an_input_callback_registered_off_the_owner_thread_is_refused` and the `ui_pass` fixture
 `input_callback_captures_rc` pin it. Only the headless and Win32 paths ran on the implementing
 host; AppKit, UIKit, Android and web are type-checked (UIKit not even that without `clang`).

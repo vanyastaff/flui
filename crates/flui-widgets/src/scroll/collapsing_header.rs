@@ -635,9 +635,9 @@ fn header_box(
     let content = SizedBox::new(f64::INFINITY, model.extent()).child(
         ClipRect::new().child(
             OverflowBox::new()
-                .with_alignment(Alignment::TOP_CENTER)
-                .with_min_height(extents.expanded)
-                .with_max_height(extents.expanded)
+                .alignment(Alignment::TOP_CENTER)
+                .min_height(extents.expanded)
+                .max_height(extents.expanded)
                 .child(header.clone()),
         ),
     );

@@ -5,7 +5,7 @@
 //! letting the panic abort the frame.
 //!
 //! E3 + H3: the element no longer owns its children, and component
-//! builds require the live tree-backed `BuildCtx` supplied by
+//! builds require the live tree-backed `LiveBuildContext` supplied by
 //! `BuildOwner::build_scope`. These tests drive the production
 //! mount/schedule/build-scope path and inspect the materialized slab
 //! children created by the id-reconciler.

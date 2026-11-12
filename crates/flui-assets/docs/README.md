@@ -15,7 +15,7 @@ use flui_assets::{AssetRegistryBuilder, FontAsset};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+    let registry = AssetRegistryBuilder::new().default_capacity().build();
     let font = registry.load(FontAsset::file("font.ttf")).await?;
     println!("Loaded bytes: {}", font.bytes.len());
     Ok(())

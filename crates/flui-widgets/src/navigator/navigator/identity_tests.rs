@@ -83,7 +83,7 @@ fn assert_named_refusal_changes_nothing(operation: &str) {
     let before = navigator.route_ids();
     let departing = navigator.current().expect("departing route");
     RouteId::leave_process_identities(0);
-    let request = RouteSettings::named("/next").with_arguments(payload());
+    let request = RouteSettings::named("/next").arguments(payload());
     let result = (operation == "pop_and_push_named_with").then(payload);
     armed.store(true, Ordering::SeqCst);
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match operation {

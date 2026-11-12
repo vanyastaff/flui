@@ -14,7 +14,7 @@ use flui_painting::{
 };
 
 /// A text context over a fresh collection, lent to each measurement.
-fn text_cx() -> flui_painting::TextContext {
+fn text_ctx() -> flui_painting::TextContext {
     flui_painting::TextContext::new(&flui_painting::FontCollection::new())
 }
 
@@ -62,7 +62,7 @@ pub(crate) fn example_bidirectional_text() {
         .with_text_direction(TextDirection::Ltr); // Base direction LTR
 
     painter
-        .layout(&mut text_cx(), 0.0, 400.0)
+        .layout(&mut text_ctx(), 0.0, 400.0)
         .expect("valid fixture lays out");
 
     // Should layout successfully

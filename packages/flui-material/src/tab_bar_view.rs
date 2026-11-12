@@ -62,7 +62,7 @@ use flui_sdk::animation::MotionPolicy;
 use flui_sdk::foundation::ChangeNotifier;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
-use flui_sdk::view::{BoxedView, EventCx};
+use flui_sdk::view::{BoxedView, EventContext};
 use flui_sdk::widgets::{Action, ActionOutcome, Actions, PageController, PageView};
 
 use crate::tab_controller::{
@@ -279,7 +279,7 @@ impl ViewState<TabBarView> for TabBarViewState {
             .into_view()
             .boxed();
         }
-        Actions::new(PageView::new(pages, controller.step_alternatives()).controller(pager))
+        Actions::new(PageView::new(controller.step_alternatives(), pages).controller(pager))
             .action(TabStepAction { controller })
     }
 }
@@ -299,7 +299,7 @@ impl Action<TabStep> for TabStepAction {
         Some(self.controller.step_changes())
     }
 
-    fn invoke(&self, _ctx: &mut EventCx<'_>, step: &TabStep) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, step: &TabStep) -> ActionOutcome {
         let Some(target) = self.target(*step) else {
             return ActionOutcome::NotPerformed;
         };

@@ -33,8 +33,8 @@ use flui_rendering::{
     RenderUpdateImpact,
     constraints::BoxConstraints,
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
-        PaintCx,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext, PaintContext,
     },
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
@@ -214,7 +214,7 @@ impl RenderBox for RenderAnimatedInset {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let (horizontal, vertical) = Self::totals(&self.rect());
         let child = if ctx.child_count() == 0 {
@@ -228,7 +228,7 @@ impl RenderBox for RenderAnimatedInset {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let (horizontal, vertical) = Self::totals(&self.rect());
         let child = if ctx.child_count() == 0 {
@@ -242,7 +242,7 @@ impl RenderBox for RenderAnimatedInset {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let (horizontal, vertical) = Self::totals(&self.rect());
         let child = if ctx.child_count() == 0 {
@@ -256,7 +256,7 @@ impl RenderBox for RenderAnimatedInset {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let (horizontal, vertical) = Self::totals(&self.rect());
         let child = if ctx.child_count() == 0 {
@@ -270,7 +270,7 @@ impl RenderBox for RenderAnimatedInset {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         let rect = self.rect();
         let child = if ctx.child_count() == 0 {
@@ -285,7 +285,7 @@ impl RenderBox for RenderAnimatedInset {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
             return Ok(None);
@@ -296,10 +296,10 @@ impl RenderBox for RenderAnimatedInset {
             .map(|child_baseline| saturate(child_baseline + rect.top)))
     }
 
-    // Closure is load-bearing: `PaintCx::paint_child` is ambiguous as a method path
+    // Closure is load-bearing: `PaintContext::paint_child` is ambiguous as a method path
     // (Single's zero-arg overload vs the indexed variant on other arities).
     #[expect(clippy::redundant_closure_for_method_calls)]
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         if !self.has_child {
             return;
         }

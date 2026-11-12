@@ -75,8 +75,8 @@ and `Mailbox` needs a pacer FLUI does not have.
    host's, as before. It travels with the vsync in `HostInput::Frame`, so a recorded session
    replays the same bound.
 4. **Frame latency is a typed setting.** `FrameLatency` is `#[non_exhaustive]`: `Balanced` is two
-   frames in flight, the measured default, and `Low` is one. `AppConfig::frame_latency` carries it
-   (`with_frame_latency`), each runner applies it to its renderer after creation, and the renderer
+   frames in flight, the measured default, and `Low` is one. `AppConfig::frame_latency` sets it,
+   each runner applies it to its renderer after creation, and the renderer
    stores it and supplies it at every `Surface::configure`, including the recovery and recreation
    paths. A per-window override is a call on that window's renderer. A backend that ignores the
    bound (wgpu on GL) keeps ignoring it.

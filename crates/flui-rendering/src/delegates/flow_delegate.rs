@@ -9,7 +9,7 @@ use flui_foundation::Listenable;
 use flui_foundation::Variable;
 use flui_foundation::geometry::{Matrix4, Size};
 
-use crate::{constraints::BoxConstraints, context::PaintCx};
+use crate::{constraints::BoxConstraints, context::PaintContext};
 
 /// A delegate that provides custom flow layout behavior.
 ///
@@ -155,7 +155,7 @@ pub trait FlowDelegate: Debug {
 /// Context for flow painting operations.
 ///
 /// Carries a delegate's [`FlowDelegate::paint_children`] call through to
-/// either a live [`PaintCx`] (real paint — [`Self::for_paint`]) or a
+/// either a live [`PaintContext`] (real paint — [`Self::for_paint`]) or a
 /// recording-only replay with nowhere to draw ([`Self::for_replay`]). Both
 /// modes record the same `(paint order, index -> transform)` data: paint's
 /// record is what `RenderFlow` hit-tests, and a replay answers semantics and
@@ -165,7 +165,7 @@ pub struct FlowPaintingContext<'ctx, 'cx> {
     child_sizes: &'ctx [Size],
     /// `Some` in paint mode (drives the real paint pipeline); `None`
     /// during a replay (recording only, nothing is drawn).
-    live: Option<&'ctx mut PaintCx<'cx, Variable>>,
+    live: Option<&'ctx mut PaintContext<'cx, Variable>>,
     /// Child indices in the order `paint_child` was called. Hit-testing walks
     /// this in reverse (top-most painted first).
     paint_order: &'ctx mut Vec<usize>,
@@ -180,7 +180,7 @@ pub struct FlowPaintingContext<'ctx, 'cx> {
 
 impl std::fmt::Debug for FlowPaintingContext<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `live` holds a &mut PaintCx (the live recording canvas); report
+        // `live` holds a &mut PaintContext (the live recording canvas); report
         // the replayable recording state instead.
         f.debug_struct("FlowPaintingContext")
             .field("size", &self.size)
@@ -194,13 +194,13 @@ impl std::fmt::Debug for FlowPaintingContext<'_, '_> {
 
 impl<'ctx, 'cx> FlowPaintingContext<'ctx, 'cx> {
     /// Builds a paint-mode context that forwards each [`Self::paint_child`]
-    /// call to the live `ctx` via [`PaintCx::with_transform`].
+    /// call to the live `ctx` via [`PaintContext::with_transform`].
     ///
     /// Reads `ctx.size()` before moving `ctx` into `live` — ordering
     /// matters, since `size()` borrows `ctx` immutably and `live` then
     /// takes it by unique reference.
     pub fn for_paint(
-        ctx: &'ctx mut PaintCx<'cx, Variable>,
+        ctx: &'ctx mut PaintContext<'cx, Variable>,
         child_sizes: &'ctx [Size],
         paint_order: &'ctx mut Vec<usize>,
         transforms: &'ctx mut Vec<Option<Matrix4>>,
@@ -219,7 +219,7 @@ impl<'ctx, 'cx> FlowPaintingContext<'ctx, 'cx> {
 
     /// Builds a replay-only context: records the same
     /// `(paint_order, transforms)` a real paint pass would have produced,
-    /// but draws nothing (there is no live [`PaintCx`] to draw into).
+    /// but draws nothing (there is no live [`PaintContext`] to draw into).
     pub fn for_replay(
         size: Size,
         child_sizes: &'ctx [Size],
@@ -259,7 +259,7 @@ impl<'ctx, 'cx> FlowPaintingContext<'ctx, 'cx> {
     /// Paints a child with the given transform.
     ///
     /// In paint mode ([`Self::for_paint`]), forwards to the live
-    /// [`PaintCx`] via [`PaintCx::with_transform`] so the transform
+    /// [`PaintContext`] via [`PaintContext::with_transform`] so the transform
     /// actually reaches the paint pipeline. In replay mode
     /// ([`Self::for_replay`]), only the bookkeeping below runs — nothing
     /// is drawn.

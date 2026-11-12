@@ -83,12 +83,12 @@ the registry stood in `crates/flui-view/src/capability/` in place of `flui-platf
   - `capability_erased` on the sealed trait plus the blanket `LifecycleContextExt` compiled.
     `cargo check --workspace --all-targets --all-features` is green, and the 136 sites are
     untouched (a grep counts 138; the extra 2 are doc lines).
-  - Only `ElementBuildContext` and `BuildCtx` implement the method.
+  - Only `ElementBuildContext` and `LiveBuildContext` implement the method.
   - A `compile_fail,E0599` doctest covers `ctx.capability::<Clipboard>()` on
     `&dyn BuildContext`.
   - A crate outside the workspace registered a capability and received it in `init_state`;
     without its plugin it got `NotRegistered`.
-  - 3 of 5 external tests fail when `BuildCtx::capability_erased` ignores the scope.
+  - 3 of 5 external tests fail when `LiveBuildContext::capability_erased` ignores the scope.
 - **Narrower than the success metric.**
   - The fixture depended on `flui-view`, `flui-native` and `flui-types`, not on
     `flui-platform` and `flui-sdk`.

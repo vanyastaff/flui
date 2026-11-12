@@ -39,7 +39,7 @@ impl Application {
 
     /// Run a resident application: one that starts without a window and
     /// lives until it quits, by its exit policy or an
-    /// [`AppHandle::quit`]. Each main window, opened by
+    /// [`AppHandle::request_quit`]. Each main window, opened by
     /// [`AppHandle::request_show_main_window`], mounts a fresh tree that
     /// `factory` builds on the owner thread; state that outlives a window
     /// belongs in the factory's captures, which may be `Rc`. Desktop only.
@@ -107,7 +107,7 @@ where
         self
     }
 
-    pub(crate) fn with_startup_window(mut self, startup: StartupWindow) -> Self {
+    pub(crate) fn startup_window(mut self, startup: StartupWindow) -> Self {
         self.startup = startup;
         self
     }

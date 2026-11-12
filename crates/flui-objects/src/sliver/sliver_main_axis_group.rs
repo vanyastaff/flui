@@ -30,7 +30,7 @@ use flui_foundation::inspect::{Fields, Inspect};
 
 use flui_rendering::{
     constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
-    context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
+    context::{PaintContext, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     traits::RenderSliver,
 };
@@ -247,7 +247,7 @@ impl RenderSliver for RenderSliverMainAxisGroup {
     /// already skips any sliver whose committed geometry is invisible
     /// (`pipeline/owner/paint.rs`), and the harness paint-cull test pins
     /// that contract for this group.
-    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         ctx.paint_children_reverse();
     }
 

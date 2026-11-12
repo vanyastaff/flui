@@ -22,11 +22,11 @@ fn rect100() -> Rect<f64> {
     Rect::from_ltrb(0.0, 0.0, 100.0, 50.0)
 }
 
-fn commands(decoration: &BoxDecoration<f64>) -> Vec<DrawOp> {
+fn commands(decoration: &BoxDecoration) -> Vec<DrawOp> {
     commands_in(rect100(), decoration)
 }
 
-fn commands_in(rect: Rect<f64>, decoration: &BoxDecoration<f64>) -> Vec<DrawOp> {
+fn commands_in(rect: Rect<f64>, decoration: &BoxDecoration) -> Vec<DrawOp> {
     let mut canvas = Canvas::new();
     paint_box_decoration(
         &mut canvas,

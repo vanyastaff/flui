@@ -101,7 +101,7 @@ use membership::Membership;
 
 mod writer;
 pub use writer::{
-    EventContextError, EventCx, EventError, EventOutcome, WriteTarget, Writer, WriterSource,
+    EventContext, EventContextError, EventError, EventOutcome, WriteTarget, Writer, WriterSource,
     callback, callback_ref, callback_with,
 };
 
@@ -1096,7 +1096,7 @@ impl<T: 'static> sealed::Sealed for Signal<T> {}
 /// against the graph that minted it (ADR-0085 §2), through a [`WriteTarget`]
 /// (ADR-0086).
 ///
-/// In an event callback the target is the `&mut EventCx<'_>` the callback
+/// In an event callback the target is the `&mut EventContext<'_>` the callback
 /// receives: `move |ctx| count.update(ctx, |n| *n += 1)`. Passing `ctx` reborrows
 /// it, so the same `ctx` serves several writes. `build` has no write target;
 /// [`Reactive`] still is one until ADR-0086 §8 step 3 removes it.

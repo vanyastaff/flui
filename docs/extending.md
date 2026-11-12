@@ -21,8 +21,31 @@ What adding each kind of thing takes. The rules behind the rows are in
 Every widget in `flui-widgets`, `flui-material` and `flui-cupertino` has the shape its Flutter
 counterpart has, adapted to Rust:
 
+- **Child.** A child that Flutter's constructor marks `required` is an argument of `new`; a child
+  that Flutter leaves nullable is set with `.child(…)`, and the widget lays out, paints and
+  hit-tests without one. A forgotten required child is then a compile error, and an optional one
+  is never asked for. A multi-child widget takes its children in `new`. The child or children
+  come last among the arguments of `new`, after the other required values (Flutter's
+  `sort_child_properties_last`). A widget with no Flutter counterpart asks the same question:
+  does it mean anything without its child?
+- **Callbacks.** A callback field and its builder method carry Flutter's name in snake case:
+  `on_pressed`, `on_long_press`, `on_changed`, `on_submitted`, `on_tap`. A callback Flutter
+  declares `required` but nullable (`VoidCallback? onPressed`) is a builder method; leaving it
+  out is Flutter's `null`.
 - **Contexts.** A context is bound as `ctx`, whatever its kind: `BuildContext`,
   `LifecycleContext`, `RenderObjectContext`, the layout, paint and hit-test contexts, a
   capability's `ProviderContext`, an event callback's context and a `poll`'s
   `std::task::Context`. A context type is named `…Context`. `cargo xtask context-names` holds the
-  binding ([ADR-0325](adr/ADR-0325-a-context-is-bound-as-ctx-and-its-type-is-named-context.md)).
+  binding ([ADR-0325](adr/ADR-0325-a-context-is-bound-as-ctx-and-a-description-builder-has-no-with.md)).
+- **Builder methods.** An optional parameter of the Flutter constructor is a builder method with
+  the parameter's bare name: `.alignment(…)`, never `.with_alignment(…)`. The same holds on every
+  description the author assembles and hands over (`Application`, `AppConfig`, a
+  `…Options/Settings/Request/Builder/Params/Spec`). A parameter a host reads back is a `pub` field
+  of a `#[non_exhaustive]` type, never a `get_x`. `with_x` stays where Flutter has `withX` or a
+  setter: a finished value (`Color::with_alpha`), a render object's chaining pair of `set_x`.
+  `cargo xtask builder-names` holds the rule ([ADR-0325](adr/ADR-0325-a-context-is-bound-as-ctx-and-a-description-builder-has-no-with.md)).
+- **Units.** A type generic over `Unit` defaults to logical pixels, `T: Unit = f64`, as `Size`,
+  `Rect` and `Offset` do, so a signature writes `BoxDecoration`, not `BoxDecoration<f64>`.
+
+`flui-widgets`' `child_form` table test holds a row for each widget whose form was ever in
+doubt; a widget that changes form changes its row.

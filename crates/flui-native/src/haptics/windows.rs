@@ -596,8 +596,8 @@ mod tests {
         let window = platform
             .open_window(
                 WindowOptions::default()
-                    .with_title("flui haptics")
-                    .with_size(Size::new(160.0, 120.0)),
+                    .title("flui haptics")
+                    .size(Size::new(160.0, 120.0)),
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("window");
@@ -642,8 +642,8 @@ mod tests {
             platform
                 .open_window(
                     WindowOptions::default()
-                        .with_title(title)
-                        .with_size(Size::new(160.0, 120.0)),
+                        .title(title)
+                        .size(Size::new(160.0, 120.0)),
                     flui_testing::window_handler::RecordingWindowHandler::new(),
                 )
                 .expect("window")

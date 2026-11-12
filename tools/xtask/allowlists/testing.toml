@@ -81,11 +81,6 @@ kind = "double"
 names = ["FakeWindow"]
 
 [[allow]]
-path = "crates/flui-hot-reload/src/pipeline.rs"
-kind = "double"
-names = ["ProbeRoot"]
-
-[[allow]]
 path = "crates/flui-interaction/src/gesture/arena/mod.rs"
 kind = "double"
 names = ["MockMember"]

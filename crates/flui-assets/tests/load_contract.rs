@@ -14,7 +14,7 @@ where
         let weak_name = Arc::downgrade(&name);
         let descriptor = make(name);
         let key = descriptor.key();
-        let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+        let registry = AssetRegistryBuilder::new().default_capacity().build();
         let first = registry
             .load(make(Arc::from("owned-name")))
             .await
@@ -161,8 +161,7 @@ fn retirement_commits_before_reentry(release_owner: bool) {
             .build()
             .expect("retirement runtime starts")
             .block_on(async {
-                let registry =
-                    Arc::new(AssetRegistryBuilder::new().with_default_capacity().build());
+                let registry = Arc::new(AssetRegistryBuilder::new().default_capacity().build());
                 let observed = Arc::new(AtomicUsize::new(0));
                 let data = registry
                     .load(ReentrantAsset {
@@ -239,7 +238,7 @@ impl Asset for OwnedAsset {
 
 #[tokio::test]
 async fn non_clone_data_retains_evicted_handles_across_reload() {
-    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+    let registry = AssetRegistryBuilder::new().default_capacity().build();
     let loads = Arc::new(AtomicUsize::new(0));
     let drops = Arc::new(AtomicUsize::new(0));
     let asset = || OwnedAsset {
@@ -333,7 +332,7 @@ fn font_sources_recover(invalid: Vec<u8>) {
 }
 
 async fn font_source_sequence(invalid: Vec<u8>) {
-    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+    let registry = AssetRegistryBuilder::new().default_capacity().build();
     let font_path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../flui-painting/assets/fonts/probe-sans-400.ttf"
@@ -399,7 +398,7 @@ impl Asset for CheckedAsset {
 
 #[tokio::test]
 async fn validation_precedes_loading_and_cache_hits_without_poisoning_accepted_data() {
-    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+    let registry = AssetRegistryBuilder::new().default_capacity().build();
     let loads = Arc::new(AtomicUsize::new(0));
     let asset = |accepted| CheckedAsset {
         accepted,
@@ -519,7 +518,7 @@ async fn poll_waiter<F: std::future::Future>(mut future: std::pin::Pin<&mut F>) 
 
 fn concurrent_cold_success_preserves_elected_publication() {
     run_cold_load_case(async {
-        let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+        let registry = AssetRegistryBuilder::new().default_capacity().build();
         let loads = Arc::new(AtomicUsize::new(0));
         let gate = Arc::new(tokio::sync::Semaphore::new(0));
         let asset = || GatedAsset {
@@ -553,7 +552,7 @@ fn concurrent_cold_success_preserves_elected_publication() {
 
 fn concurrent_cold_errors_are_independent_and_retryable() {
     run_cold_load_case(async {
-        let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+        let registry = AssetRegistryBuilder::new().default_capacity().build();
         let loads = Arc::new(AtomicUsize::new(0));
         let gate = Arc::new(tokio::sync::Semaphore::new(0));
         let asset = |fail| GatedAsset {
@@ -584,7 +583,7 @@ fn concurrent_cold_errors_are_independent_and_retryable() {
 
 fn canceling_the_initializer_preserves_overlapping_work() {
     run_cold_load_case(async {
-        let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+        let registry = AssetRegistryBuilder::new().default_capacity().build();
         let loads = Arc::new(AtomicUsize::new(0));
         let gate = Arc::new(tokio::sync::Semaphore::new(0));
         let asset = || GatedAsset {
@@ -746,8 +745,7 @@ fn custom_registry_reentry_case(spawned: bool) {
         .expect("two-thread runtime starts")
         .block_on(async {
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                let registry =
-                    Arc::new(AssetRegistryBuilder::new().with_default_capacity().build());
+                let registry = Arc::new(AssetRegistryBuilder::new().default_capacity().build());
                 let outer = registry
                     .load(RecursiveRegistryAsset {
                         registry: Arc::clone(&registry),
@@ -807,7 +805,7 @@ fn builtin_cold_loads_case<T: Asset<Error = AssetError>>(
                 let _ = release_rx.recv();
             });
             started_rx.await.expect("IO worker is occupied");
-            let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+            let registry = AssetRegistryBuilder::new().default_capacity().build();
             let key = asset().key();
             let mut first = Box::pin(registry.load(asset()));
             let mut second = Box::pin(registry.load(asset()));

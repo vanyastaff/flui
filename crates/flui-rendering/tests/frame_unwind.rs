@@ -107,7 +107,7 @@ impl flui_foundation::inspect::Inspect for Rigged {
 impl RenderObject<BoxProtocol> for Rigged {
     fn perform_layout_raw(
         &mut self,
-        _ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::LayoutCtxErased<'_>,
+        _ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::ErasedLayoutContext<'_>,
     ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
         if self.fails_layout.load(Ordering::SeqCst) {
             return Err(RenderError::contract_violation(

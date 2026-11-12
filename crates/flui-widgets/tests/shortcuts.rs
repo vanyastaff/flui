@@ -557,10 +557,10 @@ pub(crate) mod activation_tests {
     }
 }
 
-/// Shortcut callbacks and actions receive the key event's `EventCx`
+/// Shortcut callbacks and actions receive the key event's `EventContext`
 /// (ADR-0086): they write signals directly, and the signal's reader
 /// rebuilds on the next frame.
-pub(crate) mod event_cx_tests {
+pub(crate) mod event_context_tests {
     use std::rc::Rc;
 
     use flui_interaction::focus::FocusNode;
@@ -644,7 +644,7 @@ pub(crate) mod event_cx_tests {
         assert_eq!(probe.value(), Ok(0), "other state is intact");
     }
 
-    pub(crate) fn a_shortcut_action_writes_through_the_key_events_cx() {
+    pub(crate) fn a_shortcut_action_writes_through_the_key_events_ctx() {
         let node = FocusNode::with_debug_label("action-write-field");
         let probe_node = Rc::clone(&node);
         let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {

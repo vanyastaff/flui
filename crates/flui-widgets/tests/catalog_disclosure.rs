@@ -79,8 +79,8 @@ fn key(app: &LaidOut, key: Key) -> bool {
                 manager
                     .dispatch_key_event(
                         &KeyEventBuilder::new(Code::Unidentified)
-                            .with_key(key.clone())
-                            .with_state(state)
+                            .key(key.clone())
+                            .state(state)
                             .build(),
                     )
                     .is_handled()
@@ -759,10 +759,10 @@ fn geometry(constraints: BoxConstraints, ambient: TextDirection, explicit: Optio
         ExpansionState::Expanded,
         SizedBox::new(60.0, 24.0),
         OverflowBox::new()
-            .with_min_width(90.0)
-            .with_max_width(90.0)
-            .with_min_height(90.0)
-            .with_max_height(90.0)
+            .min_width(90.0)
+            .max_width(90.0)
+            .min_height(90.0)
+            .max_height(90.0)
             .child(
                 GestureDetector::new()
                     .on_tap(move |_| body_taps.set(body_taps.get() + 1))

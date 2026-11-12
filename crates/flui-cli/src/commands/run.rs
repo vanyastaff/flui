@@ -1325,11 +1325,11 @@ impl BrowserSession {
             .and_then(Session::driver_feature)
             .map(str::to_owned);
         let ctx = BuilderContextBuilder::new(self.root.clone())
-            .with_features(driver_feature)
-            .with_platform(Platform::Web {
+            .features(driver_feature)
+            .platform(Platform::Web {
                 target: "web".to_string(),
             })
-            .with_profile(if self.release {
+            .profile(if self.release {
                 Profile::Release
             } else {
                 Profile::Debug
@@ -1627,12 +1627,12 @@ impl AndroidSession {
             .and_then(Session::driver_feature)
             .map(str::to_owned);
         let ctx = BuilderContextBuilder::new(self.root.clone())
-            .with_floors(floors)
-            .with_features(driver_feature)
-            .with_platform(Platform::Android {
+            .floors(floors)
+            .features(driver_feature)
+            .platform(Platform::Android {
                 targets: vec![abi.to_owned()],
             })
-            .with_profile(if self.release {
+            .profile(if self.release {
                 Profile::Release
             } else {
                 Profile::Debug
@@ -1872,6 +1872,24 @@ impl WorkerHost {
             .map(|p| self.project.config_dir.join(p))
     }
 
+    /// The cargo flags that select the host's reload build: its
+    /// `reload_feature` with its default features off (which also turns off
+    /// the worker's, the two being built in one invocation). Empty for a host
+    /// whose default build installs the hook.
+    fn host_feature_args(&self) -> Vec<String> {
+        self.project
+            .config
+            .reload_feature
+            .as_ref()
+            .map_or_else(Vec::new, |feature| {
+                vec![
+                    "--no-default-features".to_owned(),
+                    "--features".to_owned(),
+                    format!("{}/{feature}", self.project.config.host_package),
+                ]
+            })
+    }
+
     /// Build worker + host in ONE invocation — see `run_cargo_build_packages`.
     fn build_both(&self) -> bool {
         timed_build(|| {
@@ -1883,6 +1901,7 @@ impl WorkerHost {
                 self.profile.as_deref(),
                 self.verbose,
                 &self.floor_env,
+                &self.host_feature_args(),
             )
         })
     }
@@ -1902,6 +1921,7 @@ impl WorkerHost {
             self.profile.as_deref(),
             self.verbose,
             &self.floor_env,
+            &self.host_feature_args(),
         )
     }
 }
@@ -2174,9 +2194,11 @@ fn spawn_host_package(
     profile: Option<&str>,
     verbose: bool,
     floor_env: &[(&'static str, String)],
+    feature_args: &[String],
 ) -> CliResult<AppChild> {
     let mut cmd = Command::new("cargo");
     cmd.args(["run", "-p", package]);
+    cmd.args(feature_args);
     cmd.envs(floor_env.iter().map(|(name, value)| (*name, value)));
 
     if let Some(prof) = profile {
@@ -2212,11 +2234,16 @@ fn spawn_host_package(
 /// failure that made `flui run` unusable whenever host and worker were built
 /// separately. Passing every `-p` flag to one `cargo build` makes cargo unify
 /// once, so both binaries link one instance and the `TypeId`s agree.
+///
+/// `feature_args` are the host's feature flags (`WorkerHost::host_feature_args`);
+/// `spawn_host_package` passes the same ones, so `cargo run` finds the host built
+/// and does not rebuild it with another feature set.
 fn run_cargo_build_packages(
     packages: &[&str],
     profile: Option<&str>,
     verbose: bool,
     floor_env: &[(&'static str, String)],
+    feature_args: &[String],
 ) -> bool {
     let mut cmd = Command::new("cargo");
     cmd.arg("build");
@@ -2224,6 +2251,7 @@ fn run_cargo_build_packages(
     for package in packages {
         cmd.args(["-p", package]);
     }
+    cmd.args(feature_args);
 
     if let Some(prof) = profile {
         cmd.args(["--profile", prof]);
@@ -2475,8 +2503,8 @@ fn ensure_flui_project() -> CliResult<Project> {
 ///
 /// Watches the scene crate's `src/` directory for changes and rebuilds/pushes
 /// the scene plugin `.so` to the device without restarting the app.
-/// A host app that installs `flui::hot_reload::ScenePluginHook` with
-/// `AppConfig::with_dev_reload` detects the new `.so` via mtime polling and
+/// A host app that installs `flui_hot_reload::ScenePluginHook` with
+/// `AppConfig::dev_reload` detects the new `.so` via mtime polling and
 /// reloads it; the Android runner warns when the library is on the device but
 /// no hook is installed.
 pub(crate) fn execute_scene(
@@ -2497,7 +2525,7 @@ pub(crate) fn execute_scene(
         style(mode).cyan()
     ))?;
     ui::info(
-        "The app loads the plugin only if it installs `flui::hot_reload::ScenePluginHook`          with `AppConfig::with_dev_reload`",
+        "The app loads the plugin only if it installs `flui_hot_reload::ScenePluginHook`          with `AppConfig::dev_reload`",
     )?;
 
     let workspace_root = std::env::current_dir()?;
@@ -2615,6 +2643,36 @@ pub(crate) fn execute_scene(
 mod tests {
     use super::env;
 
+    /// `flui run` builds a host that names a `reload_feature` with that
+    /// feature and its default features off, and passes nothing for one that
+    /// does not, which keeps a project written before the key building as it
+    /// did.
+    #[test]
+    fn worker_host_builds_the_reload_feature_it_is_told() {
+        let host = |reload_feature: Option<&str>| super::WorkerHost {
+            project: super::WorkerHotReloadProject {
+                config: crate::config::HotReloadConfig {
+                    host_package: "app-host".to_owned(),
+                    worker_package: "app-logic".to_owned(),
+                    worker_lib: "app_logic".to_owned(),
+                    logic_watch: "app-logic/src".to_owned(),
+                    types_watch: None,
+                    reload_feature: reload_feature.map(str::to_owned),
+                },
+                config_dir: std::path::PathBuf::from("."),
+                workspace_root: std::path::PathBuf::from("."),
+            },
+            profile: None,
+            verbose: false,
+            floor_env: Vec::new(),
+        };
+        assert_eq!(
+            host(Some("reload")).host_feature_args(),
+            ["--no-default-features", "--features", "app-host/reload"]
+        );
+        assert_eq!(host(None).host_feature_args(), Vec::<String>::new());
+    }
+
     /// Set in the child run of `worker_path_follows_cargos_target_dir`: the
     /// fixture project it builds.
     const WORKER_FIXTURE: &str = "FLUI_WORKER_FIXTURE_ROOT";
@@ -2630,7 +2688,7 @@ mod tests {
         if let Some(root) = std::env::var_os(WORKER_FIXTURE) {
             let root = std::path::PathBuf::from(root);
             assert!(
-                super::run_cargo_build_packages(&["worker"], Some("dev"), false, &[]),
+                super::run_cargo_build_packages(&["worker"], Some("dev"), false, &[], &[]),
                 "cargo build of the fixture failed"
             );
             let path = super::worker_dylib_path(&root, "worker", Some("dev")).expect("worker path");

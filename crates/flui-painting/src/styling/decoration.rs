@@ -145,7 +145,7 @@ pub trait Decoration: std::fmt::Debug {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
-pub struct BoxDecoration<T: Unit> {
+pub struct BoxDecoration<T: Unit = f64> {
     /// The color to fill the box with.
     pub color: Option<Color>,
 

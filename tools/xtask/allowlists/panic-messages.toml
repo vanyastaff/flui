@@ -49,7 +49,7 @@ path = "crates/flui-foundation/src/notifier_generic.rs"
 count = 1
 
 [[allow]]
-path = "crates/flui-hot-reload/src/driver.rs"
+path = "packages/flui-hot-reload/src/driver.rs"
 count = 1
 
 [[allow]]
@@ -59,10 +59,6 @@ count = 1
 [[allow]]
 path = "crates/flui-native/src/owner/apple/macos/content_view.rs"
 count = 2
-
-[[allow]]
-path = "crates/flui-native/src/task.rs"
-count = 1
 
 [[allow]]
 path = "crates/flui-native/src/window/apple/macos/delegate.rs"

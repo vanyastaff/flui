@@ -29,7 +29,7 @@ The semantics owner validates incoming payloads against its current range
 when it resolves the request, and the request is invoked as soon as it resolves.
 
 `Slider` and `Disclosure` are controlled widgets: events propose changes through
-`EventCx`; the parent commits them by supplying a new value or expansion state.
+`EventContext`; the parent commits them by supplying a new value or expansion state.
 Their public types are available through the existing SDK widget module.
 Focus belongs to the mounted lifecycle-acquired node. After a reentrant focus
 request, input rechecks attachment and writer authority before proposing.

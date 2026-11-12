@@ -3,7 +3,7 @@
 ## Type-state configuration
 
 `AssetRegistryBuilder<NoCapacity>` cannot build a registry until the caller
-selects capacity or a complete cache configuration. `with_default_capacity`
+selects capacity or a complete cache configuration. `default_capacity`
 selects 10,240 completed entries per asset type. Explicit capacity separates
 disabled retention from a positive count:
 
@@ -12,15 +12,15 @@ use flui_assets::{AssetRegistryBuilder, CacheCapacity};
 use std::num::NonZeroU64;
 
 let registry = AssetRegistryBuilder::new()
-    .with_capacity(CacheCapacity::Entries(NonZeroU64::new(128).expect("nonzero entry limit")))
+    .capacity(CacheCapacity::Entries(NonZeroU64::new(128).expect("nonzero entry limit")))
     .build();
 
 let uncached = AssetRegistryBuilder::new()
-    .with_capacity(CacheCapacity::Disabled)
+    .capacity(CacheCapacity::Disabled)
     .build();
 ```
 
-`with_cache_config` supplies `AssetCacheConfig`, including independently validated
+`cache_config` supplies `AssetCacheConfig`, including independently validated
 lifetime and idle expiration. Capacity transitions preserve configured expiration
 and any host runtime or HTTP policy. The type-state transition requires an
 explicit policy; it does not claim a memory budget.

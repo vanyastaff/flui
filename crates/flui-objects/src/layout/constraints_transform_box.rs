@@ -40,8 +40,8 @@ use flui_painting::paint::Clip;
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
-        PaintCx,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext, PaintContext,
     },
     parent_data::BoxParentData,
     traits::{RenderBox, TextBaseline},
@@ -223,11 +223,11 @@ impl RenderBox for RenderConstraintsTransformBox {
     /// Paints the child, clipping to this box's own bounds when the child
     /// overflowed at the last layout and `clip_behavior` is not `Clip::None`.
     /// There is no debug overflow indicator otherwise (see module doc).
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         if self.has_visual_overflow && self.clip_behavior != Clip::None {
             let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
             let clip_behavior = self.clip_behavior;
-            ctx.with_clip_rect(bounds, clip_behavior, PaintCx::paint_children_in_order);
+            ctx.with_clip_rect(bounds, clip_behavior, PaintContext::paint_children_in_order);
         } else {
             ctx.paint_children_in_order();
         }
@@ -246,7 +246,7 @@ impl RenderBox for RenderConstraintsTransformBox {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -259,7 +259,7 @@ impl RenderBox for RenderConstraintsTransformBox {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -272,7 +272,7 @@ impl RenderBox for RenderConstraintsTransformBox {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -285,7 +285,7 @@ impl RenderBox for RenderConstraintsTransformBox {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -301,7 +301,7 @@ impl RenderBox for RenderConstraintsTransformBox {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
             return Ok(constraints.smallest());
@@ -315,7 +315,7 @@ impl RenderBox for RenderConstraintsTransformBox {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
             return Ok(None);

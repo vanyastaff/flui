@@ -152,6 +152,7 @@ impl Inbox {
     fn view(&self, axis: Axis) -> RefreshIndicator {
         let refreshes = Rc::clone(&self.refreshes);
         RefreshIndicator::new(
+            alternatives(),
             SingleChildScrollView::new()
                 .controller(self.list.clone())
                 .scroll_direction(axis)
@@ -159,7 +160,6 @@ impl Inbox {
                     builds: Rc::clone(&self.builds),
                     axis,
                 }),
-            alternatives(),
         )
         .axis(axis)
         .controller(self.refresh.clone())
@@ -760,8 +760,8 @@ pub(crate) fn a_first_command_without_the_refresh_intent_is_reported() {
     let ((), log) = flui_testing::log_capture::capture(|| {
         let _laid = crate::common::lay_out(
             RefreshIndicator::new(
-                SingleChildScrollView::new().child(SizedBox::new(200.0, 1000.0)),
                 alternatives,
+                SingleChildScrollView::new().child(SizedBox::new(200.0, 1000.0)),
             ),
             tight(300.0, 300.0),
         );

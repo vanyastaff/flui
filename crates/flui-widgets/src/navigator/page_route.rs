@@ -165,7 +165,7 @@ macro_rules! delegate_modal_route {
         impl<T: 'static> fmt::Debug for $ty<T> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.debug_struct(stringify!($ty))
-                    .field("name", &self.modal.settings().name())
+                    .field("name", &self.modal.settings().name.as_deref())
                     .finish_non_exhaustive()
             }
         }

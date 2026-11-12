@@ -19,7 +19,7 @@ use super::{AppConfig, capability::AppCapabilities};
 ///
 /// ```rust,ignore
 /// Application::new()
-///     .config(AppConfig::new().with_title("My App"))
+///     .config(AppConfig::new().title("My App"))
 ///     .plugin(MyPlugin)
 ///     .run(MyRoot)?;
 /// ```

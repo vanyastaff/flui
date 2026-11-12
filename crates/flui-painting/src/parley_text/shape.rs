@@ -1241,7 +1241,7 @@ impl TextContext {
 
         // Families are resolved against the collection before the builder
         // borrows it (`resolve_family_name`).
-        let collection = &mut self.font_cx.collection;
+        let collection = &mut self.font_ctx.collection;
         let (default_family, default_family_name) = family(collection, None);
         let default_properties = paragraph.default_style.map_or_default(|style| {
             properties(collection, style, None, paragraph.font_weight_adjustment)
@@ -1316,8 +1316,8 @@ impl TextContext {
         // device grid once, when it is placed (`(baseline * scale).round()`);
         // `tests/parley_metrics_oracle.rs` pins the agreement.
         let mut builder = self
-            .layout_cx
-            .ranged_builder(&mut self.font_cx, &breaks, 1.0, false);
+            .layout_ctx
+            .ranged_builder(&mut self.font_ctx, &breaks, 1.0, false);
         builder.push_default(default_family);
         builder.push_default(StyleProperty::FontSize(paragraph.font_size));
         if let Some(weight) = adjusted_weight(

@@ -145,7 +145,7 @@ tokio = { workspace = true, features = ["macros"] }
 # Only for the env-var contract test in `commands/run.rs`; never in the
 # `cargo install` graph. No `version`: a path-only dev-dependency is dropped
 # from the published manifest, so the CLI publishes without the framework.
-flui-hot-reload = { path = "../flui-hot-reload" }
+flui-hot-reload = { path = "../../packages/flui-hot-reload" }
 # Only for the test holding `app_id::AppId` to `flui_log::AppId`'s grammar; path-only, so
 # dropped from the published manifest like the line above.
 flui-log = { path = "../flui-log" }

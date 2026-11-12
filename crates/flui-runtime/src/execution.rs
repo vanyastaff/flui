@@ -29,7 +29,7 @@
 //! crate's only allowed normal dependent is `flui-app`, checked by
 //! `cargo xtask workspace`. An embedded host
 //! that already runs its own executors injects them through
-//! [`HostExecutors`] (`AppConfig::with_executors`); the default pools are
+//! [`HostExecutors`] (`AppConfig::executors`); the default pools are
 //! then **never constructed**, so FLUI and the host cannot oversubscribe the
 //! machine with two full-core pools.
 //!
@@ -99,7 +99,7 @@ pub trait HostIoPool: Send + Sync {
 }
 
 /// The host-injection seam: an embedded host's own executors, passed via
-/// `AppConfig::with_executors`.
+/// `AppConfig::executors`.
 ///
 /// When present, FLUI routes all background work through these pools and
 /// **never constructs its default pools** — the mechanism by which FLUI
@@ -627,6 +627,33 @@ impl ExecutionServices {
         !matches!(self.backend, Backend::Host(_))
     }
 
+    /// The IO runtime the native host runs its long-lived sources on (XIM,
+    /// IBus, logind, the settings portal), starting it on first use, so a
+    /// process runs one IO runtime (ADR-0327 §3). Its IO and time drivers
+    /// are enabled.
+    ///
+    /// `Ok(None)` with host-injected pools: FLUI runs no runtime then, and
+    /// the host keeps its own.
+    ///
+    /// The host spawns on the handle directly, outside the IO lane's
+    /// admission window: its sources are not jobs, and each ends when its
+    /// owner drops it or when [`Self::shutdown`] drops the runtime's tasks.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::ShuttingDown`] once [`Self::shutdown`] has begun and
+    /// [`SpawnError::Unavailable`] when the OS refuses to start the pool.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn io_runtime(&self) -> Result<Option<tokio::runtime::Handle>, SpawnError> {
+        if !self.lifecycle.is_accepting() {
+            return Err(SpawnError::ShuttingDown);
+        }
+        match &self.backend {
+            Backend::Host(_) => Ok(None),
+            Backend::Default(pools) => pools.io_handle().map(Some),
+        }
+    }
+
     /// Spawn an **asynchronous compute** job (see the module doc's
     /// work-class model). Fire-and-forget: result delivery is the caller's
     /// business.
@@ -990,7 +1017,7 @@ impl DeterministicExecutors {
     }
 
     /// The [`HostExecutors`] bundle routing both work classes to this
-    /// executor — pass it to `AppConfig::with_executors`.
+    /// executor — pass it to `AppConfig::executors`.
     #[must_use]
     pub fn host_executors(&self) -> HostExecutors {
         HostExecutors::new(Arc::new(self.clone()), Arc::new(self.clone()))

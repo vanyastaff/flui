@@ -61,6 +61,13 @@ impl Align {
         self
     }
 
+    /// Hands over an optional child as it is, for a widget that wraps this
+    /// one and keeps its own child slot.
+    pub(crate) fn child_slot(mut self, child: Child) -> Self {
+        self.child = child;
+        self
+    }
+
     /// Resolve the geometry against the ambient [`Directionality`]. Only the
     /// directional arm reads it, so an absolute alignment registers no
     /// `Directionality` dependency and never rebuilds on a direction change.

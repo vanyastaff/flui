@@ -474,8 +474,7 @@ pub(crate) fn sliver_fade_keeps_geometry_and_retargets_paint_and_semantics() {
     let view = |opacity: Rc<dyn Animation<f64>>| {
         Viewport::new(
             flui_rendering::view::ScrollPosition::fixed(0.0),
-            (SliverFadeTransition::new(
-                opacity,
+            (SliverFadeTransition::new(opacity).sliver(
                 SliverToBoxAdapter::new().child(
                     Semantics::new()
                         .container(true)
@@ -1376,7 +1375,7 @@ pub(crate) fn the_assistive_cursor_entering_and_leaving_a_subtree_reaches_its_ha
     }
 }
 
-/// An action handler receives the dispatch's `EventCx`: its signal write
+/// An action handler receives the dispatch's `EventContext`: its signal write
 /// lands, and the signal's reader rebuilds on the next frame.
 pub(crate) fn an_action_handler_writes_a_signal_and_rebuilds_its_reader() {
     let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
@@ -1955,15 +1954,15 @@ pub(crate) fn animated_slide_publishes_bounds_at_its_current_sample() {
             )
             .animate(scalar),
         );
-        let slide = SlideTransition::new(
-            position,
-            Semantics::new()
-                .container(true)
-                .role(SemanticsRole::Button)
-                .label("Moving control")
-                .child(SizedBox::new(40.0, 40.0)),
-        )
-        .text_direction(direction);
+        let slide = SlideTransition::new(position)
+            .child(
+                Semantics::new()
+                    .container(true)
+                    .role(SemanticsRole::Button)
+                    .label("Moving control")
+                    .child(SizedBox::new(40.0, 40.0)),
+            )
+            .text_direction(direction);
         // The nested boundary is the partial pass's anchor. Its unchanged
         // ancestors still contribute translation and scale to every graft.
         let (content, x, y, sx, sy) = if anchored {
@@ -2052,9 +2051,13 @@ pub(crate) fn animated_scale_and_rotation_publish_clipped_bounds() {
             .label("Projected control")
             .child(SizedBox::new(40.0, 20.0));
         let transition = if rotation {
-            RotationTransition::new(Rc::new(Tween::new(0.0, 0.5).animate(scalar)), child).boxed()
+            RotationTransition::new(Rc::new(Tween::new(0.0, 0.5).animate(scalar)))
+                .child(child)
+                .boxed()
         } else {
-            ScaleTransition::new(Rc::new(Tween::new(1.0, 2.0).animate(scalar)), child).boxed()
+            ScaleTransition::new(Rc::new(Tween::new(1.0, 2.0).animate(scalar)))
+                .child(child)
+                .boxed()
         };
         let content = if clipped {
             ClipRect::new().child(transition).boxed()

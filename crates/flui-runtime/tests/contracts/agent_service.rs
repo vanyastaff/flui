@@ -495,7 +495,7 @@ fn input_a_connection_holds_is_let_go_when_it_goes() {
     let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let log = |name: &'static str| {
         let seen = Arc::clone(&seen);
-        move |_: &mut flui_view::EventCx<'_>, _: flui_interaction::PointerDispatch<'_>| {
+        move |_: &mut flui_view::EventContext<'_>, _: flui_interaction::PointerDispatch<'_>| {
             seen.lock().push(name);
         }
     };

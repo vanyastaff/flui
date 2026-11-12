@@ -2,7 +2,7 @@
 //!
 //! On Android the system loads the application's `cdylib` and calls the
 //! `android_main` the attribute writes with the `AndroidApp` it starts the
-//! application with. [`android`] hands that `AndroidApp` to the run on this
+//! application with. `android` hands that `AndroidApp` to the run on this
 //! thread and calls the application's entry function, whose
 //! [`Application::run`](crate::Application::run) takes it. On every other
 //! target the attribute adds nothing, and this module has nothing.

@@ -40,7 +40,8 @@ use flui_painting::typography::TextDirection;
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext,
     },
     parent_data::StackParentData,
     traits::{RenderBox, TextBaseline},
@@ -435,10 +436,10 @@ impl RenderStack {
     /// Intrinsics use the same sizing contributors as ordinary layout.
     /// IndexedStack installs BoxParentData, so all its children participate.
     fn max_child_intrinsic(
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
         extent: f64,
         mut query: impl FnMut(
-            &mut BoxIntrinsicsCtx<'_>,
+            &mut BoxIntrinsicsContext<'_>,
             usize,
             f64,
         ) -> flui_rendering::RenderResult<f64>,
@@ -546,7 +547,7 @@ impl RenderBox for RenderStack {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         // Build specs via the erased parent-data accessor: same gate as
         // perform_layout so positioned vs non-positioned classification
@@ -567,7 +568,7 @@ impl RenderBox for RenderStack {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Self::max_child_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_min_intrinsic_width(i, extent)
@@ -585,7 +586,7 @@ impl RenderBox for RenderStack {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         let specs: Vec<_> = (0..ctx.child_count())
             .map(|i| {
@@ -619,7 +620,7 @@ impl RenderBox for RenderStack {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Self::max_child_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_max_intrinsic_width(i, extent)
@@ -629,7 +630,7 @@ impl RenderBox for RenderStack {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Self::max_child_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_min_intrinsic_height(i, extent)
@@ -639,14 +640,14 @@ impl RenderBox for RenderStack {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Self::max_child_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_max_intrinsic_height(i, extent)
         })
     }
 
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Variable>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Variable>) {
         // Clip when overflow happens AND the user asked for clipping.
         // The clip must cover the CHILDREN, so it goes through a clip
         // layer scope (canvas clips are run-local and never extend
@@ -829,7 +830,7 @@ impl RenderIndexedStack {
 
     fn build_specs_from_dry_layout_ctx(
         &self,
-        ctx: &BoxDryLayoutCtx<'_>,
+        ctx: &BoxDryLayoutContext<'_>,
     ) -> Vec<Option<PositionedSpec>> {
         let mut specs = Vec::with_capacity(ctx.child_count());
         for i in 0..ctx.child_count() {
@@ -843,7 +844,7 @@ impl RenderIndexedStack {
 
     fn build_specs_from_dry_baseline_ctx(
         &self,
-        ctx: &BoxDryBaselineCtx<'_>,
+        ctx: &BoxDryBaselineContext<'_>,
     ) -> Vec<Option<PositionedSpec>> {
         let mut specs = Vec::with_capacity(ctx.child_count());
         for i in 0..ctx.child_count() {
@@ -938,7 +939,7 @@ impl RenderBox for RenderIndexedStack {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         let specs = self.build_specs_from_dry_layout_ctx(ctx);
         self.stack
@@ -949,7 +950,7 @@ impl RenderBox for RenderIndexedStack {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         RenderStack::max_child_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_min_intrinsic_width(i, extent)
@@ -959,7 +960,7 @@ impl RenderBox for RenderIndexedStack {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         RenderStack::max_child_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_max_intrinsic_width(i, extent)
@@ -969,7 +970,7 @@ impl RenderBox for RenderIndexedStack {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         RenderStack::max_child_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_min_intrinsic_height(i, extent)
@@ -979,7 +980,7 @@ impl RenderBox for RenderIndexedStack {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         RenderStack::max_child_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_max_intrinsic_height(i, extent)
@@ -990,7 +991,7 @@ impl RenderBox for RenderIndexedStack {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         let child_count = ctx.child_count();
         let Some(displayed_index) = self.displayed_index(child_count) else {
@@ -1029,14 +1030,15 @@ impl RenderBox for RenderIndexedStack {
         Ok(self.reported_baselines[baseline_kind_index(baseline)])
     }
 
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Variable>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Variable>) {
         let Some(index) = self.displayed_index(self.stack.child_count) else {
             return;
         };
 
-        let paint_displayed_child = |ctx: &mut flui_rendering::context::PaintCx<'_, Variable>| {
-            ctx.paint_child(index);
-        };
+        let paint_displayed_child =
+            |ctx: &mut flui_rendering::context::PaintContext<'_, Variable>| {
+                ctx.paint_child(index);
+            };
 
         if self.stack.has_visual_overflow && self.stack.clip_behavior != Clip::None {
             let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());

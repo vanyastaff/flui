@@ -418,7 +418,7 @@ impl DrawerHandle {
 }
 
 /// Signature for [`DrawerController::on_open_changed`].
-type DrawerCallback = Rc<dyn Fn(&mut EventCx<'_>, bool)>;
+type DrawerCallback = Rc<dyn Fn(&mut EventContext<'_>, bool)>;
 type BoundDrawerCallback = Rc<dyn Fn(bool)>;
 
 /// Provides interactive behavior for [`Drawer`] content: open/close
@@ -486,7 +486,7 @@ impl DrawerController {
     #[must_use]
     pub fn on_open_changed<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
         self.on_open_changed = Some(crate::event_callback::value_callback(callback));
@@ -884,17 +884,17 @@ fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl 
     // `SizedBox` needed `f64::INFINITY` above. `SizedBox::expand` clamps to
     // the Stack's own (bounded — the drawer slot is always tight) size, so
     // the scrim genuinely covers, and is tappable across, the whole area.
-    let scrim = scrim_detector.child(FadeTransition::new(
-        Rc::clone(&animation),
-        SizedBox::expand().child(ColoredBox::new(view.scrim_color.unwrap_or(BLACK54))),
-    ));
+    let scrim = scrim_detector.child(
+        FadeTransition::new(Rc::clone(&animation))
+            .child(SizedBox::expand().child(ColoredBox::new(view.scrim_color.unwrap_or(BLACK54)))),
+    );
     let position = Tween::new(
         TranslationFraction::new(-core.direction_factor(), 0.0),
         TranslationFraction::ZERO,
     )
     .animate(animation);
     let panel = Align::new(outer_alignment(view.alignment))
-        .child(SlideTransition::new(Rc::new(position), view.child.clone()));
+        .child(SlideTransition::new(Rc::new(position)).child(view.child.clone()));
 
     DrawerAlignmentScope {
         alignment: view.alignment,

@@ -54,7 +54,7 @@ impl DisplaySpec {
     /// The display's colour profile, as [`DisplayInfo::color`] reports it: a
     /// colour space and headroom, or the reason a platform would give none.
     #[must_use]
-    pub fn with_color(mut self, color: Result<DisplayColor, CapabilityAbsence>) -> Self {
+    pub fn color(mut self, color: Result<DisplayColor, CapabilityAbsence>) -> Self {
         self.color = color;
         self
     }
@@ -62,14 +62,14 @@ impl DisplaySpec {
     /// The key that names this display again in another run, as
     /// [`DisplayInfo::persistent_key`] reports it.
     #[must_use]
-    pub fn with_persistent_key(mut self, key: impl Into<String>) -> Self {
+    pub fn persistent_key(mut self, key: impl Into<String>) -> Self {
         self.persistent_key = Some(key.into());
         self
     }
 
     /// The display's device pixels per logical pixel.
     #[must_use]
-    pub fn with_scale_factor(mut self, scale_factor: f64) -> Self {
+    pub fn scale_factor(mut self, scale_factor: f64) -> Self {
         self.scale_factor = scale_factor;
         self
     }
@@ -77,7 +77,7 @@ impl DisplaySpec {
     /// The period of the mode the display runs. One outside 1 ms to 1 s is
     /// recorded as unknown, as a native source would.
     #[must_use]
-    pub fn with_refresh_period(mut self, period: Duration) -> Self {
+    pub fn refresh_period(mut self, period: Duration) -> Self {
         self.refresh_period = Some(period);
         self
     }

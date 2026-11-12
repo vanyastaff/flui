@@ -383,7 +383,7 @@ mod event_loop {
     use super::activation::{ActivationToken, LAUNCH_TOKEN_VARIABLE, UserInput, launch_token};
     use super::wait::{BeforePoll, Flush, LoopTurn, before_poll, poll_timeout};
     use crate::error::PlatformError;
-    use crate::executor::BackgroundExecutor;
+    use crate::executor::NativeExecutor;
     use crate::host;
     use crate::owner::app_delivery::AppDelivery;
     use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
@@ -459,7 +459,7 @@ mod event_loop {
         /// The Settings portal's preferences, observed on `executor` and
         /// waking the owner behind `signal`; started as the loop runs.
         fn preferences(
-            executor: &BackgroundExecutor,
+            executor: &NativeExecutor,
             signal: &Arc<OwnerSignal>,
         ) -> Arc<dyn LinuxPreferences>;
 
@@ -467,7 +467,7 @@ mod event_loop {
         /// memory pressure), started once the owner can deliver what they
         /// queue.
         fn host_notices(
-            executor: &BackgroundExecutor,
+            executor: &NativeExecutor,
             signal: &Arc<OwnerSignal>,
         ) -> Arc<dyn LinuxNotices>;
     }
@@ -1503,7 +1503,7 @@ mod event_loop {
         pub(crate) drag: Arc<dyn WaylandDrag>,
         /// The loop's background work, on which a window's own frame has
         /// the host's fonts read once.
-        pub(crate) executor: Arc<BackgroundExecutor>,
+        pub(crate) executor: NativeExecutor,
     }
 
     /// The owner's event queue and what it dispatches into, kept together:
@@ -1542,13 +1542,13 @@ mod event_loop {
         drag: Arc<dyn WaylandDrag>,
         notices: Arc<dyn NoticeChannel>,
         portal: PortalSlot,
-        start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
-        start_host_notices: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices>,
+        start_preferences: fn(&NativeExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
+        start_host_notices: fn(&NativeExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices>,
         /// The sources the loop keeps while it runs.
         sources: Mutex<Sources>,
         /// The display watch, which the owner thread starts and stops.
         display_watch: OwnerCell<Option<Watch>>,
-        executor: Arc<BackgroundExecutor>,
+        executor: NativeExecutor,
         /// The wake deadline armed and the last one delivered.
         deadline: OwnerCell<WakeDeadline>,
         /// How many frames the windows' handlers produced, which tells the
@@ -1597,7 +1597,10 @@ mod event_loop {
         /// cannot be loaded, or the compositor lacks `wl_compositor`;
         /// [`PlatformError::MissingRequirement`] when it lacks `xdg_wm_base`,
         /// part of Linux's floor (ADR-0244 §3).
-        pub(crate) fn try_new<H: WaylandHost>(socket: &Path) -> Result<Self, PlatformError> {
+        pub(crate) fn try_new<H: WaylandHost>(
+            socket: &Path,
+            executor: NativeExecutor,
+        ) -> Result<Self, PlatformError> {
             let init = |what: &str, error: &dyn std::fmt::Display| PlatformError::Init {
                 message: format!("Wayland: {what}: {error}"),
             };
@@ -1742,7 +1745,7 @@ mod event_loop {
                 start_host_notices: H::host_notices,
                 sources: Mutex::new(Sources::default()),
                 display_watch: OwnerCell::new(),
-                executor: Arc::new(BackgroundExecutor::new()),
+                executor,
                 deadline: OwnerCell::new(),
                 frames: FrameCount::default(),
                 reevaluate: AtomicBool::new(false),
@@ -1782,7 +1785,7 @@ mod event_loop {
                 frames: self.frames.counter(),
                 input: Arc::clone(&self.input),
                 drag: Arc::clone(&self.drag),
-                executor: Arc::clone(&self.executor),
+                executor: self.executor.clone(),
             })
         }
 
@@ -2180,7 +2183,7 @@ mod event_loop {
             }
             tracing::info!("starting the Wayland loop");
             self.signal.bind_owner();
-            let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+            let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
                 Arc::clone(&platform),
                 Arc::clone(&self.signal),
             ));
@@ -2192,7 +2195,7 @@ mod event_loop {
             self.start_sources();
             let outcome = self
                 .app
-                .ready(OwnerPlatform::new(platform, Arc::clone(&hooks)))
+                .ready(OwnerPlatform::new(platform, Rc::clone(&hooks)))
                 .map_err(PlatformError::bootstrap)
                 .and_then(|()| {
                     self.signal

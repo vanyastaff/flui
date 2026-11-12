@@ -9,14 +9,41 @@
 //! The generated project is a workspace because cargo must be able to build the
 //! worker and the host independently: `flui run` watches the worker crate and
 //! rebuilds only it, leaving the running host untouched.
+//!
+//! Reload is a development build only. The host's default `linked` feature
+//! links the logic crate and calls its build function directly, so a release
+//! build installs no hook and the package's loader and watcher are dead code.
+//! `flui run` builds the host with its `reload` feature and without the
+//! default ones (`[hot_reload] reload_feature`), so the running host links no
+//! copy of the logic crate and is not relinked when it changes.
 
-use super::{DependencySource, ProjectPlan};
+use super::{DependencySource, FrameworkPackage, ProjectPlan};
+
+/// The host feature `flui run` builds with: the hook that loads and reloads
+/// the logic crate's library.
+const RELOAD_FEATURE: &str = "reload";
 
 /// A dependency on a sibling crate inside the generated workspace.
 fn member_dep(sibling: &str) -> String {
+    member_dep_table(sibling).to_string()
+}
+
+/// A sibling dependency that a feature turns on.
+fn optional_member_dep(sibling: &str) -> String {
+    let mut dependency = member_dep_table(sibling);
+    if let toml::Value::Table(table) = &mut dependency {
+        table.insert(String::from("optional"), toml::Value::Boolean(true));
+    }
+    dependency.to_string()
+}
+
+fn member_dep_table(sibling: &str) -> toml::Value {
     let mut dependency = toml::Table::new();
-    dependency.insert("path".into(), format!("../{sibling}").into());
-    toml::Value::Table(dependency).to_string()
+    dependency.insert(
+        String::from("path"),
+        toml::Value::String(format!("../{sibling}")),
+    );
+    toml::Value::Table(dependency)
 }
 
 pub fn generate(name: &str, app_id: &str, source: &DependencySource) -> ProjectPlan {
@@ -113,12 +140,16 @@ worker_package = "{worker_package}"
 worker_lib = "{worker_lib}"
 logic_watch = "{worker_package}/src"
 types_watch = "{types_package}/src"
+# The host feature `flui run` turns on, with the host's default features off: it
+# loads the worker library instead of linking the logic crate.
+reload_feature = "{RELOAD_FEATURE}"
 "#
     )
 }
 
 fn types_plan(types_package: &str, source: &DependencySource) -> ProjectPlan {
-    let facade_dep = source.dependency("flui", &["hot-reload"]);
+    let facade_dep = source.dependency(FrameworkPackage::Facade, &[]);
+    let reload_dep = source.dependency(FrameworkPackage::HotReload, &["app-plugin"]);
 
     let cargo = format!(
         r#"[package]
@@ -131,6 +162,7 @@ description = "Shared types and persistent State for the hot-reload app"
 
 [dependencies]
 flui = {facade_dep}
+flui-hot-reload = {reload_dep}
 "#
     );
 
@@ -145,7 +177,9 @@ fn logic_plan(
     worker_lib: &str,
     source: &DependencySource,
 ) -> ProjectPlan {
-    let facade_dep = source.dependency("flui", &["hot-reload"]);
+    let facade_dep = source.dependency(FrameworkPackage::Facade, &[]);
+    let test_facade_dep = source.dependency(FrameworkPackage::Facade, &["testing"]);
+    let reload_dep = source.dependency(FrameworkPackage::HotReload, &["app-plugin"]);
     let types_dep = member_dep(types_package);
     let types_crate = types_package.replace('-', "_");
 
@@ -159,12 +193,17 @@ publish = false
 description = "Reloadable UI logic (cdylib) — the hot-reload target"
 
 [lib]
-crate-type = ["cdylib"]
+# `cdylib` is the library `flui run` reloads; `rlib` is what a release host links.
+crate-type = ["cdylib", "rlib"]
 name = "{worker_lib}"
 
 [dependencies]
 flui = {facade_dep}
+flui-hot-reload = {reload_dep}
 {types_package} = {types_dep}
+
+[dev-dependencies]
+flui = {test_facade_dep}
 "#
     );
 
@@ -183,8 +222,10 @@ fn host_plan(
     worker_lib: &str,
     source: &DependencySource,
 ) -> ProjectPlan {
-    let facade_dep = source.dependency("flui", &["hot-reload"]);
+    let facade_dep = source.dependency(FrameworkPackage::Facade, &[]);
+    let reload_dep = source.dependency(FrameworkPackage::HotReload, &["app-plugin"]);
     let types_dep = member_dep(types_package);
+    let worker_dep = optional_member_dep(worker_package);
     let types_crate = types_package.replace('-', "_");
 
     let cargo = format!(
@@ -200,9 +241,20 @@ description = "Host binary — owns the element tree and loads the worker"
 name = "{host_package}"
 path = "src/main.rs"
 
+[features]
+default = ["linked"]
+# The logic crate linked into the host: `flui build` and `cargo build --release`
+# load no library and install no reload hook.
+linked = ["dep:{worker_package}"]
+# What `flui run` builds instead (`reload_feature` in flui.toml, default features
+# off): the host loads the logic crate's library and reloads it on each rebuild.
+{RELOAD_FEATURE} = ["flui-hot-reload/host-hook"]
+
 [dependencies]
 flui = {facade_dep}
+flui-hot-reload = {reload_dep}
 {types_package} = {types_dep}
+{worker_package} = {worker_dep}
 tracing = {{ workspace = true }}
 "#
     );
@@ -212,6 +264,7 @@ tracing = {{ workspace = true }}
         .replace("__HOST_PACKAGE__", host_package)
         .replace("__WORKER_PACKAGE__", worker_package)
         .replace("__WORKER_LIB__", worker_lib)
+        .replace("__WORKER_CRATE__", worker_lib)
         .replace("__TYPES_CRATE__", &types_crate);
 
     ProjectPlan::new()
@@ -251,6 +304,10 @@ restarts the host instead (hot restart) — bump `TYPE_FINGERPRINT` there.
 ```bash
 flui build desktop --package {host_package} --release
 ```
+
+A build outside `flui run` takes the host's default `linked` feature: the
+logic crate is linked into the host, which loads no library and installs no
+reload hook.
 "
     )
 }
@@ -268,8 +325,9 @@ use std::sync::{
     atomic::{AtomicI32, Ordering},
 };
 
-use flui::hot_reload::{WorkerBuildEnv, get_worker_build_ptr};
+use flui_hot_reload::{WorkerBuildEnv, get_worker_build_ptr, request_rebuild};
 use flui::prelude::*;
+use flui::view::{RebuildHandle, RebuildReason};
 
 /// Stable-layout fingerprint. Bump when the shared types change shape.
 pub const TYPE_FINGERPRINT: u64 = 0xF10A_0001;
@@ -296,6 +354,17 @@ pub fn counter_build_fn() -> CounterBuildFn {
     unsafe { std::mem::transmute(ptr) }
 }
 
+/// Where the counter's build function comes from.
+#[derive(Clone, Copy, Debug)]
+pub enum CounterBuild {
+    /// The logic crate linked into the host: its function is called directly
+    /// and no library is loaded (the host's `linked` feature).
+    Linked(CounterBuildFn),
+    /// Resolved through the worker registry on every build, so a reloaded
+    /// worker takes effect (the host's `reload` feature).
+    Reloadable,
+}
+
 /// Root stateful widget. Its `State` lives in the host element tree and
 /// survives a worker reload.
 #[derive(Clone, Debug, StatefulView)]
@@ -304,12 +373,35 @@ pub struct CounterApp {
     pub initial: i32,
     /// Live counter storage, shared with the worker's tap handlers.
     pub count: Arc<AtomicI32>,
+    /// Where `build` comes from.
+    pub build: CounterBuild,
+}
+
+/// How a change to the count asks for the counter to be built again.
+#[derive(Clone, Debug)]
+pub enum CounterRebuild {
+    /// The counter element's own rebuild handle (the host's `linked` feature).
+    Element(RebuildHandle),
+    /// The reload hook, which rebuilds the tree on its next poll (the host's
+    /// `reload` feature).
+    ReloadHook,
+}
+
+impl CounterRebuild {
+    /// Schedule the counter's next build.
+    pub fn request(&self) {
+        match self {
+            Self::Element(handle) => handle.schedule(RebuildReason::StateChange),
+            Self::ReloadHook => request_rebuild(),
+        }
+    }
 }
 
 /// Persistent state owned by the host element tree.
 #[derive(Debug)]
 pub struct CounterState {
     count: Arc<AtomicI32>,
+    rebuild: CounterRebuild,
 }
 
 impl CounterState {
@@ -317,22 +409,35 @@ impl CounterState {
     pub fn count(&self) -> &Arc<AtomicI32> {
         &self.count
     }
+
+    /// What a tap calls after it changes the count.
+    pub fn rebuild(&self) -> &CounterRebuild {
+        &self.rebuild
+    }
 }
 
 impl StatefulView for CounterApp {
     type State = CounterState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         self.count.store(self.initial, Ordering::Relaxed);
+        let rebuild = match self.build {
+            CounterBuild::Linked(_) => CounterRebuild::Element(ctx.rebuild_handle()),
+            CounterBuild::Reloadable => CounterRebuild::ReloadHook,
+        };
         CounterState {
             count: Arc::clone(&self.count),
+            rebuild,
         }
     }
 }
 
 impl ViewState<CounterApp> for CounterState {
     fn build(&self, view: &CounterApp, ctx: &dyn BuildContext) -> impl IntoView {
-        let build = counter_build_fn();
+        let build = match view.build {
+            CounterBuild::Linked(build) => build,
+            CounterBuild::Reloadable => counter_build_fn(),
+        };
         build(WorkerBuildEnv::new(ctx), self, view)
     }
 }
@@ -361,7 +466,7 @@ use std::sync::{
     atomic::{AtomicI32, Ordering},
 };
 
-use flui::hot_reload::{WorkerBuildEnv, hot_reload_worker, request_rebuild};
+use flui_hot_reload::{WorkerBuildEnv, hot_reload_worker};
 use flui::painting::styling::Color;
 use flui::prelude::*;
 use flui::widgets::{ColoredBox, Column, GestureDetector, Padding, Text};
@@ -370,20 +475,24 @@ use __TYPES_CRATE__::{CounterApp, CounterState, TYPE_FINGERPRINT};
 /// **Edit this string and rebuild to see hot reload.**
 const INCREMENT_LABEL: &str = "Increment (+1)";
 
-fn build_counter_ui(
+/// The counter's UI. The host calls it directly when it links this crate
+/// (`linked`), and through the registry `init_counter_worker` fills when it
+/// loads this crate's library (`reload`).
+pub fn build_counter_ui(
     _env: WorkerBuildEnv<'_>,
     state: &CounterState,
     _view: &CounterApp,
 ) -> BoxedView {
     let count = state.count().load(Ordering::Relaxed);
     let count_for_tap: Arc<AtomicI32> = Arc::clone(state.count());
+    let rebuild = state.rebuild().clone();
 
     Column::new(vec![
         Text::new(format!("Count: {count}")).boxed(),
         GestureDetector::new()
             .on_tap(move |_ctx| {
                 count_for_tap.fetch_add(1, Ordering::Relaxed);
-                request_rebuild();
+                rebuild.request();
             })
             .child(
                 Padding::all(12.0).child(
@@ -395,28 +504,119 @@ fn build_counter_ui(
     .boxed()
 }
 
-fn init_counter_worker(register: flui::hot_reload::RegisterWorkerBuildFn) {
+fn init_counter_worker(register: flui_hot_reload::RegisterWorkerBuildFn) {
     register(TYPE_FINGERPRINT, build_counter_ui as *const ());
 }
 
 hot_reload_worker!(init_counter_worker, fingerprint: TYPE_FINGERPRINT);
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, atomic::AtomicI32};
+
+    use flui::testing::widgets::{lay_out, tight};
+    use __TYPES_CRATE__::{CounterApp, CounterBuild};
+
+    use super::{INCREMENT_LABEL, build_counter_ui};
+
+    /// The linked build (a release host) shows the new count after a tap,
+    /// with no reload hook installed.
+    #[test]
+    fn a_tap_shows_the_new_count() {
+        let mut app = lay_out(
+            CounterApp {
+                initial: 0,
+                count: Arc::new(AtomicI32::new(0)),
+                build: CounterBuild::Linked(build_counter_ui),
+            },
+            tight(480.0, 320.0),
+        );
+        let button = app
+            .find_text(INCREMENT_LABEL)
+            .expect("the increment button is laid out");
+        let origin = app.absolute_offset(button);
+        let size = app.size(button);
+        let (x, y) = (origin.dx + size.width / 2.0, origin.dy + size.height / 2.0);
+
+        app.dispatch_pointer_down(x, y);
+        app.dispatch_pointer_up(x, y);
+        // A frame that rebuilds only what was scheduled (`pump` would rebuild
+        // the root whatever the tap did).
+        app.tick();
+
+        assert!(app.find_text("Count: 1").is_some(), "the tap must rebuild the count");
+    }
+}
 "#;
 
 const HOST_MAIN: &str = r#"//! Host binary for the hot-reload app.
 //!
 //! Run it with `flui run`: the CLI builds the worker (`__WORKER_PACKAGE__`) and
-//! this host, starts this process with the worker dylib path, then rebuilds
-//! (and reloads) only the worker on each save. The counter's `State` lives in
-//! this process's element tree, so it survives a reload.
+//! this host with its `reload` feature, starts this process with the worker
+//! dylib path, then rebuilds (and reloads) only the worker on each save. The
+//! counter's `State` lives in this process's element tree, so it survives a
+//! reload.
+//!
+//! Any other build takes the default `linked` feature: the logic crate is linked
+//! in, and the host loads no library and installs no reload hook.
 
 use std::sync::{Arc, atomic::AtomicI32};
 
-use __TYPES_CRATE__::{CounterApp, CounterShell};
+use __TYPES_CRATE__::{CounterApp, CounterBuild, CounterShell};
 use flui::{AppConfig, Application, LaunchError};
-use flui::hot_reload::{WorkerReloadHook, engine::env};
+
+#[cfg(not(any(feature = "reload", feature = "linked")))]
+compile_error!("build the host with its `linked` feature (the default) or with `reload` (`flui run`)");
+
+fn main() -> Result<(), LaunchError> {
+    let (build, config) = counter_build(AppConfig::new().title("__NAME__").size(480, 320));
+
+    let count = Arc::new(AtomicI32::new(0));
+    let root = CounterShell {
+        app: CounterApp {
+            initial: 0,
+            count: Arc::clone(&count),
+            build,
+        },
+    };
+
+    Application::new().config(config).run(root)?;
+
+    tracing::info!(
+        final_count = count.load(std::sync::atomic::Ordering::Relaxed),
+        "Application exited"
+    );
+    Ok(())
+}
+
+/// `flui run`'s build: the build function comes from the worker library,
+/// which the installed hook loads and reloads.
+#[cfg(feature = "reload")]
+fn counter_build(config: AppConfig) -> (CounterBuild, AppConfig) {
+    use flui_hot_reload::{WorkerReloadHook, engine::env};
+
+    let worker_path = std::env::var(env::WORKER_PLUGIN)
+        .map_or_else(|_| default_worker_path(), std::path::PathBuf::from);
+    tracing::info!(
+        worker = %worker_path.display(),
+        "Hot-reload host — edit the logic crate and save to reload"
+    );
+    (
+        CounterBuild::Reloadable,
+        config.dev_reload(WorkerReloadHook::new(worker_path)),
+    )
+}
+
+/// Every other build: the logic crate is linked in and called directly.
+#[cfg(not(feature = "reload"))]
+fn counter_build(config: AppConfig) -> (CounterBuild, AppConfig) {
+    (CounterBuild::Linked(__WORKER_CRATE__::build_counter_ui), config)
+}
 
 /// Default worker dylib path, used when `FLUI_WORKER_PLUGIN` is unset (a bare
-/// `cargo run -p __HOST_PACKAGE__` without `flui run`).
+/// `cargo run -p __HOST_PACKAGE__ --no-default-features --features reload`
+/// without `flui run`).
+#[cfg(feature = "reload")]
 fn default_worker_path() -> std::path::PathBuf {
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".into());
     let mut path = std::path::PathBuf::from("target");
@@ -436,36 +636,5 @@ fn default_worker_path() -> std::path::PathBuf {
     }
 
     path
-}
-
-fn main() -> Result<(), LaunchError> {
-    let worker_path = std::env::var(env::WORKER_PLUGIN)
-        .map_or_else(|_| default_worker_path(), std::path::PathBuf::from);
-
-    tracing::info!(
-        worker = %worker_path.display(),
-        "Hot-reload host — edit the logic crate and save to reload"
-    );
-
-    let count = Arc::new(AtomicI32::new(0));
-    let root = CounterShell {
-        app: CounterApp {
-            initial: 0,
-            count: Arc::clone(&count),
-        },
-    };
-
-    let config = AppConfig::new()
-        .with_title("__NAME__")
-        .with_size(480, 320)
-        .with_dev_reload(WorkerReloadHook::new(worker_path));
-
-    Application::new().config(config).run(root)?;
-
-    tracing::info!(
-        final_count = count.load(std::sync::atomic::Ordering::Relaxed),
-        "Application exited"
-    );
-    Ok(())
 }
 "#;

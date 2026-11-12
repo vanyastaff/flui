@@ -1,4 +1,4 @@
-use super::{DependencySource, ProjectPlan};
+use super::{DependencySource, FrameworkPackage, ProjectPlan};
 
 pub fn generate(
     name: &str,
@@ -19,8 +19,14 @@ pub fn generate(
 fn cargo_toml(name: &str, source: &DependencySource) -> String {
     let version = env!("CARGO_PKG_VERSION");
 
-    let deps = format!("flui = {}", source.dependency("flui", &[]));
-    let test_deps = format!("flui = {}", source.dependency("flui", &["testing"]));
+    let deps = format!(
+        "flui = {}",
+        source.dependency(FrameworkPackage::Facade, &[])
+    );
+    let test_deps = format!(
+        "flui = {}",
+        source.dependency(FrameworkPackage::Facade, &["testing"])
+    );
     let mode_comment = if matches!(source, DependencySource::Local(_)) {
         " (local development)"
     } else {
@@ -90,7 +96,7 @@ impl ViewState<CounterView> for CounterState {
     fn build(&self, _view: &CounterView, ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count;
 
-        SafeArea::new().child(
+        SafeArea::new(
             Center::new().child(
                 Column::new((
                     Text::new("You have pushed the button this many times:"),

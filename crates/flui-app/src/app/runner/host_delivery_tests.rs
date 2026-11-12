@@ -26,11 +26,11 @@ fn service_factory_can_use_owner_window_capabilities() {
         },
     );
     let app = DesktopRun::new(|_| flui_widgets::Text::new("unused"))
-        .with_startup_window(StartupWindow::None)
+        .startup_window(StartupWindow::None)
         .config(
             AppConfig::new()
-                .with_exit_policy(ExitPolicy::ExplicitQuit)
-                .with_service(service),
+                .exit_policy(ExitPolicy::ExplicitQuit)
+                .service(service),
         )
         .on_ready(|handle| handle.request_quit().expect("ordinary quit"));
     let result = run_with_platform(app, Box::new(HeadlessPlatform::new()));
@@ -101,11 +101,11 @@ fn executor_refusal_retires_service_future_outside_host_borrow() {
         },
     );
     let app = DesktopRun::new(|_| flui_widgets::Text::new("unused"))
-        .with_startup_window(StartupWindow::None)
+        .startup_window(StartupWindow::None)
         .config(
             AppConfig::new()
-                .with_service(service)
-                .with_executors(HostExecutors::new(Arc::new(Pool), Arc::new(Pool))),
+                .service(service)
+                .executors(HostExecutors::new(Arc::new(Pool), Arc::new(Pool))),
         );
     let result = run_with_platform(app, Box::new(HeadlessPlatform::new()));
     let Err(LaunchError::Service { source }) = result else {

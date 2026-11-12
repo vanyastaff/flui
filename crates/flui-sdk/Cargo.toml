@@ -39,6 +39,10 @@ flui-objects = { workspace = true }
 # `hooks::FrameSnapshot`, which `flui-devtools`' timeline records. Already in
 # this crate's closure through `flui-view`, so reach does not change.
 flui-scheduler = { workspace = true }
+# `hooks::Scene` and `hooks::LayerTree`, the plugin ABI of flui-hot-reload's
+# dlopen path (ADR-0311 §6). Already in this crate's closure through
+# `flui-rendering`, so reach does not change.
+flui-layer = { workspace = true }
 
 [dev-dependencies]
 trybuild = { workspace = true }
@@ -49,6 +53,8 @@ flui = { path = "../..", default-features = false }
 # The headless widget harness that mounts the custom recognizer in
 # `tests/surface/custom_recognizer.rs`; a dev edge only, like the packages'.
 flui-testing = { workspace = true }
+# `hooks::PluginPipeline`'s unit tests mount render nodes by hand.
+flui-rendering = { workspace = true, features = ["testing"] }
 
 [features]
 animation-diagnostics = ["flui-animation/diagnostics"]
