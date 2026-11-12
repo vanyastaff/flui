@@ -234,7 +234,11 @@ of its own.
   - declares a `pub use` or `pub mod`, which decides what the facade re-exports;
   - names, in the file that defines an item the list names, a segment of that item's path
     there (`AppConfig`, `with_memory_reclaim`), so a rename or a move on a line apart from the
-    bound is seen.
+    bound is seen. An implementation's entry (`impl Trait for Type`) resolves each path it
+    holds.
+
+  A change to the list, the gate's rule or the rustdoc JSON loader it shares with `api-closure`
+  sets it too: their self-tests read built-in documents and cannot see the workspace's report.
 
   A pull request then runs `api-contracts` with `send-positions` only; `api-closure` stays on
   main. What these lines miss is an item that turns public on a line that names no marker, while

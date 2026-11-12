@@ -1116,7 +1116,8 @@ reaches what the check reads. `plan` decides this in its outputs, and each job i
   - declares a `pub use` or `pub mod`;
   - names a segment of a listed item's path, in the file that defines that item.
 
-  The list is read from `tools/xtask/allowlists/send-positions.toml` on each run.
+  A change to the list, `tools/xtask/src/send_positions.rs` or the rustdoc JSON loader
+  (`api_closure`) sets it too. The list is read from `tools/xtask/allowlists/send-positions.toml` on each run.
 
 A pull request that reaches none of them skips all three.
 

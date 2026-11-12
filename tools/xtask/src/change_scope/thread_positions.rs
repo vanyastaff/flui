@@ -17,6 +17,7 @@ use crate::send_positions::{ALLOWLIST, ROOTS, listed_items};
 
 /// The first of `files` that can change what the gate reports, or `None`:
 ///
+/// - the gate's list, rule or rustdoc JSON loader ([`is_the_gate`]);
 /// - a library source of a crate the facade reaches whose changed lines
 ///   (`changed_lines`, a unified diff; without one, its whole text) name
 ///   `Send` or `Sync`, or declare a `pub use` or `pub mod`, which decides what
@@ -34,6 +35,9 @@ pub(super) fn changed_position<'f>(
     files: &'f [String],
     changed_lines: Option<&str>,
 ) -> anyhow::Result<Option<&'f str>> {
+    if let Some(found) = files.iter().map(String::as_str).find(|f| is_the_gate(f)) {
+        return Ok(Some(found));
+    }
     if !files.iter().any(|f| is_rust(f)) {
         return Ok(None);
     }
@@ -89,6 +93,17 @@ pub(super) fn changed_position<'f>(
     Ok(found.copied())
 }
 
+/// Whether `path` is the gate itself: its list, its rule, or the rustdoc JSON
+/// loader it shares with `api-closure`. Their self-tests read built-in
+/// documents, so only a run over the workspace sees what a change to them
+/// does to the report.
+fn is_the_gate(path: &str) -> bool {
+    path == ALLOWLIST
+        || path == "tools/xtask/src/send_positions.rs"
+        || path == "tools/xtask/src/api_closure.rs"
+        || path.starts_with("tools/xtask/src/api_closure/")
+}
+
 /// Whether a line of code names a marker (`Send`, `Sync` as a whole word) or
 /// declares a public re-export or module; a comment line does not.
 fn names_a_position(line: &str) -> bool {
@@ -123,21 +138,28 @@ fn defining_files(
         .collect();
     let mut files: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for item in listed_items(&text)? {
-        let mut segments = item.split("::");
-        let Some(dir) = segments.next().and_then(|ident| crates.get(ident)) else {
-            continue;
-        };
-        let segments: Vec<&str> = segments.collect();
-        if let Some((file, inside)) = (0..=segments.len()).rev().find_map(|k| {
-            module_files(dir, &segments[..k])
-                .into_iter()
-                .find(|file| repo.root.join(file).is_file())
-                .map(|file| (file, &segments[k..]))
-        }) {
-            files
-                .entry(file)
-                .or_default()
-                .extend(inside.iter().map(|&name| name.to_owned()));
+        // `impl Trait for Type` and `impl Type` name their paths among other
+        // words: each workspace path in the label resolves on its own
+        for path in item
+            .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':'))
+            .filter(|token| token.contains("::"))
+        {
+            let mut segments = path.split("::");
+            let Some(dir) = segments.next().and_then(|ident| crates.get(ident)) else {
+                continue;
+            };
+            let segments: Vec<&str> = segments.collect();
+            if let Some((file, inside)) = (0..=segments.len()).rev().find_map(|k| {
+                module_files(dir, &segments[..k])
+                    .into_iter()
+                    .find(|file| repo.root.join(file).is_file())
+                    .map(|file| (file, &segments[k..]))
+            }) {
+                files
+                    .entry(file)
+                    .or_default()
+                    .extend(inside.iter().map(|&name| name.to_owned()));
+            }
         }
     }
     Ok(files)
@@ -204,10 +226,19 @@ mod tests {
         let line = Some("+pub fn spawn<T: Send>(value: T) {}");
         for misses in [
             "crates/flui-widgets/tests/main.rs",
-            "tools/xtask/src/send_positions.rs",
+            "tools/xtask/src/perf.rs",
             "docs/testing.md",
         ] {
             assert_eq!(reaches(misses, line), None, "{misses}");
+        }
+        // the gate's list, rule and loader, whose self-tests read built-in
+        // documents, on any change
+        for gate in [
+            "tools/xtask/allowlists/send-positions.toml",
+            "tools/xtask/src/send_positions.rs",
+            "tools/xtask/src/api_closure.rs",
+        ] {
+            assert_eq!(reaches(gate, None).as_deref(), Some(gate), "{gate}");
         }
     }
 
@@ -219,6 +250,10 @@ mod tests {
         let rename = Some("-    pub fn with_memory_reclaim(");
         assert_eq!(reaches(config, rename).as_deref(), Some(config));
         assert_eq!(reaches(config, Some("+    let frames = 3;")), None);
+        // an implementation's entry names its paths after `impl` (and `for`)
+        let lifecycle = "crates/flui-app/src/app/lifecycle.rs";
+        let method = Some("-    pub fn spawn_io<T, F, Fut>(");
+        assert_eq!(reaches(lifecycle, method).as_deref(), Some(lifecycle));
         assert_eq!(
             reaches("crates/flui-widgets/src/container.rs", rename),
             None
