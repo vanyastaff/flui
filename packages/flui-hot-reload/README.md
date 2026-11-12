@@ -31,9 +31,11 @@ with `cargo ndk` and pushes it to the device ([`docs/hot-reload.md`](../../docs/
 
 `flui-app` does not depend on this crate. A host installs one of its
 `DevReloadHook`s (ADR-0311) on its configuration, and the runner drives it.
-The hooks sit behind the `host-hook` feature, which the host crate turns on (an
-application adds this package itself, ADR-0311 §6); a scene plugin or worker
-crate leaves it off. The desktop and iOS runners drive `WorkerReloadHook`; the
+The hooks sit behind the `host-hook` feature, which only the host crate's
+development build turns on (an application adds this package itself, ADR-0311
+§6; the host `flui create --hot-reload` writes turns it on through its own
+`reload` feature, which `flui run` builds with); a scene plugin or worker crate
+leaves it off. The desktop and iOS runners drive `WorkerReloadHook`; the
 Android runner drives only `ScenePluginHook`:
 
 ```rust,ignore

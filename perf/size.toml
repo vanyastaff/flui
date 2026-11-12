@@ -1,5 +1,6 @@
 # Written by `cargo xtask perf --size --bless`; Linux x86_64.
-# Package counts of the facade's default graph and the counter example's sizes.
+# Package counts of the facade's default graph, the counter example's sizes and the
+# release size of a `flui create --hot-reload` host.
 
 [size]
 counter_release_bytes = 27245528
@@ -9,3 +10,4 @@ crates_linux = 275
 crates_macos = 208
 crates_wasm32 = 180
 crates_windows = 207
+hot_reload_host_release_bytes = 27457080

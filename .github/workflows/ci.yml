@@ -825,19 +825,21 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # size — what an application costs before it does anything: the counter
   # example's release binary on Linux and its wasm32 module, symbols stripped
-  # as `flui create` ships them, within 2% of perf/size.toml, and the default
-  # graph's package counts (`cargo xtask perf --size --check`). Two cold
+  # as `flui create` ships them, the release host of a `flui create
+  # --hot-reload` project, each within 2% of perf/size.toml, and the default
+  # graph's package counts (`cargo xtask perf --size --check`). Three cold
   # release builds, so a pull request runs it only when `size_required`: its
   # diff touches a manifest, Cargo.lock, the toolchain, .cargo/, the counter
-  # example, the baseline or the check (ON_DEMAND). A code change moves a size
-  # a little at a time; main runs it on every push and catches that drift.
+  # example, the `flui create` templates, the baseline or the check
+  # (ON_DEMAND). A code change moves a size a little at a time; main runs it on
+  # every push and catches that drift.
   # ─────────────────────────────────────────────────────────────────────────
   size:
     name: size
     needs: [checks, plan]
     if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.size_required == 'true')
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -171,6 +171,9 @@ fn assert_generated_project_compiles(template: &str, hot_reload: bool) {
             );
         }
     }
+    if hot_reload {
+        assert_reload_only_in_the_reload_build(&cargo, &project, &target, &name);
+    }
     if template == "counter" && !hot_reload {
         run_generated_counter_tests(&cargo, &project, &target);
     }
@@ -188,6 +191,108 @@ const GENERATED_COUNTER_TESTS: &[&str] = &[
     "tests::counter_responds_to_pointer_input",
     "tests::counter_content_is_centred",
 ];
+
+/// A hot-reload project's host carries the reload hook only in the build
+/// `flui run` makes (`reload_feature`, default features off): its default
+/// build, which `flui build --release` and `cargo build --release` make, links
+/// the logic crate and enables no `host-hook`, so the loader and the watcher
+/// are not reached. The reload build must still compile, and must not link
+/// the logic crate the running host would be relinked over.
+fn assert_reload_only_in_the_reload_build(cargo: &str, project: &Path, target: &Path, name: &str) {
+    let host = format!("{name}-host");
+    let logic = format!("{name}-logic");
+    let config: toml::Table = std::fs::read_to_string(project.join("flui.toml"))
+        .expect("flui.toml")
+        .parse()
+        .expect("valid TOML");
+    let feature = config["hot_reload"]["reload_feature"]
+        .as_str()
+        .expect("`flui run` is told which host feature reloads");
+    let reload_build = [
+        "--no-default-features".to_owned(),
+        "--features".to_owned(),
+        format!("{host}/{feature}"),
+    ];
+    let feature_graph = |extra: &[String]| -> String {
+        let output = std::process::Command::new(cargo)
+            .args([
+                "tree",
+                "--offline",
+                "--locked",
+                "-p",
+                &host,
+                "--edges",
+                "features",
+                "--invert",
+                "flui-hot-reload",
+            ])
+            .args(["--prefix", "none"])
+            .args(extra)
+            .current_dir(project)
+            .output()
+            .expect("host feature graph");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    let default = feature_graph(&[]);
+    assert!(
+        !default.contains("feature \"host-hook\""),
+        "the host's default build must not turn on the reload hook:\n{default}"
+    );
+    assert!(
+        default
+            .lines()
+            .any(|line| line.starts_with(&format!("{logic} "))),
+        "the host's default build must link the logic crate:\n{default}"
+    );
+
+    let reload = feature_graph(&reload_build);
+    assert!(
+        reload.contains("feature \"host-hook\""),
+        "the reload build must turn on the reload hook:\n{reload}"
+    );
+    assert!(
+        !reload
+            .lines()
+            .any(|line| line.starts_with(&format!("{logic} "))),
+        "the reload build must not link the logic crate:\n{reload}"
+    );
+
+    let output = std::process::Command::new(cargo)
+        .args(["check", "--offline", "--locked", "-p", &host])
+        .args(&reload_build)
+        .arg("--target-dir")
+        .arg(target.join("cli-template-check"))
+        .current_dir(project)
+        .output()
+        .expect("run cargo check on the reload build");
+    assert!(
+        output.status.success(),
+        "the hot-reload host's reload build does not compile:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // The linked build has no reload hook, so its counter must rebuild through
+    // the framework: the logic crate's own test taps it and reads the count.
+    let output = std::process::Command::new(cargo)
+        .args(["test", "--offline", "--locked", "-p", &logic, "--lib"])
+        .arg("--target-dir")
+        .arg(target.join("cli-template-check"))
+        .current_dir(project)
+        .output()
+        .expect("run the logic crate's tests");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("tests::a_tap_shows_the_new_count ... ok"),
+        "the linked counter must show the new count after a tap:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
 
 /// Run the generated counter's own test binary and require every test in it.
 ///
@@ -378,6 +483,7 @@ fn templates_depend_on_the_facade_and_hot_reload_on_its_package() {
             let dependencies = manifest["dependencies"].as_table().expect("dependencies");
             let types_package = format!("{name}-types");
             let host_package = format!("{name}-host");
+            let logic_package = format!("{name}-logic");
             let mut expected = vec!["flui"];
             if hot_reload {
                 expected.push("flui-hot-reload");
@@ -387,6 +493,7 @@ fn templates_depend_on_the_facade_and_hot_reload_on_its_package() {
             }
             if hot_reload && member == host_package {
                 expected.push("tracing");
+                expected.push(&logic_package);
             }
             expected.sort_unstable();
             assert_eq!(
@@ -423,15 +530,32 @@ fn templates_depend_on_the_facade_and_hot_reload_on_its_package() {
                     .iter()
                     .map(|feature| feature.as_str().expect("feature name"))
                     .collect();
-                let wanted: &[&str] = if member == host_package {
-                    &["app-plugin", "host-hook"]
-                } else {
-                    &["app-plugin"]
-                };
+                // The host turns `host-hook` on only through its `reload`
+                // feature, so its default build carries no reload hook.
                 assert_eq!(
-                    features, wanted,
+                    features,
+                    ["app-plugin"],
                     "flui-hot-reload features for {name}/{member}"
                 );
+            }
+            if hot_reload && member == host_package {
+                assert_eq!(
+                    dependencies[&logic_package]["optional"].as_bool(),
+                    Some(true),
+                    "the host links the logic crate only through `linked`"
+                );
+                let features = manifest["features"].as_table().expect("host features");
+                let names = |feature: &str| -> Vec<&str> {
+                    features[feature]
+                        .as_array()
+                        .expect("feature list")
+                        .iter()
+                        .map(|name| name.as_str().expect("feature name"))
+                        .collect()
+                };
+                assert_eq!(names("default"), ["linked"]);
+                assert_eq!(names("linked"), [format!("dep:{logic_package}")]);
+                assert_eq!(names("reload"), ["flui-hot-reload/host-hook"]);
             }
         }
     }

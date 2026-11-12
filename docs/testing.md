@@ -584,17 +584,19 @@ against `perf/size.toml`: the packages of the facade's default graph on Linux,
 Windows, macOS, Android and wasm32 (`cargo tree -p flui`, each name and version
 once), and the size of `examples/counter.rs` built in release for the host and
 for wasm32, with the symbols stripped as the release profile `flui create` writes
-does. A package count has to stay at or under its baseline, so a change
-that adds a package to an application's default graph runs `perf --size
---bless` in the same PR and says why. A binary grows with every change to the
-code it links, so a size fails only past 2% over its baseline, and `--bless` on
-a fresh `main` moves it. The baseline is Linux x86_64's. The `size` job runs the
-builds on `main` and on a pull request whose diff reaches a manifest, `Cargo.lock`,
-the toolchain, `.cargo/`, the counter example or the baseline.
+does, and the release host of a `flui create --hot-reload` project, which links
+the logic crate and installs no reload hook. A package count has to stay at or
+under its baseline, so a change that adds a package to an application's default
+graph runs `perf --size --bless` in the same PR and says why. A binary grows with
+every change to the code it links, so a size fails only past 2% over its
+baseline, and `--bless` on a fresh `main` moves it. The baseline is Linux
+x86_64's. The `size` job runs the builds on `main` and on a pull request whose
+diff reaches a manifest, `Cargo.lock`, the toolchain, `.cargo/`, the counter
+example, the `flui create` templates or the baseline.
 
 ```bash
 cargo xtask perf --size --graph --check   # the package counts alone, no build (the `deps` job, every PR)
-cargo xtask perf --size --check           # counts and both release builds (the `size` job)
+cargo xtask perf --size --check           # counts and the three release builds (the `size` job)
 cargo xtask perf --size --bless           # rewrite perf/size.toml from this run
 ```
 
