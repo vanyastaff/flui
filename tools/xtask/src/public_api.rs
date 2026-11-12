@@ -6,7 +6,9 @@
 //! builds once), and for every workspace crate a public re-export reaches. The
 //! walk starts at the crate root and visits, in order of path length, every
 //! public item of every public module, through re-exports and glob
-//! re-exports into the crates they name. An item gets the first path the walk
+//! re-exports into the crates they name; then every public workspace type a
+//! reached signature names that no path reaches (a type behind a type alias,
+//! a returned engine type), at the path rustdoc records. An item gets the first path the walk
 //! finds (the shortest, then the first in order); every other path to it is a
 //! `reexport` line naming that one. A `#[doc(hidden)]` item, and everything
 //! under one, is not part of the API.
@@ -221,7 +223,10 @@ impl Surface {
         &self.doc(&key.0)["index"][&key.1]
     }
 
-    /// Visits every public path from the root of `lib`, shortest first.
+    /// Visits every public path from the root of `lib`, shortest first; then
+    /// every public workspace type a reached signature names (through a type
+    /// alias, a field, a return) that no path reaches, at the path rustdoc
+    /// records for it, until no reached item names another.
     fn walk(&mut self, lib: &str, load: &mut Load<'_>) -> anyhow::Result<()> {
         if !self.ensure(lib, load)? {
             bail!("`{lib}` is not a workspace library");
@@ -229,9 +234,30 @@ impl Surface {
         let root = api_closure::id_text(&self.doc(lib)["root"]);
         let mut queue: BTreeSet<(usize, Vec<String>, Key)> = BTreeSet::new();
         queue.insert((1, vec![lib.to_owned()], (lib.to_owned(), root)));
+        let mut scanned = BTreeSet::new();
+        loop {
+            self.drain(&mut queue, load)?;
+            for (key, path) in self.named(&mut scanned, load)? {
+                // After every facade path: a recorded path is a fallback.
+                queue.insert((usize::MAX / 2 + path.len(), path, key));
+            }
+            if queue.is_empty() {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Visits the queued paths, shortest first, and the modules they reach.
+    fn drain(
+        &mut self,
+        queue: &mut BTreeSet<(usize, Vec<String>, Key)>,
+        load: &mut Load<'_>,
+    ) -> anyhow::Result<()> {
         while let Some((depth, path, key)) = queue.pop_first() {
             if self.canonical.contains_key(&key) {
-                self.reexports.push((path, Target::Item(key)));
+                if depth < usize::MAX / 2 {
+                    self.reexports.push((path, Target::Item(key)));
+                }
                 continue;
             }
             self.canonical.insert(key.clone(), path.clone());
@@ -239,7 +265,7 @@ impl Surface {
                 continue;
             }
             let mut globs = BTreeSet::new();
-            for (name, target) in self.children(&key, load, &mut globs)? {
+            for ((name, _), target) in self.children(&key, load, &mut globs)? {
                 let mut child = path.clone();
                 child.push(name);
                 match target {
@@ -253,15 +279,101 @@ impl Surface {
         Ok(())
     }
 
+    /// The public workspace types, traits and aliases that the reached items
+    /// not yet in `scanned` name and no path reached, with the path rustdoc
+    /// records for each.
+    fn named(
+        &mut self,
+        scanned: &mut BTreeSet<Key>,
+        load: &mut Load<'_>,
+    ) -> anyhow::Result<Vec<(Key, Vec<String>)>> {
+        let fresh: Vec<Key> = self
+            .canonical
+            .keys()
+            .filter(|key| !scanned.contains(*key))
+            .cloned()
+            .collect();
+        let mut references: BTreeSet<(String, String)> = BTreeSet::new();
+        for key in fresh {
+            scanned.insert(key.clone());
+            let (lib, id) = &key;
+            let index = &self.doc(lib)["index"];
+            let mut stack = vec![id.clone()];
+            let mut seen = BTreeSet::new();
+            while let Some(id) = stack.pop() {
+                if !seen.insert(id.clone()) {
+                    continue;
+                }
+                let Some(item) = index.get(&id) else {
+                    continue;
+                };
+                if item["inner"].get("module").is_some() || api_closure::skipped(item) {
+                    continue;
+                }
+                let mut ids = Vec::new();
+                referenced_ids(&item["inner"], &mut ids);
+                references.extend(ids.into_iter().map(|id| (lib.clone(), id)));
+                stack.extend(members(index, &item["inner"]));
+            }
+        }
+        let mut found = Vec::new();
+        for (lib, id) in references {
+            let Some((key, path)) = self.nameable(&lib, &id, load)? else {
+                continue;
+            };
+            if !self.canonical.contains_key(&key) {
+                found.push((key, path));
+            }
+        }
+        found.sort();
+        found.dedup();
+        Ok(found)
+    }
+
+    /// The workspace item `id` of `lib`'s document refers to, with its
+    /// recorded path, when it is a public type, trait or alias.
+    fn nameable(
+        &mut self,
+        lib: &str,
+        id: &str,
+        load: &mut Load<'_>,
+    ) -> anyhow::Result<Option<(Key, Vec<String>)>> {
+        let doc = self.doc(lib);
+        let (key, path) = if doc["index"].get(id).is_some() {
+            let Some(path) = segments(&doc["paths"][id]["path"]) else {
+                return Ok(None);
+            };
+            ((lib.to_owned(), id.to_owned()), path)
+        } else {
+            let Some((other, path)) = send_positions::external(doc, id) else {
+                return Ok(None);
+            };
+            if !self.ensure(&other, load)? {
+                return Ok(None);
+            }
+            let Some(other_id) = self.recorded[&other].get(&path).cloned() else {
+                return Ok(None);
+            };
+            ((other, other_id), path)
+        };
+        let item = self.item(&key);
+        let kind = kind_of(item);
+        let nameable = matches!(
+            kind.as_str(),
+            "struct" | "enum" | "union" | "trait" | "type_alias" | "trait_alias"
+        );
+        Ok((nameable && send_positions::public(item) && !hidden(item)).then_some((key, path)))
+    }
     /// The names a module gives, with where each leads: its own public items
     /// and re-exports first, then what its glob re-exports bring that those
-    /// do not shadow. A macro's name ends in `!`, its own namespace.
+    /// do not shadow. A name is unique within its namespace (a derive and a
+    /// trait may share one); a function-like macro's name ends in `!`.
     fn children(
         &mut self,
         module: &Key,
         load: &mut Load<'_>,
         globs: &mut BTreeSet<Key>,
-    ) -> anyhow::Result<BTreeMap<String, Target>> {
+    ) -> anyhow::Result<BTreeMap<(String, Namespace), Target>> {
         globs.insert(module.clone());
         let (lib, _) = module;
         let items: Vec<String> =
@@ -274,7 +386,7 @@ impl Surface {
                 continue;
             }
             if let Some(re_export) = item["inner"].get("use") {
-                let target = self.target(lib, re_export, load)?;
+                let (target, kind) = self.target(lib, re_export, load)?;
                 if re_export["is_glob"].as_bool() == Some(true) {
                     if let Target::Item(key) = target
                         && self.item(&key)["inner"].get("module").is_some()
@@ -286,8 +398,9 @@ impl Surface {
                 let Some(name) = re_export["name"].as_str() else {
                     continue;
                 };
-                let macro_name = matches!(&target, Target::Item(key) if is_macro(self.item(key)));
-                names.entry(spelled(name, macro_name)).or_insert(target);
+                names
+                    .entry((spelled(name, &kind), Namespace::of(&kind)))
+                    .or_insert(target);
                 continue;
             }
             let Some(name) = item["name"].as_str() else {
@@ -296,8 +409,9 @@ impl Surface {
             if item["inner"].get("impl").is_some() {
                 continue;
             }
+            let kind = kind_of(&item);
             names.insert(
-                spelled(name, is_macro(&item)),
+                (spelled(name, &kind), Namespace::of(&kind)),
                 Target::Item((lib.clone(), id)),
             );
         }
@@ -312,32 +426,38 @@ impl Surface {
         Ok(names)
     }
 
-    /// Where a re-export in `lib` leads.
+    /// Where a re-export in `lib` leads, and the kind of item it names
+    /// (`struct`, `proc_derive`, …; empty when rustdoc records none).
     fn target(
         &mut self,
         lib: &str,
         re_export: &Json,
         load: &mut Load<'_>,
-    ) -> anyhow::Result<Target> {
+    ) -> anyhow::Result<(Target, String)> {
         let source = re_export["source"].as_str().unwrap_or("?").to_owned();
         let id = &re_export["id"];
         if id.is_null() {
-            return Ok(Target::Foreign(source));
+            return Ok((Target::Foreign(source), String::new()));
         }
         let id = api_closure::id_text(id);
         let doc = self.doc(lib);
-        if doc["index"].get(&id).is_some() {
-            return Ok(Target::Item((lib.to_owned(), id)));
+        if let Some(item) = doc["index"].get(&id) {
+            let kind = kind_of(item);
+            return Ok((Target::Item((lib.to_owned(), id)), kind));
         }
+        let recorded_kind = doc["paths"][&id]["kind"].as_str().unwrap_or("").to_owned();
         let Some((other, path)) = send_positions::external(doc, &id) else {
-            return Ok(Target::Foreign(source));
+            return Ok((Target::Foreign(source), recorded_kind));
         };
         if !self.ensure(&other, load)? {
-            return Ok(Target::Foreign(path.join("::")));
+            return Ok((Target::Foreign(path.join("::")), recorded_kind));
         }
         Ok(match send_positions::resolve(self.doc(&other), &path) {
-            Some(id) => Target::Item((other, id)),
-            None => Target::Foreign(path.join("::")),
+            Some(id) => {
+                let kind = kind_of(&self.doc(&other)["index"][&id]);
+                (Target::Item((other, id)), kind)
+            }
+            None => (Target::Foreign(path.join("::")), recorded_kind),
         })
     }
 
@@ -587,18 +707,24 @@ impl Surface {
             let data = &implementation["inner"]["impl"];
             if data["trait"].is_null() {
                 let generics = &data["generics"];
+                // The implemented type with its arguments: `impl Offset<f64>`
+                // offers its items to that specialization only.
+                let for_type = render::ty(&names, &data["for"]);
                 let context = format!(
-                    "{}{}",
+                    "{} {for_type}{}",
                     render::params(&names, generics),
                     render::where_clause(&names, generics)
                 );
+                let plain = render::params(&names, generics).is_empty()
+                    && render::where_clause(&names, generics).is_empty()
+                    && !for_type.contains('<');
                 for member in send_positions::ids(&data["items"]) {
                     let member = &index[&member];
                     if !send_positions::public(member) || hidden(member) {
                         continue;
                     }
                     if let Some(mut line) = associated(&names, path, member, false) {
-                        if !context.is_empty() {
+                        if !plain {
                             write!(line, " // impl{context}").expect("BUG: writing to a String");
                         }
                         lines.push(line);
@@ -696,13 +822,45 @@ fn segments(value: &Json) -> Option<Vec<String>> {
         .collect()
 }
 
-fn is_macro(item: &Json) -> bool {
-    item["inner"].get("macro").is_some()
-        || item["inner"]["proc_macro"]["kind"].as_str() == Some("bang")
+/// The kind of an item as rustdoc's `paths` table writes it: `struct`,
+/// `function`, `macro` (a function-like macro of either form),
+/// `proc_attribute`, `proc_derive`, …
+fn kind_of(item: &Json) -> String {
+    let inner = &item["inner"];
+    match inner["proc_macro"]["kind"].as_str() {
+        Some("bang") => "macro".to_owned(),
+        Some("attr") => "proc_attribute".to_owned(),
+        Some("derive") => "proc_derive".to_owned(),
+        _ => inner
+            .as_object()
+            .and_then(|map| map.keys().next())
+            .cloned()
+            .unwrap_or_default(),
+    }
 }
 
-fn spelled(name: &str, macro_name: bool) -> String {
-    if macro_name {
+/// Which of Rust's namespaces a name lives in: a type and a value, or a
+/// trait and a derive, may share it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Namespace {
+    Type,
+    Value,
+    Macro,
+}
+
+impl Namespace {
+    fn of(kind: &str) -> Self {
+        match kind {
+            "macro" | "proc_macro" | "proc_attribute" | "proc_derive" => Self::Macro,
+            "function" | "constant" | "static" => Self::Value,
+            _ => Self::Type,
+        }
+    }
+}
+
+/// A path segment: a function-like macro's name ends in `!`.
+fn spelled(name: &str, kind: &str) -> String {
+    if kind == "macro" {
         format!("{name}!")
     } else {
         name.to_owned()
@@ -826,10 +984,13 @@ fn associated(names: &Namer<'_>, owner: &str, member: &Json, in_trait: bool) -> 
             )
         }
         "assoc_const" => {
-            let value = inner["value"]
-                .as_str()
-                .filter(|_| !in_trait)
-                .map_or_else(String::new, |value| format!(" = {value}"));
+            // A trait's default is written as `= ..`: whether it has one is
+            // the API, its text is the implementation's.
+            let value = match inner["value"].as_str() {
+                Some(_) if in_trait => " = ..".to_owned(),
+                Some(value) => format!(" = {value}"),
+                None => String::new(),
+            };
             format!(
                 "{attributes}{visibility}const {path}: {}{value}",
                 render::ty(names, &inner["type"])
@@ -843,17 +1004,69 @@ fn associated(names: &Namer<'_>, owner: &str, member: &Json, in_trait: bool) -> 
                 format!(" = {}", render::ty(names, &inner["type"]))
             };
             format!(
-                "{attributes}type {path}{}{}{default}",
+                "{attributes}type {path}{}{}{}{default}",
                 render::params(names, &inner["generics"]),
                 if bounds.is_empty() {
                     String::new()
                 } else {
                     format!(": {bounds}")
-                }
+                },
+                render::where_clause(names, &inner["generics"])
             )
         }
         _ => return None,
     })
+}
+
+/// Every `"id"` an object inside `value` holds: the items a signature, a
+/// bound or a field type names. A bare list of ids (a type's fields, an
+/// implementation's items) is a list of members, not a reference.
+fn referenced_ids(value: &Json, out: &mut Vec<String>) {
+    match value {
+        Json::Object(map) => {
+            if let Some(id) = map.get("id").filter(|id| id.is_u64() || id.is_string()) {
+                out.push(api_closure::id_text(id));
+            }
+            for child in map.values() {
+                referenced_ids(child, out);
+            }
+        }
+        Json::Array(list) => {
+            for child in list {
+                referenced_ids(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The members of an item a user reaches through it: public fields,
+/// variants, implementations, a trait's items and an implementation's.
+fn members(index: &Json, inner: &Json) -> Vec<String> {
+    let public = |id: &String| {
+        index
+            .get(id)
+            .is_some_and(|item| send_positions::public(item) && !hidden(item))
+    };
+    let mut out = Vec::new();
+    if let Some(data) = inner.get("struct").or_else(|| inner.get("union")) {
+        let kind = &data["kind"];
+        out.extend(send_positions::ids(&kind["plain"]["fields"]).filter(public));
+        out.extend(send_positions::ids(&kind["tuple"]).filter(public));
+        out.extend(send_positions::ids(&data["fields"]).filter(public));
+        out.extend(send_positions::ids(&data["impls"]));
+    } else if let Some(data) = inner.get("enum") {
+        out.extend(send_positions::ids(&data["variants"]));
+        out.extend(send_positions::ids(&data["impls"]));
+    } else if let Some(variant) = inner.get("variant") {
+        out.extend(send_positions::ids(&variant["kind"]["tuple"]));
+        out.extend(send_positions::ids(&variant["kind"]["struct"]["fields"]));
+    } else if let Some(definition) = inner.get("trait") {
+        out.extend(send_positions::ids(&definition["items"]));
+    } else if let Some(implementation) = inner.get("impl") {
+        out.extend(send_positions::ids(&implementation["items"]).filter(public));
+    }
+    out
 }
 
 /// An implementation of a trait its crate keeps private (a sealing trait):
@@ -941,6 +1154,104 @@ fn self_test() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn entry(id: u64, name: Option<&str>, visibility: &str, inner: Json) -> (String, Json) {
+        (
+            id.to_string(),
+            json!({ "id": id, "crate_id": 0, "name": name, "visibility": visibility,
+                    "attrs": [], "deprecation": null, "inner": inner }),
+        )
+    }
+
+    fn no_generics() -> Json {
+        json!({ "params": [], "where_predicates": [] })
+    }
+
+    fn method(name: &str, id: u64) -> (String, Json) {
+        entry(
+            id,
+            Some(name),
+            "public",
+            json!({ "function": {
+            "sig": { "inputs": [["self", { "generic": "Self" }]], "output": null, "is_c_variadic": false },
+            "generics": no_generics(), "header": {}, "has_body": true } }),
+        )
+    }
+
+    /// A crate `lib` whose root exports a trait and a derive of one name, an
+    /// alias of a type no path reaches, a specialized inherent
+    /// implementation, a trait constant with a default and an associated
+    /// type with a where clause.
+    fn shapes() -> Json {
+        let f64_point = json!({ "resolved_path": { "path": "Point", "id": 3,
+            "args": { "angle_bracketed": { "args": [{ "type": { "primitive": "f64" } }], "constraints": [] } } } });
+        let index: serde_json::Map<String, Json> = [
+            entry(0, Some("lib"), "public", json!({ "module": { "is_crate": true, "items": [1, 2, 3, 10, 20], "is_stripped": false } })),
+            entry(1, Some("Inspect"), "public", json!({ "trait": { "is_auto": false, "is_unsafe": false, "is_dyn_compatible": true,
+                "items": [11, 12], "generics": no_generics(), "bounds": [], "implementations": [] } })),
+            entry(2, Some("Inspect"), "public", json!({ "use": { "source": "lib_macros::Inspect", "name": "Inspect", "id": 90, "is_glob": false } })),
+            entry(3, Some("Point"), "public", json!({ "struct": { "kind": "unit", "generics": no_generics(), "impls": [4] } })),
+            entry(4, None, "default", json!({ "impl": { "is_unsafe": false, "generics": no_generics(), "provided_trait_methods": [],
+                "trait": null, "for": f64_point, "items": [5], "is_negative": false, "is_synthetic": false, "blanket_impl": null } })),
+            method("direction", 5),
+            entry(10, Some("Context"), "public", json!({ "type_alias": { "type": { "resolved_path": { "path": "Inner", "id": 30, "args": null } }, "generics": no_generics() } })),
+            entry(11, Some("EPSILON"), "default", json!({ "assoc_const": { "type": { "primitive": "f64" }, "value": "1e-6" } })),
+            entry(12, Some("Ctx"), "default", json!({ "assoc_type": { "generics": {
+                "params": [{ "name": "'ctx", "kind": { "lifetime": { "outlives": [] } } }],
+                "where_predicates": [{ "bound_predicate": { "type": { "generic": "Self" }, "bounds": [{ "outlives": "'ctx" }], "generic_params": [] } }] },
+                "bounds": [], "type": null } })),
+            entry(20, Some("hidden"), "crate", json!({ "module": { "is_crate": false, "items": [30], "is_stripped": false } })),
+            entry(30, Some("Inner"), "public", json!({ "struct": { "kind": "unit", "generics": no_generics(), "impls": [31] } })),
+            entry(31, None, "default", json!({ "impl": { "is_unsafe": false, "generics": no_generics(), "provided_trait_methods": [],
+                "trait": null, "for": { "resolved_path": { "path": "Inner", "id": 30, "args": null } }, "items": [32],
+                "is_negative": false, "is_synthetic": false, "blanket_impl": null } })),
+            method("layout_child", 32),
+        ]
+        .into_iter()
+        .collect();
+        json!({
+            "root": 0,
+            "index": index,
+            "paths": {
+                "1": { "crate_id": 0, "path": ["lib", "Inspect"], "kind": "trait" },
+                "3": { "crate_id": 0, "path": ["lib", "Point"], "kind": "struct" },
+                "10": { "crate_id": 0, "path": ["lib", "Context"], "kind": "type_alias" },
+                "30": { "crate_id": 0, "path": ["lib", "hidden", "Inner"], "kind": "struct" },
+                "90": { "crate_id": 1, "path": ["lib_macros", "Inspect"], "kind": "proc_derive" },
+            },
+            "external_crates": { "1": { "name": "lib_macros", "html_root_url": null } },
+            "format_version": 61,
+        })
+    }
+
+    #[test]
+    fn public_api_writes_namespaces_specializations_defaults_and_aliased_types() {
+        let mut load =
+            |lib: &str| -> anyhow::Result<Option<Json>> { Ok((lib == "lib").then(shapes)) };
+        let mut surface = Surface::default();
+        surface.walk("lib", &mut load).expect("the shapes render");
+        let text = surface.render();
+        for line in [
+            // A trait and a derive of one name are both re-exports a user names.
+            "pub trait lib::Inspect",
+            "reexport lib::Inspect => lib_macros::Inspect",
+            // A trait constant's default, and an associated type's where clause.
+            "const lib::Inspect::EPSILON: f64 = ..",
+            "type lib::Inspect::Ctx<'ctx> where Self: 'ctx",
+            // The specialization that owns an inherent method.
+            "pub fn lib::Point::direction(self) // impl lib::Point<f64>",
+            // A type only an alias reaches, with its methods.
+            "pub type lib::Context = lib::hidden::Inner",
+            "pub struct lib::hidden::Inner",
+            "pub fn lib::hidden::Inner::layout_child(self)",
+        ] {
+            assert!(
+                text.lines().any(|candidate| candidate == line),
+                "missing `{line}` in:\n{text}"
+            );
+        }
+    }
 
     #[test]
     fn public_api_fixture_renders_as_expected_and_reports_the_planted_lines() {
