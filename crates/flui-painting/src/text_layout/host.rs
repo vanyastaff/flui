@@ -118,8 +118,12 @@ impl HostFonts {
     /// What a collection is fed from: each font file's path, each in-memory
     /// font's data (shared, not copied), every source's family names, the
     /// generic families' names and the fallback lists.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keyed by names or paths that come from font files and font directories, so the table keeps SipHash's random seed against chosen collisions"
+    )]
     pub(crate) fn faces(&self) -> HostFaces {
-        use rustc_hash::FxHashMap;
+        use std::collections::HashMap;
 
         use fontdb::Source;
 
@@ -130,7 +134,7 @@ impl HostFonts {
         }
 
         let mut sources: Vec<HostSource> = Vec::new();
-        let mut index: FxHashMap<SourceKey, usize> = FxHashMap::default();
+        let mut index: HashMap<SourceKey, usize> = HashMap::new();
         for face in self.db.faces() {
             let (key, data) = match &face.source {
                 Source::Binary(data) => (

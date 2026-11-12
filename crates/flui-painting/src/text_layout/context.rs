@@ -592,18 +592,22 @@ enum Registration {
 /// Returns whether the collection changed: a source was registered, a
 /// generic bound, or a fallback list rewritten with a different order.
 #[tracing::instrument(skip_all, fields(sources = host.sources.len()))]
+#[expect(
+    clippy::disallowed_types,
+    reason = "keyed by names or paths that come from font files and font directories, so the table keeps SipHash's random seed against chosen collisions"
+)]
 fn feed_host_faces(
     collection: &mut parley::fontique::Collection,
     host: &HostFaces,
     registration: Registration,
 ) -> bool {
-    use rustc_hash::FxHashSet;
+    use std::collections::HashSet;
 
     use parley::fontique::GenericFamily;
 
     use super::fallback_chain::{install_into, resolve};
 
-    let held: FxHashSet<String> = collection.family_names().map(str::to_lowercase).collect();
+    let held: HashSet<String> = collection.family_names().map(str::to_lowercase).collect();
     let mut fed = 0_usize;
     let mut bound = false;
     for source in &host.sources {

@@ -187,8 +187,12 @@ pub(crate) fn resolve(
 /// The collection's file-backed faces by canonical file and index, built on
 /// the first [`FaceRef::File`] it is asked about.
 #[derive(Default)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "keyed by names or paths that come from font files and font directories, so the table keeps SipHash's random seed against chosen collisions"
+)]
 struct FaceIndex {
-    files: Option<rustc_hash::FxHashMap<(std::path::PathBuf, u32), parley::fontique::FamilyId>>,
+    files: Option<std::collections::HashMap<(std::path::PathBuf, u32), parley::fontique::FamilyId>>,
     unresolved: usize,
 }
 
@@ -232,11 +236,15 @@ impl FaceIndex {
 }
 
 /// Every file-backed face of `collection`, by canonical file and index.
+#[expect(
+    clippy::disallowed_types,
+    reason = "keyed by names or paths that come from font files and font directories, so the table keeps SipHash's random seed against chosen collisions"
+)]
 fn file_index(
     collection: &mut parley::fontique::Collection,
-) -> rustc_hash::FxHashMap<(std::path::PathBuf, u32), parley::fontique::FamilyId> {
+) -> std::collections::HashMap<(std::path::PathBuf, u32), parley::fontique::FamilyId> {
     let names: Vec<String> = collection.family_names().map(str::to_owned).collect();
-    let mut files = rustc_hash::FxHashMap::default();
+    let mut files = std::collections::HashMap::new();
     for name in names {
         let Some(family) = collection.family_by_name(&name) else {
             continue;
