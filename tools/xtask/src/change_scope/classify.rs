@@ -26,7 +26,7 @@ use regex::Regex;
 use serde::Deserialize;
 
 use super::aggregator::WIDE_CONDITION;
-use super::{diagnostics, thread_positions};
+use super::{diagnostics, miri_scope, thread_positions};
 
 /// Documentation: a change made only of these compiles nothing.
 ///
@@ -621,6 +621,9 @@ pub(super) struct Scope {
     /// The changed file that can change what `send-positions` reports, if any
     /// ([`thread_positions::changed_position`]): a pull request then runs it.
     pub(super) send_positions_input: Option<String>,
+    /// The changed file that can change what the `miri` job finds, if any
+    /// ([`miri_scope::changed_input`]): a pull request then runs it.
+    pub(super) miri_input: Option<String>,
     pub(super) reason: String,
 }
 
@@ -634,6 +637,7 @@ impl Scope {
             heavy_required: false,
             trybuild_input: None,
             send_positions_input: None,
+            miri_input: None,
             reason,
         }
     }
@@ -674,6 +678,7 @@ pub(super) fn classify_change(
         diagnostics::changed_input(repo, files, changed_lines)?.map(str::to_owned);
     scope.send_positions_input =
         thread_positions::changed_position(repo, files, changed_lines)?.map(str::to_owned);
+    scope.miri_input = miri_scope::changed_input(files).map(str::to_owned);
     Ok(scope)
 }
 
@@ -790,6 +795,7 @@ fn classify_packages(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         heavy_required: false,
         trybuild_input: None,
         send_positions_input: None,
+        miri_input: None,
         reason,
     })
 }

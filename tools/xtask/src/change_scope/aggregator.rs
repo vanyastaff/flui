@@ -62,10 +62,11 @@ pub(super) struct OnDemand {
 
 /// The on-demand jobs: the trybuild suites when a changed file can change an
 /// expectation, the per-feature clippy of the changed packages that have
-/// features (main's `feature-matrix` runs it over the whole workspace), and
-/// the API contracts when a changed line can change what `send-positions`
-/// reports (a pull request runs that half; `api-closure` stays on `main`).
-pub(super) const ON_DEMAND: [OnDemand; 3] = [
+/// features (main's `feature-matrix` runs it over the whole workspace), the
+/// API contracts when a changed line can change what `send-positions`
+/// reports (a pull request runs that half; `api-closure` stays on `main`),
+/// and `miri` when a changed file sits under a source it interprets whole.
+pub(super) const ON_DEMAND: [OnDemand; 4] = [
     OnDemand {
         job: "test-trybuild",
         output: "trybuild_required",
@@ -79,6 +80,11 @@ pub(super) const ON_DEMAND: [OnDemand; 3] = [
     OnDemand {
         job: "api-contracts",
         output: "send_positions_required",
+        in_full: true,
+    },
+    OnDemand {
+        job: "miri",
+        output: "miri_required",
         in_full: true,
     },
 ];
@@ -551,6 +557,17 @@ mod tests {
             &run("wide"),
             &without(quiet.clone(), "api-contracts"),
             "'api-contracts': 'ran (success)",
+        );
+        let miri = Run {
+            asked: &["miri_required"],
+            ..run("wide")
+        };
+        green(&miri, &without(quiet.clone(), "miri"));
+        red(&miri, &quiet, "'miri': 'skipped");
+        red(
+            &run("wide"),
+            &without(quiet.clone(), "miri"),
+            "'miri': 'ran (success)",
         );
         let main = Run {
             event: "push",
