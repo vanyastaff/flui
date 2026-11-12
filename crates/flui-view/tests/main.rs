@@ -313,6 +313,7 @@ fn element_lifecycle_and_dependency_matrix() {
             ("inherited_dependency::inherited_update_notifies_dependents", inherited_dependency::inherited_update_notifies_dependents as fn()),
             ("inherited_dependency::missing_inherited_reads_refresh_lifecycle_and_survive_build_recovery", inherited_dependency::missing_inherited_reads_refresh_lifecycle_and_survive_build_recovery),
             ("inherited_dependency::unmounted_dependent_is_removed_from_provider_before_next_notification", inherited_dependency::unmounted_dependent_is_removed_from_provider_before_next_notification as fn()),
+            ("inherited_dependency::a_provider_with_many_dependents_keeps_exactly_the_mounted_ones", inherited_dependency::a_provider_with_many_dependents_keeps_exactly_the_mounted_ones as fn()),
             ("inherited_dependency::a_failing_frame_request_while_a_provider_notifies_keeps_its_subtree", inherited_dependency::a_failing_frame_request_while_a_provider_notifies_keeps_its_subtree),
             ("provided_values::provided_value_change_notifies_like_inherited_element", provided_values::provided_value_change_notifies_like_inherited_element as fn()),
             ("provided_values::provided_value_follows_a_moved_subtree", provided_values::provided_value_follows_a_moved_subtree),

@@ -5,9 +5,7 @@
 //! view-specific logic while the unified Element handles all common operations.
 
 use flui_rendering::parent_data::SliverSlot;
-use std::{
-    any::TypeId, collections::HashMap, marker::PhantomData, panic::AssertUnwindSafe, rc::Rc,
-};
+use std::{any::TypeId, marker::PhantomData, panic::AssertUnwindSafe, rc::Rc};
 
 use flui_foundation::{ElementId, Listenable, RenderId};
 
@@ -1406,9 +1404,10 @@ impl<V: InheritedView> InheritedBehavior<V> {
         &self.data
     }
 
-    /// Get all dependent elements (id -> depth + fields read).
-    pub fn dependents(&self) -> &HashMap<ElementId, DependentEntry> {
-        self.dependents.map()
+    /// What `dependent` is recorded as reading from this provider, if it
+    /// depends on it.
+    pub fn dependent(&self, dependent: ElementId) -> Option<&DependentEntry> {
+        self.dependents.get(dependent)
     }
 }
 

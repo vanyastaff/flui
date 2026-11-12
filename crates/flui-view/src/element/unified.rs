@@ -460,11 +460,10 @@ where
         self.behavior.data()
     }
 
-    /// Get all dependent elements: id -> (depth, fields read) (#1090).
-    pub fn dependents(
-        &self,
-    ) -> &std::collections::HashMap<ElementId, crate::element::DependentEntry> {
-        self.behavior.dependents()
+    /// What `dependent` is recorded as reading from this provider (its depth
+    /// and the fields it read), if it depends on it.
+    pub fn dependent(&self, dependent: ElementId) -> Option<&crate::element::DependentEntry> {
+        self.behavior.dependent(dependent)
     }
 }
 
