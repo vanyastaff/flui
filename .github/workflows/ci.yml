@@ -244,6 +244,7 @@ jobs:
       mode: ${{ steps.scope.outputs.mode }}
       heavy_required: ${{ steps.scope.outputs.heavy_required }}
       trybuild_required: ${{ steps.scope.outputs.trybuild_required }}
+      send_positions_required: ${{ steps.scope.outputs.send_positions_required }}
       features_required: ${{ steps.scope.outputs.features_required }}
       hack_args: ${{ steps.scope.outputs.hack_args }}
     steps:
@@ -712,14 +713,19 @@ jobs:
         run: cargo semver-checks check-release -p flui-platform --baseline-rev "$BASELINE"
 
   # Nightly API contracts keep their rustdoc JSON output in one job, separately
-  # from stable documentation and the semver report. Main only: at 17-18
-  # minutes it was a pull request's slowest job but one, and a change that
-  # breaks the API closure shows as a red main. Locally:
+  # from stable documentation and the semver report. On main both gates run.
+  # On a pull request only send-positions runs, and only when the diff can
+  # change what it reports. `plan` sets `send_positions_required` when a
+  # changed line of a library the facade reaches names `Send` or `Sync`,
+  # declares or sits inside a `pub use`, declares a `pub mod`, or names an
+  # item the list names in its file, and when the gate itself changes
+  # (tools/xtask/src/change_scope/thread_positions.rs).
+  # api-closure stays on main. Locally:
   # `cargo xtask api-closure` and `cargo xtask send-positions`.
   api-contracts:
     name: api-contracts
     needs: [checks, plan]
-    if: needs.plan.outputs.lane == 'full'
+    if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.send_positions_required == 'true')
     runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
@@ -747,6 +753,7 @@ jobs:
       # adds lints ahead of stable; lints are the stable jobs' business, so its
       # warnings do not fail this step.
       - name: cargo xtask api-closure (+ --self-test)
+        if: needs.plan.outputs.lane == 'full'
         env:
           CARGO_BUILD_WARNINGS: warn
         run: |
@@ -1292,8 +1299,10 @@ jobs:
       #      tooling   deps
       #      wide      deps + HEAVY_JOBS (the Linux PR gate)
       #      full      wide + FULL_JOBS (additional Linux checks) + test-trybuild
-      #    and a wide pull request adds test-trybuild when `trybuild_required`
-      #    and feature-scope when `features_required` (ON_DEMAND).
+      #                + api-contracts
+      #    and a wide pull request adds test-trybuild when `trybuild_required`,
+      #    feature-scope when `features_required` and api-contracts when
+      #    `send_positions_required` (ON_DEMAND).
       #    Every other job must skip. Any other skip (a drifted `if:`, a
       #    cancellation) or a job that ran where it should have skipped fails
       #    the aggregator. Each list must equal the jobs whose `if:` names its
@@ -1304,9 +1313,10 @@ jobs:
           HEAVY_JOBS: >-
             clippy wasm-check cross-typecheck test test-nested doc test-features
           FULL_JOBS: >-
-            feature-matrix doc-test miri api-contracts perf-gates
+            feature-matrix doc-test miri perf-gates
           LANE: ${{ needs.plan.outputs.lane }}
           TRYBUILD_REQUIRED: ${{ needs.plan.outputs.trybuild_required }}
+          SEND_POSITIONS_REQUIRED: ${{ needs.plan.outputs.send_positions_required }}
           FEATURES_REQUIRED: ${{ needs.plan.outputs.features_required }}
           EVENT: ${{ github.event_name }}
         run: cargo xtask ci-verify
