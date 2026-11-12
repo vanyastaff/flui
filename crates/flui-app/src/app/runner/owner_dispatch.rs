@@ -672,12 +672,11 @@ pub(super) fn deliver_host_notice_while(
             .installed_host
             .logical()
             .runtime_ids()
-            .map(|ids| {
+            .map_or_default(|ids| {
                 ids.into_iter()
                     .map(|id| RuntimeDispatcher { owner_thread, id })
                     .collect::<Vec<_>>()
             })
-            .unwrap_or_default()
     });
     let mut outcome = NoticeDelivery::default();
     for dispatcher in dispatchers {
@@ -720,19 +719,16 @@ pub(super) fn deliver_session_end_close(deadline: std::time::Instant, margin: st
             return Vec::new();
         };
         let logical = runtime.installed_host.logical();
-        logical
-            .runtime_ids()
-            .map(|ids| {
-                ids.into_iter()
-                    .filter(|id| {
-                        logical
-                            .runtime_status(*id)
-                            .is_ok_and(|status| !status.checked_out)
-                    })
-                    .map(|id| RuntimeDispatcher { owner_thread, id })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
+        logical.runtime_ids().map_or_default(|ids| {
+            ids.into_iter()
+                .filter(|id| {
+                    logical
+                        .runtime_status(*id)
+                        .is_ok_and(|status| !status.checked_out)
+                })
+                .map(|id| RuntimeDispatcher { owner_thread, id })
+                .collect::<Vec<_>>()
+        })
     });
     for dispatcher in dispatchers {
         if deadline.saturating_duration_since(std::time::Instant::now()) < margin {

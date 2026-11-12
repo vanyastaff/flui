@@ -139,7 +139,7 @@ fn every_message_reads_as_it_was_written() {
             bytes.len(),
             "{message:?} counts its own body"
         );
-        assert_eq!(Message::decode(&bytes), Ok(message.clone()));
+        assert_eq!(Message::decode(&bytes), Ok(message));
     }
 }
 

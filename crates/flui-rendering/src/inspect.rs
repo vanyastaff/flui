@@ -115,8 +115,7 @@ impl InspectTree for RenderInspect<'_> {
     fn children(&self, id: InspectId) -> impl Iterator<Item = InspectId> + '_ {
         render_id(id)
             .and_then(|id| self.tree.get(id))
-            .map(RenderNode::children)
-            .unwrap_or_default()
+            .map_or_default(RenderNode::children)
             .iter()
             .map(|&child| child.into())
     }

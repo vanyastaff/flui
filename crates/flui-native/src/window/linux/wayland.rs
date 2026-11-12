@@ -3299,8 +3299,7 @@ mod toplevel {
                     .client_frame
                     .borrow()
                     .as_ref()
-                    .map(ClientFrame::shown)
-                    .unwrap_or_default(),
+                    .map_or_default(ClientFrame::shown),
                 carried: self.frame_record.carried_out(),
             }
         }

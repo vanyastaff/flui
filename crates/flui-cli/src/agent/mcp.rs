@@ -268,8 +268,7 @@ fn window_of(
     let windows: Vec<&str> = listed
         .get("windows")
         .and_then(Value::as_array)
-        .map(|windows| windows.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
+        .map_or_default(|windows| windows.iter().filter_map(Value::as_str).collect());
     match windows.as_slice() {
         [only] => Ok((*only).to_owned()),
         [] => Err(Failure::Wire(json!({

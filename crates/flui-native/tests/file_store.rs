@@ -27,20 +27,18 @@ fn separate_roots(dir: &Path) -> DataDirs {
 /// The entries of `dir` other than the value `notes`, the store's lock file
 /// and its machine-local directory: what a write staged and left behind.
 fn staged_files(dir: &Path) -> Vec<String> {
-    std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                .filter(|name| {
-                    !matches!(
-                        name.as_str(),
-                        "notes" | ".flui-storage.lock" | ".machine-local"
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+    std::fs::read_dir(dir).map_or_default(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| {
+                !matches!(
+                    name.as_str(),
+                    "notes" | ".flui-storage.lock" | ".machine-local"
+                )
+            })
+            .collect()
+    })
 }
 
 fn first_write_creates_the_directory() {

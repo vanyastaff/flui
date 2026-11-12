@@ -1367,9 +1367,7 @@ impl ViewerCore {
         let Some((viewport, _)) = self.geometry() else {
             return false;
         };
-        let preferences = wheel
-            .map(WheelPreferencesProvider::snapshot)
-            .unwrap_or_default();
+        let preferences = wheel.map_or_default(WheelPreferencesProvider::snapshot);
         let distances = WheelScrollDistances::default();
         let available = Vec2::new(
             wheel_axis_delta(

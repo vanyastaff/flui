@@ -427,12 +427,11 @@ impl ViewState<Root> for RootState {
 /// Every label assistive technology reads in the host's window.
 fn labels(host: &HeadlessHost) -> Vec<String> {
     host.published_a11y_tree(host.primary_window())
-        .map(|tree| {
+        .map_or_default(|tree| {
             tree.nodes()
                 .filter_map(|node| node.label().map(str::to_owned))
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 fn contest_headers(host: &HeadlessHost) -> Vec<String> {

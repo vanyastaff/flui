@@ -113,7 +113,7 @@ fn an_undecided_press_shows_before_its_release() {
         assert_eq!(&*log.borrow(), shown, "{wait} ms undecided, still held");
         match then {
             Then::Taken => {
-                let erased: Rc<dyn GestureArenaMember> = rival.clone();
+                let erased: Rc<dyn GestureArenaMember> = rival;
                 arena.accept(pointer, &erased);
             }
             Then::Released => {

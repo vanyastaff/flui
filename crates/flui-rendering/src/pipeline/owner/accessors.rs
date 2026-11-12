@@ -465,10 +465,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         &self,
         error: crate::error::RenderError,
     ) -> flui_foundation::TreeError<crate::error::RenderError> {
-        let context = error
-            .node()
-            .map(|id| self.tree_context(id))
-            .unwrap_or_default();
+        let context = error.node().map_or_default(|id| self.tree_context(id));
         flui_foundation::TreeError::new(error, context)
     }
 

@@ -138,8 +138,7 @@ impl MenuHost {
         );
         let scope_commands = controls
             .as_ref()
-            .map(|controls| controls.commands().to_vec())
-            .unwrap_or_default();
+            .map_or_default(|controls| controls.commands().to_vec());
         let items = standard
             .iter()
             .cloned()
