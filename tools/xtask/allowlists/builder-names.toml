@@ -5,24 +5,6 @@
 # entry that is no longer one.
 
 [[allow]]
-crate = "flui-engine"
-type = "SlotConfig"
-method = "with_color"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-engine"
-type = "SlotConfig"
-method = "with_latency"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-engine"
-type = "SlotConfig"
-method = "with_visibility"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
 crate = "flui-interaction"
 type = "GestureSettings"
 method = "with_double_tap_timeout"
@@ -45,27 +27,3 @@ crate = "flui-interaction"
 type = "GestureSettings"
 method = "with_velocity_estimator"
 reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"
-
-[[allow]]
-crate = "flui-log"
-type = "FilterConfig"
-method = "with_env_var"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-rendering"
-type = "SliverConstraintsBuilder"
-method = "with_axis_direction"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-rendering"
-type = "SliverConstraintsBuilder"
-method = "with_growth_direction"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-testing"
-type = "MountOptions"
-method = "with_capabilities"
-reason = "written before the rule had a gate; its crate's rename removes it"

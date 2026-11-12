@@ -66,9 +66,13 @@ pub enum FilterError {
 /// Which directives select events, and which environment variable may override
 /// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FilterConfig {
-    directives: String,
-    env_var: Option<String>,
+    /// The directive string, in [`EnvFilter`] syntax. It is not validated
+    /// until [`FilterConfig::env_filter`] resolves it.
+    pub directives: String,
+    /// The environment variable consulted before the directives, if any.
+    pub env_var: Option<String>,
 }
 
 impl Default for FilterConfig {
@@ -97,7 +101,7 @@ impl FilterConfig {
 
     /// Consult a different environment variable.
     #[must_use]
-    pub fn with_env_var(mut self, env_var: impl Into<String>) -> Self {
+    pub fn env_var(mut self, env_var: impl Into<String>) -> Self {
         self.env_var = Some(env_var.into());
         self
     }
@@ -111,20 +115,6 @@ impl FilterConfig {
     pub fn without_env_var(mut self) -> Self {
         self.env_var = None;
         self
-    }
-
-    /// The configured directive string.
-    #[inline]
-    #[must_use]
-    pub fn directives(&self) -> &str {
-        &self.directives
-    }
-
-    /// The environment variable consulted before the directives, if any.
-    #[inline]
-    #[must_use]
-    pub fn env_var(&self) -> Option<&str> {
-        self.env_var.as_deref()
     }
 
     /// Resolve the configuration into an [`EnvFilter`], reading the configured

@@ -851,7 +851,7 @@ fn presentation_lifecycle_capability_is_absent_when_not_installed() {
         &view,
         flui::testing::MountOwners::fresh(),
         flui::testing::MountOptions::loose(100.0)
-            .with_capabilities(flui::testing::BuildCapabilities::AsyncDriverOnly),
+            .capabilities(flui::testing::BuildCapabilities::AsyncDriverOnly),
     );
     assert!(view.initialized.get());
     assert!(view.captured.borrow().is_none());

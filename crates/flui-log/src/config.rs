@@ -93,7 +93,7 @@ impl LogConfig {
 
     pub(crate) fn without_env_override(&self) -> Self {
         let mut fallback = self.clone();
-        fallback.filter = FilterConfig::new(self.filter.directives()).without_env_var();
+        fallback.filter = FilterConfig::new(self.filter.directives.clone()).without_env_var();
         fallback
     }
 
