@@ -76,8 +76,8 @@ properties.
      spans are TRACE, at relayout-boundary and rebuild roots only.
    - Costly fields are gated behind `tracing::enabled!`, and nothing allocates while disabled.
    - Framework crates set no `max_level_*` feature.
-   - Old targets keep a one-release alias, which lands only after an `EnvFilter` test confirms
-     prefix matching.
+   - Old targets keep a one-release alias, which lands only after a test of `flui-log`'s
+     filter confirms prefix matching.
 8. **One span stream.** A capture layer partitioned by runtime and presentation id feeds the
    profiler, the timeline (now a view over the capture), the driver and a Chrome/Perfetto export
    with `X` events. Phases are matched by `(target, name)` from one table.
@@ -129,7 +129,7 @@ The survey records the reasons in full:
 - `flui-rendering` and `flui-objects`: the harness reads typed fields, and a diff of two layouts
   reports the moved node with its delta.
 - Tracing:
-  - an `EnvFilter` test for the new targets and aliases;
+  - a test of `flui-log`'s filter for the new targets and aliases;
   - a phase-table test showing an app span named `paint` is not counted;
   - a disabled-level test showing the frame path allocates nothing;
   - recognizer spans entered or turned into events;
