@@ -55,15 +55,66 @@ crate-type = ["rlib", "cdylib"]
 /// still prints its message and `file:line`, and only a backtrace's frame
 /// names go, as in a Flutter release build. `--profile profiling` keeps the
 /// symbols and line tables a profiler or a crash report needs.
+///
+/// A release build is also sized: whole-program LTO, the dependencies at
+/// `opt-level = "s"`, and the crates a frame runs through, together with the
+/// application's own (workspace members, which `"*"` leaves out), at `3`.
+/// `cargo xtask perf --size` builds a generated counter with this profile
+/// (`perf/size.toml`). `panic = "abort"` would drop the unwind tables too, but
+/// it turns a panic FLUI contains in a widget, a callback or a platform entry
+/// (ADR-0281, ADR-0287) into the end of the application, so it stays `unwind`.
 pub(super) const PROFILES: &str = r#"[profile.dev.package."*"]
 opt-level = 3
 debug = false
 
 [profile.release]
 opt-level = 3
-lto = "thin"
+lto = "fat"
 codegen-units = 1
 strip = "symbols"
+
+# Dependencies are optimized for size, the frame path for speed.
+[profile.release.package."*"]
+opt-level = "s"
+
+[profile.release.package.flui-foundation]
+opt-level = 3
+
+[profile.release.package.flui-scheduler]
+opt-level = 3
+
+[profile.release.package.flui-animation]
+opt-level = 3
+
+[profile.release.package.flui-interaction]
+opt-level = 3
+
+[profile.release.package.flui-view]
+opt-level = 3
+
+[profile.release.package.flui-widgets]
+opt-level = 3
+
+[profile.release.package.flui-objects]
+opt-level = 3
+
+[profile.release.package.flui-rendering]
+opt-level = 3
+
+[profile.release.package.flui-semantics]
+opt-level = 3
+
+[profile.release.package.flui-layer]
+opt-level = 3
+
+[profile.release.package.flui-painting]
+opt-level = 3
+
+[profile.release.package.flui-engine]
+opt-level = 3
+
+[profile.release.package.flui-runtime]
+opt-level = 3
 
 [profile.profiling]
 inherits = "release"
