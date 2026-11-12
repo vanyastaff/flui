@@ -272,6 +272,13 @@ jobs:
           set -euo pipefail
           args=(--event "$EVENT" --format github)
           if [ "$EVENT" = pull_request ]; then
+            # The checkout is the PR merged into its base branch's current
+            # tip, its first parent. `base.sha` stays where the base was at
+            # the PR's last push: its diff would count every later main
+            # commit as the PR's own (and ask for test-trybuild).
+            if git rev-parse --verify --quiet HEAD^2 > /dev/null; then
+              BASE_SHA=$(git rev-parse HEAD^1)
+            fi
             args+=(--base "$BASE_SHA")
           fi
           cargo xtask affected "${args[@]}" > scope.txt
