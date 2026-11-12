@@ -220,10 +220,13 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 }
             };
         }
-        let device_moved = self.recover_device(&mut first);
+        let mut device_moved = self.recover_device(&mut first);
         for index in 0..self.slots.len() {
             outcome.settled += self.service(index, &mut first);
         }
+        // A loss this turn's own frames met is published now, so the owner
+        // knows a rebuild is due without waiting for another turn to see it.
+        device_moved |= self.note_loss(&mut first);
         if outcome.settled > 0 || device_moved {
             first.contain(|| (self.wake)());
         }
@@ -342,42 +345,55 @@ impl<B: SlotBackend> RasterExecutor<B> {
     fn recover_device(&mut self, first: &mut FirstPanic) -> bool {
         let before = self.rebuilds.health();
         let lost = self.backend.device_lost();
+        let mut rebuilt = false;
         if lost {
             self.rebuilds.note_lost();
         } else if before.is_lost() {
+            // The backend renders again without a rebuild this executor saw
+            // succeed (one that panicked after its device was in place): the
+            // slots are restamped all the same, so "healthy after lost" always
+            // means every frame stamped before the loss is refused.
             self.rebuilds.recovered();
+            self.after_rebuild(Vec::new(), first);
+            rebuilt = true;
         }
         let mut failure = None;
         let mut failed = None;
-        let mut rebuilt = false;
         let now = self.clock.now();
         if self.rebuilds.due(now) {
-            match first.contain(|| self.backend.rebuild_device()) {
-                Some(Ok(refused)) => {
+            if self.backend.rebuilds_inline() {
+                match first.contain(|| self.backend.rebuild_device()) {
+                    Some(Ok(refused)) => {
+                        self.rebuilds.recovered();
+                        // The slots are restamped before the health says the
+                        // device renders, so no owner stamps a frame for the
+                        // old device after reading it.
+                        self.after_rebuild(refused, first);
+                        rebuilt = true;
+                    }
+                    Some(Err(error)) => {
+                        failure = Some(error);
+                        failed = Some(self.rebuilds.record_failure(now));
+                    }
+                    None => failed = Some(self.rebuilds.record_failure(now)),
+                }
+                if failed.is_some() && !self.backend.device_lost() {
+                    // The rebuild failed with its new device in place: the
+                    // slots are restamped before this turn serves them, as
+                    // after a rebuild that succeeded.
                     self.rebuilds.recovered();
-                    // The slots are restamped before the health says the
-                    // device renders, so no owner stamps a frame for the old
-                    // device after reading it.
-                    self.after_rebuild(refused, first);
+                    self.after_rebuild(Vec::new(), first);
                     rebuilt = true;
                 }
-                Some(Err(error)) => {
-                    failure = Some(error);
-                    failed = Some(self.rebuilds.record_failure(now));
-                }
-                None => failed = Some(self.rebuilds.record_failure(now)),
+            } else {
+                // No attempt can succeed here: give up at once instead of
+                // walking the backoff (the web, ADR-0305 §8).
+                self.rebuilds.give_up();
+                failure = Some(EngineError::GpuUnavailable);
+                failed = Some(FailedRebuild::GivenUp);
             }
         }
-        let after = self.rebuilds.health();
-        let replaced = {
-            let mut record = self.shared.device();
-            record.health = after;
-            record.next_attempt_at = self.rebuilds.next_attempt_at();
-            failure.and_then(|error| record.failure.replace(error))
-        };
-        if let Some(error) = replaced {
-            let _dropped = first.contain(move || drop(error));
-        }
+        let after = self.publish_device(failure, now, first);
         if lost && !before.is_lost() {
             report(Report::DeviceLost, first);
         }
@@ -387,6 +403,41 @@ impl<B: SlotBackend> RasterExecutor<B> {
             report(Report::DeviceRebuilt, first);
         }
         before != after || rebuilt
+    }
+
+    /// See whether this turn's frames lost the device while it was published
+    /// healthy, and publish the loss with its rebuild due now; answers
+    /// whether it did.
+    fn note_loss(&mut self, first: &mut FirstPanic) -> bool {
+        if self.rebuilds.health().is_lost() || !self.backend.device_lost() {
+            return false;
+        }
+        self.rebuilds.note_lost();
+        let _published = self.publish_device(None, self.clock.now(), first);
+        report(Report::DeviceLost, first);
+        true
+    }
+
+    /// Write the device's health, its next attempt and a new failure into the
+    /// record the owner reads; answers the health written. The failure it
+    /// replaces is dropped outside the lock and contained.
+    fn publish_device(
+        &mut self,
+        failure: Option<EngineError>,
+        now: web_time::Instant,
+        first: &mut FirstPanic,
+    ) -> DeviceHealth {
+        let health = self.rebuilds.health();
+        let replaced = {
+            let mut record = self.shared.device();
+            record.health = health;
+            record.next_attempt_at = self.rebuilds.next_attempt_at(now);
+            failure.and_then(|error| record.failure.replace(error))
+        };
+        if let Some(error) = replaced {
+            let _dropped = first.contain(move || drop(error));
+        }
+        health
     }
 
     /// The device was rebuilt: every frame stamped before it is refused on

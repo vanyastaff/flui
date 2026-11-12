@@ -1262,6 +1262,10 @@ impl flui_engine::SlotBackend for PanicsAtAttach {
     ) -> flui_engine::EngineResult<Vec<(SlotId, flui_engine::EngineError)>> {
         Ok(Vec::new())
     }
+
+    fn rebuilds_inline(&self) -> bool {
+        true
+    }
 }
 
 /// A panic payload the owner never took is dropped when its detached slot's
@@ -1687,11 +1691,13 @@ fn a_given_up_rebuild_holds_until_the_owner_sends_retry_device() {
         DeviceHealth::Rebuilding { attempts: 1 }
     );
 }
-
-/// A rebuild that panics counts toward the backoff, the slots are still
-/// served, and the panic is resumed once the turn committed.
+/// A rebuild that panics once its new device is in place leaves the backend
+/// rendering: the slots are restamped before the turn serves them, so a frame
+/// stamped before the loss is refused, and the panic is resumed once the turn
+/// committed. Without the restamp the frame renders on the half-rebuilt
+/// device.
 #[test]
-fn a_panicking_rebuild_is_paced_and_resumed_after_the_turn() {
+fn a_rebuild_that_panics_with_its_device_in_place_restamps_every_slot() {
     let mut rig = rig();
     let at = attached(&mut rig, 1);
     rig.backend.lose_device();
@@ -1705,13 +1711,69 @@ fn a_panicking_rebuild_is_paced_and_resumed_after_the_turn() {
     );
     assert_eq!(
         verdicts(&rig.sender, at.slot),
+        [(1, RasterVerdict::SurfaceStale)],
+        "a frame stamped before the loss is refused"
+    );
+    assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+    let _ = rig
+        .sender
+        .send(frame(restamped(&rig, at), 2))
+        .expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(2, RasterVerdict::Presented)]
+    );
+}
+
+/// A loss the turn's own frame meets is published at once, with its rebuild
+/// due now, so the owner runs the next turn without waiting for a later one
+/// to see it.
+#[test]
+fn a_loss_met_by_a_frame_is_published_with_its_rebuild_due_now() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    rig.backend.lose_device_in_next_render();
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
         [(1, RasterVerdict::DeviceLost)]
     );
     assert_eq!(
         rig.sender.device_health(),
-        DeviceHealth::Rebuilding { attempts: 1 }
+        DeviceHealth::Rebuilding { attempts: 0 }
     );
-    assert!(rig.sender.device_retry_at().is_some(), "the next is paced");
+    assert_eq!(
+        rig.sender.device_retry_at(),
+        Some(MonotonicClock::now(&rig.clock)),
+        "the first rebuild is due now"
+    );
+    assert_eq!(rebuilds(&rig.backend), 0, "the next turn rebuilds");
+    let _ = rig.executor.turn();
+    assert_eq!(rebuilds(&rig.backend), 1);
+    assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+}
+
+/// A backend that cannot rebuild where the executor runs (the web) is given
+/// up at the first due attempt instead of walking the backoff.
+#[test]
+fn a_backend_that_cannot_rebuild_inline_gives_up_at_once() {
+    let mut rig = rig();
+    let _at = attached(&mut rig, 1);
+    rig.backend.cannot_rebuild_inline();
+    rig.backend.lose_device();
+    let _ = rig.executor.turn();
+    assert_eq!(
+        rig.sender.device_health(),
+        DeviceHealth::GivenUp { attempts: 0 }
+    );
+    assert_eq!(rebuilds(&rig.backend), 0, "no attempt is made");
+    assert_eq!(rig.sender.device_retry_at(), None);
+    assert!(matches!(
+        rig.sender.take_device_failure(),
+        Some(EngineError::GpuUnavailable)
+    ));
 }
 
 /// A slot the rebuilt device cannot present to drops its surface and asks

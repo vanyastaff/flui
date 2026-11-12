@@ -369,8 +369,14 @@ executor runs each command under its own catch, in both placements.
   ADR-0267's `DeviceRecovery { Pending, Failed, Abandoned }`, with when the next rebuild may run
   (`RasterSender::device_retry_at`, for the host's wake) and why the last one failed
   (`RasterSender::take_device_failure`); that record is what `is_device_lost` reads instead of the
-  backend (`raster_lane.rs:289`). A rebuild that panics counts as a failure and its panic is
-  resumed once the turn has served every slot. After `GivenUp` the context stays given up until
+  backend (`raster_lane.rs:289`). A loss that this turn's own frames meet is published after the
+  slots are served, with its first rebuild due now (`device_retry_at` answers the current instant),
+  so the owner runs the next turn. A rebuild that panics counts as a failure and its panic is
+  resumed once the turn has served every slot; the context counts its device lost until every
+  slot is on the new one, so a rebuild that unwinds part way is asked for again from the start,
+  and the executor restamps every slot whenever a lost device renders again, whichever way it
+  came back. A backend that cannot rebuild where the executor runs (the web, below) is given up
+  at the first due attempt. After `GivenUp` the context stays given up until
   the application sends `RetryDevice`; nothing retries on its own.
   That retry runs ADR-0244 decision 1's probe again in fresh instances, because the backend whose
   rebuilds exhausted the backoff may be the cause: the factory is replaced and every slot gets a

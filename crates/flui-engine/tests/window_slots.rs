@@ -432,6 +432,10 @@ impl flui_engine::SlotBackend for RestoresDuringRender {
     ) -> flui_engine::EngineResult<Vec<(flui_engine::SlotId, flui_engine::EngineError)>> {
         self.inner.rebuild_device()
     }
+
+    fn rebuilds_inline(&self) -> bool {
+        self.inner.rebuilds_inline()
+    }
 }
 
 /// A restore sent from inside a frame that then loses its surface carries the

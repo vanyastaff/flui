@@ -70,6 +70,8 @@ struct Script {
     /// The slots the next successful rebuild cannot present to.
     rebuild_refusals: Vec<(SlotId, EngineError)>,
     device_lost: bool,
+    lose_in_next_render: bool,
+    no_inline_rebuild: bool,
 }
 
 /// A [`SlotBackend`] with no GPU: it logs every call and answers from a
@@ -123,8 +125,23 @@ impl ScriptedSlots {
         self.script.borrow_mut().device_lost = true;
     }
 
+    /// Lose the device inside the next render, which fails
+    /// [`EngineError::DeviceLost`], as wgpu's device-lost callback can fire
+    /// while a frame records.
+    pub fn lose_device_in_next_render(&self) {
+        self.script.borrow_mut().lose_in_next_render = true;
+    }
+
+    /// Answer that no device rebuild can succeed where the executor runs, as
+    /// the web's context does.
+    pub fn cannot_rebuild_inline(&self) {
+        self.script.borrow_mut().no_inline_rebuild = true;
+    }
+
     /// Answer the next unanswered device rebuild with `answer`; one the
-    /// script does not answer succeeds.
+    /// script does not answer succeeds. A [`ScriptedAnswer::Panic`] panics
+    /// once the new device is in place, so the backend no longer reports the
+    /// device lost.
     pub fn script_rebuild(&self, answer: ScriptedAnswer) {
         self.script.borrow_mut().rebuilds.push_back(answer);
     }
@@ -232,6 +249,9 @@ impl SlotBackend for ScriptedSlots {
     ) -> EngineResult<PresentDisposition> {
         {
             let mut script = self.script.borrow_mut();
+            if std::mem::take(&mut script.lose_in_next_render) {
+                script.device_lost = true;
+            }
             if script.device_lost {
                 script.calls.push(SlotCall::Render(slot, damage));
                 return Err(EngineError::DeviceLost);
@@ -265,8 +285,16 @@ impl SlotBackend for ScriptedSlots {
                 Ok(std::mem::take(&mut script.rebuild_refusals))
             }
             Some(ScriptedAnswer::Fail(error)) => Err(error),
-            Some(ScriptedAnswer::Panic) => panic!("scripted device rebuild panic"),
+            Some(ScriptedAnswer::Panic) => {
+                // The new device is in place when the rebuild unwinds.
+                self.script.borrow_mut().device_lost = false;
+                panic!("scripted device rebuild panic")
+            }
         }
+    }
+
+    fn rebuilds_inline(&self) -> bool {
+        !self.script.borrow().no_inline_rebuild
     }
 }
 

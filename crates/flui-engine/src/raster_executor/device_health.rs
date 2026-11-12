@@ -101,14 +101,23 @@ impl DeviceRebuilds {
         }
     }
 
-    /// When the next rebuild may run, for the owner's wake: `None` while the
-    /// device is healthy or the rebuild is given up, which need no wake.
-    pub(crate) fn next_attempt_at(&self) -> Option<Instant> {
+    /// When the next rebuild may run, for the owner's wake: `now` while one
+    /// is due at once, `None` while the device is healthy or the rebuild is
+    /// given up, which need no wake.
+    pub(crate) fn next_attempt_at(&self, now: Instant) -> Option<Instant> {
         if self.lost && !self.given_up {
-            self.next_at
+            Some(self.next_at.unwrap_or(now))
         } else {
             None
         }
+    }
+
+    /// No rebuild can succeed where the executor runs: give up now, until
+    /// the owner asks again.
+    pub(crate) fn give_up(&mut self) {
+        self.lost = true;
+        self.given_up = true;
+        self.next_at = None;
     }
 
     /// The device was seen lost.
@@ -182,11 +191,16 @@ mod tests {
         let now = Instant::now();
         rebuilds.note_lost();
         assert!(rebuilds.due(now), "the first rebuild runs at once");
+        assert_eq!(
+            rebuilds.next_attempt_at(now),
+            Some(now),
+            "a rebuild due at once is due now"
+        );
         let mut outcomes = Vec::new();
         while outcomes.last() != Some(&FailedRebuild::GivenUp) {
             assert!(outcomes.len() < 100, "the rebuild is given up");
             outcomes.push(rebuilds.record_failure(now));
-            if let Some(at) = rebuilds.next_attempt_at() {
+            if let Some(at) = rebuilds.next_attempt_at(now) {
                 assert!(!rebuilds.due(now), "the next rebuild waits out the backoff");
                 assert!(
                     at.duration_since(now) <= REBUILD_CAP,
@@ -211,7 +225,7 @@ mod tests {
             DeviceHealth::GivenUp { attempts: failures }
         );
         assert_eq!(
-            rebuilds.next_attempt_at(),
+            rebuilds.next_attempt_at(now),
             None,
             "a given-up rebuild needs no wake"
         );

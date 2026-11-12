@@ -218,6 +218,10 @@ pub struct GpuContext {
     /// How the device was requested, so a rebuild asks for the same kind.
     recipe: DeviceRecipe,
     domain: Arc<DeviceDomain>,
+    /// A device rebuild is under way: set before the new device replaces
+    /// the old one and cleared once every slot is on it, so a rebuild that
+    /// unwinds part way leaves the device lost (ADR-0305 §8).
+    rebuilding: bool,
     /// The painter every slot records and replays with: its pipelines per
     /// target format, the glyph atlas and the image and path caches.
     ///
@@ -462,6 +466,7 @@ impl GpuContext {
             adapter,
             recipe,
             domain,
+            rebuilding: false,
             painter: None,
             pipelines: None,
             blit: None,
@@ -506,6 +511,9 @@ impl GpuContext {
             SurfaceSlot::Offscreen(_) => None,
         });
         let (adapter, device, queue) = block_on(self.recipe.request(&self.instance, compatible))?;
+        // The device counts as lost until every slot is on the new one, so a
+        // rebuild that unwinds part way is asked for again from the start.
+        self.rebuilding = true;
         // What the old device made goes before the new device is used.
         self.painter = None;
         self.pipelines = None;
@@ -538,6 +546,7 @@ impl GpuContext {
                 refused.push((id, error));
             }
         }
+        self.rebuilding = false;
         Ok(refused)
     }
 
@@ -1056,6 +1065,10 @@ impl SlotBackend for GpuContext {
         scene: &Scene,
         damage: DamageRegion,
     ) -> EngineResult<PresentDisposition> {
+        // A rebuild that unwound part way left slots on the old device.
+        if self.rebuilding {
+            return Err(EngineError::DeviceLost);
+        }
         match self.slots.get(slot) {
             Some(SurfaceSlot::Window(_)) => self.render_window(slot, scene, damage),
             Some(SurfaceSlot::Offscreen(_)) | None => {
@@ -1076,11 +1089,15 @@ impl SlotBackend for GpuContext {
     }
 
     fn device_lost(&self) -> bool {
-        self.domain.is_lost()
+        self.rebuilding || self.domain.is_lost()
     }
 
     fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
         self.rebuild()
+    }
+
+    fn rebuilds_inline(&self) -> bool {
+        cfg!(not(target_arch = "wasm32"))
     }
 }
 
