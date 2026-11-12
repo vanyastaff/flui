@@ -25,6 +25,10 @@ pub struct RunKey {
 ///
 /// Append-only: a face registered once stays for the registry's life, so a
 /// key naming it never dangles.
+#[expect(
+    clippy::disallowed_types,
+    reason = "interns variation coordinates an application's text styles author, so the table keeps SipHash's random seed against chosen collisions"
+)]
 pub struct FontRegistry {
     /// This registry's identity, stamped on every [`VariationId`] it mints: a
     /// random 64-bit value, so two registries collide with negligible
@@ -34,7 +38,7 @@ pub struct FontRegistry {
     owned_sources: bool,
     /// Interned coordinate sets; a [`VariationId`] is an index into this.
     variations: Vec<Box<[i16]>>,
-    variation_ids: FxHashMap<Box<[i16]>, VariationId>,
+    variation_ids: std::collections::HashMap<Box<[i16]>, VariationId>,
 }
 
 enum FaceBytes {
@@ -75,6 +79,10 @@ impl Face {
 }
 
 impl Default for FontRegistry {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "interns variation coordinates an application's text styles author, so the table keeps SipHash's random seed against chosen collisions"
+    )]
     fn default() -> Self {
         Self {
             // std's randomly keyed hasher over no input: a fresh random value
@@ -83,7 +91,7 @@ impl Default for FontRegistry {
             faces: FxHashMap::default(),
             owned_sources: false,
             variations: Vec::new(),
-            variation_ids: FxHashMap::default(),
+            variation_ids: std::collections::HashMap::new(),
         }
     }
 }
