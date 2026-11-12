@@ -141,6 +141,22 @@ pub(crate) fn create_element_of(view: &dyn View) -> ElementKind {
     }
 }
 
+/// The view `view` offers, as a `V` in a shared allocation: the innermost
+/// [`BoxedView`]'s own `Rc` when `view` is one, otherwise a copy. `None` when
+/// the view is not a `V`.
+pub(crate) fn shared_view_of<V: View + Clone>(view: &dyn View) -> Option<Rc<V>> {
+    let mut effective = view;
+    let mut shared: Option<&Rc<dyn View>> = None;
+    while let Some(boxed) = effective.as_any().downcast_ref::<BoxedView>() {
+        shared = Some(boxed.shared());
+        effective = boxed.as_view();
+    }
+    match shared {
+        Some(shared) => Rc::clone(shared).downcast_rc::<V>().ok(),
+        None => effective.as_any().downcast_ref::<V>().cloned().map(Rc::new),
+    }
+}
+
 /// An element kind for type erasure.
 ///
 /// Used when the concrete Element type cannot be known at compile time.
