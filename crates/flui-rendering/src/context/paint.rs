@@ -768,7 +768,7 @@ mod tests {
 
     // Paint-context run matrix: ordered runs between child markers and baked origin.
     #[test]
-    fn paint_cx_run_matrix() {
+    fn paint_context_run_matrix() {
         let cases: &[(&str, fn())] = &[
             (
                 "draws_between_child_markers_split_into_ordered_runs",

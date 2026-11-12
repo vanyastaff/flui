@@ -454,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn a_write_through_an_event_cx_marks_exactly_the_readers() {
+    fn a_write_through_an_event_context_marks_exactly_the_readers() {
         let (r, inbox) = graph_with_inbox();
         let a = r.signal(1u32);
         let b = r.signal(2u32);

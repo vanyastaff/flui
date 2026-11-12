@@ -609,7 +609,7 @@ and schedules a rebuild; `build` queues one post-frame entry per recorded page,
 and delivery reads the current callback (mapping decision 37).
 
 Tests: `tests/drag_and_drop.rs`, `tests/page_view_events.rs`, and the
-`event_cx_tests` module of `tests/shortcuts.rs`.
+`event_context_tests` module of `tests/shortcuts.rs`.
 
 `DropTarget`'s `on_drop` and spring-loading callback and `Semantics`' action
 handlers take `EventContext` too. Their render data must stay `Send + Sync`, so each
@@ -3150,7 +3150,7 @@ at build time and called from an event is a gesture's
 `CommandHandle` ("Gesture alternatives perform one intent on every path"
 below). `is_enabled` and `to_key_event_result` stay
 queries. **Tests:** `tests/actions.rs` (resolution through key dispatch),
-`tests/shortcuts.rs`'s `event_cx_tests`.
+`tests/shortcuts.rs`'s `event_context_tests`.
 
 ### Pull to refresh is a participant of the scroll channel
 
