@@ -9,7 +9,7 @@ use flui_platform::input_regions::{
 };
 use flui_platform::{AppTitleBar, PlatformWindow as _, WindowCommand, WindowFrame, WindowMode};
 use flui_testing::window_commands::AdmitAndApply as _;
-use flui_view::{EventCx, IntoView, View};
+use flui_view::{EventContext, IntoView, View};
 use flui_widgets::{
     ColoredBox, GestureDetector, MouseRegion, Positioned, SizedBox, Stack, WindowCaptionButton,
     WindowMovePassThrough, WindowResizeArea, WindowTitleBar,
@@ -32,7 +32,7 @@ fn device(
 
 fn button(width: f64) -> impl View {
     GestureDetector::new()
-        .on_tap(|_cx: &mut EventCx<'_>| {})
+        .on_tap(|_ctx: &mut EventContext<'_>| {})
         .child(SizedBox::new(width, 20.0).child(ColoredBox::new(Color::rgb(0, 0, 200))))
 }
 

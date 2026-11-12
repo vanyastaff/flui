@@ -201,8 +201,8 @@ impl SwipeActions {
             }
             SwipeAlternative::PresentedMenu(presenter) => {
                 let menu = more.iter().fold(
-                    MenuSpec::new(first.command.clone(), move |cx, request| {
-                        presenter(cx, request);
+                    MenuSpec::new(first.command.clone(), move |ctx, request| {
+                        presenter(ctx, request);
                     }),
                     |spec, action| spec.item(action.command.clone()),
                 );
@@ -408,8 +408,8 @@ impl SwipeActionsState {
             // or that removes the row, leaves no row standing open.
             return_to(&controller, Stop::Closed, motion.get());
             if let Some(handle) = handle {
-                writer.write(|cx| {
-                    let _ = handle.perform(cx);
+                writer.write(|ctx| {
+                    let _ = handle.perform(ctx);
                 });
             }
         })
@@ -478,7 +478,7 @@ impl ViewState<SwipeActions> for SwipeActionsState {
         let (geometry, applied) = (Rc::clone(&self.geometry), Rc::clone(&self.applied));
         // Every Down reaches the row before its drag captures the contact.
         let row = Listener::new()
-            .on_pointer_down(move |_cx, _dispatch| {
+            .on_pointer_down(move |_ctx, _dispatch| {
                 Self::reanchor(&down, &geometry, &applied, None);
                 origin_down.down(down.current());
             })
@@ -543,11 +543,11 @@ fn tray_buttons(
                 .label(action.command.label().to_owned())
                 .child(ExcludeSemantics::new().child(Center::new().child(action.content.clone()))),
         )
-        .on_press(move |cx| {
+        .on_press(move |ctx| {
             // Closed first: a command that panics or removes the row leaves
             // no row standing open.
             return_to(&controller, Stop::Closed, motion.get());
-            let _ = handle.perform(cx);
+            let _ = handle.perform(ctx);
         });
         SizedBox::width(ACTION_EXTENT).child(pressed).boxed()
     };

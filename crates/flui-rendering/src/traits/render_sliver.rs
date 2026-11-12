@@ -253,7 +253,7 @@ pub trait RenderSliver: flui_foundation::inspect::Inspect + 'static {
     /// job — splice only the visible child range.
     ///
     /// The default implementation splices all children in tree order.
-    fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Self::Arity>) {
+    fn paint(&self, ctx: &mut crate::context::PaintContext<'_, Self::Arity>) {
         ctx.paint_children_in_order();
     }
 
@@ -528,15 +528,15 @@ where
 {
     fn perform_layout_raw(
         &mut self,
-        ctx: &mut <SliverProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
+        ctx: &mut <SliverProtocol as crate::protocol::Protocol>::ErasedLayoutContext<'_>,
     ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<SliverProtocol>> {
         // Core.2 W3 — live bridge, mirroring the Box analog in
         // `render_box.rs`.
         //
-        // The pipeline hands us `&mut dyn SliverLayoutCtxErased`
-        // (the GAT `SliverProtocol::LayoutCtxErased<'_>` resolves to
+        // The pipeline hands us `&mut dyn ErasedSliverLayoutContext`
+        // (the GAT `SliverProtocol::ErasedLayoutContext<'_>` resolves to
         // exactly this). We reconstruct a typed
-        // `SliverLayoutCtx<T::Arity, T::ParentData>` via `from_erased`
+        // `RawSliverLayoutContext<T::Arity, T::ParentData>` via `from_erased`
         // (Proxy storage — caches constraints, delegates child ops
         // back through the erased ctx), wrap it in the ergonomic
         // `SliverLayoutContext` so the user's `perform_layout` body
@@ -546,7 +546,7 @@ where
         // `T::perform_layout` now returns `SliverGeometry` directly —
         // a missing completion is a compile error, not a runtime error.
         let typed_inner =
-            crate::protocol::SliverLayoutCtx::<T::Arity, T::ParentData>::from_erased(ctx);
+            crate::protocol::RawSliverLayoutContext::<T::Arity, T::ParentData>::from_erased(ctx);
         let mut layout_ctx =
             crate::context::SliverLayoutContext::<T::Arity, T::ParentData>::new(typed_inner);
         T::perform_layout(self, &mut layout_ctx)
@@ -559,12 +559,12 @@ where
         size: flui_foundation::geometry::Size,
     ) {
         // Same paint bridge shape as the BoxProtocol blanket: wrap the
-        // recorder in the typed PaintCx<T::Arity> and call the user's
+        // recorder in the typed PaintContext<T::Arity> and call the user's
         // RenderSliver::paint. `size` is the sliver's absolute paint size
         // (`get_absolute_size(paint_extent)`), resolved by the driver
         // from `RenderState` so paint reads `ctx.size()` (2B field dedup).
-        let mut cx = crate::context::PaintCx::<T::Arity>::new(recorder, child_count, size);
-        T::paint(self, &mut cx);
+        let mut ctx = crate::context::PaintContext::<T::Arity>::new(recorder, child_count, size);
+        T::paint(self, &mut ctx);
     }
 
     fn hit_test_raw(
@@ -582,7 +582,7 @@ where
         // range), so `size` is threaded for signature uniformity but the
         // sliver context does not read it.
         let inner =
-            crate::protocol::SliverHitTestCtx::<T::Arity, T::ParentData>::with_child_callback(
+            crate::protocol::RawSliverHitTestContext::<T::Arity, T::ParentData>::with_child_callback(
                 position, hit_child,
             );
         let mut ctx =

@@ -439,7 +439,7 @@ table in `crates/flui-widgets/tests/contracts.rs`.
 ### Build contexts are live during build; there is no detached fallback context
 
 **Rule.** During a `BuildOwner::build_scope` drain, the element being built is taken out of its
-slot and built against a borrowed, read-only view of the real tree (`BuildCtx`), then put back.
+slot and built against a borrowed, read-only view of the real tree (`LiveBuildContext`), then put back.
 Node fields that survive the take (parent, depth, inherited scope, children) stay readable; only
 the element itself is a hole. A component build outside a drain is a framework bug and panics
 with a `BUG:` message — there is no inert "minimal" context to fall back to.
@@ -455,10 +455,11 @@ stashed and used after its element is defunct. Capability acquisition is split o
 ### Inherited reads are O(1) and field-precise; reading is depending
 
 **Rule.** Each element node carries its resolved inherited scope, built at mount and shared by
-refcount down runs of non-providers. A provider's scope is the table of everything above it,
-shared, and the few types the nearest providers added since that table was built; a provider
-copies the table only when those outgrow four. A nearer provider of a type shadows a farther one.
-`find_inherited_provider` scans the few and asks the table once.
+refcount down runs of non-providers. A provider's scope is one layer holding the types it
+publishes, over a shared pointer to the scope above; a nearer provider of a type shadows a farther
+one. `find_inherited_provider` walks at most four layers and then asks one table: the provider
+whose parent's chain is four layers long folds that chain into a new table, so a lookup stays
+O(1) at any depth.
 `#[derive(InheritedData)]` generates `FieldMask` constants per field; `InheritedView::changed_fields`
 diffs old and new data per field; `depend_on_field(mask, …)` records a masked dependency, and a
 provider update rebuilds only dependents whose mask intersects the change. The whole-type read
@@ -522,9 +523,9 @@ with `LifecycleHook::Update` (ADR-0287); the element is not requeued.
 
 **Rule.** The reactive graph (`reactive/mod.rs`, one `Reactive` per `BuildOwner`) implements
 `flui_foundation::read_scope::ReadGraph` — pure reads, enough for `Signal::peek` — and never
-`ReaderSink`. `BuildContext` has `ReadScope` as a supertrait, so `sig.get(cx)` resolves through
+`ReaderSink`. `BuildContext` has `ReadScope` as a supertrait, so `sig.get(ctx)` resolves through
 the context's scope. The scope pairs the graph with `ElementReads`, a crate-private sink bound
-to one element: `make_build_ctx` mints it for the element about to build (`BuildCtx` always
+to one element: `make_build_ctx` mints it for the element about to build (`LiveBuildContext` always
 subscribes), and `ElementBuildContext` captures one for its own element and subscribes only while
 marked as building. `begin_element_build`/`end_element_build` bracket every build in
 `build_or_recover` and `release_element` runs on every unmount, in every build: there is no
@@ -547,9 +548,9 @@ A local invariant (ADR-0086).
 
 **Rule.** `SignalWriteExt::set`/`update`/`set_if_changed` take `&W` where `W: WriteTarget`, a
 sealed trait whose graph accessor takes a token only this crate can make
-(`reactive/writer.rs`). Application code meets one target: the `&mut EventCx<'_>` an event
+(`reactive/writer.rs`). Application code meets one target: the `&mut EventContext<'_>` an event
 callback receives, which derefs to a `Writer`. `Writer` has no public constructor and is neither
-`Clone` nor `Send`; an `EventCx` exists only inside `WriterSource::write`. Stateful widgets acquire
+`Clone` nor `Send`; an `EventContext` exists only inside `WriterSource::write`. Stateful widgets acquire
 their `WriterSource` through `LifecycleContext::writer_source`; render views acquire it through
 `RenderObjectContext::writer_source` while registering owner-local interaction handlers.
 Neither capability is exposed by `build`'s `&dyn BuildContext`. A detached render context
@@ -571,7 +572,7 @@ return `()` or a write's `Result`; `EventOutcome::report` logs a refused write o
 `flui.signals` rather than dropping it silently. A state creates its signals in
 `StatefulView::create_state`, so no handle exists before its graph slot does.
 
-The borrowed `Writer` and `EventCx` also implement pure `ReadGraph`: an event's
+The borrowed `Writer` and `EventContext` also implement pure `ReadGraph`: an event's
 `peek` observes current values without creating a build subscription. Owner-bound
 non-signal mutations use `WriterSource::check_context` before changing state;
 it refuses foreign presentation contexts and a build in progress. It cannot prove
@@ -864,11 +865,12 @@ imposing a generation advance on retained slots.
 
 ### Object keys own their identity
 
-`ObjectKey` stores the erased owning Arc alone. `Arc::ptr_eq` compares its
-allocation identity, while hash and debug formatting use its data address.
-Cloned keys keep that allocation live; equal values in separate allocations
-remain different keys. Automatic Send/Sync follow the stored Arc's bounds,
-without duplicate pointer state or manual unsafe implementations.
+`ObjectKey` stores the erased owning `Rc` alone, cloned from the `&Rc<T>` its
+constructor takes. `Rc::ptr_eq` compares its allocation identity, while hash
+and debug formatting use its data address. Cloned keys keep that allocation
+live, so the address cannot be reused while a key compares it; equal values in
+separate allocations remain different keys. A key is owner-local: it lives in
+views and elements on the owner thread and carries no thread bound (ADR-0323 §4).
 
 The public constructor doctest distinguishes shared and separate allocations.
 `object_keys_follow_retained_allocations_through_reorder` in

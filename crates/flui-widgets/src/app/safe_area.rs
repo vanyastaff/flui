@@ -44,18 +44,16 @@ pub struct SafeArea {
 }
 
 impl SafeArea {
-    /// A `SafeArea` with all four edge-toggles on and no minimum insets.
-    ///
-    /// Set the child with [`.child()`](Self::child); the default placeholder
-    /// is a zero-size [`SizedBox::shrink`](crate::SizedBox).
-    pub fn new() -> Self {
+    /// A `SafeArea` around `child`, with all four edge-toggles on and no
+    /// minimum insets.
+    pub fn new(child: impl IntoView) -> Self {
         Self {
             left: true,
             top: true,
             right: true,
             bottom: true,
             minimum: EdgeInsets::ZERO,
-            child: crate::layout::SizedBox::shrink().boxed(),
+            child: child.into_view().boxed(),
         }
     }
 
@@ -94,19 +92,6 @@ impl SafeArea {
     pub fn minimum(mut self, minimum: EdgeInsets) -> Self {
         self.minimum = minimum;
         self
-    }
-
-    /// Set the widget laid out inside the safe-area insets.
-    #[must_use]
-    pub fn child(mut self, child: impl IntoView) -> Self {
-        self.child = child.into_view().boxed();
-        self
-    }
-}
-
-impl Default for SafeArea {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

@@ -10,7 +10,8 @@ use flui_view::environment::VsyncScope;
 use flui_widgets::{AnimatedContainer, AnimatedOpacity, MotionBuilder, SizedBox};
 
 fn tree(registry: &Vsync, opacity: f64, side: f64, spring: bool) -> VsyncScope {
-    let mut geometry = AnimatedContainer::new(SizedBox::shrink())
+    let mut geometry = AnimatedContainer::new()
+        .child(SizedBox::shrink())
         .width(side)
         .height(side)
         .color(Color::RED)
@@ -23,7 +24,8 @@ fn tree(registry: &Vsync, opacity: f64, side: f64, spring: bool) -> VsyncScope {
     }
     VsyncScope::new(
         registry.clone(),
-        AnimatedOpacity::new(opacity, geometry)
+        AnimatedOpacity::new(opacity)
+            .child(geometry)
             .duration(Duration::from_secs(1))
             .curve(Linear),
     )

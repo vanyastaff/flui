@@ -50,8 +50,8 @@ pub fn validator_error_reaches_the_input_decorator_error_line() {
 
     let _ = node.request_focus();
     let event = KeyEventBuilder::new(Code::KeyA)
-        .with_key(Key::character("a"))
-        .with_state(KeyState::Down)
+        .key(Key::character("a"))
+        .state(KeyState::Down)
         .build();
     assert_eq!(
         laid.focus_manager().dispatch_key_event(&event),

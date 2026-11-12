@@ -217,7 +217,7 @@ fn a_window_methods_parameters_name_the_window_they_address() {
     }
     assert_eq!(
         WaitParams::new(window, Condition::Settled)
-            .with_timeout_ms(250)
+            .timeout_ms(250)
             .holds_for(),
         Duration::from_millis(250),
         "a wait holds for its timeout"

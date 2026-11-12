@@ -112,14 +112,14 @@ pub(crate) fn each_style_change_is_delivered_once() {
     ui_runtime.render_frame(&mut sink);
     assert_eq!(delivered(&chrome), [Dark]);
     ui_runtime.render_frame(&mut sink);
-    writer.write(|cx| scene.set(cx, 2)).expect("write");
+    writer.write(|ctx| scene.set(ctx, 2)).expect("write");
     ui_runtime.render_frame(&mut sink);
     assert_eq!(
         delivered(&chrome),
         [Dark],
         "an equal style repaints silently"
     );
-    writer.write(|cx| scene.set(cx, 1)).expect("write");
+    writer.write(|ctx| scene.set(ctx, 1)).expect("write");
     ui_runtime.render_frame(&mut sink);
     assert_eq!(delivered(&chrome), [Dark, Light]);
 }
@@ -167,7 +167,7 @@ pub(crate) fn a_detached_presentation_resends_its_style() {
     let id = ui_runtime.presentation_id();
     ui_runtime.synchronize_window_snapshot(id, Detached, true, true);
     ui_runtime.synchronize_window_snapshot(id, Running, true, true);
-    writer.write(|cx| scene.set(cx, 2)).expect("write");
+    writer.write(|ctx| scene.set(ctx, 2)).expect("write");
     ui_runtime.render_frame(&mut sink);
     assert_eq!(
         delivered(&chrome),
@@ -194,7 +194,7 @@ pub(crate) fn a_panicking_chrome_is_retried_on_the_next_frame() {
     assert_eq!(payload.downcast_ref::<&str>(), Some(&"chrome failed"));
     assert_eq!(delivered(&chrome), []);
     // An equal style: only the retry can deliver it.
-    writer.write(|cx| scene.set(cx, 2)).expect("write");
+    writer.write(|ctx| scene.set(ctx, 2)).expect("write");
     ui_runtime.render_frame(&mut sink);
     assert_eq!(delivered(&chrome), [SystemUiOverlayStyle::Dark]);
 }

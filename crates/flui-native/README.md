@@ -25,7 +25,7 @@ platform.rs      Platform, AppHandler, and HostPlatform<H>, its one
                  implementation
 host_window.rs   HostWindow: a PlatformWindow plus its accessibility bridge
 host.rs, hosts/  a host's table of positions, one table per host
-owner/           OwnerPlatform, SharedPlatform, PlatformProxy; the owner-turn
+owner/           OwnerPlatform, PlatformProxy; the owner-turn
                  signal, the owner-thread slot, the panic boundary, the
                  delivery to the application's handler (AppDelivery), each
                  window's delivery to its
@@ -37,7 +37,7 @@ haptics/, preferences/, lifecycle/
                  a feature each: its model beside one file per platform
                  (windows, apple, android, web, linux, headless)
 storage/         where an application keeps its data
-executor.rs      BackgroundExecutor (tokio pool for the hosts' own marshaling)
+executor.rs      NativeExecutor (the tokio runtime the hosts run their IO on)
 error.rs         PlatformError, BootstrapError
 ```
 
@@ -54,9 +54,10 @@ Activity `android_main` is handed, through `android_platform(app)`.
   wrapped in `PlatformInput`. Named-key spellings and pointer fields map the
   applicable W3C vocabularies; native adapters keep their platform contracts
   (ADR-0143), with execution evidence distinct from type compatibility.
-- **Executor** — `BackgroundExecutor` runs the hosts' own thread-safe work on a multi-threaded
-  tokio runtime. UI-owner commands stay private to each backend's bounded,
-  wake-integrated control path.
+- **Executor** — `NativeExecutor` is the tokio runtime a host runs its IO on (the Linux
+  session sources and the Wayland title fonts): the one its creator lends with `from_tokio`, which
+  `CurrentHost::start_with` takes, or a small one of its own (`own`, what `start` uses).
+  UI-owner commands stay private to each backend's bounded, wake-integrated control path.
 - **Displays** — monitor enumeration, DPI/scale factors, device↔logical pixel
   conversion.
 

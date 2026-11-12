@@ -291,7 +291,7 @@ libc.workspace = true
 # Native-only async dependencies (not available on wasm32)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
-# The file store behind `flui::AppConfig::with_storage_dir`: the per-user data directories, and
+# The file store behind `flui::AppConfig::storage_dir`: the per-user data directories, and
 # the uniquely named temporary file each write is staged in before it
 # replaces the target. wasm32 keeps values in the page's IndexedDB
 # instead, so neither is there.
@@ -543,13 +543,11 @@ objc2-core-haptics = { workspace = true, features = [
 # UIA bridge for Windows, which every Win32 window builds. Version cohort must
 # match the workspace `accesskit` (0.25) -- 0.35 is that cohort -- and its
 # `windows` dependency (0.62) matches the backend's own, so no duplicate
-# windows-rs stack is linked. UI Automation's `ScrollPattern`
-# (docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements), which
-# the published adapter does not implement, comes from the vendored copy listed
-# in third_party/README.md, by path for the reason given at accesskit_ios.
+# windows-rs stack is linked. The published adapter implements no UI
+# Automation `ScrollPattern`
+# (docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements).
 [target.'cfg(target_os = "windows")'.dependencies.accesskit_windows]
 version = "0.35.1"
-path = "../../third_party/accesskit_windows"
 
 # NSAccessibility bridge for macOS, which every AppKit window builds, in the
 # same 0.25 accesskit cohort. Uses the same objc2 binding family as the
@@ -560,27 +558,23 @@ version = "0.27.1"
 # UIAccessibility (ADR-0255 decision 12): the low-level adapter, which the
 # window's own view forwards to. Same 0.25 accesskit cohort; it is built on
 # objc2 0.5 beside FLUI's 0.6, and the two meet only through raw pointers.
-# VoiceOver's cursor reaches FLUI through a hook the published adapter does not
-# have yet (docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements),
-# so the build takes the vendored copy listed in
-# third_party/README.md. A path dependency, not a root `[patch]`: a patch binds
-# only this workspace, and an app depending on FLUI by path or git would build
-# the published crate, which lacks the hook.
+# The published adapter keeps VoiceOver's cursor to itself, so iOS reports
+# no assistive focus
+# (docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements).
 [target.'cfg(target_os = "ios")'.dependencies.accesskit_ios]
 version = "0.2.2"
-path = "../../third_party/accesskit_ios"
 
 # TalkBack (docs/gaps.md#no-accessibility-on-mobile-and-the-web): the low-level
 # adapter, which `FluiView`'s
 # node provider forwards to on the Java main thread. Same 0.25 accesskit
 # cohort. It is built on jni 0.21 beside FLUI's 0.22, and the two meet only
 # through raw pointers (the environment and the view in, the node info out),
-# until accesskit_android moves to jni 0.22. TalkBack's cursor needs a hook the
-# published adapter keeps private, so the build takes the vendored copy, by
-# path for the reason given at accesskit_ios.
+# until accesskit_android moves to jni 0.22. The published adapter keeps
+# TalkBack's cursor to itself and sets no `viewIdResourceName`, so Android
+# reports no assistive focus and no identifier
+# (docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements).
 [target.'cfg(target_os = "android")'.dependencies.accesskit_android]
 version = "0.9.1"
-path = "../../third_party/accesskit_android"
 
 [features]
 default = ["desktop"]
@@ -602,14 +596,6 @@ wayland = [
     "dep:wayland-cursor",
 ]
 
-# Web platform
-# Honest note (verified 2026-08-04): no-op selector — zero
-# `feature = "web"` references in this crate's src. The web host and each
-# feature's `web` file are gated by `#[cfg(target_arch = "wasm32")]` on the
-# actual compile target (`src/hosts/mod.rs`), not by this flag; enabling or
-# disabling it changes nothing observable. Kept as a forward-compatible name
-# for downstream `Cargo.toml`s, mirroring `desktop`.
-web = []
 x11 = ["dep:x11rb", "dep:rustix", "dep:xkbcommon-dl", "dep:xim-ctext"]
 
 # The built-in HTTP client of the native hosts without a system stack (Linux
@@ -949,7 +935,11 @@ traits = [{ trait = "flui_semantics::platform::PlatformAccessibility", crate = "
 # The Activity is the system's, handed only to the application's
 # `android_main`: the composition root passes it on through this one entry, as
 # the facade's `run_app_android` takes it.
-entries = [{ item = "flui_native::android_platform", crate = "android_activity" }]
+entries = [
+    { item = "flui_native::android_platform", crate = "android_activity" },
+    # ADR-0327 §3: the application lends the host its IO runtime.
+    { item = "flui_native::executor::NativeExecutor::from_tokio", crate = "tokio" },
+]
 # Each target the core builds a host for, with the features that add public
 # items there.
 targets = [

@@ -53,9 +53,9 @@ impl ViewState<Counter> for CounterState {
             Text::new("Done").into_view().boxed()
         } else {
             RawButton::new(Text::new("Increment"))
-                .on_press(move |cx| {
+                .on_press(move |ctx| {
                     presses.fetch_add(1, Ordering::Relaxed);
-                    count.update(cx, |n| *n += 1)
+                    count.update(ctx, |n| *n += 1)
                 })
                 .into_view()
                 .boxed()
@@ -123,7 +123,7 @@ pub(super) fn answer<T>(
 
 /// The parameters of a read of `window` scoped by `query`.
 pub(super) fn read_params(window: &AgentWindow, query: ReadQuery) -> ReadParams {
-    ReadParams::new(window.id()).with_query(query)
+    ReadParams::new(window.id()).query(query)
 }
 
 /// The parameters of `action` on the element `element` of `window`.

@@ -19,6 +19,34 @@ pub struct LocalSource {
     root: String,
 }
 
+/// A framework package a generated project names in its manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameworkPackage {
+    /// The facade, `flui`, at the checkout root.
+    Facade,
+    /// The official package `flui-hot-reload`, which an application adds
+    /// itself: the facade names no reload package (ADR-0311 §6).
+    HotReload,
+}
+
+impl FrameworkPackage {
+    /// The package name, which is also its dependency key.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Facade => "flui",
+            Self::HotReload => "flui-hot-reload",
+        }
+    }
+
+    /// Its directory in a checkout, relative to the root; `None` for the root.
+    const fn member(self) -> Option<&'static str> {
+        match self {
+            Self::Facade => None,
+            Self::HotReload => Some("packages/flui-hot-reload"),
+        }
+    }
+}
+
 impl DependencySource {
     /// Resolve and validate the selected checkout before writing any output.
     pub fn resolve(local: Option<&Path>, hot_reload: bool) -> CliResult<Self> {
@@ -49,24 +77,33 @@ impl DependencySource {
                 root.display()
             )));
         }
-        let mut required = vec!["flui-app", "flui-view", "flui-widgets"];
+        let mut required = vec![
+            ("crates/flui-app", "flui-app"),
+            ("crates/flui-view", "flui-view"),
+            ("crates/flui-widgets", "flui-widgets"),
+        ];
         if hot_reload {
-            required.push("flui-hot-reload");
+            let package = FrameworkPackage::HotReload;
+            required.push((
+                package
+                    .member()
+                    .expect("BUG: an official package is a workspace member"),
+                package.name(),
+            ));
         }
-        for name in required {
-            let member = format!("crates/{name}");
+        for (member, name) in required {
             let members = manifest["workspace"]
                 .get("members")
                 .and_then(toml::Value::as_array);
             if !members
-                .is_some_and(|members| members.iter().any(|value| value.as_str() == Some(&member)))
+                .is_some_and(|members| members.iter().any(|value| value.as_str() == Some(member)))
             {
                 return Err(CliError::Missing(format!(
                     "FLUI source '{}' does not declare workspace member '{member}'",
                     root.display()
                 )));
             }
-            let crate_manifest = read_manifest(&root.join(&member).join("Cargo.toml"))?;
+            let crate_manifest = read_manifest(&root.join(member).join("Cargo.toml"))?;
             if crate_manifest
                 .get("package")
                 .and_then(|p| p.get("name"))
@@ -84,8 +121,8 @@ impl DependencySource {
     }
 
     /// Serialize a Cargo dependency value, preserving paths and feature names.
-    pub fn dependency(&self, name: &str, features: &[&str]) -> String {
-        render(FRAMEWORK_ON_CRATES_IO, self, name, features)
+    pub fn dependency(&self, package: FrameworkPackage, features: &[&str]) -> String {
+        render(FRAMEWORK_ON_CRATES_IO, self, package, features)
     }
 }
 
@@ -102,7 +139,12 @@ const FRAMEWORK_ON_CRATES_IO: bool = false;
 /// `"<version>"` (or `{ version, features }`) when the framework is on
 /// crates.io, `{ git = "<repository>", tag = "v<version>" }` until then,
 /// `{ path }` for `--local`.
-fn render(on_crates_io: bool, source: &DependencySource, name: &str, features: &[&str]) -> String {
+fn render(
+    on_crates_io: bool,
+    source: &DependencySource,
+    package: FrameworkPackage,
+    features: &[&str],
+) -> String {
     let version = env!("CARGO_PKG_VERSION");
     if matches!(source, DependencySource::Registry) && on_crates_io && features.is_empty() {
         return toml::Value::String(version.into()).to_string();
@@ -117,11 +159,10 @@ fn render(on_crates_io: bool, source: &DependencySource, name: &str, features: &
             dependency.insert("tag".into(), format!("v{version}").into());
         }
         DependencySource::Local(source) => {
-            let path = if name == "flui" {
-                Path::new(&source.root).to_path_buf()
-            } else {
-                Path::new(&source.root).join("crates").join(name)
-            };
+            let root = Path::new(&source.root);
+            let path = package
+                .member()
+                .map_or_else(|| root.to_path_buf(), |member| root.join(member));
             dependency.insert(
                 "path".into(),
                 path.to_str()

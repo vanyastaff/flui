@@ -13,7 +13,7 @@
   (owner-local state; §5, a thread per runtime later);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) and
   [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md) (containment of
-  user code); [ADR-0136](ADR-0136-owner-local-ui-surfaces.md) §3 (the `Send` positions of the
+  user code); [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) §3 (the `Send` positions of the
   public API); [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) §1 (`InputTapFactory`,
   the same factory shape); [ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md) §7
   (the development agent's hooks, which the loop owns the same way); [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the `globals`
@@ -33,13 +33,13 @@ is rejected, so the seam had no accepted record. What `main` holds:
 | Fact | Evidence |
 |---|---|
 | `DevReloadHook: Send + 'static` has `attach`, `detach`, `poll` and an unsafe `scene_frame`; `ReloadEvent` is `Unchanged` or `Patched`; `ReloadWake` is the hook's `Send + Sync` frame request | `crates/flui-view/src/dev_reload.rs` |
-| The application installs one instance, `AppConfig::with_dev_reload(impl DevReloadHook)`, and every clone of the configuration shares it | `crates/flui-app/src/app/config.rs` |
+| The application installs one instance, `AppConfig::dev_reload(impl DevReloadHook)`, and every clone of the configuration shares it | `crates/flui-app/src/app/config.rs` |
 | The `Send` bound is there only because the instance travels inside `AppConfig`, which is `Send`; every call is on the owner thread | the trait's docs; `crates/flui-app/src/app/hot_reload.rs` |
 | The host keeps the instance in `Arc<Mutex<Slot>>`, lends it out of the slot for each call and catches each call's panic by hand | `crates/flui-app/src/app/hot_reload.rs` (`DevReload`, `lend`, `disable`) |
 | Hosts call different methods: desktop and iOS `attach`, `poll` and `detach`; Android only `scene_frame`; the web none. A worker hook does nothing on Android, a scene hook nothing elsewhere | the trait's module table; `runner/desktop.rs`, `runner/ios.rs`, `runner/main_window.rs`, `runner/android.rs` |
 | `flui-app` has no edge to `flui-hot-reload` under any feature | `FACTS` in `tools/xtask/src/workspace/reach.rs` |
-| `flui-hot-reload` is an official package (`tier-kind = "official"`) still under `crates/`, implementing both hooks behind its `host-hook` feature | `crates/flui-hot-reload/Cargo.toml`, `src/hook.rs` |
-| Fifteen manifest exceptions are debt of the dlopen path: in `flui-hot-reload` four `edge-exceptions`, two `reach-exceptions` and six `globals`; in `flui-view` two `globals` (`REGISTRY_STACK` and `TEST_REGISTRY`, `ManuallyDrop` for a hot-reload `cdylib`); in the facade one `edge-exceptions` entry | the manifests' `[package.metadata.flui]` |
+| `flui-hot-reload` is an official package (`tier-kind = "official"`) under `packages/`, implementing both hooks behind its `host-hook` feature | `packages/flui-hot-reload/Cargo.toml`, `src/hook.rs` |
+| Ten manifest exceptions are debt of the dlopen path: in `flui-hot-reload` two `reach-exceptions` and six `globals`; in `flui-view` two `globals` (`REGISTRY_STACK` and `TEST_REGISTRY`, `ManuallyDrop` for a hot-reload `cdylib`) | the manifests' `[package.metadata.flui]` |
 
 What is the contract of the reload seam, independent of the tool behind it, and where do the dlopen
 path's exceptions exit?
@@ -111,7 +111,7 @@ thread.**
 
 ```rust
 impl AppConfig {
-    pub fn with_dev_reload<H: DevReloadHook>(
+    pub fn dev_reload<H: DevReloadHook>(
         self,
         make: impl Fn() -> H + Send + Sync + 'static,
     ) -> Self;
@@ -183,7 +183,7 @@ lent scene is rendered inline (ADR-0305 §10).
 
 A host that does not drive an installed hook never calls its factory and logs once, when its loop
 starts, that the hook is not driven there. A desktop scene plugin runs through the package's own
-driver in the application's frame loop (`examples/scene_render.rs`), not through the host. Widget
+driver in the application's frame loop (`packages/flui-hot-reload/examples/scene_render.rs`), not through the host. Widget
 reload on Android and the web is a shortfall in `docs/gaps.md`, not part of this contract.
 
 §5. **A hook's failure costs hot reload, never the frame.** The factory and every hook method are
@@ -212,16 +212,22 @@ user code:
 - `flui-hot-reload` lives under `packages/`. Its normal dependencies are `flui-sdk` and the contract
   crates (ADR-0088 §2), with no `edge-exceptions`, and it implements §1 and §3 through
   `flui_sdk::view::dev_reload`.
-- The items of the plugin ABI that its `app-plugin` half names (`WidgetsBinding`, `PipelineCell`
-  and `PipelineOwner`, `Scene`, `LayerTree`, and the smallest further set the worker needs) are
-  Evolving items of `flui_sdk::hooks`, which ADR-0088 §4 keeps outside its surface ceiling, each
-  pinned in `crates/flui-sdk/tests/surface.rs`. `flui_view::__runtime` stays out of the SDK, as
-  `crates/flui-view/ARCHITECTURE.md` requires. These items leave with the dlopen path (§7).
+- The items of the plugin ABI that its `app-plugin` half names are Evolving items of
+  `flui_sdk::hooks`, which ADR-0088 §4 keeps outside its surface ceiling, each pinned in
+  `crates/flui-sdk/tests/surface.rs`: `PluginPipeline` (the root a plugin image mounts, its
+  binding, pipeline owner and layer tree behind one frame call) and its `PluginFrameError`,
+  `Scene` and `LayerTree`, and `TextContextHandle`. The binding, `PipelineCell` and
+  `PipelineOwner` stay behind `PluginPipeline`, and `flui_view::__runtime` stays out of the SDK,
+  as `crates/flui-view/ARCHITECTURE.md` requires. These items leave with the dlopen path (§7).
 - No core crate, no host and not the facade names the package in any form: `flui-app`,
-  `flui-runtime` and `flui` have no edge to it, and the facade's `hot-reload` feature goes with the
-  rule that the facade names no official package (ADR-0088 §6). An application adds the package as
-  a direct dependency, and `flui create --hot-reload` adds it under a feature of the generated
-  application.
+  `flui-runtime` and `flui` have no edge to it, and the facade has no reload feature, by the rule
+  that the facade names no official package (ADR-0088 §6). An application adds the package as a
+  direct dependency. `flui create --hot-reload` generates the host, worker and types crates, each
+  of which names it directly: that split is how the package reloads, so the template has no
+  build without it, and the template leaves with the dlopen path (§7). The host turns on
+  `host-hook` only through its `reload` feature, which `flui run` builds with; its default
+  `linked` build links the logic crate and installs no hook, so a release build carries no
+  loader or watcher.
 - The package reaches the application only through the hooks of §1 and §3.
 
 §7. **The dlopen path is the package's implementation, and a code patcher is its exit.**
@@ -233,8 +239,7 @@ user code:
   `REGISTRY_STACK` and `TEST_REGISTRY` in `ManuallyDrop` form; the package's `globals` entries
   (`dispatch::REQUEST_REBUILD`, the three statics `app_plugin!` emits,
   `worker::REGISTRATION_SESSION`, `worker::WORKER_BUILDS`); its `reach-exceptions` for `windows`
-  and `android_log-sys`, which the loader needs. Its four `edge-exceptions` and the facade's edge
-  exit with §6.
+  and `android_log-sys`, which the loader needs.
 - The dlopen path is deleted when a code patcher implements `DevReloadHook` on Windows, macOS and
   Linux. Then the worker template, the dlopen driver, the `hot_reload_counter` and
   `hot_reload_lifecycle_fixture` examples and the entries above go together, and `cargo xtask
@@ -251,11 +256,11 @@ user code:
   longer sits silently on Android and a scene hook no longer sits silently on the desktop.
 - Good, because the fifteen exceptions name an accepted record with a stated exit.
 - Good, because a second owner thread gets an instance of its own from the same configuration.
-- Bad, because `with_dev_reload` breaks its callers: they pass a closure that builds the hook, and
+- Bad, because `dev_reload` breaks its callers: they pass a closure that builds the hook, and
   the Android `--scene` host moves to `with_dev_scene`.
 - Bad, because `cargo xtask send-positions` gains the two factories' `Send` and `Sync` positions
   while losing the hook's `Send` supertrait; they stay because the factory really crosses threads
-  inside `AppConfig` (ADR-0136 §3).
+  inside `AppConfig` (ADR-0323 §2, a `handle`).
 - Bad, because `flui create --hot-reload` stays a three-crate project until a code patcher arrives,
   and Android and the web have no widget reload.
 - Neutral, because the reload tiers stay `flui_runtime::reload::ReloadTier`, and only `Reassemble`
@@ -264,7 +269,7 @@ user code:
 ### Confirmation
 
 - **The compiler.** Both hooks are `'static` alone. The implementing change adds a doctest on
-  `AppConfig::with_dev_reload` whose hook holds an `Rc` (it compiles only without `Send`), and a
+  `AppConfig::dev_reload` whose hook holds an `Rc` (it compiles only without `Send`), and a
   `compile_fail` doctest that calls `scene_frame` on a `dyn DevReloadHook`; the existing
   `compile_fail,E0133` doctest of a safe `scene_frame` call moves to `DevSceneHook`.
 - **`cargo xtask send-positions`.** The `flui_view::dev_reload::DevReloadHook` supertrait entry of
@@ -272,7 +277,8 @@ user code:
   fails the gate; the factories' positions are listed.
 - **`cargo xtask reach`.** The facts `flui-hot-reload must be absent from flui-app's default graph`
   and `flui-hot-reload must be absent from flui-app's graph with every feature` hold §6 for the
-  host. When the facade's feature goes, its presence fact becomes an absence fact.
+  host, and `flui-hot-reload must be absent from the facade's graph with every feature` holds it
+  for the facade.
 - **`cargo xtask workspace`.** It refuses `edge-exceptions` under `packages/`, so the package's move
   there proves "on `flui-sdk` alone". `cargo xtask globals` and `cargo xtask reach` read §7's entries,
   each with `exit = "ADR-0311"`, and report each as stale once the dlopen path is gone.
@@ -286,7 +292,7 @@ user code:
   `a_panicking_attach_leaves_the_loop_without_reload` and
   `each_reload_event_maps_to_the_ui_runtime_tier`; the runner's
   `main_window_reload_hook_stays_attached_across_failed_reopens_and_detaches_with_loop`. The
-  package's (`crates/flui-hot-reload/src/hook/tests.rs`): `event_for_maps_each_driver_outcome`,
+  package's (`packages/flui-hot-reload/src/hook/tests.rs`): `event_for_maps_each_driver_outcome`,
   `a_rebuild_request_polls_as_a_patch_and_wakes_once_until_detached`,
   `an_artifact_change_wakes_the_host`, `dropping_an_attached_hook_joins_its_watcher`,
   `scene_frame_without_a_loaded_plugin_draws_nothing` and `scene_frame_reset_recovery_matrix`.
@@ -315,7 +321,7 @@ user code:
 - Good, because the compiler holds the owner-thread rule, and owner-local state replaces the lock.
 - Good, because each hook's calls are the same on every host that drives it.
 - Good, because the shape is the one `InputTapFactory` already has.
-- Bad, because it breaks `with_dev_reload`'s callers and adds the factories' `Send` positions.
+- Bad, because it breaks `dev_reload`'s callers and adds the factories' `Send` positions.
 
 ### 3. Delete the dlopen path and run without hot reload
 

@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use common::{lay_out, tight};
 use flui_material::{Material, MaterialShape};
 use flui_sdk::painting::Color;
-use flui_sdk::view::EventCx;
+use flui_sdk::view::EventContext;
 use flui_sdk::widgets::{ColoredBox, GestureDetector};
 
 /// A point near the top-left corner of a 120x40 rect: outside the Stadium's
@@ -32,10 +32,10 @@ use flui_sdk::widgets::{ColoredBox, GestureDetector};
 /// bounding rectangle a sharp-cornered shape would fill.
 const CORNER_PROBE: (f64, f64) = (2.0, 2.0);
 
-fn tap_counter() -> (Arc<AtomicUsize>, impl Fn(&mut EventCx<'_>) + 'static) {
+fn tap_counter() -> (Arc<AtomicUsize>, impl Fn(&mut EventContext<'_>) + 'static) {
     let taps = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&taps);
-    (taps, move |_cx: &mut EventCx<'_>| {
+    (taps, move |_ctx: &mut EventContext<'_>| {
         counted.fetch_add(1, Ordering::SeqCst);
     })
 }

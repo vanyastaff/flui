@@ -151,7 +151,7 @@ fn default_fill_color(colors: &ColorScheme, states: &WidgetStates) -> Color {
 /// M3 default `activeIndicatorBorder` (the bottom underline) —
 /// `_InputDecoratorDefaultsM3.activeIndicatorBorder`
 /// (`input_decorator.dart:5972-5992`).
-fn default_active_indicator(colors: &ColorScheme, states: &WidgetStates) -> BorderSide<f64> {
+fn default_active_indicator(colors: &ColorScheme, states: &WidgetStates) -> BorderSide {
     if states.contains_state(WidgetState::Disabled) {
         BorderSide::new(
             colors.on_surface.with_opacity(0.38),
@@ -596,10 +596,12 @@ impl ViewState<InputDecorator> for InputDecoratorState {
         let hover_on_exit = self.hover.clone();
 
         let container = MouseRegion::new()
-            .on_enter(move |_cx, _device, _offset| {
+            .on_enter(move |_ctx, _device, _offset| {
                 hover_on_enter.update(WidgetState::Hovered, true);
             })
-            .on_exit(move |_cx, _device, _offset| hover_on_exit.update(WidgetState::Hovered, false))
+            .on_exit(move |_ctx, _device, _offset| {
+                hover_on_exit.update(WidgetState::Hovered, false);
+            })
             .child(DecoratedBox::new(box_decoration).child(content))
             .boxed();
 

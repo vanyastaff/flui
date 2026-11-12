@@ -74,8 +74,8 @@ pub(crate) use crate::owner::wake_deadline::FrameCount;
 use crate::owner::wake_deadline::ModalDelivery;
 use crate::owner::wake_deadline::WakeDeadline;
 use crate::{
-    error::PlatformError, executor::BackgroundExecutor, host, owner::OwnerHooks,
-    owner::OwnerPlatform, owner::handlers::OpenWindows, owner::hwnd_affinity::UserDataRefusal,
+    error::PlatformError, host, owner::OwnerHooks, owner::OwnerPlatform,
+    owner::handlers::OpenWindows, owner::hwnd_affinity::UserDataRefusal,
     owner::window_delivery::WindowDelivery, platform::AppHandler, platform::Platform,
 };
 use broadcast::Subscriber;
@@ -847,9 +847,6 @@ pub struct WindowsLoop {
     // The platform-level handlers (callbacks from platform to framework)
     // are not a field: they live in the owner control context, reachable
     // only on the owner thread through `owner_control.shares`.
-    /// Background executor for async tasks
-    background_executor: Arc<BackgroundExecutor>,
-
     /// The monitors this platform last sampled and the registry of their ids,
     /// as the table made them.
     pub(crate) displays: Arc<dyn HostDisplays>,
@@ -867,7 +864,7 @@ pub struct WindowsLoop {
     pub(crate) apartment: com_apartment::ApartmentHold,
 }
 
-// SAFETY, per field: `windows` and `displays` are `Send + Sync` by their
+// SAFETY: per field, `windows` and `displays` are `Send + Sync` by their
 // traits' bounds, `owner_control` holds only an `Arc`-shared signal and a
 // locked address (its owner-thread state, callbacks included, sits behind the
 // owner window's `GWLP_USERDATA` and is reached only through the owner-thread
@@ -1016,10 +1013,7 @@ impl WindowsLoop {
             })?
         };
 
-        // Create executors
-        let background_executor = Arc::new(BackgroundExecutor::new());
-
-        tracing::info!("Windows platform initialized with Tokio executors");
+        tracing::info!("Windows platform initialized");
 
         let platform = Self {
             owner_control,
@@ -1027,7 +1021,6 @@ impl WindowsLoop {
             drag,
             message_window,
             windows,
-            background_executor,
             displays,
             affinity: flui_foundation::OwnerAffinity::new(),
             apartment: com_apartment::ApartmentHold::new(apartment),
@@ -1330,7 +1323,7 @@ impl host::Loop for WindowsLoop {
         // The delivery holds the platform and the hooks weakly: they live in
         // this frame until the loop ends, declared before the guard so they
         // outlive it and the handler can still hear the quit.
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(control::WindowsOwnerHooks::new(
+        let hooks: Rc<dyn OwnerHooks> = Rc::new(control::WindowsOwnerHooks::new(
             Arc::clone(&platform),
             &self.owner_control,
         ));
@@ -1338,10 +1331,7 @@ impl host::Loop for WindowsLoop {
         self.app.bind(handler, &platform, &hooks);
         self.app.resume_through_signal(&self.owner_control.signal);
         self.app
-            .ready(OwnerPlatform::new(
-                Arc::clone(&platform),
-                Arc::clone(&hooks),
-            ))
+            .ready(OwnerPlatform::new(Arc::clone(&platform), Rc::clone(&hooks)))
             .map_err(PlatformError::bootstrap)?;
         self.owner_control
             .signal
@@ -1416,86 +1406,74 @@ impl host::Services for WindowsLoop {
         &self,
         options: crate::platform::PathPromptOptions,
     ) -> crate::task::Task<Result<Option<Vec<std::path::PathBuf>>, PlatformError>> {
-        let executor = self.background_executor.clone();
-        executor.spawn(async move {
-            // COM file dialogs must run on an STA thread. The closure keeps
-            // the raw `windows::core::Result` so the COM `?`s inside stay
-            // untouched; the typed mapping happens once, at the join below.
-            let result = std::thread::spawn(
-                move || -> windows::core::Result<Option<Vec<std::path::PathBuf>>> {
-                    // SAFETY: this whole body runs on the freshly `std::thread::spawn`ed
-                    // thread, which owns no other window state — `CoInitializeEx`
-                    // makes it an STA for the `IFileOpenDialog` COM object, as
-                    // that interface requires. Every `windows-rs` COM call
-                    // (`CoCreateInstance`, `dialog.Show`/`SetOptions`, `results.*`,
-                    // `item.GetDisplayName`) is a checked, typed FFI wrapper with
-                    // no raw pointer of ours to validate. `CoTaskMemFree` below
-                    // frees the `PWSTR` `name` owns from COM — it is only used
-                    // (via `name.to_string()`, which copies the string out) before
-                    // this free, and each loop iteration gets its own `name` from
-                    // `GetDisplayName`, so there is no double-free or use-after-free
-                    // across iterations.
-                    unsafe {
-                        use windows::Win32::{
-                            System::Com::{
-                                CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance,
-                                CoInitializeEx, CoTaskMemFree,
-                            },
-                            UI::Shell::{
-                                FOS_ALLOWMULTISELECT, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST,
-                                FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog,
-                                SIGDN_FILESYSPATH,
-                            },
-                        };
+        // COM file dialogs must run on an STA thread. The closure keeps
+        // the raw `windows::core::Result` so the COM `?`s inside stay
+        // untouched; the typed mapping happens once, in `dialog_on_sta_thread`.
+        dialog_on_sta_thread(
+            move || -> windows::core::Result<Option<Vec<std::path::PathBuf>>> {
+                // SAFETY: this whole body runs on the freshly `std::thread::spawn`ed
+                // thread, which owns no other window state — `CoInitializeEx`
+                // makes it an STA for the `IFileOpenDialog` COM object, as
+                // that interface requires. Every `windows-rs` COM call
+                // (`CoCreateInstance`, `dialog.Show`/`SetOptions`, `results.*`,
+                // `item.GetDisplayName`) is a checked, typed FFI wrapper with
+                // no raw pointer of ours to validate. `CoTaskMemFree` below
+                // frees the `PWSTR` `name` owns from COM — it is only used
+                // (via `name.to_string()`, which copies the string out) before
+                // this free, and each loop iteration gets its own `name` from
+                // `GetDisplayName`, so there is no double-free or use-after-free
+                // across iterations.
+                unsafe {
+                    use windows::Win32::{
+                        System::Com::{
+                            CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+                            CoTaskMemFree,
+                        },
+                        UI::Shell::{
+                            FOS_ALLOWMULTISELECT, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST,
+                            FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
+                        },
+                    };
 
-                        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-                        let dialog: IFileOpenDialog =
-                            CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)?;
+                    let dialog: IFileOpenDialog =
+                        CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)?;
 
-                        let mut flags = FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST;
-                        if options.multiple {
-                            flags |= FOS_ALLOWMULTISELECT;
-                        }
-                        if options.directories {
-                            flags |= FOS_PICKFOLDERS;
-                        }
-                        dialog.SetOptions(flags)?;
-
-                        match dialog.Show(None) {
-                            Ok(()) => {}
-                            Err(e)
-                                if e.code()
-                                    == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) =>
-                            {
-                                return Ok(None);
-                            }
-                            Err(e) => return Err(e),
-                        }
-
-                        let results = dialog.GetResults()?;
-                        let count = results.GetCount()?;
-                        let mut paths = Vec::with_capacity(count as usize);
-                        for i in 0..count {
-                            let item = results.GetItemAt(i)?;
-                            let name = item.GetDisplayName(SIGDN_FILESYSPATH)?;
-                            let path_str = name.to_string()?;
-                            paths.push(std::path::PathBuf::from(path_str));
-                            CoTaskMemFree(Some(name.as_ptr() as *const _));
-                        }
-                        Ok(Some(paths))
+                    let mut flags = FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST;
+                    if options.multiple {
+                        flags |= FOS_ALLOWMULTISELECT;
                     }
-                },
-            )
-            .join()
-            .map_err(|_| PlatformError::Dialog {
-                message: "File dialog thread panicked".to_string(),
-            })?
-            .map_err(|error| PlatformError::Dialog {
-                message: error.to_string(),
-            })?;
-            Ok(result)
-        })
+                    if options.directories {
+                        flags |= FOS_PICKFOLDERS;
+                    }
+                    dialog.SetOptions(flags)?;
+
+                    match dialog.Show(None) {
+                        Ok(()) => {}
+                        Err(e)
+                            if e.code()
+                                == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) =>
+                        {
+                            return Ok(None);
+                        }
+                        Err(e) => return Err(e),
+                    }
+
+                    let results = dialog.GetResults()?;
+                    let count = results.GetCount()?;
+                    let mut paths = Vec::with_capacity(count as usize);
+                    for i in 0..count {
+                        let item = results.GetItemAt(i)?;
+                        let name = item.GetDisplayName(SIGDN_FILESYSPATH)?;
+                        let path_str = name.to_string()?;
+                        paths.push(std::path::PathBuf::from(path_str));
+                        CoTaskMemFree(Some(name.as_ptr() as *const _));
+                    }
+                    Ok(Some(paths))
+                }
+            },
+        )
     }
 
     fn prompt_for_new_path(
@@ -1505,91 +1483,103 @@ impl host::Services for WindowsLoop {
     ) -> crate::task::Task<Result<Option<std::path::PathBuf>, PlatformError>> {
         let dir = directory.to_path_buf();
         let name = suggested_name.map(std::string::ToString::to_string);
-        let executor = self.background_executor.clone();
-        executor.spawn(async move {
-            // Same raw-`windows::core::Result` closure + single typed
-            // mapping shape as `prompt_for_paths` above.
-            let result = std::thread::spawn(
-                move || -> windows::core::Result<Option<std::path::PathBuf>> {
-                    // SAFETY: see `prompt_for_paths` above — same
-                    // dedicated-STA-thread, checked-COM-wrapper reasoning.
-                    // `dir_wide` is explicitly NUL-terminated and outlives the
-                    // `SHCreateItemFromParsingName` call that borrows its
-                    // pointer; the single `CoTaskMemFree` below frees the one
-                    // `name` this function's single `IFileSaveDialog::GetResult`
-                    // path produces, after `name.to_string()` has already copied
-                    // the string out.
-                    unsafe {
-                        use windows::Win32::{
-                            System::Com::{
-                                CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance,
-                                CoInitializeEx, CoTaskMemFree,
-                            },
-                            UI::Shell::{
-                                FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
-                                FileSaveDialog, IFileSaveDialog, IShellItem,
-                                SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
-                            },
-                        };
+        // Same raw-`windows::core::Result` closure + single typed
+        // mapping shape as `prompt_for_paths` above.
+        dialog_on_sta_thread(
+            move || -> windows::core::Result<Option<std::path::PathBuf>> {
+                // SAFETY: see `prompt_for_paths` above — same
+                // dedicated-STA-thread, checked-COM-wrapper reasoning.
+                // `dir_wide` is explicitly NUL-terminated and outlives the
+                // `SHCreateItemFromParsingName` call that borrows its
+                // pointer; the single `CoTaskMemFree` below frees the one
+                // `name` this function's single `IFileSaveDialog::GetResult`
+                // path produces, after `name.to_string()` has already copied
+                // the string out.
+                unsafe {
+                    use windows::Win32::{
+                        System::Com::{
+                            CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+                            CoTaskMemFree,
+                        },
+                        UI::Shell::{
+                            FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
+                            FileSaveDialog, IFileSaveDialog, IShellItem,
+                            SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
+                        },
+                    };
 
-                        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-                        let dialog: IFileSaveDialog =
-                            CoCreateInstance(&FileSaveDialog, None, CLSCTX_ALL)?;
+                    let dialog: IFileSaveDialog =
+                        CoCreateInstance(&FileSaveDialog, None, CLSCTX_ALL)?;
 
-                        dialog.SetOptions(
-                            FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_OVERWRITEPROMPT,
-                        )?;
+                    dialog.SetOptions(
+                        FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_OVERWRITEPROMPT,
+                    )?;
 
-                        // Set initial directory
-                        let dir_wide: Vec<u16> = dir
-                            .to_string_lossy()
-                            .encode_utf16()
-                            .chain(std::iter::once(0))
-                            .collect();
-                        if let Ok(folder) = SHCreateItemFromParsingName::<PCWSTR, _, IShellItem>(
-                            PCWSTR(dir_wide.as_ptr()),
-                            None,
-                        ) {
-                            let _ = dialog.SetFolder(&folder);
-                        }
-
-                        // Set suggested file name
-                        if let Some(ref name) = name {
-                            let name_hstring = windows::core::HSTRING::from(name.as_str());
-                            let _ = dialog.SetFileName(&name_hstring);
-                        }
-
-                        match dialog.Show(None) {
-                            Ok(()) => {}
-                            Err(e)
-                                if e.code()
-                                    == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) =>
-                            {
-                                return Ok(None);
-                            }
-                            Err(e) => return Err(e),
-                        }
-
-                        let result = dialog.GetResult()?;
-                        let name = result.GetDisplayName(SIGDN_FILESYSPATH)?;
-                        let path_str = name.to_string()?;
-                        let path = std::path::PathBuf::from(path_str);
-                        CoTaskMemFree(Some(name.as_ptr() as *const _));
-                        Ok(Some(path))
+                    // Set initial directory
+                    let dir_wide: Vec<u16> = dir
+                        .to_string_lossy()
+                        .encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect();
+                    if let Ok(folder) = SHCreateItemFromParsingName::<PCWSTR, _, IShellItem>(
+                        PCWSTR(dir_wide.as_ptr()),
+                        None,
+                    ) {
+                        let _ = dialog.SetFolder(&folder);
                     }
-                },
-            )
-            .join()
-            .map_err(|_| PlatformError::Dialog {
-                message: "File dialog thread panicked".to_string(),
-            })?
-            .map_err(|error| PlatformError::Dialog {
-                message: error.to_string(),
-            })?;
-            Ok(result)
-        })
+
+                    // Set suggested file name
+                    if let Some(ref name) = name {
+                        let name_hstring = windows::core::HSTRING::from(name.as_str());
+                        let _ = dialog.SetFileName(&name_hstring);
+                    }
+
+                    match dialog.Show(None) {
+                        Ok(()) => {}
+                        Err(e)
+                            if e.code()
+                                == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) =>
+                        {
+                            return Ok(None);
+                        }
+                        Err(e) => return Err(e),
+                    }
+
+                    let result = dialog.GetResult()?;
+                    let name = result.GetDisplayName(SIGDN_FILESYSPATH)?;
+                    let path_str = name.to_string()?;
+                    let path = std::path::PathBuf::from(path_str);
+                    CoTaskMemFree(Some(name.as_ptr() as *const _));
+                    Ok(Some(path))
+                }
+            },
+        )
     }
+}
+
+/// Run a COM file dialog on a thread of its own, which makes itself an STA as
+/// `IFileOpenDialog` requires, and hand its answer back through a channel: no
+/// runtime is involved. A dialog thread that panics answers
+/// [`PlatformError::Dialog`].
+fn dialog_on_sta_thread<T: Send + 'static>(
+    dialog: impl FnOnce() -> windows::core::Result<T> + Send + 'static,
+) -> crate::task::Task<Result<T, PlatformError>> {
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let result = dialog().map_err(|error| PlatformError::Dialog {
+            message: error.to_string(),
+        });
+        // A caller that dropped its task no longer waits for the answer.
+        let _ = answer.send(result);
+    });
+    crate::task::Task::from_channel(
+        answered,
+        Err(PlatformError::Dialog {
+            message: "File dialog thread panicked".to_string(),
+        }),
+    )
 }
 
 /// The displays position is the loop's: it answers from the displays the table
@@ -1712,13 +1702,13 @@ impl Drop for WindowsLoop {
         tracing::debug!("Dropping WindowsLoop");
 
         // Destroy message window
-        //
-        // SAFETY: `DestroyWindow` takes `self.message_window` by value; the
-        // `is_invalid()` guard skips the call for a handle that was never
-        // successfully created. This window carries no `GWLP_USERDATA`
-        // context (it is message-only and never routed through
-        // `WindowsWindow::try_new`), so there is no allocation to reclaim here.
         if !self.message_window.is_invalid() {
+            // SAFETY: `DestroyWindow` takes `self.message_window` by value; the
+            // `is_invalid()` guard skips the call for a handle that was never
+            // successfully created. This window carries no `GWLP_USERDATA`
+            // context (it is message-only and never routed through
+            // `WindowsWindow::try_new`), so there is no allocation to reclaim
+            // here.
             unsafe {
                 if let Err(error) = DestroyWindow(self.message_window) {
                     tracing::warn!(

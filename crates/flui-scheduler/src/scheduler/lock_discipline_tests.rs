@@ -279,8 +279,8 @@ fn completion_waker_runs_with_no_scheduler_lock_held() {
     })
     .shared()
     .waker();
-    let mut cx = Context::from_waker(&waker);
-    assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
+    let mut ctx = Context::from_waker(&waker);
+    assert!(Pin::new(&mut future).poll(&mut ctx).is_pending());
 
     crate::OwnerFrame::try_new(&scheduler)
         .expect("the scheduler has no live owner frame")

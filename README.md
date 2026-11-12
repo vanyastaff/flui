@@ -22,7 +22,7 @@ are defined in the [release requirements](docs/plans/specs/release/requirements.
 - ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`
 - ✅ Framework/application: `flui-view`, `flui-objects`, `flui-widgets`, `flui-runtime` (the UI runtime and the per-presentation frame transaction it drives; internal), `flui-testing`, `flui-animation`, `flui-assets`, `flui-app`
 - ✅ Package-author surface: `flui-sdk` (what an official or third-party package builds on, without the host, engine or GPU stack; evolving, versioned `0.N` apart from the other crates)
-- ✅ Official packages (`tier-kind = "official"`): `flui-material`, `flui-cupertino`, `flui-devtools` (partial) under `packages/`, built on `flui-sdk` alone; and `flui-hot-reload`, still under `crates/` until it builds on `flui-sdk` alone (ADR-0311 §6)
+- ✅ Official packages (`tier-kind = "official"`): `flui-material`, `flui-cupertino`, `flui-devtools` (partial) and `flui-hot-reload`, under `packages/` and built on `flui-sdk` alone
 - ✅ DX/tooling: `flui-cli` (with the per-target build pipeline in `crates/flui-cli/src/build/`)
 
 See [`docs/crates.md`](docs/crates.md) for the full tier map and per-crate status.
@@ -75,7 +75,6 @@ flui = { path = "…" }
 | `material` | off | `flui::material` and the Material half of `flui::prelude` |
 | `cupertino` | off | `flui::cupertino` |
 | `localizations` | off | nothing: deprecated and empty; the global widgets localizations are in `flui::widgets` |
-| `hot-reload` | off | desktop, iOS and Android development reload machinery; absent from an ordinary production graph |
 | `testing` | off | `flui::testing` for headless application tests; add it to the development dependency, as the counter template does |
 | `serde` | off | serialization for supported geometry, painting, locale, layout, interaction, and animation values |
 | `animation-diagnostics` | off | structured animation transition events and CPU spans through `tracing`; devtools `profiling` also enables them |
@@ -87,9 +86,9 @@ adapters hand the semantics tree to Narrator, VoiceOver and Orca in every build.
 A module whose feature is off is *absent*, not empty. Every supported
 combination is compiled in isolation by CI (`cargo xtask facade-combos`), so a
 combination cannot pass only because a sibling crate happened to enable a
-feature. The web has no hot-reload runner integration; enabling
-the additive feature there remains compile-safe but does not install a reload
-driver.
+feature. Hot reload is the official package `flui-hot-reload`, which an
+application adds beside the facade (ADR-0311 §6); `flui create --hot-reload`
+generates such a project.
 
 ## Key Features
 
@@ -114,7 +113,7 @@ pipeline (element tree → render objects → layout → paint → `wgpu`). The
 minimal one is a piece of state and a button that updates it — the same
 `CounterView`/`CounterState` shape `flui create`'s `counter` template
 generates, kept in sync deliberately. The count is a `Signal`, read in `build`
-and written by the button's press through the `cx` its callback receives:
+and written by the button's press through the `ctx` its callback receives:
 
 ```rust
 //! examples/counter.rs (excerpt)
@@ -142,7 +141,7 @@ impl ViewState<CounterView> for CounterState {
     fn build(&self, _view: &CounterView, ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count;
 
-        SafeArea::new().child(
+        SafeArea::new(
             Center::new().child(
                 Column::new((
                     Text::new("You have pushed the button this many times:"),
@@ -150,7 +149,7 @@ impl ViewState<CounterView> for CounterState {
                     Text::new(count.get(ctx).to_string()),
                     SizedBox::height(16.0),
                     RawButton::new(Text::new("Increment"))
-                        .on_press(move |cx| count.update(cx, |n| *n += 1)),
+                        .on_press(move |ctx| count.update(ctx, |n| *n += 1)),
                 ))
                 .main_axis_alignment(MainAxisAlignment::Center),
             ),

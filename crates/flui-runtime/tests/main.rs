@@ -117,6 +117,9 @@ mod display_timing;
 mod frame_rate_demand;
 #[path = "contracts/input_tap.rs"]
 mod input_tap;
+#[path = "contracts/io_runtime.rs"]
+#[cfg(not(target_arch = "wasm32"))]
+mod io_runtime;
 #[path = "contracts/numeric_text_answers.rs"]
 mod numeric_text_answers;
 #[path = "contracts/owner_close.rs"]

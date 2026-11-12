@@ -2,7 +2,7 @@
 //!
 //! Misplacing `Expanded` under `Stack` or `Positioned` under `Row` must fail at
 //! the element-tree parent-data attach seam — before layout's
-//! `BoxLayoutCtx::from_erased` TypeId assert — with a message that names the
+//! `RawBoxLayoutContext::from_erased` TypeId assert — with a message that names the
 //! offending view, the typical ancestor family, and the actual render parent.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -41,7 +41,7 @@ pub(crate) fn expanded_under_stack_panics_at_attach_with_ancestry_diagnostic() {
         "missing actual render parent: {message}"
     );
     assert!(
-        !message.contains("BoxLayoutCtx::from_erased"),
+        !message.contains("RawBoxLayoutContext::from_erased"),
         "must fail before layout TypeId assert: {message}"
     );
 }

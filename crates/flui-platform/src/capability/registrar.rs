@@ -48,7 +48,7 @@ impl fmt::Debug for CapabilityRegistrar {
 }
 
 trait ErasedProvider {
-    fn provide(&self, cx: &ProviderContext<'_>) -> Result<Box<dyn Any>, Unsupported>;
+    fn provide(&self, ctx: &ProviderContext<'_>) -> Result<Box<dyn Any>, Unsupported>;
 }
 
 struct Typed<C: Capability, P> {
@@ -57,9 +57,9 @@ struct Typed<C: Capability, P> {
 }
 
 impl<C: Capability, P: CapabilityProvider<C>> ErasedProvider for Typed<C, P> {
-    fn provide(&self, cx: &ProviderContext<'_>) -> Result<Box<dyn Any>, Unsupported> {
+    fn provide(&self, ctx: &ProviderContext<'_>) -> Result<Box<dyn Any>, Unsupported> {
         self.provider
-            .provide(cx)
+            .provide(ctx)
             .map(|handle| Box::new(handle) as Box<dyn Any>)
     }
 }
@@ -105,8 +105,8 @@ impl RegisteredProvider {
     /// # Errors
     ///
     /// What the provider answers.
-    pub fn provide(&self, cx: &ProviderContext<'_>) -> Result<Box<dyn Any>, Unsupported> {
-        self.provider.provide(cx)
+    pub fn provide(&self, ctx: &ProviderContext<'_>) -> Result<Box<dyn Any>, Unsupported> {
+        self.provider.provide(ctx)
     }
 }
 

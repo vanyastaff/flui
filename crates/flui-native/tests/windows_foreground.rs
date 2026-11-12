@@ -211,8 +211,8 @@ fn an_activation_takes_the_foreground_only_when_it_is_handed_over() {
     let opened = crate::Opened::on(
         &platform,
         WindowOptions::default()
-            .with_title("activated by a hand-over")
-            .with_visible(true),
+            .title("activated by a hand-over")
+            .visible(true),
     )
     .expect("a Win32 window opens");
     let window: Rc<dyn HostWindow> = Rc::clone(&opened.window);

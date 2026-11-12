@@ -1253,7 +1253,7 @@ mod toplevel {
     use super::frame::{Pacing, Sight, first_live, waiting_on_callback};
     use super::presented;
     use super::scale::{ScaleTold, buffer_scale};
-    use crate::executor::BackgroundExecutor;
+    use crate::executor::NativeExecutor;
     use crate::host::{self, WindowFacets, WindowPositions};
     use crate::host_window::{CoreHostWindow, HostWindow, OwnerThreadToken};
     use crate::owner::OpenWindowError;
@@ -1540,7 +1540,7 @@ mod toplevel {
         /// The fonts its title is drawn with, shared by the host's windows.
         title_fonts: TitleFonts,
         /// The loop's background work, which reads the host's fonts.
-        executor: Arc<BackgroundExecutor>,
+        executor: NativeExecutor,
         /// `wp_presentation`, through which the window's surface target asks
         /// when each commit is shown; `None` where the compositor tells
         /// nothing.

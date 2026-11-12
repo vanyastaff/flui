@@ -144,14 +144,14 @@ const _: () = assert!(ACTIVE_THUMB_RADIUS <= SWITCH_TRACK_HEIGHT / 2.0);
 
 /// A value-change callback: the next boolean value. `Rc`-based (owner-local,
 /// per ADR-0027) — matches [`InkWell`]'s own callback shape.
-type SwitchChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, bool)>;
+type SwitchChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, bool)>;
 
 /// A Material Design binary (on/off) switch.
 ///
 /// ```rust
 /// use flui_material::Switch;
 ///
-/// let _off = Switch::new(false).on_changed(|_cx, _next| { /* ... */ });
+/// let _off = Switch::new(false).on_changed(|_ctx, _next| { /* ... */ });
 /// let _disabled = Switch::new(true);
 /// ```
 ///
@@ -210,7 +210,7 @@ impl Switch {
     #[must_use]
     pub fn on_changed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, bool) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>, bool) -> R + 'static,
     ) -> Self {
         self.on_changed = Some(crate::event_callback::value_callback(callback));
         self
@@ -385,9 +385,9 @@ impl ViewState<Switch> for SwitchState {
         .states_controller(self.states.clone())
         .focus_indicator(FocusIndicator::Halo);
         if interactive {
-            ink_well = ink_well.on_tap(move |cx| {
+            ink_well = ink_well.on_tap(move |ctx| {
                 if let Some(handler) = &on_changed {
-                    handler(cx, next_value);
+                    handler(ctx, next_value);
                 }
             });
         }

@@ -65,7 +65,7 @@ pub struct MacosAccessibility {
     owner_thread: std::thread::ThreadId,
 }
 
-// SAFETY, per field: `shared` is `Arc<BridgeShared>`, `Send + Sync` by
+// SAFETY: per field, `shared` is `Arc<BridgeShared>`, `Send + Sync` by
 // construction; `owner_thread` is a plain `ThreadId`. The
 // `Mutex<Option<SubclassingAdapter>>` serializes every touch of the
 // adapter, whose auto-trait opt-outs come from (a) the type-erased handler

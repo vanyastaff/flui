@@ -145,7 +145,7 @@ against classifying by the degradation count, which would also reject a healthy 
   anywhere in FLUI's port of Flutter's own sliver family either (Flutter's base `RenderSliver`
   also just returns `0.0`; nothing in `rendering/*.dart` overrides it) — wiring it would mean a
   new cross-protocol callback (a `SliverCenterOffsetAdjustmentCallback` alongside
-  `SliverLayoutChildCallback`, threaded through `ErasedBoxLayoutCtx`, `BoxLayoutCtxErased`,
+  `SliverLayoutChildCallback`, threaded through `DriverBoxLayoutContext`, `ErasedBoxLayoutContext`,
   `LayoutContext`, and `layout_dirty_root`'s closure construction) for a value that can only ever
   evaluate to `0.0` today. Deleting the always-zero hook and using `self.offset.pixels()` directly
   is behaviorally identical to wiring it, so nothing observable changes; if a future sliver family

@@ -546,7 +546,7 @@ impl ReadParams {
 
     /// `window`, scoped by `query`.
     #[must_use]
-    pub fn with_query(mut self, query: ReadQuery) -> Self {
+    pub fn query(mut self, query: ReadQuery) -> Self {
         self.query = query;
         self
     }

@@ -96,7 +96,7 @@ pub(super) fn a_stale_source_plays_on_the_window_actuator<B: BackendUnderTest>(
         Err(outcome) => return outcome,
     };
     let window = HapticRequest::default();
-    let stale = window.with_source(stale_device());
+    let stale = window.source(stale_device());
     for kind in HapticFeedback::ALL {
         let expected = haptics.perform_with(kind, &window);
         let actual = haptics.perform_with(kind, &stale);

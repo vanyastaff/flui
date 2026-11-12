@@ -1,3 +1,59 @@
+error[E0277]: `Rc<(dyn flui_native::owner::OwnerHooks + 'static)>` cannot be sent between threads safely
+ --> tests/ui/owner_platform_is_not_send.rs:6:19
+  |
+6 |     assert_send::<OwnerPlatform>();
+  |                   ^^^^^^^^^^^^^ `Rc<(dyn flui_native::owner::OwnerHooks + 'static)>` cannot be sent between threads safely
+  |
+  = help: within `OwnerPlatform`, the trait `Send` is not implemented for `Rc<(dyn flui_native::owner::OwnerHooks + 'static)>`
+note: required because it appears within the type `OwnerPlatform`
+ --> src/owner/mod.rs
+  |
+  | pub struct OwnerPlatform {
+  |            ^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/ui/owner_platform_is_not_send.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `(dyn Platform + 'static)` cannot be shared between threads safely
+ --> tests/ui/owner_platform_is_not_send.rs:6:19
+  |
+6 |     assert_send::<OwnerPlatform>();
+  |                   ^^^^^^^^^^^^^ `(dyn Platform + 'static)` cannot be shared between threads safely
+  |
+  = help: the trait `Sync` is not implemented for `(dyn Platform + 'static)`
+  = note: required for `Arc<(dyn Platform + 'static)>` to implement `Send`
+note: required because it appears within the type `OwnerPlatform`
+ --> src/owner/mod.rs
+  |
+  | pub struct OwnerPlatform {
+  |            ^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/ui/owner_platform_is_not_send.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `(dyn Platform + 'static)` cannot be sent between threads safely
+ --> tests/ui/owner_platform_is_not_send.rs:6:19
+  |
+6 |     assert_send::<OwnerPlatform>();
+  |                   ^^^^^^^^^^^^^ `(dyn Platform + 'static)` cannot be sent between threads safely
+  |
+  = help: the trait `Send` is not implemented for `(dyn Platform + 'static)`
+  = note: required for `Arc<(dyn Platform + 'static)>` to implement `Send`
+note: required because it appears within the type `OwnerPlatform`
+ --> src/owner/mod.rs
+  |
+  | pub struct OwnerPlatform {
+  |            ^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/ui/owner_platform_is_not_send.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
 error[E0277]: `*const ()` cannot be sent between threads safely
  --> tests/ui/owner_platform_is_not_send.rs:6:19
   |

@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 name = "counter_logic"
 
 [dependencies]
-flui-hot-reload = { path = "../../../crates/flui-hot-reload", features = ["app-plugin"] }
+flui-hot-reload = { path = "../../../packages/flui-hot-reload", features = ["app-plugin"] }
 flui-painting = { path = "../../../crates/flui-painting" }
 flui-view = { path = "../../../crates/flui-view" }
 flui-widgets = { path = "../../../crates/flui-widgets" }

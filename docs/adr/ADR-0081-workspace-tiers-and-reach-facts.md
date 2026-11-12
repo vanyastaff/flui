@@ -77,7 +77,7 @@ Features are used for things features cannot express:
   (`crates/flui-view/Cargo.toml:116-118`, "Not an application-facing API contract") gates 27
   `cfg` sites in `crates/flui-view/src`, and is turned on by `flui-app`
   (`crates/flui-app/Cargo.toml:90`), `flui-testing` (`crates/flui-testing/Cargo.toml:51`) and
-  `flui-hot-reload` (`crates/flui-hot-reload/Cargo.toml:27`). Feature unification enables it
+  `flui-hot-reload` (`packages/flui-hot-reload/Cargo.toml:27`). Feature unification enables it
   for every application that links `flui-app`, so the boundary it claims does not exist.
 
 Finally, the B0 exit criterion is a count: "26 crates; no file over 3000 lines in `flui-app`
@@ -129,10 +129,10 @@ The tier assignment had six refused edges, each seeded as an `edge-exceptions` e
 optional under `testing`) exited with ADR-0082: both now name `flui-platform` (tier C), and
 their entries are gone. `flui-app -> flui-hot-reload` exited with the development reload hook
 (2026-09-29: `flui-app` reaches a reload tool only through an installed `DevReloadHook`,
-[ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md)). Three remain:
-`flui -> flui-hot-reload` exits with ADR-0311 §6; `flui -> flui-material` and
-`flui -> flui-cupertino` exit with ADR-0088. That paragraph describes the original
-migration's refused edges. Current `flui-widgets` reaches `flui-testing` only as a
+[ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md)), and
+`flui -> flui-hot-reload` when the package moved onto `flui-sdk` (ADR-0311 §6). Two remain:
+`flui -> flui-material` and `flui -> flui-cupertino` exit with ADR-0088.
+That paragraph describes the original migration's refused edges. Current `flui-widgets` reaches `flui-testing` only as a
 dev dependency; `flui-runtime` is K/internal order 4 and `flui-testing` is K/internal
 order 6. Manifest metadata is the current inventory; implemented reach/kind rules
 do not by themselves approve this record's remaining Proposed clauses.
@@ -154,7 +154,7 @@ The K set is the corrected list from owner decision 4. Generic FFI crates (`wind
 (`crates/flui-widgets/Cargo.toml:177`, `crates/flui-assets/Cargo.toml:69`) and say nothing
 about a windowing backend. A package that must reach a forbidden crate lists it under
 `reach-exceptions` with a reason (§2); `flui-hot-reload`'s direct `windows` dependency
-(`crates/flui-hot-reload/Cargo.toml`) is one entry, with
+(`packages/flui-hot-reload/Cargo.toml`) is one entry, with
 [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) §7 as its exit. "Only `flui-engine` may reach
 `wgpu`" is the one standing permission: `flui-engine` holds a `grant` from this record for
 `wgpu`, which also covers the `windows` crate `wgpu-hal` brings for DX12. The grant is the only
@@ -178,7 +178,7 @@ translated strings: every string forwarded to `DefaultWidgetsLocalizations`, so 
 the packages. Its RTL table and `GlobalWidgetsLocalizationsDelegate` moved to
 `flui_widgets::localization`, the design systems' exemption set became `flui-app` and the
 facade ([ADR-0028](ADR-0028-design-system-decoupling-contract.md)), and the
-facade's `localizations` feature stays empty until nothing names it. ADR-0041's "Localization
+facade has no `localizations` feature. ADR-0041's "Localization
 direction is locked" paragraph has nothing left to govern.
 
 ### 2. Reach facts are a gate over the resolved graph
@@ -194,7 +194,7 @@ still lists every edge any root can activate, and a test pins the resolver to `c
 --target all` for five roots.
 
 The roots are the facade under every combination `cargo xtask facade-combos` builds, the facade
-with each of its features alone (which adds `testing` and `gpu-readback-tests`), and every crate
+with each of its features alone (which adds `testing`), and every crate
 with a tier, alone, at its defaults and with `--all-features` (which reaches what the facade never
 selects, such as `flui-widgets/network-images`). These are what "every facade feature
 combination" means everywhere in these records.
@@ -231,8 +231,8 @@ shrinks: once the change an `exit` names lands, its entry becomes stale and must
 
 `TREE_FACTS` moved into `reach` as ordinary facts over one root's build. Since the development
 reload hook (ADR-0311) removed `flui-app`'s feature (2026-09-29) they read: `flui-hot-reload` is absent from `flui-app`
-at its defaults and with `--all-features`, present under
-`flui --no-default-features --features hot-reload`, and `hot-reload-counter-host`'s build enables
+at its defaults and with `--all-features`, absent from the facade with `--all-features`
+(an application adds the package itself, ADR-0311 §6), and `hot-reload-counter-host`'s build enables
 `flui-hot-reload/app-plugin`. A fact that names an unknown
 root, package or feature is an error, not a pass. The facts now run in `cargo xtask checks`
 instead of only in the heavy feature-matrix job.
@@ -279,7 +279,7 @@ from the first day, with named, dated exceptions:
 - `flui-app` optional -> `flui-hot-reload` (`crates/flui-app/Cargo.toml:65,108`): exited when
   the `DevReloadHook` landed (2026-09-29, ADR-0311);
 - the facade's optional edge and `hot-reload` feature and the facade's dev-dependency (the root
-  `Cargo.toml`): exit in the change that moves `flui-hot-reload` into the official packages
+  `Cargo.toml`): exited when `flui-hot-reload` moved under `packages/` on `flui-sdk`
   (ADR-0311 §6);
 - the facade's optional `material`/`cupertino` edges, features and default
   (`Cargo.toml:559-560,632,639-640`): exit with ADR-0088 §6, which sequences the facade change

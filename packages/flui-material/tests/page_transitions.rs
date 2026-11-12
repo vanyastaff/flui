@@ -326,7 +326,7 @@ impl PageTransitionBuilder for CountingFade {
         child: BoxedView,
     ) -> BoxedView {
         self.0.set(self.0.get() + 1);
-        FadeTransition::new(Rc::clone(primary), child).boxed()
+        FadeTransition::new(Rc::clone(primary)).child(child).boxed()
     }
 }
 

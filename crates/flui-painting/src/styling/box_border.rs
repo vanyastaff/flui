@@ -5,7 +5,7 @@ use flui_foundation::geometry::traits::{NumericUnit, Unit};
 
 /// A border for a box, with a separate side for each edge.
 ///
-/// Generic over unit type `T` for full type safety. Use `Border<f64>` for UI
+/// Generic over unit type `T` for full type safety. Use `Border` for UI
 /// borders.
 ///
 /// # Examples
@@ -32,7 +32,7 @@ use flui_foundation::geometry::traits::{NumericUnit, Unit};
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Border<T: Unit> {
+pub struct Border<T: Unit = f64> {
     /// The top side of this border.
     pub top: Option<BorderSide<T>>,
 
@@ -180,7 +180,7 @@ where
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BorderDirectional<T: Unit> {
+pub struct BorderDirectional<T: Unit = f64> {
     /// The start side of this border (left in LTR, right in RTL).
     pub start: Option<BorderSide<T>>,
 

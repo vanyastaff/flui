@@ -68,7 +68,7 @@ impl Scene {
         WidgetsApp::new(
             SelectionArea::new(content)
                 .controller(controller.clone())
-                .on_selection_changed(move |_cx, change| {
+                .on_selection_changed(move |_ctx, change| {
                     recorded.borrow_mut().push((
                         change
                             .selected
@@ -133,9 +133,9 @@ impl Scene {
 
     fn key(&mut self, key: Key, code: Code, modifiers: Modifiers) -> bool {
         let event: KeyEvent = KeyEventBuilder::new(code)
-            .with_key(key)
-            .with_state(KeyState::Down)
-            .with_modifiers(modifiers)
+            .key(key)
+            .state(KeyState::Down)
+            .modifiers(modifiers)
             .build();
         let handled = self
             .laid
@@ -361,7 +361,7 @@ pub(crate) fn a_panicking_listener_still_lets_the_controller_notify() {
         .listen(Rc::new(move || counter.set(counter.get() + 1)));
     let area = SelectionArea::new(two_texts())
         .controller(controller.clone())
-        .on_selection_changed(|_cx, _change| -> () { panic!("the listener fails") });
+        .on_selection_changed(|_ctx, _change| -> () { panic!("the listener fails") });
     let mut laid = lay_out(WidgetsApp::new(area), tight(400.0, 300.0));
     laid.pump();
     let first = controller.texts()[0].clone();

@@ -39,7 +39,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use flui_painting::paint::Image as PixelImage;
 use flui_platform::executor::SpawnError;
@@ -111,7 +111,7 @@ pub(super) struct ImageResolver {
     key: Option<ImageCacheKey>,
     /// The provider the live subscription resolves through. Held because
     /// `init_state` is handed no view.
-    provider: Arc<dyn ImageProvider + Send + Sync>, // the same erased provider handle `Image` itself stores
+    provider: Rc<dyn ImageProvider>, // the same erased provider handle `Image` itself stores
     /// Whether to keep the previous frame across a key change.
     gapless_playback: bool,
 }
@@ -138,10 +138,7 @@ impl ImageResolver {
     /// Creates a resolver for `provider`. Nothing is resolved until
     /// [`init`](Self::init) runs — the capabilities a load needs are only
     /// reachable from `init_state`.
-    pub(super) fn new(
-        provider: Arc<dyn ImageProvider + Send + Sync>,
-        gapless_playback: bool,
-    ) -> Self {
+    pub(super) fn new(provider: Rc<dyn ImageProvider>, gapless_playback: bool) -> Self {
         Self {
             published: Arc::new(Mutex::new(Published::default())),
             handle: None,
@@ -180,11 +177,7 @@ impl ImageResolver {
 
     /// Re-resolve only when the *cache key*
     /// changes, not when the provider instance does.
-    pub(super) fn did_update(
-        &mut self,
-        provider: Arc<dyn ImageProvider + Send + Sync>,
-        gapless_playback: bool,
-    ) {
+    pub(super) fn did_update(&mut self, provider: Rc<dyn ImageProvider>, gapless_playback: bool) {
         let key = provider.cache_key();
         self.provider = provider;
         self.gapless_playback = gapless_playback;
@@ -267,7 +260,7 @@ impl ImageResolver {
         let future: Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>>>> =
             match self.provider.decode_job() {
                 Some(job) => {
-                    let provider = Arc::clone(&self.provider);
+                    let provider = Rc::clone(&self.provider);
                     let on_lanes = job.run(self.services.background().cloned());
                     Box::pin(async move {
                         match on_lanes.await {

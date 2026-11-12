@@ -4,10 +4,10 @@
 //! objects in `flui-objects`, split into `Semantics`, `MergeSemantics`, and
 //! `ExcludeSemantics`.
 //!
-//! # Action handlers are owner-local and receive an `EventCx`
+//! # Action handlers are owner-local and receive an `EventContext`
 //!
 //! [`Semantics`]'s `on_*` builders register handlers that assistive technology
-//! can invoke, and each receives the `&mut EventCx<'_>` a write through the
+//! can invoke, and each receives the `&mut EventContext<'_>` a write through the
 //! widget's `WriterSource` opens (ADR-0086), exactly like a pointer callback:
 //! "activation toggles this control's own state" is a signal write.
 //!
@@ -48,7 +48,7 @@ use flui_rendering::{
     },
 };
 use flui_view::{
-    Child, CreationSite, EventCx, EventOutcome, IntoView, RenderObjectContext,
+    Child, CreationSite, EventContext, EventOutcome, IntoView, RenderObjectContext,
     RenderObjectContextError, RenderView, WriterSource, impl_render_view,
 };
 
@@ -80,9 +80,9 @@ impl SemanticsOptions {
     }
 }
 
-/// One owner-local action handler: the dispatch's `EventCx` and the call,
+/// One owner-local action handler: the dispatch's `EventContext` and the call,
 /// payload included.
-type EventActionHandler = Rc<dyn Fn(&mut EventCx<'_>, ActionCall)>;
+type EventActionHandler = Rc<dyn Fn(&mut EventContext<'_>, ActionCall)>;
 
 /// The owner-local action handlers one [`Semantics`] registered, in
 /// registration order: one per action (a later registration replaces an
@@ -155,7 +155,7 @@ impl std::fmt::Debug for EventActions {
 }
 
 /// What a mounted [`Semantics`] keeps in the owner's interaction lane: its
-/// action table, the writer each handler's `EventCx` is opened from, and how
+/// action table, the writer each handler's `EventContext` is opened from, and how
 /// many custom actions the configuration declared before the table's own, so
 /// a custom action's id finds its handler.
 struct SemanticsActionCell {
@@ -189,7 +189,7 @@ fn deliver_assistive_focus(target: LocalPayloadTarget, within: bool) {
     let Some(handler) = cell.actions.assistive_focus.clone() else {
         return;
     };
-    cell.writer.write(|cx| handler(cx, within));
+    cell.writer.write(|ctx| handler(ctx, within));
 }
 
 fn deliver(target: LocalPayloadTarget, call: ActionCall) {
@@ -233,7 +233,7 @@ fn deliver(target: LocalPayloadTarget, call: ActionCall) {
         );
         return;
     };
-    cell.writer.write(|cx| handler(cx, call));
+    cell.writer.write(|ctx| handler(ctx, call));
 }
 
 /// Annotates a subtree with accessibility semantics.
@@ -771,7 +771,7 @@ impl Semantics {
     #[must_use]
     pub fn on_click<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_plain_action(SemanticsAction::Click, handler)
@@ -782,7 +782,7 @@ impl Semantics {
     #[must_use]
     pub fn on_show_context_menu<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_plain_action(SemanticsAction::ShowContextMenu, handler)
@@ -793,7 +793,7 @@ impl Semantics {
     #[must_use]
     pub fn on_scroll_left<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ScrollUnit) -> R + 'static,
         R: EventOutcome,
     {
         self.on_scroll_action(SemanticsAction::ScrollLeft, handler)
@@ -804,7 +804,7 @@ impl Semantics {
     #[must_use]
     pub fn on_scroll_right<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ScrollUnit) -> R + 'static,
         R: EventOutcome,
     {
         self.on_scroll_action(SemanticsAction::ScrollRight, handler)
@@ -815,7 +815,7 @@ impl Semantics {
     #[must_use]
     pub fn on_scroll_up<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ScrollUnit) -> R + 'static,
         R: EventOutcome,
     {
         self.on_scroll_action(SemanticsAction::ScrollUp, handler)
@@ -826,7 +826,7 @@ impl Semantics {
     #[must_use]
     pub fn on_scroll_down<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ScrollUnit) -> R + 'static,
         R: EventOutcome,
     {
         self.on_scroll_action(SemanticsAction::ScrollDown, handler)
@@ -835,17 +835,17 @@ impl Semantics {
     /// Registers a directional scroll handler, which receives the call's unit.
     fn on_scroll_action<F, R>(mut self, action: SemanticsAction, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ScrollUnit) -> R + 'static,
         R: EventOutcome,
     {
         let handler = value_callback(handler);
         self.event_actions.insert(
             action,
-            Rc::new(move |cx, call| match call {
+            Rc::new(move |ctx, call| match call {
                 ActionCall::ScrollUp(unit)
                 | ActionCall::ScrollDown(unit)
                 | ActionCall::ScrollLeft(unit)
-                | ActionCall::ScrollRight(unit) => handler(cx, unit),
+                | ActionCall::ScrollRight(unit) => handler(ctx, unit),
                 _ => {}
             }),
         );
@@ -880,20 +880,20 @@ impl Semantics {
     /// state:
     ///
     /// ```compile_fail
-    /// let _ = flui_widgets::Semantics::new().on_expand(|_cx| {});
+    /// let _ = flui_widgets::Semantics::new().on_expand(|_ctx| {});
     /// ```
     ///
     /// Register the expanded state and both transition handlers together:
     ///
     /// ```
-    /// let _ = flui_widgets::Semantics::new().expandable(false, |_cx| {}, |_cx| {});
+    /// let _ = flui_widgets::Semantics::new().expandable(false, |_ctx| {}, |_ctx| {});
     /// ```
     #[must_use]
     pub fn expandable<E, RE, C, RC>(self, expanded: bool, on_expand: E, on_collapse: C) -> Self
     where
-        E: Fn(&mut EventCx<'_>) -> RE + 'static,
+        E: Fn(&mut EventContext<'_>) -> RE + 'static,
         RE: EventOutcome,
-        C: Fn(&mut EventCx<'_>) -> RC + 'static,
+        C: Fn(&mut EventContext<'_>) -> RC + 'static,
         RC: EventOutcome,
     {
         self.expanded(expanded)
@@ -906,15 +906,15 @@ impl Semantics {
     #[must_use]
     pub fn on_set_numeric_value<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, f64) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, f64) -> R + 'static,
         R: EventOutcome,
     {
         let handler = value_callback(handler);
         self.event_actions.insert(
             SemanticsAction::SetNumericValue,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::SetNumericValue(value) = call {
-                    handler(cx, value);
+                    handler(ctx, value);
                 }
             }),
         );
@@ -929,7 +929,7 @@ impl Semantics {
     #[must_use]
     pub fn on_increment<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_plain_action(SemanticsAction::Increment, handler)
@@ -940,7 +940,7 @@ impl Semantics {
     #[must_use]
     pub fn on_decrement<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_plain_action(SemanticsAction::Decrement, handler)
@@ -956,15 +956,15 @@ impl Semantics {
     #[must_use]
     pub fn on_scroll_into_view<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, Option<Reveal>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, Option<Reveal>) -> R + 'static,
         R: EventOutcome,
     {
         let handler = value_callback(handler);
         self.event_actions.insert(
             SemanticsAction::ScrollIntoView,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::ScrollIntoView(reveal) = call {
-                    handler(cx, reveal);
+                    handler(ctx, reveal);
                 }
             }),
         );
@@ -976,7 +976,7 @@ impl Semantics {
     #[must_use]
     pub fn on_focus<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_plain_action(SemanticsAction::Focus, handler)
@@ -990,7 +990,7 @@ impl Semantics {
     #[must_use]
     pub fn on_blur<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_plain_action(SemanticsAction::Blur, handler)
@@ -1003,15 +1003,15 @@ impl Semantics {
     #[must_use]
     pub fn on_set_value<F, R>(mut self, handler: F) -> Self
     where
-        F: for<'a> Fn(&mut EventCx<'_>, &'a str) -> R + 'static,
+        F: for<'a> Fn(&mut EventContext<'_>, &'a str) -> R + 'static,
         R: EventOutcome,
     {
         let handler = ref_callback::<str, _, _>(handler);
         self.event_actions.insert(
             SemanticsAction::SetValue,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::SetValue(text) = call {
-                    handler(cx, &text);
+                    handler(ctx, &text);
                 }
             }),
         );
@@ -1025,15 +1025,15 @@ impl Semantics {
     #[must_use]
     pub fn on_set_text_selection<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, flui_rendering::semantics::TextSelection) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, flui_rendering::semantics::TextSelection) -> R + 'static,
         R: EventOutcome,
     {
         let handler = value_callback(handler);
         self.event_actions.insert(
             SemanticsAction::SetTextSelection,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::SetTextSelection(selection) = call {
-                    handler(cx, selection);
+                    handler(ctx, selection);
                 }
             }),
         );
@@ -1071,15 +1071,15 @@ impl Semantics {
     #[must_use]
     pub fn on_set_document_selection<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, flui_rendering::semantics::DocumentSelection) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, flui_rendering::semantics::DocumentSelection) -> R + 'static,
         R: EventOutcome,
     {
         let handler = value_callback(handler);
         self.event_actions.insert(
             SemanticsAction::SetTextSelection,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::SetDocumentSelection(selection) = call {
-                    handler(cx, selection);
+                    handler(ctx, selection);
                 }
             }),
         );
@@ -1095,7 +1095,7 @@ impl Semantics {
     #[must_use]
     pub fn on_assistive_focus_within<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
         self.event_actions.assistive_focus = Some(value_callback(handler));
@@ -1107,15 +1107,15 @@ impl Semantics {
     #[must_use]
     pub fn on_replace_selected_text<F, R>(mut self, handler: F) -> Self
     where
-        F: for<'a> Fn(&mut EventCx<'_>, &'a str) -> R + 'static,
+        F: for<'a> Fn(&mut EventContext<'_>, &'a str) -> R + 'static,
         R: EventOutcome,
     {
         let handler = ref_callback::<str, _, _>(handler);
         self.event_actions.insert(
             SemanticsAction::ReplaceSelectedText,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::ReplaceSelectedText(text) = call {
-                    handler(cx, &text);
+                    handler(ctx, &text);
                 }
             }),
         );
@@ -1127,15 +1127,15 @@ impl Semantics {
     #[must_use]
     pub fn on_set_scroll_offset<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, Offset<f64>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, Offset<f64>) -> R + 'static,
         R: EventOutcome,
     {
         let handler = value_callback(handler);
         self.event_actions.insert(
             SemanticsAction::SetScrollOffset,
-            Rc::new(move |cx, call| {
+            Rc::new(move |ctx, call| {
                 if let ActionCall::SetScrollOffset(offset) = call {
-                    handler(cx, offset);
+                    handler(ctx, offset);
                 }
             }),
         );
@@ -1153,7 +1153,7 @@ impl Semantics {
     #[must_use]
     pub fn custom_action<F, R>(self, label: impl Into<String>, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.push_custom_action(label.into(), handler, None)
@@ -1176,7 +1176,7 @@ impl Semantics {
         handler: F,
     ) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.push_custom_action(label.into(), handler, Some(Rc::new(enabled)))
@@ -1198,11 +1198,11 @@ impl Semantics {
         enabled: Option<Rc<dyn Fn() -> bool>>,
     ) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         let handler: EventActionHandler =
-            Rc::new(move |cx: &mut EventCx<'_>, _call| handler(cx).report());
+            Rc::new(move |ctx: &mut EventContext<'_>, _call| handler(ctx).report());
         let entry = CustomEntry {
             label,
             handler,
@@ -1240,7 +1240,7 @@ impl Semantics {
     #[must_use]
     pub fn on_action<F, R>(mut self, action: SemanticsAction, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ActionCall) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ActionCall) -> R + 'static,
         R: EventOutcome,
     {
         self.event_actions.insert(action, value_callback(handler));
@@ -1250,14 +1250,14 @@ impl Semantics {
     /// Registers a handler for an action that takes no payload.
     fn on_plain_action<F, R>(mut self, action: SemanticsAction, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         // One allocation: the outcome is reported here, as `event_callback`
         // reports it (ADR-0086).
         self.event_actions.insert(
             action,
-            Rc::new(move |cx: &mut EventCx<'_>, _call| handler(cx).report()),
+            Rc::new(move |ctx: &mut EventContext<'_>, _call| handler(ctx).report()),
         );
         self
     }
@@ -1299,7 +1299,7 @@ impl Semantics {
     }
 
     /// The lane payload for this build's action table, or `None` when there
-    /// is none to register or no writer to open its `EventCx` from.
+    /// is none to register or no writer to open its `EventContext` from.
     fn action_cell(&self, ctx: &RenderObjectContext<'_>) -> Option<Rc<dyn Any>> {
         if self.event_actions.is_empty() {
             return None;

@@ -38,7 +38,7 @@ use flui_view::element::ElementKind;
 use flui_view::environment::GesturePolicy;
 use flui_view::owner::{KeepAliveHandle, KeepAliveLease};
 use flui_view::prelude::*;
-use flui_view::{EventCx, EventOutcome, RebuildHandle, WriterSource};
+use flui_view::{EventContext, EventOutcome, RebuildHandle, WriterSource};
 
 use super::actions::{Action, ActionOutcome, Actions, CopySelectionTextIntent};
 use super::gesture_alternatives::{
@@ -319,7 +319,7 @@ impl Draggable {
     #[must_use]
     pub fn on_drag_started<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.on_drag_started = Some(event_callback(callback));
@@ -331,7 +331,7 @@ impl Draggable {
     #[must_use]
     pub fn on_drag_end<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, DragOutcome) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, DragOutcome) -> R + 'static,
         R: EventOutcome,
     {
         self.on_drag_end = Some(value_callback(callback));
@@ -404,7 +404,7 @@ impl Source {
         }
     }
 
-    fn write(&self, invoke: impl FnOnce(&mut EventCx<'_>)) {
+    fn write(&self, invoke: impl FnOnce(&mut EventContext<'_>)) {
         let writer = self.capabilities.borrow().writer.clone();
         if let Some(writer) = writer {
             writer.write(invoke);
@@ -427,7 +427,7 @@ impl Source {
         self.rebuild();
         let callback = self.config.borrow().on_drag_started.clone();
         if let Some(callback) = callback {
-            self.write(|cx| callback(cx));
+            self.write(|ctx| callback(ctx));
         }
     }
 
@@ -447,7 +447,7 @@ impl Source {
             self.haptic(HapticFeedback::Drop, HapticTiming::FramePresented);
         }
         if let Some(callback) = callback {
-            self.write(|cx| callback(cx, outcome));
+            self.write(|ctx| callback(ctx, outcome));
         }
     }
 
@@ -1039,7 +1039,7 @@ impl ViewState<Draggable> for DraggableState {
         let pressed = Rc::downgrade(&self.source);
         let lifted = Rc::downgrade(&self.source);
         let mut listener = Listener::new()
-            .on_pointer_down(move |_cx, dispatch| {
+            .on_pointer_down(move |_ctx, dispatch| {
                 if let (Some(source), PointerEvent::Down(press)) =
                     (pressed.upgrade(), dispatch.local)
                 {
@@ -1048,10 +1048,10 @@ impl ViewState<Draggable> for DraggableState {
                     contacts.push(press.pointer);
                 }
             })
-            .on_pointer_up(move |_cx, dispatch| forget_contact(&lifted, dispatch.local))
+            .on_pointer_up(move |_ctx, dispatch| forget_contact(&lifted, dispatch.local))
             .on_pointer_cancel({
                 let source = Rc::downgrade(&self.source);
-                move |_cx, dispatch| forget_contact(&source, dispatch.local)
+                move |_ctx, dispatch| forget_contact(&source, dispatch.local)
             })
             .recognizer(&self.drag_attachment);
         if view.trigger == DragTrigger::LongPress {
@@ -1064,14 +1064,11 @@ impl ViewState<Draggable> for DraggableState {
             .cursor(CursorIcon::Grab)
             .child(listener.child(content));
         match &view.alternatives {
-            Some(alternatives) => Actions::new(
-                alternatives
-                    .clone()
-                    .with_hold(self.own_hold.clone())
-                    .child(grab),
-            )
-            .action(transfers)
-            .boxed(),
+            Some(alternatives) => {
+                Actions::new(alternatives.clone().hold(self.own_hold.clone()).child(grab))
+                    .action(transfers)
+                    .boxed()
+            }
             None => grab.boxed(),
         }
     }
@@ -1120,7 +1117,11 @@ struct DragTransfer {
 }
 
 impl Action<CopySelectionTextIntent> for DragTransfer {
-    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &CopySelectionTextIntent) -> ActionOutcome {
+    fn invoke(
+        &self,
+        _ctx: &mut EventContext<'_>,
+        intent: &CopySelectionTextIntent,
+    ) -> ActionOutcome {
         let action = match intent {
             CopySelectionTextIntent::Copy => TransferActions::COPY,
             CopySelectionTextIntent::Cut => TransferActions::MOVE,

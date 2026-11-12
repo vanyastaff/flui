@@ -14,7 +14,7 @@ use flui_testing::a11y::Role;
 pub fn tap_callback_writes_a_signal_and_rebuilds_its_reader() {
     let probe = common::SignalProbe::new(|signals| {
         CupertinoButton::new(SizedBox::shrink())
-            .on_pressed(move |cx| signals.count.update(cx, |count| *count += 1))
+            .on_pressed(move |ctx| signals.count.update(ctx, |count| *count += 1))
     });
     let mut laid = lay_out(probe.view(), tight(100.0, 44.0));
     laid.dispatch_pointer_down(50.0, 22.0);
@@ -140,14 +140,14 @@ fn exercise_button_fade_migration(releasing: bool) {
 /// that governs pointer interaction.
 pub fn cupertino_button_with_text_child_announces_one_labelled_button_node() {
     assert_button_announcement(
-        CupertinoButton::new(Text::new("Tap")).on_pressed(|_cx| {}),
+        CupertinoButton::new(Text::new("Tap")).on_pressed(|_ctx| {}),
         false,
     );
 }
 
 pub fn long_press_only_button_announces_enabled() {
     assert_button_announcement(
-        CupertinoButton::new(Text::new("Tap")).on_long_press(|_cx| {}),
+        CupertinoButton::new(Text::new("Tap")).on_long_press(|_ctx| {}),
         false,
     );
 }
@@ -188,7 +188,7 @@ fn assert_button_announcement(button: CupertinoButton, disabled: bool) {
 pub fn button_publishes_its_identifier() {
     let mut laid = lay_out(
         CupertinoButton::new(Text::new("Tap"))
-            .on_pressed(|_cx| {})
+            .on_pressed(|_ctx| {})
             .identifier("tap-button"),
         loose(200.0),
     );

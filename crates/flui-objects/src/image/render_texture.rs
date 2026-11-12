@@ -7,7 +7,7 @@ use flui_painting::paint::{FilterQuality, TextureId};
 use flui_rendering::{
     RenderUpdateImpact,
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -116,12 +116,12 @@ impl RenderBox for RenderTexture {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         Ok(Self::size_for(&constraints))
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         let size = ctx.size();
         ctx.canvas().draw_texture(
             self.texture,

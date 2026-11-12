@@ -6,7 +6,7 @@ use flui_objects::{AlignMotion, RenderAnimatedAlign};
 use flui_painting::Alignment;
 use flui_rendering::RenderUpdateImpact;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{BoxedView, RenderObjectContext, RenderView, View, impl_render_view};
+use flui_view::{Child, RenderObjectContext, RenderView, impl_render_view};
 
 /// Carries the transition's motion (whose proxy the transition's state owns)
 /// and the fixed properties a rebuild may change.
@@ -16,7 +16,7 @@ pub(super) struct AnimatedAlignView {
     pub(super) alignment: Alignment,
     pub(super) width_factor: Option<f64>,
     pub(super) height_factor: Option<f64>,
-    pub(super) child: BoxedView,
+    pub(super) child: Child,
 }
 
 impl std::fmt::Debug for AnimatedAlignView {
@@ -53,13 +53,7 @@ impl RenderView for AnimatedAlignView {
         impact
     }
 
-    fn has_children(&self) -> bool {
-        true
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        visitor(&self.child);
-    }
+    flui_view::single_child_view_children!();
 }
 
 impl_render_view!(AnimatedAlignView);

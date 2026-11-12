@@ -26,7 +26,7 @@
 //! use flui_foundation::{Leaf, geometry::Size};
 //! use flui_rendering::{
 //!     RenderResult,
-//!     context::{BoxLayoutContext, PaintCx},
+//!     context::{BoxLayoutContext, PaintContext},
 //!     parent_data::BoxParentData,
 //!     traits::RenderBox,
 //! };
@@ -49,7 +49,7 @@
 //!         Ok(ctx.constrain(self.preferred_size))
 //!     }
 //!
-//!     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+//!     fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
 //! }
 //! ```
 
@@ -136,14 +136,14 @@ pub mod prelude {
     pub use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
 
     // Per-child layout state (lives in box_protocol since it's a
-    // BoxLayoutCtx implementation detail; re-exported here for
+    // RawBoxLayoutContext implementation detail; re-exported here for
     // convenience via the public-facing `protocol` module surface).
     pub use crate::protocol::ChildState;
     // Constraints from this crate
     pub use crate::constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
     // Context types for RenderBox and RenderSliver
     pub use crate::context::{
-        BoxHitTestContext, BoxLayoutContext, FragmentRecorder, PaintCx, PaintFragment,
+        BoxHitTestContext, BoxLayoutContext, FragmentRecorder, PaintContext, PaintFragment,
         SliverHitTestContext, SliverLayoutContext,
     };
     // Error types
@@ -204,13 +204,13 @@ pub mod prelude {
 // Re-export key types at crate root
 // Context system
 pub use context::{
-    BoxHitTestContext, BoxLayoutContext, FragmentRecorder, HitTestContext, LayoutContext, PaintCx,
-    PaintFragment, SliverHitTestContext, SliverLayoutContext,
+    BoxHitTestContext, BoxLayoutContext, FragmentRecorder, HitTestContext, LayoutContext,
+    PaintContext, PaintFragment, SliverHitTestContext, SliverLayoutContext,
 };
 pub use error::{PoisonPhase, RenderError, RenderResult};
 pub use parent_data::ParentData;
 pub use pipeline::{
-    LayoutPremise, PipelineCell, PipelineOwner, TextContextHandle, TextCx, TextSource,
+    LayoutPremise, PipelineCell, PipelineOwner, TextContextHandle, TextContextMut, TextSource,
 };
 pub use protocol::{
     BoxChildSize,

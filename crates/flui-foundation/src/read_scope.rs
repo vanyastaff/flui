@@ -251,8 +251,8 @@ impl fmt::Debug for ScopeRef<'_> {
 
 /// A context a signal can be read through (ADR-0085 §2).
 ///
-/// `flui-view`'s `BuildContext` has it as a supertrait, so `count.get(cx)`
-/// with `cx: &dyn BuildContext` keeps its spelling. Read-only by
+/// `flui-view`'s `BuildContext` has it as a supertrait, so `count.get(ctx)`
+/// with `ctx: &dyn BuildContext` keeps its spelling. Read-only by
 /// construction: the one thing it yields is an opaque [`ScopeRef`], so it
 /// cannot hand out a writable graph, write, or create a slot.
 pub trait ReadScope {
@@ -529,7 +529,7 @@ impl<T: 'static> Signal<T> {
         }
     }
 
-    /// Read through `cx`; during `build` the building element becomes a
+    /// Read through `ctx`; during `build` the building element becomes a
     /// reader. Once the graph and value type are validated, that subscription
     /// is recorded after the graph releases its read loan and before a panic
     /// from `f` resumes, so a recovered build can still be invalidated by a
@@ -547,10 +547,10 @@ impl<T: 'static> Signal<T> {
     /// [`SignalError::Reentrant`] from inside this slot's own closure.
     pub fn try_with<S: ReadScope + ?Sized, R>(
         self,
-        cx: &S,
+        ctx: &S,
         f: impl FnMut(&T) -> R,
     ) -> Result<R, SignalError> {
-        let scope = cx.scope();
+        let scope = ctx.scope();
         read_typed(scope.graph, scope.sink, self.slot, f)
     }
 
@@ -559,14 +559,14 @@ impl<T: 'static> Signal<T> {
     /// # Errors
     ///
     /// As [`Signal::try_with`].
-    pub fn try_get<S: ReadScope + ?Sized>(self, cx: &S) -> Result<T, SignalError>
+    pub fn try_get<S: ReadScope + ?Sized>(self, ctx: &S) -> Result<T, SignalError>
     where
         T: Clone,
     {
-        self.try_with(cx, T::clone)
+        self.try_with(ctx, T::clone)
     }
 
-    /// Borrowed read through `cx`; during `build` the building element
+    /// Borrowed read through `ctx`; during `build` the building element
     /// becomes a reader.
     ///
     /// # Panics
@@ -574,8 +574,8 @@ impl<T: 'static> Signal<T> {
     /// On a stale handle (its owning element unmounted), a handle from
     /// another graph, a handle of the wrong `T`, or a re-entrant read of this
     /// same slot; see [`Signal::try_with`] for the non-panicking form.
-    pub fn with<S: ReadScope + ?Sized, R>(self, cx: &S, f: impl FnMut(&T) -> R) -> R {
-        match self.try_with(cx, f) {
+    pub fn with<S: ReadScope + ?Sized, R>(self, ctx: &S, f: impl FnMut(&T) -> R) -> R {
+        match self.try_with(ctx, f) {
             Ok(result) => result,
             Err(error) => panic!("Signal::with: {error} (use try_with for a fallible read)"),
         }
@@ -587,11 +587,11 @@ impl<T: 'static> Signal<T> {
     ///
     /// As [`Signal::with`].
     #[must_use]
-    pub fn get<S: ReadScope + ?Sized>(self, cx: &S) -> T
+    pub fn get<S: ReadScope + ?Sized>(self, ctx: &S) -> T
     where
         T: Clone,
     {
-        self.with(cx, T::clone)
+        self.with(ctx, T::clone)
     }
 
     /// Read without subscribing anyone (callbacks, tests, UI runtime commands).
@@ -757,20 +757,20 @@ mod tests {
     fn a_user_read_panic_keeps_priority_over_a_subscription_panic() {
         let graph = OneSlot::new(1, 7u32);
         let sink = PanickingSink;
-        let cx = Cx {
+        let ctx = Cx {
             graph: &graph,
             sink: Some(&sink),
         };
         let signal = Signal::<u32>::from_slot(graph.slot());
 
         let subscription_only = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.with(&cx, |value| *value)
+            signal.with(&ctx, |value| *value)
         }));
         let payload = subscription_only.expect_err("the subscription panic must resume");
         assert_eq!(payload.downcast_ref::<&str>(), Some(&"subscription probe"));
 
         let dual_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.with(&cx, |_| panic!("reader probe"));
+            signal.with(&ctx, |_| panic!("reader probe"));
         }));
         let payload = dual_panic.expect_err("the original read panic must resume");
         assert_eq!(
@@ -783,7 +783,7 @@ mod tests {
     fn reader_panic_keeps_priority_over_its_captures_destructor_panic() {
         let graph = OneSlot::new(1, 7u32);
         let sink = Recorder::default();
-        let cx = Cx {
+        let ctx = Cx {
             graph: &graph,
             sink: Some(&sink),
         };
@@ -791,7 +791,7 @@ mod tests {
         let captured = DropBomb("reader capture destructor probe");
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.with(&cx, move |_| {
+            signal.with(&ctx, move |_| {
                 let _capture_stays_owned_by_the_reader = &captured;
                 panic!("reader probe");
             });
@@ -832,18 +832,18 @@ mod tests {
     fn a_foreign_or_stale_read_subscribes_nobody() {
         let graph = OneSlot::new(1, 7u32);
         let sink = Recorder::default();
-        let cx = Cx {
+        let ctx = Cx {
             graph: &graph,
             sink: Some(&sink),
         };
         let foreign = Signal::<u32>::from_slot(SignalSlot::new(2, 0, 0));
         let stale = Signal::<u32>::from_slot(SignalSlot::new(1, 0, 1));
         assert!(matches!(
-            foreign.try_get(&cx),
+            foreign.try_get(&ctx),
             Err(SignalError::ForeignGraph { .. })
         ));
         assert!(matches!(
-            stale.try_get(&cx),
+            stale.try_get(&ctx),
             Err(SignalError::Released { .. })
         ));
         assert!(sink.0.borrow().is_empty());

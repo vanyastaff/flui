@@ -124,9 +124,9 @@
 //!     let platform = headless_platform();
 //!
 //!     let options = WindowOptions::default()
-//!         .with_title("Test")
-//!         .with_size(Size::new(800.0, 600.0))
-//!         .with_visible(true);
+//!         .title("Test")
+//!         .size(Size::new(800.0, 600.0))
+//!         .visible(true);
 //!
 //!     let handler = RecordingWindowHandler::new();
 //!     let window = platform
@@ -178,13 +178,11 @@
 // call the OS directly (`window::windows`, `input::windows`,
 // `text::windows::tsf`, `display::apple::{macos, ios}`, `preferences::windows`
 // and the like) — and the reading of the Windows build in `version::gate` is
-// one item-level `expect`. A platform file's pure half forbids it. The Win32
-// files are fully SAFETY-documented — every `unsafe` block there carries a
-// `// SAFETY:` comment (or, for `unsafe fn`, a `# Safety` rustdoc section)
-// stating the invariant that makes it sound. The AppKit, Android and web files
-// are NOT yet at that bar; see the per-crate documentation coverage tracked in
-// the root `Cargo.toml`'s `undocumented_unsafe_blocks` note — do not restate
-// "every block" as a crate-wide claim until that note says so too.
+// one item-level `expect`. A platform file's pure half forbids it. Every
+// `unsafe` block and `unsafe impl` carries a `// SAFETY:` comment stating the
+// invariant that makes it sound, and every `unsafe fn` a `# Safety` rustdoc
+// section; the workspace's `clippy::undocumented_unsafe_blocks` holds the
+// first on every target.
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
@@ -262,7 +260,7 @@ pub use error::{BootstrapError, PlatformError, PlatformResult};
 pub use host::{NativeClipboard, NativePrimarySelection};
 // Re-export executor types
 #[cfg(not(target_arch = "wasm32"))]
-pub use executor::BackgroundExecutor;
+pub use executor::NativeExecutor;
 // Each host's platform: the one implementation of `Platform` over its table.
 pub use hosts::HeadlessPlatform;
 #[cfg(target_os = "ios")]
@@ -322,8 +320,8 @@ pub use process::end_process;
 // handed to `on_ready`, never re-exported with a public minting seam.
 pub use owner::{
     OpenWindowError, OpenedWindow, OpenedWindowReach, OwnerPlatform, PendingWindow, PlatformProxy,
-    ProxySendError, SharedPlatform, WaitError, WakeRegistrationError, WindowHandlerFactory,
-    WindowOpen, WindowRequest,
+    ProxySendError, WaitError, WakeRegistrationError, WindowHandlerFactory, WindowOpen,
+    WindowRequest,
 };
 
 /// Get the current platform implementation
@@ -576,13 +574,49 @@ pub fn current_host() -> Result<CurrentHost, PlatformError> {
 }
 
 impl CurrentHost {
-    /// Starts this host.
+    /// Starts this host on a runtime of its own ([`NativeExecutor::own`]), for a host started
+    /// without an application: tests, headless, tools.
     ///
     /// # Errors
     ///
     /// [`PlatformError::Init`] when the host fails to start (e.g., COM failure on Windows, no
     /// connection to the display server).
     pub fn start(self) -> Result<Box<dyn Platform>, PlatformError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.launch(NativeExecutor::own())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.launch()
+        }
+    }
+
+    /// Starts this host, running its IO (the Linux session sources and the Wayland title fonts) on
+    /// `executor`'s runtime (ADR-0327 §3). An application passes its execution services' IO
+    /// runtime, so the process runs one IO pool.
+    ///
+    /// # Errors
+    ///
+    /// [`PlatformError::Init`] when the host fails to start (e.g., COM failure on Windows, no
+    /// connection to the display server).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn start_with(self, executor: NativeExecutor) -> Result<Box<dyn Platform>, PlatformError> {
+        self.launch(executor)
+    }
+
+    /// The host, built on `executor` where it runs IO. The browser host has no
+    /// tokio runtime and takes none.
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "a target whose only hosts cannot fail to start still answers through `start`'s `Result`"
+    )]
+    fn launch(
+        self,
+        #[cfg(not(target_arch = "wasm32"))] executor: NativeExecutor,
+    ) -> Result<Box<dyn Platform>, PlatformError> {
+        #[cfg(not(any(target_os = "linux", target_arch = "wasm32")))]
+        let _ = executor;
         match self {
             Self::Headless => Ok(Box::new(HeadlessPlatform::new())),
             #[cfg(windows)]
@@ -592,9 +626,9 @@ impl CurrentHost {
             #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
             Self::Wayland | Self::X11 => {
                 let platform = if self == Self::Wayland {
-                    start_wayland()
+                    start_wayland(executor)
                 } else {
-                    start_x11()
+                    start_x11(executor)
                 }?;
                 tracing::info!(host = platform.name(), "the session's native host started");
                 Ok(platform)
@@ -665,13 +699,13 @@ impl CurrentHost {
 
 /// The native Wayland host, as [`current_platform`] starts it.
 #[cfg(all(target_os = "linux", feature = "wayland"))]
-fn start_wayland() -> Result<Box<dyn Platform>, PlatformError> {
-    Ok(Box::new(WaylandPlatform::try_new()?))
+fn start_wayland(executor: NativeExecutor) -> Result<Box<dyn Platform>, PlatformError> {
+    Ok(Box::new(WaylandPlatform::try_new_with(executor)?))
 }
 
 /// A build without the Wayland host never chooses it.
 #[cfg(all(target_os = "linux", not(feature = "wayland")))]
-fn start_wayland() -> Result<Box<dyn Platform>, PlatformError> {
+fn start_wayland(_executor: NativeExecutor) -> Result<Box<dyn Platform>, PlatformError> {
     Err(PlatformError::Init {
         message: "the Wayland host is not built".to_owned(),
     })
@@ -679,13 +713,13 @@ fn start_wayland() -> Result<Box<dyn Platform>, PlatformError> {
 
 /// The native X11 host, as [`current_platform`] starts it.
 #[cfg(x11_host)]
-fn start_x11() -> Result<Box<dyn Platform>, PlatformError> {
-    Ok(Box::new(X11Platform::try_new()?))
+fn start_x11(executor: NativeExecutor) -> Result<Box<dyn Platform>, PlatformError> {
+    Ok(Box::new(X11Platform::try_new_with(executor)?))
 }
 
 /// A build without the X11 host never chooses it.
 #[cfg(all(target_os = "linux", not(feature = "x11")))]
-fn start_x11() -> Result<Box<dyn Platform>, PlatformError> {
+fn start_x11(_executor: NativeExecutor) -> Result<Box<dyn Platform>, PlatformError> {
     Err(PlatformError::Init {
         message: "the X11 host is not built".to_owned(),
     })

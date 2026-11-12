@@ -1,11 +1,11 @@
 //! `cargo xtask send-positions`: every place the public API of `flui` and
-//! `flui-sdk` names `Send` or `Sync` is listed, under the rule of ADR-0136 §3
+//! `flui-sdk` names `Send` or `Sync` is listed, under the rule of ADR-0323 §3
 //! (and ADR-0089 §6).
 //!
 //! UI state is owner-local (ADR-0136): a bound that asks for `Send` where a
 //! value never leaves its owner thread shuts out every `Rc` an application
 //! holds. The positions that stay are the ones a value really crosses a
-//! thread through (a panic payload, a waker, a worker's result); a new one is
+//! thread through (one of ADR-0323 §2's seven kinds); a new one is
 //! a decision, and the gate makes it visible.
 //!
 //! **What counts.** rustdoc's JSON output (the loader `api-closure` uses, with
@@ -35,9 +35,9 @@
 //! blanket implementation's copy on each type; its original is counted once.
 //!
 //! **The list.** [`ALLOWLIST`] names each position by item path, kind and
-//! marker, with a count when the item writes it more than once, and, for an
-//! entry added under ADR-0136 §3's rule, which kind of value crosses there
-//! (`crosses`). A position the list does not cover is a finding; so is a
+//! marker, with a count when the item writes it more than once, and which of
+//! ADR-0323 §2's kinds of value crosses there (`crosses`); an entry without
+//! one is a position ADR-0323 §4 removes. A position the list does not cover is a finding; so is a
 //! listed one the code no longer has. A position is added only by the change
 //! that writes it, for a value that really crosses a thread; every other entry
 //! only goes. `--seed` prints the list the surface needs.
@@ -64,10 +64,10 @@ use crate::api_closure::{self, Build, Items};
 use crate::util;
 
 /// The list, repository-relative.
-const ALLOWLIST: &str = "tools/xtask/allowlists/send-positions.toml";
+pub(crate) const ALLOWLIST: &str = "tools/xtask/allowlists/send-positions.toml";
 
 /// The packages whose public API the gate walks from.
-const ROOTS: &[&str] = &["flui", "flui-sdk"];
+pub(crate) const ROOTS: &[&str] = &["flui", "flui-sdk"];
 
 /// Arguments for `cargo xtask send-positions`.
 #[derive(Debug, clap::Args)]
@@ -627,8 +627,8 @@ struct Entry {
     marker: Marker,
     #[serde(default = "one")]
     count: usize,
-    /// Which of ADR-0136 §3's kinds of value crosses a thread here. An entry added since that
-    /// rule names it; the older ones are unnamed until a change touches them.
+    /// Which of ADR-0323 §2's kinds of value crosses a thread here. Every position §4 keeps
+    /// names it; an entry without it is one §4 removes.
     #[serde(default)]
     #[expect(
         dead_code,
@@ -637,7 +637,7 @@ struct Entry {
     crosses: Option<Crossing>,
 }
 
-/// What crosses a thread at a listed position (ADR-0136 §3).
+/// What crosses a thread at a listed position (ADR-0323 §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum Crossing {
@@ -645,15 +645,33 @@ enum Crossing {
     PanicPayload,
     /// A waker, or what a waker carries: `Waker` is `Send + Sync`.
     Waker,
-    /// A worker's result, made on another thread and handed back.
+    /// Work handed to another thread with its captures: `FnOnce() -> T + Send + 'static`,
+    /// `Future + Send + 'static`.
+    Job,
+    /// What a job returns or publishes: `T: Send + 'static` on the job's output only.
     WorkerResult,
-    /// A handle meant for another thread: a display, a redraw request, a factory a runtime
+    /// A capability another thread holds or calls: a display, a host pool, a factory a runtime
     /// on another thread calls.
     Handle,
+    /// A committed scene, which moves to the raster executor by value, and an immutable value
+    /// it carries there.
+    Snapshot,
+    /// An error's source, `Box<dyn Error + Send + Sync + 'static>`, so an application's `?`
+    /// into `anyhow::Error` compiles.
+    Error,
 }
 
 fn one() -> usize {
     1
+}
+
+/// The item paths [`ALLOWLIST`]'s `text` lists, each where rustdoc records it
+/// (`flui_app::app::config::AppConfig::memory_reclaim`).
+pub(crate) fn listed_items(text: &str) -> anyhow::Result<BTreeSet<String>> {
+    Ok(parse_list(text)?
+        .into_keys()
+        .map(|position| position.item)
+        .collect())
 }
 
 /// The listed positions and their counts. A position listed twice, or with a
@@ -772,12 +790,13 @@ fn check(surface: &Surface, list: &BTreeMap<Position, usize>) -> Vec<Finding> {
 fn seed(surface: &Surface) -> String {
     let mut out = String::from(
         "# Every place the public API of `flui` and `flui-sdk` names `Send` or `Sync`\n\
-         # (ADR-0089 §6, ADR-0136 §3), written by `cargo xtask send-positions --seed`. The gate\n\
+         # (ADR-0089 §6, ADR-0323 §3), written by `cargo xtask send-positions --seed`. The gate\n\
          # fails on a position it does not cover and on an entry that allows more than the code\n\
          # has. A position is added only for a value that really crosses a thread, by the change\n\
          # that writes it, with its kind in `crosses`; every other entry only goes.\n\
-         reason = \"a value crosses a thread here: a panic payload, a waker, a worker's result \
-         or a handle meant for another thread\"\n\npositions = [\n",
+         reason = \"a value crosses a thread here, of a kind ADR-0323 §2 names: a panic payload, \
+         a waker, a job, a worker's result, a handle meant for another thread, a scene snapshot \
+         or an error's source\"\n\npositions = [\n",
     );
     for (position, seen) in surface {
         let _ = write!(
@@ -1023,12 +1042,26 @@ mod tests {
                 "#
             ))
         };
-        for kind in ["panic-payload", "waker", "worker-result", "handle"] {
+        for kind in [
+            "panic-payload",
+            "waker",
+            "job",
+            "worker-result",
+            "handle",
+            "snapshot",
+            "error",
+        ] {
             let listed = list(kind).unwrap_or_else(|error| panic!("{kind}: {error}"));
             assert_eq!(listed.len(), 2, "{kind}");
         }
         let error = list("convenience").expect_err("a kind ADR-0136 does not name is an error");
         assert!(format!("{error:#}").contains("convenience"), "{error:#}");
+    }
+
+    #[test]
+    fn send_positions_checked_in_list_names_only_kinds_that_cross() {
+        let text = include_str!("../allowlists/send-positions.toml");
+        parse_list(text).unwrap_or_else(|error| panic!("{ALLOWLIST}: {error:#}"));
     }
 
     #[test]

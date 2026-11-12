@@ -1,0 +1,101 @@
+[package]
+publish = ["crates-io"]
+name = "flui-hot-reload"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Hot-reload support for FLUI scene plugins via dynamic library loading"
+keywords = ["hot-reload", "gui", "flutter", "flui", "dylib"]
+categories = ["development-tools", "gui"]
+# All root tests/*.rs files are compiled as modules of ONE integration-test
+# binary (tests/main.rs); the per-file auto-discovered targets each linked the
+# whole dependency stack. Targets that write process-global state stay separate.
+autotests = false
+
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md"]
+
+[features]
+default = []
+# `app_plugin!`, `PluginPipeline` and the worker's rebuild requests.
+app-plugin = ["dep:parking_lot"]
+# `WorkerReloadHook` and `ScenePluginHook`, the `DevReloadHook`s a `flui-app`
+# host installs (ADR-0311 §1, §3).
+host-hook = []
+
+[dependencies]
+# The package-author surface, the only framework edge of an official package
+# (ADR-0088 §2, ADR-0311 §6): `view::dev_reload` for the hooks, and
+# `hooks::{PluginPipeline, Scene, LayerTree, TextContextHandle}` for the
+# plugin ABI.
+flui-sdk = { workspace = true }
+parking_lot = { workspace = true, optional = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_log-sys = "0.3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
+
+[dev-dependencies]
+# `tests/plugin_pipeline_text.rs` reads which text context a plugin's layout
+# was lent (`flui_painting::testing::text_context_lends`, through
+# `TextContextHandle::with`).
+flui-painting = { workspace = true, features = ["testing"] }
+# `TextContextHandle::with` is test support behind `flui-rendering`'s `testing`.
+flui-rendering = { workspace = true, features = ["testing"] }
+# `tests/scene_ownership.rs` builds the layers a scene plugin returns.
+flui-layer = { workspace = true }
+# `examples/scene_render.rs`, the desktop host of a scene plugin: it opens a
+# window on the native host, polls `HotReloadDriver` and renders the plugin's
+# scene through the engine, and draws the engine's effects gallery.
+flui-engine = { workspace = true, features = ["dx12"] }
+flui-foundation = { workspace = true }
+flui-native = { workspace = true }
+flui-platform = { workspace = true }
+image = { workspace = true }
+pollster = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# `flui-rendering` is a dev-dependency only for its `testing` feature
+# (`TextContextHandle::with`); no test names the crate, so cargo-shear would call
+# it unused.
+[package.metadata.cargo-shear]
+ignored = ["flui-rendering"]
+
+[lints]
+workspace = true
+
+[[test]]
+name = "hot_reload_it"
+path = "tests/main.rs"
+
+[package.metadata.flui]
+tier = "pkg"
+tier-kind = "official"
+order = 4
+# ADR-0088 §2 holds: the package's one framework edge is `flui-sdk`
+# (ADR-0311 §6). The reach exceptions and the globals below go with the dlopen
+# reload path (ADR-0311 §7).
+reach-exceptions = [
+    { to = "windows", exit = "ADR-0311", reason = "the dlopen loader's Win32 LibraryLoader calls" },
+    { to = "android_log-sys", exit = "ADR-0311", reason = "the loader's Android logging" },
+]
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "dispatch::NEXT_HOOK_GENERATION", grant = "ADR-0097", class = "counter", reason = "Rebuild hook generations, advanced by try_update with permanent exhaustion refusal" },
+    { item = "dispatch::REQUEST_REBUILD", exit = "ADR-0311", reason = "the rebuild hook slot of the dlopen reload path" },
+    { item = "plugin::app_plugin!::__FLUI_APP_NEXT_THREAD_TOKEN", exit = "ADR-0311", reason = "per-image lane token source that `app_plugin!` emits into the plugin crate" },
+    { item = "plugin::app_plugin!::__FLUI_APP_PINNED_THREAD", exit = "ADR-0311", reason = "the lane pinned by the first build call, emitted into the plugin crate" },
+    { item = "plugin::app_plugin!::__FLUI_APP_STATE", exit = "ADR-0311", reason = "the plugin image's pipeline slot, emitted into the plugin crate" },
+    { item = "worker::REGISTRATION_SESSION", exit = "ADR-0311", reason = "worker build registrations collected during `flui_worker_init`" },
+    { item = "worker::WORKER_BUILDS", exit = "ADR-0311", reason = "the registered worker build functions of the dlopen reload path" },
+]

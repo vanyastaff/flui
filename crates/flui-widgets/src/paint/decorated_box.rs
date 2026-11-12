@@ -12,7 +12,7 @@ use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 /// (behind the child); use [`DecoratedBox::foreground`] to paint over the child.
 #[derive(Clone, Debug)]
 pub struct DecoratedBox {
-    decoration: BoxDecoration<f64>,
+    decoration: BoxDecoration,
     position: DecorationPosition,
     child: Child,
     site: CreationSite,
@@ -21,7 +21,7 @@ pub struct DecoratedBox {
 impl DecoratedBox {
     /// Paint `decoration` behind the child (the common case).
     #[track_caller]
-    pub fn new(decoration: BoxDecoration<f64>) -> Self {
+    pub fn new(decoration: BoxDecoration) -> Self {
         Self {
             decoration,
             position: DecorationPosition::Background,

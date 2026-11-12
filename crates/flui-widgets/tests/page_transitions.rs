@@ -59,7 +59,8 @@ impl PageTransitionBuilder for CountingFade {
         child: BoxedView,
     ) -> BoxedView {
         self.builds.set(self.builds.get() + 1);
-        FadeTransition::new(Rc::clone(primary), child)
+        FadeTransition::new(Rc::clone(primary))
+            .child(child)
             .into_view()
             .boxed()
     }
@@ -297,7 +298,8 @@ impl PageTransitionBuilder for NavigatorAwareFade {
         _secondary: &RouteAnimation,
         child: BoxedView,
     ) -> BoxedView {
-        FadeTransition::new(Rc::clone(primary), child)
+        FadeTransition::new(Rc::clone(primary))
+            .child(child)
             .into_view()
             .boxed()
     }
@@ -419,7 +421,8 @@ impl PageTransitionBuilder for PushingFade {
         _secondary: &RouteAnimation,
         child: BoxedView,
     ) -> BoxedView {
-        FadeTransition::new(Rc::clone(primary), child)
+        FadeTransition::new(Rc::clone(primary))
+            .child(child)
             .into_view()
             .boxed()
     }

@@ -106,7 +106,7 @@ use crate::theme::Theme;
 
 /// A user tap handler. `Rc`-based (owner-local, per ADR-0027) — matches
 /// `GestureDetector::on_tap`'s callback shape.
-type TapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
+type TapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>;
 
 /// How an [`InkWell`] shows that it has visible keyboard focus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,7 +159,7 @@ impl InkWell {
     #[must_use]
     pub fn on_tap<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_tap = Some(crate::event_callback::press_callback(callback));
         self
@@ -450,7 +450,7 @@ impl ViewState<InkWell> for InkWellState {
             let press_states = self.states.clone();
             let vsync = self.vsync.clone();
             let activation = Rc::clone(&self.activation);
-            Rc::new(move |cx: &mut flui_sdk::view::EventCx<'_>| {
+            Rc::new(move |ctx: &mut flui_sdk::view::EventContext<'_>| {
                 // Oracle order (`ink_well.dart` `activateOnIntent`, `:864-900`):
                 // `WidgetState.pressed` is set FIRST, THEN `widget.onTap?.call()`
                 // fires, and only after that does the hold start. A handler
@@ -459,7 +459,7 @@ impl ViewState<InkWell> for InkWellState {
                 let hold = press_states.hold_pressed();
                 let handler = tap_slot.borrow().clone();
                 if let Some(handler) = handler {
-                    handler(cx);
+                    handler(ctx);
                 }
                 InkWellState::cancel_pending_deactivation(&activation);
                 // The new hold is taken before the old one goes, so `Pressed`
@@ -467,7 +467,7 @@ impl ViewState<InkWell> for InkWellState {
                 let outgoing = activation.borrow_mut().hold.replace(hold);
                 drop(outgoing);
                 begin_press_deactivation(&activation, vsync.clone(), &rebuild);
-            }) as Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>
+            }) as Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>
         });
 
         // An idle well attaches no painter, so it records nothing; a state
@@ -486,7 +486,7 @@ impl ViewState<InkWell> for InkWellState {
         // `_actionMap` around the focus node (`ink_well.dart` `:852-855`,
         // `:1386-1389`): Enter, Space and Select on the focused well reach
         // these through the root shortcuts (ADR-0079). The actions run inside
-        // the key event's dispatch and hand its `cx` to the activation, the
+        // the key event's dispatch and hand its `ctx` to the activation, the
         // same one a tap's recognizer opens.
         let keyed = Rc::new(KeyActivation {
             activate: activate.clone(),
@@ -534,7 +534,7 @@ struct KeyActivation {
 }
 
 impl KeyActivation {
-    fn run(&self, cx: &mut flui_sdk::view::EventCx<'_>) -> ActionOutcome {
+    fn run(&self, ctx: &mut flui_sdk::view::EventContext<'_>) -> ActionOutcome {
         let Some(activate) = &self.activate else {
             return ActionOutcome::NotPerformed;
         };
@@ -542,7 +542,7 @@ impl KeyActivation {
         // and is released at once.
         self.indication.press(None, None);
         self.indication.release(None);
-        activate(cx);
+        activate(ctx);
         ActionOutcome::Performed
     }
 }
@@ -550,20 +550,20 @@ impl KeyActivation {
 impl Action<ActivateIntent> for KeyActivation {
     fn invoke(
         &self,
-        cx: &mut flui_sdk::view::EventCx<'_>,
+        ctx: &mut flui_sdk::view::EventContext<'_>,
         _intent: &ActivateIntent,
     ) -> ActionOutcome {
-        self.run(cx)
+        self.run(ctx)
     }
 }
 
 impl Action<ButtonActivateIntent> for KeyActivation {
     fn invoke(
         &self,
-        cx: &mut flui_sdk::view::EventCx<'_>,
+        ctx: &mut flui_sdk::view::EventContext<'_>,
         _intent: &ButtonActivateIntent,
     ) -> ActionOutcome {
-        self.run(cx)
+        self.run(ctx)
     }
 }
 
@@ -589,7 +589,7 @@ fn press_feedback(indication: &Rc<Indication>, activate: TapCallback) -> Control
         Rc::clone(indication),
     );
     ControlTap::new()
-        .on_tap_down(move |_cx, details| {
+        .on_tap_down(move |_ctx, details| {
             down.press(
                 Some(Point::new(
                     details.local_position.dx,
@@ -598,30 +598,30 @@ fn press_feedback(indication: &Rc<Indication>, activate: TapCallback) -> Control
                 Some(details.pointer.get()),
             );
         })
-        .on_tap_up(move |_cx, details| {
+        .on_tap_up(move |_ctx, details| {
             up.release(Some(details.pointer.get()));
         })
-        .on_tap(move |cx| activate(cx))
-        .on_tap_cancel(move |_cx, details| {
+        .on_tap(move |ctx| activate(ctx))
+        .on_tap_cancel(move |_ctx, details| {
             cancel.cancel(Some(details.pointer.get()));
         })
         // An `Up` is the last held button coming up, so it always ends the
         // press. A button released while another is still held arrives as a
         // `ButtonChange` (through a move): only the primary's ends the press
         // there.
-        .on_pointer_up(move |_cx, dispatch: PointerDispatch<'_>| {
+        .on_pointer_up(move |_ctx, dispatch: PointerDispatch<'_>| {
             if let PointerEvent::Up(release) = dispatch.local {
                 on_up.release(Some(release.pointer.id.get()));
             }
         })
-        .on_pointer_move(move |_cx, dispatch: PointerDispatch<'_>| {
+        .on_pointer_move(move |_ctx, dispatch: PointerDispatch<'_>| {
             if let PointerEvent::ButtonChange(ButtonChange::Released(release)) = dispatch.local
                 && release.button().number().get() == 1
             {
                 on_button_up.release(Some(release.pointer.id.get()));
             }
         })
-        .on_pointer_cancel(move |_cx, dispatch: PointerDispatch<'_>| {
+        .on_pointer_cancel(move |_ctx, dispatch: PointerDispatch<'_>| {
             if let PointerEvent::Cancel(cancel) = dispatch.local {
                 on_cancel.cancel(Some(cancel.pointer.id.get()));
             }

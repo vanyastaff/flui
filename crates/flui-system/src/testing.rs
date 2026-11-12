@@ -170,12 +170,12 @@ impl ScriptedSystem {
 impl Plugin for ScriptedSystem {
     fn register(&self, registrar: &mut CapabilityRegistrar) {
         let launcher = self.launcher.clone();
-        registrar.provide::<LauncherCapability>(move |cx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(Launcher::new(launcher.clone(), cx))
+        registrar.provide::<LauncherCapability>(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Launcher::new(launcher.clone(), ctx))
         });
         let dialogs = self.dialogs.clone();
-        registrar.provide::<FileDialogCapability>(move |cx: &ProviderContext<'_>| {
-            FileDialogs::try_new(dialogs.clone(), cx)
+        registrar.provide::<FileDialogCapability>(move |ctx: &ProviderContext<'_>| {
+            FileDialogs::try_new(dialogs.clone(), ctx)
         });
     }
 }

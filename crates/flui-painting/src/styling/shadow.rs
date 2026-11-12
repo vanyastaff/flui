@@ -8,7 +8,7 @@ use flui_foundation::geometry::{
 
 /// A single shadow cast by a shape.
 ///
-/// Generic over unit type `T` for full type safety. Use `Shadow<f64>` for UI
+/// Generic over unit type `T` for full type safety. Use `Shadow` for UI
 /// shadows.
 ///
 /// # Examples
@@ -21,7 +21,7 @@ use flui_foundation::geometry::{
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Shadow<T: Unit> {
+pub struct Shadow<T: Unit = f64> {
     /// The color of the shadow.
     pub color: Color,
 
@@ -75,7 +75,7 @@ impl<T: Unit> Shadow<T> {
     }
 }
 
-impl Shadow<f64> {
+impl Shadow {
     /// Converts a blur radius in pixels to sigma units for use in Gaussian
     /// blur.
     ///
@@ -149,7 +149,7 @@ impl<T: Unit> Default for Shadow<T> {
 
 /// A shadow cast by a box.
 ///
-/// Generic over unit type `T` for full type safety. Use `BoxShadow<f64>` for
+/// Generic over unit type `T` for full type safety. Use `BoxShadow` for
 /// UI shadows.
 ///
 /// BoxShadow extends Shadow with a spread radius, which causes the shadow to
@@ -179,7 +179,7 @@ impl<T: Unit> Default for Shadow<T> {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BoxShadow<T: Unit> {
+pub struct BoxShadow<T: Unit = f64> {
     /// The color of the shadow.
     pub color: Color,
 
@@ -287,7 +287,7 @@ impl<T: Unit> BoxShadow<T> {
     }
 }
 
-impl BoxShadow<f64> {
+impl BoxShadow {
     /// Converts a blur radius in pixels to sigma units for use in Gaussian
     /// blur.
     #[inline]

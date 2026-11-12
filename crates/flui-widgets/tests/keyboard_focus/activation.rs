@@ -10,7 +10,7 @@ use flui_interaction::FocusManager;
 use flui_interaction::focus::FocusNode;
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::{Key, KeyRepeat, KeyState, Modifiers, NamedKey};
-use flui_view::EventCx;
+use flui_view::EventContext;
 use flui_widgets::interaction::{
     Action, ActionOutcome, Actions, ActivateIntent, BackIntent, CallbackAction, DismissIntent,
     Focus,
@@ -41,7 +41,7 @@ impl Action<ActivateIntent> for DisabledActivate {
         false
     }
 
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &ActivateIntent) -> ActionOutcome {
         panic!("a disabled activation must never be invoked");
     }
 }
@@ -54,10 +54,10 @@ fn mount_control(control: Control) -> (Harness, Rc<Cell<u32>>) {
     let harness = match control {
         Control::RawButton => mount(
             RawButton::new(SizedBox::new(40.0, 40.0))
-                .on_press(move |_cx| counted.set(counted.get() + 1)),
+                .on_press(move |_ctx| counted.set(counted.get() + 1)),
         ),
         Control::Custom => mount(Actions::new(Focus::new(SizedBox::new(40.0, 40.0))).action(
-            CallbackAction::new(move |_cx, _: &ActivateIntent| counted.set(counted.get() + 1)),
+            CallbackAction::new(move |_ctx, _: &ActivateIntent| counted.set(counted.get() + 1)),
         )),
         Control::Disabled => {
             mount(Actions::new(Focus::new(SizedBox::new(40.0, 40.0))).action(DisabledActivate))
@@ -157,10 +157,10 @@ pub(crate) fn navigation_keys_reach_back_and_dismiss_once() {
     let (counted_back, counted_dismiss) = (Rc::clone(&backs), Rc::clone(&dismissals));
     let harness = mount(
         Actions::new(Focus::new(SizedBox::new(40.0, 40.0)))
-            .action(CallbackAction::new(move |_cx, _: &BackIntent| {
+            .action(CallbackAction::new(move |_ctx, _: &BackIntent| {
                 counted_back.set(counted_back.get() + 1);
             }))
-            .action(CallbackAction::new(move |_cx, _: &DismissIntent| {
+            .action(CallbackAction::new(move |_ctx, _: &DismissIntent| {
                 counted_dismiss.set(counted_dismiss.get() + 1);
             })),
     );
@@ -227,10 +227,10 @@ pub(crate) fn keys_typed_in_a_field_stay_in_the_field() {
             TextEditingController::new(),
             Rc::clone(&field),
         ))
-        .action(CallbackAction::new(move |_cx, _: &ActivateIntent| {
+        .action(CallbackAction::new(move |_ctx, _: &ActivateIntent| {
             activated.set(activated.get() + 1);
         }))
-        .action(CallbackAction::new(move |_cx, _: &DismissIntent| {
+        .action(CallbackAction::new(move |_ctx, _: &DismissIntent| {
             dismissed.set(dismissed.get() + 1);
         })),
     );
@@ -251,9 +251,9 @@ pub(crate) fn a_space_released_after_tab_activates_nothing() {
     let (counted_first, counted_second) = (Rc::clone(&first), Rc::clone(&second));
     let harness = mount(Row::new((
         RawButton::new(SizedBox::new(40.0, 40.0))
-            .on_press(move |_cx| counted_first.set(counted_first.get() + 1)),
+            .on_press(move |_ctx| counted_first.set(counted_first.get() + 1)),
         RawButton::new(SizedBox::new(40.0, 40.0))
-            .on_press(move |_cx| counted_second.set(counted_second.get() + 1)),
+            .on_press(move |_ctx| counted_second.set(counted_second.get() + 1)),
     )));
     let manager = harness.focus_manager();
     let space = Key::character(" ");
@@ -284,9 +284,9 @@ pub(crate) fn keyboard_continues_after_callback_panic() {
     let counted = Rc::clone(&activations);
     let harness = mount(Row::new((
         RawButton::new(SizedBox::new(40.0, 40.0))
-            .on_press(|_cx| -> () { panic!("on_press failed") }),
+            .on_press(|_ctx| -> () { panic!("on_press failed") }),
         RawButton::new(SizedBox::new(40.0, 40.0))
-            .on_press(move |_cx| counted.set(counted.get() + 1)),
+            .on_press(move |_ctx| counted.set(counted.get() + 1)),
     )));
     let manager = harness.focus_manager();
     let enter = Key::Named(NamedKey::Enter);
@@ -313,7 +313,7 @@ pub(crate) fn keyboard_continues_after_callback_panic() {
     let harness = mount(Row::new((
         Focus::new(SizedBox::new(40.0, 40.0))
             .focus_node(Rc::clone(&failing))
-            .on_focus_change(|_cx, focused| assert!(!focused, "focus listener failed")),
+            .on_focus_change(|_ctx, focused| assert!(!focused, "focus listener failed")),
         Focus::new(SizedBox::new(40.0, 40.0)).focus_node(Rc::clone(&next)),
     )));
     let manager = harness.focus_manager();

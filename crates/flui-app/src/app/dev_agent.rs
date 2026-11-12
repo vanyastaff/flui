@@ -2,7 +2,7 @@
 //!
 //! `flui-app` names no devtools crate. An application that wants a tool of its
 //! own to read and act on its windows installs a [`DevAgentHook`] on its
-//! configuration ([`AppConfig::with_dev_agent`](crate::AppConfig::with_dev_agent));
+//! configuration ([`AppConfig::dev_agent`](crate::AppConfig::dev_agent));
 //! in a debug build, or with the `driver` feature, the runner adds the driver
 //! agent (`app::agent`) beside it when the launch asks for one. Each hook's
 //! containment is the runtime's (`flui_runtime::dev_agent`), shared with
@@ -44,7 +44,7 @@ struct Pending(Mutex<Option<Box<dyn DevAgentHook>>>);
 /// The development agent hooks installed on an [`AppConfig`](crate::AppConfig),
 /// in the order they were installed, until a loop takes them.
 ///
-/// Built by [`AppConfig::with_dev_agent`](crate::AppConfig::with_dev_agent).
+/// Built by [`AppConfig::dev_agent`](crate::AppConfig::dev_agent).
 /// `Clone` shares the hooks, so whichever clone a loop starts with, the loop
 /// takes them all.
 #[derive(Clone)]
@@ -187,9 +187,9 @@ mod tests {
         let (failing, failing_attaches, failing_detaches) = hook(true);
         let (last, last_attaches, last_detaches) = hook(false);
         let config = AppConfig::new()
-            .with_dev_agent(first)
-            .with_dev_agent(failing)
-            .with_dev_agent(last);
+            .dev_agent(first)
+            .dev_agent(failing)
+            .dev_agent(last);
         let shared = config.clone();
         let agents = config.dev_agent.as_ref().expect("hooks installed");
 

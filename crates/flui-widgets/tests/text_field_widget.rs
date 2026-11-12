@@ -12,26 +12,26 @@ use flui_widgets::{RawTextField, TextEditingController};
 
 use crate::common::harness::mount;
 
-/// `RawTextField` forwards the `cx` its `EditableText` opens, so both of its
+/// `RawTextField` forwards the `ctx` its `EditableText` opens, so both of its
 /// callbacks write signals (ADR-0086).
-pub(crate) fn raw_text_field_callbacks_write_through_the_forwarded_cx() {
+pub(crate) fn raw_text_field_callbacks_write_through_the_forwarded_ctx() {
     use crate::common::{ProbeSignals, SignalProbe};
 
     let controller = TextEditingController::new();
-    let focus_node = FocusNode::with_debug_label("raw-cx field");
+    let focus_node = FocusNode::with_debug_label("raw-ctx field");
     let (probe_controller, probe_node) = (controller, Rc::clone(&focus_node));
     let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
         RawTextField::new(probe_controller.clone())
             .focus_node(Rc::clone(&probe_node))
-            .on_changed(move |cx, text| count.set(cx, text.len() as u32))
-            .on_submitted(move |cx, _text| count.update(cx, |n| *n += 100))
+            .on_changed(move |ctx, text| count.set(ctx, text.len() as u32))
+            .on_submitted(move |ctx, _text| count.update(ctx, |n| *n += 100))
     });
     let harness = mount(probe.view());
     let _ = focus_node.request_focus();
 
     let typed = KeyEventBuilder::new(Code::KeyA)
-        .with_key(Key::character("a"))
-        .with_state(KeyState::Down)
+        .key(Key::character("a"))
+        .state(KeyState::Down)
         .build();
     let _ = harness
         .focus_manager()
@@ -40,8 +40,8 @@ pub(crate) fn raw_text_field_callbacks_write_through_the_forwarded_cx() {
     assert_eq!(probe.value(), Ok(1), "on_changed wrote");
 
     let enter = KeyEventBuilder::new(Code::Enter)
-        .with_key(Key::Named(NamedKey::Enter))
-        .with_state(KeyState::Down)
+        .key(Key::Named(NamedKey::Enter))
+        .state(KeyState::Down)
         .build();
     let _ = harness
         .focus_manager()
@@ -94,14 +94,14 @@ pub(crate) fn the_return_key_submits_a_single_line_field_without_a_line_break() 
             .focus_node(Rc::clone(&focus_node))
             .on_submitted({
                 let submitted = Rc::clone(&submitted);
-                move |_cx, text| submitted.borrow_mut().push(text.to_owned())
+                move |_ctx, text| submitted.borrow_mut().push(text.to_owned())
             }),
     );
     let _ = focus_node.request_focus();
     for state in [KeyState::Down, KeyState::Up] {
         let enter = KeyEventBuilder::new(Code::Enter)
-            .with_key(Key::Named(NamedKey::Enter))
-            .with_state(state)
+            .key(Key::Named(NamedKey::Enter))
+            .state(state)
             .build();
         let _ = harness.focus_manager().dispatch_key_event(&enter);
     }

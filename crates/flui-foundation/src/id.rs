@@ -68,7 +68,6 @@ use core::{
     num::NonZeroUsize,
 };
 
-use crate::WasmNotSendSync;
 use crate::generation::{DOMAIN_BIT, Generation};
 
 // =========================================================================
@@ -198,9 +197,6 @@ impl From<RawId> for Index {
 /// resources cannot be confused. The marker is a zero-sized type that exists
 /// only at compile time.
 ///
-/// Uses `WasmNotSendSync` for WASM compatibility - on native requires `Send +
-/// Sync`, on WASM (single-threaded) has no thread-safety requirements.
-///
 /// # Example
 ///
 /// ```rust
@@ -211,7 +207,7 @@ impl From<RawId> for Index {
 /// pub enum CustomMarker {}
 /// impl Marker for CustomMarker {}
 /// ```
-pub trait Marker: 'static + WasmNotSendSync + Debug {}
+pub trait Marker: 'static + Debug {}
 
 // =========================================================================
 // Id<T> - The generic typed identifier
@@ -527,17 +523,7 @@ impl<T: Marker> From<Index> for Id<T> {
 /// accepts_any_tree_id(ViewId::new(1));
 /// ```
 pub trait TreeId:
-    Copy
-    + Clone
-    + Eq
-    + PartialEq
-    + Ord
-    + PartialOrd
-    + Hash
-    + Debug
-    + Display
-    + WasmNotSendSync
-    + 'static
+    Copy + Clone + Eq + PartialEq + Ord + PartialOrd + Hash + Debug + Display + 'static
 {
     /// A diagnostic value identifying this id in error messages and logs.
     ///

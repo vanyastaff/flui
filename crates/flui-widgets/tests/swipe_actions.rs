@@ -71,7 +71,7 @@ fn row(color: Color, options: Options, log: &Log) -> BoxedView {
                 action("Archive"),
             ),
         ],
-        SwipeAlternative::PresentedMenu(Rc::new(|_cx, _request| {})),
+        SwipeAlternative::PresentedMenu(Rc::new(|_ctx, _request| {})),
     )
     .expect("three labelled actions")
     .target("Alice");
@@ -83,14 +83,14 @@ fn row(color: Color, options: Options, log: &Log) -> BoxedView {
     let (pin, delete, archive) = (Rc::clone(log), Rc::clone(log), Rc::clone(log));
     let panics = options.delete_panics;
     Actions::new(row)
-        .action(CallbackAction::new(move |_cx, _: &Pin| {
+        .action(CallbackAction::new(move |_ctx, _: &Pin| {
             pin.borrow_mut().push("Pin");
         }))
-        .action(CallbackAction::new(move |_cx, _: &Delete| {
+        .action(CallbackAction::new(move |_ctx, _: &Delete| {
             assert!(!panics, "intentional Delete action panic");
             delete.borrow_mut().push("Delete");
         }))
-        .action(CallbackAction::new(move |_cx, _: &Archive| {
+        .action(CallbackAction::new(move |_ctx, _: &Archive| {
             archive.borrow_mut().push("Archive");
         }))
         .boxed()
@@ -451,7 +451,7 @@ pub(crate) fn a_cancelled_swipe_returns_where_it_began() {
 
 /// A row needs an action, and its commands must be told apart.
 pub(crate) fn swipe_actions_refuse_rows_without_distinct_actions() {
-    let menu = || SwipeAlternative::PresentedMenu(Rc::new(|_cx, _request| {}));
+    let menu = || SwipeAlternative::PresentedMenu(Rc::new(|_ctx, _request| {}));
     let none = SwipeActions::try_new(SizedBox::shrink(), [], [], menu());
     assert_eq!(none.err(), Some(SwipeActionsError::NoActions));
     let twice = SwipeActions::try_new(

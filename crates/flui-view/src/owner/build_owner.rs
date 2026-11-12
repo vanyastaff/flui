@@ -780,7 +780,7 @@ impl BuildOwner {
     }
 
     /// Weak window capability, absent for a bare owner or one without a window.
-    /// Test-support only: the borrowed `BuildCtx` reads it off its capabilities.
+    /// Test-support only: the borrowed `LiveBuildContext` reads it off its capabilities.
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn window_handle(&self) -> Option<crate::WindowHandle> {
         self.window_handle.clone()
@@ -967,7 +967,7 @@ impl BuildOwner {
     /// The write capability of this owner's graph, for host code that writes
     /// a signal outside any widget: a cross-thread write delivered on the
     /// owner thread, a test harness. Each [`WriterSource::write`] opens its
-    /// own [`EventCx`](crate::EventCx), and the build guard still refuses a
+    /// own [`EventContext`](crate::EventContext), and the build guard still refuses a
     /// write made while an element of this owner is building.
     ///
     /// [`WriterSource::write`]: crate::WriterSource::write
@@ -1677,6 +1677,10 @@ impl BuildOwner {
         // One buffer of dependency records serves every element this drain
         // builds: each build fills it, the drain below empties it.
         let mut dependent_records: Vec<crate::context::DependentRecord> = Vec::new();
+        // The providers a dependent read in its previous build, kept across
+        // builds and inline for eight, so the drain copies them without
+        // allocating.
+        let mut previous_providers: smallvec::SmallVec<[ElementId; 8]> = smallvec::SmallVec::new();
         loop {
             let absorbed_this_pop =
                 self.absorb_mid_drain_inbox(tree, &mut capped_leftover.leftover);
@@ -1766,7 +1770,7 @@ impl BuildOwner {
             // ── Phase 1: extract BY VALUE, build against a LIVE read view.
             // Taking the element out of its slot frees the tree for a shared
             // `&` borrow, so the element's `build()` can resolve InheritedView
-            // / ancestor lookups against the REAL tree (via the `BuildCtx`
+            // / ancestor lookups against the REAL tree (via the `LiveBuildContext`
             // the behaviour builds from `ElementOwner::build_view`) — no empty
             // dummy, and no deadlock against the `Arc<RwLock>` write lock the
             // frame driver holds (the borrowed view sidesteps the lock).
@@ -1950,11 +1954,11 @@ impl BuildOwner {
             // about what the element depends on, so its previous masks are kept
             // (the sink's records are still added) and it keeps receiving the
             // notifications that let a fixed condition rebuild it.
-            let previous_providers = if build_recovered.get() {
-                super::inherited_dependencies::ProviderIds::default()
-            } else {
-                self.inherited_dependencies.providers_of(id)
-            };
+            previous_providers.clear();
+            if !build_recovered.get() {
+                self.inherited_dependencies
+                    .copy_providers_into(id, &mut previous_providers);
+            }
             for provider in &previous_providers {
                 if let Some(accessor) = tree
                     .get_mut(*provider)
@@ -1998,7 +2002,7 @@ impl BuildOwner {
                     .register(record.dependent, provider);
             }
             dependent_records = recorded;
-            for provider in previous_providers {
+            for &provider in &previous_providers {
                 let pruned = tree
                     .get_mut(provider)
                     .and_then(|node| node.element_mut().as_inherited_mut())

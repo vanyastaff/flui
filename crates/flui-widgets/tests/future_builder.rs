@@ -51,12 +51,12 @@ struct Controlled {
 impl std::future::Future for Controlled {
     type Output = Result<Payload, Boom>;
 
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: std::pin::Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let result = self.result.lock().take();
         if let Some(result) = result {
             return Poll::Ready(result);
         }
-        let _prev = self.waker.lock().replace(cx.waker().clone());
+        let _prev = self.waker.lock().replace(ctx.waker().clone());
         Poll::Pending
     }
 }
@@ -136,7 +136,7 @@ pub(crate) fn future_builder_pending_then_error() {
             completer.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Rc::new(|| Payload(1))),
+        .initial_data(Rc::new(|| Payload(1))),
         loose(400.0),
     );
     assert_eq!(last(&log).data, Some(1), "initial data survives Waiting");
@@ -160,11 +160,11 @@ pub(crate) fn future_builder_accepts_an_owner_local_future() {
         Rc::new(move || {
             let waker = Rc::clone(&waker);
             let result = Rc::clone(&result);
-            Box::pin(std::future::poll_fn(move |cx: &mut Context<'_>| {
+            Box::pin(std::future::poll_fn(move |ctx: &mut Context<'_>| {
                 if let Some(shared) = result.borrow_mut().take() {
                     return Poll::Ready(Ok(shared));
                 }
-                *waker.borrow_mut() = Some(cx.waker().clone());
+                *waker.borrow_mut() = Some(ctx.waker().clone());
                 Poll::Pending
             }))
         })

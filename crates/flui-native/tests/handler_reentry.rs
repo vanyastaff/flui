@@ -133,22 +133,31 @@ impl Reach for OwnerPlatform {
 /// a replaced callback whose captures call the platform when dropped reaches
 /// the platform from its destructor.
 fn a_replaced_keyboard_layout_callback_reaches_the_platform(platform: &Arc<dyn Platform>) {
+    std::thread_local! {
+        /// The platform the capture's destructor reaches: the callback is
+        /// `Send` and the platform is not, so the destructor finds it on the
+        /// owner thread that drops it.
+        static REACHED: RefCell<Option<Weak<dyn Platform>>> = const { RefCell::new(None) };
+    }
     /// Reaches the platform when dropped.
-    struct CallsBack(Weak<dyn Platform>, Arc<AtomicBool>);
+    struct CallsBack(Arc<AtomicBool>);
     impl Drop for CallsBack {
         fn drop(&mut self) {
-            if let Some(platform) = self.0.upgrade() {
+            let platform = REACHED.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+            if let Some(platform) = platform {
                 let _ = platform.active_window();
-                self.1.store(true, Ordering::SeqCst);
+                self.0.store(true, Ordering::SeqCst);
             }
         }
     }
+    REACHED.with(|slot| *slot.borrow_mut() = Some(Arc::downgrade(platform)));
     let reached = Arc::new(AtomicBool::new(false));
-    let capture = CallsBack(Arc::downgrade(platform), Arc::clone(&reached));
+    let capture = CallsBack(Arc::clone(&reached));
     platform.on_keyboard_layout_change(Box::new(move || {
         let _ = &capture;
     }));
     platform.on_keyboard_layout_change(Box::new(|| {}));
+    REACHED.with(|slot| slot.borrow_mut().take());
     assert!(
         reached.load(Ordering::SeqCst),
         "the replaced callback's destructor did not reach the platform"
@@ -754,8 +763,8 @@ mod win32 {
 
     fn hidden() -> WindowOptions {
         WindowOptions::default()
-            .with_title("handler reentry")
-            .with_visible(false)
+            .title("handler reentry")
+            .visible(false)
     }
 
     /// Dispatch this thread's messages until `done`, for at most two seconds;
@@ -919,7 +928,7 @@ mod win32 {
             let platform = WindowsPlatform::try_new().expect("native Windows platform");
             let log = AppLog::new();
             log.bootstrap(|owner| {
-                owner.shared().request_exit_policy_reevaluation();
+                owner.request_exit_policy_reevaluation();
                 Ok(())
             });
             let first = Cell::new(true);
@@ -928,7 +937,7 @@ mod win32 {
                     return;
                 }
                 if first.replace(false) {
-                    owner.shared().request_exit_policy_reevaluation();
+                    owner.request_exit_policy_reevaluation();
                     panic!("first failure");
                 }
                 owner.proxy().request_quit().expect("the loop takes a quit");
@@ -953,12 +962,12 @@ mod win32 {
                 }
             }
             let platform = WindowsPlatform::try_new().expect("native Windows platform");
+            let capture = PanicsOnDrop;
+            platform.on_keyboard_layout_change(Box::new(move || {
+                let _ = &capture;
+            }));
             let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 Box::new(platform).run(crate::app::on_ready(|owner| {
-                    let capture = PanicsOnDrop;
-                    owner.shared().on_keyboard_layout_change(Box::new(move || {
-                        let _ = &capture;
-                    }));
                     owner.proxy().request_quit().expect("the loop takes a quit");
                     Ok(())
                 }))

@@ -1290,7 +1290,7 @@ fn agent_notification_follows_live_native_initialization() {
         let opened = Arc::new(AtomicUsize::new(0));
         let live = Arc::new(AtomicUsize::new(0));
         // The loop's development agents, as a runner starts them.
-        super::super::dev_agents::start(&crate::AppConfig::new().with_dev_agent(Agent {
+        super::super::dev_agents::start(&crate::AppConfig::new().dev_agent(Agent {
             opened: Arc::clone(&opened),
             live: Arc::clone(&live),
             close: matches!(case, DuringInstall::CloseFromAgent).then(|| mock.clone()),

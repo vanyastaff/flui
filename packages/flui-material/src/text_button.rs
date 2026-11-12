@@ -41,7 +41,7 @@ use crate::theme::Theme;
 /// use flui_material::TextButton;
 /// use flui_sdk::widgets::Text;
 ///
-/// let _button = TextButton::new(Text::new("Learn more")).on_pressed(|_cx| {});
+/// let _button = TextButton::new(Text::new("Learn more")).on_pressed(|_ctx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct TextButton {
@@ -77,7 +77,7 @@ impl TextButton {
     #[must_use]
     pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_pressed = Some(crate::event_callback::press_callback(callback));
         self

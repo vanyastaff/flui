@@ -95,7 +95,7 @@ jobs:
           cargo nextest run
           --workspace --exclude flui-native
           --lib --bins --tests
-          --features flui/cupertino,flui/localizations
+          --features flui/material,flui/cupertino,flui/native
           --no-fail-fast
           -E 'not (group(trybuild))'
 

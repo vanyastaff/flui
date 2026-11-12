@@ -26,7 +26,7 @@
   границу IO ходят только `Send`-байты, как `IoFuture`.
 - **IO-пул.** `ExecutionServices::spawn_io` (`execution.rs:516`) доступен только `flui-app`;
   ADR-0047 обещает realm'ам capability поверх него, не пулы.
-- **Закрытие.** Сейчас вето — `AppConfig::with_close_request_handler` и `CloseRequestRouter::consult`
+- **Закрытие.** Сейчас вето — `AppConfig::close_request_handler` и `CloseRequestRouter::consult`
   (`crates/flui-app/src/app/close_request.rs:432`–`471`). Teardown design вводит `CloseReason`,
   отзыв запроса и двухфазное завершение сеанса с бюджетом 3 с, где persistence пишет первой
   (`teardown/design.md`, раздел (d)); общий контракт close guard задан оркестратором и
@@ -73,7 +73,7 @@ impl Document for NotesData {
     fn encode(&self) -> Vec<u8> { serde_json::to_vec(self).expect("BUG: plain data encodes") }
     fn decode(version: u32, body: &[u8]) -> Result<Self, DecodeError> { /* serde_json */ }
 }
-// init_state: self.data = Some(Persisted::<NotesData>::open(cx));
+// init_state: self.data = Some(Persisted::<NotesData>::open(ctx));
 // Save: let rev = data.set(snapshot)?; «Saved note N», когда data.committed() >= Some(rev)
 ```
 
@@ -171,7 +171,7 @@ pub mod persist {
     }
     pub struct Persisted<D: Document> { /* Rc<RefCell<…>> */ }   // !Send, Clone
     impl<D: Document> Persisted<D> {
-        pub fn open(cx: &dyn LifecycleContext) -> Self;
+        pub fn open(ctx: &dyn LifecycleContext) -> Self;
         pub fn load(&self) -> impl Future<Output = Result<Rc<D>, PersistError>> + 'static;
         pub fn set(&self, value: D) -> Result<Revision, PersistError>;
         pub fn committed(&self) -> Option<Revision>;
@@ -207,7 +207,7 @@ wasm32 — тот же API поверх IndexedDB, асинхронный), `sto
 через `tempfile`, корни платформы — `Platform::data_dirs`. `flui-app`: реализация `Storage` для
 хоста поверх `FileStore` на IO-пуле (см. «Изменения после P6»).
 
-**Фичи.** Отдельной фичи нет: хранилище включает `AppConfig::with_storage_dir`, без него
+**Фичи.** Отдельной фичи нет: хранилище включает `AppConfig::storage_dir`, без него
 `storage()` даёт `None`, документ — `Unavailable`. `serde_json` во framework не входит (R35).
 `two_screens` — `required-features = ["material"]`, Notes зависит от `serde` и `serde_json` сам.
 
@@ -464,7 +464,7 @@ merge: это публичные типы, и после заморозки пр
 ## Изменения после P6 (2026-10-17, решение владельца)
 
 1. **Фичи `persist` (facade, `flui-app`) и `storage` (`flui-platform`) удалены.** Включение одно —
-   `AppConfig::with_storage_dir`; второй выключатель на этапе сборки давал «метод есть, а
+   `AppConfig::storage_dir`; второй выключатель на этапе сборки давал «метод есть, а
    хранилища нет» и размножал `cfg` по раннерам. `dirs` и `tempfile` линкуются всегда (вне wasm32);
    R35 по-прежнему держит `serde_json` вне графа.
 2. **Корни — от платформы.** `Platform::data_dirs(&StorageName)` (по умолчанию `storage::data_dirs`);

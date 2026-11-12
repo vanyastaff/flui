@@ -13,6 +13,8 @@
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   §2's teardown item only where it retains later panics and, during an unwind, the values without
   running their destructors: they are destroyed under the teardown's containment.
+- **Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) for §3 (the two
+  gates and the kinds of value that cross a thread).
 - **Supersedes:** [ADR-0018](ADR-0018-async-builder-seam.md) D3 and D5 (where the driver's
   tasks live and what may be spawned), [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §2
   (which UI capabilities are `!Send`), [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md)
@@ -97,29 +99,13 @@ weak-handle and thread-boundary rules in this section still apply.
   During an existing unwind the values are retained without running their destructors, the
   same limit `TaskToken`'s `Drop` states: catching cannot contain an aggregate whose drop glue
   panics twice.
-- `FutureBuilder<K, T, E>` requires `K: Clone + PartialEq + Debug + 'static` and
-  `T, E: 'static`; `BoxedResultFuture` has no `Send` bound.
+- `FutureBuilder<K, T, E>` and `StreamBuilder<K, T, E>` require `K: Clone + PartialEq + Debug + 'static` and
+  `T, E: 'static`; neither `BoxedResultFuture` nor `BoxedResultStream` has a `Send` bound.
 
 ### 3. A value crosses a thread because the compiler proves it may; two gates hold the exceptions
 
-§2 holds because the compiler refuses an owner-local value on another thread. Nothing is made
-`Send` or `Sync` by assertion, and the places that do cross are lists that only shrink:
-
-- **`cargo xtask send-impls`** lists every `unsafe impl Send` and `unsafe impl Sync` in the
-  workspace in `tools/xtask/allowlists/send-impls.toml`; an unlisted impl fails the gate, and the
-  list only shrinks. The impls that stay wrap an OS handle the platform guarantees for another
-  thread, each with its `SAFETY:` comment. `deny.toml` bans `send_wrapper` and `fragile`, which
-  would turn the compiler's refusal into a panic on the wrong thread.
-- **`cargo xtask send-positions`** lists every `Send` and `Sync` position an author wrote in the
-  public API of `flui` and `flui-sdk` (a supertrait, a bound, a `dyn … + Send`) in
-  `tools/xtask/allowlists/send-positions.toml`, read from the nightly rustdoc JSON that
-  [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §6's loader produces, in CI's
-  `api-contracts` job. An unlisted position fails the gate, and so does an entry the code no
-  longer has. A position is admitted only where a value really crosses a thread: a caught
-  panic's payload, a waker or what it carries, a worker's result, or a handle meant for another
-  thread. The change that writes it lists it, naming that kind as the entry's
-  `crosses = "panic-payload" | "waker" | "worker-result" | "handle"`, which the gate parses and
-  refuses any other value of. Every other entry only goes.
+**Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) §2 and §3, which
+state the gates and the kinds of value that cross.
 
 ## Consequences
 
@@ -153,7 +139,7 @@ weak-handle and thread-boundary rules in this section still apply.
 - §3: `cargo xtask send-impls` runs in `cargo xtask checks` and `cargo xtask send-positions` in
   CI's `api-contracts` job, each with its `--self-test`; `cargo xtask deps` (cargo-deny over
   `deny.toml`) holds the crate bans; xtask's `send_positions_list_entry_names_one_of_the_kinds_that_cross`
-  refuses a `crosses` kind this section does not name.
+  refuses a `crosses` kind ADR-0323 §2 does not name.
 - `tests/thread_boundary_ui.rs` (`async_driver_stays_on_its_thread`): an `AsyncDriver` handed
   to `std::thread::spawn` does not compile.
 - `crates/flui-testing/tests/async_driver.rs` (`owner_local_task_matrix`):

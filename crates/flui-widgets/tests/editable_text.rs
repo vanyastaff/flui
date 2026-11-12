@@ -112,9 +112,9 @@ pub(crate) mod native_actions {
                     EditableText::new(document.borrow().clone(), Rc::clone(&focus.borrow()))
                         .enabled(active.get())
                         .obscure_text(obscure)
-                        .on_changed(move |cx, text| {
+                        .on_changed(move |ctx, text| {
                             changes.borrow_mut().push(text.to_owned());
-                            signals.count.update(cx, |n| *n += 1)
+                            signals.count.update(ctx, |n| *n += 1)
                         })
                         .boxed()
                 } else {
@@ -148,11 +148,11 @@ pub(crate) mod native_actions {
 
         fn rebuild(&mut self) {
             self.probe
-                .write(|cx| {
+                .write(|ctx| {
                     self.revision
                         .borrow()
                         .expect("mounted signal")
-                        .update(cx, |n| *n += 1)
+                        .update(ctx, |n| *n += 1)
                 })
                 .expect("live rebuild signal");
             self.pump();
@@ -426,12 +426,14 @@ pub(crate) mod native_actions {
         let changes = Rc::new(RefCell::new(Vec::new()));
         let reported = Rc::clone(&changes);
         let mut harness = crate::common::harness::mount_with_ime(
-            EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, text| {
-                reported.borrow_mut().push(text.to_owned());
-                if text == "IME" {
-                    make_unfocusable.set_can_request_focus(false);
-                }
-            }),
+            EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(
+                move |_ctx, text| {
+                    reported.borrow_mut().push(text.to_owned());
+                    if text == "IME" {
+                        make_unfocusable.set_can_request_focus(false);
+                    }
+                },
+            ),
         );
         harness.enable_semantics();
         harness.tick();
@@ -557,17 +559,19 @@ pub(crate) mod native_actions {
         let changes = Rc::new(RefCell::new(Vec::new()));
         let reported = Rc::clone(&changes);
         let mut harness = crate::common::harness::mount_with_ime(
-            EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, text| {
-                reported.borrow_mut().push(text.to_owned());
-                if text == "IME" {
-                    let parent = takeover_node.parent().expect("live parent during grant");
-                    let attachment = parent
-                        .adopt_node(&takeover_node)
-                        .expect("grant callback takeover");
-                    let previous = issued.replace(Some(attachment));
-                    drop(previous);
-                }
-            }),
+            EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(
+                move |_ctx, text| {
+                    reported.borrow_mut().push(text.to_owned());
+                    if text == "IME" {
+                        let parent = takeover_node.parent().expect("live parent during grant");
+                        let attachment = parent
+                            .adopt_node(&takeover_node)
+                            .expect("grant callback takeover");
+                        let previous = issued.replace(Some(attachment));
+                        drop(previous);
+                    }
+                },
+            ),
         );
         harness.enable_semantics();
         harness.tick();
@@ -1466,7 +1470,7 @@ pub(crate) fn a_press_reentered_by_its_commit_is_not_a_second_contact() {
     let seen = Rc::new(Cell::new(None));
     let (nested, observed, read) = (Rc::clone(&slot), Rc::clone(&seen), controller.clone());
     let mut harness = crate::common::harness::mount_with_ime(
-        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, _text| {
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_ctx, _text| {
             let harness = nested.borrow_mut().take();
             if let Some(harness) = harness {
                 harness.dispatch_pointer_down(400.0, 5.0);
@@ -1850,7 +1854,7 @@ pub(crate) mod text_store {
         let (store_slot, sink) = (Rc::clone(&slot), Rc::clone(&heard));
         let mut harness = mount_with_ime(
             EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_changed(
-                move |_cx, text| {
+                move |_ctx, text| {
                     let store = store_slot.borrow().clone();
                     let seen = store.map(|store| {
                         let read = Rc::new(RefCell::new(None));
@@ -1914,7 +1918,7 @@ pub(crate) mod text_store {
         let (reader, sink) = (controller.clone(), Rc::clone(&changed));
         let mut harness = mount_with_ime(
             EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_changed(
-                move |_cx, text| {
+                move |_ctx, text| {
                     sink.borrow_mut()
                         .push((text.to_owned(), reader.text(), reader.selection()));
                 },
@@ -1994,7 +1998,7 @@ pub(crate) mod text_store {
         let focus_node = FocusNode::with_debug_label("unmounted mid-composition");
         let mut harness = mount_with_ime(
             EditableText::new(controller.clone(), Rc::clone(&focus_node))
-                .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned())),
+                .on_changed(move |_ctx, text| sink.borrow_mut().push(text.to_owned())),
         );
         let _ = focus_node.request_focus();
         harness.tick();
@@ -2066,7 +2070,7 @@ pub(crate) mod text_store {
         ) -> EditableText {
             let sink = Rc::clone(changed);
             EditableText::new(controller.clone(), Rc::clone(node))
-                .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned()))
+                .on_changed(move |_ctx, text| sink.borrow_mut().push(text.to_owned()))
         }
 
         fn run(pull: bool, blur_first: bool) {
@@ -2166,7 +2170,7 @@ pub(crate) mod text_store {
         let focus_node = FocusNode::with_debug_label("listener session field");
         let mut harness = mount_with_ime(
             EditableText::new(controller.clone(), Rc::clone(&focus_node))
-                .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned())),
+                .on_changed(move |_ctx, text| sink.borrow_mut().push(text.to_owned())),
         );
         let _ = focus_node.request_focus();
         harness.tick();
@@ -2337,7 +2341,7 @@ pub(crate) mod text_store {
         let focus_node = FocusNode::with_debug_label("owner failure field");
         let mut harness = mount_with_ime(
             EditableText::new(controller.clone(), Rc::clone(&focus_node))
-                .on_changed(move |_cx, text| on_changed(text)),
+                .on_changed(move |_ctx, text| on_changed(text)),
         );
         let _ = focus_node.request_focus();
         harness.tick();
@@ -2867,7 +2871,7 @@ pub(crate) mod text_store {
 /// Event context (ADR-0086): `on_changed` and `on_submitted` run inside a
 /// write the field opens from the writer source it acquired in
 /// `init_state`, whichever path made the edit.
-pub(crate) mod event_cx {
+pub(crate) mod event_context {
     use std::rc::Rc;
 
     use flui_interaction::focus::FocusNode;
@@ -2898,7 +2902,7 @@ pub(crate) mod event_cx {
         let (probe, mut harness, _controller) = mounted(|signals, controller, node| {
             let count = signals.count;
             EditableText::new(controller, node)
-                .on_changed(move |cx, text| count.set(cx, text.len() as u32))
+                .on_changed(move |ctx, text| count.set(ctx, text.len() as u32))
         });
 
         let keys = harness.focus_manager();
@@ -2917,7 +2921,7 @@ pub(crate) mod event_cx {
     pub(crate) fn a_refused_write_in_on_changed_is_reported_not_panicked() {
         let (probe, harness, controller) = mounted(|signals, controller, node| {
             let released = signals.released;
-            EditableText::new(controller, node).on_changed(move |cx, _text| released.set(cx, 1))
+            EditableText::new(controller, node).on_changed(move |ctx, _text| released.set(ctx, 1))
         });
 
         let (_, log) = flui_testing::log_capture::capture(|| {

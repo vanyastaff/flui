@@ -1372,8 +1372,8 @@ impl StatelessView for ShrinkingHoverRegion {
             MouseRegion::new()
                 .on_enter(move |_, _, _| enters.set(enters.get() + 1))
                 .on_exit(move |_, _, _| exits.set(exits.get() + 1))
-                .on_hover(move |cx, _, _| {
-                    let _ = signal.set(cx, 5.0);
+                .on_hover(move |ctx, _, _| {
+                    let _ = signal.set(ctx, 5.0);
                 })
                 .child(SizedBox::new(width, 20.0)),
         )

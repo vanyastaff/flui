@@ -9,8 +9,8 @@
 //!   operations
 //! - [`HitTestContext`]: Rich hit testing API with position helpers and child
 //!   testing
-//! - [`PaintCx`]: Sans-IO fragment-recording paint context (see
-//!   [`paint_cx`](self) module docs for the model)
+//! - [`PaintContext`]: Sans-IO fragment-recording paint context (see
+//!   [`paint_ctx`](self) module docs for the model)
 //!
 //! # Type Aliases for RenderBox
 //!
@@ -20,7 +20,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use flui_rendering::context::{BoxLayoutContext, BoxHitTestContext, PaintCx};
+//! use flui_rendering::context::{BoxLayoutContext, BoxHitTestContext, PaintContext};
 //!
 //! impl RenderBox for MyWidget {
 //!     type Arity = Single;
@@ -32,7 +32,7 @@
 //!         Ok(ctx.constrain(child_size))
 //!     }
 //!
-//!     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+//!     fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
 //!         // Draw self in LOCAL coordinates (origin pre-translated).
 //!         ctx.canvas().draw_rect(...);
 //!         // Splice the child at its laid-out offset.
@@ -52,7 +52,7 @@
 mod hit_test;
 mod intrinsics;
 mod layout;
-mod paint_cx;
+mod paint;
 pub mod proxy_queries;
 
 pub use flui_painting::{Canvas, DisplayList, Paint, PaintStyle};
@@ -62,13 +62,13 @@ pub use hit_test::HitTestContext;
 #[cfg(any(test, feature = "testing"))]
 pub use intrinsics::test_support as intrinsics_test_support;
 pub use intrinsics::{
-    BoxDryBaselineCtx, BoxDryLayoutCtx, BoxIntrinsicsCtx, DryBaselineChildRequest,
+    BoxDryBaselineContext, BoxDryLayoutContext, BoxIntrinsicsContext, DryBaselineChildRequest,
     DryBaselineChildResponse, DryLayoutChildRequest, DryLayoutChildResponse,
 };
 pub use layout::LayoutContext;
-// FragmentRecorder and PaintCx are unconditionally pub: FragmentRecorder
+// FragmentRecorder and PaintContext are unconditionally pub: FragmentRecorder
 // appears in the public `RenderObject::paint_raw` trait signature (users must
-// be able to name the type), and PaintCx is the render-object paint surface.
+// be able to name the type), and PaintContext is the render-object paint surface.
 // PaintFragment is pub because it is the return type of `FragmentRecorder::finish`.
 //
 // FragmentOp is crate-private in its definition (only the recorder writes ops,
@@ -82,15 +82,15 @@ pub use layout::LayoutContext;
 //
 // FragmentScope (née FragmentClip — it now also carries the ShaderMask and
 // BackdropFilter scope variants, not just clips) has ZERO cross-crate
-// consumers (used only crate-internally by the paint encoder in paint_cx.rs
+// consumers (used only crate-internally by the paint encoder in paint.rs
 // and the composer in pipeline/owner). It is not re-exported as `pub` —
 // only as `pub(crate)` for the pipeline composer.
 #[cfg(any(test, feature = "testing"))]
-pub use paint_cx::FragmentOp;
+pub use paint::FragmentOp;
 #[cfg(not(any(test, feature = "testing")))]
-pub(crate) use paint_cx::FragmentOp;
-pub(crate) use paint_cx::FragmentScope;
-pub use paint_cx::{FragmentRecorder, PaintAnchor, PaintCx, PaintFragment};
+pub(crate) use paint::FragmentOp;
+pub(crate) use paint::FragmentScope;
+pub use paint::{FragmentRecorder, PaintAnchor, PaintContext, PaintFragment};
 
 // ============================================================================
 // Protocol Type Aliases

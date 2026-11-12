@@ -26,6 +26,13 @@ fn thread_boundary_ui() {
     } else {
         cases.compile_fail("tests/ui/unstable_input/*.rs");
     }
+    // A second window is reachable exactly with `unstable-windows`, until
+    // ADR-0091 §3–§5 are built; the entry point is desktop-only.
+    if cfg!(feature = "unstable-windows") {
+        cases.pass("tests/ui/unstable_windows/*.rs");
+    } else {
+        cases.compile_fail("tests/ui/unstable_windows/*.rs");
+    }
     // The escape hatch exists exactly with the `native` feature, and each
     // system's module exactly on that system (ADR-0254 §8, R3.9).
     const HOST_WINDOW: &str = "tests/ui/native/host_window_needs_native.rs";

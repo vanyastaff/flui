@@ -28,7 +28,7 @@ use flui_foundation::geometry::{Offset, Point, Rect};
 use flui_painting::paint::{BlendMode, Shader};
 
 use flui_rendering::{
-    context::{BoxHitTestContext, PaintCx},
+    context::{BoxHitTestContext, PaintContext},
     hit_testing::{ShaderMaskTarget, resolve_shader_mask_target},
     parent_data::BoxParentData,
     traits::RenderBox,
@@ -206,11 +206,11 @@ impl RenderBox for RenderShaderMask {
         self.has_child
     }
 
-    // Closure is load-bearing: `PaintCx::paint_child` is ambiguous as a method path
+    // Closure is load-bearing: `PaintContext::paint_child` is ambiguous as a method path
     // (Single's zero-arg overload vs the indexed variant on other arities), so the
     // closure cannot be replaced by a method reference.
     #[expect(clippy::redundant_closure_for_method_calls)]
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         // No child means nothing at all is drawn (not even an empty mask
         // layer).
         if ctx.child_count() == 0 {
@@ -219,7 +219,7 @@ impl RenderBox for RenderShaderMask {
         // LOCAL rect (origin zero) — the shader callback
         // must see LOCAL coordinates, and so must the scope's recorded
         // `bounds`; the composer applies the origin shift for us (see
-        // `PaintCx::with_shader_mask`'s doc and the design research
+        // `PaintContext::with_shader_mask`'s doc and the design research
         // plan's trap §4.3).
         let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
         let shader = self.resolve_shader(bounds);

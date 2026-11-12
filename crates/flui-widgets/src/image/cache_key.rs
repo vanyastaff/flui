@@ -5,7 +5,7 @@
 use std::any::{Any, TypeId};
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 /// Identifies the image an async provider resolves, for the subscription an
 /// [`Image`](super::Image) holds while it is mounted: a rebuild whose provider
@@ -38,9 +38,9 @@ impl ImageCacheKey {
     /// made from an equal value of the same type `K`.
     pub fn custom<K>(key: K) -> Self
     where
-        K: Hash + Eq + fmt::Debug + Send + Sync + 'static,
+        K: Hash + Eq + fmt::Debug + 'static,
     {
-        Self(Repr::Custom(CustomKey(Arc::new(key))))
+        Self(Repr::Custom(CustomKey(Rc::new(key))))
     }
 
     /// The key of encoded `bytes` whose hash is `hash`.
@@ -150,9 +150,9 @@ impl fmt::Debug for MemoryKey {
 
 /// A custom provider's key value, compared by type and then by value.
 #[derive(Clone)]
-struct CustomKey(Arc<dyn DynKey>);
+struct CustomKey(Rc<dyn DynKey>);
 
-trait DynKey: fmt::Debug + Send + Sync {
+trait DynKey: fmt::Debug {
     fn as_any(&self) -> &dyn Any;
     fn dyn_eq(&self, other: &dyn DynKey) -> bool;
     fn dyn_hash(&self, state: &mut dyn Hasher);
@@ -160,7 +160,7 @@ trait DynKey: fmt::Debug + Send + Sync {
 
 impl<K> DynKey for K
 where
-    K: Hash + Eq + fmt::Debug + Send + Sync + 'static,
+    K: Hash + Eq + fmt::Debug + 'static,
 {
     fn as_any(&self) -> &dyn Any {
         self

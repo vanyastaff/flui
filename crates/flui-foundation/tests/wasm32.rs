@@ -17,12 +17,9 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use std::cell::Cell;
-use std::rc::Rc;
-
 use flui_foundation::{
     AtomicIdMint, FrameCallbackId, IdMint, ListenerId, ManualClock, MonotonicClock, SystemClock,
-    TaskId, WasmNotSendSync,
+    TaskId,
 };
 use std::time::Duration;
 use wasm_bindgen_test::wasm_bindgen_test;
@@ -60,23 +57,6 @@ fn a_manual_clock_advance_round_trips_exactly_over_a_performance_now_base() {
     let other = clock.clone();
     clock.advance(Duration::from_millis(100));
     assert_eq!(other.elapsed(), Duration::from_millis(600));
-}
-
-/// `WasmNotSendSync` exists to be `Send + Sync` on native and empty on wasm32.
-/// The oracle has to be a type that VIOLATES the native bound, or the test is
-/// silent about whether the relaxation happened at all: `Rc<Cell<u32>>` is
-/// neither `Send` nor `Sync`, so this function does not compile for a native
-/// target and does compile — and run — here.
-#[wasm_bindgen_test]
-fn the_wasm_blanket_impl_accepts_a_type_that_is_neither_send_nor_sync() {
-    fn takes<T: WasmNotSendSync>(value: T) -> T {
-        value
-    }
-
-    let shared: Rc<Cell<u32>> = Rc::new(Cell::new(7));
-    let returned = takes(Rc::clone(&shared));
-    returned.set(returned.get() + 1);
-    assert_eq!(shared.get(), 8, "the value did not survive the bound");
 }
 
 /// Listener, frame-callback and task ids are 64-bit on every target. On

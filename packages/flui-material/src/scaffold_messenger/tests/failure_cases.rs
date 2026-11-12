@@ -133,7 +133,7 @@ fn exercise(completion_fails: bool, forward_fails: bool, fanout_failures: usize)
     let arm = Arc::clone(&armed);
     handle
         .show_snack_bar(snack_bar("first"))
-        .on_closed(move |_cx, reason| {
+        .on_closed(move |_ctx, reason| {
             assert_eq!(reason, SnackBarClosedReason::Remove);
             seen.set(seen.get() + 1);
             arm.store(true, Ordering::SeqCst);
@@ -143,7 +143,7 @@ fn exercise(completion_fails: bool, forward_fails: bool, fanout_failures: usize)
     let seen = Rc::clone(&next);
     handle
         .show_snack_bar(snack_bar("next"))
-        .on_closed(move |_cx, reason| seen.set(Some(reason)));
+        .on_closed(move |_ctx, reason| seen.set(Some(reason)));
     // Empty the independent inboxes after setup. Start the production advance
     // from its dismissed-entry boundary, without an earlier dismissal wake: the
     // status listener stays quiet while the setup settles the controller.
@@ -207,7 +207,7 @@ fn exercise(completion_fails: bool, forward_fails: bool, fanout_failures: usize)
     let seen = Rc::clone(&fresh);
     handle
         .show_snack_bar(snack_bar("fresh"))
-        .on_closed(move |_cx, _reason| seen.set(true));
+        .on_closed(move |_ctx, _reason| seen.set(true));
     handle.remove_current_snack_bar();
     assert!(fresh.get(), "fresh queue operation remains live");
 }
@@ -247,7 +247,7 @@ fn a_second_display_timer_retires_the_first() {
     let seen = Rc::clone(&closed);
     handle
         .show_snack_bar(snack_bar("replacement").duration(Duration::from_millis(800)))
-        .on_closed(move |_cx, reason| seen.borrow_mut().push(reason));
+        .on_closed(move |_ctx, reason| seen.borrow_mut().push(reason));
     handle
         .shared
         .entry_controller

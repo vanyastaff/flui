@@ -293,9 +293,9 @@ impl ViewState<MenuPanel> for MenuPanelState {
                     );
                     // The menu closes before the command runs, so a command
                     // that fails leaves no menu open behind it.
-                    move |cx: &mut EventCx<'_>| {
+                    move |ctx: &mut EventContext<'_>| {
                         session.close(&menu);
-                        let _ = item.perform(cx);
+                        let _ = item.perform(ctx);
                     }
                 }));
                 menu_row(item.label(), Rc::clone(node), direction, min_target, choose)
@@ -380,7 +380,7 @@ fn menu_row(
         .child(
             GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)
-                .on_tap(move |cx| tap(cx))
+                .on_tap(move |ctx| tap(ctx))
                 .child(focus),
         )
         .boxed()
@@ -388,25 +388,29 @@ fn menu_row(
 
 /// Chooses one item: closes the menu, then performs the item's command.
 #[derive(Clone)]
-struct Choose(Rc<dyn Fn(&mut EventCx<'_>)>);
+struct Choose(Rc<dyn Fn(&mut EventContext<'_>)>);
 
 impl Action<ActivateIntent> for Choose {
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
-        (self.0)(cx);
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+        (self.0)(ctx);
         ActionOutcome::Performed
     }
 }
 
 impl Action<ButtonActivateIntent> for Choose {
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
-        (self.0)(cx);
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
+        (self.0)(ctx);
         ActionOutcome::Performed
     }
 }
 
 /// Space's key-down on an item: consumed, so its release chooses it.
 impl Action<ActivationPressIntent> for Choose {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+    fn invoke(
+        &self,
+        _ctx: &mut EventContext<'_>,
+        _intent: &ActivationPressIntent,
+    ) -> ActionOutcome {
         ActionOutcome::Performed
     }
 }
@@ -426,7 +430,7 @@ impl Intent for MenuStep {}
 struct MoveFocus(Rc<[Rc<FocusNode>]>);
 
 impl Action<MenuStep> for MoveFocus {
-    fn invoke(&self, _cx: &mut EventCx<'_>, step: &MenuStep) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, step: &MenuStep) -> ActionOutcome {
         let count = self.0.len();
         if count == 0 {
             return ActionOutcome::NotPerformed;
@@ -487,8 +491,8 @@ impl SelectionMenu for PlainSelectionMenu {
                 toolbar_button(
                     item.label().to_owned(),
                     item.label().to_owned(),
-                    move |cx| {
-                        let _ = chosen.perform(cx);
+                    move |ctx| {
+                        let _ = chosen.perform(ctx);
                     },
                     direction,
                     min_target,
@@ -511,7 +515,7 @@ impl SelectionMenu for PlainSelectionMenu {
                     toolbar_button(
                         glyph.to_owned(),
                         label.to_owned(),
-                        move |_cx| controller.toggle(),
+                        move |_ctx| controller.toggle(),
                         direction,
                         min_target,
                     )
@@ -531,7 +535,7 @@ impl SelectionMenu for PlainSelectionMenu {
 fn toolbar_button(
     text: String,
     label: String,
-    tap: impl Fn(&mut EventCx<'_>) + 'static,
+    tap: impl Fn(&mut EventContext<'_>) + 'static,
     direction: TextDirection,
     min_target: f64,
 ) -> BoxedView {
@@ -547,7 +551,7 @@ fn toolbar_button(
         .child(
             GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)
-                .on_tap(move |cx| tap(cx))
+                .on_tap(move |ctx| tap(ctx))
                 .child(
                     ConstrainedBox::new(BoxConstraints::new(
                         side,
@@ -588,7 +592,7 @@ impl SelectionPopup for PlainPopup {
             owner: origin.owner().cloned(),
             direction: Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr),
         };
-        Rc::new(move |_cx, request| presenter.present(request))
+        Rc::new(move |_ctx, request| presenter.present(request))
     }
 
     fn close(&self) {

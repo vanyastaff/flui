@@ -116,6 +116,12 @@ wgpu = { workspace = true, default-features = false, features = ["metal"] }
 # GLES 3.0 is the fallback when no Vulkan adapter answers (ADR-0244 §1).
 wgpu = { workspace = true, default-features = false, features = ["vulkan", "gles"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The inline raster executor rebuilds a lost device on the owner thread and
+# waits for wgpu's adapter and device requests there (ADR-0305 §8); on the web
+# the rebuild is a future the owner spawns.
+pollster = { workspace = true }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # fragile-send-sync-non-atomic-wasm: wgpu types are Rc/RefCell-based on the
 # WebGPU backend and therefore !Send; this feature marks them Send+Sync, which

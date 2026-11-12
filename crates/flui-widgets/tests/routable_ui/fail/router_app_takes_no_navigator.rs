@@ -15,7 +15,7 @@ struct Analytics;
 impl NavigatorObserver for Analytics {}
 
 fn router() -> Router<AppRoute> {
-    Router::new(AppRoute::Home, |_route: &AppRoute, _cx| {
+    Router::new(AppRoute::Home, |_route: &AppRoute, _ctx| {
         SizedBox::shrink().into_view().boxed()
     })
 }

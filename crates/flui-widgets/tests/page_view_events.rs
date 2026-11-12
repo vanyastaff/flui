@@ -1,4 +1,4 @@
-//! `PageView::on_page_changed` receives an `EventCx` (ADR-0086). The
+//! `PageView::on_page_changed` receives an `EventContext` (ADR-0086). The
 //! controller's listener only records a change; the callback runs after the
 //! frame on the local post-frame lane, outside any build, so its writes land
 //! — every recorded page, in order, through whichever callback is current
@@ -29,7 +29,7 @@ fn pages() -> Vec<BoxedView> {
 }
 
 fn page_view(controller: &PageController) -> PageView {
-    PageView::new(pages(), pager_alternatives()).controller(controller.clone())
+    PageView::new(pager_alternatives(), pages()).controller(controller.clone())
 }
 
 fn mounted(probe: &SignalProbe) -> LaidOut {
@@ -42,7 +42,7 @@ fn page_change_writes_a_signal_after_the_frame() {
     let probe = {
         let controller = controller.clone();
         SignalProbe::new(move |ProbeSignals { count, .. }| {
-            page_view(&controller).on_page_changed(move |cx, page| count.set(cx, page as u32))
+            page_view(&controller).on_page_changed(move |ctx, page| count.set(ctx, page as u32))
         })
     };
     let mut app = mounted(&probe);
@@ -74,9 +74,9 @@ fn page_changes_in_one_frame_are_delivered_in_order() {
         let delivered = Rc::clone(&delivered);
         SignalProbe::new(move |ProbeSignals { count, .. }| {
             let delivered = Rc::clone(&delivered);
-            page_view(&controller).on_page_changed(move |cx, page| {
+            page_view(&controller).on_page_changed(move |ctx, page| {
                 delivered.borrow_mut().push(page);
-                count.update(cx, |n| *n = *n * 10 + page as u32)
+                count.update(ctx, |n| *n = *n * 10 + page as u32)
             })
         })
     };
@@ -87,7 +87,7 @@ fn page_changes_in_one_frame_are_delivered_in_order() {
     app.tick();
 
     assert_eq!(*delivered.borrow(), [1, 2], "both pages, in order");
-    assert_eq!(probe.value(), Ok(12), "each wrote through its own cx");
+    assert_eq!(probe.value(), Ok(12), "each wrote through its own ctx");
 }
 
 /// Counts its drops, so a test can see when a callback's captures go.
@@ -118,9 +118,9 @@ fn a_page_view_unmounted_before_it_rebuilds_drops_its_recorded_change() {
             }
             let held = DropProbe(Rc::clone(&drops));
             page_view(&controller)
-                .on_page_changed(move |cx, page| {
+                .on_page_changed(move |ctx, page| {
                     let _held = &held;
-                    count.set(cx, page as u32)
+                    count.set(ctx, page as u32)
                 })
                 .into_view()
                 .boxed()
@@ -176,10 +176,10 @@ fn a_page_view_unmounted_after_queueing_a_change_delivers_nothing() {
                 }
                 let delivered = Rc::clone(&delivered);
                 let held = DropProbe(Rc::clone(&drops));
-                let pages = page_view(&controller).on_page_changed(move |cx, page| {
+                let pages = page_view(&controller).on_page_changed(move |ctx, page| {
                     let _held = &held;
                     delivered.borrow_mut().push(page);
-                    count.set(cx, page as u32)
+                    count.set(ctx, page as u32)
                 });
                 Some(SizedBox::new(PAGE, PAGE).child(pages).into_view().boxed())
             })
@@ -228,7 +228,7 @@ fn the_latest_callback_receives_a_queued_page_change() {
         SignalProbe::new(move |ProbeSignals { count, .. }| {
             let base = generation.get() * 100;
             page_view(&controller)
-                .on_page_changed(move |cx, page| count.set(cx, base + page as u32))
+                .on_page_changed(move |ctx, page| count.set(ctx, base + page as u32))
         })
     };
     let mut app = mounted(&probe);
@@ -250,7 +250,7 @@ fn a_refused_page_change_write_is_reported_not_panicked() {
     let probe = {
         let controller = controller.clone();
         SignalProbe::new(move |ProbeSignals { released, .. }| {
-            page_view(&controller).on_page_changed(move |cx, _page| released.set(cx, 1))
+            page_view(&controller).on_page_changed(move |ctx, _page| released.set(ctx, 1))
         })
     };
     let mut app = mounted(&probe);
@@ -280,7 +280,7 @@ fn a_page_change_mid_drag_keeps_the_drag() {
     let probe = {
         let controller = controller.clone();
         SignalProbe::new(move |ProbeSignals { count, .. }| {
-            page_view(&controller).on_page_changed(move |cx, page| count.set(cx, page as u32))
+            page_view(&controller).on_page_changed(move |ctx, page| count.set(ctx, page as u32))
         })
     };
     let mut app = mounted(&probe);
@@ -316,10 +316,10 @@ fn a_panicking_page_change_does_not_discard_the_later_pages() {
         let delivered = Rc::clone(&delivered);
         SignalProbe::new(move |ProbeSignals { count, .. }| {
             let delivered = Rc::clone(&delivered);
-            page_view(&controller).on_page_changed(move |cx, page| {
+            page_view(&controller).on_page_changed(move |ctx, page| {
                 assert_ne!(page, 1, "intentional page-change panic");
                 delivered.borrow_mut().push(page);
-                count.set(cx, page as u32)
+                count.set(ctx, page as u32)
             })
         })
     };

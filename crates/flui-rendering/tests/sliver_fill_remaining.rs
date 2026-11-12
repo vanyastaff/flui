@@ -5,7 +5,7 @@ use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_objects::RenderSliverFillRemainingWithScrollable;
 use flui_rendering::{
     constraints::SliverConstraints,
-    context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
+    context::{BoxHitTestContext, BoxIntrinsicsContext, BoxLayoutContext},
     parent_data::BoxParentData,
     pipeline::PipelineOwner,
     testing::{inspect, sliver as sliver_presets},
@@ -90,7 +90,7 @@ impl RenderBox for FixedHitBox {
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.desired.width)
     }
@@ -98,7 +98,7 @@ impl RenderBox for FixedHitBox {
     fn compute_max_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.desired.height)
     }

@@ -47,7 +47,7 @@ re-checked:
 | `AssetRegistry::global` | `crates/flui-assets/src/registry/mod.rs:83-90` | `static LazyLock<AssetRegistry>` behind a `pub fn` |
 | `APP_RUNTIME` | `crates/flui-app/src/app/runner/host.rs:25-47` | `thread_local!` host of every UI runtime |
 | `POLLING_PENDING_WINDOWS`, `PENDING_SECONDARY_WINDOW_OPENS`, `PENDING_SECONDARY_WINDOW_COMPLETIONS` | `crates/flui-app/src/app/runner/secondary_window.rs:453-471` | `thread_local!` queues beside the host cell |
-| `REQUEST_REBUILD` | `crates/flui-hot-reload/src/dispatch.rs:24` | `static LazyLock<Mutex<…>>` hook slot |
+| `REQUEST_REBUILD` | `packages/flui-hot-reload/src/dispatch.rs:24` | `static LazyLock<Mutex<…>>` hook slot |
 | `REGISTRY_STACK`, `TEST_REGISTRY` | `crates/flui-view/src/key/registry.rs:198-212` | `thread_local!`, `ManuallyDrop` for a hot-reload cdylib |
 | `LOCAL_LANES`, `ACTIVE_LANES` | `crates/flui-interaction/src/pointer/interaction_lane.rs:739-741` | `thread_local!` lane registries |
 

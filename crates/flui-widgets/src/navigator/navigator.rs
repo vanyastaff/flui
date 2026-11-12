@@ -1755,7 +1755,7 @@ impl NavigatorHandle {
 ///
 /// // An argument-carrying request.
 /// let with_id = navigator
-///     .push_named(RouteSettings::named("/details").with_arguments(7_u32))?;
+///     .push_named(RouteSettings::named("/details").arguments(7_u32))?;
 ///
 /// // And the one call that does name a type, to keep the pop result.
 /// let result = navigator.push_named_typed::<i32>("/details")?;
