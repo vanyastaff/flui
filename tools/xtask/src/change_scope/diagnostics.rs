@@ -240,7 +240,7 @@ const PROSE: usize = 20;
 
 /// The added and removed lines of a unified diff, each with its file's
 /// repo-relative path.
-fn diff_lines(diff: &str) -> impl Iterator<Item = (&str, &str)> {
+pub(super) fn diff_lines(diff: &str) -> impl Iterator<Item = (&str, &str)> {
     let mut file = "";
     diff.lines().filter_map(move |line| {
         if let Some(path) = line.strip_prefix("+++ b/") {
@@ -280,12 +280,12 @@ fn join(dir: &str, path: &str) -> String {
 }
 
 /// Whether `path` is a Rust source file.
-fn is_rust(path: &str) -> bool {
+pub(super) fn is_rust(path: &str) -> bool {
     Path::new(path).extension().is_some_and(|e| e == "rs")
 }
 
 /// Whether `path` sits under a `tests/` directory.
-fn in_tests(path: &str) -> bool {
+pub(super) fn in_tests(path: &str) -> bool {
     path.starts_with("tests/") || path.contains("/tests/")
 }
 
