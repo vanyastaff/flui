@@ -1,5 +1,5 @@
 //! `cargo xtask context-names`: a context is bound as `ctx`, never as `cx`
-//! (ADR-0324).
+//! (ADR-0325).
 //!
 //! A reader who meets `cx` and `ctx` for the same role cannot tell from the
 //! name which context a closure has, and the next change copies either. The
@@ -80,7 +80,7 @@ impl fmt::Display for Found {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}:{}: `cx: {}`: a context is bound as `ctx` (ADR-0324)",
+            "{}:{}: `cx: {}`: a context is bound as `ctx` (ADR-0325)",
             self.file, self.line, self.ty
         )
     }

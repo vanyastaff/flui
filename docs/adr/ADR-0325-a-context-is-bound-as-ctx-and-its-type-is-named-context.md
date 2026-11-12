@@ -1,4 +1,4 @@
-# ADR-0324: A context is bound as `ctx`, and its type is named `…Context`
+# ADR-0325: A context is bound as `ctx`, and its type is named `…Context`
 
 - **Status:** Accepted (2026-11-12)
 - **Date:** 2026-11-12

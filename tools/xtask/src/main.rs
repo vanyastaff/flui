@@ -134,7 +134,7 @@ enum Command {
     /// Check that every `new` returning `Result` or `Option` is listed and the list only
     /// shrinks: such a constructor is `try_new` (AGENTS.md).
     TryNew(try_new::TryNewArgs),
-    /// Check that a context is bound as `ctx`, never as `cx` (ADR-0324).
+    /// Check that a context is bound as `ctx`, never as `cx` (ADR-0325).
     ContextNames(context_names::ContextNamesArgs),
     /// Check that every production `expect` and `panic!` names its invariant (`BUG: `) or its
     /// `try_` twin; the counts of the ones that do not only go down (docs/PANIC-POLICY.md).

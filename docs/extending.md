@@ -25,4 +25,4 @@ counterpart has, adapted to Rust:
   `LifecycleContext`, `RenderObjectContext`, the layout, paint and hit-test contexts, a
   capability's `ProviderContext`, an event callback's context and a `poll`'s
   `std::task::Context`. A context type is named `…Context`. `cargo xtask context-names` holds the
-  binding ([ADR-0324](adr/ADR-0324-a-context-is-bound-as-ctx-and-its-type-is-named-context.md)).
+  binding ([ADR-0325](adr/ADR-0325-a-context-is-bound-as-ctx-and-its-type-is-named-context.md)).

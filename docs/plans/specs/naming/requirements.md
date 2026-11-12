@@ -339,7 +339,7 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
 - **N1. Контексты.** Типы называются `…Context` (как `std::task::Context`), привязка любого
   контекста — `ctx`, включая `EventContext` и `std::task::Context`: `ctx: &dyn BuildContext`,
   `move |ctx| …`. Написания `Ctx` и `Cx` в именах типов уходят. Привязку держит гейт
-  `xtask context-names` ([ADR-0324](../../../adr/ADR-0324-a-context-is-bound-as-ctx-and-its-type-is-named-context.md)).
+  `xtask context-names` ([ADR-0325](../../../adr/ADR-0325-a-context-is-bound-as-ctx-and-its-type-is-named-context.md)).
 - **N2. Имена из Flutter/Dart/Skia — всё по-растовски.** Пересматриваются не только артефакты Dart
   (`Mixin`, `Base`, статический `Curves`, бессмысленный `Data`, сокращения Skia вроде `RRect`), но
   и предметные имена виджетов и типов (`Container`, `ThemeData` и т. п.) — под стиль экосистемы

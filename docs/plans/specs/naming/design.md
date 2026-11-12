@@ -106,7 +106,7 @@ flui-interaction 13, flui-painting 11, flui-material 10, flui-platform 8, flui-f
 
 ## 4. Контексты (решение владельца N1)
 
-Типы-контексты называются `…Context`, привязки — `ctx` (ADR-0324). Написания `Ctx` и `Cx` из имён типов
+Типы-контексты называются `…Context`, привязки — `ctx` (ADR-0325). Написания `Ctx` и `Cx` из имён типов
 уходят. Слово `Context` закрепляется за контекстами: тип, который не передаётся как контекст,
 его не носит (`NodeContext` → `FocusNodePayload`).
 
@@ -134,7 +134,7 @@ flui-interaction 13, flui-painting 11, flui-material 10, flui-platform 8, flui-f
 `FlowPaintingContext`, `TextContext`, `TaskContext` и `ServiceContext`.
 **Привязки.** Привязка любого контекста называется `ctx`, включая `EventContext` и
 `std::task::Context`; `cx` не носит ни одна привязка контекста, и это держит `xtask context-names`
-([ADR-0324](../../../adr/ADR-0324-a-context-is-bound-as-ctx-and-its-type-is-named-context.md)). Время жизни
+([ADR-0325](../../../adr/ADR-0325-a-context-is-bound-as-ctx-and-its-type-is-named-context.md)). Время жизни
 контекста — `'ctx`.
 `count.get(cx)` … `.on_press(move |cx| count.update(cx, …))`.
 
