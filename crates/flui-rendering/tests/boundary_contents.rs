@@ -586,12 +586,8 @@ fn a_parent_painting_its_child_again_drops_the_order_that_left_it_out() {
     );
     let parent = registry.get("parent").expect("labelled");
     let child = registry.get("child").expect("labelled");
-    let presents = |owner: &PipelineOwner<Idle>| {
-        owner
-            .presented_nodes()
-            .iter()
-            .any(|node| node.id == child)
-    };
+    let presents =
+        |owner: &PipelineOwner<Idle>| owner.presented_nodes().iter().any(|node| node.id == child);
     let mut scene = SceneHost::new();
     let mut owner = frame(&mut scene, owner);
     assert!(!presents(&owner), "precondition: the child is left out");
