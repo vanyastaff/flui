@@ -29,13 +29,23 @@ use crate::support::{RefCallback, ref_callback};
 /// A pointer-event callback: receives the dispatch's [`EventCx`] and the event
 /// that landed on the [`Listener`] in both spaces — see [`PointerDispatch`].
 /// Stored already adapted to report its outcome.
-type PointerCallback = Rc<dyn Fn(&mut EventCx<'_>, PointerDispatch<'_>)>;
+pub(super) type PointerCallback = Rc<dyn Fn(&mut EventCx<'_>, PointerDispatch<'_>)>;
 
 /// A trackpad pan/zoom callback routed from a [`PointerEvent::PanZoom`] update.
 type PointerPanZoomCallback = RefCallback<PanZoomEvent>;
 
+/// What an owner observes of a contact's raw end through a [`Listener`]:
+/// the up, a move (a button released under another arrives as one), and
+/// the cancel.
+#[derive(Clone, Default)]
+pub(super) struct ContactCallbacks {
+    pub(super) up: Option<PointerCallback>,
+    pub(super) moved: Option<PointerCallback>,
+    pub(super) cancel: Option<PointerCallback>,
+}
+
 /// Store a pointer callback, adapted to report its outcome.
-fn pointer_callback<F, R>(callback: F) -> PointerCallback
+pub(super) fn pointer_callback<F, R>(callback: F) -> PointerCallback
 where
     F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
     R: EventOutcome,
@@ -278,6 +288,18 @@ impl Listener {
     #[must_use]
     pub(crate) fn recognizers(mut self, set: RecognizerSet) -> Self {
         self.recognizers = set;
+        self
+    }
+
+    /// The raw ends of a contact, as [`on_pointer_up`](Self::on_pointer_up),
+    /// [`on_pointer_move`](Self::on_pointer_move) and
+    /// [`on_pointer_cancel`](Self::on_pointer_cancel) set them: for an owner
+    /// that already holds the callbacks and hands them on every update.
+    #[must_use]
+    pub(super) fn contact_callbacks(mut self, contact: &ContactCallbacks) -> Self {
+        self.on_pointer_up.clone_from(&contact.up);
+        self.on_pointer_move.clone_from(&contact.moved);
+        self.on_pointer_cancel.clone_from(&contact.cancel);
         self
     }
 

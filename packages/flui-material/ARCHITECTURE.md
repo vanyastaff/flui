@@ -14,6 +14,18 @@ recorded so far.
 
 ### `InkWell` owns its ripple; no ink-feature registry
 
+`InkWell` mounts the catalogs' interactive node (ADR-0322 §1,
+`flui_widgets::interaction::node`, doc-hidden): one element and one render
+object carry its tap (`ControlTap`, the tap family of `GestureDetector` and the
+raw contact ends), its focus node and ring, its activation bindings and the
+five interaction states, where it nested a `GestureDetector`, a `Listener`, a
+`MouseRegion`, `Actions`, `Focus` and `FocusRing`. Its `enabled` is the node's
+switch, so a disabled well keeps its activation bindings declared and switched
+off. `ink_well_a11y_tree_matches_wrappers`,
+`ink_well_contests_like_gesture_detector`,
+`a_disabled_ink_well_is_disabled_in_every_part` and `perf_ink_well_over_text`
+pin it.
+
 Each `InkWell` owns its feedback (Compose's `Indication` model): a state layer
 whose alpha animates toward `StateLayerAlpha` for the strongest active state,
 and a short queue of waves, painted by a background `CustomPaint` under the
@@ -26,9 +38,10 @@ from the well's `overlay_color` (alpha included), else the ambient
 `RippleScope` without a configuration turns both parts off. Waves follow the
 press the tap recognizer shows: a wave starts at `on_tap_down` (at once when
 no rival holds the contact, else at the press timeout or the win) and ends with
-`on_tap_up` or `on_tap_cancel`; a `Listener` ends it on the raw up, a primary
-release under another button and a pointer cancel. A second contact beside a
-pending tap grows no wave. The 100 ms `Pressed` window stays on the tap. The state layer drops
+`on_tap_up` or `on_tap_cancel`; the raw contact ends (the up, a primary
+release under another button, a pointer cancel) end it too. A second contact
+beside a pending tap grows no wave. `Pressed` is the node's from the down to
+the up, and an activation holds it 100 ms more (ADR-0322 §3). The state layer drops
 `Pressed` only while a wave carries it, and shows a held contact as pressed
 when no wave runs (reduced motion). An idle well attaches no painter, so it
 records nothing.
@@ -127,9 +140,9 @@ Press, selection and value-change setters accept `&mut EventCx` and an
 `EventOutcome` result (ADR-0086). Composed controls pass the context they
 receive from `InkWell` or the input widget; they do not open a new write
 scope per wrapper. Query callbacks keep their return values and receive no
-writer. `InkWell`'s keyboard activation is a `CallbackAction`, which runs
-inside the key event's dispatch and receives its context (ADR-0086, amending
-ADR-0023), so it opens no write scope of its own. Pointer activation forwards
+writer. `InkWell`'s keyboard activation is an action bound on its node, which
+runs inside the key event's dispatch and receives its context (ADR-0086,
+amending ADR-0023), so it opens no write scope of its own. Pointer activation forwards
 the gesture's context. Both paths retain pressed-state-before-callback
 ordering.
 
