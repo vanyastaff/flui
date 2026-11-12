@@ -769,6 +769,7 @@ ignored-paths = [
     "tests/ui/thread_boundary/material/*.rs",
     "tests/ui/thread_boundary/cupertino/*.rs",
     "tests/ui/unstable_input/*.rs",
+    "tests/ui/unstable_windows/*.rs",
     "tests/ui/native/*.rs",
 ]
 
@@ -901,6 +902,13 @@ unstable-input = []
 # reads; the core host builds the extensions regardless.
 native = ["flui-app/native"]
 
+# === Windows beyond the first ===
+# Additive and unstable. Publishes `flui::open_window`, `flui::open_secondary_window`
+# and `flui::WindowPolicy` (and their `flui::app` paths) until ADR-0091 §3–§5 are
+# built: a `Shared` window is refused and an open answers only that it was
+# admitted (`docs/gaps.md`). Without it an application has one window.
+unstable-windows = ["flui-app/unstable-windows"]
+
 # Development-only reload machinery, off in an ordinary production graph. This
 # re-exports flui-hot-reload as `flui::hot_reload`; the application installs
 # its hook with `AppConfig::with_dev_reload` (ADR-0311 §2), and flui-app names
@@ -977,7 +985,8 @@ path = "tests/surface.rs"
 
 # UI-runtime-bound handles refuse `std::thread::spawn` (compile-fail fixtures under
 # `tests/ui/thread_boundary/`), and the facade hides the unstable input vocabulary
-# without `unstable-input` (`tests/ui/unstable_input/`). Its own binary, a member of nextest's
+# without `unstable-input` (`tests/ui/unstable_input/`) and a second window without
+# `unstable-windows` (`tests/ui/unstable_windows/`). Its own binary, a member of nextest's
 # `trybuild` group, so the slow rustc runs never hold the ordinary suite.
 [[test]]
 name = "thread_boundary_ui"

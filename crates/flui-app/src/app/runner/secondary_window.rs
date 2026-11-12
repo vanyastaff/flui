@@ -160,6 +160,13 @@ use flui_view::View;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+#[cfg_attr(
+    not(feature = "unstable-windows"),
+    expect(
+        dead_code,
+        reason = "published only under `unstable-windows` until ADR-0091 §3–§5 are built; its tests turn the feature on"
+    )
+)]
 pub fn open_secondary_window(
     config: AppConfig,
     policy: WindowPolicy,
@@ -201,6 +208,13 @@ pub fn open_secondary_window(
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+#[cfg_attr(
+    not(feature = "unstable-windows"),
+    expect(
+        dead_code,
+        reason = "published only under `unstable-windows` until ADR-0091 §3–§5 are built; its tests turn the feature on"
+    )
+)]
 pub fn open_window<V>(
     config: AppConfig,
     policy: WindowPolicy,

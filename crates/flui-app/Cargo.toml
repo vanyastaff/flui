@@ -70,6 +70,14 @@ performance-overlay = []
 # is absent and the runner keeps no list of host windows.
 native = []
 
+# Additional top-level windows (ADR-0091): `open_window`, `open_secondary_window`
+# and `WindowPolicy`. Off, the application has one window: ADR-0091 §3–§5 are not
+# built (a `Shared` window is refused, an open answers only that it was admitted),
+# so the multi-window surface stays out of the stable API until they are
+# (`docs/gaps.md`). The runner builds the secondary-window machinery regardless;
+# the facade's `unstable-windows` forwards here.
+unstable-windows = []
+
 # The `testing` module (ADR-0243): an application run on the headless platform,
 # driven from the test thread. Off by default and not part of the release API;
 # this crate's tests turn it on through the dev-dependency on itself.
@@ -172,8 +180,8 @@ flui-engine = { workspace = true, features = ["vulkan"] }
 flui-testing = { workspace = true }
 # `CountingWaker`, the waker whose wakes a served-page test counts.
 flui-foundation = { workspace = true, features = ["testing"] }
-# The `testing` kit, for this crate's integration tests.
-flui-app = { path = ".", features = ["testing"] }
+# The `testing` kit and the multi-window entry points, for this crate's tests.
+flui-app = { path = ".", features = ["testing", "unstable-windows"] }
 static_assertions.workspace = true
 # A throwaway data root for the host storage tests.
 tempfile.workspace = true

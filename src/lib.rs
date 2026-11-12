@@ -76,6 +76,7 @@ await its returned request or poll `try_result` to obtain the window result."
 //! | `devtools` | off | re-exports `flui-devtools` as `devtools`: the frame profiler, timeline and inspector counters |
 //! | `driver` | off | the driver agent in an optimized build; every debug build serves its windows to a driver launched with an endpoint (ADR-0239) |
 //! | `native` | off | `flui::native`, the operating systems' window extensions (Evolving) |
+//! | `unstable-windows` | off | `open_window`, `open_secondary_window` and `WindowPolicy`: windows beyond the first (unstable) |
 //!
 //! Nothing is on by default (ADR-0088 §6): an application names the catalog it
 //! uses, e.g. `features = ["material"]`; with no feature the facade still gives
@@ -103,6 +104,16 @@ await its returned request or poll `try_result` to obtain the window result."
 #![cfg_attr(not(feature = "native"), doc = "```compile_fail,E0432")]
 #![cfg_attr(feature = "native", doc = "```")]
 //! use flui::native::HostWindow;
+//! ```
+//!
+//! `unstable-windows` publishes the windows beyond the first: `open_window`,
+//! `open_secondary_window` and `WindowPolicy`. An application has one window
+//! until ADR-0091 §3–§5 are built (`docs/gaps.md`), so they are absent without
+//! the feature:
+//!
+#![cfg_attr(not(feature = "unstable-windows"), doc = "```compile_fail,E0432")]
+#![cfg_attr(feature = "unstable-windows", doc = "```no_run")]
+//! use flui::app::WindowPolicy;
 //! ```
 //!
 //! # Using a design system
@@ -313,10 +324,10 @@ pub mod view {
 pub use flui_app::android_activity;
 /// Application configuration. Re-exported from [`app`] (`flui-app`).
 pub use flui_app::app::AppConfig;
-/// The errors a window request can fail with — what [`open_window`] and
-/// [`AppHandle`] report, and what an [`Application`] window-error observer
-/// receives. Re-exported from [`app`] (`flui-app`); desktop only, like the
-/// entry points that produce it.
+/// The errors a window request can fail with — what [`AppHandle`] reports and
+/// what an [`Application`] window-error observer receives (and, under
+/// `unstable-windows`, what `open_window` answers). Re-exported from [`app`]
+/// (`flui-app`); desktop only, like the entry points that produce it.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -324,25 +335,32 @@ pub use flui_app::app::AppConfig;
 ))]
 pub use flui_app::app::AppWindowError;
 /// Whether an additional window joins the caller's UI runtime or gets its own.
-/// Re-exported from [`app`] (`flui-app`); absent on iOS, where no
-/// secondary-window entry point exists.
-#[cfg(not(target_os = "ios"))]
+/// Re-exported from [`app`] (`flui-app`); unstable, under `unstable-windows`
+/// (see `open_window`), and absent on iOS, where no secondary-window entry
+/// point exists.
+#[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
 pub use flui_app::app::WindowPolicy;
 /// Open an additional top-level window without widget content.
 ///
-/// Desktop only. Call on the owner thread while its event loop is live.
-/// Success can mean creation was admitted for a later owner turn; this API
-/// does not provide a completion receiver or a renderer. Use [`open_window`]
-/// for widget content. See [`app::app::open_secondary_window`] for policy,
-/// deferred-failure, and ownership details.
-/// Re-exported from [`app`] (`flui-app`).
+/// Unstable, under `unstable-windows` (see [`open_window`]). Desktop only.
+/// Call on the owner thread while its event loop is live. Success can mean
+/// creation was admitted for a later owner turn; this API does not provide a
+/// completion receiver or a renderer. Use [`open_window`] for widget content.
+/// See [`app::app::open_secondary_window`] for policy, deferred-failure, and
+/// ownership details. Re-exported from [`app`] (`flui-app`).
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
-    not(target_arch = "wasm32")
+    not(target_arch = "wasm32"),
+    feature = "unstable-windows"
 ))]
 pub use flui_app::app::open_secondary_window;
 /// Open an additional top-level window with mounted widget content.
+///
+/// Unstable: an application has one window unless it turns on the additive
+/// `unstable-windows` feature, because ADR-0091 §3–§5 are not built yet
+/// (`docs/gaps.md`). Without the feature this entry point,
+/// [`open_secondary_window`] and [`WindowPolicy`] are absent.
 ///
 /// Desktop only. Call on the owner thread while its event loop is live, with
 /// [`WindowPolicy::Isolated`]. `WindowPolicy::Shared` is refused with
@@ -353,7 +371,8 @@ pub use flui_app::app::open_secondary_window;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
-    not(target_arch = "wasm32")
+    not(target_arch = "wasm32"),
+    feature = "unstable-windows"
 ))]
 pub use flui_app::app::open_window;
 /// The resident-application builder and its control surface: a reusable
@@ -445,14 +464,21 @@ pub use flui_app::{FontRegistrationError, register_font};
 /// `flui::cupertino` rather than joining this glob.
 pub mod prelude {
     pub use flui_app::app::AppConfig;
-    #[cfg(not(target_os = "ios"))]
-    pub use flui_app::app::WindowPolicy;
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    pub use flui_app::app::{AppWindowError, open_secondary_window, open_window};
+    pub use flui_app::app::AppWindowError;
+    #[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
+    pub use flui_app::app::WindowPolicy;
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32"),
+        feature = "unstable-windows"
+    ))]
+    pub use flui_app::app::{open_secondary_window, open_window};
     pub use flui_app::{AppCapabilities, AppLaunch, LaunchError, register_font, run_app};
     #[cfg(feature = "material")]
     pub use flui_material::{
