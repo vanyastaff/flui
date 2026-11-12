@@ -46,6 +46,8 @@ pub(super) enum DirtyKind {
     Paint,
     /// Mark for next-frame semantics update.
     Semantics,
+    /// Mark for a next-frame re-placement of the semantics under this node.
+    SemanticsGeometry,
     /// Mark for a next-frame rebuild of only the layers this node pushes.
     CompositedLayerUpdate,
 }

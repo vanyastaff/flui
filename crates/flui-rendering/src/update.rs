@@ -7,6 +7,7 @@ const PAINT_BIT: u8 = 1 << 1;
 const COMPOSITING_BITS_BIT: u8 = 1 << 2;
 const SEMANTICS_BIT: u8 = 1 << 3;
 const COMPOSITED_LAYER_UPDATE_BIT: u8 = 1 << 4;
+const SEMANTICS_GEOMETRY_BIT: u8 = 1 << 5;
 
 /// The pipeline work required after a render object's configuration changes.
 ///
@@ -46,6 +47,15 @@ impl RenderUpdateImpact {
     /// `PipelineOwner::apply_render_update_impact`, which applies the paint
     /// mark first so the weaker mark refuses itself.
     pub const COMPOSITED_LAYER_UPDATE: Self = Self(COMPOSITED_LAYER_UPDATE_BIT);
+    /// Re-place the semantics of the render object's subtree: where its
+    /// descendants land moved (a transform, a translation), what any node
+    /// describes did not.
+    ///
+    /// The semantics pass then re-assembles only the semantics nodes inside
+    /// the subtree, not the nearest one above it. A setter whose change can
+    /// also alter a configuration reports [`Self::SEMANTICS`], which covers
+    /// this one.
+    pub const SEMANTICS_GEOMETRY: Self = Self(SEMANTICS_GEOMETRY_BIT);
 
     /// Returns whether no pipeline work is required.
     #[inline]
@@ -81,6 +91,14 @@ impl RenderUpdateImpact {
     #[inline]
     pub const fn needs_semantics_update(self) -> bool {
         self.0 & SEMANTICS_BIT != 0
+    }
+
+    /// Returns whether only where the subtree's semantics land must be
+    /// recomputed. False when [`Self::needs_semantics_update`] is true, which
+    /// re-describes the subtree and so covers its placement too.
+    #[inline]
+    pub const fn needs_semantics_geometry_update(self) -> bool {
+        self.0 & SEMANTICS_GEOMETRY_BIT != 0 && !self.needs_semantics_update()
     }
 
     /// Combines the pipeline work required by two independent changes.
@@ -160,5 +178,13 @@ mod tests {
             );
             assert_eq!(impact.is_none(), impact == RenderUpdateImpact::NONE);
         }
+
+        let moved = RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS_GEOMETRY;
+        assert!(moved.needs_semantics_geometry_update());
+        assert!(!moved.needs_semantics_update());
+        assert!(
+            !(moved | RenderUpdateImpact::SEMANTICS).needs_semantics_geometry_update(),
+            "re-describing the subtree re-places it too",
+        );
     }
 }

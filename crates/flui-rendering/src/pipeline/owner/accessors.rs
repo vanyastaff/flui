@@ -264,6 +264,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 DirtyKind::Paint,
                 DirtyKind::Semantics,
                 DirtyKind::CompositedLayerUpdate,
+                DirtyKind::SemanticsGeometry,
             ] {
                 if marks & super::super::local_invalidation::bit(kind) == 0 {
                     continue;
@@ -303,6 +304,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                         && self.render_tree.get(id).is_some_and(|node| {
                             self.scheduler
                                 .commit_node_needing_semantics(id, node.depth() as usize)
+                        })
+                }
+                DirtyKind::SemanticsGeometry => {
+                    self.semantics_enabled()
+                        && self.render_tree.get(id).is_some_and(|node| {
+                            self.scheduler
+                                .commit_node_needing_semantics_geometry(id, node.depth() as usize)
                         })
                 }
                 DirtyKind::CompositedLayerUpdate => self
@@ -1909,6 +1917,26 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             .add_node_needing_semantics(node_id, node.depth() as usize);
     }
 
+    /// Marks a live node whose subtree's semantics moved without any
+    /// configuration changing, when semantics are enabled: the pass then
+    /// re-places the semantics nodes inside the subtree instead of
+    /// re-assembling the one above it. Disabled semantics and stale IDs are
+    /// no-ops.
+    pub fn mark_needs_semantics_geometry(&mut self, node_id: RenderId) {
+        if !self.semantics_enabled() {
+            return;
+        }
+        let Some(node) = self.render_tree.get(node_id) else {
+            return;
+        };
+        if self
+            .scheduler
+            .commit_node_needing_semantics_geometry(node_id, node.depth() as usize)
+        {
+            self.scheduler.notify_visual_update();
+        }
+    }
+
     /// Applies the pipeline work returned by a render-object update.
     ///
     /// Work is scheduled in layout, compositing, paint, then semantics order.
@@ -1937,12 +1965,22 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
         if impact.needs_semantics_update() {
             self.mark_needs_semantics(node_id);
+        } else if impact.needs_semantics_geometry_update() {
+            self.mark_needs_semantics_geometry(node_id);
         }
     }
 
     // ========================================================================
     // Semantics enablement (data access, phase-agnostic)
     // ========================================================================
+
+    /// Turns off, or back on, the debug check that a pass which re-placed
+    /// moved semantics publishes what a whole-tree rebuild would. A test that
+    /// counts what a pass costs turns it off; every other test keeps it.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn set_semantics_placement_check(&mut self, checks: bool) {
+        self.semantics_regions.set_checks_placement(checks);
+    }
 
     /// Returns whether semantics are enabled.
     #[inline]

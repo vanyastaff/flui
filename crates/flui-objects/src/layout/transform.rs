@@ -211,7 +211,7 @@ impl RenderTransform {
         } else {
             flui_rendering::RenderUpdateImpact::PAINT
         };
-        paint_or_layer | flui_rendering::RenderUpdateImpact::SEMANTICS
+        paint_or_layer | flui_rendering::RenderUpdateImpact::SEMANTICS_GEOMETRY
     }
 
     /// Updates the alignment-relative pivot without replacing layout state.
@@ -232,7 +232,7 @@ impl RenderTransform {
         } else {
             flui_rendering::RenderUpdateImpact::PAINT
         };
-        paint_or_layer | flui_rendering::RenderUpdateImpact::SEMANTICS
+        paint_or_layer | flui_rendering::RenderUpdateImpact::SEMANTICS_GEOMETRY
     }
 
     /// Updates the explicit pivot without replacing layout state.
@@ -247,7 +247,7 @@ impl RenderTransform {
         } else {
             flui_rendering::RenderUpdateImpact::PAINT
         };
-        paint_or_layer | flui_rendering::RenderUpdateImpact::SEMANTICS
+        paint_or_layer | flui_rendering::RenderUpdateImpact::SEMANTICS_GEOMETRY
     }
 
     /// Sets the alignment for the transform origin.

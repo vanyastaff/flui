@@ -686,6 +686,22 @@ impl DirtyTracker {
         target.push(DirtyNode::new(node_id, depth))
     }
 
+    /// Admit a semantics placement mark (a transform or a translation moved
+    /// the node's subtree) without invoking the presentation wake. Routes by
+    /// phase the way [`Self::commit_node_needing_semantics`] does.
+    pub(super) fn commit_node_needing_semantics_geometry(
+        &mut self,
+        node_id: RenderId,
+        depth: usize,
+    ) -> bool {
+        let target = if self.debug_doing_semantics {
+            &mut self.mid_layout_marks.needs_semantics_geometry
+        } else {
+            &mut self.dirty.needs_semantics_geometry
+        };
+        target.push(DirtyNode::new(node_id, depth))
+    }
+
     pub(super) fn notify_visual_update(&self) {
         let wake = self.notifier.visual_update();
         wake.notify();
@@ -703,7 +719,7 @@ impl DirtyTracker {
     /// phase-exit flow (e.g., the `PipelineOwner::drain_mid_layout_marks` API
     /// used by `flui-app` and integration tests).
     ///
-    /// Returns the total entries moved across all four sets (informational).
+    /// Returns the total entries moved across every set (informational).
     ///
     /// Capacity-preserving: `DirtySet::append` drains the source but keeps its
     /// allocation for the next frame.
@@ -722,6 +738,9 @@ impl DirtyTracker {
         self.dirty
             .needs_semantics
             .append(&mut self.mid_layout_marks.needs_semantics);
+        self.dirty
+            .needs_semantics_geometry
+            .append(&mut self.mid_layout_marks.needs_semantics_geometry);
         drained
     }
 
@@ -763,6 +782,7 @@ impl DirtyTracker {
             + self.dirty.needs_compositing.len()
             + self.dirty.needs_paint.len()
             + self.dirty.needs_semantics.len()
+            + self.dirty.needs_semantics_geometry.len()
     }
 
     /// Returns `true` when `dirty` has at least one entry in any queue.
@@ -772,6 +792,7 @@ impl DirtyTracker {
             || !self.dirty.needs_compositing.is_empty()
             || !self.dirty.needs_paint.is_empty()
             || !self.dirty.needs_semantics.is_empty()
+            || !self.dirty.needs_semantics_geometry.is_empty()
     }
 
     /// Returns `true` when any mid-phase marks are pending drain.
@@ -1016,6 +1037,7 @@ impl DirtyTracker {
     /// assembled before children fold into it.
     pub(super) fn sort_semantics_shallow_first(&mut self) {
         self.dirty.needs_semantics.sort_shallow_first();
+        self.dirty.needs_semantics_geometry.sort_shallow_first();
     }
 
     /// Clears the semantics queue without processing it.
@@ -1024,6 +1046,7 @@ impl DirtyTracker {
     #[inline]
     pub(super) fn clear_semantics_queue(&mut self) {
         self.dirty.needs_semantics.clear();
+        self.dirty.needs_semantics_geometry.clear();
     }
 
     // =========================================================================
@@ -1052,6 +1075,12 @@ impl DirtyTracker {
     #[inline]
     pub(super) fn nodes_needing_semantics(&self) -> &[DirtyNode] {
         self.dirty.needs_semantics.as_slice()
+    }
+
+    /// Returns the nodes whose subtree's semantics only moved.
+    #[inline]
+    pub(super) fn nodes_needing_semantics_geometry(&self) -> &[DirtyNode] {
+        self.dirty.needs_semantics_geometry.as_slice()
     }
 
     // =========================================================================

@@ -2955,3 +2955,178 @@ pub(crate) fn semantics_turned_on_later_publish_the_tree_of_semantics_on_from_th
     click(&mut late, "Press");
     assert_eq!((scene.clicks.get(), scene.presses.get()), (2, 2));
 }
+
+/// Where `label` lands on the window, read once per step after the root is
+/// rebuilt with `content(step)`. Each step only changes a transform, so the
+/// semantics pass re-places the moved subtree; in debug builds it also
+/// checks the result against a full assembly and panics on a difference.
+fn placements<V: flui_view::View>(
+    content: impl Fn(f64) -> V,
+    steps: &[f64],
+    label: &str,
+) -> Vec<Option<(f64, f64)>> {
+    let mut laid = lay_out(content(steps[0]), loose(400.0));
+    laid.enable_semantics();
+    laid.tick();
+    let mut seen = Vec::with_capacity(steps.len());
+    for &step in steps {
+        laid.pump_widget(content(step));
+        laid.tick();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        seen.push(
+            tree.find_by_label(label)
+                .ok()
+                .and_then(|node| tree.window_bounds(&node))
+                .map(|rect| (rect.x0, rect.y0)),
+        );
+    }
+    seen
+}
+
+fn labelled(label: &'static str, width: f64) -> Semantics {
+    Semantics::new()
+        .container(true)
+        .label(label)
+        .child(SizedBox::new(width, 20.0))
+}
+
+/// How far the node moved from where the first step published it.
+fn moved_by(seen: &[Option<(f64, f64)>]) -> Vec<f64> {
+    let origin = seen[0].expect("the node is published before it moves").0;
+    seen.iter()
+        .map(|at| at.expect("the node stays published").0 - origin)
+        .collect()
+}
+
+const STEPS: [f64; 4] = [0.0, 30.0, 0.0, 30.0];
+
+fn nested_nodes_move_with_the_transform() {
+    use flui_widgets::Transform;
+    let seen = placements(
+        |dx| {
+            Transform::translate(dx, 0.0).child(
+                Semantics::new()
+                    .container(true)
+                    .label("outer")
+                    .child(labelled("inner", 40.0)),
+            )
+        },
+        &STEPS,
+        "inner",
+    );
+    assert_eq!(moved_by(&seen), STEPS);
+}
+
+fn a_sibling_outside_the_transform_stays() {
+    use flui_widgets::{Column, Transform};
+    let content = |dx| {
+        Column::new((
+            Transform::translate(dx, 0.0).child(labelled("moved", 40.0)),
+            labelled("still", 40.0),
+        ))
+    };
+    assert_eq!(moved_by(&placements(content, &STEPS, "moved")), STEPS);
+    assert_eq!(moved_by(&placements(content, &STEPS, "still")), [0.0; 4]);
+}
+
+fn a_partly_clipped_node_stays_published() {
+    use flui_widgets::{ClipRect, Transform};
+    let seen = placements(
+        |dx| {
+            ClipRect::new().child(
+                SizedBox::new(60.0, 20.0)
+                    .child(Transform::translate(dx, 0.0).child(labelled("cut", 60.0))),
+            )
+        },
+        &STEPS,
+        "cut",
+    );
+    assert!(seen.iter().all(Option::is_some), "{seen:?}");
+}
+
+fn a_node_moved_out_of_its_clip_comes_back() {
+    use flui_widgets::{ClipRect, Transform};
+    let seen = placements(
+        |dx| {
+            ClipRect::new().child(
+                SizedBox::new(60.0, 20.0)
+                    .child(Transform::translate(dx, 0.0).child(labelled("hidden", 40.0))),
+            )
+        },
+        &[0.0, 200.0, 0.0],
+        "hidden",
+    );
+    assert_eq!(seen[0], seen[2], "moving back restores the node");
+}
+
+fn reading_order_in_a_document_follows_the_move() {
+    use flui_widgets::{Column, SelectionArea, Text, Transform};
+    let seen = placements(
+        |dy| {
+            SelectionArea::new(Column::new((
+                Transform::translate(0.0, dy).child(Text::new("first")),
+                Text::new("second"),
+            )))
+        },
+        &[0.0, 40.0, 0.0],
+        "first",
+    );
+    assert!(seen.iter().all(Option::is_some), "{seen:?}");
+}
+
+fn a_text_region_moves_with_its_paragraph() {
+    use flui_painting::typography::TextSpan;
+    use flui_widgets::{RichText, Transform};
+    let seen = placements(
+        |dx| {
+            Transform::translate(dx, 0.0).child(
+                RichText::new(TextSpan::with_children(vec![
+                    TextSpan::new("Read the "),
+                    TextSpan::new("terms").with_link("app://terms"),
+                ]))
+                .on_link(|_ctx, _link| {}),
+            )
+        },
+        &STEPS,
+        "terms",
+    );
+    assert_eq!(moved_by(&seen), STEPS);
+}
+
+fn a_transform_collapsed_to_scale_zero_grows_back() {
+    use flui_widgets::Transform;
+    let seen = placements(
+        |scale| Transform::scale(scale, scale).child(labelled("shrunk", 40.0)),
+        &[1.0, 0.0, 1.0],
+        "shrunk",
+    );
+    assert_eq!(seen[0], seen[2], "growing back restores the node");
+}
+
+/// A transform that only moves its subtree moves every semantics node in
+/// it, nested ones and text regions included, and leaves the siblings
+/// outside where they were. The cases cover the shapes the re-placing pass
+/// either handles in place or hands back to a full assembly: a clip that
+/// cuts the moved node, one that hides it, reading order inside a
+/// selectable document, and a transform that collapses to scale zero.
+///
+/// Red-check: report `PAINT` alone from `RenderTransform::set_transform`
+/// (the moved nodes keep their old bounds), or leave the formed nodes the
+/// re-placing walk finds out of its anchors (the same).
+pub(crate) fn a_moved_transform_re_places_the_semantics_inside_it() {
+    crate::common::cases::run_cases(
+        "re-placed semantics",
+        &[
+            ("nested", nested_nodes_move_with_the_transform),
+            ("sibling stays", a_sibling_outside_the_transform_stays),
+            ("partial clip", a_partly_clipped_node_stays_published),
+            ("full clip", a_node_moved_out_of_its_clip_comes_back),
+            (
+                "reading order in a document",
+                reading_order_in_a_document_follows_the_move,
+            ),
+            ("text region", a_text_region_moves_with_its_paragraph),
+            ("scale zero", a_transform_collapsed_to_scale_zero_grows_back),
+        ],
+    );
+}

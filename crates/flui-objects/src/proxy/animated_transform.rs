@@ -370,7 +370,7 @@ fn commit(
         flui_rendering::RenderUpdateImpact::NONE
     };
     if let Err(error) =
-        handle.request_update(layer_impact | flui_rendering::RenderUpdateImpact::SEMANTICS)
+        handle.request_update(layer_impact | flui_rendering::RenderUpdateImpact::SEMANTICS_GEOMETRY)
     {
         tracing::warn!(
             %error,
@@ -453,13 +453,13 @@ impl RenderAnimatedTransform {
     }
 
     /// Sets the reading direction a [`TransformMotion::Slide`] mirrors `dx`
-    /// against. A change repaints and republishes semantics; other motions
+    /// against. A change repaints and re-places the subtree's semantics; other motions
     /// ignore it and report no impact.
     pub fn set_text_direction(&mut self, direction: TextDirection) -> RenderUpdateImpact {
         match self.kind {
             Kind::Slide(current) if current != direction => {
                 self.kind = Kind::Slide(direction);
-                RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+                RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS_GEOMETRY
             }
             _ => RenderUpdateImpact::NONE,
         }

@@ -151,7 +151,8 @@ impl RenderFractionalTranslation {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.translation = translation;
-        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
+        flui_rendering::RenderUpdateImpact::PAINT
+            | flui_rendering::RenderUpdateImpact::SEMANTICS_GEOMETRY
     }
 
     /// Updates the hit-test transform flag, which schedules no pipeline pass.

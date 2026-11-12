@@ -245,6 +245,15 @@ notifier hooks). Assembly runs in the existing post-paint semantics phase (`run_
   own forming decision does not depend on its descendants, so re-assembling the anchor's subtree
   reproduces everything a mark could influence. Anything the graft preconditions cannot prove
   falls back to the whole-tree rebuild, which is the correctness baseline.
+- A mark that only moves a subtree (`RenderUpdateImpact::SEMANTICS_GEOMETRY`, reported by a
+  transform or translation setter) re-assembles the semantics nodes **inside** the moved
+  subtree, each in its own slot, instead of grafting under the anchor above it. The pass walks
+  the moved subtree to its outermost formed nodes; when a render node on that walk could
+  contribute to its parent (a boundary, a merge boundary, an annotation, a sibling barrier,
+  authored regions) or a moved node sits in a document that orders by geometry, the mark
+  becomes an ordinary semantics mark. In debug builds every re-placing pass is compared with a
+  full assembly and a difference panics; `a_moved_transform_re_places_the_semantics_inside_it`
+  is the widget table of the cases.
 - `accesskit_translation.rs` maps the owner's tree to AccessKit updates with stable
   `AccessibilityNodeId`s; `flui-native` hosts the AccessKit adapters per backend.
 - `platform.rs` holds `PlatformAccessibility`, the capability those adapters implement and the

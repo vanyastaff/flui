@@ -1,11 +1,8 @@
 //! Co-located dirty sets for the pipeline owner.
 //!
-//! `PipelineOwner` used to carry four parallel `Vec<DirtyNode>` fields,
-//! scattered across the struct between unrelated bookkeeping. As of
-//! 2026-05-20 they are consolidated into a single [`DirtySets`] struct so
-//! the one cache line of four `Vec` pointers lives together, the names
-//! line up, and "what dirty work is pending" reads as one concept rather
-//! than four adjacent ones.
+//! The pipeline owner keeps its dirty work in one [`DirtySets`] struct, so the
+//! queue pointers live together and "what dirty work is pending" reads as one
+//! concept.
 //!
 //! Each phase's vector has a stable sort discipline applied at flush time:
 //!
@@ -378,7 +375,7 @@ impl PaintQueue {
 // DirtySets
 // ============================================================================
 
-/// Co-located dirty sets for the four pipeline phases that produce them.
+/// Co-located dirty sets for the pipeline phases that produce them.
 ///
 /// Each phase's set uses a `Vec` + [`SlotIndex`] pair for O(1) dedup
 /// on `push` and ordered iteration at flush time. The vectors are
@@ -398,17 +395,22 @@ pub struct DirtySets {
 
     /// Nodes needing semantics update (sorted shallow-first during flush).
     pub needs_semantics: DirtySet,
+
+    /// Nodes whose subtree's semantics only moved: a transform or a
+    /// translation changed, no configuration did (sorted shallow-first during
+    /// flush). An entry also in [`Self::needs_semantics`] is covered by it.
+    pub needs_semantics_geometry: DirtySet,
 }
 
 impl DirtySets {
-    /// Creates an empty `DirtySets`. All four sets are empty.
+    /// Creates an empty `DirtySets`. Every set is empty.
     #[inline]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Evicts every entry whose id is in `removed` from all four
-    /// sets.
+    /// Evicts every entry whose id is in `removed` from every
+    /// set.
     ///
     /// The dispose half of node removal: a freed slot's set entries
     /// must die WITH the node, or the next phase walks ids whose
@@ -419,15 +421,17 @@ impl DirtySets {
         self.needs_compositing.evict(removed);
         self.needs_paint.evict(removed);
         self.needs_semantics.evict(removed);
+        self.needs_semantics_geometry.evict(removed);
     }
 
-    /// Returns the total number of dirty entries across all four sets.
+    /// Returns the total number of dirty entries across every set.
     #[inline]
     pub fn total(&self) -> usize {
         self.needs_layout.len()
             + self.needs_paint.len()
             + self.needs_compositing.len()
             + self.needs_semantics.len()
+            + self.needs_semantics_geometry.len()
     }
 
     /// Returns `true` when any phase has at least one dirty entry.
@@ -443,5 +447,6 @@ impl DirtySets {
         self.needs_paint.clear();
         self.needs_compositing.clear();
         self.needs_semantics.clear();
+        self.needs_semantics_geometry.clear();
     }
 }

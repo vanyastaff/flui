@@ -129,25 +129,34 @@ impl PipelineOwner<Semantics> {
     /// The body of [`Self::run_semantics`], entered with the phase set.
     fn run_semantics_in_phase(&mut self) -> crate::error::RenderResult<()> {
         let mut callbacks = AssemblyCallbacks::default();
+        // The rebuild check's own retained handlers, retired with the pass's.
+        let mut check_callbacks: Option<AssemblyCallbacks> = None;
 
         // Sort shallow-first. Roots dispatch before their descendants so a parent's config is
         // assembled before children fold into it.
         self.scheduler.sort_semantics_shallow_first();
 
-        let marked: Vec<RenderId> = self
-            .scheduler
-            .nodes_needing_semantics()
-            .iter()
-            .map(|d| d.id)
-            .filter(|&id| self.render_tree.contains(id))
-            .collect();
+        // The pass's id lists live between passes, so a frame reuses them.
+        let mut marked = std::mem::take(&mut self.semantics_regions.marked);
+        marked.clear();
+        marked.extend(
+            self.scheduler
+                .nodes_needing_semantics()
+                .iter()
+                .map(|d| d.id)
+                .filter(|&id| self.render_tree.contains(id)),
+        );
+        let mut placed = std::mem::take(&mut self.semantics_regions.placed);
+        placed.clear();
+        let mut walk = std::mem::take(&mut self.semantics_regions.placement_walk);
         let pending_count = marked.len();
+        let moved_count = self.scheduler.nodes_needing_semantics_geometry().len();
 
         let tree_is_empty = self
             .semantics_owner
             .as_ref()
             .is_some_and(|owner| owner.tree().is_empty());
-        let should_build = pending_count > 0 || tree_is_empty;
+        let should_build = pending_count > 0 || moved_count > 0 || tree_is_empty;
 
         if should_build {
             if let Some(owner) = self.semantics_owner.as_mut() {
@@ -156,73 +165,120 @@ impl PipelineOwner<Semantics> {
                 // cannot partially commit an earlier subtree.
                 let mut regions =
                     AssemblyRegions::reusing(std::mem::take(&mut self.semantics_regions.visited));
-                let grafts = (!tree_is_empty)
+                if !tree_is_empty {
+                    // A moved subtree re-assembles the semantics nodes inside it,
+                    // each in its own slot. One the walk cannot place that way is
+                    // an ordinary mark: its anchor above re-assembles it.
+                    for moved in self.scheduler.nodes_needing_semantics_geometry() {
+                        if !self.render_tree.contains(moved.id) {
+                            continue;
+                        }
+                        let first = placed.len();
+                        let placeable = placement_anchors(
+                            &self.render_tree,
+                            owner.tree(),
+                            moved.id,
+                            &mut walk,
+                            &mut placed,
+                            &mut regions,
+                        ) && placed[first..]
+                            .iter()
+                            .all(|&anchor| placement_keeps_order(owner.tree(), anchor));
+                        if !placeable {
+                            placed.truncate(first);
+                            marked.push(moved.id);
+                        }
+                    }
+                }
+                let nothing_moved = !tree_is_empty && marked.is_empty() && placed.is_empty();
+                let grafts = (!tree_is_empty && !nothing_moved)
                     .then(|| {
                         plan_graft_pass(
                             &self.render_tree,
                             self.root_id,
                             owner,
                             &marked,
+                            &placed,
                             &mut regions,
                         )
                     })
                     .flatten();
-                let planned = if let Some(grafts) = grafts {
-                    Ok(SemanticsPlan::Graft(grafts))
+                if nothing_moved {
+                    // Every mark was a move whose subtree holds no semantics:
+                    // the published tree is already what a rebuild would give.
+                    if owner.needs_flush() {
+                        let published = owner.flush();
+                        self.counters.semantics_nodes_updated += published as u64;
+                    }
+                    callbacks = std::mem::take(&mut regions.callbacks);
+                    self.semantics_regions.visited = std::mem::take(&mut regions.visited);
                 } else {
-                    // A failed graft proposal can discard configurations, but
-                    // their handlers remain owned until the whole pass verdict.
-                    regions.visited.clear();
-                    regions.authored.clear();
-                    regions.duplicate = None;
-                    regions.invalid_sort_key = None;
-                    assemble_semantics_root(&self.render_tree, self.root_id, &mut regions)
-                        .map(|root| SemanticsPlan::Rebuild(root.map(Box::new)))
-                };
-                let mut planned = match planned {
-                    Ok(plan) => plan,
-                    Err(error) => {
+                    let planned = if let Some(grafts) = grafts {
+                        Ok(SemanticsPlan::Graft(grafts))
+                    } else {
+                        // A failed graft proposal can discard configurations, but
+                        // their handlers remain owned until the whole pass verdict.
+                        regions.visited.clear();
+                        regions.authored.clear();
+                        regions.duplicate = None;
+                        regions.invalid_sort_key = None;
+                        assemble_semantics_root(&self.render_tree, self.root_id, &mut regions)
+                            .map(|root| SemanticsPlan::Rebuild(root.map(Box::new)))
+                    };
+                    let mut planned = match planned {
+                        Ok(plan) => plan,
+                        Err(error) => {
+                            regions.callbacks.rejected = true;
+                            let _ = self.scheduler.exit_phase(PhaseKind::Semantics);
+                            return Err(crate::error::RenderError::semantics(error.to_string()));
+                        }
+                    };
+                    if let SemanticsPlan::Rebuild(Some(root)) = &mut planned {
+                        reconcile_collections(root);
+                    }
+                    // Exit the phase before rejected configurations retire their
+                    // callback captures. Their destruction is authored code too.
+                    if let Err(error) = self.semantics_regions.prepare(&regions, &self.render_tree)
+                    {
                         regions.callbacks.rejected = true;
                         let _ = self.scheduler.exit_phase(PhaseKind::Semantics);
+                        retire_rejected_plan(planned);
                         return Err(crate::error::RenderError::semantics(error.to_string()));
                     }
-                };
-                if let SemanticsPlan::Rebuild(Some(root)) = &mut planned {
-                    reconcile_collections(root);
-                }
-                // Exit the phase before rejected configurations retire their
-                // callback captures. Their destruction is authored code too.
-                if let Err(error) = self.semantics_regions.prepare(&regions, &self.render_tree) {
-                    regions.callbacks.rejected = true;
-                    let _ = self.scheduler.exit_phase(PhaseKind::Semantics);
-                    retire_rejected_plan(planned);
-                    return Err(crate::error::RenderError::semantics(error.to_string()));
-                }
-                self.semantics_regions
-                    .assign_text_runs(&mut planned, &self.render_tree);
-                match planned {
-                    SemanticsPlan::Rebuild(built) => {
-                        rebuild_semantics_owner(
-                            owner,
-                            built.map(|node| *node),
-                            &self.semantics_regions,
-                        );
-                    }
-                    SemanticsPlan::Graft(grafts) => {
-                        for (anchor, built) in grafts {
-                            apply_graft(owner, anchor, built, &self.semantics_regions);
+                    self.semantics_regions
+                        .assign_text_runs(&mut planned, &self.render_tree);
+                    match planned {
+                        SemanticsPlan::Rebuild(built) => {
+                            rebuild_semantics_owner(
+                                owner,
+                                built.map(|node| *node),
+                                &self.semantics_regions,
+                            );
+                        }
+                        SemanticsPlan::Graft(grafts) => {
+                            for (anchor, built) in grafts {
+                                apply_graft(owner, anchor, built, &self.semantics_regions);
+                            }
                         }
                     }
+                    let published = owner.flush();
+                    let diagnostics = owner.take_diagnostics();
+                    #[cfg(any(test, feature = "testing"))]
+                    self.unchecked_semantics_diagnostics
+                        .extend(diagnostics.iter().cloned());
+                    self.semantics_diagnostics.extend(diagnostics);
+                    self.counters.semantics_nodes_updated += published as u64;
+                    callbacks = std::mem::take(&mut regions.callbacks);
+                    self.semantics_regions.visited = std::mem::take(&mut regions.visited);
                 }
-                let published = owner.flush();
-                let diagnostics = owner.take_diagnostics();
-                #[cfg(any(test, feature = "testing"))]
-                self.unchecked_semantics_diagnostics
-                    .extend(diagnostics.iter().cloned());
-                self.semantics_diagnostics.extend(diagnostics);
-                self.counters.semantics_nodes_updated += published as u64;
-                callbacks = std::mem::take(&mut regions.callbacks);
-                self.semantics_regions.visited = std::mem::take(&mut regions.visited);
+                if moved_count > 0 && self.semantics_regions.checks_placement() {
+                    check_callbacks = Some(check_placement_against_rebuild(
+                        &self.render_tree,
+                        self.root_id,
+                        owner,
+                        &mut self.semantics_regions,
+                    ));
+                }
             } else if pending_count > 0 {
                 // With no owner installed the pass returns early. Keep the
                 // warning so enabled-without-owner wiring
@@ -250,6 +306,10 @@ impl PipelineOwner<Semantics> {
             );
         }
 
+        self.semantics_regions.marked = marked;
+        self.semantics_regions.placed = placed;
+        self.semantics_regions.placement_walk = walk;
+
         // `clear()` retains the Vec's allocated capacity; next frame's
         // pushes amortise into the existing buffer.
         self.scheduler.clear_semantics_queue();
@@ -263,6 +323,7 @@ impl PipelineOwner<Semantics> {
         // Losing/filtered handlers retire only after accepted work and phase
         // completion. An unwind during assembly uses the same RAII custody.
         drop(callbacks);
+        drop(check_callbacks);
 
         Ok(())
     }
@@ -315,6 +376,14 @@ pub(super) struct RegionIdentities {
     /// The render nodes the last assembly walk visited, kept between passes
     /// so a pass reuses the table instead of growing a new one.
     visited: FxHashSet<RenderId>,
+    /// A pass's marked nodes, its placement anchors and the placement walk's
+    /// stack, kept between passes for the same reason.
+    marked: Vec<RenderId>,
+    placed: Vec<RenderId>,
+    placement_walk: Vec<RenderId>,
+    /// Set by a test that measures a pass and so must not pay for
+    /// [`check_placement_against_rebuild`].
+    skip_placement_check: bool,
 }
 
 #[derive(Default)]
@@ -369,6 +438,18 @@ impl Drop for AssemblyCallbacks {
 }
 
 impl RegionIdentities {
+    /// Whether a pass that re-placed moved subtrees checks itself against a
+    /// rebuild: in debug builds, unless a test turned it off.
+    fn checks_placement(&self) -> bool {
+        cfg!(debug_assertions) && !self.skip_placement_check
+    }
+
+    /// Turns the debug placement check on or off.
+    #[cfg(any(test, feature = "testing"))]
+    pub(super) fn set_checks_placement(&mut self, checks: bool) {
+        self.skip_placement_check = !checks;
+    }
+
     /// The presentation's announcement queue, minting the two announcer
     /// identities on first use. `None` once the identity space is exhausted,
     /// reported once.
@@ -1608,6 +1689,7 @@ fn plan_graft_pass(
     pipeline_root: Option<RenderId>,
     owner: &SemanticsOwner,
     marked: &[RenderId],
+    placed: &[RenderId],
     regions: &mut AssemblyRegions,
 ) -> Option<Vec<(flui_foundation::SemanticsId, BuiltSemanticsNode)>> {
     let pipeline_root = pipeline_root?;
@@ -1621,6 +1703,14 @@ fn plan_graft_pass(
         let anchor = anchor_for(tree, owner.tree(), &marked_set, mark)?;
         anchors.insert(anchor);
     }
+    // A placement anchor formed last pass and its configuration has not
+    // changed, so, unlike a marked node, it re-assembles in its own slot.
+    anchors.extend(
+        placed
+            .iter()
+            .copied()
+            .filter(|anchor| !marked_set.contains(anchor)),
+    );
 
     // Keep only top-most anchors: an anchor inside another anchor's render
     // subtree is fully covered by re-assembling the outer one. After this,
@@ -1657,6 +1747,91 @@ fn plan_graft_pass(
         .collect()
 }
 
+/// Resolves a placement mark — a node whose subtree moved while no
+/// configuration in it changed — to the formed semantics nodes it holds.
+///
+/// Walks `moved`'s render subtree as the assembly walk does (the same placed
+/// children, the same exclusions) and stops at each node that formed a
+/// semantics node last pass, appending it to `anchors`: re-assembling it in
+/// place re-places everything below it, and its own place among its siblings
+/// does not follow geometry (checked by the caller). Every node passed on the
+/// way must contribute nothing at all, clipped or not, so nothing the walk
+/// skips ever reached the node above `moved`.
+///
+/// `false` when that cannot be shown: a node on the way contributes (a
+/// pending fragment, a boundary the clip dropped last pass), authors
+/// regions, or bars its earlier siblings. The caller then treats `moved` as
+/// an ordinary semantics mark.
+fn placement_anchors(
+    tree: &RenderTree,
+    arena: &SemanticsTree,
+    moved: RenderId,
+    walk: &mut Vec<RenderId>,
+    anchors: &mut Vec<RenderId>,
+    regions: &mut AssemblyRegions,
+) -> bool {
+    walk.clear();
+    walk.push(moved);
+    while let Some(id) = walk.pop() {
+        let Some(node) = tree.get(id) else {
+            continue;
+        };
+        if arena
+            .find_by_accessibility_id(AccessibilityNodeId::from(id))
+            .is_some()
+        {
+            anchors.push(id);
+            continue;
+        }
+        let config = describe_semantics_configuration(id, node, regions);
+        if config.is_semantics_boundary()
+            || config.is_merge_boundary()
+            || config.has_been_annotated()
+            || config.blocks_previous_siblings()
+        {
+            return false;
+        }
+        let authored = match node {
+            RenderNode::Box(entry) => entry
+                .render_object()
+                .semantics_regions(entry.state().geometry().unwrap_or(Size::ZERO)),
+            RenderNode::Sliver(entry) => entry
+                .render_object()
+                .semantics_regions(entry.state().absolute_paint_size()),
+        };
+        if !authored.before_children.is_empty() || !authored.after_children.is_empty() {
+            return false;
+        }
+        if node.excludes_semantics_subtree() {
+            continue;
+        }
+        let parent_generation = node.layout_generation();
+        // Pushed in reverse so the walk visits children in slot order, the
+        // order the anchors' grafts are later sorted into anyway.
+        for (child_slot, &child_id) in node.children().iter().enumerate().rev() {
+            let placed = tree
+                .get(child_id)
+                .is_some_and(|child| child.was_placed_by(id, parent_generation));
+            if placed && visits_child_for_semantics(node, child_slot) {
+                walk.push(child_id);
+            }
+        }
+    }
+    true
+}
+
+/// Whether re-assembling `anchor` in place keeps it where a full rebuild
+/// would put it among its siblings. A parent that orders its children by
+/// where they are laid out (a selectable document) may move it.
+fn placement_keeps_order(arena: &SemanticsTree, anchor: RenderId) -> bool {
+    let Some(sid) = arena.find_by_accessibility_id(AccessibilityNodeId::from(anchor)) else {
+        return false;
+    };
+    match arena.parent(sid).and_then(|parent| arena.get(parent)) {
+        Some(parent) => !parent.config().makes_document_selections(),
+        None => true,
+    }
+}
 /// `id`'s position in render preorder, as its child index at each level from
 /// the root down: comparing two paths lexicographically orders the nodes as a
 /// preorder walk visits them. Survivors never contain one another, so no path
@@ -1899,6 +2074,67 @@ fn apply_graft(
     }
 }
 
+/// Checks a pass that re-placed moved subtrees in their own slots against
+/// what re-assembling the whole tree publishes: the two must export the same
+/// AccessKit nodes. Run by default in debug builds, so every test that moves
+/// semantics checks the placement rules; a panic names the first node that
+/// differs. The handlers the check's assembly retained are returned for the
+/// caller to retire after the phase, as the pass's own are.
+///
+/// Skipped while the owner announces (its announcer nodes are not part of
+/// assembly) or when the full assembly itself refuses the tree, which the
+/// next ordinary mark reports.
+fn check_placement_against_rebuild(
+    tree: &RenderTree,
+    root: Option<RenderId>,
+    owner: &SemanticsOwner,
+    identities: &mut RegionIdentities,
+) -> AssemblyCallbacks {
+    let mut regions = AssemblyRegions::default();
+    if identities.existing_announcements().is_some() {
+        return std::mem::take(&mut regions.callbacks);
+    }
+    let Ok(built) = assemble_semantics_root(tree, root, &mut regions) else {
+        return std::mem::take(&mut regions.callbacks);
+    };
+    let mut plan = SemanticsPlan::Rebuild(built.map(Box::new));
+    if let SemanticsPlan::Rebuild(Some(root)) = &mut plan {
+        reconcile_collections(root);
+    }
+    if identities.prepare(&regions, tree).is_err() {
+        return std::mem::take(&mut regions.callbacks);
+    }
+    identities.assign_text_runs(&mut plan, tree);
+    let SemanticsPlan::Rebuild(built) = plan else {
+        unreachable!("BUG: the check plans a rebuild");
+    };
+    let mut rebuilt = SemanticsOwner::new_without_callback();
+    rebuilt.set_device_pixel_ratio(owner.device_pixel_ratio());
+    rebuild_semantics_owner(&mut rebuilt, built.map(|node| *node), identities);
+
+    let placed = owner.to_accesskit_tree_update(None);
+    let expected = rebuilt.to_accesskit_tree_update(None);
+    let nodes = |update: Option<accesskit::TreeUpdate>| {
+        let mut nodes = update.map(|update| update.nodes).unwrap_or_default();
+        nodes.sort_by_key(|(id, _)| id.0);
+        nodes
+    };
+    let (placed, expected) = (nodes(placed), nodes(expected));
+    if placed != expected {
+        let first = placed
+            .iter()
+            .zip(&expected)
+            .find(|(a, b)| a != b)
+            .map_or_else(
+                || format!("{} nodes placed, {} rebuilt", placed.len(), expected.len()),
+                |(a, b)| format!("placed {a:?}\nrebuilt {b:?}"),
+            );
+        panic!(
+            "BUG: re-placing moved semantics published another tree than a rebuild would\n{first}"
+        );
+    }
+    std::mem::take(&mut regions.callbacks)
+}
 fn describe_semantics_configuration(
     id: RenderId,
     node: &RenderNode,

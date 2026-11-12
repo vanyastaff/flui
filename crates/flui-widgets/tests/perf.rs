@@ -333,8 +333,19 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
         MountOptions::tight(WIDTH, HEIGHT),
     );
     binding.enable_semantics().expect("tree-bound");
-    controller.set_value(0.25).expect("no build is running");
-    binding.pump_frame(FRAME);
+    // The scenario counts the tick itself, not the debug check that measures
+    // a re-placement against a rebuild.
+    binding
+        .pipeline_owner()
+        .expect("mounted")
+        .with_mut(|owner| owner.set_semantics_placement_check(false));
+    // The first frame assembles the semantics tree; the first tick after it
+    // grows the buffers a moved subtree's pass keeps. The measured tick is
+    // the steady one every later frame of the slide repeats.
+    for value in [0.25, 0.375] {
+        controller.set_value(value).expect("no build is running");
+        binding.pump_frame(FRAME);
+    }
 
     let ((), allocations) = perf_measured(|| {
         controller.set_value(0.5).expect("no build is running");

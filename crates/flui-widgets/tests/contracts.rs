@@ -956,6 +956,7 @@ fn semantics_translation_and_routing() {
             ("semantics::collection_consumer_uses_member_totals_for_separated_and_composed_delegates", crate::semantics::collection_consumer_uses_member_totals_for_separated_and_composed_delegates),
             ("semantics::rich_text_accessible_labels_follow_span_overrides_and_replacement", crate::semantics::rich_text_accessible_labels_follow_span_overrides_and_replacement),
             ("semantics::a_semantics_barrier_crosses_proxies_but_stops_at_its_boundary", crate::semantics::a_semantics_barrier_crosses_proxies_but_stops_at_its_boundary),
+            ("semantics::a_moved_transform_re_places_the_semantics_inside_it", crate::semantics::a_moved_transform_re_places_the_semantics_inside_it),
             ("semantics::semantics_sort_keys_reorder_published_siblings_after_local_updates", crate::semantics::semantics_sort_keys_reorder_published_siblings_after_local_updates),
             ("semantics::flow_repaint_and_delegate_replacement_update_accessible_children", crate::semantics::flow_repaint_and_delegate_replacement_update_accessible_children),
             ("semantics::custom_painter_regions_follow_semantics_only_updates_and_layout_size", crate::semantics::custom_painter_regions_follow_semantics_only_updates_and_layout_size),
