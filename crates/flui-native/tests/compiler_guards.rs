@@ -10,6 +10,7 @@ mod trybuild_ui {
         cases.compile_fail("tests/ui/platform_and_host_window_are_sealed.rs");
         cases.compile_fail("tests/ui/owner_platform_is_not_send.rs");
         cases.compile_fail("tests/ui/platform_is_not_send.rs");
+        cases.compile_fail("tests/ui/window_is_not_send.rs");
         cases.compile_fail("tests/ui/owner_thread_token_is_private.rs");
         cases.compile_fail("tests/ui/owner_thread_token_has_no_default.rs");
         cases.compile_fail("tests/ui/basic_velocity_tracker_is_retired.rs");

@@ -16,7 +16,7 @@
 //! ([`OsDrags`]); the source, a window's drag source and the test's side all
 //! play over it.
 
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
@@ -235,7 +235,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
 pub struct HeadlessDragAndDrop {
     drags: Arc<Mutex<OsDrags>>,
     /// The system whose windows a step reaches.
-    system: Weak<Mutex<HeadlessState>>,
+    system: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
 }
 
 impl std::fmt::Debug for HeadlessDragAndDrop {
@@ -248,10 +248,10 @@ impl std::fmt::Debug for HeadlessDragAndDrop {
 
 impl HeadlessDragAndDrop {
     /// The OS side of the simulated system whose state is `system`.
-    pub(crate) fn of(system: &Arc<Mutex<HeadlessState>>) -> Self {
+    pub(crate) fn of(system: &std::rc::Rc<std::cell::RefCell<HeadlessState>>) -> Self {
         Self {
-            drags: Arc::clone(&system.lock().drags),
-            system: Arc::downgrade(system),
+            drags: Arc::clone(&system.borrow_mut().drags),
+            system: std::rc::Rc::downgrade(system),
         }
     }
 
@@ -260,7 +260,7 @@ impl HeadlessDragAndDrop {
         let system = self.system.upgrade();
         // The windows are the window feature's, which the loop holds without
         // naming them: their callbacks are what the drag reaches.
-        let windows = system.map(|system| Arc::clone(&system.lock().windows));
+        let windows = system.map(|system| Arc::clone(&system.borrow_mut().windows));
         let callbacks = windows.and_then(|windows| windows.delivery_of(window));
         if let Some(callbacks) = callbacks {
             // No lock is held: the window's callback reenters the runtime.

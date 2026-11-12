@@ -403,6 +403,10 @@ mod tests {
         let (answered, answer) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let signal = OwnerSignal::new(Arc::new(|| Ok(())));
+            #[expect(
+                clippy::arc_with_non_send_sync,
+                reason = "ADR-0327 §1: a platform is shared as `Rc` once every host is owner-local (§5)"
+            )]
             let platform: Arc<dyn crate::platform::Platform> =
                 Arc::new(crate::HeadlessPlatform::new());
             signal.serve_platform(&platform);
