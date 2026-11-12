@@ -430,16 +430,19 @@ fn acceptance_project(workdir: &Path, storage: &str) -> PathBuf {
         .expect("BUG: a local project names the facade by a table");
     facade.insert(
         "features".to_owned(),
-        toml::Value::Array(vec!["material".into(), "serde".into()]),
+        toml::Value::Array(vec![
+            toml::Value::from("material"),
+            toml::Value::from("serde"),
+        ]),
     );
     let mut serde = toml::Table::new();
-    serde.insert("version".to_owned(), "1".into());
+    serde.insert("version".to_owned(), toml::Value::from("1"));
     serde.insert(
         "features".to_owned(),
-        toml::Value::Array(vec!["derive".into()]),
+        toml::Value::Array(vec![toml::Value::from("derive")]),
     );
     dependencies.insert("serde".to_owned(), toml::Value::Table(serde));
-    dependencies.insert("serde_json".to_owned(), "1".into());
+    dependencies.insert("serde_json".to_owned(), toml::Value::from("1"));
     std::fs::write(
         &manifest_path,
         toml::to_string(&manifest).expect("serialize the project manifest"),
