@@ -144,7 +144,7 @@ pub struct ButtonStyle {
     /// (see `shape.rs`'s "Named deferral: `OutlinedBorder` sides"). An
     /// `OutlinedButton` in V1 resolves an outline color/width but does not
     /// yet draw a stroke.
-    pub side: Option<WidgetStateProperty<Option<BorderSide<f64>>>>,
+    pub side: Option<WidgetStateProperty<Option<BorderSide>>>,
 
     /// The shape of the button's underlying `Material` (a
     /// [`MaterialShape`]; an open border hierarchy is `Material`'s own named

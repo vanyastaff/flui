@@ -1051,7 +1051,7 @@ impl ViewState<Screen> for ScreenState {
             Route::Note { id } => editor(ctx, id, shared, &router, &self.form, &self.focus),
             Route::Settings => settings(ctx, shared),
         };
-        SafeArea::new().child(Column::new((
+        SafeArea::new(Column::new((
             Row::new(header(&view.route, &router)),
             Text::new(shared.status.get(ctx)),
             storage_banner(&shared.data),

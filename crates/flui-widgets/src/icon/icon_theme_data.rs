@@ -60,7 +60,7 @@ pub struct IconThemeData {
     pub optical_size: Option<f64>,
 
     /// Shadows painted underneath the icon.
-    pub shadows: Option<Vec<Shadow<f64>>>,
+    pub shadows: Option<Vec<Shadow>>,
 
     /// Whether to scale `size` by the ambient `MediaQuery` text-scale
     /// factor.
@@ -146,7 +146,7 @@ impl IconThemeData {
 
     /// Sets the `shadows` field.
     #[must_use]
-    pub fn shadows(mut self, shadows: Vec<Shadow<f64>>) -> Self {
+    pub fn shadows(mut self, shadows: Vec<Shadow>) -> Self {
         self.shadows = Some(shadows);
         self
     }

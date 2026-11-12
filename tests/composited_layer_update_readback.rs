@@ -864,7 +864,7 @@ fn decoration_filter_precision(filter: fn(f32) -> flui_painting::paint::ColorFil
     use flui_painting::{Canvas, DecorationPaintOptions, Paint, paint_box_decoration};
 
     #[derive(Debug)]
-    struct ImagePainter(BoxDecoration<f64>);
+    struct ImagePainter(BoxDecoration);
 
     impl CustomPainter for ImagePainter {
         fn paint(&self, canvas: &mut Canvas, size: Size) {

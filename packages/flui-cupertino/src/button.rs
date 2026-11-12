@@ -579,7 +579,8 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
         if let Some(identifier) = &view.identifier {
             semantics = semantics.identifier(std::sync::Arc::clone(identifier));
         }
-        let faded = ConstrainedBox::new(constraints).child(FadeTransition::new(opacity, decorated));
+        let faded =
+            ConstrainedBox::new(constraints).child(FadeTransition::new(opacity).child(decorated));
 
         let mut gesture_detector = GestureDetector::new();
         if enabled {

@@ -103,7 +103,7 @@ pub struct RenderTable {
     default_vertical_alignment: TableCellVerticalAlignment,
     text_baseline: Option<TextBaseline>,
     border: Option<TableBorder>,
-    row_decorations: Vec<Option<BoxDecoration<f64>>>,
+    row_decorations: Vec<Option<BoxDecoration>>,
 
     // Cached geometry, rebuilt on every layout — read by `paint`/`hit_test`.
     /// Row top offsets, length `row_count + 1` (the last entry is the
@@ -201,10 +201,7 @@ impl RenderTable {
 
     /// Builder: set per-row background decorations, indexed by row.
     #[must_use]
-    pub fn with_row_decorations(
-        mut self,
-        row_decorations: Vec<Option<BoxDecoration<f64>>>,
-    ) -> Self {
+    pub fn with_row_decorations(mut self, row_decorations: Vec<Option<BoxDecoration>>) -> Self {
         self.row_decorations = row_decorations;
         self
     }
@@ -324,7 +321,7 @@ impl RenderTable {
     /// Updates the per-row background decorations; returns `true` if changed.
     pub fn set_row_decorations(
         &mut self,
-        row_decorations: Vec<Option<BoxDecoration<f64>>>,
+        row_decorations: Vec<Option<BoxDecoration>>,
     ) -> flui_rendering::RenderUpdateImpact {
         if self.row_decorations == row_decorations {
             return flui_rendering::RenderUpdateImpact::NONE;

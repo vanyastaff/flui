@@ -314,7 +314,7 @@ fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
     }
 
     let padded = Padding::new(content_padding).child(Row::new(row_children));
-    let safe_area = SafeArea::new().top(false).child(padded);
+    let safe_area = SafeArea::new(padded).top(false);
 
     // A status message: announced politely when it appears, without moving
     // the user to it.

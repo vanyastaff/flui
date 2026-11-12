@@ -91,7 +91,7 @@ pub struct RenderContainer {
     padding: Option<EdgeInsets>,
     margin: EdgeInsets,
     color: Option<Color>,
-    decoration: Option<BoxDecoration<f64>>,
+    decoration: Option<BoxDecoration>,
     additional_constraints: Option<BoxConstraints>,
     transform: Option<Matrix4>,
 
@@ -147,7 +147,7 @@ impl RenderContainer {
     }
 
     /// Returns the decoration, if any.
-    pub fn decoration(&self) -> Option<&BoxDecoration<f64>> {
+    pub fn decoration(&self) -> Option<&BoxDecoration> {
         self.decoration.as_ref()
     }
 
@@ -227,7 +227,7 @@ impl RenderContainer {
     }
 
     /// Sets the decoration painted behind the child.
-    pub fn set_decoration(&mut self, decoration: Option<BoxDecoration<f64>>) -> RenderUpdateImpact {
+    pub fn set_decoration(&mut self, decoration: Option<BoxDecoration>) -> RenderUpdateImpact {
         if self.decoration == decoration {
             return RenderUpdateImpact::NONE;
         }
@@ -323,7 +323,7 @@ impl RenderContainer {
 
     /// Builder form of [`set_decoration`](Self::set_decoration).
     #[must_use]
-    pub fn with_decoration(mut self, decoration: BoxDecoration<f64>) -> Self {
+    pub fn with_decoration(mut self, decoration: BoxDecoration) -> Self {
         let _ = self.set_decoration(Some(decoration));
         self
     }

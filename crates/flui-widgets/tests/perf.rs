@@ -414,7 +414,7 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
             .collect::<Vec<_>>(),
     );
     let app = Align::new(flui_painting::Alignment::TOP_LEFT)
-        .child(RepaintBoundary::new().child(SlideTransition::new(position, panel)));
+        .child(RepaintBoundary::new().child(SlideTransition::new(position).child(panel)));
     let mut binding = HeadlessBinding::new();
     let root = GestureArenaScope::new(binding.arena().clone(), FocusTreeRoot::new(app_root(app)));
     let _ = binding.mount_root(

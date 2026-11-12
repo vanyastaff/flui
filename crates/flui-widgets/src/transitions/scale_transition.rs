@@ -7,7 +7,7 @@ use flui_animation::{Animation, ProxyAnimation};
 use flui_objects::TransformMotion;
 use flui_painting::typography::TextDirection;
 use flui_view::prelude::{BuildContext, StatefulView};
-use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
+use flui_view::{Child, IntoView, ViewState};
 
 use super::transform_view::AnimatedTransformView;
 
@@ -22,16 +22,30 @@ use super::transform_view::AnimatedTransformView;
 #[derive(Clone, StatefulView)]
 pub struct ScaleTransition {
     scale: std::rc::Rc<dyn Animation<f64>>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl ScaleTransition {
-    /// A scale driven by `scale`, transforming `child`.
-    pub fn new(scale: std::rc::Rc<dyn Animation<f64>>, child: impl IntoView) -> Self {
+    /// A scale driven by `scale`, with no child yet.
+    pub fn new(scale: std::rc::Rc<dyn Animation<f64>>) -> Self {
         Self {
             scale,
-            child: child.into_view().boxed(),
+            child: Child::empty(),
         }
+    }
+
+    /// Sets the child the transition animates.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
+    }
+
+    /// Hands over an optional child as it is, for a widget that wraps this
+    /// transition and keeps its own child slot.
+    pub(crate) fn child_slot(mut self, child: Child) -> Self {
+        self.child = child;
+        self
     }
 }
 

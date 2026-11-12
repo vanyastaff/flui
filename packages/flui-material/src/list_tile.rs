@@ -120,7 +120,7 @@
 //!   helper; a natural, additive follow-up once a caller list-builds
 //!   `ListTile`s (see [`crate::divider`]'s module docs).
 //! - **The `SafeArea`/`IconTheme.merge` wrapper layers ARE
-//!   ported**: `SafeArea::new().top(false).bottom(false).minimum(...)`, and
+//!   ported**: `SafeArea::new(..).top(false).bottom(false).minimum(...)`, and
 //!   `IconTheme::new(IconTheme::of(ctx).color(..), ..)`
 //!   — a genuine merge over the ambient `IconTheme::of(ctx)` snapshot (only
 //!   `color` is overridden; `size`/`opacity`/etc. pass through from whatever
@@ -776,14 +776,13 @@ impl StatelessView for ListTile {
         // field back to `None`, discarding an ambient `size` override an
         // app-level `IconTheme` set above this tile.
         let ambient_icon_theme = IconTheme::of(ctx);
-        let content = SafeArea::new()
-            .top(false)
-            .bottom(false)
-            .minimum(resolved.content_padding)
-            .child(IconTheme::new(
-                ambient_icon_theme.color(resolved.icon_color),
-                build_content_row(self, &resolved),
-            ));
+        let content = SafeArea::new(IconTheme::new(
+            ambient_icon_theme.color(resolved.icon_color),
+            build_content_row(self, &resolved),
+        ))
+        .top(false)
+        .bottom(false)
+        .minimum(resolved.content_padding);
 
         // A selectable tile is an option, the role ARIA gives a selection, and
         // keeps it whether or not it is selected; any other tile declares no

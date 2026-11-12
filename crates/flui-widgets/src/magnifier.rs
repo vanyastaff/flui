@@ -64,9 +64,9 @@ pub enum MagnifierShape {
 #[non_exhaustive]
 pub struct MagnifierDecoration {
     /// The line along the outline.
-    pub border: Option<BorderSide<f64>>,
+    pub border: Option<BorderSide>,
     /// The shadows the magnifier casts.
-    pub shadows: Vec<BoxShadow<f64>>,
+    pub shadows: Vec<BoxShadow>,
 }
 
 impl MagnifierDecoration {
@@ -78,14 +78,14 @@ impl MagnifierDecoration {
 
     /// The line along the outline.
     #[must_use]
-    pub fn border(mut self, side: BorderSide<f64>) -> Self {
+    pub fn border(mut self, side: BorderSide) -> Self {
         self.border = Some(side);
         self
     }
 
     /// Adds a shadow.
     #[must_use]
-    pub fn shadow(mut self, shadow: BoxShadow<f64>) -> Self {
+    pub fn shadow(mut self, shadow: BoxShadow) -> Self {
         self.shadows.push(shadow);
         self
     }

@@ -22,7 +22,7 @@ use super::proxy_slot::ProxySlot;
 ///
 /// Backed by `RenderAnimatedDecoratedBox`, which listens to `decoration`
 /// itself: a tick repaints this node without relaying out or rebuilding the
-/// element tree. A `Tween<BoxDecoration<f64>>` interpolates color, border,
+/// element tree. A `Tween<BoxDecoration>` interpolates color, border,
 /// corner radius, shadows and gradient together; a field set on one end only
 /// fades in or out.
 ///
@@ -39,7 +39,7 @@ use super::proxy_slot::ProxySlot;
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct DecoratedBoxTransition {
-    decoration: Rc<dyn Animation<BoxDecoration<f64>>>,
+    decoration: Rc<dyn Animation<BoxDecoration>>,
     position: DecorationPosition,
     child: BoxedView,
 }
@@ -47,7 +47,7 @@ pub struct DecoratedBoxTransition {
 impl DecoratedBoxTransition {
     /// A decoration transition driven by `decoration`, painted behind
     /// `child`.
-    pub fn new(decoration: Rc<dyn Animation<BoxDecoration<f64>>>, child: impl IntoView) -> Self {
+    pub fn new(decoration: Rc<dyn Animation<BoxDecoration>>, child: impl IntoView) -> Self {
         Self {
             decoration,
             position: DecorationPosition::Background,
@@ -76,7 +76,7 @@ impl std::fmt::Debug for DecoratedBoxTransition {
 /// to, kept across rebuilds so a new `decoration` retargets it in place.
 #[derive(Debug)]
 pub struct DecoratedBoxTransitionState {
-    decoration: ProxySlot<BoxDecoration<f64>>,
+    decoration: ProxySlot<BoxDecoration>,
 }
 
 impl ViewState<DecoratedBoxTransition> for DecoratedBoxTransitionState {
@@ -109,7 +109,7 @@ impl StatefulView for DecoratedBoxTransition {
 
 #[derive(Clone)]
 struct AnimatedDecoratedBoxView {
-    decoration: ProxyAnimation<BoxDecoration<f64>>,
+    decoration: ProxyAnimation<BoxDecoration>,
     position: DecorationPosition,
     child: BoxedView,
 }

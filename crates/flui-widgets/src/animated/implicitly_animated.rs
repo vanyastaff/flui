@@ -26,7 +26,7 @@ use flui_view::environment::VsyncScope;
 /// use flui_animation::curves;
 /// use std::time::Duration;
 ///
-/// let fade = AnimatedOpacity::new(0.5, SizedBox::shrink())
+/// let fade = AnimatedOpacity::new(0.5).child(SizedBox::shrink())
 ///     .curve(curves::DECELERATE)
 ///     .duration(Duration::from_millis(300));
 /// # let _ = fade;

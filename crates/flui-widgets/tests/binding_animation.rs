@@ -62,7 +62,7 @@ pub(crate) fn fade_source_replacement_retries_after_status_failure() {
         .set_value(0.75)
         .expect("no build is running");
     let view = |animation: Rc<dyn Animation<f64>>| {
-        FadeTransition::new(animation, SizedBox::new(40.0, 40.0))
+        FadeTransition::new(animation).child(SizedBox::new(40.0, 40.0))
     };
     let mut laid = crate::common::lay_out(view(Rc::new(first)), tight(40.0, 40.0));
     let nodes = laid.find_all_by_render_type("RenderAnimatedOpacity");
@@ -105,7 +105,7 @@ pub(crate) fn registered_controller_advances_fade_opacity_frame_to_frame() {
     let opacity: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
 
     let mut laid = flui_testing::widgets::lay_out_animated(
-        FadeTransition::new(opacity, SizedBox::new(100.0, 50.0)),
+        FadeTransition::new(opacity).child(SizedBox::new(100.0, 50.0)),
         tight(100.0, 50.0),
         vsync,
     );
