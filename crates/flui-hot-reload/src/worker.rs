@@ -57,6 +57,8 @@ struct BuildPtr(*const ());
 // view values and callbacks that escaped into the host tree.
 #[expect(unsafe_code)]
 unsafe impl Send for BuildPtr {}
+// SAFETY: the `Send` argument above: a shared `&BuildPtr` only reads the
+// address, never what it points to.
 #[expect(unsafe_code)]
 unsafe impl Sync for BuildPtr {}
 

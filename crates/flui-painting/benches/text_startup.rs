@@ -30,7 +30,7 @@ struct Counting;
 
 static LIVE: AtomicIsize = AtomicIsize::new(0);
 
-// `System` upholds `GlobalAlloc`'s contract; this wrapper forwards every call
+// SAFETY: `System` upholds `GlobalAlloc`'s contract; this wrapper forwards every call
 // with the caller's arguments unchanged and adds no invariant of its own. The
 // counter allocates nothing. `realloc` is forwarded rather than left to the
 // default so a grown `Vec` is counted by its size change, not as a second

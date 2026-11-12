@@ -178,13 +178,11 @@
 // call the OS directly (`window::windows`, `input::windows`,
 // `text::windows::tsf`, `display::apple::{macos, ios}`, `preferences::windows`
 // and the like) — and the reading of the Windows build in `version::gate` is
-// one item-level `expect`. A platform file's pure half forbids it. The Win32
-// files are fully SAFETY-documented — every `unsafe` block there carries a
-// `// SAFETY:` comment (or, for `unsafe fn`, a `# Safety` rustdoc section)
-// stating the invariant that makes it sound. The AppKit, Android and web files
-// are NOT yet at that bar; see the per-crate documentation coverage tracked in
-// the root `Cargo.toml`'s `undocumented_unsafe_blocks` note — do not restate
-// "every block" as a crate-wide claim until that note says so too.
+// one item-level `expect`. A platform file's pure half forbids it. Every
+// `unsafe` block and `unsafe impl` carries a `// SAFETY:` comment stating the
+// invariant that makes it sound, and every `unsafe fn` a `# Safety` rustdoc
+// section; the workspace's `clippy::undocumented_unsafe_blocks` holds the
+// first on every target.
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 

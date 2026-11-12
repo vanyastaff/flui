@@ -63,6 +63,8 @@ fn cloning_waker(action: impl Fn() + Send + Sync + 'static) -> Waker {
         // hook succeeds, so a hook panic cannot strand an unpublished clone.
         let executor = unsafe { &*data.cast::<CloneExecutor>() };
         (executor.0)();
+        // SAFETY: `data` still points at the live `Arc<CloneExecutor>` the
+        // input waker owns; the strong reference taken here is the clone's.
         unsafe { Arc::increment_strong_count(data.cast::<CloneExecutor>()) };
         RawWaker::new(data, &VTABLE)
     }

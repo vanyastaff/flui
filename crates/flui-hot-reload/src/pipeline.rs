@@ -36,6 +36,8 @@ fn log(msg: &str) {
     {
         let tag = c"PluginPipeline";
         let msg_c = std::ffi::CString::new(msg).unwrap_or_default();
+        // SAFETY: `tag` and `msg_c` are NUL-terminated C strings that outlive
+        // the call; liblog copies both before returning and retains neither.
         #[expect(unsafe_code)]
         unsafe {
             android_log_sys::__android_log_write(

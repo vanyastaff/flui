@@ -205,12 +205,12 @@ mod cases {
         }
 
         fn finish(server: Child, display: &str) -> Self {
-            // SAFETY: the harness has started no thread yet; nothing else
-            // reads or writes the environment while it is set.
             #[expect(
                 unsafe_code,
                 reason = "the environment is set before any thread exists"
             )]
+            // SAFETY: the harness has started no thread yet; nothing else
+            // reads or writes the environment while it is set.
             unsafe {
                 std::env::set_var("DISPLAY", display);
                 std::env::remove_var("WAYLAND_DISPLAY");

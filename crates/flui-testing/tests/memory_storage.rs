@@ -32,6 +32,8 @@ fn cloning_waker(action: impl Fn() + Send + Sync + 'static) -> Waker {
         // returns, so a panicking action leaves no unowned reference.
         let executor = unsafe { &*data.cast::<CloneExecutor>() };
         (executor.0)();
+        // SAFETY: `data` still points at the live `Arc<CloneExecutor>` the
+        // input waker owns; the strong reference taken here is the clone's.
         unsafe { Arc::increment_strong_count(data.cast::<CloneExecutor>()) };
         RawWaker::new(data, &VTABLE)
     }
