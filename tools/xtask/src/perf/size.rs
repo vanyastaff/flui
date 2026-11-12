@@ -54,6 +54,26 @@ const GRAPH_TARGETS: [(&str, &str); 5] = [
 
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
 
+/// The first of the changed `files` (repo-relative, `/`-separated) that can
+/// move a counter past what a code change does: a manifest or the lock (the
+/// graph, the features, the release profile), the toolchain or cargo's
+/// configuration, the measured example, the baseline, or this check. A pull
+/// request whose diff holds one runs the `size` job (ADR-0303 §9); `main` runs
+/// it on every push, which catches the slow drift of code changes.
+pub(crate) fn changed_input(files: &[String]) -> Option<&str> {
+    let example = format!("examples/{EXAMPLE}.rs");
+    files.iter().map(String::as_str).find(|f| {
+        *f == "Cargo.lock"
+            || *f == "Cargo.toml"
+            || f.ends_with("/Cargo.toml")
+            || *f == "rust-toolchain.toml"
+            || f.starts_with(".cargo/")
+            || *f == BASELINE
+            || *f == example
+            || *f == "tools/xtask/src/perf/size.rs"
+    })
+}
+
 const BASELINE_HEADER: &str = "# Written by `cargo xtask perf --size --bless`; Linux x86_64.\n\
 # Package counts of the facade's default graph and the counter example's sizes.\n";
 
@@ -384,6 +404,28 @@ mod tests {
             assert_eq!(compare(&base, &current), expected, "{case}");
         }
         assert!(!past_tolerance(u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn size_inputs_table() {
+        let cases: [(&[&str], Option<&str>); 9] = [
+            (&["Cargo.lock"], Some("Cargo.lock")),
+            (&["Cargo.toml"], Some("Cargo.toml")),
+            (
+                &["src/lib.rs", "crates/flui-app/Cargo.toml"],
+                Some("crates/flui-app/Cargo.toml"),
+            ),
+            (&["rust-toolchain.toml"], Some("rust-toolchain.toml")),
+            (&[".cargo/config.toml"], Some(".cargo/config.toml")),
+            (&["perf/size.toml"], Some("perf/size.toml")),
+            (&["examples/counter.rs"], Some("examples/counter.rs")),
+            (&["examples/counter_extra.rs", "docs/Cargo.toml.md"], None),
+            (&["crates/flui-view/src/lib.rs"], None),
+        ];
+        for (files, expected) in cases {
+            let files: Vec<String> = files.iter().map(|f| (*f).to_owned()).collect();
+            assert_eq!(changed_input(&files), expected, "{files:?}");
+        }
     }
 
     #[test]

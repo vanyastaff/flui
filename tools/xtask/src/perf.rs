@@ -36,7 +36,7 @@ use anyhow::{Context, bail};
 use crate::util::{self, repo_root};
 
 mod instructions;
-mod size;
+pub(crate) mod size;
 
 /// The package whose `perf` test target holds the scenarios.
 const PACKAGE: &str = "flui-widgets";

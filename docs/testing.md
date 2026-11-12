@@ -588,11 +588,13 @@ does. A package count has to stay at or under its baseline, so a change
 that adds a package to an application's default graph runs `perf --size
 --bless` in the same PR and says why. A binary grows with every change to the
 code it links, so a size fails only past 2% over its baseline, and `--bless` on
-a fresh `main` moves it. The baseline is Linux x86_64's.
+a fresh `main` moves it. The baseline is Linux x86_64's. The `size` job runs the
+builds on `main` and on a pull request whose diff reaches a manifest, `Cargo.lock`,
+the toolchain, `.cargo/`, the counter example or the baseline.
 
 ```bash
 cargo xtask perf --size --graph --check   # the package counts alone, no build (the `deps` job, every PR)
-cargo xtask perf --size --check           # counts and both release builds (`perf-gates`, `full` lane)
+cargo xtask perf --size --check           # counts and both release builds (the `size` job)
 cargo xtask perf --size --bless           # rewrite perf/size.toml from this run
 ```
 
