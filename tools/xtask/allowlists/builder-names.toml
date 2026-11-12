@@ -53,30 +53,6 @@ method = "with_env_var"
 reason = "written before the rule had a gate; its crate's rename removes it"
 
 [[allow]]
-crate = "flui-native"
-type = "DisplaySpec"
-method = "with_color"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-native"
-type = "DisplaySpec"
-method = "with_persistent_key"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-native"
-type = "DisplaySpec"
-method = "with_refresh_period"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-native"
-type = "DisplaySpec"
-method = "with_scale_factor"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
 crate = "flui-rendering"
 type = "SliverConstraintsBuilder"
 method = "with_axis_direction"
