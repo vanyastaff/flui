@@ -1097,8 +1097,10 @@ reaches what the check reads. `plan` decides this in its outputs, and each job i
   these:
   - a file that a tracked `*.stderr` cites in a `--> path` or `::: path` line (the fixture, or the declaration of
     a type the compiler names);
-  - a file beside an expectation;
+  - a file in a case directory: beside an expectation, or in a directory a runner's `pass` or
+    `compile_fail` path names;
   - a runner of the suites;
+  - the source of a workspace procedural macro (its diagnostics are copied into expectations);
   - the toolchain file, `Cargo.lock` or `.config/nextest.toml`.
 
   The cited files are read from the expectations on each run.

@@ -79,32 +79,102 @@ fn package_dir(root: &Path, path: &str) -> String {
     String::new()
 }
 
-/// The first of `files` that can change a trybuild expectation, or `None`:
-/// a file an expectation cites, a file beside an expectation (its case, or a
-/// case or expectation added there), a runner of the suites, or an input of
-/// every expectation ([`EVERY_EXPECTATION`]).
+/// The first of `files` that can change what a trybuild suite reports, or
+/// `None`:
+///
+/// - a file an expectation cites;
+/// - a file in a case directory: beside an expectation, or named by a
+///   runner's `pass` or `compile_fail` path (a passing case has no
+///   expectation, and runs its assertions);
+/// - a runner of the suites;
+/// - the source of a workspace procedural macro, whose diagnostics point at
+///   the invocation and are copied into the expectations;
+/// - an input of every expectation ([`EVERY_EXPECTATION`]).
 pub(super) fn changed_input<'f>(
     repo: &Repo,
     files: &'f [String],
 ) -> anyhow::Result<Option<&'f str>> {
     let listing = repo.git(&["ls-files", "-z", "--", "*.stderr"])?;
-    let expectations: Vec<&str> = listing.split('\0').filter(|f| !f.is_empty()).collect();
     let mut cited = BTreeSet::new();
     let mut case_dirs = BTreeSet::new();
-    for expectation in &expectations {
+    for expectation in listing.split('\0').filter(|f| !f.is_empty()) {
         let Ok(text) = std::fs::read_to_string(repo.root.join(expectation)) else {
             continue;
         };
         cited.extend(cited_paths(&text, &package_dir(&repo.root, expectation)));
-        case_dirs.insert(parent(expectation));
+        case_dirs.insert(parent(expectation).to_owned());
     }
-    let found = files.iter().map(String::as_str).find(|&f| {
+    let runners = repo.git(&["grep", "-l", "-z", "-F", RUNNER_MARK, "--", "*.rs"])?;
+    for runner in runners.split('\0').filter(|f| in_tests(f)) {
+        let Ok(text) = std::fs::read_to_string(repo.root.join(runner)) else {
+            continue;
+        };
+        let package = package_dir(&repo.root, runner);
+        case_dirs.extend(case_paths(&text).map(|case| join(&package, parent(case))));
+    }
+    if let Some(found) = files.iter().map(String::as_str).find(|&f| {
         EVERY_EXPECTATION.contains(&f)
             || cited.contains(f)
             || case_dirs.contains(parent(f))
             || is_runner(&repo.root, f)
-    });
-    Ok(found)
+    }) {
+        return Ok(Some(found));
+    }
+    // only a file a package owns can be a macro's source: documentation and
+    // tooling alone never read the workspace's metadata
+    if !files.iter().any(|f| is_rust(f)) {
+        return Ok(None);
+    }
+    let ws = repo.workspace()?;
+    let macro_crates: BTreeSet<&str> = ws
+        .packages
+        .values()
+        .filter(|pkg| {
+            pkg.targets
+                .iter()
+                .any(|t| t.kind.iter().any(|k| k == "proc-macro"))
+        })
+        .map(|pkg| pkg.name.as_str())
+        .collect();
+    Ok(files.iter().map(String::as_str).find(|f| {
+        is_rust(f)
+            && !in_tests(f)
+            && ws
+                .owning_package(f)
+                .is_some_and(|pkg| macro_crates.contains(pkg))
+    }))
+}
+
+/// The case paths a runner hands trybuild: the string literal of each
+/// `.pass("…")` and `.compile_fail("…")` call, a file or a glob, relative to
+/// the runner's package.
+fn case_paths(runner: &str) -> impl Iterator<Item = &str> {
+    [".pass(\"", ".compile_fail(\""]
+        .into_iter()
+        .flat_map(move |call| {
+            runner
+                .match_indices(call)
+                .filter_map(move |(at, _)| runner[at + call.len()..].split('"').next())
+        })
+}
+
+/// `dir/path`, or `path` when `dir` is the root.
+fn join(dir: &str, path: &str) -> String {
+    match (dir.is_empty(), path.is_empty()) {
+        (true, _) => path.to_owned(),
+        (false, true) => dir.to_owned(),
+        (false, false) => format!("{dir}/{path}"),
+    }
+}
+
+/// Whether `path` is a Rust source file.
+fn is_rust(path: &str) -> bool {
+    Path::new(path).extension().is_some_and(|e| e == "rs")
+}
+
+/// Whether `path` sits under a `tests/` directory.
+fn in_tests(path: &str) -> bool {
+    path.starts_with("tests/") || path.contains("/tests/")
 }
 
 /// `path`'s directory, `""` at the root.
@@ -116,9 +186,8 @@ fn parent(path: &str) -> &str {
 /// under a `tests/` directory that names [`RUNNER_MARK`]; `false` when it is
 /// gone (a deleted runner changes no expectation it no longer runs).
 fn is_runner(root: &Path, path: &str) -> bool {
-    let in_tests = path.starts_with("tests/") || path.contains("/tests/");
-    in_tests
-        && Path::new(path).extension().is_some_and(|e| e == "rs")
+    in_tests(path)
+        && is_rust(path)
         && std::fs::read_to_string(root.join(path)).is_ok_and(|text| text.contains(RUNNER_MARK))
 }
 
@@ -173,6 +242,11 @@ note: required because it appears within the type `X`
             "crates/flui-widgets/src/widget_state.rs",
             // the declaration flui-runtime's privacy case cites only as `::: src/…`
             "crates/flui-runtime/src/ui_runtime/frame.rs",
+            // a passing case, which no expectation sits beside, and a new one
+            "crates/flui-widgets/tests/routable_ui/pass/basic.rs",
+            "crates/flui-widgets/tests/routable_ui/pass/a_new_case.rs",
+            // the derive whose error text `routable_ui/fail/*.stderr` copies
+            "crates/flui-macros/src/derive_routable.rs",
             "tests/ui/thread_boundary/owner_values_stay_on_their_thread.stderr",
             "tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs",
             "tests/ui/thread_boundary/a_new_case.rs",

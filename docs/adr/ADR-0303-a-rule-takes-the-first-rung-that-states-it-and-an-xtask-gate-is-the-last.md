@@ -198,11 +198,18 @@ of its own.
   of each type or item the compiler names. `plan` reads the tracked `*.stderr` files on each run
   (`change_scope::diagnostics`) and sets `trybuild_required` when the diff touches one of these:
   - a cited file;
-  - a file beside an expectation (a case, or a new case);
+  - a file in a case directory: beside an expectation, or in a directory a runner's `pass` or
+    `compile_fail` path names (a passing case has no expectation and runs its assertions);
   - a runner of the suites;
+  - the source of a workspace procedural macro, whose diagnostics point at the invocation and
+    are copied into the expectations;
   - the toolchain file, `Cargo.lock` or the nextest groups.
 
   No list of these files is stored, so there is none to keep in step with the expectations.
+
+  A passing case also reads the public API of every crate it uses, which no line names. A change
+  to that API that breaks only a passing case still turns main red; making every source of those
+  crates an input would run the suites on most pull requests.
 - **The narrow form runs over the changed crates.** `feature-scope` runs feature-matrix's
   `cargo hack clippy --each-feature` over the changed crates that have features, and over every
   crate whose manifest changed (`hack_args`). It does this in a pull request's full mode too, when

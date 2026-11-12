@@ -475,7 +475,7 @@ impl Workspace {
 
     /// The package owning `path`: the longest matching prefix wins. One of the
     /// [`COMPILED_DOCS`] is owned by the package that reads it.
-    fn owning_package(&self, path: &str) -> Option<&str> {
+    pub(super) fn owning_package(&self, path: &str) -> Option<&str> {
         let path = compiled_doc_reader(path).unwrap_or(path);
         let mut best: Option<(&str, usize)> = None;
         for (name, prefixes) in &self.owned {
