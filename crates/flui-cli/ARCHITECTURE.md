@@ -143,9 +143,15 @@ validated before output creation.
 
 The hot-reload template adds the official package `flui-hot-reload` beside the
 facade in each of its three crates: the facade names no official package
-(ADR-0311 §6). The types and worker crates take its `app-plugin` feature, the
-host `app-plugin` and `host-hook`, and the host installs its `WorkerReloadHook`
-with `AppConfig::dev_reload`. A local package dependency points at
+(ADR-0311 §6). Every crate takes its `app-plugin` feature. The host has two
+features of its own: `linked`, the default, links the logic crate (built as
+`cdylib` and `rlib`) and calls its build function directly, so a release build
+loads no library and installs no hook; `reload` turns on the package's
+`host-hook`, and the host then installs `WorkerReloadHook` with
+`AppConfig::dev_reload`. `flui.toml` names `reload` as `[hot_reload]
+reload_feature`, and `flui run` builds and runs the host with it and with its
+default features off, so the running host never links the logic crate it
+reloads. A local package dependency points at
 `packages/flui-hot-reload` in the checkout, which `--local` validates. Sibling
 app crates retain relative dependencies. The worker deliberately receives the
 full facade dependency graph: this increases its compile graph but keeps

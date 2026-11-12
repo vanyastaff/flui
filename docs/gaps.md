@@ -554,14 +554,6 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The likely shape on Android is the desktop's worker path, pushed to the device as the scene plugin is; on the Web, which has no `dlopen`, a code patcher (ADR-0311 §7).
 - The check is a widget edit on an Android device and in a browser that reloads with a stateful counter's value kept.
 
-### A release build of a hot-reload project ships the reload machinery
-
-> **Environments:** Windows, macOS, Linux, iOS · **Who it hurts:** Developers who ship the project `flui create --hot-reload` generated · **Parity:** none (build graph)
-
-- The generated host installs `WorkerReloadHook` in every profile, and its types crate resolves the build function through the worker registry (`get_worker_build_ptr`), so a release build still loads the worker `cdylib` with `dlopen`, starts the artifact watcher and needs the library beside the binary (`crates/flui-cli/src/templates/hot_reload.rs`). An ordinary template names no reload package.
-- The shape that closes it: in a release build the host links the worker crate and calls its build function directly, and installs no hook, so the loader and the watcher are dead code the linker drops. `perf --size` then holds the release size of the generated host beside the counter's.
-- The check is a release build of a generated project that runs with no worker library present, and a `perf --size` row that measures it.
-
 ### Two versions of zbus on Linux
 
 > **Environments:** Linux · **Who it hurts:** Every Linux application, which compiles both D-Bus stacks · **Parity:** none (build graph)

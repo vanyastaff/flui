@@ -73,6 +73,20 @@ GestureArenaScope"*. Building both packages together makes cargo unify the graph
 once, so both binaries link one instance and the `TypeId`s agree. The reload path
 rebuilds both for the same reason (the host is unchanged and is not relinked).
 
+### A release build links the logic crate
+
+Reload is a development build only. The generated host has two features:
+`linked`, its default, links the logic crate (`crate-type = ["cdylib", "rlib"]`)
+and calls its build function directly, so `flui build --release` and
+`cargo build --release` load no library, install no hook and need no library
+beside the binary; `reload` turns on `flui-hot-reload/host-hook` and installs
+`WorkerReloadHook`. `flui run` builds and runs the host with
+`--no-default-features --features <host>/reload`, the feature that `flui.toml`
+names in `[hot_reload] reload_feature`, so the running host links no copy of the
+logic crate and is not relinked when it changes (on Windows the running
+executable is locked). `cargo xtask perf --size` holds the release size of the
+generated host (`hot_reload_host_release_bytes`).
+
 ### How the host drives the reload
 
 `flui-app` names no reload crate. The host installs the worker driver on its
@@ -262,7 +276,7 @@ For a full `flui-app` desktop runner, the same `HotReloadDriver` can wrap a plug
 - **Immediate-mode friendly:** scene plugins rebuild each frame path — code changes show up on next reload without stale retained state.
 - **Sanctioned `dyn` boundary:** `flui_hot_reload::dynlib` is the only approved dynamic loading surface.
 - **No WASM layer 2:** `HotReloadDriver` is `#[cfg(not(target_arch = "wasm32"))]`.
-- **Dev-only:** hot-reload is not shipped in release builds; use static linking for production plugins.
+- **Dev-only:** hot-reload is not shipped in release builds: the generated host links the logic crate unless it is built with its `reload` feature (see "A release build links the logic crate").
 
 ## See Also
 

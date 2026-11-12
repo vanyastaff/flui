@@ -224,7 +224,10 @@ user code:
   that the facade names no official package (ADR-0088 §6). An application adds the package as a
   direct dependency. `flui create --hot-reload` generates the host, worker and types crates, each
   of which names it directly: that split is how the package reloads, so the template has no
-  build without it, and the template leaves with the dlopen path (§7).
+  build without it, and the template leaves with the dlopen path (§7). The host turns on
+  `host-hook` only through its `reload` feature, which `flui run` builds with; its default
+  `linked` build links the logic crate and installs no hook, so a release build carries no
+  loader or watcher.
 - The package reaches the application only through the hooks of §1 and §3.
 
 §7. **The dlopen path is the package's implementation, and a code patcher is its exit.**

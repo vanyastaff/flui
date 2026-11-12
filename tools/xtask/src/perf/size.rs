@@ -12,10 +12,14 @@
 //! - `counter_release_bytes`: the release binary of `examples/counter.rs` on
 //!   the host, with the workspace's release profile and the symbol table
 //!   stripped, as the release profile `flui create` writes ships it.
+//! - `hot_reload_host_release_bytes`: the host of a `flui create --hot-reload`
+//!   project built in release with the profile the template writes, as `flui
+//!   build` ships it: its default build links the logic crate and installs no
+//!   reload hook, so the reload machinery stays out of the binary.
 //! - `counter_wasm_bytes`: the same example built for `wasm32-unknown-unknown`,
 //!   before `wasm-opt`.
 //!
-//! A binary's size moves with every change to the code it links, so the two
+//! A binary's size moves with every change to the code it links, so the
 //! byte counters fail only past [`BYTES_TOLERANCE_PERCENT`] over the baseline;
 //! growth inside it prints and passes, and `--bless` on `main` moves the
 //! baseline. A count or size that fell prints as an improvement and passes.
@@ -44,6 +48,9 @@ const SCENARIO: &str = "size";
 /// The example whose binary is measured: the `flui create` counter's tree.
 const EXAMPLE: &str = "counter";
 
+/// The name of the `flui create --hot-reload` project whose host is measured.
+const HOT_RELOAD_PROJECT: &str = "perf-reload";
+
 /// How far a byte counter may exceed its baseline before it fails, in percent.
 pub(super) const BYTES_TOLERANCE_PERCENT: u64 = 2;
 
@@ -61,9 +68,10 @@ const WASM_TARGET: &str = "wasm32-unknown-unknown";
 /// The first of the changed `files` (repo-relative, `/`-separated) that can
 /// move a counter past what a code change does: a manifest or the lock (the
 /// graph, the features, the release profile), the toolchain or cargo's
-/// configuration, the measured example, the baseline, or this check. A pull
-/// request whose diff holds one runs the `size` job (ADR-0303 §9); `main` runs
-/// it on every push, which catches the slow drift of code changes.
+/// configuration, the measured example, the templates `flui create` writes, the
+/// baseline, or this check. A pull request whose diff holds one runs the
+/// `size` job (ADR-0303 §9); `main` runs it on every push, which catches the
+/// slow drift of code changes.
 pub(crate) fn changed_input(files: &[String]) -> Option<&str> {
     let example = format!("examples/{EXAMPLE}.rs");
     files.iter().map(String::as_str).find(|f| {
@@ -75,11 +83,13 @@ pub(crate) fn changed_input(files: &[String]) -> Option<&str> {
             || *f == BASELINE
             || *f == example
             || *f == "tools/xtask/src/perf/size.rs"
+            || f.starts_with("crates/flui-cli/src/templates/")
     })
 }
 
 const BASELINE_HEADER: &str = "# Written by `cargo xtask perf --size --bless`; Linux x86_64.\n\
-# Package counts of the facade's default graph and the counter example's sizes.\n";
+# Package counts of the facade's default graph, the counter example's sizes and the\n\
+# release size of a `flui create --hot-reload` host.\n";
 
 /// Which counters a `--size` run measures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +108,10 @@ pub(super) fn run(root: &Path, mode: Mode, measure: Measure) -> anyhow::Result<E
     }
     if measure == Measure::All {
         counters.insert("counter_release_bytes".to_owned(), built_size(root, None)?);
+        counters.insert(
+            "hot_reload_host_release_bytes".to_owned(),
+            hot_reload_host_size(root)?,
+        );
         counters.insert(
             "counter_wasm_bytes".to_owned(),
             built_size(root, Some(WASM_TARGET))?,
@@ -190,11 +204,6 @@ fn distinct_packages(tree: &str) -> usize {
 
 /// Builds the counter example in release for `target` (the host when `None`)
 /// and returns its artifact's size in bytes.
-///
-/// The artifact's path is the one Cargo reports for this build, not one
-/// derived from the target directory: a `CARGO_BUILD_TARGET` or `build.target`
-/// setting moves the output under `target/<triple>/`, and a guessed path would
-/// measure a stale binary from an earlier build.
 fn built_size(root: &Path, target: Option<&str>) -> anyhow::Result<u64> {
     let mut build = cargo(root);
     // What an application from `flui create` ships: its release profile strips
@@ -214,8 +223,82 @@ fn built_size(root: &Path, target: Option<&str>) -> anyhow::Result<u64> {
     if let Some(target) = target {
         build.args(["--target", target]);
     }
+    artifact_size(build, EXAMPLE, cargo_metadata::Target::is_example)
+}
+
+/// Generates a `flui create --hot-reload --local` project from this checkout,
+/// builds its host in release as `flui build` does (the default `linked`
+/// build, which installs no reload hook), and returns the binary's size in
+/// bytes.
+///
+/// The project lives in a temporary directory outside the checkout, so its
+/// own profiles apply and the checkout's `.cargo/` does not; its lock starts
+/// from the checkout's, so it resolves the versions the workspace does.
+fn hot_reload_host_size(root: &Path) -> anyhow::Result<u64> {
+    let parent = tempfile::tempdir().context("creating the hot-reload project's directory")?;
+    let status = cargo(root)
+        .args([
+            "run",
+            "--locked",
+            "--quiet",
+            "--package",
+            "flui-cli",
+            "--bin",
+            "flui",
+            "--",
+            "create",
+            HOT_RELOAD_PROJECT,
+            "--template",
+            "counter",
+            "--org",
+            "com.perf",
+            "--local",
+            "--no-check",
+            "--hot-reload",
+            "--path",
+        ])
+        .arg(parent.path())
+        .status()
+        .context("running flui create --hot-reload")?;
+    if !status.success() {
+        bail!("flui create --hot-reload failed ({status})");
+    }
+    let project = parent.path().join(HOT_RELOAD_PROJECT);
+    std::fs::copy(root.join("Cargo.lock"), project.join("Cargo.lock"))
+        .context("seeding the hot-reload project's lock")?;
+    // Records the project's own members in the copied lock and moves no
+    // registry version, so the build below can be `--locked`.
+    let status = cargo(&project)
+        .args(["update", "--workspace", "--offline", "--quiet"])
+        .status()
+        .context("adding the hot-reload project's members to its lock")?;
+    if !status.success() {
+        bail!("cargo update --workspace in the hot-reload project failed ({status})");
+    }
+    let host = format!("{HOT_RELOAD_PROJECT}-host");
+    let mut build = cargo(&project);
+    build
+        .args(["build", "--locked", "--release", "--package", &host])
+        .arg("--target-dir")
+        .arg(root.join("target").join("perf-size-hot-reload"))
+        .args(["--message-format", "json-render-diagnostics"]);
+    artifact_size(build, &host, cargo_metadata::Target::is_bin)
+}
+
+/// Runs `build` and returns the size of the artifact Cargo reports for the
+/// target named `name` of the kind `is_kind` accepts.
+///
+/// The artifact's path is the one Cargo reports for this build, not one
+/// derived from the target directory: a `CARGO_BUILD_TARGET` or `build.target`
+/// setting moves the output under `target/<triple>/`, and a guessed path would
+/// measure a stale binary from an earlier build.
+fn artifact_size(
+    mut build: Command,
+    name: &str,
+    is_kind: fn(&cargo_metadata::Target) -> bool,
+) -> anyhow::Result<u64> {
     build.stdout(Stdio::piped()).stderr(Stdio::inherit());
-    let mut child = build.spawn().context("building the counter example")?;
+    let mut child = build.spawn().with_context(|| format!("building {name}"))?;
     let stdout = child
         .stdout
         .take()
@@ -224,10 +307,10 @@ fn built_size(root: &Path, target: Option<&str>) -> anyhow::Result<u64> {
     for message in Message::parse_stream(BufReader::new(stdout)) {
         let message = message.context("reading the build's messages")?;
         if let Message::CompilerArtifact(built) = message
-            && built.target.name == EXAMPLE
-            && built.target.is_example()
+            && built.target.name == name
+            && is_kind(&built.target)
         {
-            // Where Cargo reports no `executable` for the example, its module is
+            // Where Cargo reports no `executable` for the target, its module is
             // then the `.wasm` among its files.
             artifact = built
                 .executable
@@ -240,11 +323,12 @@ fn built_size(root: &Path, target: Option<&str>) -> anyhow::Result<u64> {
                 .map(Utf8PathBuf::into_std_path_buf);
         }
     }
-    let status = child.wait().context("building the counter example")?;
+    let status = child.wait().with_context(|| format!("building {name}"))?;
     if !status.success() {
-        bail!("building the counter example failed ({status})");
+        bail!("building {name} failed ({status})");
     }
-    let artifact = artifact.context("the build reported no executable for the counter example")?;
+    let artifact =
+        artifact.with_context(|| format!("the build reported no executable for {name}"))?;
     let metadata =
         std::fs::metadata(&artifact).with_context(|| format!("reading {}", artifact.display()))?;
     Ok(metadata.len())
@@ -425,7 +509,7 @@ mod tests {
 
     #[test]
     fn size_inputs_table() {
-        let cases: [(&[&str], Option<&str>); 9] = [
+        let cases: [(&[&str], Option<&str>); 10] = [
             (&["Cargo.lock"], Some("Cargo.lock")),
             (&["Cargo.toml"], Some("Cargo.toml")),
             (
@@ -436,6 +520,10 @@ mod tests {
             (&[".cargo/config.toml"], Some(".cargo/config.toml")),
             (&["perf/size.toml"], Some("perf/size.toml")),
             (&["examples/counter.rs"], Some("examples/counter.rs")),
+            (
+                &["crates/flui-cli/src/templates/hot_reload.rs"],
+                Some("crates/flui-cli/src/templates/hot_reload.rs"),
+            ),
             (&["examples/counter_extra.rs", "docs/Cargo.toml.md"], None),
             (&["crates/flui-view/src/lib.rs"], None),
         ];

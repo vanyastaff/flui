@@ -116,9 +116,10 @@ conversation:
   `cargo xtask affected` (ADR-0303 §9). `test-trybuild` runs when the diff touches a file a
   `*.stderr` cites, a case, a runner, a procedural macro or a message an expectation copies,
   `feature-scope` runs over the changed crates' features, `size` runs when the diff reaches a
-  manifest, `Cargo.lock`, the toolchain or `perf/size.toml`, and `send-positions` runs when a
-  changed line of the facade's crates names `Send`, `Sync`, a `pub use`/`pub mod` or a listed
-  item. A new main-only job that a pull request can break gets such a row.
+  manifest, `Cargo.lock`, the toolchain, a `flui create` template or `perf/size.toml`, and
+  `send-positions` runs when a changed line of the facade's crates names `Send`, `Sync`, a
+  `pub use`/`pub mod` or a listed item. A new main-only job that a pull request can break gets
+  such a row.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
