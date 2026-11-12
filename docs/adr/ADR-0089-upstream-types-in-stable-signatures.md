@@ -93,7 +93,7 @@ from `flui-geometry`/`flui-types`, `PlatformWindow::resize` and `safe_area_inset
 facade re-exports whole internal crates (`pub use flui_types as types`, `src/lib.rs:150`). Every
 item reachable from a Stable crate's public API therefore carries the Stable promise, whatever
 its crate's `tier-kind`; the `internal` kind's "no promise" covers only items outside that
-closure. The closure gate of §6 is what lists them.
+closure. `api/flui.txt` lists them for the facade ([ADR-0324](ADR-0324-the-facade-api-is-a-committed-snapshot.md)).
 
 ### 2. What may appear
 

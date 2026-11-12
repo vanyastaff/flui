@@ -543,7 +543,7 @@ fn tray_buttons(
                 .label(action.command.label().to_owned())
                 .child(ExcludeSemantics::new().child(Center::new().child(action.content.clone()))),
         )
-        .on_press(move |ctx| {
+        .on_pressed(move |ctx| {
             // Closed first: a command that panics or removes the row leaves
             // no row standing open.
             return_to(&controller, Stop::Closed, motion.get());

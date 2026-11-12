@@ -103,7 +103,7 @@ impl ViewState<RemoveButton> for RemoveButtonState {
         let body = SizedBox::new(view.side, view.side);
         match view.reach {
             Reach::Everyone => RawButton::new(semantics.child(body))
-                .on_press(move |_ctx| removed.set(removed.get() + 1))
+                .on_pressed(move |_ctx| removed.set(removed.get() + 1))
                 .boxed(),
             Reach::AssistiveOnly => semantics
                 .on_click(move |_ctx| removed.set(removed.get() + 1))

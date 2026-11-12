@@ -14,9 +14,9 @@
   on key-down); Enter, Select and Space activate once per press, not on auto-repeat; Escape sends
   `DismissIntent`; Alt+Left and `BrowserBack` (Cmd+[ and `BrowserBack` on macOS and iOS) send
   `BackIntent`.
-- **`RawButton` takes keyboard focus** (`flui-widgets`): with `on_press` it is a Tab stop, answers
+- **`RawButton` takes keyboard focus** (`flui-widgets`): with `on_pressed` it is a Tab stop, answers
   `ActivateIntent` and `ButtonActivateIntent` with its press, consumes Space's key-down and draws a
-  `FocusRing`; without `on_press` it takes no focus and an activation key bubbles past it.
+  `FocusRing`; without `on_pressed` it takes no focus and an activation key bubbles past it.
 - **`Focus` requests from assistive technology carry `FocusCause::Assistive`** (`flui-widgets`), so
   focus moved by a screen reader is shown like focus moved by Tab.
 

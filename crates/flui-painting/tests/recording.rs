@@ -84,6 +84,44 @@ pub(crate) fn isolated_append_preserves_bounds_and_scopes_the_run() {
     assert_eq!(combined.bounds(), Some(rect));
 }
 
+/// A run that only draws changes no replay state, so it is spliced as it
+/// stands; a run that clips keeps the scope that ends its clip before the
+/// next run.
+pub(crate) fn isolated_append_scopes_only_a_run_that_changes_replay_state() {
+    let first = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
+    let clip = Rect::from_xywh(20.0, 0.0, 10.0, 10.0);
+    let last = Rect::from_xywh(40.0, 0.0, 10.0, 10.0);
+    let draws = |rect| {
+        flui_painting::testing::record(move |canvas| {
+            canvas.draw_rect(rect, &Paint::fill(Color::RED));
+        })
+    };
+    let clips = flui_painting::testing::record(|canvas| {
+        canvas.clip_rect(clip);
+        canvas.draw_rect(clip, &Paint::fill(Color::BLUE));
+    });
+    let mut combined = DisplayList::new();
+    combined.append_isolated(draws(first));
+    combined.append_isolated(clips);
+    combined.append_isolated(draws(last));
+    let ops: Vec<&DrawOp> = combined.iter().map(|c| &c.op).collect();
+    assert!(
+        matches!(
+            ops.as_slice(),
+            [
+                DrawOp::Rect { .. },
+                DrawOp::Save,
+                DrawOp::ClipRect { .. },
+                DrawOp::Rect { .. },
+                DrawOp::Restore,
+                DrawOp::Rect { .. },
+            ]
+        ),
+        "{ops:#?}"
+    );
+    assert_eq!(combined.bounds(), Some(first.union(&last)));
+}
+
 fn rect_paint(cmd: &DrawCommand) -> &Arc<Paint> {
     match &cmd.op {
         DrawOp::Rect { paint, .. } => paint,
