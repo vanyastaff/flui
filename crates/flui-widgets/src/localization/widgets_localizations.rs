@@ -21,7 +21,7 @@ use flui_painting::typography::TextDirection;
 ///
 /// [`LocalizationsDelegate`]: crate::LocalizationsDelegate
 /// [`Localizations::of`]: crate::Localizations::of
-pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
+pub trait WidgetsLocalizations: Any + fmt::Debug {
     /// The reading direction for text in this locale.
     fn text_direction(&self) -> TextDirection;
 

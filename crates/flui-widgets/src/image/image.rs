@@ -1,6 +1,8 @@
 //! [`Image`] widget — displays a bitmap image.
 
 use std::path::PathBuf;
+use std::rc::Rc;
+#[cfg(feature = "asset-images")]
 use std::sync::Arc;
 
 use flui_foundation::geometry::{Rect, Size};
@@ -106,7 +108,7 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 /// [`height`]: Image::height
 #[derive(Clone, Debug, StatefulView)]
 pub struct Image {
-    provider: Arc<dyn ImageProvider + Send + Sync>,
+    provider: Rc<dyn ImageProvider>,
     placement: ImagePlacement,
     width: Option<f64>,
     height: Option<f64>,
@@ -122,12 +124,13 @@ impl Image {
     /// no forced width or height.
     ///
     /// `provider` must be `'static` because the widget is stored in the
-    /// element tree; it must be `Send + Sync` (implied by [`ImageProvider`]'s
-    /// supertraits) because the tree may be accessed from multiple threads.
+    /// element tree. It carries no thread bound: the owner thread alone holds
+    /// and calls it, and its reads run as jobs that own what they read
+    /// (ADR-0323 §4).
     #[track_caller]
     pub fn new(provider: impl ImageProvider + 'static) -> Self {
         Self {
-            provider: Arc::new(provider),
+            provider: Rc::new(provider),
             placement: DEFAULT_PLACEMENT,
             width: None,
             height: None,
@@ -339,7 +342,7 @@ impl StatefulView for Image {
         // rebuilds reach the fresh view through `did_update_view` / `build`.
         ImageState {
             resolver: super::resolve::ImageResolver::new(
-                Arc::clone(&self.provider),
+                Rc::clone(&self.provider),
                 self.gapless_playback,
             ),
         }
@@ -377,7 +380,7 @@ impl ViewState<Image> for ImageState {
     /// Re-resolve when the cache key changed.
     fn did_update_view(&mut self, _old_view: &Image, new_view: &Image) {
         self.resolver
-            .did_update(Arc::clone(&new_view.provider), new_view.gapless_playback);
+            .did_update(Rc::clone(&new_view.provider), new_view.gapless_playback);
     }
 
     /// Cancel the load this widget owns.
