@@ -28,7 +28,11 @@ struct Rig {
 
 fn rig() -> Rig {
     let backend = ScriptedSlots::new();
-    let (executor, sender) = RasterExecutor::new(backend.clone(), || {});
+    let (executor, sender) = RasterExecutor::new(
+        backend.clone(),
+        Arc::new(flui_foundation::SystemClock),
+        || {},
+    );
     let display: Arc<dyn DisplayConnection> = Arc::new(FakeDisplay);
     Rig {
         executor,
@@ -418,6 +422,16 @@ impl flui_engine::SlotBackend for RestoresDuringRender {
     fn reclaim(&mut self, level: flui_foundation::memory::MemoryPressureLevel) {
         self.inner.reclaim(level);
     }
+
+    fn device_lost(&self) -> bool {
+        self.inner.device_lost()
+    }
+
+    fn rebuild_device(
+        &mut self,
+    ) -> flui_engine::EngineResult<Vec<(flui_engine::SlotId, flui_engine::EngineError)>> {
+        self.inner.rebuild_device()
+    }
 }
 
 /// A restore sent from inside a frame that then loses its surface carries the
@@ -436,7 +450,8 @@ fn a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation() {
         inner: inner.clone(),
         restore: std::rc::Rc::clone(&restore),
     };
-    let (executor, sender) = RasterExecutor::new(backend, || {});
+    let (executor, sender) =
+        RasterExecutor::new(backend, Arc::new(flui_foundation::SystemClock), || {});
     let display: Arc<dyn DisplayConnection> = Arc::new(FakeDisplay);
     let factory = noop_surface_factory(display);
     let surface = || {

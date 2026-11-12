@@ -7,18 +7,19 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
 use flui_engine::{
-    EngineError, ExecutorHealth, PresentDisposition, RasterCommand, RasterExecutor,
+    DeviceHealth, EngineError, ExecutorHealth, PresentDisposition, RasterCommand, RasterExecutor,
     RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure,
     SlotId, SlotPhase, SlotSettlement, SlotTarget, SlotVisibility,
     raster_executor::LIFECYCLE_CAPACITY,
     testing::{ScriptedAnswer, ScriptedSlots, SlotCall},
 };
 use flui_foundation::{
-    FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId,
-    SurfaceGeneration, UiRuntimeId,
+    FrameEpoch, FrameStamp, GpuResourceGeneration, ManualClock, MonotonicClock,
+    PresentationAddress, PresentationId, SurfaceGeneration, UiRuntimeId,
     geometry::{DeviceSize, Rect},
     memory::MemoryPressureLevel,
     panic::FirstPanic,
@@ -35,20 +36,25 @@ struct Rig {
     sender: RasterSender,
     backend: ScriptedSlots,
     wakes: Arc<AtomicUsize>,
+    /// The clock the device's rebuilds are paced on.
+    clock: ManualClock,
 }
 
 fn rig() -> Rig {
     let backend = ScriptedSlots::new();
     let wakes = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&wakes);
-    let (executor, sender) = RasterExecutor::new(backend.clone(), move || {
-        counted.fetch_add(1, Ordering::SeqCst);
-    });
+    let clock = ManualClock::new();
+    let (executor, sender) =
+        RasterExecutor::new(backend.clone(), Arc::new(clock.clone()), move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        });
     Rig {
         executor,
         sender,
         backend,
         wakes,
+        clock,
     }
 }
 
@@ -458,17 +464,21 @@ fn a_command_sent_during_the_stop_comes_back_gone() {
     let owner: std::rc::Rc<std::cell::OnceCell<RasterSender>> = std::rc::Rc::default();
     let answers: std::rc::Rc<RefCell<Vec<Result<SendReceipt, RasterSendError>>>> =
         std::rc::Rc::default();
-    let (mut executor, sender) = RasterExecutor::new(ScriptedSlots::new(), {
-        let owner = std::rc::Rc::clone(&owner);
-        let answers = std::rc::Rc::clone(&answers);
-        move || {
-            let sender = owner.get().expect("the owner's sender is set");
-            let slot = sender.mint_slot().expect("a slot id is left");
-            answers
-                .borrow_mut()
-                .push(sender.send(attach_command(slot, address(9))));
-        }
-    });
+    let (mut executor, sender) = RasterExecutor::new(
+        ScriptedSlots::new(),
+        Arc::new(flui_foundation::SystemClock),
+        {
+            let owner = std::rc::Rc::clone(&owner);
+            let answers = std::rc::Rc::clone(&answers);
+            move || {
+                let sender = owner.get().expect("the owner's sender is set");
+                let slot = sender.mint_slot().expect("a slot id is left");
+                answers
+                    .borrow_mut()
+                    .push(sender.send(attach_command(slot, address(9))));
+            }
+        },
+    );
     let queued = sender.mint_slot().expect("a slot id is left");
     let SendReceipt::Configured(generation) = sender
         .send(attach_command(queued, address(1)))
@@ -896,17 +906,22 @@ fn a_panicking_host_wake_is_resumed_after_the_turn_committed() {
     let backend = ScriptedSlots::new();
     let wakes = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&wakes);
-    let (executor, sender) = RasterExecutor::new(backend.clone(), move || {
-        assert!(
-            counted.fetch_add(1, Ordering::SeqCst) != 0,
-            "the first wake panics"
-        );
-    });
+    let (executor, sender) = RasterExecutor::new(
+        backend.clone(),
+        Arc::new(flui_foundation::SystemClock),
+        move || {
+            assert!(
+                counted.fetch_add(1, Ordering::SeqCst) != 0,
+                "the first wake panics"
+            );
+        },
+    );
     let mut rig = Rig {
         executor,
         sender,
         backend,
         wakes,
+        clock: ManualClock::new(),
     };
     let at = attached(&mut rig, 1);
     assert_eq!(
@@ -1237,6 +1252,16 @@ impl flui_engine::SlotBackend for PanicsAtAttach {
     fn detach(&mut self, _: SlotId) {}
 
     fn reclaim(&mut self, _: MemoryPressureLevel) {}
+
+    fn device_lost(&self) -> bool {
+        false
+    }
+
+    fn rebuild_device(
+        &mut self,
+    ) -> flui_engine::EngineResult<Vec<(SlotId, flui_engine::EngineError)>> {
+        Ok(Vec::new())
+    }
 }
 
 /// A panic payload the owner never took is dropped when its detached slot's
@@ -1244,7 +1269,11 @@ impl flui_engine::SlotBackend for PanicsAtAttach {
 /// can mint through the same sender.
 #[test]
 fn an_untaken_panic_payload_is_dropped_outside_the_slot_table() {
-    let (mut executor, sender) = RasterExecutor::new(PanicsAtAttach, || {});
+    let (mut executor, sender) = RasterExecutor::new(
+        PanicsAtAttach,
+        Arc::new(flui_foundation::SystemClock),
+        || {},
+    );
     let slot = sender.mint_slot().expect("a slot id is left");
     let _ = sender
         .send(attach_command(slot, address(1)))
@@ -1452,5 +1481,264 @@ fn a_surface_loss_keeps_the_barrier_of_a_refused_size() {
         verdicts(&rig.sender, at.slot),
         [(2, RasterVerdict::SurfaceStale)],
         "no frame renders laid out for a size the slot does not have"
+    );
+}
+
+/// The slot's frame as the owner stamps it now: with the generation its
+/// record requires.
+fn restamped(rig: &Rig, at: Attached) -> Attached {
+    Attached {
+        generation: rig
+            .sender
+            .record(at.slot)
+            .expect("the owner holds the slot")
+            .required_generation,
+        ..at
+    }
+}
+
+fn rebuilds(backend: &ScriptedSlots) -> usize {
+    backend
+        .calls()
+        .iter()
+        .filter(|call| **call == SlotCall::RebuildDevice)
+        .count()
+}
+
+/// A rebuilt device refuses every frame stamped before it on its generation,
+/// as a restore does, and the next frame repaints in full.
+#[test]
+fn a_device_rebuild_refuses_the_frames_stamped_before_it_and_redraws_in_full() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(1, RasterVerdict::Presented)]
+    );
+    let wakes = rig.wakes.load(Ordering::SeqCst);
+
+    rig.backend.lose_device();
+    let _ = rig.sender.send(frame(at, 2)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(rebuilds(&rig.backend), 1, "the first rebuild runs at once");
+    assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(2, RasterVerdict::SurfaceStale)],
+        "a frame stamped before the rebuild is refused"
+    );
+    assert!(
+        rig.wakes.load(Ordering::SeqCst) > wakes,
+        "the owner is woken"
+    );
+
+    let _ = rig
+        .sender
+        .send(frame(restamped(&rig, at), 3))
+        .expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(3, RasterVerdict::Presented)]
+    );
+    assert_eq!(
+        rig.backend.renders().last(),
+        Some(&(
+            at.slot,
+            DamageRegion::Full(FullReason::Resync(ResyncReason::RasterReset))
+        )),
+        "the first frame on the new device repaints in full"
+    );
+}
+
+/// A size still pending when the device is rebuilt keeps its barrier: frames
+/// laid out for a size the slot does not have are not rendered.
+#[test]
+fn a_device_rebuild_keeps_the_barrier_of_a_refused_size() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    let _ = rig
+        .sender
+        .send(RasterCommand::Configure {
+            slot: at.slot,
+            change: SlotChange::Size(DeviceSize::new(1 << 20, 16)),
+        })
+        .expect("accepted");
+    rig.backend
+        .script_resize(ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
+            width: 1 << 20,
+            height: 16,
+        }));
+    rig.backend.lose_device();
+    let _ = rig.executor.turn();
+    assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+    let _ = rig
+        .sender
+        .send(frame(restamped(&rig, at), 1))
+        .expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(1, RasterVerdict::SurfaceStale)],
+        "the rebuild authorises no frame laid out for the refused size"
+    );
+}
+
+/// A failed rebuild settles the frame `DeviceLost`, leaves its error for the
+/// owner, and the next one waits out the backoff on the executor's clock
+/// (ADR-0267).
+#[test]
+fn a_failed_rebuild_is_reported_and_the_next_waits_out_its_backoff() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    rig.backend.lose_device();
+    rig.backend
+        .script_rebuild(ScriptedAnswer::Fail(EngineError::GpuUnavailable));
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(1, RasterVerdict::DeviceLost)]
+    );
+    assert_eq!(
+        rig.sender.device_health(),
+        DeviceHealth::Rebuilding { attempts: 1 }
+    );
+    assert!(matches!(
+        rig.sender.take_device_failure(),
+        Some(EngineError::GpuUnavailable)
+    ));
+    assert!(rig.sender.take_device_failure().is_none(), "taken once");
+    let retry_at = rig
+        .sender
+        .device_retry_at()
+        .expect("a failed rebuild arms the next");
+
+    let _ = rig.executor.turn();
+    assert_eq!(rebuilds(&rig.backend), 1, "no rebuild before the deadline");
+    rig.clock
+        .advance(retry_at.duration_since(MonotonicClock::now(&rig.clock)));
+    let _ = rig
+        .sender
+        .send(frame(restamped(&rig, at), 2))
+        .expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(rebuilds(&rig.backend), 2);
+    assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+    assert_eq!(rig.sender.device_retry_at(), None);
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(2, RasterVerdict::SurfaceStale)]
+    );
+}
+
+/// A rebuild that keeps failing at the backoff's ceiling is given up: frames
+/// settle `DeviceLost` and no rebuild runs, however long, until the owner
+/// sends `RetryDevice`; then the device renders again (ADR-0267).
+#[test]
+fn a_given_up_rebuild_holds_until_the_owner_sends_retry_device() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    rig.backend.lose_device();
+    for _ in 0..64 {
+        rig.backend
+            .script_rebuild(ScriptedAnswer::Fail(EngineError::GpuUnavailable));
+    }
+    let mut turns = 0;
+    while !matches!(rig.sender.device_health(), DeviceHealth::GivenUp { .. }) {
+        assert!(turns < 64, "the rebuild is given up");
+        let _ = rig.executor.turn();
+        rig.clock.advance(Duration::from_secs(1));
+        turns += 1;
+    }
+    let given_up = rebuilds(&rig.backend);
+    assert_eq!(
+        rig.sender.device_health(),
+        DeviceHealth::GivenUp {
+            attempts: u32::try_from(given_up).expect("a short streak")
+        }
+    );
+    assert_eq!(rig.sender.device_retry_at(), None, "nothing to wake for");
+    rig.clock.advance(Duration::from_secs(3600));
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(rebuilds(&rig.backend), given_up, "no rebuild of its own");
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(1, RasterVerdict::DeviceLost)]
+    );
+
+    let _ = rig
+        .sender
+        .send(RasterCommand::RetryDevice)
+        .expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        rebuilds(&rig.backend),
+        given_up + 1,
+        "the asked-for rebuild runs at once"
+    );
+    // The scripted failures are not spent: the asked-for rebuild failed too
+    // and is paced again, not given up.
+    assert_eq!(
+        rig.sender.device_health(),
+        DeviceHealth::Rebuilding { attempts: 1 }
+    );
+}
+
+/// A rebuild that panics counts toward the backoff, the slots are still
+/// served, and the panic is resumed once the turn committed.
+#[test]
+fn a_panicking_rebuild_is_paced_and_resumed_after_the_turn() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    rig.backend.lose_device();
+    rig.backend.script_rebuild(ScriptedAnswer::Panic);
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    let mut caught = FirstPanic::new();
+    let turn = caught.contain(|| rig.executor.turn());
+    assert!(
+        turn.is_none() && caught.into_payload().is_some(),
+        "the rebuild's panic is resumed"
+    );
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(1, RasterVerdict::DeviceLost)]
+    );
+    assert_eq!(
+        rig.sender.device_health(),
+        DeviceHealth::Rebuilding { attempts: 1 }
+    );
+    assert!(rig.sender.device_retry_at().is_some(), "the next is paced");
+}
+
+/// A slot the rebuilt device cannot present to drops its surface and asks
+/// its owner for another, with why; the other slots render.
+#[test]
+fn a_slot_the_rebuilt_device_cannot_present_to_asks_for_a_new_surface() {
+    let mut rig = rig();
+    let refused = attached(&mut rig, 1);
+    let kept = attached(&mut rig, 2);
+    rig.backend.lose_device();
+    rig.backend
+        .refuse_on_rebuild(refused.slot, EngineError::IncompatibleSurface);
+    let _ = rig.executor.turn();
+    let record = rig.sender.record(refused.slot).expect("held");
+    assert!(record.wants_surface, "the owner makes a new surface");
+    assert!(matches!(
+        rig.sender.take_failure(refused.slot),
+        Some(SlotFailure::Refused(EngineError::IncompatibleSurface))
+    ));
+    assert!(!rig.sender.record(kept.slot).expect("held").wants_surface);
+    let _ = rig
+        .sender
+        .send(frame(restamped(&rig, kept), 1))
+        .expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, kept.slot),
+        [(1, RasterVerdict::Presented)]
     );
 }

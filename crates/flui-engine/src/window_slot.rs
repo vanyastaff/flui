@@ -216,6 +216,36 @@ impl WindowSlot {
         self.frame.surface_changed();
     }
 
+    /// The surface the slot holds; `None` while it is released.
+    pub(crate) fn surface(&self) -> Option<&wgpu::Surface<'static>> {
+        self.lease.surface()
+    }
+
+    /// The context rebuilt its device: configure the held surface on the new
+    /// one from the new adapter's capabilities (ADR-0063 decision 6), at the
+    /// slot's size. What the frame protocol retained was the old device's
+    /// and is dropped, so the next frame repaints in full. A released slot
+    /// stays released until its restore.
+    ///
+    /// # Errors
+    /// [`EngineError::IncompatibleSurface`] when the new adapter cannot
+    /// present to the surface, which is then dropped for the owner to
+    /// replace; a configuration error.
+    pub(crate) fn rebuild(&mut self, gpu: &Gpu<'_>) -> EngineResult<()> {
+        self.configured = None;
+        self.recovery.reset();
+        self.frame.release_target();
+        self.frame.surface_changed();
+        if !self.lease.has_surface() {
+            return Ok(());
+        }
+        if let Err(error) = presentable(gpu, &self.lease) {
+            let _released = self.lease.release();
+            return Err(error);
+        }
+        self.configure(gpu)
+    }
+
     /// Present to `surface` from now on, configured at the slot's size.
     ///
     /// # Errors

@@ -94,6 +94,17 @@ impl SlotTable {
         }
     }
 
+    fn iter(&self) -> impl Iterator<Item = (SlotId, &SurfaceSlot)> {
+        self.entries.iter().flatten().map(|(id, slot)| (*id, slot))
+    }
+
+    fn iter_mut(&mut self) -> impl Iterator<Item = (SlotId, &mut SurfaceSlot)> {
+        self.entries
+            .iter_mut()
+            .flatten()
+            .map(|(id, slot)| (*id, slot))
+    }
+
     /// Takes the slot out; `None` for a stale id or one already detached.
     fn remove(&mut self, id: SlotId) -> Option<SurfaceSlot> {
         let entry = self.entries.get_mut(id.index() as usize)?;
@@ -102,6 +113,81 @@ impl SlotTable {
         }
         None
     }
+}
+
+/// How a context's device was requested, so a rebuild asks for the same kind
+/// on the same instance (ADR-0305 §8).
+#[derive(Debug, Clone, Copy)]
+enum DeviceRecipe {
+    /// The backend ADR-0244's probe chose, with the capabilities the renderer
+    /// negotiates.
+    Probed(Attempt),
+    /// wgpu's default device plus whichever of these features the adapter
+    /// offers: offscreen contexts.
+    Offscreen(wgpu::Features),
+}
+
+impl DeviceRecipe {
+    /// An adapter on `instance` that presents to `surface` when one is named,
+    /// and its device.
+    async fn request(
+        self,
+        instance: &wgpu::Instance,
+        surface: Option<&wgpu::Surface<'static>>,
+    ) -> EngineResult<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
+        match self {
+            Self::Probed(attempt) => {
+                let (adapter, _, device, queue) =
+                    crate::Renderer::adapter_and_device(instance, attempt, surface).await?;
+                Ok((adapter, device, queue))
+            }
+            Self::Offscreen(wanted_features) => {
+                let adapter = instance
+                    .request_adapter(&crate::adapter::trusted_adapter_options(
+                        wgpu::PowerPreference::HighPerformance,
+                        surface,
+                    ))
+                    .await
+                    .map_err(EngineError::adapter_request)?;
+                let (device, queue) = offscreen_device(&adapter, wanted_features).await?;
+                Ok((adapter, device, queue))
+            }
+        }
+    }
+}
+
+/// An offscreen context's device on `adapter`.
+async fn offscreen_device(
+    adapter: &wgpu::Adapter,
+    wanted_features: wgpu::Features,
+) -> EngineResult<(wgpu::Device, wgpu::Queue)> {
+    // Deliberately NOT `adapter::request_flui_device`: an offscreen context
+    // wants wgpu's default (downlevel-friendly) device rather than the
+    // renderer's capability-negotiated one, plus the features asked for,
+    // which change what the rendered pixels look like.
+    adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("FLUI GPU Context Device"),
+            required_features: adapter.features() & wanted_features,
+            ..Default::default()
+        })
+        .await
+        .map_err(EngineError::device_creation)
+}
+
+/// Wait for a device request on the executor's thread: the inline executor
+/// rebuilds on the owner thread, where nothing else is polled meanwhile.
+#[cfg(not(target_arch = "wasm32"))]
+fn block_on<T>(request: impl std::future::Future<Output = EngineResult<T>>) -> EngineResult<T> {
+    pollster::block_on(request)
+}
+
+/// On the web a request is a future the owner spawns, which the inline
+/// executor cannot wait for: the device stays lost.
+#[cfg(target_arch = "wasm32")]
+fn block_on<T>(request: impl std::future::Future<Output = EngineResult<T>>) -> EngineResult<T> {
+    drop(request);
+    Err(EngineError::GpuUnavailable)
 }
 
 /// What a context has built over its life, read by the tests that pin the
@@ -126,16 +212,11 @@ pub struct GpuContext {
     /// The instance the factory makes every window surface on (ADR-0305 §2),
     /// made on the host's display connection. The executor makes no surface
     /// on it; the device rebuild (§8) requests its adapter here.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "ADR-0305 §8: the device rebuild requests its adapter on it"
-        )
-    )]
     instance: wgpu::Instance,
-    /// The adapter the first surface picked, for the context's life.
+    /// The adapter the device was requested on; a rebuild can pick another.
     adapter: wgpu::Adapter,
+    /// How the device was requested, so a rebuild asks for the same kind.
+    recipe: DeviceRecipe,
     domain: Arc<DeviceDomain>,
     /// The painter every slot records and replays with: its pipelines per
     /// target format, the glyph atlas and the image and path caches.
@@ -161,6 +242,9 @@ pub struct GpuContext {
     /// When set, the next torn painter's drop panics.
     #[cfg(test)]
     panic_in_next_cleanup: bool,
+    /// How many of the next device rebuilds fail.
+    #[cfg(test)]
+    rebuilds_failing: u32,
     _one_mutator: PhantomData<Cell<()>>,
 }
 
@@ -197,6 +281,8 @@ struct Answered {
     device: wgpu::Device,
     queue: wgpu::Queue,
     first: Option<wgpu::Surface<'static>>,
+    /// The backend attempt that answered, for a rebuild to ask the same.
+    attempt: Attempt,
 }
 
 impl GpuContext {
@@ -244,6 +330,7 @@ impl GpuContext {
             device,
             queue,
             first: surface,
+            attempt,
         } = answered;
         let first = match (first, surface) {
             (Some((leased, target)), Some(surface)) => {
@@ -252,7 +339,13 @@ impl GpuContext {
             _ => None,
         };
         let factory = SurfaceFactory::new(instance.clone(), display);
-        let context = Self::from_device(instance, adapter, device, queue);
+        let context = Self::from_device(
+            instance,
+            adapter,
+            device,
+            queue,
+            DeviceRecipe::Probed(attempt),
+        );
         Ok(GpuBootstrap {
             context,
             factory,
@@ -299,6 +392,7 @@ impl GpuContext {
                 device,
                 queue,
                 first,
+                attempt,
             });
         }
         let first = surface(&instance)?;
@@ -310,6 +404,7 @@ impl GpuContext {
             device,
             queue,
             first,
+            attempt,
         })
     }
 
@@ -326,14 +421,9 @@ impl GpuContext {
         INSTANCES_CREATED.with(|created| created.set(created.get() + 1));
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
-        let adapter = instance
-            .request_adapter(&crate::adapter::trusted_adapter_options(
-                wgpu::PowerPreference::HighPerformance,
-                None,
-            ))
-            .await
-            .map_err(EngineError::adapter_request)?;
-        Self::on_adapter(instance, adapter, wanted_features).await
+        let recipe = DeviceRecipe::Offscreen(wanted_features);
+        let (adapter, device, queue) = recipe.request(&instance, None).await?;
+        Ok(Self::from_device(instance, adapter, device, queue, recipe))
     }
 
     /// A second context on this one's adapter and instance, its device
@@ -346,24 +436,16 @@ impl GpuContext {
         Self::on_adapter(self.instance.clone(), self.adapter.clone(), wanted_features)
     }
 
+    /// An offscreen context on `adapter` of `instance`.
+    #[cfg(test)]
     async fn on_adapter(
         instance: wgpu::Instance,
         adapter: wgpu::Adapter,
         wanted_features: wgpu::Features,
     ) -> EngineResult<Self> {
-        // Deliberately NOT `adapter::request_flui_device`: an offscreen
-        // context wants wgpu's default (downlevel-friendly) device rather
-        // than the renderer's capability-negotiated one, plus the features
-        // asked for, which change what the rendered pixels look like.
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("FLUI GPU Context Device"),
-                required_features: adapter.features() & wanted_features,
-                ..Default::default()
-            })
-            .await
-            .map_err(EngineError::device_creation)?;
-        Ok(Self::from_device(instance, adapter, device, queue))
+        let (device, queue) = offscreen_device(&adapter, wanted_features).await?;
+        let recipe = DeviceRecipe::Offscreen(wanted_features);
+        Ok(Self::from_device(instance, adapter, device, queue, recipe))
     }
 
     fn from_device(
@@ -371,12 +453,14 @@ impl GpuContext {
         adapter: wgpu::Adapter,
         device: wgpu::Device,
         queue: wgpu::Queue,
+        recipe: DeviceRecipe,
     ) -> Self {
         let domain = DeviceDomain::new(Arc::new(device), Arc::new(queue));
         install_device_diagnostics(&domain);
         Self {
             instance,
             adapter,
+            recipe,
             domain,
             painter: None,
             pipelines: None,
@@ -392,8 +476,69 @@ impl GpuContext {
             panics_ahead: 0,
             #[cfg(test)]
             panic_in_next_cleanup: false,
+            #[cfg(test)]
+            rebuilds_failing: 0,
             _one_mutator: PhantomData,
         }
+    }
+
+    /// Make a new device on the context's instance and configure every slot
+    /// on it again (ADR-0305 §8). The surfaces are kept: the adapter is asked
+    /// to present to the first window slot holding one. The pipelines, the
+    /// glyph atlas, the image and path caches and the presentation blit were
+    /// the old device's, so the next frame builds them again; an offscreen
+    /// slot gets a new target of its size, cleared.
+    ///
+    /// Answers the slots the new device cannot present to, with why; their
+    /// surface was dropped.
+    ///
+    /// # Errors
+    /// The adapter or device request failed; the context keeps its lost
+    /// device and every slot as it was.
+    fn rebuild(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
+        #[cfg(test)]
+        if self.rebuilds_failing > 0 {
+            self.rebuilds_failing -= 1;
+            return Err(EngineError::GpuUnavailable);
+        }
+        let compatible = self.slots.iter().find_map(|(_, slot)| match slot {
+            SurfaceSlot::Window(window) => window.surface(),
+            SurfaceSlot::Offscreen(_) => None,
+        });
+        let (adapter, device, queue) = block_on(self.recipe.request(&self.instance, compatible))?;
+        // What the old device made goes before the new device is used.
+        self.painter = None;
+        self.pipelines = None;
+        self.blit = None;
+        self.adapter = adapter;
+        self.domain = DeviceDomain::new(Arc::new(device), Arc::new(queue));
+        install_device_diagnostics(&self.domain);
+        #[cfg(test)]
+        {
+            self.builds.devices += 1;
+        }
+        let max_dim = self.max_texture_dimension();
+        let Self {
+            adapter,
+            domain,
+            slots,
+            ..
+        } = self;
+        let gpu = gpu_of(adapter, domain);
+        let mut refused = Vec::new();
+        for (id, slot) in slots.iter_mut() {
+            let rebuilt = match slot {
+                SurfaceSlot::Offscreen(entry) => {
+                    offscreen_texture(domain, max_dim, entry.size, entry.format)
+                        .map(|texture| entry.texture = texture)
+                }
+                SurfaceSlot::Window(window) => window.rebuild(&gpu),
+            };
+            if let Err(error) = rebuilt {
+                refused.push((id, error));
+            }
+        }
+        Ok(refused)
     }
 
     /// The device domain every slot submits through.
@@ -690,6 +835,18 @@ impl GpuContext {
         self.panic_in_next_cleanup = true;
     }
 
+    /// Lose the device, as wgpu's device-lost callback does.
+    #[cfg(test)]
+    pub(crate) fn lose_device(&self) {
+        self.domain.mark_lost();
+    }
+
+    /// Make the next `rebuilds` device rebuilds fail before any request.
+    #[cfg(test)]
+    pub(crate) fn fail_next_rebuilds(&mut self, rebuilds: u32) {
+        self.rebuilds_failing = rebuilds;
+    }
+
     /// Whether this frame panics, counting it off.
     #[cfg(test)]
     fn injected_panic(&mut self) -> bool {
@@ -917,6 +1074,14 @@ impl SlotBackend for GpuContext {
             painter.reclaim(level);
         }
     }
+
+    fn device_lost(&self) -> bool {
+        self.domain.is_lost()
+    }
+
+    fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
+        self.rebuild()
+    }
 }
 
 /// `size` as a texture extent; a side of zero or less is refused.
@@ -1031,7 +1196,11 @@ mod tests {
         let Some(context) = context_or_skip() else {
             return;
         };
-        let (mut executor, sender) = RasterExecutor::new(context, || {});
+        let (mut executor, sender) = RasterExecutor::new(
+            context,
+            std::sync::Arc::new(flui_foundation::SystemClock),
+            || {},
+        );
         let targets = [
             ((32, 16), wgpu::TextureFormat::Rgba8Unorm),
             ((48, 16), wgpu::TextureFormat::Rgba8Unorm),
@@ -1151,7 +1320,11 @@ mod tests {
         let Some(context) = context_or_skip() else {
             return;
         };
-        let (mut executor, sender) = RasterExecutor::new(context, || {});
+        let (mut executor, sender) = RasterExecutor::new(
+            context,
+            std::sync::Arc::new(flui_foundation::SystemClock),
+            || {},
+        );
         let slots = [(); 2].map(|()| {
             let slot = sender.mint_slot().expect("a slot id is left");
             let address = PresentationAddress {
@@ -1247,6 +1420,132 @@ mod tests {
         }
     }
 
+    /// A lost device is rebuilt on the context's own instance: no instance is
+    /// made, every slot keeps its target at its size, a frame stamped before
+    /// the rebuild is refused on its generation, and the next frame draws
+    /// every slot in full on the new device, with its pipelines and glyph
+    /// atlas built again (ADR-0305 §8). The first rebuild fails, so the
+    /// second runs only once the backoff on the executor's clock allows it.
+    ///
+    /// Red-check: keep the old painter across the rebuild and the frames on
+    /// the new device still settle `DeviceLost` through the old device's
+    /// painter; skip the restamp in the executor's rebuild and the frames
+    /// stamped before it render.
+    #[test]
+    fn a_device_rebuild_keeps_the_surfaces_and_redraws_every_slot_in_full() {
+        use flui_foundation::{ManualClock, MonotonicClock};
+
+        use crate::raster_executor::DeviceHealth;
+
+        let instances = || INSTANCES_CREATED.with(std::cell::Cell::get);
+        let before = instances();
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let clock = ManualClock::new();
+        let (mut executor, sender) =
+            RasterExecutor::new(context, std::sync::Arc::new(clock.clone()), || {});
+        let slots = [(32, 16), (48, 16)].map(|(width, height)| {
+            let slot = sender.mint_slot().expect("a slot id is left");
+            let address = PresentationAddress {
+                ui_runtime_id: UiRuntimeId::new(1),
+                presentation_id: PresentationId::new(slot.index() as usize + 1),
+            };
+            let _receipt = sender
+                .send(RasterCommand::Attach {
+                    slot,
+                    address,
+                    target: SlotTarget::Offscreen {
+                        size: DeviceSize::new(width, height),
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                    },
+                    config: SlotConfig::new(),
+                })
+                .expect("the attach is accepted");
+            (slot, address)
+        });
+        let required = |slot: SlotId| {
+            sender
+                .record(slot)
+                .expect("the owner holds the slot")
+                .required_generation
+        };
+        let draw = |executor: &mut RasterExecutor<GpuContext>, stamped: [SurfaceGeneration; 2]| {
+            for ((slot, address), generation) in slots.into_iter().zip(stamped) {
+                sender
+                    .send(frame(slot, address, generation, square_and_glyph()))
+                    .expect("the frame is accepted");
+            }
+            let _ = executor.turn();
+            slots.map(|(slot, _)| {
+                let mut settled = Vec::new();
+                sender.drain_settlements(slot, &mut settled);
+                assert_eq!(settled.len(), 1, "each frame settles once");
+                settled[0].verdict
+            })
+        };
+        let current = || slots.map(|(slot, _)| required(slot));
+
+        assert_eq!(
+            draw(&mut executor, current()),
+            [RasterVerdict::Presented; 2]
+        );
+        let built = executor.backend().builds();
+        let committed = slots.map(|(slot, _)| {
+            executor
+                .backend()
+                .read_slot(slot)
+                .expect("the slot reads back")
+        });
+
+        executor.backend().lose_device();
+        executor.backend_mut().fail_next_rebuilds(1);
+        let stale = current();
+        assert_eq!(draw(&mut executor, stale), [RasterVerdict::DeviceLost; 2]);
+        assert_eq!(
+            sender.device_health(),
+            DeviceHealth::Rebuilding { attempts: 1 }
+        );
+        assert!(matches!(
+            sender.take_device_failure(),
+            Some(EngineError::GpuUnavailable)
+        ));
+        let retry_at = sender.device_retry_at().expect("the next rebuild is paced");
+        clock.advance(retry_at.duration_since(MonotonicClock::now(&clock)));
+
+        assert_eq!(
+            draw(&mut executor, stale),
+            [RasterVerdict::SurfaceStale; 2],
+            "the frames stamped before the rebuild are refused"
+        );
+        assert_eq!(sender.device_health(), DeviceHealth::Healthy);
+        let rebuilt = executor.backend().builds();
+        assert_eq!(rebuilt.devices, 2, "one device more");
+        assert_eq!(instances() - before, 1, "the instance is the context's");
+
+        assert_eq!(
+            draw(&mut executor, current()),
+            [RasterVerdict::Presented; 2]
+        );
+        let drawn = executor.backend().builds();
+        assert_eq!(
+            drawn.pipeline_sets,
+            built.pipeline_sets + 1,
+            "the new device's pipelines are built once"
+        );
+        assert_eq!(drawn.glyph_atlases, built.glyph_atlases + 1);
+        for ((slot, _), committed) in slots.into_iter().zip(committed) {
+            assert_eq!(
+                executor
+                    .backend()
+                    .read_slot(slot)
+                    .expect("the slot reads back"),
+                committed,
+                "the slot keeps its size and draws the same frame"
+            );
+        }
+    }
+
     /// Dropping the painter a frame unwound with runs destructors that are not
     /// ours (a cached value's), so it runs contained: when one panics too, the
     /// slot's record still holds the frame's panic, not the cleanup's, and the
@@ -1262,7 +1561,11 @@ mod tests {
         let Some(context) = context_or_skip() else {
             return;
         };
-        let (mut executor, sender) = RasterExecutor::new(context, || {});
+        let (mut executor, sender) = RasterExecutor::new(
+            context,
+            std::sync::Arc::new(flui_foundation::SystemClock),
+            || {},
+        );
         let slot = sender.mint_slot().expect("a slot id is left");
         let address = PresentationAddress {
             ui_runtime_id: UiRuntimeId::new(1),
@@ -1344,7 +1647,11 @@ mod tests {
         let surface = factory
             .create(Arc::new(FakeWindow::new(7)))
             .expect("the no-op backend makes a surface for any window");
-        let (_executor, sender) = RasterExecutor::new(crate::testing::ScriptedSlots::new(), || {});
+        let (_executor, sender) = RasterExecutor::new(
+            crate::testing::ScriptedSlots::new(),
+            std::sync::Arc::new(flui_foundation::SystemClock),
+            || {},
+        );
         let slot = sender.mint_slot().expect("a slot id is left");
         assert!(matches!(
             context.attach(slot, SlotTarget::Window(surface), SlotConfig::new()),
@@ -1396,7 +1703,11 @@ mod tests {
             (32, 16),
             ScriptedAcquire::Timeout,
         );
-        let (_executor, sender) = RasterExecutor::new(crate::testing::ScriptedSlots::new(), || {});
+        let (_executor, sender) = RasterExecutor::new(
+            crate::testing::ScriptedSlots::new(),
+            std::sync::Arc::new(flui_foundation::SystemClock),
+            || {},
+        );
         let slot = sender.mint_slot().expect("a slot id is left");
         context
             .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
@@ -1444,7 +1755,11 @@ mod tests {
             .expect("the no-op backend makes a surface for any window");
         let window =
             WindowSlot::configured_without_capabilities(surface, (32, 16), ScriptedAcquire::Lost);
-        let (_executor, sender) = RasterExecutor::new(crate::testing::ScriptedSlots::new(), || {});
+        let (_executor, sender) = RasterExecutor::new(
+            crate::testing::ScriptedSlots::new(),
+            std::sync::Arc::new(flui_foundation::SystemClock),
+            || {},
+        );
         let slot = sender.mint_slot().expect("a slot id is left");
         context
             .insert(slot, super::SurfaceSlot::Window(Box::new(window)))

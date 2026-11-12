@@ -508,9 +508,9 @@ pub use raster_owner::{
 };
 // The raster executor and its commands (ADR-0305).
 pub use raster_executor::{
-    ExecutorHealth, RasterCommand, RasterExecutor, RasterSendError, RasterSender, RasterVerdict,
-    SendReceipt, SlotBackend, SlotChange, SlotConfig, SlotFailure, SlotId, SlotPhase, SlotRecord,
-    SlotSettlement, SlotTarget, SlotVisibility, TurnOutcome,
+    DeviceHealth, ExecutorHealth, RasterCommand, RasterExecutor, RasterSendError, RasterSender,
+    RasterVerdict, SendReceipt, SlotBackend, SlotChange, SlotConfig, SlotFailure, SlotId,
+    SlotPhase, SlotRecord, SlotSettlement, SlotTarget, SlotVisibility, TurnOutcome,
 };
 // The GPU-resource freshness stamp (ADR-0045 decision 4); declared in
 // `flui-foundation` and re-exported here so `flui_engine::GpuResourceGeneration`
