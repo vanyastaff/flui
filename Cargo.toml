@@ -583,33 +583,13 @@ pedantic = { level = "warn", priority = -1 }
 # ship-quality waves. `expect_used` stays off — expect() with the BUG:
 # message convention IS the sanctioned invariant idiom.
 unwrap_used = "warn"
-# `undocumented_unsafe_blocks` — re-evaluated, measured, reverted.
-# This workspace runs every clippy-capable job under `-D warnings`, so
-# `warn` here means "CI enforces it immediately", and the actual CI run
-# (not a local guess) came back red on every compiling job: clippy,
-# cross-typecheck, wasm-check, all three feature-matrix groups, and
-# cli-macos. Confirmed real, annotatable sites (each job aborts on its
-# first error, so this is a floor, not the true total — appkit/android
-# were never even reached before windows/ios aborted the job that would
-# have checked them): flui-native/src/window.rs:328,332;
-# platforms/{windows/{accessibility.rs:96, platform.rs:382,1998,
-# owner_control.rs:109, window.rs:117}, web/{clipboard.rs:26,
-# display.rs:13-14, executor.rs:15, platform.rs:49, window.rs:40},
-# ios/platform.rs:996}; flui-hot-reload/src/worker.rs:61;
-# flui-log/tests/a_rejected_env_override_still_installs.rs:37 — sixteen
-# sites, plus twelve more that CANNOT be annotated at all: paired
-# `unsafe impl` sites in six OUT_DIR-generated files under
-# flui-engine's build.rs (advanced_blend/blur/color_matrix/gamma/mode/
-# morphology_generated.rs), where a `// SAFETY:` comment would have to
-# live in codegen'd output, not source. Per this comment's own stated
-# rule: too many for `-D warnings`, revert to `allow`, keep the real
-# count instead of forcing green with prose. `dbg_macro`/`todo`/
-# `unimplemented` below are unaffected — zero hits across the same CI
-# matrix, confirmed via the same run's logs. The original point stands
-# for future unsafe code either way: write a SAFETY comment because the
-# invariant was checked, not because a lint failed — several stale ones
-# in flui-hot-reload came from writing the comment first.
-undocumented_unsafe_blocks = "allow"
+# Every `unsafe` block and `unsafe impl` carries a `// SAFETY:` comment that
+# names the invariant it relies on, directly above its statement (below any
+# multi-line attribute) or as the first line inside the block. Write it
+# because the invariant was checked, not because the lint failed. The one
+# exemption is `flui-engine`'s `wgsl_bindgen` output, included from OUT_DIR
+# through modules that carry an `#[expect]` with the reason.
+undocumented_unsafe_blocks = "warn"
 # `dbg_macro`/`todo`/`unimplemented`: restriction lints, off by default even
 # under `all`/`pedantic`. A `dbg!()` left in is a debug-session leftover, not
 # a review comment. `todo!()`/`unimplemented!()` are placeholders; the

@@ -1290,6 +1290,8 @@ fn owner_thread_window_titled(title: &str) -> bool {
         // SAFETY: enumeration is synchronous on the caller; state points to
         // its live exclusive Search, and the buffer is writable for the call.
         let search = unsafe { &mut *(state.0 as *mut Search) };
+        // SAFETY: `hwnd` is the window the enumeration hands this callback;
+        // the slice bounds what the call may write.
         let length = unsafe { GetWindowTextW(hwnd, &mut search.buffer) } as usize;
         search.found |= search.buffer[..length] == search.title;
         BOOL(1)

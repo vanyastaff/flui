@@ -260,12 +260,12 @@ fn fake_display_handle() -> raw_window_handle::DisplayHandle<'static> {
     let raw = raw_window_handle::RawDisplayHandle::Xlib(raw_window_handle::XlibDisplayHandle::new(
         None, 0,
     ));
-    // SAFETY: the handle carries no pointer, so `borrow_raw` has no pointee
-    // whose validity it must be promised.
     #[expect(
         unsafe_code,
         reason = "test double: a display handle without a pointer"
     )]
+    // SAFETY: the handle carries no pointer, so `borrow_raw` has no pointee
+    // whose validity it must be promised.
     unsafe {
         raw_window_handle::DisplayHandle::borrow_raw(raw)
     }

@@ -867,7 +867,7 @@ pub struct WindowsLoop {
     pub(crate) apartment: com_apartment::ApartmentHold,
 }
 
-// SAFETY, per field: `windows` and `displays` are `Send + Sync` by their
+// SAFETY: per field, `windows` and `displays` are `Send + Sync` by their
 // traits' bounds, `owner_control` holds only an `Arc`-shared signal and a
 // locked address (its owner-thread state, callbacks included, sits behind the
 // owner window's `GWLP_USERDATA` and is reached only through the owner-thread
@@ -1712,13 +1712,13 @@ impl Drop for WindowsLoop {
         tracing::debug!("Dropping WindowsLoop");
 
         // Destroy message window
-        //
-        // SAFETY: `DestroyWindow` takes `self.message_window` by value; the
-        // `is_invalid()` guard skips the call for a handle that was never
-        // successfully created. This window carries no `GWLP_USERDATA`
-        // context (it is message-only and never routed through
-        // `WindowsWindow::try_new`), so there is no allocation to reclaim here.
         if !self.message_window.is_invalid() {
+            // SAFETY: `DestroyWindow` takes `self.message_window` by value; the
+            // `is_invalid()` guard skips the call for a handle that was never
+            // successfully created. This window carries no `GWLP_USERDATA`
+            // context (it is message-only and never routed through
+            // `WindowsWindow::try_new`), so there is no allocation to reclaim
+            // here.
             unsafe {
                 if let Err(error) = DestroyWindow(self.message_window) {
                     tracing::warn!(
