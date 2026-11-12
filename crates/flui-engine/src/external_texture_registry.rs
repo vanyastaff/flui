@@ -12,10 +12,8 @@ use crate::{
     error::{EngineResult, ExternalTextureError},
 };
 use flui_painting::paint::TextureId;
-use std::{
-    collections::HashMap,
-    sync::{Arc, Weak},
-};
+use rustc_hash::FxHashMap;
+use std::sync::{Arc, Weak};
 
 /// Default sampling used by the resource-sampling draw entry point.
 /// Explicit per-draw FilterQuality overrides this default.
@@ -143,7 +141,7 @@ impl ExternalTextureEntry {
 /// Reach this registry through WgpuPainter's registry accessors.
 #[derive(Debug)]
 pub struct ExternalTextureRegistry {
-    textures: HashMap<u64, ExternalTextureEntry>,
+    textures: FxHashMap<u64, ExternalTextureEntry>,
     owner: Arc<()>,
     generation: u64,
     domain: Weak<DeviceDomain>,
@@ -153,7 +151,7 @@ pub struct ExternalTextureRegistry {
 impl ExternalTextureRegistry {
     pub(crate) fn new(domain: &Arc<DeviceDomain>) -> Self {
         Self {
-            textures: HashMap::new(),
+            textures: FxHashMap::default(),
             owner: Arc::new(()),
             generation: 0,
             domain: Arc::downgrade(domain),

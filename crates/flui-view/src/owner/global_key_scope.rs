@@ -51,9 +51,9 @@
 //! real UI runtime are documented on [`GlobalKeyScope`] itself — the type this
 //! module exists to define — not here.
 
+use rustc_hash::FxHashMap;
 use std::{
     cell::RefCell,
-    collections::HashMap,
     fmt,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
@@ -163,7 +163,7 @@ struct ScopeState {
     /// in for both. A bucket is dropped as soon as it empties, so
     /// [`GlobalKeyScope::claim_count`] can sum bucket lengths without
     /// counting corpses.
-    claims: HashMap<u64, Vec<Claim>>,
+    claims: FxHashMap<u64, Vec<Claim>>,
 }
 
 impl ScopeState {

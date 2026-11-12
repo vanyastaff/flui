@@ -143,7 +143,7 @@ impl<T: 'static> GlobalKey<T> {
     /// bucket entries by
     /// [`ViewKey::key_hash`] and then decide membership with
     /// [`ViewKey::key_eq`], because `Box<dyn ViewKey>` has no blanket
-    /// `Hash + Eq` to hand a `HashMap` directly.
+    /// `Hash + Eq` to hand a `FxHashMap` directly.
     ///
     /// # During a frame
     ///

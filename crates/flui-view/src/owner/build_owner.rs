@@ -6,10 +6,11 @@
 //! - Managing GlobalKey registry
 //! - Coordinating InheritedElement lookups
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
     cell::{Cell, RefCell},
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::BinaryHeap,
     rc::Rc,
     sync::Arc,
 };
@@ -18,7 +19,6 @@ use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ElementId, RebuildReasons, RenderId, SlotSet, ViewKey};
 use flui_interaction::FocusManager;
 use flui_rendering::pipeline::DetachedRenderSubtrees;
-use rustc_hash::FxHashMap;
 
 use super::dirty_queue::{DirtyElement, DirtyQueue};
 use crate::{
@@ -241,7 +241,7 @@ pub(crate) struct BuildScopeQueues {
     /// Dirty work currently outside every live layout-builder scope.
     root: BinaryHeap<Reverse<DirtyElement>>,
     /// Dirty work keyed by its current nearest live layout-builder scope.
-    isolated: HashMap<ElementId, BinaryHeap<Reverse<DirtyElement>>>,
+    isolated: FxHashMap<ElementId, BinaryHeap<Reverse<DirtyElement>>>,
     /// Reused while rerouting after scope removal or tree reparenting.
     scratch: Vec<DirtyElement>,
     /// Nearest scope per element, reused by each repartition.
@@ -400,7 +400,7 @@ pub struct BuildOwner {
     ///
     /// `pub(crate)` for the [`ElementOwner`](super::ElementOwner)
     /// split-borrow.
-    pub(crate) pending_dependency_changes: std::collections::HashSet<ElementId>,
+    pub(crate) pending_dependency_changes: rustc_hash::FxHashSet<ElementId>,
 
     /// Sparse dependent -> providers ownership index.
     ///
@@ -518,7 +518,7 @@ pub struct BuildOwner {
     /// `ElementOwner::register_child_manager` / `unregister_child_manager`
     /// split-borrow methods.
     ///
-    /// A `RefCell` (not a plain `HashMap`) so `ElementOwner` can carry a
+    /// A `RefCell` (not a plain `FxHashMap`) so `ElementOwner` can carry a
     /// shared `&'a` reference and still register and unregister managers.
     /// `service_child_requests` clones the manager `Rc`s out of it before
     /// calling service, releasing the registry borrow before the potentially
@@ -726,7 +726,7 @@ impl BuildOwner {
             global_key_reservations: Box::new(GlobalKeyReservations::new()),
             global_key_diagnostics: Vec::new(),
             inactive_elements: Vec::new(),
-            pending_dependency_changes: std::collections::HashSet::new(),
+            pending_dependency_changes: rustc_hash::FxHashSet::default(),
             inherited_dependencies: InheritedDependencies::default(),
             reactive: crate::reactive::Reactive::new(),
             keep_alive: super::KeepAliveHolds::default(),
@@ -744,7 +744,7 @@ impl BuildOwner {
             mid_drain_cap_streak: false,
             built_this_frame: SlotSet::new(),
             frame_builds: Box::default(),
-            child_manager_registry: RefCell::new(HashMap::new()),
+            child_manager_registry: RefCell::new(FxHashMap::default()),
             layout_builder_registry: LayoutBuilderRegistry::default(),
             lazy_band_pass_budget: super::layout_builder::MAX_LAZY_BAND_PASSES,
             build_scope_queues: None,
@@ -1062,7 +1062,7 @@ impl BuildOwner {
     /// Return the nearest mounted layout-builder scope containing `element`.
     /// The search includes `element` itself: a scope root belongs to its own
     /// scope.
-    fn live_layout_scope_ids(&self, tree: &ElementTree) -> HashSet<ElementId> {
+    fn live_layout_scope_ids(&self, tree: &ElementTree) -> FxHashSet<ElementId> {
         self.layout_builder_registry.with_entries(|entries| {
             entries
                 .values()
@@ -1075,7 +1075,7 @@ impl BuildOwner {
     fn nearest_layout_builder_scope(
         tree: &ElementTree,
         element: ElementId,
-        live_scopes: &HashSet<ElementId>,
+        live_scopes: &FxHashSet<ElementId>,
     ) -> Option<ElementId> {
         #[cfg(test)]
         LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
@@ -1132,7 +1132,7 @@ impl BuildOwner {
     pub(crate) fn repartition_dirty(
         &mut self,
         tree: &ElementTree,
-        live_scopes: &HashSet<ElementId>,
+        live_scopes: &FxHashSet<ElementId>,
     ) {
         self.collect_partitioned_dirty();
         let mut memo = std::mem::take(
@@ -1558,7 +1558,7 @@ impl BuildOwner {
         &mut self,
         tree: &mut ElementTree,
         target: BuildScopeTarget,
-        live_scopes: Option<&HashSet<ElementId>>,
+        live_scopes: Option<&FxHashSet<ElementId>>,
     ) -> BuildDrainResult {
         #[cfg(not(debug_assertions))]
         if matches!(target, BuildScopeTarget::All) {
@@ -1613,7 +1613,7 @@ impl BuildOwner {
         &mut self,
         tree: &mut ElementTree,
         target: BuildScopeTarget,
-        live_scopes: Option<&HashSet<ElementId>>,
+        live_scopes: Option<&FxHashSet<ElementId>>,
     ) -> BuildDrainResult {
         let mut result = BuildDrainResult::default();
         let mut absorbed_mid_drain = 0usize;
@@ -2396,21 +2396,21 @@ impl BuildOwner {
         );
 
         // 2. Group requests and retain-bands by sliver RenderId.
-        let mut requests_by_sliver: HashMap<RenderId, Vec<usize>> = HashMap::new();
+        let mut requests_by_sliver: FxHashMap<RenderId, Vec<usize>> = FxHashMap::default();
         for (sliver_id, logical_index) in pending_requests {
             requests_by_sliver
                 .entry(sliver_id)
                 .or_default()
                 .push(logical_index);
         }
-        let mut bands_by_sliver: HashMap<RenderId, (usize, usize)> = HashMap::new();
+        let mut bands_by_sliver: FxHashMap<RenderId, (usize, usize)> = FxHashMap::default();
         for (sliver_id, first, last) in retain_bands {
             bands_by_sliver.insert(sliver_id, (first, last));
         }
 
         // Collect all affected sliver ids (may have requests, bands, or both).
         let affected_ids: Vec<RenderId> = {
-            let mut ids: HashSet<RenderId> = requests_by_sliver.keys().copied().collect();
+            let mut ids: FxHashSet<RenderId> = requests_by_sliver.keys().copied().collect();
             ids.extend(bands_by_sliver.keys().copied());
             ids.into_iter().collect()
         };

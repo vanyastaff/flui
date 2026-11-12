@@ -52,13 +52,8 @@
 //! rebuilds is replaced through `sparse_children::replace_failed_resident`,
 //! which re-points that map.
 
-use std::{
-    cell::RefCell,
-    collections::{BTreeSet, HashMap},
-    fmt,
-    marker::PhantomData,
-    rc::Rc,
-};
+use rustc_hash::FxHashMap;
+use std::{cell::RefCell, collections::BTreeSet, fmt, marker::PhantomData, rc::Rc};
 
 use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_objects::{
@@ -209,7 +204,7 @@ type ChildMap = Rc<dyn Fn(usize, BoxedView) -> BoxedView>;
 /// salt is stripped before the call).
 pub struct StaticChildren {
     children: Vec<BoxedView>,
-    key_to_index: std::cell::OnceCell<HashMap<u64, Vec<usize>>>,
+    key_to_index: std::cell::OnceCell<FxHashMap<u64, Vec<usize>>>,
     /// Applied to each child as it is built (a per-item repaint boundary,
     /// say). The key map reads the raw children, so a wrapper that salts
     /// the key stays matchable through the unsalted callback key.
@@ -300,7 +295,7 @@ impl StaticChildren {
     #[must_use]
     pub fn find_index_by_key(&self, key: &dyn ViewKey) -> Option<usize> {
         let map = self.key_to_index.get_or_init(|| {
-            let mut map: HashMap<u64, Vec<usize>> = HashMap::new();
+            let mut map: FxHashMap<u64, Vec<usize>> = FxHashMap::default();
             for (index, child) in self.children.iter().enumerate() {
                 if let Some(child_key) = child.key() {
                     map.entry(child_key.key_hash()).or_default().push(index);

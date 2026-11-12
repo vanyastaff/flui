@@ -188,7 +188,7 @@ pub(crate) fn resolve(
 /// the first [`FaceRef::File`] it is asked about.
 #[derive(Default)]
 struct FaceIndex {
-    files: Option<std::collections::HashMap<(std::path::PathBuf, u32), parley::fontique::FamilyId>>,
+    files: Option<rustc_hash::FxHashMap<(std::path::PathBuf, u32), parley::fontique::FamilyId>>,
     unresolved: usize,
 }
 
@@ -234,9 +234,9 @@ impl FaceIndex {
 /// Every file-backed face of `collection`, by canonical file and index.
 fn file_index(
     collection: &mut parley::fontique::Collection,
-) -> std::collections::HashMap<(std::path::PathBuf, u32), parley::fontique::FamilyId> {
+) -> rustc_hash::FxHashMap<(std::path::PathBuf, u32), parley::fontique::FamilyId> {
     let names: Vec<String> = collection.family_names().map(str::to_owned).collect();
-    let mut files = std::collections::HashMap::new();
+    let mut files = rustc_hash::FxHashMap::default();
     for name in names {
         let Some(family) = collection.family_by_name(&name) else {
             continue;

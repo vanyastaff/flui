@@ -1,7 +1,7 @@
 //! Owner-local closed numeric answers. Native evaluation belongs outside measurement.
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::{Rc, Weak};
 
@@ -57,7 +57,7 @@ pub(super) struct Answer {
 
 #[derive(Debug)]
 struct AnswerState {
-    indexed: HashMap<TextSizeRequest, Weak<Answer>>,
+    indexed: FxHashMap<TextSizeRequest, Weak<Answer>>,
     warm: LruCache<TextSizeRequest, Rc<Answer>>,
     revision: u64,
 }
@@ -65,14 +65,14 @@ struct AnswerState {
 impl Default for AnswerState {
     fn default() -> Self {
         Self {
-            indexed: HashMap::new(),
+            indexed: FxHashMap::default(),
             warm: LruCache::unbounded(),
             revision: 0,
         }
     }
 }
 
-type CohortAnswers = RefCell<HashMap<TextSizeRequest, Option<Rc<Answer>>>>;
+type CohortAnswers = RefCell<FxHashMap<TextSizeRequest, Option<Rc<Answer>>>>;
 
 #[derive(Debug, Default)]
 struct AttemptAnswers {
@@ -85,7 +85,7 @@ impl AttemptAnswers {
         if let Some((_, pins)) = sources.iter().find(|(candidate, _)| candidate == source) {
             return Rc::clone(pins);
         }
-        let pins = Rc::new(RefCell::new(HashMap::new()));
+        let pins = Rc::new(RefCell::new(FxHashMap::default()));
         source.0.cohorts.borrow_mut().push(Rc::downgrade(&pins));
         sources.push((source.clone(), Rc::clone(&pins)));
         pins
@@ -310,8 +310,8 @@ impl TextSizingAdmission {
 
 fn unique_answers(
     answers: impl IntoIterator<Item = (TextSizeRequest, TextSize)>,
-) -> Result<HashMap<TextSizeRequest, TextSize>, TextSizingConflict> {
-    let mut unique = HashMap::new();
+) -> Result<FxHashMap<TextSizeRequest, TextSize>, TextSizingConflict> {
+    let mut unique = FxHashMap::default();
     for (request, answer) in answers {
         if let Some(previous) = unique.insert(request, answer)
             && previous != answer
@@ -462,7 +462,7 @@ impl TextSizing {
                     let mut resolved = Vec::with_capacity(requests.len());
                     let mut retained = Vec::new();
                     let mut missing = Vec::new();
-                    let mut missing_keys = HashSet::new();
+                    let mut missing_keys = FxHashSet::default();
                     for request in requests {
                         if let Some(answer) = state.indexed.get(request).and_then(Weak::upgrade) {
                             resolved.push(TextResolvedSize {

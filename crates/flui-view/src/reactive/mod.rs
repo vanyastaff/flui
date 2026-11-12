@@ -77,9 +77,9 @@
 //! [`SignalSlot::graph`] to the presentation whose graph minted the slot
 //! (ADR-0085 §1).
 
+use rustc_hash::FxHashMap;
 use std::any::{Any, type_name};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -206,10 +206,10 @@ struct Inner {
     generations: GenSlots,
     free: Vec<u32>,
     /// Slots each element read during its last build.
-    element_reads: HashMap<ElementId, Membership<u32>>,
+    element_reads: FxHashMap<ElementId, Membership<u32>>,
     /// Slots created on behalf of an element (full handles, so a slot that
     /// was released and reused in between is recognised by generation).
-    owned_by_element: HashMap<ElementId, SmallVec<[SignalSlot; 2]>>,
+    owned_by_element: FxHashMap<ElementId, SmallVec<[SignalSlot; 2]>>,
     /// The element whose `build` is running, if any.
     building: Option<ElementId>,
     /// The read set of the element now building, taken out by
@@ -784,7 +784,7 @@ impl Reactive {
     #[must_use]
     pub fn snapshot(&self) -> Vec<SlotInfo> {
         let inner = self.inner.borrow();
-        let mut owners: HashMap<u32, ElementId> = HashMap::new();
+        let mut owners: FxHashMap<u32, ElementId> = FxHashMap::default();
         for (element, slots) in &inner.owned_by_element {
             for slot in slots {
                 if self.check(&inner, *slot).is_ok() {

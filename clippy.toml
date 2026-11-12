@@ -30,3 +30,15 @@ disallowed-methods = [
     # only the app runner, which installs that value at the root, takes the compile target.
     { path = "flui_platform::TargetPlatform::current", reason = "ADR-0028: read the platform from flui_view::environment::PlatformConvention::of; the runner is the one root default" },
 ]
+
+# A hash table on an owner or frame path hashes with `rustc_hash` (FxHashMap/FxHashSet); a
+# per-frame set over tree ids is a `SlotSet`/`SlotIndex`. std's SipHash with a random seed
+# costs time on every lookup and buys protection from keys an attacker picks, which ids and
+# fingerprints are not. The crates that hold this rule opt in with
+# `#![warn(clippy::disallowed_types)]` at their root; the workspace default is `allow`
+# (docs/gaps.md lists the crates still on SipHash). A table whose keys come from outside the
+# process keeps SipHash under `#[expect(clippy::disallowed_types, reason = "…")]`.
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "hash ids with rustc_hash::FxHashMap; per-frame sets over tree ids are flui_foundation::SlotSet" },
+    { path = "std::collections::HashSet", reason = "hash ids with rustc_hash::FxHashSet; per-frame sets over tree ids are flui_foundation::SlotSet" },
+]

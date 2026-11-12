@@ -10,7 +10,7 @@
 //! Entries not accessed for 120 frames are automatically evicted during
 //! [`PathCache::advance_frame`](crate::path_cache::PathCache::advance_frame).
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use flui_painting::paint::path::{Path, PathCommand};
@@ -25,7 +25,7 @@ const EVICTION_THRESHOLD: u64 = 120;
 /// identical paths do not need to be re-tessellated by lyon every frame.
 #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
 pub struct PathCache {
-    entries: HashMap<u64, CachedPath>,
+    entries: FxHashMap<u64, CachedPath>,
     max_entries: usize,
     hits: u64,
     misses: u64,
@@ -50,7 +50,10 @@ impl PathCache {
     #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
     pub fn new(max_entries: usize) -> Self {
         Self {
-            entries: HashMap::with_capacity(max_entries.min(512)),
+            entries: FxHashMap::with_capacity_and_hasher(
+                max_entries.min(512),
+                rustc_hash::FxBuildHasher,
+            ),
             max_entries,
             hits: 0,
             misses: 0,

@@ -28,9 +28,9 @@
 //! shape was tried first and held; we did not need the
 //! `for<'a> Fn(&'a mut ElementOwner<'a>)` HRTB fallback.
 
+use rustc_hash::FxHashSet;
 use std::{
     cell::{Cell, RefCell},
-    collections::HashSet,
     rc::Rc,
     sync::Arc,
 };
@@ -172,7 +172,7 @@ pub struct ElementOwner<'a> {
     /// [`ViewState::did_change_dependencies`](crate::view::ViewState::did_change_dependencies)
     /// hook fires exactly once per dependency-change-then-rebuild
     /// cycle.
-    pub(crate) pending_dependency_changes: &'a mut HashSet<ElementId>,
+    pub(crate) pending_dependency_changes: &'a mut FxHashSet<ElementId>,
 
     /// Sparse reverse index for inherited dependency ownership.
     pub(crate) inherited_dependencies: &'a mut InheritedDependencies,
@@ -455,7 +455,7 @@ impl ElementOwner<'_> {
     /// hook (via `ElementBase::notify_dependency_change`) BEFORE the
     /// actual rebuild.
     ///
-    /// Idempotent: re-marking the same id is a no-op (HashSet dedup) —
+    /// Idempotent: re-marking the same id is a no-op (FxHashSet dedup) —
     /// `did_change_dependencies` fires at most once per
     /// dependency-change-then-rebuild cycle even if multiple inherited
     /// ancestors fire in the same update phase.

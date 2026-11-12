@@ -597,13 +597,13 @@ fn feed_host_faces(
     host: &HostFaces,
     registration: Registration,
 ) -> bool {
-    use std::collections::HashSet;
+    use rustc_hash::FxHashSet;
 
     use parley::fontique::GenericFamily;
 
     use super::fallback_chain::{install_into, resolve};
 
-    let held: HashSet<String> = collection.family_names().map(str::to_lowercase).collect();
+    let held: FxHashSet<String> = collection.family_names().map(str::to_lowercase).collect();
     let mut fed = 0_usize;
     let mut bound = false;
     for source in &host.sources {

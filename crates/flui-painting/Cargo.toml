@@ -49,6 +49,8 @@ icu_segmenter = { workspace = true }
 swash = { workspace = true }
 parley = { workspace = true }
 lru = { workspace = true }
+# Hash tables keyed by font, glyph and style ids, which no outside party chooses.
+rustc-hash = { workspace = true }
 
 [dev-dependencies]
 # Colour property tests and the compile-fail suite.

@@ -42,7 +42,8 @@
 //! Bindings are `!Send`, so a held lock can only mean re-entry on the owner
 //! thread, never a race with another thread.
 
-use std::{cell::RefCell, collections::HashMap, mem::ManuallyDrop, rc::Rc};
+use rustc_hash::FxHashMap;
+use std::{cell::RefCell, mem::ManuallyDrop, rc::Rc};
 
 use crate::view::ElementBase;
 use flui_foundation::{ElementId, ViewKey};
@@ -180,7 +181,8 @@ impl GlobalKeyRegistryHandle {
 /// rather than scanning the others, which could reach an unrelated element
 /// that reuses the same raw id.
 pub(crate) fn build_composite(members: Vec<GlobalKeyRegistryHandle>) -> GlobalKeyRegistryHandle {
-    let resolved_by: Rc<RefCell<HashMap<ElementId, usize>>> = Rc::new(RefCell::new(HashMap::new()));
+    let resolved_by: Rc<RefCell<FxHashMap<ElementId, usize>>> =
+        Rc::new(RefCell::new(FxHashMap::default()));
     let lookup_members = members.clone();
     let lookup_cache = Rc::clone(&resolved_by);
     let visit_members = members;

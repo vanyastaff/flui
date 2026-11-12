@@ -69,7 +69,7 @@
 //! over the type-erased [`ElementBase`] accessors plus the typed
 //! [`View`] surface.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use smallvec::SmallVec;
 
@@ -116,7 +116,7 @@ const INLINE_CHILDREN: usize = 8;
 /// # Complexity
 ///
 /// `O(n + m)` average over `n` old children and `m` new views (one
-/// HashMap-indexed pass plus the prefix/suffix scans). Worst case rises
+/// FxHashMap-indexed pass plus the prefix/suffix scans). Worst case rises
 /// to `O(n * m)` only when every new keyed view's hash collides into one
 /// bucket whose candidates mostly fail the semantic `key_eq` check —
 /// the cost of collision-resistant keyed matching. Both `n`
@@ -235,7 +235,7 @@ pub(crate) fn reconcile_children_by_id(
     // `can_update_by_id`, and clears a claim by index in O(1) (indexing
     // the bucket by slot, not id, is what keeps phase 4 linear rather than
     // O(n*m) — no per-claim scan of `old_slots`).
-    let mut old_keyed: HashMap<u64, Vec<usize>> = HashMap::new();
+    let mut old_keyed: FxHashMap<u64, Vec<usize>> = FxHashMap::default();
     for (idx, slot) in old_slots
         .iter_mut()
         .enumerate()
@@ -546,7 +546,7 @@ fn slot_of(tree: &ElementTree, old_id: ElementId) -> Option<usize> {
 fn claim_old_for_new(
     tree: &ElementTree,
     new_view: &dyn View,
-    old_keyed: &mut HashMap<u64, Vec<usize>>,
+    old_keyed: &mut FxHashMap<u64, Vec<usize>>,
     old_slots: &[Option<ElementId>],
 ) -> Option<usize> {
     let key_hash = new_view.key()?.key_hash();

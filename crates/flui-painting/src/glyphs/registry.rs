@@ -1,6 +1,6 @@
 //! The faces and variation instances keys name, held by the raster side.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::hash::{BuildHasher, Hasher, RandomState};
 use std::sync::Arc;
 
@@ -30,11 +30,11 @@ pub struct FontRegistry {
     /// random 64-bit value, so two registries collide with negligible
     /// probability and no process-wide counter is needed.
     identity: u64,
-    faces: HashMap<FaceKey, Face>,
+    faces: FxHashMap<FaceKey, Face>,
     owned_sources: bool,
     /// Interned coordinate sets; a [`VariationId`] is an index into this.
     variations: Vec<Box<[i16]>>,
-    variation_ids: HashMap<Box<[i16]>, VariationId>,
+    variation_ids: FxHashMap<Box<[i16]>, VariationId>,
 }
 
 enum FaceBytes {
@@ -80,10 +80,10 @@ impl Default for FontRegistry {
             // std's randomly keyed hasher over no input: a fresh random value
             // per registry, from state std already keeps.
             identity: RandomState::new().build_hasher().finish(),
-            faces: HashMap::new(),
+            faces: FxHashMap::default(),
             owned_sources: false,
             variations: Vec::new(),
-            variation_ids: HashMap::new(),
+            variation_ids: FxHashMap::default(),
         }
     }
 }

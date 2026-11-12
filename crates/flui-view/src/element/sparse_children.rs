@@ -11,8 +11,9 @@
 //! from parent-data alone (ADR-0003), so children may be attached in any order —
 //! there is no insertion cursor.
 
+use rustc_hash::FxHashMap;
 use std::any::TypeId;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ElementId, RenderId, SaltedKey, ViewKey};
@@ -372,8 +373,8 @@ impl SparseChildren {
         // residents are bucketed by key hash (decided by `key_eq` inside the
         // bucket, as the dense reconciler does) and keyless ones by index, so
         // each built view costs O(1) expected rather than a scan of the band.
-        let mut keyed_by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
-        let mut keyless_by_index: HashMap<usize, usize> = HashMap::new();
+        let mut keyed_by_hash: FxHashMap<u64, Vec<usize>> = FxHashMap::default();
+        let mut keyless_by_index: FxHashMap<usize, usize> = FxHashMap::default();
         for (pos, resident) in residents.iter().enumerate() {
             match &resident.key {
                 Some(key) => keyed_by_hash.entry(key.key_hash()).or_default().push(pos),

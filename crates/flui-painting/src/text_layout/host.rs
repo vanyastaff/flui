@@ -119,7 +119,7 @@ impl HostFonts {
     /// font's data (shared, not copied), every source's family names, the
     /// generic families' names and the fallback lists.
     pub(crate) fn faces(&self) -> HostFaces {
-        use std::collections::HashMap;
+        use rustc_hash::FxHashMap;
 
         use fontdb::Source;
 
@@ -130,7 +130,7 @@ impl HostFonts {
         }
 
         let mut sources: Vec<HostSource> = Vec::new();
-        let mut index: HashMap<SourceKey, usize> = HashMap::new();
+        let mut index: FxHashMap<SourceKey, usize> = FxHashMap::default();
         for face in self.db.faces() {
             let (key, data) = match &face.source {
                 Source::Binary(data) => (

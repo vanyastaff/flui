@@ -5,7 +5,9 @@
 //! a shared signal's rebuild wave does linear bookkeeping without changing
 //! peer scheduling order. Keys here are internal IDs, never user values.
 
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::hash_map::Entry;
+
+use rustc_hash::FxHashMap;
 use std::hash::Hash;
 
 use smallvec::SmallVec;
@@ -17,7 +19,7 @@ pub(super) enum Membership<T> {
 
 pub(super) struct Indexed<T> {
     members: Vec<Option<T>>,
-    positions: HashMap<T, usize>,
+    positions: FxHashMap<T, usize>,
 }
 
 impl<T> Default for Membership<T> {

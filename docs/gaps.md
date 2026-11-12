@@ -538,6 +538,13 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The likely shape is a public listener that installs the observer scope and reads the attached position, so a scroll frame costs one listener call and nothing bubbles through the tree.
 - The entry closes when a public listener reports a scroll start, update, end and a change of extents for the scroll view at depth zero below it, with headless tests over a nested list.
 
+### Hash tables outside the view, painting and engine crates still use SipHash
+
+> **Environments:** all · **Who it hurts:** Every frame that looks up an id in a std `HashMap` · **Parity:** none (performance)
+
+- `flui-view`, `flui-painting` and `flui-engine` hash ids and fingerprints with `rustc_hash` and hold that with `#![warn(clippy::disallowed_types)]` at their roots (`clippy.toml`, `disallowed-types`). Every other crate still builds std `HashMap`/`HashSet` with a random SipHash seed, which costs time on every lookup and gives a run-to-run iteration order: `rg -w 'HashMap|HashSet' crates packages --type rust` lists them, `flui-native`, `flui-widgets` and `flui-interaction` the most.
+- A crate leaves this entry when it opts into the lint at its root; a table whose keys come from outside the process keeps SipHash under `#[expect(clippy::disallowed_types, reason = "…")]`. The entry closes when the workspace default in `Cargo.toml` turns from `allow` to the lint's own level and the root attributes go.
+
 ### Widget states still fill their handles in `init_state`
 
 > **Environments:** all · **Who it hurts:** Contributors copying a catalog widget's state · **Parity:** none (API shape)
