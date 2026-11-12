@@ -935,7 +935,11 @@ traits = [{ trait = "flui_semantics::platform::PlatformAccessibility", crate = "
 # The Activity is the system's, handed only to the application's
 # `android_main`: the composition root passes it on through this one entry, as
 # the facade's `run_app_android` takes it.
-entries = [{ item = "flui_native::android_platform", crate = "android_activity" }]
+entries = [
+    { item = "flui_native::android_platform", crate = "android_activity" },
+    # ADR-0327 §3: the application lends the host its IO runtime.
+    { item = "flui_native::executor::NativeExecutor::from_tokio", crate = "tokio" },
+]
 # Each target the core builds a host for, with the features that add public
 # items there.
 targets = [

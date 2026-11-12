@@ -74,8 +74,8 @@ pub(crate) use crate::owner::wake_deadline::FrameCount;
 use crate::owner::wake_deadline::ModalDelivery;
 use crate::owner::wake_deadline::WakeDeadline;
 use crate::{
-    error::PlatformError, executor::BackgroundExecutor, host, owner::OwnerHooks,
-    owner::OwnerPlatform, owner::handlers::OpenWindows, owner::hwnd_affinity::UserDataRefusal,
+    error::PlatformError, executor::NativeExecutor, host, owner::OwnerHooks, owner::OwnerPlatform,
+    owner::handlers::OpenWindows, owner::hwnd_affinity::UserDataRefusal,
     owner::window_delivery::WindowDelivery, platform::AppHandler, platform::Platform,
 };
 use broadcast::Subscriber;
@@ -848,7 +848,7 @@ pub struct WindowsLoop {
     // are not a field: they live in the owner control context, reachable
     // only on the owner thread through `owner_control.shares`.
     /// Background executor for async tasks
-    background_executor: Arc<BackgroundExecutor>,
+    background_executor: NativeExecutor,
 
     /// The monitors this platform last sampled and the registry of their ids,
     /// as the table made them.
@@ -915,8 +915,9 @@ impl WindowsLoop {
     /// registered for another host, and whatever the native setup refuses.
     pub(crate) fn try_new<H: WindowsHost>(
         windows: Arc<dyn ClassWindows>,
+        executor: NativeExecutor,
     ) -> Result<Self, PlatformError> {
-        Self::admit::<H>(windows, WindowIdentity::source(), H::drag)
+        Self::admit::<H>(windows, executor, WindowIdentity::source(), H::drag)
     }
 
     /// [`Self::try_new`] holding `drag` in place of the transport `H` makes, for
@@ -924,9 +925,10 @@ impl WindowsLoop {
     #[cfg(test)]
     pub(crate) fn with_drag<H: WindowsHost>(
         windows: Arc<dyn ClassWindows>,
+        executor: NativeExecutor,
         drag: Arc<dyn HostDrag>,
     ) -> Result<Self, PlatformError> {
-        Self::admit::<H>(windows, WindowIdentity::source(), move || drag)
+        Self::admit::<H>(windows, executor, WindowIdentity::source(), move || drag)
     }
 
     /// [`Self::try_new`] with the identity drawn from `source` and the transport
@@ -935,6 +937,7 @@ impl WindowsLoop {
     /// refusal (and every caught retry) leaves nothing to release.
     fn admit<H: WindowsHost>(
         windows: Arc<dyn ClassWindows>,
+        executor: NativeExecutor,
         source: &std::sync::atomic::AtomicU64,
         drag: impl FnOnce() -> Arc<dyn HostDrag>,
     ) -> Result<Self, PlatformError> {
@@ -1016,8 +1019,8 @@ impl WindowsLoop {
             })?
         };
 
-        // Create executors
-        let background_executor = Arc::new(BackgroundExecutor::new());
+        // The runtime the dialogs marshal through (ADR-0327 §3).
+        let background_executor = executor;
 
         tracing::info!("Windows platform initialized with Tokio executors");
 
