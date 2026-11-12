@@ -35,18 +35,6 @@ method = "with_env_var"
 reason = "written before the rule had a gate; its crate's rename removes it"
 
 [[allow]]
-crate = "flui-rendering"
-type = "SliverConstraintsBuilder"
-method = "with_axis_direction"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-rendering"
-type = "SliverConstraintsBuilder"
-method = "with_growth_direction"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
 crate = "flui-testing"
 type = "MountOptions"
 method = "with_capabilities"
