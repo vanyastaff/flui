@@ -13,7 +13,7 @@ from an event callback through the `cx` it receives (ADR-0086):
 
 ```rust,ignore
 RawButton::new(Text::new("Increment"))
-    .on_press(move |cx| count.update(cx, |n| *n += 1)),
+    .on_pressed(move |cx| count.update(cx, |n| *n += 1)),
 ```
 
 *(from `examples/counter.rs` — copied verbatim.)* `build` has no `cx`, so `count.set(cx, ..)`

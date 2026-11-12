@@ -9,7 +9,7 @@
 //! (ADR-0078). So a write in `build` has no writer to name:
 //!
 //! ```rust,ignore
-//! RawButton::new(Text::new("+")).on_press(move |cx| count.update(cx, |n| *n += 1))
+//! RawButton::new(Text::new("+")).on_pressed(move |cx| count.update(cx, |n| *n += 1))
 //! ```
 //!
 //! The types narrow the run-time guard; they do not replace it. A widget that

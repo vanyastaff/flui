@@ -343,7 +343,7 @@ fn a_render_object_that_panics_in_the_hit_test_answers_platform_before_the_owner
                 ui_runtime.presentation_id(),
                 &Stack::new(vec![
                     RawButton::new(Text::new("Press"))
-                        .on_press(|_| {})
+                        .on_pressed(|_| {})
                         .into_view()
                         .boxed(),
                     PanicsWhenHit.into_view().boxed(),

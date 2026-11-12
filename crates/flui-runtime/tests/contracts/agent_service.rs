@@ -56,7 +56,7 @@ impl ViewState<Counter> for CounterState {
         let presses = Arc::clone(&view.presses);
         Column::new((
             Text::new(format!("Count: {}", count.get(ctx))),
-            RawButton::new(Text::new("Go")).on_press(move |cx| {
+            RawButton::new(Text::new("Go")).on_pressed(move |cx| {
                 presses.fetch_add(1, Ordering::SeqCst);
                 count.update(cx, |n| *n += 1)
             }),

@@ -103,7 +103,7 @@ fn buttons(
     count: Signal<u32>,
 ) -> (RawButton, ElevatedButton, CupertinoButton) {
     (
-        raw.on_press(move |cx| count.set(cx, 1)),
+        raw.on_pressed(move |cx| count.set(cx, 1)),
         material.on_pressed(move |cx| {
             let _ = count.set(cx, 2);
         }),

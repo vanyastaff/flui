@@ -468,7 +468,7 @@ impl StatelessView for ButtonColumn {
         let rows: Vec<_> = (0..self.buttons)
             .map(|row| {
                 RawButton::new(Text::new(format!("Row {row}")))
-                    .on_press(|_cx| {})
+                    .on_pressed(|_cx| {})
                     .boxed()
             })
             .collect();
@@ -600,7 +600,7 @@ fn mount_cost(row: fn(usize) -> BoxedView) -> MountCost {
 fn perf_raw_button_over_text() {
     let button_row = |row: usize| {
         RawButton::new(Text::new(format!("Row {row}")))
-            .on_press(|_cx| {})
+            .on_pressed(|_cx| {})
             .boxed()
     };
     // What the process and the thread set up once (the font system, lazy

@@ -26,7 +26,7 @@ const STYLE: FocusRingStyle = FocusRingStyle {
 /// A themed button labelled `Go`.
 fn app() -> LaidOut {
     let mut app = lay_out(
-        DefaultFocusRingStyle::new(STYLE, RawButton::new(Text::new("Go")).on_press(|_cx| {})),
+        DefaultFocusRingStyle::new(STYLE, RawButton::new(Text::new("Go")).on_pressed(|_cx| {})),
         loose(400.0),
     );
     app.pump();

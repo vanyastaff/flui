@@ -22,7 +22,7 @@ const ROW: f64 = 40.0;
 /// A button labelled `label`, one row tall.
 fn button(label: String) -> flui_view::BoxedView {
     SizedBox::new(300.0, ROW)
-        .child(RawButton::new(Text::new(label)).on_press(|_cx| {}))
+        .child(RawButton::new(Text::new(label)).on_pressed(|_cx| {}))
         .boxed()
 }
 
@@ -482,7 +482,7 @@ pub(crate) fn sliver_keyboard_navigation() {
 /// A tile 90 px square labelled `label`.
 fn tile(label: String) -> flui_view::BoxedView {
     SizedBox::new(90.0, 90.0)
-        .child(RawButton::new(Text::new(label)).on_press(|_cx| {}))
+        .child(RawButton::new(Text::new(label)).on_pressed(|_cx| {}))
         .boxed()
 }
 

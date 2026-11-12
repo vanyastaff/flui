@@ -237,7 +237,7 @@ classification, with the command above as its census:
 | widgets `interaction/drag_target.rs` | `on_will_accept` (`-> bool`) | **query** | no (was yes) | — |
 | widgets `interaction/focus.rs` | `on_focus_change`, `on_key_event` (`-> KeyEventResult`) | event | no | not yet audited |
 | widgets `interaction/gesture_detector.rs` | 13: `on_tap`, `on_secondary_tap`, `on_long_press`, `on_double_tap`, `on_double_tap_down`, `on_multi_tap`, and the `on_*` callbacks of `DragSlot` (`down`, `start`, `update`, `end`, `cancel`), `TransformSlot` and `ForcePressSlot` | event | no | recognizer (§4); `on_tap` and `on_long_press` also from an assistive-technology request, inside that request's `EventCx` in the semantics-action drain |
-| widgets `interaction/raw_button.rs` | `on_press` | event | no | `GestureDetector::on_tap` through the button's `WriterSource` (takes `cx` already) |
+| widgets `interaction/raw_button.rs` | `on_pressed` | event | no | `GestureDetector::on_tap` through the button's `WriterSource` (takes `cx` already) |
 | widgets `scroll/interactive_viewer.rs` | `on_interaction_{start,update,end}` | event | no | not yet audited |
 | widgets `interaction/listener.rs` | `on_pointer_{down,up,move,hover,cancel,signal}`, `on_pointer_pan_zoom_update` | event | no | pointer dispatch |
 | widgets `interaction/listener.rs` | `on_scroll_claim`, `on_pointer_pan_zoom_claim` (`-> EventPropagation`) | **query** | no | — |
@@ -353,7 +353,7 @@ The changes land one at a time, each with the pre-PR checks (AGENTS.md, "Checkin
    higher-ranked signature, named in the widget-author documentation.
 3. The `Signal` write signatures, and removal of both `reactive()` accessors.
 4. The setter signatures, migrated crate by crate by `flui migrate`, starting with a pilot. The
-   pilot surface is one new catalog widget, `flui_widgets::RawButton` (its `on_press` takes
+   pilot surface is one new catalog widget, `flui_widgets::RawButton` (its `on_pressed` takes
    `Fn(&mut EventCx<'_>)` and wraps an unchanged `GestureDetector::on_tap` through a
    `WriterSource`), and the application code that uses it: the `counter` and `todo` examples
    (`examples/counter.rs`, [`examples/todo.rs`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/todo.rs)) and the `flui create` counter template
@@ -403,10 +403,10 @@ fixed before the code.
 
 | Site | Code | Excess |
 |---|---|---|
-| counter, Increment | `.on_press(move \|cx\| count.update(cx, \|n\| *n += 1))` | none |
-| todo, Toggle | `.on_press(move \|cx\| { items.update(cx, \|list\| { .. }) })` | none |
-| todo, Delete | `.on_press(move \|cx\| { items.update(cx, \|list\| list.retain(..)) })` | none |
-| todo, Add | `.on_press(move \|cx\| { add_item(cx, items, &button_field, &button_field.text()) })` | `cx` passed to the helper's parameter (the probe's pattern) |
+| counter, Increment | `.on_pressed(move \|cx\| count.update(cx, \|n\| *n += 1))` | none |
+| todo, Toggle | `.on_pressed(move \|cx\| { items.update(cx, \|list\| { .. }) })` | none |
+| todo, Delete | `.on_pressed(move \|cx\| { items.update(cx, \|list\| list.retain(..)) })` | none |
+| todo, Add | `.on_pressed(move \|cx\| { add_item(cx, items, &button_field, &button_field.text()) })` | `cx` passed to the helper's parameter (the probe's pattern) |
 | template, Increment | as the counter | none |
 
 The press callbacks return the write's `Result` (`EventOutcome`), so no site needs `let _` or
@@ -451,7 +451,7 @@ The probe's "implementation of `Fn` is not general enough" did not reproduce: on
 
 **Inference assumptions.** Both hold: `&mut EventCx` coerces to a generic `&W` (the `callback`
 doctest makes two writes through one `cx`), and a closure whose return type `R` is generic is
-inferred higher-ranked where `Fn(&mut EventCx<'_>) -> R` is expected (`RawButton::on_press`,
+inferred higher-ranked where `Fn(&mut EventCx<'_>) -> R` is expected (`RawButton::on_pressed`,
 `callback`, `WriterSource::write`).
 
 **Verdict.** The trigger did not fire: no converted site needs an annotation, and no converted

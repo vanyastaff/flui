@@ -44,7 +44,7 @@ impl ViewState<Moving> for MovingState {
     fn build(&self, view: &Moving, ctx: &dyn BuildContext) -> impl IntoView {
         let moved = self.moved;
         let presses = Arc::clone(&view.presses);
-        let go = RawButton::new(Text::new("Go")).on_press(move |cx| {
+        let go = RawButton::new(Text::new("Go")).on_pressed(move |cx| {
             presses.fetch_add(1, Ordering::SeqCst);
             moved.update(cx, |n| *n += 1)
         });
@@ -55,8 +55,8 @@ impl ViewState<Moving> for MovingState {
         };
         Column::new((
             go,
-            RawButton::new(Text::new("Same")).on_press(|_| {}),
-            RawButton::new(Text::new("Same")).on_press(|_| {}),
+            RawButton::new(Text::new("Same")).on_pressed(|_| {}),
+            RawButton::new(Text::new("Same")).on_pressed(|_| {}),
         ))
     }
 }
