@@ -50,7 +50,7 @@ pub trait ProxyView: Clone + 'static + Sized {
 macro_rules! impl_proxy_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> $crate::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> $crate::element::ElementKind {
                 $crate::element::ElementKind::proxy(self)
             }
         }

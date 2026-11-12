@@ -799,7 +799,7 @@ impl flui_view::StatelessView for FailingPage {
 }
 
 impl flui_view::View for FailingPage {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }

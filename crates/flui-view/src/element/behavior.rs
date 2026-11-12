@@ -699,12 +699,12 @@ where
         // mutable `owner` reborrow for `build_or_recover` is still free.
         let ctx_choice = make_build_ctx(core, owner);
         let ctx = ctx_choice.as_ctx();
-        // One clone of the view serves `provide` and `build`, taken before the
+        // One handle on the shared view serves `provide` and `build`, taken before the
         // reactive phase is armed: between the two hooks nothing the author
         // wrote runs (no `Clone`, no `Drop`), so the phase `publish_provided`
         // arms is always handed to `build_or_recover_begun`. The children
         // this build returns mount under what is published here.
-        let view = core.view().clone();
+        let view = std::rc::Rc::clone(core.shared_view());
         publish_provided(&mut self.publication, core, owner, |values| {
             view.provide(ctx, values);
         });
@@ -977,12 +977,12 @@ where
             );
             self.apply_pending = false;
         }
-        // One clone of the view serves `provide` and `build`, taken before the
+        // One handle on the shared view serves `provide` and `build`, taken before the
         // reactive phase is armed: between the two hooks nothing the author
         // wrote runs (no `Clone`, no `Drop`), so the phase `publish_provided`
         // arms is always handed to `build_or_recover_begun`. The children
         // this build returns mount under what is published here.
-        let view = core.view().clone();
+        let view = std::rc::Rc::clone(core.shared_view());
         let state = self
             .state
             .as_ref()
@@ -1373,16 +1373,16 @@ use super::provided::Dependents;
 pub struct InheritedBehavior<V: InheritedView> {
     /// Cached data for dependents.
     pub data: V::Data,
-    /// Cached clone of the inherited view itself.
+    /// The inherited view itself, in the core's shared allocation.
     ///
     /// `BuildContext::depend_on_inherited` must hand a `&V` to the
     /// caller's typed callback (the view itself, not just its data). The
     /// unified element's view lives in `ElementCore`, but the
     /// [`InheritedElementAccess`](crate::element::InheritedElementAccess)
     /// trait surface only carries `&mut InheritedBehavior<V>` through
-    /// the behavior-trait routing — so we cache a clone of the view
-    /// here, refreshed on every `on_view_updated`.
-    pub view_cache: V,
+    /// the behavior-trait routing — so the behavior shares the core's
+    /// allocation of the view, refreshed on every `on_view_updated`.
+    view_cache: std::rc::Rc<V>,
     /// Elements that depend on this InheritedElement.
     dependents: Dependents,
     /// Marker for view type.
@@ -1390,12 +1390,12 @@ pub struct InheritedBehavior<V: InheritedView> {
 }
 
 impl<V: InheritedView> InheritedBehavior<V> {
-    /// Create a new InheritedBehavior by extracting data + view clone
-    /// from the source view.
-    pub fn new(view: &V) -> Self {
+    /// Create a new InheritedBehavior by extracting data and sharing the
+    /// source view's allocation.
+    pub fn new(view: &std::rc::Rc<V>) -> Self {
         Self {
             data: view.data().clone(),
-            view_cache: view.clone(),
+            view_cache: std::rc::Rc::clone(view),
             dependents: Dependents::default(),
             _phantom: PhantomData,
         }
@@ -1421,10 +1421,10 @@ where
     }
 
     fn provided(&self, type_id: TypeId) -> Option<crate::element::ProvidedRef<'_>> {
-        // The cached view-clone is the value: the caller's typed downcast
+        // The shared view is the value: the caller's typed downcast
         // (`.downcast_ref::<V>()`) succeeds inside `BuildContextExt::depend_on`.
         (type_id == TypeId::of::<V>()).then_some(crate::element::ProvidedRef {
-            value: &self.view_cache as &dyn std::any::Any,
+            value: &*self.view_cache as &dyn std::any::Any,
             field: None,
         })
     }
@@ -1504,9 +1504,9 @@ where
         old_view: &V,
         owner: &mut crate::ElementOwner<'_>,
     ) {
-        // Refresh cached data + view-clone each update.
+        // Refresh cached data and the shared view each update.
         self.data = core.view().data().clone();
-        self.view_cache = core.view().clone();
+        self.view_cache = std::rc::Rc::clone(core.shared_view());
 
         // Field-granular (#1090): the provider reports WHICH fields changed
         // (`ALL` for a provider that never opted in — the

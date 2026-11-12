@@ -52,7 +52,7 @@ impl<C: Capability> StatefulView for Acquire<C> {
 }
 
 impl<C: Capability> View for Acquire<C> {
-    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
         flui_sdk::view::element::ElementKind::stateful(self)
     }
 }

@@ -39,12 +39,7 @@
 //! ```
 
 use flui_rendering::parent_data::SliverSlot;
-use std::{
-    any::TypeId,
-    cell::Cell,
-    marker::PhantomData,
-    rc::{Rc, Weak},
-};
+use std::{any::TypeId, cell::Cell, marker::PhantomData, rc::Rc};
 
 use flui_foundation::{ElementId, ListenerCallback, RenderId};
 use flui_rendering::pipeline::PipelineCell;
@@ -120,15 +115,6 @@ struct CoreState {
     /// fired outside a frame; captured at mount.
     external_scheduler: Option<ExternalBuildScheduler>,
 
-    /// The shared view (a [`BoxedView`](crate::BoxedView)'s allocation) the
-    /// stored configuration was last taken from, if it came from one. An
-    /// update offering that same allocation again changes nothing, which
-    /// [`crate::element::dispatch`] answers without cloning, replacing or
-    /// rebuilding. Weak, so the element never extends the life of a view (or
-    /// of what its closures captured); the allocation itself stays reserved
-    /// while this is held, so a different view can never be mistaken for it.
-    source_view: Option<Weak<dyn View>>,
-
     /// Where the view this element was mounted for was created, copied from
     /// [`View::creation_site`] at mount (zero-sized without sites).
     site: flui_foundation::CreationSite,
@@ -146,7 +132,6 @@ impl CoreState {
             self_id: None,
             element_parent: None,
             external_scheduler: None,
-            source_view: None,
             site: flui_foundation::CreationSite::unknown(),
         }
     }
@@ -292,11 +277,10 @@ where
     V: Clone + 'static,
     A: ElementArity,
 {
-    /// The current View configuration.
-    ///
-    /// Views are immutable and recreated each build cycle, so we clone
-    /// and store the current version.
-    view: V,
+    /// The current View configuration, in the shared allocation the
+    /// [`BoxedView`](crate::BoxedView) that offered it holds: an update
+    /// takes the new allocation instead of copying the view.
+    view: Rc<V>,
 
     /// Everything `V`-independent — lifecycle, depth, dirty flag, owner
     /// links — lives in the non-generic [`CoreState`] so its cold methods
@@ -335,7 +319,7 @@ where
     /// # Returns
     ///
     /// A new ElementCore in Initial lifecycle state.
-    pub fn new(view: V) -> Self {
+    pub fn new(view: Rc<V>) -> Self {
         Self {
             view,
             state: CoreState::new(),
@@ -487,18 +471,11 @@ where
         crate::element::dispatch::dispatch_view_update(self, new_view)
     }
 
-    /// Whether `shared` is the allocation the stored view was last taken from.
+    /// Whether `shared` is the allocation the stored view lives in. The
+    /// element holds that allocation, so a different view can never be
+    /// mistaken for it.
     pub(crate) fn is_taken_from(&self, shared: &Rc<dyn View>) -> bool {
-        self.state
-            .source_view
-            .as_ref()
-            .is_some_and(|source| std::ptr::addr_eq(source.as_ptr(), Rc::as_ptr(shared)))
-    }
-
-    /// Record where the stored view came from: a shared view, or `None` for
-    /// one built in place that nothing can offer again.
-    pub(crate) fn note_source_view(&mut self, source: Option<Weak<dyn View>>) {
-        self.state.source_view = source;
+        std::ptr::addr_eq(Rc::as_ptr(&self.view), Rc::as_ptr(shared))
     }
 
     // ========================================================================
@@ -515,7 +492,7 @@ where
     /// Replace the stored view. Used by
     /// [`crate::element::dispatch::dispatch_view_update`] after the
     /// `TypeId`-guarded downcast matches `V`.
-    pub(crate) fn replace_view_for_dispatch(&mut self, view: V) -> V {
+    pub(crate) fn replace_view_for_dispatch(&mut self, view: Rc<V>) -> Rc<V> {
         std::mem::replace(&mut self.view, view)
     }
 
@@ -622,9 +599,11 @@ where
         &self.view
     }
 
-    /// Get a mutable reference to the current View.
-    pub fn view_mut(&mut self) -> &mut V {
-        &mut self.view
+    /// The shared allocation the current view lives in: the one the
+    /// [`BoxedView`](crate::BoxedView) that offered it holds, so the element
+    /// keeps no copy of its own.
+    pub(crate) fn shared_view(&self) -> &Rc<V> {
+        &self.view
     }
 
     /// Check if this element should build.

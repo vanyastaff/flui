@@ -27,7 +27,7 @@ use flui_sdk::widgets::{Column, Expanded, PageView, SizedBox};
 struct Probe(Rc<Cell<u32>>);
 
 impl View for Probe {
-    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
         flui_sdk::view::element::ElementKind::stateful(self)
     }
 }

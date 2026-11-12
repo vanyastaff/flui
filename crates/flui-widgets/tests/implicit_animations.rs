@@ -1003,7 +1003,7 @@ pub(crate) fn outgoing_switcher_retirement_preserves_independent_captures() {
         drops: Rc<RefCell<Vec<(&'static str, bool)>>>,
     }
     impl View for ObservedView {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateless(self)
         }
         fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
@@ -1257,7 +1257,7 @@ struct KeyedOpacityState {
 }
 
 impl flui_view::View for KeyedOpacity {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {

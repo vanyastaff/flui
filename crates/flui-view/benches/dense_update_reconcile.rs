@@ -45,7 +45,7 @@ impl RenderView for KeyedLeaf {
 }
 
 impl View for KeyedLeaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 
@@ -90,7 +90,7 @@ impl RenderView for DenseHost {
 }
 
 impl View for DenseHost {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }

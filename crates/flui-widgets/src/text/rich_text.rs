@@ -138,7 +138,7 @@ impl RichText {
 }
 
 impl View for RichText {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 
