@@ -245,14 +245,6 @@ impl WindowSlot {
             let _released = self.lease.release();
             return Err(error);
         }
-        let max = gpu.device.limits().max_texture_dimension_2d;
-        if let Some((width, height)) = self.size
-            && (width > max || height > max)
-        {
-            // The new device's limit is below the size the old one took: the
-            // slot keeps its surface, unconfigured, until a resize fits.
-            return Err(EngineError::InvalidTargetSize { width, height });
-        }
         self.configure(gpu)
     }
 
@@ -448,10 +440,21 @@ impl WindowSlot {
 
     /// Configure the held surface at the slot's size from its own
     /// capabilities; nothing while it has no size or no surface.
+    ///
+    /// # Errors
+    /// [`EngineError::InvalidTargetSize`] when the size is over the device's
+    /// limit, which leaves the slot unconfigured; a configuration error.
     fn configure(&mut self, gpu: &Gpu<'_>) -> EngineResult<()> {
         let (Some(surface), Some((width, height))) = (self.lease.surface(), self.size) else {
             return Ok(());
         };
+        // Every configuration checks the size against the device it is made
+        // on: a rebuilt device's limit can be below the size an older one
+        // took, and the slot then stays unconfigured until a resize fits.
+        let max = gpu.device.limits().max_texture_dimension_2d;
+        if width > max || height > max {
+            return Err(EngineError::InvalidTargetSize { width, height });
+        }
         let (config, supports_copy_src, color) = crate::Renderer::derive_surface_config(
             surface,
             gpu.adapter,
