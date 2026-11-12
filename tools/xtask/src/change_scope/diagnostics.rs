@@ -11,7 +11,7 @@
 //! The cited files are read from the tracked expectations on each run, so the
 //! set follows them with no list to keep in step (ADR-0303 §9).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use super::classify::Repo;
@@ -93,19 +93,26 @@ fn package_dir(root: &Path, path: &str) -> String {
 pub(super) fn changed_input<'f>(
     repo: &Repo,
     files: &'f [String],
+    changed_lines: Option<&str>,
 ) -> anyhow::Result<Option<&'f str>> {
     let listing = repo.git(&["ls-files", "-z", "--", "*.stderr"])?;
     let mut cited = BTreeSet::new();
     let mut case_dirs = BTreeSet::new();
+    let mut messages = String::new();
     for expectation in listing.split('\0').filter(|f| !f.is_empty()) {
         let Ok(text) = std::fs::read_to_string(repo.root.join(expectation)) else {
             continue;
         };
         cited.extend(cited_paths(&text, &package_dir(&repo.root, expectation)));
+        for line in message_lines(&text) {
+            messages.push_str(line);
+            messages.push('\n');
+        }
         case_dirs.insert(parent(expectation).to_owned());
     }
     let runners = repo.git(&["grep", "-l", "-z", "-F", RUNNER_MARK, "--", "*.rs"])?;
-    for runner in runners.split('\0').filter(|f| in_tests(f)) {
+    let runner_files: Vec<&str> = runners.split('\0').filter(|f| in_tests(f)).collect();
+    for &runner in &runner_files {
         let Ok(text) = std::fs::read_to_string(repo.root.join(runner)) else {
             continue;
         };
@@ -126,6 +133,25 @@ pub(super) fn changed_input<'f>(
         return Ok(None);
     }
     let ws = repo.workspace()?;
+    // the packages that run a suite, and so compile what its cases name
+    let suites: BTreeSet<String> = runner_files
+        .iter()
+        .filter_map(|runner| ws.owning_package(runner))
+        .map(str::to_owned)
+        .collect();
+    let mut reaches_a_suite = BTreeMap::new();
+    let mut compiled_by_a_suite = |f: &str| -> Option<String> {
+        if !is_rust(f) || in_tests(f) {
+            return None;
+        }
+        let pkg = ws.owning_package(f)?.to_owned();
+        let reaches = *reaches_a_suite.entry(pkg.clone()).or_insert_with(|| {
+            ws.affected(&BTreeSet::from([pkg.clone()]))
+                .iter()
+                .any(|dependent| suites.contains(dependent))
+        });
+        reaches.then_some(pkg)
+    };
     let macro_crates: BTreeSet<&str> = ws
         .packages
         .values()
@@ -136,13 +162,75 @@ pub(super) fn changed_input<'f>(
         })
         .map(|pkg| pkg.name.as_str())
         .collect();
-    Ok(files.iter().map(String::as_str).find(|f| {
-        is_rust(f)
-            && !in_tests(f)
-            && ws
-                .owning_package(f)
-                .is_some_and(|pkg| macro_crates.contains(pkg))
-    }))
+    let compiled: Vec<(&str, String)> = files
+        .iter()
+        .map(String::as_str)
+        .filter_map(|f| compiled_by_a_suite(f).map(|pkg| (f, pkg)))
+        .collect();
+    if let Some((found, _)) = compiled
+        .iter()
+        .find(|(_, pkg)| macro_crates.contains(pkg.as_str()))
+    {
+        return Ok(Some(found));
+    }
+    // a message the compiler copies from the source: a `deprecated` note, an
+    // `on_unimplemented` message, a `compile_error!`
+    let quotes = |text: &str| prose(text).any(|fragment| messages.contains(fragment));
+    let found = match changed_lines {
+        Some(diff) => diff_lines(diff)
+            .filter(|(_, line)| quotes(line))
+            .find_map(|(file, _)| compiled.iter().find(|(f, _)| *f == file)),
+        None => compiled.iter().find(|(f, _)| {
+            std::fs::read_to_string(repo.root.join(f)).is_ok_and(|text| quotes(&text))
+        }),
+    };
+    Ok(found.map(|(f, _)| *f))
+}
+
+/// The message lines of an expectation: the error, warning, note and help
+/// texts and the labels under the carets, not the quoted source.
+fn message_lines(expectation: &str) -> impl Iterator<Item = &str> {
+    expectation.lines().filter(|line| {
+        let line = line.trim_start();
+        let label = line
+            .split_once('|')
+            .is_some_and(|(_, rest)| rest.trim_start().starts_with(['^', '-']));
+        ["error", "warning", "note", "help", "= "]
+            .iter()
+            .any(|p| line.starts_with(p))
+            || label
+    })
+}
+
+/// The pieces of prose in `text` long enough to name a message: the runs
+/// between quotes, escapes and format braces that hold a space.
+fn prose(text: &str) -> impl Iterator<Item = &str> {
+    text.split(['"', '\\', '{', '}', '\n'])
+        .map(str::trim)
+        .filter(|piece| piece.len() >= PROSE && piece.contains(' '))
+}
+
+/// The shortest piece [`prose`] matches: shorter ones are code (`a, b`), not
+/// a message.
+const PROSE: usize = 20;
+
+/// The added and removed lines of a unified diff, each with its file's
+/// repo-relative path.
+fn diff_lines(diff: &str) -> impl Iterator<Item = (&str, &str)> {
+    let mut file = "";
+    diff.lines().filter_map(move |line| {
+        if let Some(path) = line.strip_prefix("+++ b/") {
+            file = path;
+            None
+        } else if line.starts_with("+++ ") || line.starts_with("--- ") {
+            None
+        } else if let Some(path) = line.strip_prefix("diff --git a/") {
+            file = path.split_once(" b/").map_or(path, |(a, _)| a);
+            None
+        } else {
+            line.strip_prefix(['+', '-']).map(|text| (file, text))
+        }
+    })
 }
 
 /// The case paths a runner hands trybuild: the string literal of each
@@ -198,7 +286,7 @@ mod tests {
 
     fn input(files: &[&str]) -> Option<String> {
         let files: Vec<String> = files.iter().map(|&f| f.to_owned()).collect();
-        changed_input(repo(), &files)
+        changed_input(repo(), &files, None)
             .expect("reading the expectations")
             .map(str::to_owned)
     }
@@ -267,6 +355,41 @@ note: required because it appears within the type `X`
         }
     }
 
+    /// A message the compiler copies from the source reaches the suites
+    /// through the changed line that holds it, removed or added; another
+    /// line of the same file does not.
+    fn a_changed_message_reaches_the_suites() {
+        let value = "crates/flui-foundation/src/inspect/value.rs";
+        let files = [value.to_owned()];
+        let diff = |line: &str| {
+            format!(
+                "diff --git a/{value} b/{value}\n--- a/{value}\n+++ b/{value}\n@@ -77 +77 @@\n{line}\n"
+            )
+        };
+        let reaches = |line: &str| {
+            changed_input(repo(), &files, Some(&diff(line)))
+                .expect("reading the expectations")
+                .map(str::to_owned)
+        };
+        // the `deprecated` note `inspect_untyped_is_deprecated.stderr` copies
+        let note = "-        note = \"map the field to a typed `Value` (ADR-0242); a site that cannot yet carries `#[expect(deprecated, reason = \\\"…\\\")]` (ADR-0303 §7)\"";
+        assert_eq!(reaches(note).as_deref(), Some(value));
+        assert_eq!(
+            reaches("+    pub const fn new(value: &'a dyn fmt::Debug) -> Self {"),
+            None
+        );
+        // the message lines, not the quoted source, are what a change must name
+        let expectation = "error: use of deprecated function: the message text here\n  --> a.rs:1:1\n   |\n 1 | let quoted = \"source text, not a message\";\n   |     ^^^^^^ the label under the carets\n";
+        let messages: Vec<&str> = message_lines(expectation).collect();
+        assert_eq!(
+            messages,
+            [
+                "error: use of deprecated function: the message text here",
+                "   |     ^^^^^^ the label under the carets"
+            ]
+        );
+    }
+
     #[test]
     fn trybuild_inputs() {
         crate::table_test::run_table(
@@ -279,6 +402,10 @@ note: required because it appears within the type `X`
                 (
                     "a_diff_reaches_the_suites_through_what_they_cite",
                     a_diff_reaches_the_suites_through_what_they_cite as fn(),
+                ),
+                (
+                    "a_changed_message_reaches_the_suites",
+                    a_changed_message_reaches_the_suites as fn(),
                 ),
             ],
         );

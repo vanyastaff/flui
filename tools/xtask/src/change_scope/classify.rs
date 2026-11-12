@@ -454,7 +454,7 @@ impl Workspace {
     /// depending on them through normal and build edges, transitively, and
     /// then the dev-dependents of all of those. A dev-dependent is the last
     /// hop, because its library does not contain the dependency.
-    fn affected(&self, seeds: &BTreeSet<String>) -> BTreeSet<String> {
+    pub(super) fn affected(&self, seeds: &BTreeSet<String>) -> BTreeSet<String> {
         let mut scope = seeds.clone();
         let mut todo: Vec<String> = seeds.iter().cloned().collect();
         while let Some(pkg) = todo.pop() {
@@ -540,6 +540,19 @@ impl Repo {
         String::from_utf8(out.stdout).context("non-UTF-8 `git` output")
     }
 
+    /// The added and removed lines of the Rust files changed since the merge
+    /// base with `base` (with `worktree`, uncommitted work too), as a unified
+    /// diff with no context.
+    pub(super) fn changed_lines(&self, base: &str, worktree: bool) -> anyhow::Result<String> {
+        let merge_base = self.git(&["merge-base", base, "HEAD"])?;
+        let range = format!("{}..HEAD", merge_base.trim());
+        let mut diff = self.git(&["diff", "-U0", "--no-renames", &range, "--", "*.rs"])?;
+        if worktree {
+            diff.push_str(&self.git(&["diff", "-U0", "--no-renames", "HEAD", "--", "*.rs"])?);
+        }
+        Ok(diff)
+    }
+
     /// The files changed since the merge base with `base`, plus (with
     /// `worktree`) staged, unstaged and untracked work, for `cargo xtask affected --worktree`.
     pub(super) fn changed_files(&self, base: &str, worktree: bool) -> anyhow::Result<Vec<String>> {
@@ -620,8 +633,20 @@ fn first_five(files: &[&str]) -> String {
     files.iter().take(5).copied().collect::<Vec<_>>().join(", ")
 }
 
-/// Classifies the changed `files` (repo-relative, `/`-separated).
+/// Classifies the changed `files` (repo-relative, `/`-separated), reading the
+/// current text of each for the messages it holds.
 pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
+    classify_change(repo, files, None)
+}
+
+/// [`classify`], with the added and removed lines of the change as a unified
+/// diff (`changed_lines`) when there is one: a message the change removes
+/// counts as much as one it adds.
+pub(super) fn classify_change(
+    repo: &Repo,
+    files: &[String],
+    changed_lines: Option<&str>,
+) -> anyhow::Result<Scope> {
     let mut scope = classify_packages(repo, files)?;
     if scope.mode == Mode::Full && !files.is_empty() {
         // a workspace-wide input (Cargo.lock, ci.yml) beside a crate's change
@@ -630,7 +655,8 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         scope.seeds = owners.seeds.into_iter().collect();
         scope.manifests = owners.manifests.into_iter().collect();
     }
-    scope.trybuild_input = diagnostics::changed_input(repo, files)?.map(str::to_owned);
+    scope.trybuild_input =
+        diagnostics::changed_input(repo, files, changed_lines)?.map(str::to_owned);
     Ok(scope)
 }
 

@@ -72,11 +72,14 @@ pub(crate) fn affected(args: &AffectedArgs) -> anyhow::Result<ExitCode> {
     let scope = if args.full || event != Event::PullRequest {
         Scope::whole_workspace()
     } else {
-        let files = match &args.files {
-            Some(files) => files.clone(),
-            None => repo.changed_files(&args.base, args.worktree)?,
-        };
-        classify::classify(&repo, &files)?
+        match &args.files {
+            Some(files) => classify::classify(&repo, files)?,
+            None => classify::classify_change(
+                &repo,
+                &repo.changed_files(&args.base, args.worktree)?,
+                Some(&repo.changed_lines(&args.base, args.worktree)?),
+            )?,
+        }
     };
     let values = lane_args::lane_args(&repo, &scope, event)?;
     print!("{}", render(&values, scope.packages.len(), args.format));
