@@ -13,6 +13,8 @@
 
 use std::sync::Arc;
 
+use smallvec::SmallVec;
+
 use flui_foundation::geometry::{Matrix4, Rect};
 
 use crate::display_list::{DisplayList, DrawOp, Paint, paint_finite};
@@ -61,7 +63,7 @@ pub struct Canvas {
     ///
     /// Equal paints share an allocation. `Paint` is not `Hash`, so lookup
     /// uses equality over this vector. `reset()` clears the pool.
-    pub(crate) paint_pool: Vec<InternedPaint>,
+    pub(crate) paint_pool: SmallVec<[InternedPaint; 4]>,
 }
 
 /// A paint of the canvas's pool and whether its values are finite.
@@ -78,7 +80,7 @@ impl Canvas {
             display_list: DisplayList::new(),
             transform: Matrix4::identity(),
             save_stack: Vec::new(),
-            paint_pool: Vec::new(),
+            paint_pool: SmallVec::new(),
         }
     }
 

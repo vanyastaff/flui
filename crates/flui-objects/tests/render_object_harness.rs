@@ -12328,21 +12328,20 @@ fn harness_table_paints_row_decoration_then_children_then_border_in_order() {
     .run_frame();
 
     let commands = run.display_commands();
-    assert_eq!(
+    // No run of the table clips or saves, so none is spliced inside a scope
+    // of its own: a scope around a run that changes no replay state changes
+    // nothing.
+    assert!(
         commands
             .iter()
-            .map(|command| command.line.as_str())
-            .filter(|line| matches!(*line, "Save" | "Restore"))
-            .collect::<Vec<_>>(),
-        [
-            "Save", "Restore", "Save", "Restore", "Save", "Restore", "Save", "Restore"
-        ],
-        "decoration, each child, and border must retain separate paint scopes",
+            .all(|command| !matches!(command.line.as_str(), "Save" | "Restore")),
+        "runs that only draw are spliced without a scope; commands:\n{}",
+        commands
+            .iter()
+            .map(|c| c.line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
     );
-    let commands: Vec<_> = commands
-        .iter()
-        .filter(|command| !matches!(command.line.as_str(), "Save" | "Restore"))
-        .collect();
     let kinds: Vec<_> = commands.iter().map(|c| c.kind).collect();
     assert_eq!(
         kinds,

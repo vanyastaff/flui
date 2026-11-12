@@ -201,7 +201,7 @@ impl FormHandle {
     ///
     /// Takes the `&mut EventContext<'_>` of the event callback that saves (a
     /// submit button's press), and hands it to each `on_saved` (ADR-0086 §6):
-    /// `.on_press(move |ctx| form.save(ctx))`.
+    /// `.on_pressed(move |ctx| form.save(ctx))`.
     ///
     /// # Errors
     /// Refuses a detached form, a foreign presentation or a build-time call
