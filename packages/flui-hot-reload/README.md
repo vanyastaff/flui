@@ -5,8 +5,9 @@ without restarting the process.
 
 `flui-hot-reload` loads scene plugins (cdylibs) at runtime via a
 `HotReloadDriver`, watches for rebuilds, and swaps the plugin in place while
-the host window and GPU context stay alive. See `examples/desktop_scene/` and
-`examples/hot_reload_counter/` for the host/plugin pair layout.
+the host window and GPU context stay alive. See `examples/scene_render.rs` (the
+desktop host) with the workspace's `examples/desktop_scene/` plugin, and
+`examples/hot_reload_counter/` for the host/worker layout.
 
 Part of the [FLUI](https://github.com/vanyastaff/flui) workspace — pre-release,
 consumed by path (not published to crates.io).
@@ -30,13 +31,13 @@ with `cargo ndk` and pushes it to the device ([`docs/hot-reload.md`](../../docs/
 
 `flui-app` does not depend on this crate. A host installs one of its
 `DevReloadHook`s (ADR-0311) on its configuration, and the runner drives it.
-The hooks sit behind the `host-hook` feature, which the facade's `hot-reload`
-feature turns on; a scene plugin or worker crate leaves it off. The desktop and
-iOS runners drive `WorkerReloadHook`; the Android runner drives only
-`ScenePluginHook`:
+The hooks sit behind the `host-hook` feature, which the host crate turns on (an
+application adds this package itself, ADR-0311 §6); a scene plugin or worker
+crate leaves it off. The desktop and iOS runners drive `WorkerReloadHook`; the
+Android runner drives only `ScenePluginHook`:
 
 ```rust,ignore
-use flui::hot_reload::{ScenePluginHook, WorkerReloadHook};
+use flui_hot_reload::{ScenePluginHook, WorkerReloadHook};
 
 // Desktop host/worker split (`flui create --hot-reload`):
 let config = AppConfig::new().dev_reload(WorkerReloadHook::new(worker_path));

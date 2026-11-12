@@ -360,7 +360,7 @@ impl ScenePlugin {
             if pushed.exists() {
                 tracing::warn!(
                     path = %pushed.display(),
-                    "a scene plugin is on the device, but no DevReloadHook is installed on the                      AppConfig, so it will not be loaded; install                      `flui::hot_reload::ScenePluginHook` with `AppConfig::dev_reload`"
+                    "a scene plugin is on the device, but no DevReloadHook is installed on the                      AppConfig, so it will not be loaded; install                      `flui_hot_reload::ScenePluginHook` with `AppConfig::dev_reload`"
                 );
             }
         }

@@ -140,7 +140,7 @@ Subsecond reads there should it return (ADR-0311 §7).
   entry in ADR-0097's allowlist.
 - The reading of the dlopen worker in the study found two unreported hazards (the old image
   unmapped before the reassemble drops its views; the worker's own `REQUEST_REBUILD`,
-  `crates/flui-hot-reload/src/dispatch.rs:24`). Both are unrun hypotheses and belong to the
+  `packages/flui-hot-reload/src/dispatch.rs:24`). Both are unrun hypotheses and belong to the
   hot-reload work, not to this decision.
 
 ## Alternatives considered

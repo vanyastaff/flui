@@ -35,7 +35,7 @@
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui::hot_reload::{Scene, scene_plugin};
+/// use flui_hot_reload::{Scene, scene_plugin};
 ///
 /// fn my_scene(_width: f64, _height: f64) -> Scene {
 ///     Scene::default()
@@ -262,7 +262,7 @@ macro_rules! hot_reload_worker {
 ///
 /// ```rust,ignore
 /// use flui_hot_reload::app_plugin;
-/// use flui_view::prelude::*;
+/// use flui_sdk::view::prelude::*;
 ///
 /// #[derive(Clone)]
 /// struct MyApp;
@@ -274,8 +274,8 @@ macro_rules! hot_reload_worker {
 /// }
 ///
 /// impl View for MyApp {
-///     fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-///         flui_view::element::ElementKind::stateless(self)
+///     fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
+///         flui_sdk::view::element::ElementKind::stateless(self)
 ///     }
 /// }
 ///
@@ -428,7 +428,12 @@ macro_rules! app_plugin {
                         $crate::__private_text::TextContextHandle::standalone(),
                     ))
                 });
-                let scene = pipeline.draw_frame(width, height);
+                // A frame that produced no scene still hands the host a valid
+                // pointer: an empty scene, with the reason reported.
+                let scene = pipeline.draw_frame(width, height).unwrap_or_else(|error| {
+                    $crate::__private_report_frame(&error);
+                    $crate::Scene::default()
+                });
                 ::std::boxed::Box::into_raw(::std::boxed::Box::new(scene))
                     .cast::<::std::ffi::c_void>()
             })
@@ -518,15 +523,15 @@ mod thread_affinity_tests {
     #[derive(Clone)]
     struct ThreadAffinityProbeRoot;
 
-    impl flui_view::StatelessView for ThreadAffinityProbeRoot {
-        fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
-            flui_view::ErrorView::new("thread-affinity probe")
+    impl flui_sdk::view::StatelessView for ThreadAffinityProbeRoot {
+        fn build(&self, _ctx: &dyn flui_sdk::view::BuildContext) -> impl flui_sdk::view::IntoView {
+            flui_sdk::view::ErrorView::new("thread-affinity probe")
         }
     }
 
-    impl flui_view::View for ThreadAffinityProbeRoot {
-        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-            flui_view::element::ElementKind::stateless(self)
+    impl flui_sdk::view::View for ThreadAffinityProbeRoot {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
+            flui_sdk::view::element::ElementKind::stateless(self)
         }
     }
 

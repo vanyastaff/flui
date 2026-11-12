@@ -1,4 +1,4 @@
-use super::{DependencySource, ProjectPlan};
+use super::{DependencySource, FrameworkPackage, ProjectPlan};
 
 pub fn generate(
     name: &str,
@@ -19,7 +19,10 @@ pub fn generate(
 fn cargo_toml(name: &str, source: &DependencySource) -> String {
     let version = env!("CARGO_PKG_VERSION");
 
-    let deps = format!("flui = {}", source.dependency("flui", &[]));
+    let deps = format!(
+        "flui = {}",
+        source.dependency(FrameworkPackage::Facade, &[])
+    );
     let mode_comment = if matches!(source, DependencySource::Local(_)) {
         " (local development)"
     } else {

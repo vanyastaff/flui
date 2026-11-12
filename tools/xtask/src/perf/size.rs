@@ -24,10 +24,14 @@
 //! so the baseline is Linux x86_64's, which is where CI runs this.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 
 use anyhow::{Context, bail};
+use cargo_metadata::Message;
+use cargo_metadata::camino::Utf8PathBuf;
 
 use super::{Counts, Finding, Mode};
 
@@ -87,24 +91,16 @@ pub(super) enum Measure {
 }
 
 /// `cargo xtask perf --size [--graph] [--check | --bless]`.
-pub(super) fn run(
-    root: &Path,
-    target_dir: &Path,
-    mode: Mode,
-    measure: Measure,
-) -> anyhow::Result<ExitCode> {
+pub(super) fn run(root: &Path, mode: Mode, measure: Measure) -> anyhow::Result<ExitCode> {
     let mut counters = BTreeMap::new();
     for (name, triple) in GRAPH_TARGETS {
         counters.insert(format!("crates_{name}"), graph_packages(root, triple)?);
     }
     if measure == Measure::All {
-        counters.insert(
-            "counter_release_bytes".to_owned(),
-            built_size(root, target_dir, None)?,
-        );
+        counters.insert("counter_release_bytes".to_owned(), built_size(root, None)?);
         counters.insert(
             "counter_wasm_bytes".to_owned(),
-            built_size(root, target_dir, Some(WASM_TARGET))?,
+            built_size(root, Some(WASM_TARGET))?,
         );
     }
     let current: Counts = [(SCENARIO.to_owned(), counters)].into_iter().collect();
@@ -194,7 +190,12 @@ fn distinct_packages(tree: &str) -> usize {
 
 /// Builds the counter example in release for `target` (the host when `None`)
 /// and returns its artifact's size in bytes.
-fn built_size(root: &Path, target_dir: &Path, target: Option<&str>) -> anyhow::Result<u64> {
+///
+/// The artifact's path is the one Cargo reports for this build, not one
+/// derived from the target directory: a `CARGO_BUILD_TARGET` or `build.target`
+/// setting moves the output under `target/<triple>/`, and a guessed path would
+/// measure a stale binary from an earlier build.
+fn built_size(root: &Path, target: Option<&str>) -> anyhow::Result<u64> {
     let mut build = cargo(root);
     // What an application from `flui create` ships: its release profile strips
     // the symbols the workspace keeps for profiling.
@@ -207,35 +208,51 @@ fn built_size(root: &Path, target_dir: &Path, target: Option<&str>) -> anyhow::R
         "flui",
         "--example",
         EXAMPLE,
+        "--message-format",
+        "json-render-diagnostics",
     ]);
     if let Some(target) = target {
         build.args(["--target", target]);
     }
-    let status = build.status().context("building the counter example")?;
+    build.stdout(Stdio::piped()).stderr(Stdio::inherit());
+    let mut child = build.spawn().context("building the counter example")?;
+    let stdout = child
+        .stdout
+        .take()
+        .expect("BUG: the build's stdout is piped");
+    let mut artifact: Option<PathBuf> = None;
+    for message in Message::parse_stream(BufReader::new(stdout)) {
+        let message = message.context("reading the build's messages")?;
+        if let Message::CompilerArtifact(built) = message
+            && built.target.name == EXAMPLE
+            && built.target.is_example()
+        {
+            // Where Cargo reports no `executable` for the example, its module is
+            // then the `.wasm` among its files.
+            artifact = built
+                .executable
+                .or_else(|| {
+                    built
+                        .filenames
+                        .into_iter()
+                        .find(|file| file.extension() == Some("wasm"))
+                })
+                .map(Utf8PathBuf::into_std_path_buf);
+        }
+    }
+    let status = child.wait().context("building the counter example")?;
     if !status.success() {
         bail!("building the counter example failed ({status})");
     }
-    let artifact = artifact(target_dir, target);
+    let artifact = artifact.context("the build reported no executable for the counter example")?;
     let metadata =
         std::fs::metadata(&artifact).with_context(|| format!("reading {}", artifact.display()))?;
     Ok(metadata.len())
 }
 
-/// Where Cargo writes the counter example for `target`.
-fn artifact(target_dir: &Path, target: Option<&str>) -> PathBuf {
-    match target {
-        Some(target) => target_dir
-            .join(target)
-            .join("release/examples")
-            .join(format!("{EXAMPLE}.wasm")),
-        None => target_dir
-            .join("release/examples")
-            .join(format!("{EXAMPLE}{}", std::env::consts::EXE_SUFFIX)),
-    }
-}
-
 fn cargo(root: &Path) -> Command {
-    let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    let mut command =
+        Command::new(std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")));
     command.current_dir(root);
     command
 }

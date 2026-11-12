@@ -21,22 +21,18 @@ exclude = ["/ARCHITECTURE.md"]
 
 [features]
 default = []
-app-plugin = ["dep:flui-foundation", "dep:flui-view", "dep:flui-rendering", "dep:parking_lot"]
+# `app_plugin!`, `PluginPipeline` and the worker's rebuild requests.
+app-plugin = ["dep:parking_lot"]
 # `WorkerReloadHook` and `ScenePluginHook`, the `DevReloadHook`s a `flui-app`
-# host installs (ADR-0311 §1, §3). Off by default: the hook traits come through
-# `flui-sdk`, which brings the widget catalog, and a scene plugin or worker
-# cdylib that only loads code must not build it.
-host-hook = ["dep:flui-sdk"]
+# host installs (ADR-0311 §1, §3).
+host-hook = []
 
 [dependencies]
-# `view::dev_reload`, the hook trait the `host-hook` feature implements. The
-# SDK is an official package's own edge (ADR-0088 §2), so it needs no
-# exception.
-flui-sdk = { workspace = true, optional = true }
-flui-layer = { workspace = true }
-flui-foundation = { workspace = true, optional = true }
-flui-view = { workspace = true, optional = true }
-flui-rendering = { workspace = true, optional = true }
+# The package-author surface, the only framework edge of an official package
+# (ADR-0088 §2, ADR-0311 §6): `view::dev_reload` for the hooks, and
+# `hooks::{PluginPipeline, Scene, LayerTree, TextContextHandle}` for the
+# plugin ABI.
+flui-sdk = { workspace = true }
 parking_lot = { workspace = true, optional = true }
 tracing = { workspace = true }
 
@@ -50,19 +46,30 @@ libc = "0.2"
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
 
 [dev-dependencies]
-# The hook's unit tests run without `host-hook` (`src/lib.rs` compiles `hook`
-# under `cfg(test)` too), so a plain `cargo test -p flui-hot-reload` covers it.
-flui-sdk = { workspace = true }
-flui-view = { workspace = true, features = ["testing"] }
 # `tests/plugin_pipeline_text.rs` reads which text context a plugin's layout
 # was lent (`flui_painting::testing::text_context_lends`, through
 # `TextContextHandle::with`).
 flui-painting = { workspace = true, features = ["testing"] }
+# `TextContextHandle::with` is test support behind `flui-rendering`'s `testing`.
 flui-rendering = { workspace = true, features = ["testing"] }
-# The leader-watch test mounts a raw leader and watches it through the
-# scheduler's post-frame lane.
-flui-objects = { workspace = true }
-flui-scheduler = { workspace = true }
+# `tests/scene_ownership.rs` builds the layers a scene plugin returns.
+flui-layer = { workspace = true }
+# `examples/scene_render.rs`, the desktop host of a scene plugin: it opens a
+# window on the native host, polls `HotReloadDriver` and renders the plugin's
+# scene through the engine, and draws the engine's effects gallery.
+flui-engine = { workspace = true, features = ["dx12"] }
+flui-foundation = { workspace = true }
+flui-native = { workspace = true }
+flui-platform = { workspace = true }
+image = { workspace = true }
+pollster = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# `flui-rendering` is a dev-dependency only for its `testing` feature
+# (`TextContextHandle::with`); no test names the crate, so cargo-shear would call
+# it unused.
+[package.metadata.cargo-shear]
+ignored = ["flui-rendering"]
 
 [lints]
 workspace = true
@@ -75,16 +82,9 @@ path = "tests/main.rs"
 tier = "pkg"
 tier-kind = "official"
 order = 4
-# ADR-0088 §2: an official package's normal dependencies are the SDK and the
-# contract crates. These edges go when the package builds on `flui-sdk` alone
-# from `packages/` (ADR-0311 §6); the reach exceptions and the globals below go
-# with the dlopen reload path (ADR-0311 §7).
-edge-exceptions = [
-    { to = "flui-foundation", exit = "ADR-0311", reason = "the dlopen reload path's internal-crate edges" },
-    { to = "flui-layer", exit = "ADR-0311", reason = "the dlopen reload path's internal-crate edges" },
-    { to = "flui-rendering", exit = "ADR-0311", reason = "the dlopen reload path's internal-crate edges" },
-    { to = "flui-view", exit = "ADR-0311", reason = "the dlopen reload path's internal-crate edges" },
-]
+# ADR-0088 §2 holds: the package's one framework edge is `flui-sdk`
+# (ADR-0311 §6). The reach exceptions and the globals below go with the dlopen
+# reload path (ADR-0311 §7).
 reach-exceptions = [
     { to = "windows", exit = "ADR-0311", reason = "the dlopen loader's Win32 LibraryLoader calls" },
     { to = "android_log-sys", exit = "ADR-0311", reason = "the loader's Android logging" },

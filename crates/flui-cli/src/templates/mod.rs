@@ -12,7 +12,7 @@ mod source;
 mod widget;
 
 pub use plan::{PlannedFile, ProjectPlan};
-pub use source::DependencySource;
+pub use source::{DependencySource, FrameworkPackage};
 
 use crate::Template;
 use crate::app_id::AppId;

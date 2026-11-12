@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use flui_view::BuildContext;
+use flui_sdk::view::BuildContext;
 use parking_lot::Mutex;
 
 type RebuildHook = Arc<dyn Fn() + Send + Sync + 'static>;
@@ -181,7 +181,7 @@ mod tests {
                 register_request_rebuild_with_counter(|| panic!("rejected hook ran"), &counter)
             }))
             .expect_err("exhausted allocator must permanently refuse");
-            flui_foundation::panic::discard_payload(failure);
+            flui_sdk::foundation::panic::discard_payload(failure);
         }
         drop(first);
         request_rebuild();
@@ -203,11 +203,11 @@ mod tests {
         }))
         .expect_err("rejected hook is refused");
         assert!(
-            flui_foundation::panic::payload_text(failure.as_ref()).is_some_and(|message| {
+            flui_sdk::foundation::panic::payload_text(failure.as_ref()).is_some_and(|message| {
                 message.starts_with("BUG: rebuild hook generation capacity exhausted")
             })
         );
-        flui_foundation::panic::discard_payload(failure);
+        flui_sdk::foundation::panic::discard_payload(failure);
         assert_eq!(
             drops.load(Ordering::Relaxed),
             2,
@@ -272,11 +272,11 @@ mod tests {
         }))
         .expect_err("outgoing capture destructor panics");
         assert_eq!(
-            flui_foundation::panic::payload_text(failure.as_ref()),
+            flui_sdk::foundation::panic::payload_text(failure.as_ref()),
             Some("replaced capture destruction"),
             "the destructor failure propagates"
         );
-        flui_foundation::panic::discard_payload(failure);
+        flui_sdk::foundation::panic::discard_payload(failure);
         assert!(
             REQUEST_REBUILD.lock().hook.is_none(),
             "final-generation hook is withdrawn with its unwound guard"

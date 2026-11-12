@@ -51,7 +51,7 @@
 //!
 //! ## How It Works
 //!
-//! The plugin builds a real [`flui_layer::Scene`] using normal FLUI APIs.
+//! The plugin builds a real [`Scene`] using normal FLUI APIs.
 //! The macro wraps it with `extern "C"` functions that pass an opaque pointer
 //! (`Box::into_raw`) across the FFI boundary. The host moves the value out
 //! with `ptr::read` and hands the emptied box back to the plugin's
@@ -68,7 +68,7 @@
 //! ## Plugin Side (cdylib crate)
 //!
 //! ```rust,ignore
-//! use flui::hot_reload::{Scene, scene_plugin};
+//! use flui_hot_reload::{Scene, scene_plugin};
 //!
 //! fn my_scene(_width: f64, _height: f64) -> Scene {
 //!     Scene::default()
@@ -106,10 +106,11 @@
 //! development reload hook (ADR-0094 §1) on its configuration, and the runner
 //! drives it. With the `host-hook` feature, `WorkerReloadHook` drives the
 //! host/worker split and `ScenePluginHook` lets an Android scene plugin draw
-//! frames; the facade's `hot-reload` feature turns it on.
+//! frames. An application adds this package as a dependency of its own (the
+//! facade names no official package, ADR-0311 §6).
 //!
 //! ```rust,ignore
-//! use flui::hot_reload::WorkerReloadHook;
+//! use flui_hot_reload::WorkerReloadHook;
 //!
 //! let config = flui::AppConfig::new().dev_reload(WorkerReloadHook::new(worker_path));
 //! ```
@@ -149,7 +150,7 @@ mod abi;
 pub use abi::abi_token;
 
 /// Canonical scene payload shared by plugin factories and the host ABI.
-pub use flui_layer::Scene;
+pub use flui_sdk::hooks::Scene;
 
 // Re-exported so `app_plugin!`'s generated `flui_app_build` can log its
 // wrong-thread refusal via `$crate::__private_tracing::error!` instead of a
@@ -167,15 +168,43 @@ pub use tracing as __private_tracing;
 #[cfg(feature = "app-plugin")]
 #[doc(hidden)]
 pub mod __private_text {
-    pub use flui_rendering::pipeline::TextContextHandle;
+    pub use flui_sdk::hooks::TextContextHandle;
 }
 
-#[cfg(feature = "app-plugin")]
-mod pipeline;
 mod plugin;
 
 #[cfg(feature = "app-plugin")]
-pub use pipeline::PluginPipeline;
+pub use flui_sdk::hooks::{PluginFrameError, PluginPipeline};
+
+// Re-exported so `app_plugin!`'s generated `flui_app_build` can report a frame
+// that produced no scene where the plugin's platform shows it: the host's
+// tracing subscriber does not reach a `dlopen`ed image, so this writes to
+// logcat on Android and to stderr elsewhere. `#[doc(hidden)]`, never named
+// outside this crate's own macros.
+#[cfg(feature = "app-plugin")]
+#[doc(hidden)]
+pub fn __private_report_frame(error: &PluginFrameError) {
+    let message = error.to_string();
+    #[cfg(target_os = "android")]
+    {
+        let tag = c"PluginPipeline";
+        let message = std::ffi::CString::new(message).unwrap_or_default();
+        // SAFETY: `tag` and `message` are NUL-terminated C strings that outlive
+        // the call; liblog copies both before returning and retains neither.
+        #[expect(unsafe_code, reason = "liblog's C entry point")]
+        unsafe {
+            android_log_sys::__android_log_write(
+                android_log_sys::LogPriority::INFO as i32,
+                tag.as_ptr(),
+                message.as_ptr(),
+            );
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        eprintln!("[PluginPipeline] {message}");
+    }
+}
 
 // Dynamic library loading is not available on wasm32
 #[cfg(not(target_arch = "wasm32"))]

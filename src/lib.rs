@@ -73,7 +73,6 @@ await its returned request or poll `try_result` to obtain the window result."
 //! | `cupertino` | off | `flui::cupertino` |
 //! | `http` | off | the built-in `HttpCapability` provider, each host's own HTTP stack (`ureq` over rustls on Linux); off, an `HttpCapability` request is refused as not registered |
 //! | `system` | off | `flui::services::system`: the launcher and file-dialog providers |
-//! | `hot-reload` | off | re-exports `flui-hot-reload` as `hot_reload`; install its hook with `AppConfig::dev_reload` |
 //! | `devtools` | off | re-exports `flui-devtools` as `devtools`: the frame profiler, timeline and inspector counters |
 //! | `driver` | off | the driver agent in an optimized build; every debug build serves its windows to a driver launched with an endpoint (ADR-0239) |
 //! | `native` | off | `flui::native`, the operating systems' window extensions (Evolving) |
@@ -85,11 +84,10 @@ await its returned request or poll `try_result` to obtain the window result."
 //! **absent**, not empty — `flui::cupertino` without the `cupertino` feature is
 //! an unresolved-import error at the use site, which is the diagnostic you
 //! want.
-//! Enabling `hot-reload` makes the tooling available; it does not install a
-//! driver. Desktop and iOS poll an installed development hook, Android drives
-//! its scene-frame hook, and the web runner drives no hook. The feature remains
-//! compile-safe on web and iOS so workspace feature unification does not break
-//! an otherwise supported cross-target build.
+//! Hot reload is the official package `flui-hot-reload`, which an application
+//! adds as a dependency of its own and installs with
+//! `AppConfig::dev_reload`; the facade re-exports no package for it
+//! (ADR-0311 §6).
 //!
 //! Additional opt-in capabilities are `testing` (the `flui::testing` headless
 //! harness, normally enabled in a development dependency) and `serde`
@@ -202,9 +200,6 @@ pub use flui_foundation as foundation;
 pub use flui_foundation::geometry;
 /// The typed self-description of a node, and its derive, for application-defined types.
 pub use flui_foundation::inspect::Inspect;
-/// Development hot-reload support. Requires the `hot-reload` feature.
-#[cfg(feature = "hot-reload")]
-pub use flui_hot_reload as hot_reload;
 /// The Material Design system (`flui-material`). Requires the `material`
 /// feature.
 #[cfg(feature = "material")]

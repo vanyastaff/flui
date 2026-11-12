@@ -36,7 +36,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use flui_layer::Scene;
+use flui_sdk::hooks::Scene;
 
 use crate::{
     host::{PluginKind, ScenePlugin},

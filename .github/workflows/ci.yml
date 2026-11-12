@@ -1119,8 +1119,8 @@ jobs:
   # steps (tools/xtask/src/tasks/web.rs holds the commands and why):
   #   wasm-check — check + lib/bin clippy of every package that builds for
   #                wasm32 (a package opts out with `[package.metadata.flui]
-  #                wasm = false`, a reason beside it), plus the facade's
-  #                hot-reload feature. The clippy pass is the only lint over
+  #                wasm = false`, a reason beside it), plus `flui-hot-reload`
+  #                with every feature. The clippy pass is the only lint over
   #                flui-native's wasm32-only web backend.
   #   wasm-link  — really links the two web demos and checks their import
   #                surface against tools/xtask/fixtures/wasm/import-allowlist.txt:
