@@ -18,15 +18,26 @@ pub use android_activity::AndroidApp;
     label = "returns `{Self}`"
 )]
 pub trait EntryOutcome {
+    /// Whether this outcome carries a failure to report.
+    fn failed(&self) -> bool;
+
     /// Log the failure this outcome carries, if any.
     fn report(self);
 }
 
 impl EntryOutcome for () {
+    fn failed(&self) -> bool {
+        false
+    }
+
     fn report(self) {}
 }
 
 impl<E: std::fmt::Display> EntryOutcome for Result<(), E> {
+    fn failed(&self) -> bool {
+        self.is_err()
+    }
+
     fn report(self) {
         if let Err(error) = self {
             tracing::error!(%error, "FLUI could not start");
@@ -45,7 +56,15 @@ pub fn android<R: EntryOutcome>(app: AndroidApp, entry: fn() -> R) {
     // Whatever the run left: an entry that never ran one does not leak the
     // `AndroidApp` into the next start.
     drop(crate::app::runner::take_android_entry());
-    outcome.report();
+    if outcome.failed() {
+        // An entry that failed before its run started (a `?` on loading its
+        // configuration) left no subscriber: install FLUI's default, which
+        // keeps one the application installed itself, so the failure reaches
+        // logcat instead of a subscriber-less `tracing` event.
+        let _installation =
+            crate::app::logging::init_managed_logging(&crate::app::AppConfig::default());
+        outcome.report();
+    }
 }
 
 /// Compiles only for an entry function whose outcome is an [`EntryOutcome`];
