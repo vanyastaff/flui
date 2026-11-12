@@ -75,9 +75,11 @@ lets a test hand every layer the same scripted client.
    client.
 2. **The client drives its requests.** `send`'s future and a body's chunks need no runtime of the
    caller's; dropping either abandons the request.
-3. **Providers.** `flui-app` registers the built-in provider behind its `http` feature (on by
-   default): every host sends through a stack of its own, which needs no Tokio, so an embedder's
-   executors send as the host's own lanes do. The caller's future waits on a channel, and each
+3. **Providers.** `flui-app` registers the built-in provider behind its `http` feature, which
+   the facade's `http` turns on and which is off by default like every capability (ADR-0088 §6):
+   an application that never sends links no HTTP client or TLS stack, and without the feature a
+   request for `HttpCapability` is refused as not registered. Every host sends through a stack
+   of its own, which needs no Tokio, so an embedder's executors send as the host's own lanes do. The caller's future waits on a channel, and each
    exchange holds a slot of the run's IO lane until its body ends, fails or is dropped; a lane that
    shuts down under an exchange ends it with `Cancelled`. On the web the page's `fetch` sends
    (`flui_native::http::FetchClient`, a task of the page answering through a channel), and each

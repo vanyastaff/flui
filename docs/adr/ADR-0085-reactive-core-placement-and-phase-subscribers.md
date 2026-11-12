@@ -526,4 +526,4 @@ Planned:
 |---|---|---|
 | `compile_fail`: no driver is `Clone`; `ReadScope` reaches no driver hook (step 2) | The read side cannot drive | No drivers |
 | One test per phase guard (step 2); the first render subscriber's repaint test (step 3) | A write during layout or paint is refused or deferred as §4 specifies; a write outside the frame repaints the render object and nothing else, observed through the pipeline's paint record, and fails with the subscription removed | No phase readers |
-| `cargo tree -p flui-view -e features` | No `signals` feature after §5 | Open: `flui-view`, `flui-testing`, `flui-widgets` and `flui-app` keep an empty, ignored `signals` feature because CI's `test-features` job still passes it by name; the step and the four shims go together |
+| `cargo tree -p flui-view -e features` | No `signals` feature after §5 | Met: no crate declares one |
