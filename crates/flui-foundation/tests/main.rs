@@ -67,3 +67,6 @@ mod window_metrics;
 
 // The `testing` feature's wakers.
 mod testing_kit;
+
+// The owner thread's seams carry no thread bound (ADR-0323 §4).
+mod owner_local;

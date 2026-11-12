@@ -197,7 +197,7 @@ impl ElementUnmounted {
 /// fires once, when the embedder clears or replaces the observer or when
 /// its owner is dropped. An owner dropped while its thread unwinds a panic
 /// emits nothing.
-pub trait TreeObserver: Send + Sync {
+pub trait TreeObserver {
     /// A fresh element was minted and mounted.
     fn element_mounted(&self, event: &ElementMounted) {
         let _ = event;

@@ -96,7 +96,7 @@ pub struct ElementRebuilt { pub element: ElementId, pub view_type_id: TypeId, pu
 #[non_exhaustive] #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ElementUnmounted { pub element: ElementId }
 
-pub trait TreeObserver: Send + Sync {
+pub trait TreeObserver {
     fn element_mounted(&self, event: &ElementMounted) { let _ = event; }
     fn element_moved(&self, event: &ElementMoved) { let _ = event; }
     fn element_rebuilt(&self, event: &ElementRebuilt) { let _ = event; }
@@ -114,8 +114,9 @@ pub trait TreeObserver: Send + Sync {
   implementors.
 - **`#[non_exhaustive]` + `new`:** protects matchers; constructors are in-workspace only, so
   appending a field is not a consumer break.
-- **`Send + Sync`:** emission happens on the UI runtime's owner thread, while a devtools reader (or one
-  collector shared by several UI runtimes) lives elsewhere.
+- **No thread bound** (ADR-0323 §4): emission happens on the UI runtime's owner thread, and the
+  observer is called there alone. A reader on another thread (a devtools server, one collector
+  for several UI runtimes) is reached through a `handle` or a `job` the observer holds.
 
 ### 3. Registration is per-UI runtime, one slot, on `BuildOwner` — with a seeded install for mid-run attach
 
