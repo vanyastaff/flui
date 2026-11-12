@@ -48,6 +48,11 @@ workspace = true
 name = "material_it"
 path = "tests/main.rs"
 
+# Installs a counting global allocator, so it is a binary of its own.
+[[test]]
+name = "perf"
+path = "tests/perf.rs"
+
 [package.metadata.flui]
 tier = "pkg"
 tier-kind = "official"

@@ -158,7 +158,13 @@ which reads the focus node.
 
 - `Hovered`: a pointer is inside the mouse region, from the first one in to the last one out (a
   mouse and a hovering pen are two);
-- `Pressed`: a contact a recognizer tracks is down and not yet rejected;
+- `Pressed`: a contact a recognizer of the node tracks is down and not yet rejected, or an
+  activation the control runs holds it. The controller counts the sources: the node's contact and
+  the holds a control takes with `WidgetStatesController::hold_pressed`, a `PressHold` token
+  (`#[doc(hidden)]`, for the catalogs) that releases its hold when dropped. `Pressed` is set while
+  any source is live and the control is enabled, so a contact inside a hold, or a hold inside a
+  contact, is one press. Flutter's `InkWell` keeps `pressed` for `_activationDuration` after an
+  activation; `InkWell` here holds a `PressHold` for that time;
 - `Focused`: the node or a descendant of it holds the primary focus, as `Focus::on_focus_change`
   reports it;
 - `FocusVisible`: the node holds focus and focus is shown (ADR-0079);
@@ -179,7 +185,12 @@ When the element unmounts, or the control hands the node another controller, the
 states it wrote from the one it stops writing to, so a shared controller keeps no state of a
 control that is gone. A controller given later starts at what the node is: the five states are the
 node's, so one that arrives holding any of them keeps only what is true of this control, and a
-press or a hover under way follows its contact or its pointers to it.
+press or a hover under way follows its contact or its pointers to it. A control that hands its node
+another controller under a hold takes a hold on the new one before it drops the old, and a control
+that becomes disabled drops its holds. Before it subscribes to a controller, a control may set
+`Disabled` on it to the value the node will write in the next build (Flutter's
+`initStatesController`), so the node's write notifies nobody while the control builds; it writes no
+other state.
 
 The two focus edges are delivered each on its own: a handler of one that panics does not cost the
 other, and the first failure is the one resumed (ADR-0281).
@@ -393,6 +404,17 @@ render object or already owns the element the value comes from.
   `nested_raw_button_contests_like_gesture_detector`: a table of contacts (tap, drag past slop,
   long press, cancel) gives the same winner, the same callbacks and the same order as the
   wrappers.
+- `packages/flui-material/tests/perf.rs`, `perf_ink_well_over_text`: what an `InkWell` adds to its
+  `Text`, held by `packages/flui-material/perf/baseline/ink_well_over_text.toml`.
+- `ink_well_a11y_tree_matches_wrappers` and `ink_well_contests_like_gesture_detector`: an
+  `InkWell` on the node publishes the tree of the same well composed from the wrappers (node ids
+  compared by the order they first appear in, since an id is the arena slot the assembly order
+  gave it) and contests a scrollable and a nested well as they do;
+  `a_disabled_ink_well_is_disabled_in_every_part`: its rows of §2.
+- `a_press_hold_and_a_contact_give_one_pressed_edge`: a contact inside a hold and a hold inside a
+  contact give one edge down and one up, and a hold on a disabled control presses nothing;
+  `the_press_hold_survives_a_rebuild_and_a_disable_ends_it`: `InkWell`'s hold through a rebuild,
+  across a controller handed over under it, and ended by a disable.
 - `disabled_raw_button_is_disabled_in_every_part`: one switch, the six rows of §2, including a
   disable during a contact. The pointer and
   action rows of a control that keeps its callback while disabled are the node's `switch_tests`

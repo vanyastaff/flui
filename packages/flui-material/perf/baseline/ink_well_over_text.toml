@@ -1,0 +1,8 @@
+# Held by packages/flui-material/tests/perf.rs, which fails when a run costs
+# more; counts, not timings. Lower it by hand from a FLUI_PERF_OUT record.
+
+[ink_well_over_text]
+allocations = 83
+bytes = 11689
+elements = 3
+render_nodes = 2
