@@ -435,6 +435,8 @@ pub(crate) struct Indication {
     rebuild: RefCell<Option<RebuildHandle>>,
     /// Whether the last build attached the painter.
     painted: Cell<bool>,
+    /// Set by `dispose`: a disposed indication starts no state layer.
+    disposed: Cell<bool>,
     /// This indication, for the runs' settle callbacks.
     this: Weak<Self>,
 }
@@ -463,6 +465,7 @@ impl Indication {
             repaint: Rc::new(ChangeNotifier::new()),
             rebuild: RefCell::new(None),
             painted: Cell::new(false),
+            disposed: Cell::new(false),
             this: Weak::clone(this),
         })
     }
@@ -607,7 +610,8 @@ impl Indication {
             self.layer_color.set(Some(color));
         }
         // A layer at rest that stays invisible needs no animation yet.
-        let started = if self.layer.borrow().is_none() && target_alpha > 0.0 {
+        let started = if !self.disposed.get() && self.layer.borrow().is_none() && target_alpha > 0.0
+        {
             self.start_layer()
         } else {
             Ok(())
@@ -748,13 +752,13 @@ impl Indication {
         self.sync();
     }
 
-    /// Stop every run.
+    /// Stop every run and let the state layer go for good: a `sync` after
+    /// this starts none.
     pub(crate) fn dispose(&self) {
+        self.disposed.set(true);
         let waves = std::mem::take(&mut *self.waves.borrow_mut());
         drop(waves);
-        if let Some(layer) = self.layer.borrow_mut().as_mut() {
-            layer.dispose();
-        }
+        self.release_layer();
     }
 
     /// The state layer's colour now, or `None` when it is invisible.
