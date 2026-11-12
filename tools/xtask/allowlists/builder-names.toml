@@ -27,9 +27,3 @@ crate = "flui-interaction"
 type = "GestureSettings"
 method = "with_velocity_estimator"
 reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"
-
-[[allow]]
-crate = "flui-log"
-type = "FilterConfig"
-method = "with_env_var"
-reason = "written before the rule had a gate; its crate's rename removes it"
