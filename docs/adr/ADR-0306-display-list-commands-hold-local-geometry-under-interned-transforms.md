@@ -100,9 +100,10 @@ any other pushes one. `Matrix4`'s `==` is exact (`matrix4.rs:812-818`) and is ap
 finite matrices, so it is reflexive on everything it compares. The ops of one run share one entry. `append` rebases each
 appended id by the receiving table's length with `checked_add(..).expect("BUG: two transform
 tables fit in the address space")`, since each table holds at most `isize::MAX / 128` entries, and
-keeps its swap when the receiver is empty; `append_isolated` brackets the run with `Save` and
-`Restore` under the identity. No public item names `TransformId` or `RecordedOp`, so the ids of two
-lists cannot be compared or mixed. `record`, `append`, `append_isolated` and `clear` each update all
+keeps its swap when the receiver is empty; `append_isolated` brackets a run that holds a clip, a
+save, a restore or a layer scope with `Save` and `Restore` under the identity, and splices a run
+that only draws as `append` does, since a scope around it changes nothing. No public item names
+`TransformId` or `RecordedOp`, so the ids of two lists cannot be compared or mixed. `record`, `append`, `append_isolated` and `clear` each update all
 six fields.
 
 §2. **Geometry is local and `f64`; no op holds its render object's position.** `DrawOp`'s geometry
