@@ -226,6 +226,19 @@ of its own.
   a `Cargo.lock` or workflow change sits beside a crate's change. It does not cover a dependent's
   feature-gated edge, which main's feature-matrix still compiles: those edges would double the
   pass for a change to one widely used crate.
+- **What the gate reports is read from its list and the facade's crates.** `send-positions` lists
+  every `Send` or `Sync` an author wrote in the facade's public API (ADR-0136 §3). In a crate the
+  facade reaches, `plan` sets `send_positions_required` when a changed library line, added or
+  removed, does one of these (`change_scope::thread_positions`):
+  - names `Send` or `Sync` as a word, outside a comment;
+  - declares a `pub use` or `pub mod`, which decides what the facade re-exports;
+  - names, in the file that defines an item the list names, a segment of that item's path
+    there (`AppConfig`, `with_memory_reclaim`), so a rename or a move on a line apart from the
+    bound is seen.
+
+  A pull request then runs `api-contracts` with `send-positions` only; `api-closure` stays on
+  main. What these lines miss is an item that turns public on a line that names no marker, while
+  its bound sits on another line. Main's run still catches that.
 - **The aggregator recomputes the run.** Each such job is a row of `ON_DEMAND`
   (`change_scope/aggregator.rs`), which names the job and the `plan` output that asks for it.
   `ci-verify` reads that output and fails a job that ran without being asked, or skipped when it
@@ -270,6 +283,9 @@ of its own.
 - `trybuild_inputs` (`tools/xtask/src/change_scope/diagnostics.rs`) checks which files reach the
   suites. A type an expectation cites, the expectation, its case, a runner and the toolchain do.
   Another source file of the same crate, documentation and tooling do not (§9).
+- `send_positions_inputs` (`tools/xtask/src/change_scope/thread_positions.rs`) checks which lines
+  reach `send-positions`. A changed marker, a public re-export and a listed item's name in its
+  file do. Another line, a comment, a test, tooling and the same name in another file do not (§9).
 - `on_demand_jobs_are_gated_on_their_output` and `an_on_demand_job_runs_exactly_when_asked` in
   `aggregator_contract` check two things: every `ON_DEMAND` job's `if:` is the condition its row
   states, and `ci-verify` fails a job that ran without being asked or skipped when asked (§9).
