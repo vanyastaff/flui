@@ -158,7 +158,7 @@ use signal::{OwnerSignal, SignalTransport};
 /// ```
 pub struct OwnerPlatform {
     platform: Arc<dyn Platform>,
-    hooks: Arc<dyn OwnerHooks>,
+    hooks: Rc<dyn OwnerHooks>,
     // `_owner_affine` makes the type `!Send + !Sync`, so owner-thread state stays
     // on the thread that created it; the fields stay private so a caller cannot
     // swap the backend or hooks out from under that affinity.
@@ -178,7 +178,7 @@ impl OwnerPlatform {
     /// owner thread may create directly outside callbacks) at any later
     /// point on that same thread. `pub(crate)`: not part of the public
     /// constructor surface (see the module docs' crate-seal note).
-    pub(crate) fn new(platform: Arc<dyn Platform>, hooks: Arc<dyn OwnerHooks>) -> Self {
+    pub(crate) fn new(platform: Arc<dyn Platform>, hooks: Rc<dyn OwnerHooks>) -> Self {
         Self {
             platform,
             hooks,
@@ -903,7 +903,7 @@ pub enum WaitError {
 
 /// Backend-specific window-open dispatch behind [`OwnerPlatform`], kept
 /// `pub(crate)` alongside [`OwnerPlatform`]'s own private fields.
-pub(crate) trait OwnerHooks: Send + Sync {
+pub(crate) trait OwnerHooks {
     fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
         drop(callback);
         Err(WakeRegistrationError::Unsupported)

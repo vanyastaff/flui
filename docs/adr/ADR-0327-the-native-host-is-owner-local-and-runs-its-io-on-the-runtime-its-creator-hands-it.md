@@ -179,11 +179,15 @@ documentation and type-checked:
 1. this record;
 2. `NativeExecutor`, `CurrentHost::start_with`, `BackgroundExecutor` made `pub(crate)` without `block` and `spawn`, the Windows dialogs answering through a `oneshot`;
 3. `ExecutionServices::io_runtime`, and `flui-app` starts the services first and hands the runtime over;
-4. the thread bounds leave `Platform`, `Loop`, `Window::Shared`, `OpenWindows`, `OwnerHooks` and
-   `on_wake` in one change across every host, bounds only, with `cross-typecheck` green on every
-   target before it merges;
+4. the thread bounds leave `Platform`, `Loop`, `Window::Shared`, `OpenWindows` and `OwnerHooks` in
+   one change across every host, bounds only, with `cross-typecheck` green on every target before
+   it merges;
 5. one PR per host moves `Arc`/`Mutex` to `Rc`/`RefCell` inside the loop and windows and deletes
-   its `unsafe impl Send/Sync`: headless, X11, Wayland, Windows, macOS, iOS, Android, web;
+   its `unsafe impl Send/Sync`: headless, X11, Wayland, Windows, macOS, iOS, Android, web. With
+   the last of them `run_shared` takes `Rc<Self>` and the callbacks of `on_wake` and
+   `on_keyboard_layout_change` lose `Send`: until then the callbacks sit in the owner signal's
+   state, which other threads lock to wake the owner, and the owner-local turn slot each host gets
+   in its step is where they move;
 6. `flui-platform`'s five traits lose `Send + Sync` (ADR-0323 §4) and `WindowFacets` holds `Rc`;
 7. `OwnerSlot`, `OwnerCell` and `OwnerMap` are deleted.
 

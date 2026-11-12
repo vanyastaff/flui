@@ -1045,7 +1045,7 @@ impl host::Loop for X11Loop {
         // The delivery holds the platform and the hooks weakly: they live in
         // this frame until the loop ends, declared before the guard so they
         // outlive it and the handler still hears the quit.
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+        let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
             Arc::clone(&platform),
             Arc::clone(&self.signal),
         ));
@@ -1067,10 +1067,7 @@ impl host::Loop for X11Loop {
         // not in the light one it would otherwise wait a turn to leave.
         self.deliver_appearance();
         self.app
-            .ready(OwnerPlatform::new(
-                Arc::clone(&platform),
-                Arc::clone(&hooks),
-            ))
+            .ready(OwnerPlatform::new(Arc::clone(&platform), Rc::clone(&hooks)))
             .map_err(PlatformError::bootstrap)?;
         self.signal
             .start()

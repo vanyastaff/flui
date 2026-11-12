@@ -1323,7 +1323,7 @@ impl host::Loop for WindowsLoop {
         // The delivery holds the platform and the hooks weakly: they live in
         // this frame until the loop ends, declared before the guard so they
         // outlive it and the handler can still hear the quit.
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(control::WindowsOwnerHooks::new(
+        let hooks: Rc<dyn OwnerHooks> = Rc::new(control::WindowsOwnerHooks::new(
             Arc::clone(&platform),
             &self.owner_control,
         ));
@@ -1331,10 +1331,7 @@ impl host::Loop for WindowsLoop {
         self.app.bind(handler, &platform, &hooks);
         self.app.resume_through_signal(&self.owner_control.signal);
         self.app
-            .ready(OwnerPlatform::new(
-                Arc::clone(&platform),
-                Arc::clone(&hooks),
-            ))
+            .ready(OwnerPlatform::new(Arc::clone(&platform), Rc::clone(&hooks)))
             .map_err(PlatformError::bootstrap)?;
         self.owner_control
             .signal

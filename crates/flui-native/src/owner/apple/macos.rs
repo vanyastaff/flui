@@ -367,7 +367,7 @@ impl host::Loop for MacOSLoop {
         // The delivery holds the platform and the hooks weakly: they live in
         // this frame, past the ownership guard that tells the handler of the
         // quit as it drops.
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+        let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
             Arc::clone(&platform),
             Arc::clone(&self.loop_control.owner_signal),
         ));
@@ -379,10 +379,7 @@ impl host::Loop for MacOSLoop {
         self.app_delivery
             .resume_through_signal(&self.loop_control.owner_signal);
         self.app_delivery
-            .ready(OwnerPlatform::new(
-                Arc::clone(&platform),
-                Arc::clone(&hooks),
-            ))
+            .ready(OwnerPlatform::new(Arc::clone(&platform), Rc::clone(&hooks)))
             .map_err(PlatformError::bootstrap)?;
         // The handler is bound: the pump may ask it for its deadline.
         self.wake_pump.arm();

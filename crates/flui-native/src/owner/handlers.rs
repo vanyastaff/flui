@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 
 /// The windows a loop holds through its hook, as one object: the window
 /// feature's. Each loop's hook extends it with what that loop asks of them.
-pub(crate) trait OpenWindows: Send + Sync {
+pub(crate) trait OpenWindows {
     /// Whether no window is open.
     fn is_empty(&self) -> bool;
 }
