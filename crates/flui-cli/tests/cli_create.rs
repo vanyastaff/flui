@@ -526,3 +526,53 @@ fn created_application_builds_with_its_identifier() {
         assert_eq!(declared.as_deref(), expected, "{name}");
     }
 }
+
+/// Every application template's workspace root optimizes its dependencies in
+/// a debug build, as this workspace does: without it wgpu, naga, Parley and
+/// lyon set the frame time of a new project's first `flui run`.
+#[test]
+fn every_application_template_optimizes_its_dependencies_in_debug() {
+    let tmp = TempDir::new().expect("temp dir");
+    for (name, template, hot_reload) in [
+        ("counter", "counter", false),
+        ("basic", "basic", false),
+        ("empty", "empty", false),
+        ("reload", "counter", true),
+    ] {
+        let mut command = flui();
+        command
+            .args([
+                "create",
+                name,
+                "--template",
+                template,
+                "--no-check",
+                "--path",
+            ])
+            .arg(tmp.path());
+        if hot_reload {
+            command.arg("--hot-reload");
+        }
+        command.assert().success();
+        let manifest: toml::Table =
+            std::fs::read_to_string(tmp.path().join(name).join("Cargo.toml"))
+                .expect("root manifest")
+                .parse()
+                .expect("TOML");
+        let dependencies = &manifest["profile"]["dev"]["package"]["*"];
+        assert_eq!(
+            dependencies
+                .get("opt-level")
+                .and_then(toml::Value::as_integer),
+            Some(3),
+            "{name}: [profile.dev.package.\"*\"] opt-level"
+        );
+        assert_eq!(
+            manifest["profile"]["release"]
+                .get("lto")
+                .and_then(toml::Value::as_str),
+            Some("thin"),
+            "{name}: [profile.release] lto"
+        );
+    }
+}

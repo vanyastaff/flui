@@ -1677,6 +1677,10 @@ impl BuildOwner {
         // One buffer of dependency records serves every element this drain
         // builds: each build fills it, the drain below empties it.
         let mut dependent_records: Vec<crate::context::DependentRecord> = Vec::new();
+        // The providers a dependent read in its previous build, kept across
+        // builds and inline for eight, so the drain copies them without
+        // allocating.
+        let mut previous_providers: smallvec::SmallVec<[ElementId; 8]> = smallvec::SmallVec::new();
         loop {
             let absorbed_this_pop =
                 self.absorb_mid_drain_inbox(tree, &mut capped_leftover.leftover);
@@ -1950,11 +1954,11 @@ impl BuildOwner {
             // about what the element depends on, so its previous masks are kept
             // (the sink's records are still added) and it keeps receiving the
             // notifications that let a fixed condition rebuild it.
-            let previous_providers = if build_recovered.get() {
-                super::inherited_dependencies::ProviderIds::default()
-            } else {
-                self.inherited_dependencies.providers_of(id)
-            };
+            previous_providers.clear();
+            if !build_recovered.get() {
+                self.inherited_dependencies
+                    .copy_providers_into(id, &mut previous_providers);
+            }
             for provider in &previous_providers {
                 if let Some(accessor) = tree
                     .get_mut(*provider)
@@ -1998,7 +2002,7 @@ impl BuildOwner {
                     .register(record.dependent, provider);
             }
             dependent_records = recorded;
-            for provider in previous_providers {
+            for &provider in &previous_providers {
                 let pruned = tree
                     .get_mut(provider)
                     .and_then(|node| node.element_mut().as_inherited_mut())

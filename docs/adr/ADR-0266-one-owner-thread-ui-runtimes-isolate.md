@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-10-30)
 - **Date:** 2026-10-30
+- **Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) for §4 (where
+  parallel work leaves the owner thread).
 - **Supersedes:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md), the verdict's sentence "Multiple
   UI runtimes may execute concurrently" and §1's sentence on runtime count per owner thread only
   (the ownership levels, the `!Send` model and the rest of §1 stand);
@@ -87,11 +89,8 @@ runtime partition with ADR-0242 decision 8.
 
 ### §4. Parallelism is where the work is parallel
 
-Work that can run in parallel leaves the owner thread through the typed cross-thread handles:
-`IoFuture`, `ComputeJob` and the host pools for workers, `SignalSender`, `RebuildHandle`,
-`FrameWaker` and `AppHandle` for coming back, the raster thread for GPU work
-([ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) §4). Those are the
-public API's only `Send` positions, held by `cargo xtask send-positions`.
+**Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) §2, which lists
+what crosses a thread.
 
 ### §5. What may come later, and how
 

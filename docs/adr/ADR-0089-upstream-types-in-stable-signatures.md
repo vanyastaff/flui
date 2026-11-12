@@ -6,7 +6,7 @@
   a counterpart, and role-bearing flags are roles). The rule that stable signatures carry no
   upstream type stands.
 - **Revised:** 2026-10-30 — §6's loader also feeds `cargo xtask send-positions`, the list of
-  `Send` and `Sync` positions in the facade's API (ADR-0136); synthetic auto-trait impls are not
+  `Send` and `Sync` positions in the facade's API (ADR-0323); synthetic auto-trait impls are not
   positions.
 - **Revised:** 2026-10-21 — §6's gate is `cargo xtask api-closure`; its first run moved the
   contract's two `bitflags` sets into the contract's own type (ADR-0151 §5).
@@ -166,11 +166,11 @@ scratch crate with `pub fn f() -> accesskit::Role` must be rejected (its `--self
 [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) §5 asks of every gate).
 
 The same loader feeds `cargo xtask send-positions`
-([ADR-0136](ADR-0136-owner-local-ui-surfaces.md)): from the public re-exports of `flui` and
+([ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md)): from the public re-exports of `flui` and
 `flui-sdk`, built with every feature and with private items, it lists every place the reached
 API names `Send` or `Sync` that an author wrote (a supertrait, private sealed ones included, a
 bound, `dyn … + Send`, `-> impl Trait + Send`, an explicit `impl Send`) against
-`tools/xtask/allowlists/send-positions.toml`, under ADR-0136 §3's rule. A synthetic auto-trait
+`tools/xtask/allowlists/send-positions.toml`, under ADR-0323 §3's rule. A synthetic auto-trait
 implementation is not a position: it follows from a type's fields and no author decided it;
 trybuild pins the owner types that must stay `!Send`, a consumer test the handles meant to
 cross a thread.

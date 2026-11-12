@@ -26,6 +26,7 @@ fn cargo_toml(name: &str, source: &DependencySource) -> String {
         ""
     };
     let lib_table = super::LIB_TABLE;
+    let profiles = super::PROFILES;
 
     format!(
         r#"# FLUI Template v{version}{mode_comment}
@@ -44,12 +45,7 @@ rust-version = "1.99"
 [dependencies]
 {deps}
 
-[profile.release]
-opt-level = 3
-lto = "thin"
-codegen-units = 1
-strip = "debuginfo"
-"#
+{profiles}"#
     )
 }
 

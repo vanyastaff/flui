@@ -44,10 +44,9 @@ use super::adapter_cell::AdapterCell;
 use crate::accessibility::bridge::{Action, Activation, BridgeShared, Deactivation};
 use crate::owner::accessibility_slot::{ViewAccessibility, ViewPoint};
 use crate::owner::apple::ios::{NativeOwner, ViewRef};
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_semantics::platform::{
-    AccessibilityActionListener, AccessibilityActivationListener, AssistiveFocusListener,
-    PlatformAccessibility, RouteChange, RouteChangeSupport,
+    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
+    RouteChange, RouteChangeSupport,
 };
 
 /// The adapter as the window's view reaches it, through the slot its
@@ -82,22 +81,6 @@ impl ViewAccessibility for ViewBridge {
     }
 }
 
-/// Where VoiceOver's cursor moved, from the adapter's platform focus handler
-/// to the composition root. The hook is the vendored adapter's
-/// (`third_party/accesskit_ios`).
-struct AssistiveFocus(Arc<BridgeShared>);
-
-impl accesskit_ios::PlatformFocusHandler for AssistiveFocus {
-    fn platform_focus_changed(&mut self, node: Option<(accesskit::NodeId, accesskit::TreeId)>) {
-        os_entry(
-            "VoiceOver's cursor",
-            (),
-            AfterPanic::Answer(|()| ()),
-            || self.0.notify_assistive_focus(node),
-        );
-    }
-}
-
 /// UIAccessibility for one window.
 pub struct IosAccessibility {
     shared: Arc<BridgeShared>,
@@ -119,12 +102,11 @@ impl crate::host::Accessibility<ViewRef> for IosAccessibility {
         // to it, so a view gone first leaves the adapter answering nothing.
         // The window makes its part on the main thread.
         let adapter = unsafe {
-            Adapter::with_platform_focus_handler(
+            Adapter::new(
                 view,
                 Activation(Arc::clone(&shared)),
                 Action(Arc::clone(&shared)),
                 Deactivation(Arc::clone(&shared)),
-                AssistiveFocus(Arc::clone(&shared)),
             )
         };
         let adapter = AdapterCell::new(adapter);
@@ -195,10 +177,6 @@ impl PlatformAccessibility for IosAccessibility {
         Self::ASSISTIVE_FOCUS
     }
 
-    fn set_assistive_focus_listener(&self, listener: AssistiveFocusListener) {
-        self.shared.set_assistive_focus_listener(listener);
-    }
-
     fn route_change_support(&self) -> RouteChangeSupport {
         Self::ROUTE_CHANGE
     }
@@ -235,11 +213,11 @@ impl PlatformAccessibility for IosAccessibility {
 }
 
 impl IosAccessibility {
-    /// VoiceOver's cursor comes through the vendored adapter's hook; a run on
-    /// a device has not checked it yet
+    /// The published `accesskit_ios` tracks VoiceOver's cursor but tells the
+    /// application nothing of it
     /// ([docs/gaps.md, "Accessibility bridge fidelity"](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)).
     pub(crate) const ASSISTIVE_FOCUS: flui_semantics::AssistiveFocusSupport =
-        flui_semantics::AssistiveFocusSupport::Reported;
+        flui_semantics::AssistiveFocusSupport::Unreported;
 
     /// A route change is UIKit's notice of a new screen; a run on a device
     /// has not checked how VoiceOver reads it yet.
