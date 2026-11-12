@@ -36,6 +36,7 @@ use anyhow::{Context, bail};
 use crate::util::{self, repo_root};
 
 mod instructions;
+mod size;
 
 /// The package whose `perf` test target holds the scenarios.
 const PACKAGE: &str = "flui-widgets";
@@ -71,6 +72,14 @@ pub(crate) struct PerfArgs {
     /// under callgrind, and compare them instead of the baseline's counters. Needs valgrind.
     #[arg(long, conflicts_with = "self_test")]
     instructions: bool,
+    /// Count the packages of the facade's default graph on each target and
+    /// build the counter example in release for the host and wasm32, and
+    /// compare them with `perf/size.toml` instead of the scenarios' baseline.
+    #[arg(long, conflicts_with_all = ["self_test", "instructions"])]
+    size: bool,
+    /// With `--size`: count the packages only and build nothing.
+    #[arg(long, requires = "size", conflicts_with = "bless")]
+    graph: bool,
 }
 
 /// How a run treats its findings.
@@ -194,10 +203,16 @@ pub(crate) fn perf(args: &PerfArgs) -> anyhow::Result<ExitCode> {
     };
 
     let root = repo_root();
-    let out = util::metadata(&root)?
-        .target_directory
-        .into_std_path_buf()
-        .join("perf");
+    let target_dir = util::metadata(&root)?.target_directory.into_std_path_buf();
+    if args.size {
+        let measure = if args.graph {
+            size::Measure::Graph
+        } else {
+            size::Measure::All
+        };
+        return size::run(&root, &target_dir, mode, measure);
+    }
+    let out = target_dir.join("perf");
     if out.exists() {
         std::fs::remove_dir_all(&out).with_context(|| format!("clearing {}", out.display()))?;
     }

@@ -579,6 +579,22 @@ while every counter of its work stays put. The budget assertions run with
 flui-widgets' suite on every PR; the `perf-gates` job runs `perf --check` and
 `perf --instructions --check` in the `full` lane.
 
+`perf --size` measures what an application costs before it does anything,
+against `perf/size.toml`: the packages of the facade's default graph on Linux,
+Windows, macOS, Android and wasm32 (`cargo tree -p flui`, each name and version
+once), and the size of `examples/counter.rs` built in release for the host and
+for wasm32. A package count has to stay at or under its baseline, so a change
+that adds a package to an application's default graph runs `perf --size
+--bless` in the same PR and says why. A binary grows with every change to the
+code it links, so a size fails only past 2% over its baseline, and `--bless` on
+a fresh `main` moves it. The baseline is Linux x86_64's.
+
+```bash
+cargo xtask perf --size --graph --check   # the package counts alone, no build (the `deps` job, every PR)
+cargo xtask perf --size --check           # counts and both release builds (`perf-gates`, `full` lane)
+cargo xtask perf --size --bless           # rewrite perf/size.toml from this run
+```
+
 ## Linting
 
 `cargo clippy` is the canonical lint command. The constitution requires `clippy::all` and `clippy::pedantic` at warn level workspace-wide.

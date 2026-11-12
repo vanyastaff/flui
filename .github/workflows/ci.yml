@@ -774,14 +774,15 @@ jobs:
   # and large tree under callgrind and fails when the large one costs more
   # than 5% over the small. The scenarios' own assertions (equal allocations
   # on both sizes) run on every PR with flui-widgets' suite; callgrind and
-  # the baseline comparison are the slow half, so they run in `full` only.
+  # the baseline comparison are the slow half, so they run in `full` only,
+  # as do `--size --check`'s release builds of the counter (perf/size.toml).
   # ─────────────────────────────────────────────────────────────────────────
   perf-gates:
     name: perf-gates
     needs: [checks, plan]
     if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -789,6 +790,8 @@ jobs:
 
       - name: Install pinned Rust
         uses: ./.github/actions/rust-toolchain
+        with:
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -813,6 +816,12 @@ jobs:
 
       - name: cargo xtask perf --instructions --check
         run: cargo xtask perf --instructions --check
+
+      # What an application costs before it does anything (perf/size.toml):
+      # the counter example's release binary on Linux and on wasm32, within
+      # 2% of the baseline, and the default graph's package counts.
+      - name: cargo xtask perf --size --check
+        run: cargo xtask perf --size --check
 
   # ─────────────────────────────────────────────────────────────────────────
   # deps — `cargo xtask deps`: cargo-deny over every workspace member (bans,
@@ -871,6 +880,14 @@ jobs:
       - name: cargo xtask deps --only advisories
         continue-on-error: ${{ needs.plan.outputs.lane == 'tooling' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.mode == 'packages' && needs.plan.outputs.heavy_required == 'false') }}
         run: cargo xtask deps --strict --only advisories
+
+      # The packages of the facade's default graph on each target, against
+      # perf/size.toml (`cargo tree` only, nothing builds). A pull request that
+      # adds a package to an application's default graph fails here until
+      # `cargo xtask perf --size --bless` records it; the binary sizes of the
+      # same baseline are measured in perf-gates on main.
+      - name: cargo xtask perf --size --graph --check
+        run: cargo xtask perf --size --graph --check
 
   # ─────────────────────────────────────────────────────────────────────────
   # doc-test — run every rustdoc example as a test. nextest does NOT execute
