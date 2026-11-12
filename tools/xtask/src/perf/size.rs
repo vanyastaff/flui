@@ -10,7 +10,8 @@
 //!   exactly: a new package in the default graph fails until `--bless`
 //!   records it as meant.
 //! - `counter_release_bytes`: the release binary of `examples/counter.rs` on
-//!   the host, with the workspace's release profile.
+//!   the host, with the workspace's release profile and the symbol table
+//!   stripped, as the release profile `flui create` writes ships it.
 //! - `counter_wasm_bytes`: the same example built for `wasm32-unknown-unknown`,
 //!   before `wasm-opt`.
 //!
@@ -175,6 +176,9 @@ fn distinct_packages(tree: &str) -> usize {
 /// and returns its artifact's size in bytes.
 fn built_size(root: &Path, target_dir: &Path, target: Option<&str>) -> anyhow::Result<u64> {
     let mut build = cargo(root);
+    // What an application from `flui create` ships: its release profile strips
+    // the symbols the workspace keeps for profiling.
+    build.env("CARGO_PROFILE_RELEASE_STRIP", "symbols");
     build.args([
         "build",
         "--locked",

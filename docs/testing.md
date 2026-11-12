@@ -583,7 +583,8 @@ flui-widgets' suite on every PR; the `perf-gates` job runs `perf --check` and
 against `perf/size.toml`: the packages of the facade's default graph on Linux,
 Windows, macOS, Android and wasm32 (`cargo tree -p flui`, each name and version
 once), and the size of `examples/counter.rs` built in release for the host and
-for wasm32. A package count has to stay at or under its baseline, so a change
+for wasm32, with the symbols stripped as the release profile `flui create` writes
+does. A package count has to stay at or under its baseline, so a change
 that adds a package to an application's default graph runs `perf --size
 --bless` in the same PR and says why. A binary grows with every change to the
 code it links, so a size fails only past 2% over its baseline, and `--bless` on
