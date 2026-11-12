@@ -17972,7 +17972,7 @@ impl flui::app::StatelessView for flui::prelude::RawButton
 impl flui::app::View for flui::prelude::RawButton where Self: flui::app::StatelessView
 pub fn flui::prelude::RawButton::identifier(self, identifier: impl Into<alloc::rcs::arc::Arc<str>>) -> Self
 pub fn flui::prelude::RawButton::new(child: impl flui::prelude::IntoView) -> Self
-pub fn flui::prelude::RawButton::on_press<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::RawButton::on_pressed<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::RawButton::states_controller(self, controller: flui::prelude::WidgetStatesController) -> Self
 pub struct flui::prelude::RawTextField { .. }
 impl Clone for flui::prelude::RawTextField
