@@ -7,15 +7,15 @@
   takes one); [ADR-0082](ADR-0082-platform-api-contract-crate.md) §4 only (an owner-only
   callback is kept sound by `OwnerSlot`'s run-time refusal: the compiler keeps it sound once the
   window is not `Send`); [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §2 only (which
-  methods stay on a `Send + Sync` `Platform`); [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md)
-  §3 step 4 only (the native sources now stop beside the services)
+  methods stay on a `Send + Sync` `Platform`)
 - **Related:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md)
   §1, §2 and §4 (the rule this record applies to `flui-native`, and the five capability traits
   of `flui-platform` whose bounds wait on it), [ADR-0047](ADR-0047-unified-execution-services.md)
   (one set of execution pools per process), [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md)
   (`flui-runtime` has no host edge), [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md) §1 (one
   owner thread per process, whose loop this record makes owner-local), [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md)
-  (a type before a run-time check)
+  (a type before a run-time check), [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) §3 and §7
+  (the exit order and deadline a source must not hold)
 
 ## Context and problem statement
 
@@ -34,7 +34,6 @@ consolidation"). The measured state on `main` at `8b2b210`:
 | `unsafe impl Send/Sync` exist only to satisfy the loop's bound | `MacOSLoop` (`owner/apple/macos.rs`), `WebLoop` (`owner/web.rs`) |
 | A host owner starts a 2-thread tokio runtime of its own | `BackgroundExecutor` (`executor.rs`), created at `owner/linux/x11.rs`, `owner/linux/wayland.rs`, `owner/windows.rs`; its users are the IBus/XIM bus, `logind::watch`, the settings portal and one Wayland `spawn_blocking` |
 | The execution services start their IO pool too late for the host | `install_host_executors` and `ensure_execution` run inside `ready` (`crates/flui-app/src/app/runner/main_window.rs`), after `X11Loop::try_new` started the input bus |
-| Shutdown cuts the sources mid-conversation | `BackgroundExecutor`'s last owner calls `shutdown_background`: the logind inhibitor and the IBus session end without a goodbye |
 
 ## Decision drivers
 
@@ -115,7 +114,7 @@ impl NativeExecutor {
     pub(crate) fn spawn_blocking<R: Send + 'static>(&self, job: impl FnOnce() -> R + Send + 'static) -> Task<R>;
 }
 impl CurrentHost {
-    pub fn start_with(self, executor: NativeExecutor) -> Result<(Box<dyn Platform>, NativeSources), PlatformError>;
+    pub fn start_with(self, executor: NativeExecutor) -> Result<Box<dyn Platform>, PlatformError>;
 }
 // flui-runtime (tier-internal, hosts only)
 impl ExecutionServices { pub fn io_runtime(&self) -> Result<tokio::runtime::Handle, SpawnError>; }
@@ -138,29 +137,21 @@ Without an application (`current_platform()`, `CurrentHost::start()`, `headless_
 `own()`. Headless starts no sources. The driver agent lives in `flui-app` and gets the
 application's runtime.
 
-### §4. The sources stop beside the services, inside the exit deadline
+### §4. A source ends when its owner drops it
 
-Each long-lived source (logind, the settings portal, the XIM/IBus bus) is started with a
-`pub(crate)` `SourceStop`: a `CancellationToken` it obeys and a `oneshot` it closes when it has
-said goodbye (the inhibitor released, the bus disconnected). `start_with` returns them as one
-owner-local value:
+Each long-lived source (logind, the settings portal, the IBus bus) keeps the `JoinHandle` of its
+task and aborts it in `Drop`, as it does today (`HostNoticeSource`, `PreferenceSource`, `Bus`).
+Dropping the future closes what it holds: the logind delay inhibitor is a file descriptor, and its
+close is what logind waits for; the bus socket's close ends the IBus session. No goodbye message is
+owed, so there is no stop protocol and no budget of its own.
 
-```rust
-pub struct NativeSources { /* Vec<(&'static str, SourceStop)> */ }
-impl NativeSources {
-    pub fn stop(self, deadline: Instant) -> SourcesStopped; // cancels all at once, waits until `deadline`
-}
-pub struct SourcesStopped { pub stopped: usize, pub abandoned: Vec<&'static str> }
-```
-
-ADR-0258 §3 step 4 becomes: services are cancelled and the native sources are stopped, both
-against what is left of `exit.services()`. The two run concurrently, so the budget is the one
-ADR-0258 §7 already gives (`SERVICE_SHUTDOWN_DEADLINE` within `EXIT_BUDGET`, well under
-`EXIT_WATCHDOG`); there is no number of their own. A source still running at the deadline is
-abandoned and named in one `tracing` warning; the pools of step 5 cancel their root token and end
-it. A source that starts during teardown gets `SpawnError::ShuttingDown` and reports itself
-unavailable. With `own()` the same `stop` runs, and the runtime shuts down when the platform is
-released.
+On the borrowed runtime the order at exit is the one ADR-0258 §3 already gives. The loop's sources
+drop with the loop when the platform is released. If the pools of step 5 shut down first, the
+runtime drops the source tasks itself: `ExecutionServices::shutdown` cancels its root token and
+shuts the runtime down with `shutdown_timeout`, which drops every task at its `await` and waits
+only for blocking threads, up to `exit.end()`, so a source task, finished or hung at an `await`, holds
+neither the deadline nor `EXIT_WATCHDOG`. A spawn on a runtime that has shut down returns a
+`JoinHandle` that resolves as cancelled; the source reports itself unavailable and does not panic.
 
 ### §5. Order of the change
 
@@ -168,26 +159,24 @@ Each step is its own PR, green on Linux CI, with the other hosts written from th
 documentation and type-checked:
 
 1. this record;
-2. `SourceStop` in the Linux sources and loops, `block` deleted, `Task` on a `oneshot`;
-3. `NativeExecutor`, `CurrentHost::start_with`, `NativeSources`;
-4. `flui-app` starts the services first, hands the runtime over and stops the sources in step 4;
-5. the thread bounds leave `Platform`, `Loop`, `Window::Shared`, `OpenWindows`, `OwnerHooks` and
+2. `NativeExecutor`, `CurrentHost::start_with`, `BackgroundExecutor` made `pub(crate)` without `block`, `Task` on a `oneshot`;
+3. `ExecutionServices::io_runtime`, and `flui-app` starts the services first and hands the runtime over;
+4. the thread bounds leave `Platform`, `Loop`, `Window::Shared`, `OpenWindows`, `OwnerHooks` and
    `on_wake` in one change across every host, bounds only, with `cross-typecheck` green on every
    target before it merges;
-6. one PR per host moves `Arc`/`Mutex` to `Rc`/`RefCell` inside the loop and windows and deletes
+5. one PR per host moves `Arc`/`Mutex` to `Rc`/`RefCell` inside the loop and windows and deletes
    its `unsafe impl Send/Sync`: headless, X11, Wayland, Windows, macOS, iOS, Android, web;
-7. `flui-platform`'s five traits lose `Send + Sync` (ADR-0323 §4) and `WindowFacets` holds `Rc`;
-8. `OwnerSlot`, `OwnerCell` and `OwnerMap` are deleted.
+6. `flui-platform`'s five traits lose `Send + Sync` (ADR-0323 §4) and `WindowFacets` holds `Rc`;
+7. `OwnerSlot`, `OwnerCell` and `OwnerMap` are deleted.
 
 ### Consequences
 
 - Good, because a window callback, a facet or a loop field may hold `Rc` and `Cell` state, and a
   registration from the wrong thread does not compile.
 - Good, because a process runs one IO runtime, and its threads are named `flui-io`.
-- Good, because logind and IBus are told the application is leaving.
 - Bad, because the core host's public API names a tokio type; it is one constructor, and
   `flui-native` is reached only from `flui-app` (ADR-0082).
-- Bad, because step 5 touches every host at once: `Platform` has one implementation,
+- Bad, because step 4 touches every host at once: `Platform` has one implementation,
   `HostPlatform<H>`, for all of them.
 
 ### Confirmation
@@ -199,9 +188,10 @@ documentation and type-checked:
   holding `Rc<Cell<u32>>` installed on a headless window.
 - Under Xvfb: an X11 application runs with `flui-io` threads and no `flui-native-bg` thread
   (`/proc/self/task/*/comm`).
-- On the fake bus of `lifecycle/linux/logind`: the inhibitor is released before
-  `NativeSources::stop` returns, and a source that never closes its `oneshot` is abandoned and
-  `stop` returns by its deadline.
+- A source task parked at an `await` forever on a borrowed runtime is finished once its owner drops
+  (`JoinHandle::is_finished`), and `ExecutionServices::shutdown` returns by its deadline with it
+  still pending; on the fake bus of `lifecycle/linux/logind`, dropping the source closes the
+  inhibitor descriptor.
 - `send-positions.toml` drops the five traits' entries; `xtask send-impls` drops `MacOSLoop` and
   `WebLoop`.
 
