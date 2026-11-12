@@ -181,6 +181,12 @@ pub enum TestError {
         /// The frames pumped.
         frames: usize,
     },
+    /// The window's agent did not answer within the frames allowed.
+    #[error("the window's agent did not answer within {frames} frames")]
+    Unanswered {
+        /// The frames pumped.
+        frames: u32,
+    },
     /// The window's agent refused or failed a call.
     #[error("the window's agent answered {}: {}", .0.code, .0.message)]
     Agent(Box<ErrorObject>),
@@ -631,18 +637,28 @@ impl Tester {
 
     /// Pump until `answer` is answered: the drain at the next frame boundary,
     /// or a frame per input tick.
-    fn answered<T>(&mut self, mut answer: AgentAnswer<T>) -> Result<T, TestError> {
+    fn answered<T>(&mut self, answer: AgentAnswer<T>) -> Result<T, TestError> {
+        self.answered_within(answer, ANSWER_FRAMES)
+    }
+
+    /// Pump until `answer` is answered, at most `frames` frames after the
+    /// first drain.
+    fn answered_within<T>(
+        &mut self,
+        mut answer: AgentAnswer<T>,
+        frames: u32,
+    ) -> Result<T, TestError> {
         let _ = self.host.pump(Duration::ZERO);
-        for _ in 0..ANSWER_FRAMES {
+        for _ in 0..frames {
             if let Some(answer) = answer.try_take() {
                 return answer.map_err(TestError::from);
             }
             let _ = self.host.pump(FRAME);
         }
-        let Some(answer) = answer.try_take() else {
-            panic!("BUG: the window's agent answers within {ANSWER_FRAMES} frames");
-        };
-        answer.map_err(TestError::from)
+        match answer.try_take() {
+            Some(answer) => answer.map_err(TestError::from),
+            None => Err(TestError::Unanswered { frames }),
+        }
     }
 
     /// The one match of `locator`, or why there is not one.
@@ -700,11 +716,17 @@ impl Tester {
     /// Deliver `sources` through the window's input lease and run the frame
     /// after the last tick.
     fn inject(&mut self, sources: Vec<InputSource>) -> Result<(), TestError> {
+        // The agent plays a pause or a timed move for its whole duration
+        // before it answers, so the budget is that span in frames on top of
+        // the ticks' own.
+        let span = sources.iter().map(source_span).max().unwrap_or_default();
+        let frame_ms = u64::try_from(FRAME.as_millis()).unwrap_or(u64::MAX);
+        let span_frames = u32::try_from(span.div_ceil(frame_ms)).unwrap_or(u32::MAX);
         let call = self.lease.call::<InputInject>(InputParams::new(
             self.lease.window(),
             ActionSequence::new(sources),
         ))?;
-        let _outcome = self.answered(call)?;
+        let _outcome = self.answered_within(call, ANSWER_FRAMES.saturating_add(span_frames))?;
         Ok(())
     }
 
@@ -769,7 +791,7 @@ impl Expectation<'_> {
     /// `count` elements match: `findsNWidgets`.
     #[track_caller]
     pub fn to_have_count(self, count: usize) {
-        self.check(&format!("{count} matches"), |matches| {
+        self.check(&format!("{count} matches"), |_, matches| {
             (matches.len() == count)
                 .then_some(())
                 .ok_or_else(|| format!("{}", matches.len()))
@@ -802,13 +824,29 @@ impl Expectation<'_> {
     /// ancestor.
     #[track_caller]
     pub fn to_be_enabled(self) {
-        self.one("enabled", |node| !node.disabled);
+        self.enabled_is(true);
     }
 
-    /// The one element that matches is disabled.
+    /// The one element that matches is disabled, itself or through an
+    /// ancestor.
     #[track_caller]
     pub fn to_be_disabled(self) {
-        self.one("disabled", |node| node.disabled);
+        self.enabled_is(false);
+    }
+
+    /// Exactly one element matches and its effective enabled state, read
+    /// with `element.actionability` as an action reads it, is `enabled`.
+    #[track_caller]
+    fn enabled_is(self, enabled: bool) {
+        let expected = if enabled { "enabled" } else { "disabled" };
+        self.check(expected, |tester, matches| match matches {
+            [only] => match tester.actionability(only) {
+                Ok(facts) if facts.enabled == enabled => Ok(()),
+                Ok(_) => Err(line_of(&only.node)),
+                Err(error) => Err(error.to_string()),
+            },
+            many => Err(format!("{} matches", many.len())),
+        });
     }
 
     /// The one element that matches holds keyboard focus.
@@ -820,7 +858,7 @@ impl Expectation<'_> {
     /// Exactly one element matches and `holds` is true of it.
     #[track_caller]
     fn one(self, expected: &str, holds: impl Fn(&Node) -> bool) {
-        self.check(expected, |matches| match matches {
+        self.check(expected, |_, matches| match matches {
             [only] if holds(&only.node) => Ok(()),
             [only] => Err(line_of(&only.node)),
             many => Err(format!("{} matches", many.len())),
@@ -830,7 +868,7 @@ impl Expectation<'_> {
     /// Wait while the application works until `holds` answers `Ok` for the
     /// matches; `Err` carries what was found instead.
     #[track_caller]
-    fn check(self, expected: &str, holds: impl Fn(&[Match]) -> Result<(), String>) {
+    fn check(self, expected: &str, holds: impl Fn(&mut Tester, &[Match]) -> Result<(), String>) {
         let Self {
             tester,
             locator,
@@ -847,12 +885,12 @@ fn wait(
     locator: &Locator,
     timeout: Duration,
     expected: &str,
-    holds: impl Fn(&[Match]) -> Result<(), String>,
+    holds: impl Fn(&mut Tester, &[Match]) -> Result<(), String>,
 ) -> Result<(), TestError> {
     let mut waited = Duration::ZERO;
     loop {
         let matches = tester.try_find_all(locator)?;
-        let found = match holds(&matches) {
+        let found = match holds(tester, &matches) {
             Ok(()) => return Ok(()),
             Err(found) => found,
         };
@@ -888,6 +926,23 @@ fn line_of(node: &Node) -> String {
         .next()
         .unwrap_or_default()
         .to_owned()
+}
+
+/// How long `source` plays in milliseconds: the sum of its pauses and timed
+/// moves, saturating.
+fn source_span(source: &InputSource) -> u64 {
+    match source {
+        InputSource::Pointer { actions, .. } => actions
+            .iter()
+            .map(|action| match action {
+                PointerAction::Move { duration_ms, .. } | PointerAction::Pause { duration_ms } => {
+                    *duration_ms
+                }
+                _ => 0,
+            })
+            .fold(0, u64::saturating_add),
+        _ => 0,
+    }
 }
 
 fn pointer(actions: Vec<PointerAction>) -> InputSource {

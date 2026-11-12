@@ -134,3 +134,26 @@ fn pump_for_moves_the_clock_by_what_it_is_given() {
         Some(Duration::from_millis(40))
     );
 }
+
+#[test]
+fn an_element_disabled_through_an_ancestor_is_not_enabled() {
+    let mut t = Tester::mount(
+        flui_widgets::Semantics::new()
+            .container(true)
+            .enabled(false)
+            .label("Group")
+            .child(RawButton::new(Text::new("Inside")).on_press(|_| {})),
+    );
+    t.expect(find::button("Inside")).to_be_disabled();
+    let message = panic_text(|| t.expect(find::button("Inside")).to_be_enabled());
+    assert!(message.contains("enabled"), "{message}");
+}
+
+#[test]
+fn a_long_press_longer_than_the_answer_budget_is_delivered() {
+    let mut t = Tester::mount(Counter);
+    let before = t.clock().elapsed();
+    t.long_press(&find::button("Increment"), Duration::from_secs(2));
+    let took = t.clock().elapsed().checked_sub(before).unwrap_or_default();
+    assert!(took >= Duration::from_secs(2), "the press lasted {took:?}");
+}
