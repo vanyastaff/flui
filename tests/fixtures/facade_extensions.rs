@@ -5,7 +5,7 @@ use flui::geometry::{Offset, Point, Rect, Size};
 use flui::painting::{Canvas, CustomPainter, DrawOp, Paint};
 use flui::prelude::*;
 use flui::rendering::{
-    BoxConstraints, BoxDryLayoutCtx, BoxLayoutContext, BoxParentData, BoxProtocol, Leaf, PaintCx,
+    BoxConstraints, BoxDryLayoutContext, BoxLayoutContext, BoxParentData, BoxProtocol, Leaf, PaintContext,
     RenderBox, RenderUpdateImpact, Single,
 };
 use flui::testing::widgets::{lay_out, loose};
@@ -207,12 +207,12 @@ impl RenderBox for SolidLeaf {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut BoxDryLayoutCtx<'_>,
+        _ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui::rendering::RenderResult<Size> {
         Ok(constraints.constrain(Size::new(24.0, 16.0)))
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         let size = ctx.size();
         RectanglePainter.paint(ctx.canvas(), size);
         self.paints.fetch_add(1, Ordering::SeqCst);
@@ -271,7 +271,7 @@ impl RenderBox for TransparentProxy {
     flui::rendering::forward_single_child_box_queries!();
     flui::rendering::forward_single_child_box_hit_test!();
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 }

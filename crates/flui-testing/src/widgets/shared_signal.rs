@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_view::prelude::*;
-use flui_view::{BuildContext, EventCx, LifecycleContext, SignalError};
+use flui_view::{BuildContext, EventContext, LifecycleContext, SignalError};
 
 struct Bound<T: 'static> {
     signal: Signal<T>,
@@ -154,7 +154,7 @@ impl<T: Clone + 'static> SharedSignal<T> {
     /// Before a view has bound it.
     pub fn update_in<R>(
         &self,
-        ctx: &mut EventCx<'_>,
+        ctx: &mut EventContext<'_>,
         f: impl FnMut(&mut T) -> R,
     ) -> Result<R, SignalError> {
         self.signal().update(ctx, f)
@@ -169,7 +169,7 @@ impl<T: Clone + 'static> SharedSignal<T> {
     /// # Panics
     ///
     /// Before a view has bound it.
-    pub fn set_in(&self, ctx: &mut EventCx<'_>, value: T) -> Result<(), SignalError> {
+    pub fn set_in(&self, ctx: &mut EventContext<'_>, value: T) -> Result<(), SignalError> {
         let mut value = Some(value);
         self.update_in(ctx, |current| {
             *current = value.take().expect("BUG: the closure runs once");

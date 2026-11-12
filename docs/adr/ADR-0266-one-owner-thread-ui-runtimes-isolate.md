@@ -95,7 +95,7 @@ what crosses a thread.
 ### §5. What may come later, and how
 
 - **State shared by windows** is an app-scope owner-local signal graph on the owner thread: read in
-  any runtime's `build`, written through `EventCx`. It adds API and changes none.
+  any runtime's `build`, written through `EventContext`. It adds API and changes none.
 - **A thread per runtime**, on the hosts that allow it, is a new variant of the
   `#[non_exhaustive] WindowPolicy` with its own ADR. No public signature names a thread, and a
   runtime's types never leave it, so the variant breaks nothing published.

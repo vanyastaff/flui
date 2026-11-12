@@ -28,7 +28,7 @@
 //!
 //! `paint` clips to this box when the fit cropped the source and
 //! `clip_behavior` is not `Clip::None`. The machinery
-//! (`PaintCx::with_clip_rect`) is shared with the rest of
+//! (`PaintContext::with_clip_rect`) is shared with the rest of
 //! the overflow-gated family that clips from `paint` rather than
 //! `paint_effects` — `RenderViewport`, `RenderConstraintsTransformBox`,
 //! `RenderWrap`, `RenderStack`, `RenderAnimatedSize`. (`RenderClip` is not
@@ -405,7 +405,7 @@ impl RenderBox for RenderFittedBox {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
             return Ok(constraints.smallest());
@@ -421,7 +421,7 @@ impl RenderBox for RenderFittedBox {
         &self,
         _constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
             Ok(None)
@@ -492,7 +492,7 @@ impl RenderBox for RenderFittedBox {
     /// the fit twice. Coordinate mapping (`transform_to` and the
     /// local-to-global family) is a separate concern from layer emission and
     /// reads the `apply_paint_transform` override below.
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Single>) {
         if !self.has_child {
             return;
         }
@@ -513,17 +513,18 @@ impl RenderBox for RenderFittedBox {
         // is cheaper — and equally correct — to apply as a child offset than
         // as a compositing layer; `BoxFit::None` under an off-centre alignment
         // is the case that reaches it.
-        let paint_transformed_child = |ctx: &mut flui_rendering::context::PaintCx<'_, Single>| {
-            if let Some((dx, dy)) = transform.as_translation() {
-                ctx.paint_child_at(Offset::new(dx, dy));
-            } else {
-                // Not a redundant closure: `paint_child` is inherent on PaintCx
-                // for both `Exact<1>` and `Variable`, so the bare path is
-                // ambiguous (E0034) and the lint's rewrite does not compile.
-                #[expect(clippy::redundant_closure_for_method_calls)]
-                ctx.with_transform(transform, |ctx| ctx.paint_child());
-            }
-        };
+        let paint_transformed_child =
+            |ctx: &mut flui_rendering::context::PaintContext<'_, Single>| {
+                if let Some((dx, dy)) = transform.as_translation() {
+                    ctx.paint_child_at(Offset::new(dx, dy));
+                } else {
+                    // Not a redundant closure: `paint_child` is inherent on PaintContext
+                    // for both `Exact<1>` and `Variable`, so the bare path is
+                    // ambiguous (E0034) and the lint's rewrite does not compile.
+                    #[expect(clippy::redundant_closure_for_method_calls)]
+                    ctx.with_transform(transform, |ctx| ctx.paint_child());
+                }
+            };
 
         if self.has_visual_overflow && self.clip_behavior != Clip::None {
             let bounds = Rect::from_origin_size(Point::ZERO, size);

@@ -357,11 +357,11 @@ fn chip_content_min_height(padding: EdgeInsets, label_padding: EdgeInsets) -> f6
 
 /// A tap/press callback taking no arguments. `Rc`-based (owner-local, per
 /// ADR-0027) — matches [`InkWell::on_tap`]'s own callback shape.
-type ChipTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
+type ChipTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>;
 
 /// A selection-change callback: the next selected value. `Rc`-based, same
 /// shape as [`ChipTapCallback`].
-type FilterChipSelectCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, bool)>;
+type FilterChipSelectCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, bool)>;
 
 /// A Material Design chip: a compact label with an optional leading avatar
 /// and trailing delete affordance, outlined and unfilled by default.
@@ -424,7 +424,7 @@ impl Chip {
     #[must_use]
     pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_pressed = Some(crate::event_callback::press_callback(callback));
         self
@@ -435,7 +435,7 @@ impl Chip {
     #[must_use]
     pub fn on_deleted<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_deleted = Some(crate::event_callback::press_callback(callback));
         self
@@ -662,7 +662,7 @@ impl FilterChip {
     #[must_use]
     pub fn on_selected<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, bool) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>, bool) -> R + 'static,
     ) -> Self {
         self.on_selected = Some(crate::event_callback::value_callback(callback));
         self
@@ -673,7 +673,7 @@ impl FilterChip {
     #[must_use]
     pub fn on_deleted<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_deleted = Some(crate::event_callback::press_callback(callback));
         self

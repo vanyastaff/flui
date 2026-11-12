@@ -40,8 +40,8 @@ use flui_rendering::constraints::AxisDirection;
 use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::element::ElementKind;
 use flui_view::{
-    AnimatedView, BoxedView, BuildContext, EventCx, IntoView, LifecycleContext, StatefulView, View,
-    ViewExt, ViewState,
+    AnimatedView, BoxedView, BuildContext, EventContext, IntoView, LifecycleContext, StatefulView,
+    View, ViewExt, ViewState,
 };
 
 use super::ScrollView;
@@ -1121,7 +1121,7 @@ impl<K: Copy + Eq + 'static> Action<AnchorIntent> for AnchorAction<K> {
         Some(ChangeNotifier::clone(&self.controller.inner.notifier))
     }
 
-    fn invoke(&self, _ctx: &mut EventCx<'_>, intent: &AnchorIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, intent: &AnchorIntent) -> ActionOutcome {
         let Some(target) = self.target(*intent) else {
             return ActionOutcome::NotPerformed;
         };

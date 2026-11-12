@@ -9,6 +9,9 @@
 - `flui create` writes `[profile.dev.package."*"] opt-level = 3` into every application template,
   so a new project's debug build runs its dependencies (wgpu, naga, Parley, lyon) optimized, as
   the FLUI workspace does.
+- `flui create` templates strip symbols from release builds (`strip = "symbols"`): a panic still
+  prints its message and `file:line`, only backtrace frame names are lost. A `profiling` profile
+  inherits release and keeps symbols and line tables for profilers and symbolized backtraces.
 
 ### Removed
 

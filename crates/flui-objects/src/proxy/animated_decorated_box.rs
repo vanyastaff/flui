@@ -16,7 +16,7 @@ use flui_painting::styling::BoxDecoration;
 use flui_painting::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
 use flui_rendering::{
     RenderUpdateImpact,
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
     traits::RenderBox,
@@ -65,7 +65,7 @@ impl RenderAnimatedDecoratedBox {
         RenderUpdateImpact::PAINT
     }
 
-    fn paint_decoration(ctx: &mut PaintCx<'_, Single>, decoration: &BoxDecoration<f64>) {
+    fn paint_decoration(ctx: &mut PaintContext<'_, Single>, decoration: &BoxDecoration<f64>) {
         let rect = Rect::from_origin_size(Point::ZERO, ctx.size());
         paint_box_decoration(
             ctx.canvas(),
@@ -122,7 +122,7 @@ impl RenderBox for RenderAnimatedDecoratedBox {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let decoration = self.decoration();
         if self.position == DecorationPosition::Background {
             Self::paint_decoration(ctx, &decoration);

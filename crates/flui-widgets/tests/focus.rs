@@ -898,7 +898,7 @@ pub(crate) fn a_directionality_update_changes_tab_order_without_replacing_focus_
 /// Event context (ADR-0086): the focus edge and the key handler run inside a
 /// write the `Focus` opens from the writer source it acquired in
 /// `init_state`.
-pub(crate) mod event_cx {
+pub(crate) mod event_context {
     use std::cell::RefCell;
     use std::rc::Rc;
 

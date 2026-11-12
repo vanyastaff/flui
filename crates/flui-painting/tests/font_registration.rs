@@ -71,10 +71,10 @@ fn painted_faces(paragraph: &ShapedParagraph) -> Vec<FaceKey> {
 #[test]
 fn a_face_registered_on_the_collection_reaches_measurement_paint_and_carets() {
     let fonts = FontCollection::with_host_fonts(&HostFonts::scan());
-    let mut text_cx = TextContext::new(&fonts);
+    let mut text_ctx = TextContext::new(&fonts);
     let mut painter = probe_painter("iiii wwww");
     painter
-        .layout(&mut text_cx, 0.0, WIDTH)
+        .layout(&mut text_ctx, 0.0, WIDTH)
         .expect("valid fixture lays out");
     let measured = painter.size();
     let painted = painted_paragraph(&painter);
@@ -94,7 +94,7 @@ fn a_face_registered_on_the_collection_reaches_measurement_paint_and_carets() {
         );
     }
     painter
-        .layout(&mut text_cx, 0.0, WIDTH)
+        .layout(&mut text_ctx, 0.0, WIDTH)
         .expect("valid fixture lays out");
 
     // In the proportional fallback 'iiii' and 'wwww' differ in width, in the

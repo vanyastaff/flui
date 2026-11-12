@@ -1,7 +1,7 @@
 //! [`Actions`] resolution against a mounted tree, driven the way an action is
 //! invoked: a key the focused subtree ignored reaches a `Shortcuts`, which
 //! maps it to an intent and invokes the nearest enabled action with the key
-//! event's `EventCx`. The nearest enabled action wins, a disabled one stops
+//! event's `EventContext`. The nearest enabled action wins, a disabled one stops
 //! resolution at its own scope, and a lookup with no binding leaves the key
 //! unconsumed.
 
@@ -96,7 +96,7 @@ pub(crate) fn the_nearest_enabled_action_wins_and_receives_the_payload() {
 
 /// A `CallbackAction` runs inside the key event's dispatch: it writes a
 /// signal through the `ctx` it receives, and the signal's reader rebuilds.
-pub(crate) fn callback_action_writes_through_the_key_events_cx() {
+pub(crate) fn callback_action_writes_through_the_key_events_ctx() {
     let field = FocusNode::with_debug_label("writing-field");
     let probe_field = Rc::clone(&field);
     let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {

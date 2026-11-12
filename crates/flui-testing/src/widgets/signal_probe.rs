@@ -106,7 +106,7 @@ impl SignalProbe {
         self.seen.reads.borrow().clone()
     }
 
-    /// Run `f` with an [`EventCx`] opened from the probe's writer source,
+    /// Run `f` with an [`EventContext`] opened from the probe's writer source,
     /// as an event callback would: for a test that calls an API taking the
     /// caller's `ctx` (`FormHandle::save`, `FormFieldHandle::reset`) outside
     /// any widget's callback.
@@ -114,7 +114,7 @@ impl SignalProbe {
     /// # Panics
     ///
     /// Before the probe has built once.
-    pub fn write<R>(&self, f: impl FnOnce(&mut EventCx<'_>) -> R) -> R {
+    pub fn write<R>(&self, f: impl FnOnce(&mut EventContext<'_>) -> R) -> R {
         let writer = self
             .seen
             .writer

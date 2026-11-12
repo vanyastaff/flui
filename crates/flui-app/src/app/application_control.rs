@@ -90,7 +90,7 @@ pub enum AppWindowError {
     /// running `Platform::run`'s `on_ready`.
     #[error("no application loop runs on this thread; call from the owner thread")]
     NoOwnerLoop,
-    /// The requested [`WindowPolicy`](crate::app::WindowPolicy) is not
+    /// The requested `WindowPolicy` (under `unstable-windows`) is not
     /// supported by this entry point in the application's current state;
     /// `reason` says which precondition failed.
     #[error("window policy not supported here: {reason}")]

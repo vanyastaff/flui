@@ -128,7 +128,7 @@ impl WidgetsBindingObserver for Observer {
     fn did_change_app_lifecycle_state(&self, _: AppLifecycleState) {
         self.notify();
     }
-    fn did_pop_route(&self) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+    fn did_pop_route(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
         self.notify();
         Box::pin(ResponseFuture {
             pending: self.pending,
@@ -139,7 +139,7 @@ impl WidgetsBindingObserver for Observer {
     fn did_push_route_information(
         &self,
         _: &RouteInformation,
-    ) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = bool> + '_>> {
         self.did_pop_route()
     }
 }
@@ -251,7 +251,7 @@ pub(crate) fn dispatch_child(case: &str) {
                 handled: bool,
             }
             impl WidgetsBindingObserver for Navigation {
-                fn did_pop_route(&self) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+                fn did_pop_route(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
                     self.calls.set(self.calls.get() + 1);
                     let handled = self.handled;
                     Box::pin(async move { handled })
@@ -259,7 +259,7 @@ pub(crate) fn dispatch_child(case: &str) {
                 fn did_push_route_information(
                     &self,
                     _: &RouteInformation,
-                ) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+                ) -> Pin<Box<dyn Future<Output = bool> + '_>> {
                     self.did_pop_route()
                 }
             }

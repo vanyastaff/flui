@@ -54,8 +54,8 @@ use flui_rendering::{
     RenderResult,
     constraints::BoxConstraints,
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
-        PaintCx,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext, PaintContext,
     },
     layer::LayerLink,
     parent_data::BoxParentData,
@@ -392,7 +392,7 @@ impl RenderEditable {
     /// Pushes a leader at each published end: the selection's two ends, or
     /// the caret alone under the start link while the selection is
     /// collapsed.
-    fn paint_handle_leaders(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint_handle_leaders(&self, ctx: &mut PaintContext<'_, Leaf>) {
         let ends = match self.selection.as_ref() {
             Some(range) if !range.is_empty() => [
                 (self.start_handle, TextPosition::downstream(range.start)),
@@ -811,7 +811,7 @@ impl RenderBox for RenderEditable {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> RenderResult<Size> {
         let (min_width, max_width) = self.text_width_constraints(&constraints);
         let text_size = ctx
@@ -825,7 +825,7 @@ impl RenderBox for RenderEditable {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> RenderResult<Option<f64>> {
         let (min_width, max_width) = self.text_width_constraints(&constraints);
         let painter_baseline = match baseline {
@@ -843,7 +843,7 @@ impl RenderBox for RenderEditable {
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> RenderResult<f64> {
         Ok(ctx
             .text()?
@@ -855,7 +855,7 @@ impl RenderBox for RenderEditable {
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> RenderResult<f64> {
         Ok(ctx
             .text()?
@@ -867,7 +867,7 @@ impl RenderBox for RenderEditable {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> RenderResult<f64> {
         Ok(ctx
             .text()?
@@ -879,7 +879,7 @@ impl RenderBox for RenderEditable {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> RenderResult<f64> {
         Ok(ctx
             .text()?
@@ -916,7 +916,7 @@ impl RenderBox for RenderEditable {
         ctx.is_within_own_size()
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         if !self.painter.has_layout() {
             return;
         }
@@ -930,7 +930,7 @@ impl RenderBox for RenderEditable {
 }
 
 impl RenderEditable {
-    fn paint_visible_content(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint_visible_content(&self, ctx: &mut PaintContext<'_, Leaf>) {
         self.paint_selection(ctx);
 
         // The composing region is underlined as a span would be: where its
@@ -989,7 +989,7 @@ impl RenderEditable {
     /// input FLUI's layout accepts produces a duplicate box today. With a translucent highlight a
     /// duplicate blends twice and reads as a darker rectangle, so it is kept
     /// as cheap insurance against a layout change, not as a proven guard.
-    fn paint_selection(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint_selection(&self, ctx: &mut PaintContext<'_, Leaf>) {
         let Some(range) = self.selection.as_ref() else {
             return;
         };

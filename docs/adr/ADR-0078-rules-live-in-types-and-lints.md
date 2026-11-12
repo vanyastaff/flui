@@ -169,7 +169,7 @@ conditions.
 ## Alternatives rejected
 
 - **A run-time phase assertion in each capability method.** `init_state` runs through the
-  same `BuildCtx` as `build`, so the context cannot tell the phases apart without a new
+  same `LiveBuildContext` as `build`, so the context cannot tell the phases apart without a new
   flag, and a debug-only panic finds the bug later than the compiler does.
 - **Keep the scanners, drop only the markers.** The markers existed because the scanners
   could not tell legal from illegal code; without them every lock and `dyn` would fail.

@@ -3,7 +3,7 @@
 //! A UI runtime owns one [`TextContext`] over the app's font collection and every
 //! presentation's [`PipelineOwner`](super::PipelineOwner) holds a
 //! [`TextContextHandle`] to it. Layout, intrinsic, dry-layout and
-//! dry-baseline contexts lend it to a render object as a [`TextCx`], a scoped
+//! dry-baseline contexts lend it to a render object as a [`TextContextMut`], a scoped
 //! loan taken from `&mut` context. Raw query methods and erased layout hooks
 //! receive the same complete mutable capability: a text loan cannot remain in
 //! use across a child query through that context. Drivers keep [`TextSource`]
@@ -34,7 +34,7 @@ use rustc_hash::FxHashSet;
 /// A UI runtime's text context, shared with each presentation's pipeline.
 ///
 /// Cloning shares the context. `!Send`, like the UI runtime and pipeline owners
-/// that hold it. A render object measures through the [`TextCx`] its layout
+/// that hold it. A render object measures through the [`TextContextMut`] its layout
 /// context lends; `ptr_eq` and `with`, under the `testing` feature, let a
 /// test compare handles and inspect the context.
 #[derive(Clone)]
@@ -269,9 +269,9 @@ impl fmt::Debug for TextSource<'_> {
 ///
 /// Measurement binds the shared resources to this presentation's sizing policy.
 /// Raw diagnostic shaping explicitly chooses fixed logical sizes.
-pub struct TextCx<'a>(RefMut<'a, TextContext>, TextSizing);
+pub struct TextContextMut<'a>(RefMut<'a, TextContext>, TextSizing);
 
-impl TextCx<'_> {
+impl TextContextMut<'_> {
     /// Measure through this presentation's explicit numeric authority.
     pub fn measurement(&mut self) -> TextMeasurement<'_> {
         TextMeasurement::new(&mut self.0, &self.1)
@@ -296,7 +296,7 @@ impl TextCx<'_> {
     }
 }
 
-impl Deref for TextCx<'_> {
+impl Deref for TextContextMut<'_> {
     type Target = TextContext;
 
     fn deref(&self) -> &TextContext {
@@ -304,15 +304,15 @@ impl Deref for TextCx<'_> {
     }
 }
 
-impl fmt::Debug for TextCx<'_> {
+impl fmt::Debug for TextContextMut<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("TextCx").field(&**self).finish()
+        f.debug_tuple("TextContextMut").field(&**self).finish()
     }
 }
 
 /// Borrows the UI runtime's context for one measurement, and records the node it
 /// is lent to.
-pub(crate) fn lend(source: TextSource<'_>) -> crate::RenderResult<TextCx<'_>> {
+pub(crate) fn lend(source: TextSource<'_>) -> crate::RenderResult<TextContextMut<'_>> {
     let context = source
         .cell()
         .try_borrow_mut()
@@ -320,7 +320,10 @@ pub(crate) fn lend(source: TextSource<'_>) -> crate::RenderResult<TextCx<'_>> {
     if let Some((measurers, node)) = source.measured {
         measurers.note(node);
     }
-    Ok(TextCx(context, source.sizing.cloned().unwrap_or_default()))
+    Ok(TextContextMut(
+        context,
+        source.sizing.cloned().unwrap_or_default(),
+    ))
 }
 
 #[cfg(test)]
@@ -352,7 +355,7 @@ mod tests {
         drop(lent);
         assert!(
             handle.cell().try_borrow_mut().is_ok(),
-            "the loan ends with the TextCx"
+            "the loan ends with the TextContextMut"
         );
     }
 

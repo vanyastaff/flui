@@ -69,7 +69,7 @@ use flui_view::element::ElementKind;
 use flui_view::environment::GestureArenaScope;
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
-use flui_view::{EventCx, EventOutcome, RebuildHandle, WriterSource};
+use flui_view::{EventContext, EventOutcome, RebuildHandle, WriterSource};
 
 use crate::interaction::actions::{ambient_action_chain, resolve};
 use crate::interaction::{
@@ -221,8 +221,8 @@ impl fmt::Debug for ReorderableItem<'_> {
 
 type KeyFn = Rc<dyn Fn(usize) -> Rc<dyn ViewKey>>;
 type ItemFn = Rc<dyn Fn(&ReorderableItem<'_>) -> BoxedView>;
-type ReorderFn = Rc<dyn Fn(&mut EventCx<'_>, Reorder)>;
-type PreviewFn = Rc<dyn Fn(&mut EventCx<'_>, ReorderPreview)>;
+type ReorderFn = Rc<dyn Fn(&mut EventContext<'_>, Reorder)>;
+type PreviewFn = Rc<dyn Fn(&mut EventContext<'_>, ReorderPreview)>;
 type LabelFn = Rc<dyn Fn(usize) -> String>;
 type DecoratorFn = Rc<dyn Fn(BoxedView, usize, Rc<dyn Animation<f64>>) -> BoxedView>;
 
@@ -264,7 +264,7 @@ impl Config {
         item_count: usize,
         key: impl Fn(usize) -> K + 'static,
         item: impl Fn(&ReorderableItem<'_>) -> V + 'static,
-        on_reorder: impl Fn(&mut EventCx<'_>, Reorder) -> R + 'static,
+        on_reorder: impl Fn(&mut EventContext<'_>, Reorder) -> R + 'static,
     ) -> Self
     where
         K: Clone + Hash + Eq + fmt::Debug + 'static,
@@ -294,7 +294,7 @@ impl Config {
 
     fn on_reorder_preview<F, R>(&mut self, callback: F)
     where
-        F: Fn(&mut EventCx<'_>, ReorderPreview) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ReorderPreview) -> R + 'static,
         R: EventOutcome,
     {
         self.on_reorder_preview =
@@ -364,7 +364,7 @@ impl ReorderableList {
         item_count: usize,
         key: impl Fn(usize) -> K + 'static,
         item: impl Fn(&ReorderableItem<'_>) -> V + 'static,
-        on_reorder: impl Fn(&mut EventCx<'_>, Reorder) -> R + 'static,
+        on_reorder: impl Fn(&mut EventContext<'_>, Reorder) -> R + 'static,
     ) -> Self
     where
         K: Clone + Hash + Eq + fmt::Debug + 'static,
@@ -416,7 +416,7 @@ impl ReorderableList {
     #[must_use]
     pub fn on_reorder_preview<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ReorderPreview) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ReorderPreview) -> R + 'static,
         R: EventOutcome,
     {
         self.config.on_reorder_preview(callback);
@@ -535,7 +535,7 @@ impl ReorderableGrid {
         item_count: usize,
         key: impl Fn(usize) -> K + 'static,
         item: impl Fn(&ReorderableItem<'_>) -> V + 'static,
-        on_reorder: impl Fn(&mut EventCx<'_>, Reorder) -> R + 'static,
+        on_reorder: impl Fn(&mut EventContext<'_>, Reorder) -> R + 'static,
     ) -> Self
     where
         K: Clone + Hash + Eq + fmt::Debug + 'static,
@@ -587,7 +587,7 @@ impl ReorderableGrid {
     #[must_use]
     pub fn on_reorder_preview<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, ReorderPreview) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, ReorderPreview) -> R + 'static,
         R: EventOutcome,
     {
         self.config.on_reorder_preview(callback);
@@ -919,7 +919,7 @@ struct Shared {
 }
 
 impl Shared {
-    fn write(&self, invoke: impl FnOnce(&mut EventCx<'_>)) {
+    fn write(&self, invoke: impl FnOnce(&mut EventContext<'_>)) {
         let writer = self.writer.borrow().clone();
         if let Some(writer) = writer {
             writer.write(invoke);
@@ -1151,7 +1151,7 @@ impl Shared {
 
     /// The drag of `key` was let go over the list: the item goes where the
     /// drag shows it.
-    fn dropped(&self, ctx: &mut EventCx<'_>, key: &dyn ViewKey) {
+    fn dropped(&self, ctx: &mut EventContext<'_>, key: &dyn ViewKey) {
         if let Some(Some(to)) = self.with_drag(key, |drag, _| drag.over.or(drag.left_over)) {
             let _ = self.reorder(ctx, key, to, ReorderCause::Drag);
         }
@@ -1214,7 +1214,7 @@ impl Shared {
     /// nothing when it is there already.
     fn reorder(
         &self,
-        ctx: &mut EventCx<'_>,
+        ctx: &mut EventContext<'_>,
         key: &dyn ViewKey,
         to: usize,
         cause: ReorderCause,
@@ -2032,7 +2032,7 @@ impl Action<ReorderIntent> for RowMoves {
         self.target(*intent).is_some()
     }
 
-    fn invoke(&self, ctx: &mut EventCx<'_>, intent: &ReorderIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventContext<'_>, intent: &ReorderIntent) -> ActionOutcome {
         match self.target(*intent) {
             Some(to)
                 if self

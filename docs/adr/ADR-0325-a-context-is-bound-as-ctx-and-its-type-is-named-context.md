@@ -13,7 +13,7 @@
 The first signatures a newcomer reads and copies are a widget's `build` and an event handler.
 Before this decision a build, lifecycle, render-object or provider context was bound as `ctx` at
 about 1,300 sites and as `cx` at about 170, an event context and a `poll`'s task context were
-`cx`, and context types were spelled three ways (`BuildContext`, `EventCx`, `BoxIntrinsicsCtx`).
+`cx`, and context types were spelled three ways (`BuildContext`, `EventContext`, `BoxIntrinsicsContext`).
 A reader could not tell from a name which context a closure had, and every new widget copied
 whichever neighbour it opened. The naming requirements' N1 asks for one spelling. Which one, and
 what keeps it?

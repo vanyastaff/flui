@@ -153,7 +153,7 @@ impl ControlTap {
     #[must_use]
     pub fn on_tap<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.press.tap = Some(event_callback(callback));
@@ -164,7 +164,7 @@ impl ControlTap {
     #[must_use]
     pub fn on_tap_down<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, TapDownDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, TapDownDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.press.tap_down = Some(value_callback(callback));
@@ -175,7 +175,7 @@ impl ControlTap {
     #[must_use]
     pub fn on_tap_up<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, TapUpDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, TapUpDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.press.tap_up = Some(value_callback(callback));
@@ -186,7 +186,7 @@ impl ControlTap {
     #[must_use]
     pub fn on_tap_cancel<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, TapDetails) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, TapDetails) -> R + 'static,
         R: EventOutcome,
     {
         self.press.tap_cancel = Some(value_callback(callback));
@@ -197,7 +197,7 @@ impl ControlTap {
     #[must_use]
     pub fn on_pointer_up<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerDispatch<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.contact.up = Some(pointer_callback(callback));
@@ -208,7 +208,7 @@ impl ControlTap {
     #[must_use]
     pub fn on_pointer_move<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerDispatch<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.contact.moved = Some(pointer_callback(callback));
@@ -219,7 +219,7 @@ impl ControlTap {
     #[must_use]
     pub fn on_pointer_cancel<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerDispatch<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.contact.cancel = Some(pointer_callback(callback));
@@ -442,7 +442,7 @@ fn writing_focus(
     then: Option<FocusChangeHandler>,
 ) -> FocusChangeHandler {
     let states = states.clone();
-    Rc::new(move |ctx: &mut EventCx<'_>, on: bool| {
+    Rc::new(move |ctx: &mut EventContext<'_>, on: bool| {
         states.update(state, on);
         if let Some(then) = &then {
             then(ctx, on);
@@ -841,7 +841,7 @@ mod switch_tests {
     use std::any::TypeId;
     use std::rc::Rc;
 
-    use flui_view::EventCx;
+    use flui_view::EventContext;
 
     use super::InteractiveNode;
     use crate::{Action, ActionOutcome, ActivateIntent, SizedBox};
@@ -849,7 +849,7 @@ mod switch_tests {
     struct Willing;
 
     impl Action<ActivateIntent> for Willing {
-        fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+        fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &ActivateIntent) -> ActionOutcome {
             ActionOutcome::Performed
         }
     }

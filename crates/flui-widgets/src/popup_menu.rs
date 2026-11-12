@@ -293,7 +293,7 @@ impl ViewState<MenuPanel> for MenuPanelState {
                     );
                     // The menu closes before the command runs, so a command
                     // that fails leaves no menu open behind it.
-                    move |ctx: &mut EventCx<'_>| {
+                    move |ctx: &mut EventContext<'_>| {
                         session.close(&menu);
                         let _ = item.perform(ctx);
                     }
@@ -388,17 +388,17 @@ fn menu_row(
 
 /// Chooses one item: closes the menu, then performs the item's command.
 #[derive(Clone)]
-struct Choose(Rc<dyn Fn(&mut EventCx<'_>)>);
+struct Choose(Rc<dyn Fn(&mut EventContext<'_>)>);
 
 impl Action<ActivateIntent> for Choose {
-    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &ActivateIntent) -> ActionOutcome {
         (self.0)(ctx);
         ActionOutcome::Performed
     }
 }
 
 impl Action<ButtonActivateIntent> for Choose {
-    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
         (self.0)(ctx);
         ActionOutcome::Performed
     }
@@ -406,7 +406,11 @@ impl Action<ButtonActivateIntent> for Choose {
 
 /// Space's key-down on an item: consumed, so its release chooses it.
 impl Action<ActivationPressIntent> for Choose {
-    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+    fn invoke(
+        &self,
+        _ctx: &mut EventContext<'_>,
+        _intent: &ActivationPressIntent,
+    ) -> ActionOutcome {
         ActionOutcome::Performed
     }
 }
@@ -426,7 +430,7 @@ impl Intent for MenuStep {}
 struct MoveFocus(Rc<[Rc<FocusNode>]>);
 
 impl Action<MenuStep> for MoveFocus {
-    fn invoke(&self, _ctx: &mut EventCx<'_>, step: &MenuStep) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, step: &MenuStep) -> ActionOutcome {
         let count = self.0.len();
         if count == 0 {
             return ActionOutcome::NotPerformed;
@@ -531,7 +535,7 @@ impl SelectionMenu for PlainSelectionMenu {
 fn toolbar_button(
     text: String,
     label: String,
-    tap: impl Fn(&mut EventCx<'_>) + 'static,
+    tap: impl Fn(&mut EventContext<'_>) + 'static,
     direction: TextDirection,
     min_target: f64,
 ) -> BoxedView {

@@ -70,7 +70,7 @@ impl flui_foundation::inspect::Inspect for FlakyLeaf {
 impl RenderObject<BoxProtocol> for FlakyLeaf {
     fn perform_layout_raw(
         &mut self,
-        _ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::LayoutCtxErased<'_>,
+        _ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::ErasedLayoutContext<'_>,
     ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
         self.attempts.fetch_add(1, Ordering::Relaxed);
         if self.fail {
@@ -396,7 +396,7 @@ impl flui_foundation::inspect::Inspect for RetainingLeaf {
 impl RenderObject<BoxProtocol> for RetainingLeaf {
     fn perform_layout_raw(
         &mut self,
-        ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::LayoutCtxErased<'_>,
+        ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::ErasedLayoutContext<'_>,
     ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         assert!(

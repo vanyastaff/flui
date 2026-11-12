@@ -387,7 +387,7 @@ pub trait LifecycleContext: BuildContext {
     ///
     /// Keep it in the state and use it where an event reaches this widget:
     /// wrapping a recognizer callback so the user's closure receives the
-    /// `&mut EventCx<'_>`, or inside a callback whose shape carries no `ctx`.
+    /// `&mut EventContext<'_>`, or inside a callback whose shape carries no `ctx`.
     /// It writes into this element's presentation graph; a signal minted by
     /// another presentation is refused with
     /// [`SignalError::ForeignGraph`](crate::SignalError::ForeignGraph).

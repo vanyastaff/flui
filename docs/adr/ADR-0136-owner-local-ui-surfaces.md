@@ -99,8 +99,8 @@ weak-handle and thread-boundary rules in this section still apply.
   During an existing unwind the values are retained without running their destructors, the
   same limit `TaskToken`'s `Drop` states: catching cannot contain an aggregate whose drop glue
   panics twice.
-- `FutureBuilder<K, T, E>` requires `K: Clone + PartialEq + Debug + 'static` and
-  `T, E: 'static`; `BoxedResultFuture` has no `Send` bound.
+- `FutureBuilder<K, T, E>` and `StreamBuilder<K, T, E>` require `K: Clone + PartialEq + Debug + 'static` and
+  `T, E: 'static`; neither `BoxedResultFuture` nor `BoxedResultStream` has a `Send` bound.
 
 ### 3. A value crosses a thread because the compiler proves it may; two gates hold the exceptions
 

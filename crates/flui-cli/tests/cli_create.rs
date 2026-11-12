@@ -528,7 +528,8 @@ fn created_application_builds_with_its_identifier() {
 
 /// Every application template's workspace root optimizes its dependencies in
 /// a debug build, as this workspace does: without it wgpu, naga, Parley and
-/// lyon set the frame time of a new project's first `flui run`.
+/// lyon set the frame time of a new project's first `flui run`. Its release
+/// build strips symbols, and `--profile profiling` keeps them.
 #[test]
 fn every_application_template_optimizes_its_dependencies_in_debug() {
     let tmp = TempDir::new().expect("temp dir");
@@ -572,6 +573,20 @@ fn every_application_template_optimizes_its_dependencies_in_debug() {
                 .and_then(toml::Value::as_str),
             Some("thin"),
             "{name}: [profile.release] lto"
+        );
+        assert_eq!(
+            manifest["profile"]["release"]
+                .get("strip")
+                .and_then(toml::Value::as_str),
+            Some("symbols"),
+            "{name}: [profile.release] strip"
+        );
+        assert_eq!(
+            manifest["profile"]["profiling"]
+                .get("inherits")
+                .and_then(toml::Value::as_str),
+            Some("release"),
+            "{name}: [profile.profiling] inherits"
         );
     }
 }

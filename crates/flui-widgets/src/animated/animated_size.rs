@@ -22,11 +22,13 @@ use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{Child, EventCx, EventOutcome, IntoView, RenderView, ViewState, impl_render_view};
+use flui_view::{
+    Child, EventContext, EventOutcome, IntoView, RenderView, ViewState, impl_render_view,
+};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-type EndCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
+type EndCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 
 use crate::animated::implicitly_animated::MotionBuilder;
 use flui_view::environment::VsyncScope;
@@ -94,7 +96,7 @@ impl AnimatedSize {
     #[must_use]
     pub fn on_end<R: EventOutcome>(
         mut self,
-        on_end: impl Fn(&mut EventCx<'_>) -> R + 'static,
+        on_end: impl Fn(&mut EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_end = Some(Rc::new(move |ctx| on_end(ctx).report()));
         self

@@ -1376,7 +1376,7 @@ pub(crate) fn the_assistive_cursor_entering_and_leaving_a_subtree_reaches_its_ha
     }
 }
 
-/// An action handler receives the dispatch's `EventCx`: its signal write
+/// An action handler receives the dispatch's `EventContext`: its signal write
 /// lands, and the signal's reader rebuilds on the next frame.
 pub(crate) fn an_action_handler_writes_a_signal_and_rebuilds_its_reader() {
     let probe = SignalProbe::new(|ProbeSignals { count, .. }| {

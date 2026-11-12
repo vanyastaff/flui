@@ -1,4 +1,4 @@
-//! `PageView::on_page_changed` receives an `EventCx` (ADR-0086). The
+//! `PageView::on_page_changed` receives an `EventContext` (ADR-0086). The
 //! controller's listener only records a change; the callback runs after the
 //! frame on the local post-frame lane, outside any build, so its writes land
 //! — every recorded page, in order, through whichever callback is current

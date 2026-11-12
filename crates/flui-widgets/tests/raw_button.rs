@@ -1,4 +1,4 @@
-//! `RawButton`: a press opens an `EventCx` through the button's
+//! `RawButton`: a press opens an `EventContext` through the button's
 //! `WriterSource` and writes a signal (ADR-0086). Pointer and assistive
 //! technology both reach it; without a callback it is disabled.
 
@@ -227,7 +227,7 @@ enum Made {
     Wrappers,
 }
 
-type OnPress = Rc<dyn Fn(&mut EventCx<'_>)>;
+type OnPress = Rc<dyn Fn(&mut EventContext<'_>)>;
 
 /// A button composed from the public wrappers: what `RawButton` must stay
 /// indistinguishable from to assistive technology and to the gesture arena
@@ -242,7 +242,7 @@ struct WrapperButton {
 struct WrapperPress(Option<OnPress>);
 
 impl WrapperPress {
-    fn run(&self, ctx: &mut EventCx<'_>) -> ActionOutcome {
+    fn run(&self, ctx: &mut EventContext<'_>) -> ActionOutcome {
         match &self.0 {
             Some(on_press) => {
                 on_press(ctx);
@@ -258,7 +258,7 @@ impl IntentAction<ActivateIntent> for WrapperPress {
         self.0.is_some()
     }
 
-    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &ActivateIntent) -> ActionOutcome {
         self.run(ctx)
     }
 }
@@ -268,7 +268,7 @@ impl IntentAction<ButtonActivateIntent> for WrapperPress {
         self.0.is_some()
     }
 
-    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &ButtonActivateIntent) -> ActionOutcome {
         self.run(ctx)
     }
 }
@@ -278,7 +278,11 @@ impl IntentAction<ActivationPressIntent> for WrapperPress {
         self.0.is_some()
     }
 
-    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+    fn invoke(
+        &self,
+        _ctx: &mut EventContext<'_>,
+        _intent: &ActivationPressIntent,
+    ) -> ActionOutcome {
         ActionOutcome::Performed
     }
 }
@@ -332,7 +336,7 @@ type PressLog = Rc<RefCell<Vec<&'static str>>>;
 
 fn logging(log: &PressLog, name: &'static str) -> OnPress {
     let log = Rc::clone(log);
-    Rc::new(move |_ctx: &mut EventCx<'_>| {
+    Rc::new(move |_ctx: &mut EventContext<'_>| {
         log.borrow_mut().push(name);
     })
 }
@@ -530,7 +534,7 @@ struct SwitchedState {
 struct Outer(PressLog);
 
 impl IntentAction<ActivateIntent> for Outer {
-    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &ActivateIntent) -> ActionOutcome {
         self.0.borrow_mut().push("outer");
         ActionOutcome::Performed
     }
@@ -704,7 +708,7 @@ impl ViewState<Stated> for StatedState {
             RawButton::new(flui_widgets::SizedBox::new(120.0, 60.0).child(Text::new("Press")))
                 .states_controller(controller.clone());
         if self.enabled.get(ctx) {
-            button = button.on_press(|_ctx: &mut EventCx<'_>| {});
+            button = button.on_press(|_ctx: &mut EventContext<'_>| {});
         }
         button.boxed()
     }
@@ -937,7 +941,7 @@ pub(crate) fn hover_repaints_without_rebuilding() {
                 ),
             )
             .states_controller(states.clone())
-            .on_press(|_ctx: &mut EventCx<'_>| {}),
+            .on_press(|_ctx: &mut EventContext<'_>| {}),
             Text::new("A neighbour"),
         )),
         loose(400.0),

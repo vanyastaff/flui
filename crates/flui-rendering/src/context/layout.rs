@@ -203,11 +203,13 @@ where
     /// `false`.
     #[must_use]
     pub fn descendant_layout_degraded(&self) -> bool {
-        crate::protocol::box_protocol::BoxLayoutCtxErased::descendant_layout_degraded(&self.inner)
+        crate::protocol::box_protocol::ErasedBoxLayoutContext::descendant_layout_degraded(
+            &self.inner,
+        )
     }
 
     /// The text context to measure with: the UI runtime's, lent through the
-    /// pipeline for as long as the returned [`TextCx`](crate::TextCx)
+    /// pipeline for as long as the returned [`TextContextMut`](crate::TextContextMut)
     /// lives.
     ///
     /// Taken from `&mut self`, so a render object cannot lay out a child
@@ -217,7 +219,7 @@ where
     ///
     /// Returns [`crate::error::RenderError::TextContextBusy`] when an
     /// independently held loan already uses the runtime's shared resource.
-    pub fn text(&mut self) -> crate::error::RenderResult<crate::TextCx<'_>> {
+    pub fn text(&mut self) -> crate::error::RenderResult<crate::TextContextMut<'_>> {
         self.inner.text()
     }
 
@@ -342,21 +344,21 @@ where
 // BOX CROSS-PROTOCOL EXTENSIONS
 // ============================================================================
 //
-// Separate impl block so the `BoxLayoutCtxErased` bound does not pollute
+// Separate impl block so the `ErasedBoxLayoutContext` bound does not pollute
 // the shared-method-name impl above (which would cause E0034 ambiguity
-// between `BoxLayoutCtxErased::constraints` and
+// between `ErasedBoxLayoutContext::constraints` and
 // `LayoutContextApi::constraints`).
 
 impl<'ctx, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, BoxProtocol, A, PD>
 where
     <BoxLayout as LayoutCapability>::Context<'ctx, A, PD>:
-        crate::protocol::box_protocol::BoxLayoutCtxErased,
+        crate::protocol::box_protocol::ErasedBoxLayoutContext,
 {
     /// Lays out a **sliver** child at `index` with the given
     /// [`SliverConstraints`] and returns its [`SliverGeometry`].
     ///
     /// Delegates to
-    /// [`crate::protocol::box_protocol::BoxLayoutCtxErased::layout_sliver_child`]
+    /// [`crate::protocol::box_protocol::ErasedBoxLayoutContext::layout_sliver_child`]
     /// on the underlying context. In Direct-storage contexts (leaf-only
     /// layout, unit tests without a pipeline-wired sliver callback) the
     /// underlying impl returns [`SliverGeometry::ZERO`]. In the production
@@ -369,7 +371,7 @@ where
         index: usize,
         constraints: SliverConstraints,
     ) -> crate::error::RenderResult<SliverGeometry> {
-        crate::protocol::box_protocol::BoxLayoutCtxErased::layout_sliver_child(
+        crate::protocol::box_protocol::ErasedBoxLayoutContext::layout_sliver_child(
             &mut self.inner,
             index,
             constraints,
@@ -382,7 +384,7 @@ where
         &self,
         index: usize,
     ) -> Option<(SliverConstraints, SliverGeometry)> {
-        crate::protocol::box_protocol::BoxLayoutCtxErased::cached_sliver_child_layout(
+        crate::protocol::box_protocol::ErasedBoxLayoutContext::cached_sliver_child_layout(
             &self.inner,
             index,
         )
@@ -395,7 +397,7 @@ where
     /// walked and the pass looks healthy.
     #[must_use]
     pub fn sliver_child_geometry_degraded(&self, index: usize) -> bool {
-        crate::protocol::box_protocol::BoxLayoutCtxErased::sliver_child_geometry_degraded(
+        crate::protocol::box_protocol::ErasedBoxLayoutContext::sliver_child_geometry_degraded(
             &self.inner,
             index,
         )
@@ -403,7 +405,7 @@ where
 
     /// Returns whether a sliver child is still marked as needing layout.
     pub fn sliver_child_needs_layout(&self, index: usize) -> bool {
-        crate::protocol::box_protocol::BoxLayoutCtxErased::sliver_child_needs_layout(
+        crate::protocol::box_protocol::ErasedBoxLayoutContext::sliver_child_needs_layout(
             &self.inner,
             index,
         )
@@ -416,7 +418,7 @@ where
         index: usize,
         baseline: crate::traits::TextBaseline,
     ) -> crate::error::RenderResult<Option<f64>> {
-        crate::protocol::box_protocol::BoxLayoutCtxErased::child_distance_to_actual_baseline(
+        crate::protocol::box_protocol::ErasedBoxLayoutContext::child_distance_to_actual_baseline(
             &self.inner,
             index,
             baseline,
@@ -439,7 +441,7 @@ where
         dimension: IntrinsicDimension,
         extent: f64,
     ) -> crate::error::RenderResult<f64> {
-        crate::protocol::box_protocol::BoxLayoutCtxErased::child_intrinsic(
+        crate::protocol::box_protocol::ErasedBoxLayoutContext::child_intrinsic(
             &mut self.inner,
             index,
             dimension,
@@ -495,7 +497,7 @@ where
 impl<'ctx, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, SliverProtocol, A, PD>
 where
     <crate::protocol::SliverLayout as LayoutCapability>::Context<'ctx, A, PD>:
-        crate::protocol::sliver_protocol::SliverLayoutCtxErased,
+        crate::protocol::sliver_protocol::ErasedSliverLayoutContext,
 {
     /// Lays out a **Box** child at `index` with the given
     /// [`BoxConstraints`] and returns its [`Size`].
@@ -513,7 +515,7 @@ where
         index: usize,
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<Size> {
-        crate::protocol::sliver_protocol::SliverLayoutCtxErased::layout_box_child(
+        crate::protocol::sliver_protocol::ErasedSliverLayoutContext::layout_box_child(
             &mut self.inner,
             index,
             constraints,
@@ -535,7 +537,7 @@ where
         index: usize,
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<crate::protocol::BoxChildSize> {
-        crate::protocol::sliver_protocol::SliverLayoutCtxErased::measure_box_child(
+        crate::protocol::sliver_protocol::ErasedSliverLayoutContext::measure_box_child(
             &mut self.inner,
             index,
             constraints,
@@ -549,7 +551,7 @@ where
         dimension: IntrinsicDimension,
         extent: f64,
     ) -> crate::error::RenderResult<f64> {
-        crate::protocol::sliver_protocol::SliverLayoutCtxErased::box_child_intrinsic(
+        crate::protocol::sliver_protocol::ErasedSliverLayoutContext::box_child_intrinsic(
             &mut self.inner,
             index,
             dimension,
@@ -589,7 +591,7 @@ where
     /// Returns [`ChildLayout::Scheduled`] once the request is recorded, or
     /// [`ChildLayout::Unwired`] when this context carries no request sink.
     pub fn request_child_build(&mut self, logical_index: usize) -> ChildLayout {
-        crate::protocol::sliver_protocol::SliverLayoutCtxErased::request_child_build(
+        crate::protocol::sliver_protocol::ErasedSliverLayoutContext::request_child_build(
             &mut self.inner,
             logical_index,
         )
@@ -600,7 +602,7 @@ where
     /// stand-in), at any depth. See `DegradationProbe`.
     #[must_use]
     pub fn descendant_layout_degraded(&self) -> bool {
-        crate::protocol::sliver_protocol::SliverLayoutCtxErased::descendant_layout_degraded(
+        crate::protocol::sliver_protocol::ErasedSliverLayoutContext::descendant_layout_degraded(
             &self.inner,
         )
     }
@@ -615,7 +617,7 @@ where
     /// children on the element side. The render side never disposes a child
     /// itself, which is what avoids an ABA double-remove between the two.
     pub fn emit_retain_band(&mut self, first: usize, last: usize) {
-        crate::protocol::sliver_protocol::SliverLayoutCtxErased::emit_retain_band(
+        crate::protocol::sliver_protocol::ErasedSliverLayoutContext::emit_retain_band(
             &mut self.inner,
             first,
             last,

@@ -13,7 +13,7 @@ use flui_painting::styling::BoxDecoration;
 use flui_painting::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
 
 use flui_rendering::{
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -163,7 +163,7 @@ impl RenderBox for RenderDecoratedBox {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let rect = Self::paint_rect(ctx.size());
         if self.position == DecorationPosition::Background {
             paint_box_decoration(

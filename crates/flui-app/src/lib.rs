@@ -152,7 +152,9 @@ pub use app::{
 // available on iOS, where `AppRuntime`/`UiRuntime`'s ui_runtime-hosting machinery
 // itself is not compiled (see `runtime::ExitPolicy`'s own doc).
 #[cfg(not(target_os = "ios"))]
-pub use app::{ExitPolicy, WindowPolicy};
+pub use app::ExitPolicy;
+#[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
+pub use app::WindowPolicy;
 // Per-window close-request veto (issue #558): the application's answer to
 // "may this window close?", asked per presentation before anything is torn
 // down. Same iOS gate as the policy knobs above, and for the same reason.
@@ -169,12 +171,14 @@ pub use app::{
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+#[cfg(feature = "unstable-windows")]
 pub use app::open_secondary_window;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+#[cfg(feature = "unstable-windows")]
 pub use app::open_window;
 // Android-specific entry points
 /// The crate `android_main` receives its `AndroidApp` from; re-exported so

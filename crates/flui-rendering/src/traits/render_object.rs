@@ -199,8 +199,8 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///
     /// **Users don't implement this directly.** Protocol traits like
     /// `RenderBox` provide blanket implementations that reconstruct a
-    /// typed `BoxLayoutCtx<Self::Arity, Self::ParentData>` from the
-    /// erased context (via the in-crate `BoxLayoutCtx::from_erased`
+    /// typed `RawBoxLayoutContext<Self::Arity, Self::ParentData>` from the
+    /// erased context (via the in-crate `RawBoxLayoutContext::from_erased`
     /// ctor) and call the typed [`RenderBox::perform_layout`] method.
     ///
     /// # Signature evolution
@@ -211,8 +211,8 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///    surface didn't carry children.
     ///
     /// 2. **Next revision** — signature changed to
-    ///    `fn perform_layout_raw(&mut self, ctx: &mut <P as Protocol>::LayoutCtxErased<'_>) -> ProtocolGeometry<P>`
-    ///    so the blanket impl can construct a typed [`BoxLayoutCtx`]
+    ///    `fn perform_layout_raw(&mut self, ctx: &mut <P as Protocol>::ErasedLayoutContext<'_>) -> ProtocolGeometry<P>`
+    ///    so the blanket impl can construct a typed [`RawBoxLayoutContext`]
     ///    with children access. Contract-violation signalling went
     ///    through `std::panic::panic_any(RenderError::ContractViolation)`
     ///    caught by `catch_unwind` in `RenderEntry::layout_leaf_only` —
@@ -230,18 +230,18 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///    runtime panics from third-party user widget code into
     ///    [`RenderError::Poisoned`].
     ///
-    /// The [`Protocol::LayoutCtxErased`] GAT resolves to the
-    /// per-protocol trait-object form: `dyn BoxLayoutCtxErased` for
-    /// `BoxProtocol`, `dyn SliverLayoutCtxErased` for `SliverProtocol`.
+    /// The [`Protocol::ErasedLayoutContext`] GAT resolves to the
+    /// per-protocol trait-object form: `dyn ErasedBoxLayoutContext` for
+    /// `BoxProtocol`, `dyn ErasedSliverLayoutContext` for `SliverProtocol`.
     ///
-    /// [`BoxLayoutCtx`]: crate::protocol::BoxLayoutCtx
+    /// [`RawBoxLayoutContext`]: crate::protocol::RawBoxLayoutContext
     /// [`RenderBox::perform_layout`]: crate::traits::RenderBox::perform_layout
-    /// [`Protocol::LayoutCtxErased`]: crate::protocol::Protocol::LayoutCtxErased
+    /// [`Protocol::ErasedLayoutContext`]: crate::protocol::Protocol::ErasedLayoutContext
     /// [`RenderError`]: crate::error::RenderError
     /// [`RenderError::Poisoned`]: crate::error::RenderError::Poisoned
     fn perform_layout_raw(
         &mut self,
-        ctx: &mut <P as Protocol>::LayoutCtxErased<'_>,
+        ctx: &mut <P as Protocol>::ErasedLayoutContext<'_>,
     ) -> crate::error::RenderResult<ProtocolGeometry<P>>;
 
     /// Records this render object's paint fragment.
@@ -252,7 +252,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///
     /// **Users don't implement this directly.** Protocol traits provide
     /// blanket implementations that wrap the recorder in the typed,
-    /// arity-gated [`PaintCx`](crate::context::PaintCx) and call the
+    /// arity-gated [`PaintContext`](crate::context::PaintContext) and call the
     /// protocol-level `paint` (e.g.
     /// [`RenderBox::paint`](crate::traits::RenderBox::paint)). The
     /// recorded fragment is replayed into the layer tree by the
@@ -289,7 +289,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// its inverse onto the shared `HitTestResult` for the duration of
     /// the recursive call, exactly like [`hit_test_transform`]'s own
     /// forward-then-invert handling, so `HitTestEntry.transform` composes
-    /// correctly. Only the box protocol's ctx (`BoxHitTestCtx`) ever
+    /// correctly. Only the box protocol's ctx (`RawBoxHitTestContext`) ever
     /// produces `Some` here today; the sliver protocol keeps a no-op
     /// transform stack (main-axis position covers its needs) and always
     /// passes `None`.
@@ -345,7 +345,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
         &self,
         _dimension: crate::storage::IntrinsicDimension,
         _extent: f64,
-        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut crate::context::BoxIntrinsicsContext<'_>,
     ) -> crate::error::RenderResult<f64> {
         Ok(0.0)
     }
@@ -362,7 +362,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     fn dry_layout_raw(
         &self,
         _constraints: ProtocolConstraints<P>,
-        _ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+        _ctx: &mut crate::context::BoxDryLayoutContext<'_>,
     ) -> crate::error::RenderResult<ProtocolGeometry<P>> {
         Ok(P::default_geometry())
     }
@@ -378,7 +378,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
         &self,
         _constraints: ProtocolConstraints<P>,
         _baseline: crate::traits::TextBaseline,
-        _ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
+        _ctx: &mut crate::context::BoxDryBaselineContext<'_>,
     ) -> crate::error::RenderResult<Option<f64>> {
         Ok(None)
     }
@@ -433,7 +433,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// Returns whether descendants measure their paint position from this
     /// node.
     ///
-    /// While a descendant paints, [`PaintCx::paint_anchor`] reports its
+    /// While a descendant paints, [`PaintContext::paint_anchor`] reports its
     /// origin relative to the nearest anchor at or above it, and that
     /// anchor's size. Painters that must agree on one coordinate space
     /// across separate nodes — a shimmer band shared by many placeholders —
@@ -443,7 +443,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///
     /// Default: `false`.
     ///
-    /// [`PaintCx::paint_anchor`]: crate::context::PaintCx::paint_anchor
+    /// [`PaintContext::paint_anchor`]: crate::context::PaintContext::paint_anchor
     fn is_paint_anchor(&self) -> bool {
         false
     }
@@ -571,7 +571,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// gets a correct transform **without overriding anything**.
     ///
     /// Override only when paint *deviates*: an object that calls
-    /// `PaintCx::paint_child_at` (an `offset_override`, so the committed offset is
+    /// `PaintContext::paint_child_at` (an `offset_override`, so the committed offset is
     /// not what paints) or that pushes a per-child transform scope. In this
     /// repository that is `RenderFractionalTranslation` and `RenderFlow`.
     ///
@@ -947,7 +947,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///
     /// Used by the element-tree parent-data attach seam to reject
     /// `ParentDataView` misuse (e.g. `Expanded` under a `Stack`) before
-    /// layout constructs a typed `BoxLayoutCtx`. The `RenderBox` /
+    /// layout constructs a typed `RawBoxLayoutContext`. The `RenderBox` /
     /// `RenderSliver` blankets override this to
     /// `TypeId::of::<Self::ParentData>()`; direct `RenderObject`
     /// implementors keep the box-protocol default.

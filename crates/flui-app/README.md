@@ -75,7 +75,8 @@ UI runtime-owned now — `AppBinding` is deleted, not slimmed, and no test needs
 serialization guard against shared binding state any more (each test
 constructs its own independent UI runtime). `AppRuntime` now hosts any number of
 `UiRuntimeId`-keyed UI runtimes, and each `UiRuntime` owns an insertion-ordered
-presentation forest. `WindowPolicy::Isolated` installs a new UI runtime for a
+presentation forest. Under the unstable `unstable-windows` feature,
+`WindowPolicy::Isolated` installs a new UI runtime for a
 secondary window; `WindowPolicy::Shared` installs another presentation in
 the first hosted UI runtime. The remaining hosting gap is content and rendering:
 `open_secondary_window` mounts no root widget, constructs no GPU renderer, and

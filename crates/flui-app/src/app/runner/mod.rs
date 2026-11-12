@@ -104,12 +104,14 @@ use ios::run_ios;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+#[cfg(feature = "unstable-windows")]
 pub use secondary_window::open_secondary_window;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+#[cfg(feature = "unstable-windows")]
 pub use secondary_window::open_window;
 #[cfg(target_arch = "wasm32")]
 use web::run_web;
