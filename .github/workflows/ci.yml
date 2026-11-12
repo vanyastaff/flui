@@ -957,7 +957,7 @@ jobs:
       - name: cargo miri test (flui-log)
         run: cargo +nightly miri test -p flui-log --lib --locked
       - name: cargo miri test (rendering storage)
-        run: cargo +nightly miri test -p flui-rendering --lib --locked storage::
+        run: cargo +nightly miri test -p flui-rendering --lib --locked "storage::"
 
       - name: cargo miri test (pipeline::owner)
         run: cargo +nightly miri test -p flui-rendering --lib --locked pipeline::owner
