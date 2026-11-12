@@ -45,8 +45,9 @@ the crate can add, remove, or edit a command, so its cached `bounds()` is
 always the union the recorder computed (`op.local_bounds()` through the
 command's transform), and `Option<Rect>` because a list of only clips or
 `Paint`s has no extent (which is not an empty rect at the origin).
-`DisplayList::append_isolated` splices a recorded run inside a save/restore
-scope: the run inherits the caller's clip, and its own root clips end with it.
+`DisplayList::append_isolated` splices a recorded run that clips, saves or opens a layer inside a
+save/restore scope: the run inherits the caller's clip, and its own root clips end with it. A run
+that only draws changes no replay state and is appended as it stands (`DrawOp::scopes_replay`).
 An empty run records nothing. The engine's
 `inline_picture_replay_owns_its_root_clips` pins this through readback.
 
