@@ -191,60 +191,6 @@ method = "with_scale_factor"
 reason = "written before the rule had a gate; its crate's rename removes it"
 
 [[allow]]
-crate = "flui-painting"
-type = "StrokeOptions"
-method = "with_cap"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "StrokeOptions"
-method = "with_dash_offset"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "StrokeOptions"
-method = "with_dash_pattern"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "StrokeOptions"
-method = "with_join"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "StrokeOptions"
-method = "with_miter_limit"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "StrokeOptions"
-method = "with_width"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "TextDecorationConfig"
-method = "with_color"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "TextDecorationConfig"
-method = "with_style"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "TextDecorationConfig"
-method = "with_thickness"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
 crate = "flui-protocol"
 type = "ActParams"
 method = "with_snapshot"
