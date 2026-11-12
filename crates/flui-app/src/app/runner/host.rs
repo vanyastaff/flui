@@ -1307,12 +1307,52 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
         APP_RUNTIME.with(|slot| {
             slot.borrow_mut()
                 .set_lifecycle_exit_notifier(std::sync::Arc::new(move || {
-                    super::main_window::reevaluate_exit_policy(&proxy);
+                    reevaluate_exit_policy(&proxy);
                 }));
         });
     }
     #[cfg(target_arch = "wasm32")]
     drop(proxy);
+}
+
+/// Ask the owner, from any thread, to ask the exit policy again. An owner that
+/// stopped, or one with no policy to ask for other threads, has nothing left
+/// to decide; a turn that could not be posted is logged.
+#[cfg_attr(
+    not(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
+    )),
+    expect(
+        dead_code,
+        reason = "its callers are the desktop exit policy and windows; android and iOS ask none"
+    )
+)]
+#[cfg_attr(
+    all(test, target_os = "android"),
+    expect(
+        dead_code,
+        reason = "desktop exit-policy tests are excluded on Android"
+    )
+)]
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn reevaluate_exit_policy(proxy: &flui_native::PlatformProxy) {
+    match proxy.request_exit_policy_reevaluation() {
+        Ok(())
+        | Err(
+            flui_native::ProxySendError::OwnerGone { .. }
+            | flui_native::ProxySendError::Unsupported { .. },
+        ) => {}
+        Err(error) => {
+            super::terminal::contain_diagnostic(
+                || tracing::error!(%error, "an exit-policy request could not reach the owner"),
+            );
+        }
+    }
 }
 
 /// Route the desktop platform's quit to the main window and the quit

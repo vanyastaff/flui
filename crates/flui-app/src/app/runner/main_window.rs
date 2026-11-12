@@ -77,21 +77,6 @@ impl Drop for MainController {
         first.resume();
     }
 }
-/// Ask the owner, from any thread, to ask the exit policy again. An owner that
-/// stopped, or one with no policy to ask for other threads, has nothing left
-/// to decide; a turn that could not be posted is logged.
-pub(super) fn reevaluate_exit_policy(proxy: &PlatformProxy) {
-    match proxy.request_exit_policy_reevaluation() {
-        Ok(())
-        | Err(
-            flui_native::ProxySendError::OwnerGone { .. }
-            | flui_native::ProxySendError::Unsupported { .. },
-        ) => {}
-        Err(error) => {
-            contain(|| tracing::error!(%error, "an exit-policy request could not reach the owner"));
-        }
-    }
-}
 enum CompletionState {
     Waiting,
     Claimed,
@@ -161,7 +146,7 @@ impl Wake for OpenWake {
                     || tracing::error!(%error, "main-window cleanup wake failed; cleanup requires a later owner event or shutdown"),
                 );
             }
-            reevaluate_exit_policy(&self.proxy);
+            super::host::reevaluate_exit_policy(&self.proxy);
         }
     }
 }

@@ -391,7 +391,7 @@ impl PendingRequestState {
             previous > 0,
             "BUG: pending window reservation released twice"
         );
-        super::main_window::reevaluate_exit_policy(&self.proxy);
+        super::host::reevaluate_exit_policy(&self.proxy);
     }
     fn fail(&self) -> bool {
         let failed = {
