@@ -59,7 +59,7 @@ pub struct WindowsAccessibility {
     owner_thread: std::thread::ThreadId,
 }
 
-// SAFETY, per field: `shared` is `Arc<BridgeShared>`, itself `Send + Sync`
+// SAFETY: per field, `shared` is `Arc<BridgeShared>`, itself `Send + Sync`
 // by construction (atomics + `Mutex`es over `Send + Sync` payloads);
 // `owner_thread` is a plain `ThreadId`. The `Mutex<Option<SubclassingAdapter>>`
 // serializes every touch of the adapter, whose auto-trait opt-outs come

@@ -167,8 +167,8 @@ impl ModifiersBuilder {
 /// use flui_platform::keyboard::{Code, KeyState, Modifiers};
 ///
 /// let event = KeyEventBuilder::new(Code::KeyA)
-///     .with_state(KeyState::Down)
-///     .with_modifiers(Modifiers::CONTROL)
+///     .state(KeyState::Down)
+///     .modifiers(Modifiers::CONTROL)
 ///     .build();
 /// ```
 #[derive(Debug, Clone)]
@@ -197,37 +197,37 @@ impl KeyEventBuilder {
     }
 
     /// Sets the logical key.
-    pub fn with_key(mut self, key: Key) -> Self {
+    pub fn key(mut self, key: Key) -> Self {
         self.key = key;
         self
     }
 
     /// Sets the key state.
-    pub fn with_state(mut self, state: KeyState) -> Self {
+    pub fn state(mut self, state: KeyState) -> Self {
         self.state = state;
         self
     }
 
     /// Sets the modifiers.
-    pub fn with_modifiers(mut self, modifiers: Modifiers) -> Self {
+    pub fn modifiers(mut self, modifiers: Modifiers) -> Self {
         self.modifiers = modifiers;
         self
     }
 
     /// Sets the key location.
-    pub fn with_location(mut self, location: Location) -> Self {
+    pub fn location(mut self, location: Location) -> Self {
         self.location = location;
         self
     }
 
     /// Sets whether this is a repeat event.
-    pub fn with_repeat(mut self, repeat: bool) -> Self {
+    pub fn repeat(mut self, repeat: bool) -> Self {
         self.repeat = repeat;
         self
     }
 
     /// Sets whether this is a composing event.
-    pub fn with_composing(mut self, is_composing: bool) -> Self {
+    pub fn composing(mut self, is_composing: bool) -> Self {
         self.is_composing = is_composing;
         self
     }

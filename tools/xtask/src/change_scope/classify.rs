@@ -618,6 +618,9 @@ pub(super) struct Scope {
     /// The changed file that can change a trybuild expectation, if any
     /// ([`diagnostics::changed_input`]): a pull request then runs the suites.
     pub(super) trybuild_input: Option<String>,
+    /// The changed file that can move a size `perf --size` holds, if any
+    /// ([`crate::perf::size::changed_input`]): a pull request then runs `size`.
+    pub(super) size_input: Option<String>,
     /// The changed file that can change what `send-positions` reports, if any
     /// ([`thread_positions::changed_position`]): a pull request then runs it.
     pub(super) send_positions_input: Option<String>,
@@ -633,6 +636,7 @@ impl Scope {
             manifests: Vec::new(),
             heavy_required: false,
             trybuild_input: None,
+            size_input: None,
             send_positions_input: None,
             reason,
         }
@@ -672,6 +676,7 @@ pub(super) fn classify_change(
     }
     scope.trybuild_input =
         diagnostics::changed_input(repo, files, changed_lines)?.map(str::to_owned);
+    scope.size_input = crate::perf::size::changed_input(files).map(str::to_owned);
     scope.send_positions_input =
         thread_positions::changed_position(repo, files, changed_lines)?.map(str::to_owned);
     Ok(scope)
@@ -789,6 +794,7 @@ fn classify_packages(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         manifests: manifests.into_iter().collect(),
         heavy_required: false,
         trybuild_input: None,
+        size_input: None,
         send_positions_input: None,
         reason,
     })

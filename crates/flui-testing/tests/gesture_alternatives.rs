@@ -103,16 +103,16 @@ impl ViewState<RemoveButton> for RemoveButtonState {
         let body = SizedBox::new(view.side, view.side);
         match view.reach {
             Reach::Everyone => RawButton::new(semantics.child(body))
-                .on_press(move |_cx| removed.set(removed.get() + 1))
+                .on_press(move |_ctx| removed.set(removed.get() + 1))
                 .boxed(),
             Reach::AssistiveOnly => semantics
-                .on_click(move |_cx| removed.set(removed.get() + 1))
+                .on_click(move |_ctx| removed.set(removed.get() + 1))
                 .child(body)
                 .boxed(),
             Reach::PointersOnly => semantics
                 .child(
                     Listener::new()
-                        .on_pointer_down(move |_cx, _dispatch| removed.set(removed.get() + 1))
+                        .on_pointer_down(move |_ctx, _dispatch| removed.set(removed.get() + 1))
                         .child(body),
                 )
                 .boxed(),
@@ -174,7 +174,7 @@ impl ViewState<AnimatedRemoval> for AnimatedRemovalState {
 
     fn build(&self, view: &AnimatedRemoval, _ctx: &dyn BuildContext) -> impl IntoView {
         let controller = self.driven.controller().clone();
-        Actions::new(view.child.clone()).action(CallbackAction::new(move |_cx, _: &Remove| {
+        Actions::new(view.child.clone()).action(CallbackAction::new(move |_ctx, _: &Remove| {
             let _ = controller.forward();
         }))
     }
@@ -189,7 +189,9 @@ fn mount(subject: Subject) -> AlternativesSubject<u32> {
     let command = GestureCommand::new("Remove row", Remove);
     let link = CompanionLink::<Remove>::new();
     let alternative = match subject {
-        Subject::SilentMenu => Alternative::ContextMenu(MenuSpec::new(command, |_cx, _request| {})),
+        Subject::SilentMenu => {
+            Alternative::ContextMenu(MenuSpec::new(command, |_ctx, _request| {}))
+        }
         Subject::NoCompanion
         | Subject::Companioned
         | Subject::CompanionIgnoresPointers
@@ -202,11 +204,11 @@ fn mount(subject: Subject) -> AlternativesSubject<u32> {
     let alternatives = GestureAlternatives::try_new(alternative).expect("one labelled command");
     let extra = Rc::clone(&removed);
     let mut card = Dismissible::new(
-        SizedBox::new(300.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
         alternatives.clone(),
+        SizedBox::new(300.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
     );
     if matches!(subject, Subject::GestureDoesMore) {
-        card = card.on_dismissed(move |_cx, _direction| extra.set(extra.get() + 10));
+        card = card.on_dismissed(move |_ctx, _direction| extra.set(extra.get() + 10));
     }
     let count = Rc::clone(&removed);
     let view = if matches!(subject, Subject::Unbound) {
@@ -219,7 +221,7 @@ fn mount(subject: Subject) -> AlternativesSubject<u32> {
         .boxed()
     } else {
         Actions::new(card)
-            .action(CallbackAction::new(move |_cx, _: &Remove| {
+            .action(CallbackAction::new(move |_ctx, _: &Remove| {
                 count.set(count.get() + 1);
             }))
             .boxed()

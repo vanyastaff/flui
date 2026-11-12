@@ -83,10 +83,10 @@ fn run_case(mode: u8) {
                 assert_eq!(loads.load(Ordering::Relaxed), 1);
                 if mode == 3 {
                     gate.add_permits(1);
-                    std::future::poll_fn(|cx| {
+                    std::future::poll_fn(|ctx| {
                         let outcome =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                first.as_mut().poll(cx)
+                                first.as_mut().poll(ctx)
                             }));
                         match outcome {
                             Err(payload) => {
@@ -161,8 +161,8 @@ fn run_case(mode: u8) {
 }
 
 async fn poll_pending<F: Future>(mut future: std::pin::Pin<&mut F>) {
-    std::future::poll_fn(|cx| {
-        assert!(future.as_mut().poll(cx).is_pending(), "load remains gated");
+    std::future::poll_fn(|ctx| {
+        assert!(future.as_mut().poll(ctx).is_pending(), "load remains gated");
         std::task::Poll::Ready(())
     })
     .await;

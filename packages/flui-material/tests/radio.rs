@@ -66,7 +66,7 @@ pub fn a_mounted_radio_announces_as_a_radio_button() {
     // mutually-exclusive group member by construction (`is_selected` derives
     // from `group_value`), so a node announcing as a checkbox is announcing
     // the wrong control to assistive technology.
-    let roles = announced_roles(Radio::new("spring", Some("spring")).on_changed(|_cx, _| {}));
+    let roles = announced_roles(Radio::new("spring", Some("spring")).on_changed(|_ctx, _| {}));
     assert!(
         roles.contains(&Role::RadioButton),
         "a mounted Radio must announce as a radio button, got {roles:?}",
@@ -78,7 +78,7 @@ pub fn tap_on_an_unselected_radio_fires_on_changed_with_its_own_value() {
     let recorder = Rc::clone(&observed);
     let laid = lay_out(
         themed(
-            Radio::new("summer", Some("spring")).on_changed(move |_cx, next| {
+            Radio::new("summer", Some("spring")).on_changed(move |_ctx, next| {
                 *recorder.borrow_mut() = Some(next);
             }),
         ),

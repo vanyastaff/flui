@@ -40,7 +40,7 @@ use tokio::sync::oneshot;
 
 #[cfg(linux_host)]
 use crate::{
-    executor::BackgroundExecutor,
+    executor::NativeExecutor,
     owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal},
 };
 
@@ -161,7 +161,7 @@ impl std::fmt::Debug for HostNoticeSource {
 impl HostNoticeSource {
     /// Start the sources. `signal` is woken when an event is waiting; it is
     /// held weakly.
-    pub(crate) fn start(executor: &BackgroundExecutor, signal: &Arc<OwnerSignal>) -> Self {
+    pub(crate) fn start(executor: &NativeExecutor, signal: &Arc<OwnerSignal>) -> Self {
         let inbox = Arc::new(Inbox {
             queue: Mutex::new(VecDeque::new()),
             signal: Arc::downgrade(signal),

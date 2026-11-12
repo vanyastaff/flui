@@ -20,7 +20,7 @@
 //! # No technical ceiling
 //!
 //! Every backend here accepts *every* level. Whether an event is emitted is
-//! decided by the [`EnvFilter`](crate::filter) alone. A backend that also
+//! decided by the [`Targets`](crate::filter) filter alone. A backend that also
 //! filtered would be a second, invisible ceiling that no `RUST_LOG` directive
 //! could raise — see [`crate::filter`] for the regression this prevents.
 //!
@@ -166,7 +166,7 @@ impl<S> core::fmt::Debug for Sink<S> {
 /// use tracing_subscriber::{Registry, layer::SubscriberExt as _, Layer as _};
 ///
 /// let config = LogConfig::default();
-/// let filter = config.env_filter()?;
+/// let filter = config.targets()?;
 /// let subscriber = Registry::default()
 ///     .with(PlatformLayer::platform_default(&config).with_filter(filter));
 /// // ... stack further layers here ...
@@ -387,7 +387,7 @@ fn ansi_wanted(stream: &impl std::io::IsTerminal) -> bool {
 
 #[cfg(target_arch = "wasm32")]
 fn web_console_sink<S>() -> Sink<S> {
-    // TRACE, not the application's level: the `EnvFilter` is the only filter.
+    // TRACE, not the application's level: the `Targets` filter is the only one.
     // `WASMLayer::enabled` compares against this value directly, so anything
     // lower here is exactly the second ceiling this crate exists to remove.
     let config = tracing_wasm::WASMLayerConfigBuilder::new()
@@ -423,7 +423,7 @@ where
     /// Forwarded verbatim, never narrowed.
     ///
     /// A sink that returns `None` has no opinion about the maximum level, which
-    /// is what lets the `EnvFilter` decide alone.
+    /// is what lets the `Targets` filter decide alone.
     fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
         dispatch_sink!(&self.sink, sink => Layer::<S>::max_level_hint(sink))
     }

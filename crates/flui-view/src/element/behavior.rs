@@ -16,7 +16,7 @@ use super::{
     provided::{Provided, Publication},
 };
 use crate::{
-    context::{BuildContext, BuildCtx, LifecycleContext},
+    context::{BuildContext, LifecycleContext, LiveBuildContext},
     owner::LifecycleHook,
     view::{
         AnimatedView, BoxedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView,
@@ -28,19 +28,19 @@ use crate::{
 ///
 /// During a [`BuildOwner::build_scope`](crate::BuildOwner) drain the owner
 /// carries a [`BuildHandle`](crate::ElementOwner) — a borrowed live view of
-/// the real tree — so the variant resolves to [`BuildCtx`] and ancestor
+/// the real tree — so the variant resolves to [`LiveBuildContext`] and ancestor
 /// walks / `depend_on` hit real nodes (PR-K). A component build outside a
 /// `build_scope` drain is a framework bug: it would otherwise resurrect the
 /// inert `new_minimal` context and make `InheritedView` reads silently fail.
 ///
 /// Holding the concrete value in a local lets the caller hand out a
 /// `&dyn BuildContext` whose borrow outlives the user `build()` closure.
-pub(crate) enum BuildCtxChoice<'a> {
+pub(crate) enum LiveBuildContextChoice<'a> {
     /// Live context over the borrowed real tree (inside `build_scope`).
-    Live(BuildCtx<'a>),
+    Live(LiveBuildContext<'a>),
 }
 
-impl BuildCtxChoice<'_> {
+impl LiveBuildContextChoice<'_> {
     /// Borrow the chosen context as `build` sees it: no presentation
     /// capabilities.
     pub(crate) fn as_ctx(&self) -> &dyn BuildContext {
@@ -229,12 +229,12 @@ pub(super) fn publish_provided<V, A>(
 ///
 /// `BuildHandle` is `Copy`, so reading `owner.build_view` lifts the borrowed
 /// tree/sink references (lifetime `'a`, tied to the data — not to this `&`
-/// borrow of `owner`) out cleanly; the returned `BuildCtxChoice<'a>` does not
+/// borrow of `owner`) out cleanly; the returned `LiveBuildContextChoice<'a>` does not
 /// keep `owner` borrowed, so the caller can still pass `owner` on mutably.
 pub(crate) fn make_build_ctx<'a, V, A>(
     core: &ElementCore<V, A>,
     owner: &crate::ElementOwner<'a>,
-) -> BuildCtxChoice<'a>
+) -> LiveBuildContextChoice<'a>
 where
     V: Clone + 'static,
     A: ElementArity,
@@ -267,7 +267,7 @@ where
     // (`ElementNode::element` panics in that window), so a `BuildContext` cannot
     // look itself up. `ElementCore` holds the same `PipelineCell` the node would
     // have.
-    BuildCtxChoice::Live(BuildCtx::new(
+    LiveBuildContextChoice::Live(LiveBuildContext::new(
         element_id,
         tree_depth,
         handle.tree,

@@ -37,8 +37,8 @@ use super::focus::{
 use super::focus_reveal::{FocusRevealScope, SharedRevealTarget};
 
 /// A key handler as a focus widget stores it: it decides the event's
-/// routing, and may write signals through the `cx` it receives.
-pub(crate) type FocusKeyHandler = Rc<dyn Fn(&mut EventCx<'_>, &KeyEvent) -> KeyEventResult>;
+/// routing, and may write signals through the `ctx` it receives.
+pub(crate) type FocusKeyHandler = Rc<dyn Fn(&mut EventContext<'_>, &KeyEvent) -> KeyEventResult>;
 
 /// What the callbacks a [`FocusHost`] installs on its node read, and the
 /// host writes: one allocation shared by the host, the node's listener and
@@ -90,7 +90,7 @@ fn key_handler(handler: &FocusKeyHandler, shared: &Rc<Shared>) -> KeyEventHandle
             tracing::warn!("Focus: a key event reached a node whose widget has not initialized");
             return KeyEventResult::Ignored;
         };
-        writer.write(|cx| handler(cx, event))
+        writer.write(|ctx| handler(ctx, event))
     })
 }
 
@@ -393,7 +393,7 @@ impl FocusHost {
                 // same re-entrancy reason.
                 let handler = shared.on_focus_change.borrow().clone();
                 if let Some(handler) = handler {
-                    failure.contain(|| writer.write(|cx| handler(cx, now_focused)));
+                    failure.contain(|| writer.write(|ctx| handler(ctx, now_focused)));
                 }
             }
             // Recorded before user code runs, so a notification it causes
@@ -402,7 +402,7 @@ impl FocusHost {
             if was_shown != now_shown {
                 let handler = shared.on_visible_focus_change.borrow().clone();
                 if let Some(handler) = handler {
-                    failure.contain(|| writer.write(|cx| handler(cx, now_shown)));
+                    failure.contain(|| writer.write(|ctx| handler(ctx, now_shown)));
                 }
             }
             // Shown focus is never left where the user cannot see it

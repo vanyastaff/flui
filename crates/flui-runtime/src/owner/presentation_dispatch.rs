@@ -489,10 +489,10 @@ impl PresentationDispatcher {
             } => {
                 let mut request = flui_platform::FrameRequest::new(vsync);
                 if let Some(shown) = target_present {
-                    request = request.with_target_present(shown);
+                    request = request.target_present(shown);
                 }
                 if let Some(presented) = presented {
-                    request = request.with_presented(presented);
+                    request = request.presented(presented);
                 }
                 core.deliver(RuntimeWork::Frame(self.address, request), effects)?
             }

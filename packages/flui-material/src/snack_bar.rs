@@ -178,12 +178,12 @@ impl std::fmt::Debug for SnackBar {
 /// ```rust
 /// use flui_material::SnackBarAction;
 ///
-/// let _action = SnackBarAction::new("UNDO", |_cx| {});
+/// let _action = SnackBarAction::new("UNDO", |_ctx| {});
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct SnackBarAction {
     label: String,
-    on_pressed: std::rc::Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>,
+    on_pressed: std::rc::Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>,
 }
 
 impl SnackBarAction {
@@ -192,7 +192,7 @@ impl SnackBarAction {
     #[must_use]
     pub fn new<F, R>(label: impl Into<String>, on_pressed: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         Self {
@@ -260,12 +260,12 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
                 .rebuild
                 .clone()
                 .expect("BUG: init_state runs before the first build");
-            button = button.on_pressed(move |cx| {
+            button = button.on_pressed(move |ctx| {
                 if triggered.replace(true) {
                     return;
                 }
                 rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-                on_pressed(cx);
+                on_pressed(ctx);
                 if let Some(messenger) = &messenger {
                     messenger.hide_current_snack_bar_because(SnackBarClosedReason::Action);
                 }
@@ -314,7 +314,7 @@ fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
     }
 
     let padded = Padding::new(content_padding).child(Row::new(row_children));
-    let safe_area = SafeArea::new().top(false).child(padded);
+    let safe_area = SafeArea::new(padded).top(false);
 
     // A status message: announced politely when it appears, without moving
     // the user to it.

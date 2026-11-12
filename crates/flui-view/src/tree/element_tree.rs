@@ -246,7 +246,7 @@ impl ElementNode {
     /// Panics if the element is currently extracted — the transient hole
     /// `build_scope` opens between `take_element` and `put_element` while it
     /// builds the node by value. Any lookup that can run *during* a build
-    /// (every `BuildCtx` ancestor walk) must go through [`Self::element_opt`]
+    /// (every `LiveBuildContext` ancestor walk) must go through [`Self::element_opt`]
     /// instead, so reaching the in-flight node is a clean miss, not a panic.
     pub fn element(&self) -> &dyn ElementBase {
         self.kind.as_ref().expect(Self::ELEMENT_PRESENT).element()
@@ -1131,7 +1131,7 @@ impl ElementTree {
     /// A mismatch panics with a composition diagnostic (offending
     /// `ParentDataView`, typical ancestor family, actual render parent, element
     /// ancestry) — the same failure in debug and release — rather than reaching
-    /// layout's `BoxLayoutCtx::from_erased` TypeId assert.
+    /// layout's `RawBoxLayoutContext::from_erased` TypeId assert.
     ///
     /// Average case O(1) — for a plain render child the very first ancestor is
     /// the render parent, so the walk stops in one hop and never touches the

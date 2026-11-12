@@ -103,11 +103,11 @@ async fn a_request_through_fetch_answers_its_head_and_body() {
     {
         let _page = StandIn::answering("ok");
         let request = HttpRequest::new(Method::Post, "https://example.test/upload")
-            .with_header(
+            .header(
                 HeaderName::try_new("X-Flui").expect("a token"),
                 HeaderValue::try_new("sent").expect("a value"),
             )
-            .with_body(vec![9_u8; 5]);
+            .body(vec![9_u8; 5]);
         let response = http.send(request).await.expect("the page answers");
         assert_eq!(response.status().as_u16(), 201);
         assert_eq!(
@@ -143,7 +143,7 @@ async fn a_request_through_fetch_answers_its_head_and_body() {
     {
         let _page = StandIn::answering("declared");
         let declared = http
-            .send(HttpRequest::get("https://example.test/large").with_body_limit(100))
+            .send(HttpRequest::get("https://example.test/large").body_limit(100))
             .await;
         assert_eq!(
             declared.map(|_| ()),
@@ -153,7 +153,7 @@ async fn a_request_through_fetch_answers_its_head_and_body() {
     {
         let _page = StandIn::answering("endless");
         let response = http
-            .send(HttpRequest::get("https://example.test/stream").with_body_limit(4096))
+            .send(HttpRequest::get("https://example.test/stream").body_limit(4096))
             .await
             .expect("the head arrives");
         assert_eq!(
@@ -207,7 +207,7 @@ async fn a_request_left_or_past_its_deadline_aborts_the_fetch() {
         let silent = http
             .send(
                 HttpRequest::get("https://example.test/silent")
-                    .with_deadline(std::time::Duration::from_millis(20)),
+                    .deadline(std::time::Duration::from_millis(20)),
             )
             .await;
         assert_eq!(silent.map(|_| ()), Err(HttpError::Timeout));
@@ -218,7 +218,7 @@ async fn a_request_left_or_past_its_deadline_aborts_the_fetch() {
         let held = http
             .send(
                 HttpRequest::get("https://example.test/stream")
-                    .with_deadline(std::time::Duration::from_millis(50)),
+                    .deadline(std::time::Duration::from_millis(50)),
             )
             .await
             .expect("the head arrives within the deadline");

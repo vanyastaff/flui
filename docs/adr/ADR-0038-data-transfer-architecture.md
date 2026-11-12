@@ -234,7 +234,7 @@ trait assumes threads exist.
 
 `Platform::clipboard() -> Arc<dyn Clipboard>` is a **required** method, so the
 compiler makes every backend provide one. The runner resolves it once per loop
-at bootstrap, through the owner-thread capability (`OwnerPlatform::shared()`,
+at bootstrap, through the owner-thread capability (`OwnerPlatform`,
 ADR-0039), and stores the `Arc` in `AppRuntime`
 (`set_platform_clipboard` / `clear_platform_clipboard`, read with
 `AppRuntime::clipboard()`, which clones the `Arc` out before returning so a

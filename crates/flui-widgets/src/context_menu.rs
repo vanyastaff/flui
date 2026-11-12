@@ -76,7 +76,7 @@ impl ContextMenuArea {
     ) -> Result<Self, GestureAlternativesError> {
         let menu = more
             .into_iter()
-            .fold(MenuSpec::new(first, |_cx, _request| {}), MenuSpec::item);
+            .fold(MenuSpec::new(first, |_ctx, _request| {}), MenuSpec::item);
         Ok(Self {
             alternatives: GestureAlternatives::try_new(Alternative::ContextMenu(menu))?,
             child: None,
@@ -183,8 +183,8 @@ impl ViewState<ContextMenuArea> for ContextMenuAreaState {
         view.alternatives
             .clone()
             .present_menu_with(
-                Rc::new(move |_cx, request| presenter.present(request)),
-                move |_cx| session.close_current(),
+                Rc::new(move |_ctx, request| presenter.present(request)),
+                move |_ctx| session.close_current(),
             )
             .child(content)
     }

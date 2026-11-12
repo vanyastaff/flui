@@ -102,7 +102,7 @@ const DEFAULT_NAV_BAR_BORDER_COLOR: Color = Color::from_argb(0x4D00_0000);
 pub const HAIRLINE_BORDER_WIDTH: f64 = 1.0;
 
 /// A bottom-only hairline, approximated per [`HAIRLINE_BORDER_WIDTH`]'s doc.
-fn default_border() -> Border<f64> {
+fn default_border() -> Border {
     Border::new(
         None,
         None,
@@ -132,7 +132,7 @@ pub struct CupertinoNavigationBar {
     middle: Option<BoxedView>,
     trailing: Option<BoxedView>,
     background_color: Option<CupertinoColor>,
-    border: Option<Border<f64>>,
+    border: Option<Border>,
 }
 
 impl CupertinoNavigationBar {
@@ -182,7 +182,7 @@ impl CupertinoNavigationBar {
     /// Overrides the bottom border, or removes it with `None`. Defaults to
     /// the hairline border — see the module docs' hairline note.
     #[must_use]
-    pub fn border(mut self, border: Option<Border<f64>>) -> Self {
+    pub fn border(mut self, border: Option<Border>) -> Self {
         self.border = border;
         self
     }
@@ -254,7 +254,7 @@ impl StatelessView for CupertinoNavigationBar {
 
         let decorated =
             DecoratedBox::new(BoxDecoration::with_color(background).set_border(self.border))
-                .child(SafeArea::new().bottom(false).child(toolbar));
+                .child(SafeArea::new(toolbar).bottom(false));
 
         SizedBox::height(NAV_BAR_PERSISTENT_HEIGHT + top_inset).child(decorated)
     }

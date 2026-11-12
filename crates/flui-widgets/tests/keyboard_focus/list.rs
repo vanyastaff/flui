@@ -22,7 +22,7 @@ const ROW: f64 = 40.0;
 /// A button labelled `label`, one row tall.
 fn button(label: String) -> flui_view::BoxedView {
     SizedBox::new(300.0, ROW)
-        .child(RawButton::new(Text::new(label)).on_press(|_cx| {}))
+        .child(RawButton::new(Text::new(label)).on_press(|_ctx| {}))
         .boxed()
 }
 
@@ -44,7 +44,7 @@ fn list_app(
     .semantics_label("Notes");
     let parent = Focus::new(list)
         .can_request_focus(false)
-        .on_key_event(move |_cx, event| {
+        .on_key_event(move |_ctx, event| {
             let arrow = matches!(
                 event.key,
                 Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown)
@@ -383,7 +383,7 @@ fn sliver_app(count: usize, scroll: &ScrollController) -> (LaidOut, Rc<Cell<usiz
     .controller(scroll.clone());
     let parent = Focus::new(view)
         .can_request_focus(false)
-        .on_key_event(move |_cx, event| {
+        .on_key_event(move |_ctx, event| {
             let arrow = matches!(
                 event.key,
                 Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown)
@@ -482,7 +482,7 @@ pub(crate) fn sliver_keyboard_navigation() {
 /// A tile 90 px square labelled `label`.
 fn tile(label: String) -> flui_view::BoxedView {
     SizedBox::new(90.0, 90.0)
-        .child(RawButton::new(Text::new(label)).on_press(|_cx| {}))
+        .child(RawButton::new(Text::new(label)).on_press(|_ctx| {}))
         .boxed()
 }
 

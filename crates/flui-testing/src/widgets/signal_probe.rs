@@ -7,7 +7,7 @@
 //! ```rust,ignore
 //! let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
 //!     GestureDetector::new()
-//!         .on_tap(move |cx| count.update(cx, |n| *n += 1))
+//!         .on_tap(move |ctx| count.update(ctx, |n| *n += 1))
 //!         .child(ColoredBox::new(Color::WHITE))
 //! });
 //! let mut app = lay_out(probe.view(), tight(100.0, 100.0));
@@ -96,7 +96,7 @@ impl SignalProbe {
     pub fn value(&self) -> Result<u32, SignalError> {
         let count = self.seen.count.borrow();
         let (signal, writer) = count.as_ref().expect("the probe built before it is read");
-        writer.write(|cx| signal.peek(cx, |v| *v))
+        writer.write(|ctx| signal.peek(ctx, |v| *v))
     }
 
     /// Every value the probe's `build` read, oldest first: one entry per
@@ -106,15 +106,15 @@ impl SignalProbe {
         self.seen.reads.borrow().clone()
     }
 
-    /// Run `f` with an [`EventCx`] opened from the probe's writer source,
+    /// Run `f` with an [`EventContext`] opened from the probe's writer source,
     /// as an event callback would: for a test that calls an API taking the
-    /// caller's `cx` (`FormHandle::save`, `FormFieldHandle::reset`) outside
+    /// caller's `ctx` (`FormHandle::save`, `FormFieldHandle::reset`) outside
     /// any widget's callback.
     ///
     /// # Panics
     ///
     /// Before the probe has built once.
-    pub fn write<R>(&self, f: impl FnOnce(&mut EventCx<'_>) -> R) -> R {
+    pub fn write<R>(&self, f: impl FnOnce(&mut EventContext<'_>) -> R) -> R {
         let writer = self
             .seen
             .writer

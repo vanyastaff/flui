@@ -10,7 +10,7 @@ use flui_objects::AlignMotion;
 use flui_painting::AlignmentDirectional;
 use flui_painting::typography::TextDirection;
 use flui_view::prelude::{BuildContext, StatefulView};
-use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
+use flui_view::{Child, IntoView, ViewState};
 
 use super::align_view::AnimatedAlignView;
 use super::proxy_slot::ProxySlot;
@@ -34,7 +34,7 @@ use crate::{ClipRect, Directionality};
 ///
 /// ```rust,ignore
 /// let controller = AnimationController::builder(Duration::from_millis(200)).build();
-/// let reveal = SizeTransition::new(Rc::new(controller.clone()), details());
+/// let reveal = SizeTransition::new(Rc::new(controller.clone())).child(details());
 /// controller.forward(); // the details unroll downward each frame
 /// ```
 #[derive(Clone, StatefulView)]
@@ -43,19 +43,26 @@ pub struct SizeTransition {
     axis: Axis,
     axis_alignment: f64,
     fixed_cross_axis_size_factor: Option<f64>,
-    child: BoxedView,
+    child: Child,
 }
 
 impl SizeTransition {
-    /// A vertical size transition driven by `size_factor`, sizing `child`.
-    pub fn new(size_factor: Rc<dyn Animation<f64>>, child: impl IntoView) -> Self {
+    /// A vertical size transition driven by `size_factor`, with no child yet.
+    pub fn new(size_factor: Rc<dyn Animation<f64>>) -> Self {
         Self {
             size_factor,
             axis: Axis::Vertical,
             axis_alignment: 0.0,
             fixed_cross_axis_size_factor: None,
-            child: child.into_view().boxed(),
+            child: Child::empty(),
         }
+    }
+
+    /// Sets the child the transition animates.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
     }
 
     /// Sets the axis the factor sizes (default [`Axis::Vertical`]).

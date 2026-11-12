@@ -1,5 +1,5 @@
 //! ADR-0086: `build` has no write target. The context it receives cannot
-//! stand in for the `&mut EventCx` a signal write takes, and it hands out no
+//! stand in for the `&mut EventContext` a signal write takes, and it hands out no
 //! graph to write through instead.
 
 use flui_view::prelude::*;

@@ -87,10 +87,7 @@ impl<Pr> BuilderContextBuilder<NoPlatform, Pr> {
     /// # Arguments
     ///
     /// * `platform` - Target platform (Android, Web, or Desktop)
-    pub(crate) fn with_platform(
-        self,
-        platform: Platform,
-    ) -> BuilderContextBuilder<HasPlatform, Pr> {
+    pub(crate) fn platform(self, platform: Platform) -> BuilderContextBuilder<HasPlatform, Pr> {
         BuilderContextBuilder {
             workspace_root: self.workspace_root,
             platform: HasPlatform(platform),
@@ -111,7 +108,7 @@ impl<P> BuilderContextBuilder<P, NoProfile> {
     /// # Arguments
     ///
     /// * `profile` - Build profile (Debug or Release)
-    pub(crate) fn with_profile(self, profile: Profile) -> BuilderContextBuilder<P, HasProfile> {
+    pub(crate) fn profile(self, profile: Profile) -> BuilderContextBuilder<P, HasProfile> {
         BuilderContextBuilder {
             workspace_root: self.workspace_root,
             platform: self.platform,
@@ -133,14 +130,14 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     ///
     /// * `target` - The [`BuildUnit`] to compile
     #[must_use]
-    pub(crate) fn with_target(mut self, target: BuildUnit) -> Self {
+    pub(crate) fn target(mut self, target: BuildUnit) -> Self {
         self.target = target;
         self
     }
 
     /// Stage the built executable into an application bundle with this identity.
     #[must_use]
-    pub(crate) fn with_bundle(mut self, bundle: AppBundle) -> Self {
+    pub(crate) fn bundle(mut self, bundle: AppBundle) -> Self {
         self.bundle = Some(bundle);
         self
     }
@@ -148,7 +145,7 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     /// Build against these floors (FLUI's, raised where `flui.toml` asks)
     /// instead of FLUI's alone.
     #[must_use]
-    pub(crate) fn with_floors(mut self, floors: AppFloors) -> Self {
+    pub(crate) fn floors(mut self, floors: AppFloors) -> Self {
         self.floors = floors;
         self
     }
@@ -156,7 +153,7 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     /// Turn on `features` beyond the package's defaults, each as `--features`
     /// takes it.
     #[must_use]
-    pub(crate) fn with_features(mut self, features: impl IntoIterator<Item = String>) -> Self {
+    pub(crate) fn features(mut self, features: impl IntoIterator<Item = String>) -> Self {
         self.features.extend(features);
         self
     }
@@ -170,7 +167,7 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     ///
     /// * `output_dir` - Custom output directory
     #[must_use]
-    pub(crate) fn with_output_dir(mut self, output_dir: PathBuf) -> Self {
+    pub(crate) fn output_dir(mut self, output_dir: PathBuf) -> Self {
         self.output_dir = Some(output_dir);
         self
     }

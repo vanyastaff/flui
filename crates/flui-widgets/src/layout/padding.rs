@@ -59,6 +59,13 @@ impl Padding {
         self.child = Child::some(child.into_view());
         self
     }
+
+    /// Hands over an optional child as it is, for a widget that wraps this
+    /// one and keeps its own child slot.
+    pub(crate) fn child_slot(mut self, child: Child) -> Self {
+        self.child = child;
+        self
+    }
 }
 
 impl RenderView for Padding {

@@ -58,12 +58,12 @@ struct Controlled {
 impl Stream for Controlled {
     type Item = Result<Payload, Boom>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let event = self.channel.events.lock().pop_front();
         if let Some(event) = event {
             return Poll::Ready(event);
         }
-        let _prev = self.channel.waker.lock().replace(cx.waker().clone());
+        let _prev = self.channel.waker.lock().replace(ctx.waker().clone());
         Poll::Pending
     }
 }

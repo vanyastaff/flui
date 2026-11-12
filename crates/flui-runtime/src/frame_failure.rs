@@ -12,7 +12,7 @@
 //! attempt remain contained. These outcomes surface as a [`FrameFailureReport`]
 //! instead of a silent skip: `tracing` carries the structured diagnostics, and an embedder
 //! that registered a [`FrameFailureHandler`] via
-//! `flui_app::AppConfig::with_frame_failure_handler` receives the typed
+//! `flui_app::AppConfig::frame_failure_handler` receives the typed
 //! report synchronously on the UI thread. The types here are re-exported at
 //! the root of `flui_app`, which is where an application names them.
 //!
@@ -77,7 +77,7 @@ impl fmt::Display for PanicText {
 /// treat reports as potentially sensitive and apply their own policy before
 /// formatting or forwarding them.
 ///
-/// An application selects it with `flui_app::AppConfig::with_frame_failure_detail`.
+/// An application selects it with `flui_app::AppConfig::frame_failure_detail`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum FrameFailureDetail {
@@ -534,7 +534,7 @@ pub struct FrameFailureReport {
 /// An embedder-registered callback receiving every [`FrameFailureReport`].
 ///
 /// Register a [`FrameFailureHandlerFactory`] via
-/// `flui_app::AppConfig::with_frame_failure_handler`; each runtime the app
+/// `flui_app::AppConfig::frame_failure_handler`; each runtime the app
 /// builds for a window gets its own handler from it. Invoked synchronously on the UI thread. Sampling reports arrive after every
 /// presentation has sampled and established recovery, before the build walk;
 /// retained premises are reconciled again after their diagnostics. Other frame

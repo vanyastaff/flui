@@ -64,7 +64,7 @@
 //!         Ok(ctx.constraints().constrain(self.size))
 //!     }
 //!
-//!     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+//!     fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
 //!         // Local coordinates — the recorder pre-translates to the
 //!         // node's origin.
 //!         ctx.canvas().draw_rect(Rect::from_size(self.size), self.color);

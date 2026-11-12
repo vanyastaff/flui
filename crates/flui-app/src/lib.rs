@@ -107,7 +107,7 @@ pub use app::{
     PointerResampling, RootRenderElement, RootRenderView, UnsupportedSystem, run_app,
 };
 pub use flui_engine::{BackendFailure, FrameLatency, GpuBackend};
-// The recording hook (ADR-0215 §1): `AppConfig::with_input_tap` installs a tap
+// The recording hook (ADR-0215 §1): `AppConfig::input_tap` installs a tap
 // per runtime; the serialiser for its records lives in `flui-testing`.
 pub use app::{
     DecisionRow, HostInput, InputOutcome, InputRecord, InputRow, InputTap, InputTapFactory,
@@ -120,7 +120,7 @@ pub use app::{FontRegistrationError, register_font};
 #[cfg(not(target_os = "ios"))]
 pub use app::run_direct;
 // Host-injected execution seam (issue #557): an embedded host provides its
-// own worker pools via `AppConfig::with_executors`, and the runtime's
+// own worker pools via `AppConfig::executors`, and the runtime's
 // default pools are then never constructed. `DeterministicExecutors` is the
 // single-threaded reference implementation for tests and reproducible hosts.
 pub use app::{
@@ -152,7 +152,9 @@ pub use app::{
 // available on iOS, where `AppRuntime`/`UiRuntime`'s ui_runtime-hosting machinery
 // itself is not compiled (see `runtime::ExitPolicy`'s own doc).
 #[cfg(not(target_os = "ios"))]
-pub use app::{ExitPolicy, WindowPolicy};
+pub use app::ExitPolicy;
+#[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
+pub use app::WindowPolicy;
 // Per-window close-request veto (issue #558): the application's answer to
 // "may this window close?", asked per presentation before anything is torn
 // down. Same iOS gate as the policy knobs above, and for the same reason.
@@ -169,12 +171,14 @@ pub use app::{
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+#[cfg(feature = "unstable-windows")]
 pub use app::open_secondary_window;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+#[cfg(feature = "unstable-windows")]
 pub use app::open_window;
 // Android-specific entry points
 /// The crate `android_main` receives its `AndroidApp` from; re-exported so

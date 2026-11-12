@@ -244,6 +244,7 @@ jobs:
       mode: ${{ steps.scope.outputs.mode }}
       heavy_required: ${{ steps.scope.outputs.heavy_required }}
       trybuild_required: ${{ steps.scope.outputs.trybuild_required }}
+      size_required: ${{ steps.scope.outputs.size_required }}
       send_positions_required: ${{ steps.scope.outputs.send_positions_required }}
       features_required: ${{ steps.scope.outputs.features_required }}
       hack_args: ${{ steps.scope.outputs.hack_args }}
@@ -822,6 +823,45 @@ jobs:
         run: cargo xtask perf --instructions --check
 
   # ─────────────────────────────────────────────────────────────────────────
+  # size — what an application costs before it does anything: the release
+  # builds of projects `flui create --local` generates, with the profile the
+  # templates write (a counter on Linux and its wasm32 module, and the host of
+  # a `--hot-reload` project), each within 2% of perf/size.toml, and the
+  # default graph's package counts (`cargo xtask perf --size --check`). Three
+  # cold release builds, so a pull request runs it only when `size_required`:
+  # its diff touches a manifest, Cargo.lock, the toolchain, .cargo/, the
+  # `flui create` templates, the baseline or the check (ON_DEMAND). A code
+  # change moves a size a little at a time; main runs it on every push and
+  # catches that drift.
+  # ─────────────────────────────────────────────────────────────────────────
+  size:
+    name: size
+    needs: [checks, plan]
+    if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.size_required == 'true')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          cache-on-failure: true
+          shared-key: workspace-size-v1
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo xtask perf --size --check
+        run: cargo xtask perf --size --check
+
+  # ─────────────────────────────────────────────────────────────────────────
   # deps — `cargo xtask deps`: cargo-deny over every workspace member (bans,
   # licenses and sources against deny.toml, advisories against RustSec) and
   # cargo-shear (a dependency no code uses, a test-only one declared as a
@@ -878,6 +918,14 @@ jobs:
       - name: cargo xtask deps --only advisories
         continue-on-error: ${{ needs.plan.outputs.lane == 'tooling' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.mode == 'packages' && needs.plan.outputs.heavy_required == 'false') }}
         run: cargo xtask deps --strict --only advisories
+
+      # The packages of the facade's default graph on each target, against
+      # perf/size.toml (`cargo tree` only, nothing builds). A pull request that
+      # adds a package to an application's default graph fails here until
+      # `cargo xtask perf --size --bless` records it; the binary sizes of the
+      # same baseline are the `size` job's.
+      - name: cargo xtask perf --size --graph --check
+        run: cargo xtask perf --size --graph --check
 
   # ─────────────────────────────────────────────────────────────────────────
   # doc-test — run every rustdoc example as a test. nextest does NOT execute
@@ -1073,8 +1121,8 @@ jobs:
   # steps (tools/xtask/src/tasks/web.rs holds the commands and why):
   #   wasm-check — check + lib/bin clippy of every package that builds for
   #                wasm32 (a package opts out with `[package.metadata.flui]
-  #                wasm = false`, a reason beside it), plus the facade's
-  #                hot-reload feature. The clippy pass is the only lint over
+  #                wasm = false`, a reason beside it), plus `flui-hot-reload`
+  #                with every feature. The clippy pass is the only lint over
   #                flui-native's wasm32-only web backend.
   #   wasm-link  — really links the two web demos and checks their import
   #                surface against tools/xtask/fixtures/wasm/import-allowlist.txt:
@@ -1263,7 +1311,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, clippy, feature-matrix, feature-scope, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, api-contracts, perf-gates, deps, doc-test, miri]
+    needs: [checks, plan, clippy, feature-matrix, feature-scope, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, api-contracts, perf-gates, size, deps, doc-test, miri]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -1299,10 +1347,10 @@ jobs:
       #      tooling   deps
       #      wide      deps + HEAVY_JOBS (the Linux PR gate)
       #      full      wide + FULL_JOBS (additional Linux checks) + test-trybuild
-      #                + api-contracts
+      #                + size + api-contracts
       #    and a wide pull request adds test-trybuild when `trybuild_required`,
-      #    feature-scope when `features_required` and api-contracts when
-      #    `send_positions_required` (ON_DEMAND).
+      #    size when `size_required`, feature-scope when `features_required` and
+      #    api-contracts when `send_positions_required` (ON_DEMAND).
       #    Every other job must skip. Any other skip (a drifted `if:`, a
       #    cancellation) or a job that ran where it should have skipped fails
       #    the aggregator. Each list must equal the jobs whose `if:` names its
@@ -1316,6 +1364,7 @@ jobs:
             feature-matrix doc-test miri perf-gates
           LANE: ${{ needs.plan.outputs.lane }}
           TRYBUILD_REQUIRED: ${{ needs.plan.outputs.trybuild_required }}
+          SIZE_REQUIRED: ${{ needs.plan.outputs.size_required }}
           SEND_POSITIONS_REQUIRED: ${{ needs.plan.outputs.send_positions_required }}
           FEATURES_REQUIRED: ${{ needs.plan.outputs.features_required }}
           EVENT: ${{ github.event_name }}

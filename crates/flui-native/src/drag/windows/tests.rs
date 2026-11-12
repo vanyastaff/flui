@@ -314,9 +314,9 @@ fn open(
     let window = platform
         .open_window(
             WindowOptions::default()
-                .with_title(title)
-                .with_size(Size::new(240.0, 160.0))
-                .with_visible(true),
+                .title(title)
+                .size(Size::new(240.0, 160.0))
+                .visible(true),
             handler.clone(),
         )
         .expect("window");

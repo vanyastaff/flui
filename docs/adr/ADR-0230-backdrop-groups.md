@@ -18,7 +18,7 @@ at all.
 `flui_layer::BackdropGroupKey` is an identity (an `Arc` compared by pointer):
 clones are equal, separately created keys never are, and no label or counter
 stands in for it. `BackdropFilterLayer`, `RenderBackdropFilter` and the
-`PaintCx::with_backdrop_filter` scope carry an optional key.
+`PaintContext::with_backdrop_filter` scope carry an optional key.
 
 The engine records the key on each backdrop operation. While replaying one
 ordered item list — one attachment, the root surface or one offscreen layer —

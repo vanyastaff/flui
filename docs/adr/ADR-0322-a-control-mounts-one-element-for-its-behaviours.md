@@ -7,7 +7,7 @@
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md) (keyboard
   activation and visible focus, unchanged);
   [ADR-0086](ADR-0086-signal-writes-through-event-context.md) (every callback of the node receives
-  the dispatch's `EventCx`);
+  the dispatch's `EventContext`);
   [ADR-0240](ADR-0240-semantics-identifier.md) (the identifier locators select by, which the
   node's one semantics configuration carries);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (the node commits its
@@ -207,17 +207,17 @@ pub trait StatefulRenderView: Clone + 'static + Sized {
     type RenderObject: RenderObject<Self::Protocol> + 'static;
     type State: RenderViewState<Self>;
     fn create_state(&self /* the arguments `StatefulView::create_state` takes */) -> Self::State;
-    fn create_render_object(&self, cx: &RenderObjectContext<'_>) -> Self::RenderObject;
-    fn did_unmount_render_object(&self, cx: &RenderObjectContext<'_>, object: &mut Self::RenderObject) {}
+    fn create_render_object(&self, ctx: &RenderObjectContext<'_>) -> Self::RenderObject;
+    fn did_unmount_render_object(&self, ctx: &RenderObjectContext<'_>, object: &mut Self::RenderObject) {}
 }
 
 pub trait RenderViewState<V: StatefulRenderView>: 'static {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {}
-    fn did_change_dependencies(&mut self, cx: &dyn LifecycleContext) {}
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {}
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {}
     fn did_update_view(&mut self, old: &V, new: &V) {}
-    fn update_render_object(&self, view: &V, cx: &RenderObjectContext<'_>, object: &mut V::RenderObject) -> RenderUpdateImpact;
-    fn provide(&self, view: &V, cx: &dyn BuildContext, values: &mut Provided<'_>) {}   // §5
-    fn child(&self, view: &V, cx: &dyn BuildContext) -> impl IntoView;
+    fn update_render_object(&self, view: &V, ctx: &RenderObjectContext<'_>, object: &mut V::RenderObject) -> RenderUpdateImpact;
+    fn provide(&self, view: &V, ctx: &dyn BuildContext, values: &mut Provided<'_>) {}   // §5
+    fn child(&self, view: &V, ctx: &dyn BuildContext) -> impl IntoView;
     fn deactivate(&mut self) {}
     fn activate(&mut self) {}
     fn dispose(&mut self) {}

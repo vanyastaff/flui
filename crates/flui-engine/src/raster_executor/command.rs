@@ -22,12 +22,10 @@ pub const LIFECYCLE_CAPACITY: usize = 64;
 
 /// One command for the raster executor.
 ///
-/// `Attach`, `Release`, `Restore` and `Detach` travel in order on the bounded
-/// lifecycle queue; `Frame` and `Configure` coalesce in the slot's inbox;
-/// `Trim` coalesces to the strongest level. A turn drains the lifecycle queue
+/// `Attach`, `Release`, `Restore`, `Detach` and `RetryDevice` travel in order
+/// on the bounded lifecycle queue; `Frame` and `Configure` coalesce in the
+/// slot's inbox; `Trim` coalesces to the strongest level. A turn drains the lifecycle queue
 /// before any inbox, so a frame never reaches a slot that is not attached yet.
-///
-/// `RetryDevice` arrives with the device rebuild (ADR-0305 §8).
 #[derive(Debug)]
 pub enum RasterCommand {
     /// Give `slot`, a freshly minted id, a target and bind it to `address`.
@@ -79,6 +77,11 @@ pub enum RasterCommand {
     },
     /// Give back GPU memory the next frames can rebuild, before the next frame.
     Trim(MemoryPressureLevel),
+    /// Rebuild the context's lost device again after its rebuild was given
+    /// up ([`DeviceHealth::GivenUp`](super::DeviceHealth::GivenUp)); nothing
+    /// changes while the device renders or a rebuild is still paced
+    /// (ADR-0267).
+    RetryDevice,
 }
 
 impl RasterCommand {
@@ -92,7 +95,7 @@ impl RasterCommand {
             | Self::Detach { slot }
             | Self::Frame { slot, .. }
             | Self::Configure { slot, .. } => Some(*slot),
-            Self::Trim(_) => None,
+            Self::Trim(_) | Self::RetryDevice => None,
         }
     }
 }
@@ -149,14 +152,14 @@ impl SlotConfig {
 
     /// The configuration with `visibility`.
     #[must_use]
-    pub fn with_visibility(mut self, visibility: SlotVisibility) -> Self {
+    pub fn visibility(mut self, visibility: SlotVisibility) -> Self {
         self.visibility = visibility;
         self
     }
 
     /// The configuration asking for `color`, on a display reporting `display`.
     #[must_use]
-    pub fn with_color(mut self, color: SurfaceColor, display: Option<DisplayColor>) -> Self {
+    pub fn color(mut self, color: SurfaceColor, display: Option<DisplayColor>) -> Self {
         self.color = color;
         self.display = display;
         self
@@ -164,7 +167,7 @@ impl SlotConfig {
 
     /// The configuration with `latency`.
     #[must_use]
-    pub fn with_latency(mut self, latency: FrameLatency) -> Self {
+    pub fn latency(mut self, latency: FrameLatency) -> Self {
         self.latency = latency;
         self
     }

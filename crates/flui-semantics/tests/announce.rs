@@ -344,11 +344,8 @@ fn the_agent_journal_counts_what_it_no_longer_holds() {
     assert_eq!(journal.entries.len(), 256);
     assert_eq!(journal.entries[0].seq, 45);
     assert_eq!(journal.dropped, 44);
-    let capped = owner.announcement_journal(
-        &AnnouncementsParams::new(window)
-            .since(299)
-            .with_max_entries(5),
-    );
+    let capped =
+        owner.announcement_journal(&AnnouncementsParams::new(window).since(299).max_entries(5));
     assert_eq!(capped.entries.len(), 1);
     assert_eq!(capped.entries[0].message, "Item 299");
     assert_eq!(capped.dropped, 0);

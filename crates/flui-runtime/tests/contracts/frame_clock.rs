@@ -1463,7 +1463,7 @@ fn idle_tasks_run(target_present: Option<u64>) -> (usize, bool) {
     let mut request = flui_platform::FrameRequest::new(crate::event_at(&host, start));
     if let Some(millis) = target_present {
         let shown = crate::event_at(&host, start + Duration::from_millis(millis));
-        request = request.with_target_present(shown);
+        request = request.target_present(shown);
     }
     runtime.note_frame_request(runtime.presentation_id(), request);
     let mut clock = ObservedIdleDeadline {
@@ -1496,7 +1496,7 @@ fn idle_tasks_after_a_presentation(
         if let Some(refresh) = refresh {
             shown = shown.with_refresh(refresh);
         }
-        request = request.with_presented(shown);
+        request = request.presented(shown);
     }
     runtime.note_frame_request(runtime.presentation_id(), request);
     let _ = runtime.pump(&mut SampledClock(earlier), &mut Sink);

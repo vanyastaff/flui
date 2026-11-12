@@ -268,11 +268,11 @@ impl<D: Document> fmt::Debug for Persisted<D> {
 
 impl<D: Document> Persisted<D> {
     /// The document [`D::NAME`](Document::NAME) in the storage of the UI runtime
-    /// `cx` belongs to. Call it from `init_state` or
+    /// `ctx` belongs to. Call it from `init_state` or
     /// `did_change_dependencies`; nothing is read until [`load`](Self::load).
     #[must_use]
-    pub fn open(cx: &dyn LifecycleContext) -> Self {
-        let storage = cx.capability::<StorageCapability>();
+    pub fn open(ctx: &dyn LifecycleContext) -> Self {
+        let storage = ctx.capability::<StorageCapability>();
         let status = if storage.is_ok() {
             SaveStatus::NotLoaded(None)
         } else {
@@ -281,7 +281,7 @@ impl<D: Document> Persisted<D> {
         // Writes go to the storage the document acquired, whichever
         // provider that is.
         let registry = storage.as_ref().ok().and_then(|handle| {
-            cx.flush_registry_in_crate(CrateToken::new())
+            ctx.flush_registry_in_crate(CrateToken::new())
                 .map(|registry| {
                     let publisher = registry.publisher(D::NAME, Arc::clone(handle.store()));
                     (registry, publisher)
@@ -292,7 +292,7 @@ impl<D: Document> Persisted<D> {
             .and_then(|(_, publisher)| publisher.committed())
             .map(|(revision, _)| revision);
         let hurry = Rc::new(Hurry::default());
-        let lifecycle = cx.lifecycle_handle().and_then(|handle| {
+        let lifecycle = ctx.lifecycle_handle().and_then(|handle| {
             let hurry = Rc::downgrade(&hurry);
             handle
                 .subscribe(move |state| {
@@ -308,11 +308,11 @@ impl<D: Document> Persisted<D> {
         let document = Rc::new(OpenDocument {
             storage,
             registry,
-            driver: cx.async_driver(),
-            timer: cx.timer(),
+            driver: ctx.async_driver(),
+            timer: ctx.timer(),
             hurry,
             _lifecycle: lifecycle,
-            guard: cx.close_guard(),
+            guard: ctx.close_guard(),
             unmount: RefCell::new(None),
             announcer: Announcer {
                 notifier: ChangeNotifier::new(),
@@ -342,7 +342,7 @@ impl<D: Document> Persisted<D> {
         // The listeners belong to the state that opened the document: they go
         // when it unmounts, whichever clones of the document live on.
         let closing = Rc::downgrade(&document);
-        let hook = cx.on_unmount(Box::new(move || {
+        let hook = ctx.on_unmount(Box::new(move || {
             if let Some(document) = closing.upgrade() {
                 document.announcer.close();
             }
@@ -1238,28 +1238,28 @@ async fn wait_or_hurry(
     let mut sleep = std::pin::pin!(timer.sleep_until(deadline));
     let mut registry_changed = std::pin::pin!(registry_changed);
     let mut changed = guard.map(|guard| Box::pin(guard.changed()));
-    std::future::poll_fn(|cx| {
+    std::future::poll_fn(|ctx| {
         if hurry.due.replace(false) || guard.is_some_and(|guard| guard.pending().is_some()) {
             return Poll::Ready(Woke::Due);
         }
-        let waker = cx.waker().clone();
+        let waker = ctx.waker().clone();
         let replaced = hurry.waker.replace(Some(waker));
         drop(replaced);
-        if sleep.as_mut().poll(cx).is_ready() {
+        if sleep.as_mut().poll(ctx).is_ready() {
             return Poll::Ready(Woke::Due);
         }
         if let (Some(guard), Some(future)) = (guard, changed.as_mut())
-            && future.as_mut().poll(cx).is_ready()
+            && future.as_mut().poll(ctx).is_ready()
         {
             if guard.pending().is_some() {
                 return Poll::Ready(Woke::Due);
             }
             *future = Box::pin(guard.changed());
-            if future.as_mut().poll(cx).is_ready() {
-                cx.waker().wake_by_ref();
+            if future.as_mut().poll(ctx).is_ready() {
+                ctx.waker().wake_by_ref();
             }
         }
-        if registry_changed.as_mut().poll(cx).is_ready() {
+        if registry_changed.as_mut().poll(ctx).is_ready() {
             return Poll::Ready(Woke::Changed);
         }
         Poll::Pending

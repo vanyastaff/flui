@@ -120,7 +120,7 @@ impl<T> Drop for SimpleRoute<T> {
 impl<T> fmt::Debug for SimpleRoute<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SimpleRoute")
-            .field("name", &self.settings.name())
+            .field("name", &self.settings.name.as_deref())
             .finish_non_exhaustive()
     }
 }

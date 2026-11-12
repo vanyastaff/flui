@@ -133,8 +133,8 @@ pub(crate) fn focused_character_key_inserts_into_controller() {
     guard.request_focus();
 
     let event = KeyEventBuilder::new(Code::KeyH)
-        .with_key(Key::character("h"))
-        .with_state(KeyState::Down)
+        .key(Key::character("h"))
+        .state(KeyState::Down)
         .build();
     let _ = manager.dispatch_key_event(&event).is_handled();
 
@@ -158,8 +158,8 @@ pub(crate) fn unfocused_field_does_not_receive_key_events() {
 
     // Dispatch a character key — with no node focused, the handler must not fire.
     let event = KeyEventBuilder::new(Code::KeyX)
-        .with_key(Key::character("x"))
-        .with_state(KeyState::Down)
+        .key(Key::character("x"))
+        .state(KeyState::Down)
         .build();
     let _ = manager.dispatch_key_event(&event).is_handled();
 

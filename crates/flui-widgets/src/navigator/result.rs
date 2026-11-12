@@ -194,7 +194,7 @@ impl<T> Completer<T> {
 impl<T: 'static> Future for RouteResult<T> {
     type Output = Result<Option<T>, RouteResultError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         {
             let mut shared = self.shared.borrow_mut();
             if let Poll::Ready(value) = shared.value.take() {
@@ -207,7 +207,7 @@ impl<T: 'static> Future for RouteResult<T> {
         // Cloning and retiring a waker can invoke user code. Neither happens
         // under the result borrow; clone reentry may complete the route, so
         // check its value again before publishing a pending waiter.
-        let waker = cx.waker().clone();
+        let waker = ctx.waker().clone();
         let (completed, retired) = {
             let mut shared = self.shared.borrow_mut();
             if shared.value.is_done() {

@@ -31,7 +31,7 @@
 //! [`Platform::run`]: crate::Platform::run
 
 use std::collections::VecDeque;
-use std::rc::Rc;
+use std::rc::{Rc, Weak as RcWeak};
 use std::sync::{Arc, Weak};
 
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
@@ -63,11 +63,28 @@ impl Report {
 }
 
 /// The handler of one run, and what mints the owner capability its methods
-/// borrow.
+/// borrow: the owner thread's, kept in its slot, so no other thread reaches
+/// the platform or the hooks.
 struct Binding {
-    handler: OwnerSlot<Rc<dyn AppHandler>>,
+    owned: Arc<OwnerSlot<Owned>>,
+}
+
+/// What a run binds on the owner thread.
+#[derive(Clone)]
+struct Owned {
+    handler: Rc<dyn AppHandler>,
     platform: Weak<dyn Platform>,
-    hooks: Weak<dyn OwnerHooks>,
+    hooks: RcWeak<dyn OwnerHooks>,
+}
+
+impl Binding {
+    /// What the owner thread bound, read outside the delivery's lock: the
+    /// read first drops what slots dropped on other threads left with the
+    /// owner, whose destructors may report again.
+    fn owned(state: &Mutex<State>) -> Option<Owned> {
+        let owned = Arc::clone(&state.lock().binding.as_ref()?.owned);
+        owned.cloned()
+    }
 }
 
 #[derive(Default)]
@@ -97,7 +114,7 @@ impl State {
     fn on_owner(&self) -> bool {
         self.binding
             .as_ref()
-            .is_some_and(|binding| binding.handler.is_owner_thread())
+            .is_some_and(|binding| binding.owned.is_owner_thread())
     }
 }
 
@@ -124,7 +141,7 @@ impl HandlerSlot for Resident<'_> {
     type Handler = Rc<dyn AppHandler>;
 
     fn take(&self) -> Option<Self::Handler> {
-        self.0.state.lock().binding.as_ref()?.handler.cloned()
+        Binding::owned(&self.0.state).map(|owned| owned.handler)
     }
 
     fn restore(&self, handler: Self::Handler) -> Option<Self::Handler> {
@@ -186,17 +203,21 @@ impl AppDelivery {
         &self,
         handler: Rc<dyn AppHandler>,
         platform: &Arc<dyn Platform>,
-        hooks: &Arc<dyn OwnerHooks>,
+        hooks: &Rc<dyn OwnerHooks>,
     ) {
         let slot = OwnerSlot::new();
-        let refused = slot.replace(handler).err();
+        let refused = slot
+            .replace(Owned {
+                handler,
+                platform: Arc::downgrade(platform),
+                hooks: Rc::downgrade(hooks),
+            })
+            .err();
         if refused.is_some() {
             tracing::error!("the application handler could not be kept: owner slots are exhausted");
         }
         let previous = self.state.lock().binding.replace(Binding {
-            handler: slot,
-            platform: Arc::downgrade(platform),
-            hooks: Arc::downgrade(hooks),
+            owned: Arc::new(slot),
         });
         retire(previous);
         retire(refused);
@@ -229,7 +250,7 @@ impl AppDelivery {
             // `retire` keeps it for good rather than leave it in the owner
             // thread's table, which would drop it, and its captures, when the
             // thread exits.
-            retire(binding.handler.take());
+            retire(binding.owned.take());
             drop(binding);
         }
     }
@@ -489,14 +510,15 @@ impl AppDelivery {
 
     /// The run's owner capability, minted for one call on the owner thread.
     fn owner(&self) -> Option<OwnerPlatform> {
-        let (platform, hooks) = {
-            let state = self.state.lock();
-            if !state.on_owner() {
-                return None;
-            }
-            let binding = state.binding.as_ref()?;
-            (binding.platform.clone(), binding.hooks.clone())
-        };
+        if !self.state.lock().on_owner() {
+            return None;
+        }
+        let Owned {
+            handler,
+            platform,
+            hooks,
+        } = Binding::owned(&self.state)?;
+        retire(handler);
         let platform = platform.upgrade()?;
         let Some(hooks) = hooks.upgrade() else {
             retire(platform);

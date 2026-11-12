@@ -35,9 +35,10 @@ impl OwnerWake {
         let inject_failure = self.fail_posts.load(std::sync::atomic::Ordering::Acquire);
         #[cfg(not(test))]
         let inject_failure = false;
-        // SAFETY: the caller retains the owner address under its admission lock;
-        // this pointer-free message cannot invoke user code synchronously.
         if !inject_failure
+            // SAFETY: the caller retains the owner address under its admission
+            // lock; this pointer-free message cannot invoke user code
+            // synchronously.
             && unsafe { PostMessageW(Some(hwnd), super::WAKE, WPARAM(0), LPARAM(0)) }.is_ok()
         {
             return Ok(());

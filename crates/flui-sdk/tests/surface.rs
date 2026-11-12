@@ -78,7 +78,10 @@ mod measured {
         TextSizingIntent as _, ViewKey as _,
     };
     use flui_sdk::geometry::{EdgeInsets as _, RRect as _, Radius as _};
-    use flui_sdk::hooks::FrameSnapshot as _;
+    use flui_sdk::hooks::{
+        FrameSnapshot as _, LayerTree as _, PluginFrameError as _, PluginPipeline as _, Scene as _,
+        TextContextHandle as _,
+    };
     use flui_sdk::interaction::{
         ArenaMembership as _, BeginContactError as _, CancelOutcome as _, CompositionBranch as _,
         CompositionError as _, CompositionKind as _, ContactEnd as _, ContactId as _,
@@ -400,7 +403,7 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::painting::SemanticsRegionKey) -> flui_sdk::painting::SemanticsRegionKey = |x| x;
     let _: fn(flui::painting::DrawOp) -> flui_sdk::painting::DrawOp = |x| x;
     let _: fn(flui::painting::BlurSigma) -> flui_sdk::painting::BlurSigma = |x| x;
-    let _: fn(flui::painting::styling::Shadow<f64>) -> flui_sdk::painting::Shadow<f64> = |x| x;
+    let _: fn(flui::painting::styling::Shadow) -> flui_sdk::painting::Shadow = |x| x;
     let _: fn(flui::painting::typography::TextDecoration) -> flui_sdk::painting::TextDecoration =
         |x| x;
     let _: fn(
@@ -587,6 +590,8 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::text_input::EditGeneration;",
         "pub use flui_interaction::text_input::LockArbiter;",
         "pub use flui_interaction::text_input::committed_text;",
+        "pub use flui_layer::LayerTree;",
+        "pub use flui_layer::Scene;",
         "pub use flui_objects::PathClipConfiguration;",
         "pub use flui_objects::RenderPhysicalShape;",
         "pub use flui_objects::TranslationFraction;",
@@ -691,6 +696,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::text_store::TextInputPurpose;",
         "pub use flui_rendering::constraints::BoxConstraints;",
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
+        "pub use flui_rendering::pipeline::TextContextHandle;",
         "pub use flui_rendering::protocol::BoxProtocol;",
         "pub use flui_rendering::semantics::SemanticsRegion;",
         "pub use flui_rendering::semantics::SemanticsRegionKey;",
@@ -699,6 +705,8 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_scheduler::FrameSnapshot;",
         "pub use flui_view::*;",
         "pub use flui_widgets as widgets;",
+        "pub use plugin_pipeline::PluginFrameError;",
+        "pub use plugin_pipeline::PluginPipeline;",
     ];
     assert_eq!(declared_surface(), pinned);
 }

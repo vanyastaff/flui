@@ -191,8 +191,8 @@ fn repeated_cloned_task_wake_retries_a_panicking_hook() {
     let driver = frame.async_driver();
     let observed = Arc::new(Mutex::new(None::<Waker>));
     let task_observed = Arc::clone(&observed);
-    let token = driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
-        *task_observed.lock().expect("observed waker") = Some(cx.waker().clone());
+    let token = driver.spawn_local(Box::pin(std::future::poll_fn(move |ctx| {
+        *task_observed.lock().expect("observed waker") = Some(ctx.waker().clone());
         Poll::<()>::Pending
     })));
     assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
@@ -235,8 +235,8 @@ fn scheduled_async_wake_retries_both_delivery_layers() {
     let driver = frame.async_driver();
     let observed = Arc::new(Mutex::new(None::<Waker>));
     let task_observed = Arc::clone(&observed);
-    let token = driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
-        *task_observed.lock().expect("observed waker") = Some(cx.waker().clone());
+    let token = driver.spawn_local(Box::pin(std::future::poll_fn(move |ctx| {
+        *task_observed.lock().expect("observed waker") = Some(ctx.waker().clone());
         Poll::<()>::Pending
     })));
     assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
@@ -278,8 +278,8 @@ fn driver_older_success_cannot_erase_newer_failed_wake() {
         let driver = frame.async_driver();
         let observed = Arc::new(Mutex::new(None::<Waker>));
         let task_observed = Arc::clone(&observed);
-        let token = driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
-            *task_observed.lock().expect("observed waker") = Some(cx.waker().clone());
+        let token = driver.spawn_local(Box::pin(std::future::poll_fn(move |ctx| {
+            *task_observed.lock().expect("observed waker") = Some(ctx.waker().clone());
             Poll::<()>::Pending
         })));
         assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
@@ -456,8 +456,8 @@ fn assert_reentrant_hook_replacement_after_failure(use_driver: bool) {
     let observed = Arc::new(Mutex::new(None::<Waker>));
     let task_observed = Arc::clone(&observed);
     let token = use_driver.then(|| {
-        driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
-            *task_observed.lock().expect("observed waker") = Some(cx.waker().clone());
+        driver.spawn_local(Box::pin(std::future::poll_fn(move |ctx| {
+            *task_observed.lock().expect("observed waker") = Some(ctx.waker().clone());
             Poll::<()>::Pending
         })))
     });

@@ -383,7 +383,7 @@ impl flui_rendering::traits::RenderBox for RecoveringHitParent {
         })
     }
 
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, Self::Arity>) {}
 
     fn hit_test(
         &self,
@@ -490,7 +490,7 @@ impl flui_rendering::traits::RenderBox for PanickingHitLeaf {
         })
     }
 
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, Self::Arity>) {}
 
     fn hit_test_transform(
         &self,
@@ -595,7 +595,7 @@ impl flui_rendering::traits::RenderBox for DefaultHitParent {
             .constrain(flui_foundation::geometry::Size::new(100.0, 100.0)))
     }
 
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, Self::Arity>) {}
 }
 
 /// A 40x40 leaf whose hit test panics with its message.
@@ -622,7 +622,7 @@ impl flui_rendering::traits::RenderBox for PanicOnHit {
             .constrain(flui_foundation::geometry::Size::new(40.0, 40.0)))
     }
 
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, Self::Arity>) {}
 
     fn hit_test(
         &self,
@@ -666,7 +666,7 @@ impl flui_rendering::traits::RenderBox for BombMetadataLeaf {
             .constrain(flui_foundation::geometry::Size::new(40.0, 40.0)))
     }
 
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, Self::Arity>) {}
 
     fn metadata(&self) -> Option<flui_rendering::hit_testing::HitMetadata> {
         Some(flui_rendering::hit_testing::HitMetadata::new(
@@ -697,7 +697,7 @@ impl flui_rendering::traits::RenderBox for PanicsAfterChild {
         ctx.layout_child(0, *ctx.constraints())
     }
 
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, Self::Arity>) {}
 
     fn hit_test(
         &self,
@@ -764,7 +764,7 @@ impl flui_rendering::traits::RenderBox for PlacedParent {
             .constrain(flui_foundation::geometry::Size::new(100.0, 100.0)))
     }
 
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, Self::Arity>) {}
 }
 
 /// A failed node gives up its say in expanded areas along with its entries:
@@ -794,7 +794,7 @@ impl flui_rendering::traits::RenderBox for NeverHit {
             .constrain(flui_foundation::geometry::Size::new(20.0, 20.0)))
     }
 
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, Self::Arity>) {}
 
     fn hit_test(
         &self,
@@ -1031,7 +1031,7 @@ impl flui_rendering::traits::RenderBox for RefusalHitParent {
                 .constrain(flui_foundation::geometry::Size::new(100.0, 100.0))
         })
     }
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, Self::Arity>) {}
     fn hit_test(
         &self,
         ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
@@ -1070,7 +1070,7 @@ impl flui_rendering::traits::RenderBox for RefusedHitLeaf {
                 .constrain(flui_foundation::geometry::Size::new(40.0, 40.0))
         })
     }
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, Self::Arity>) {}
     fn hit_test_transform(
         &self,
         _size: flui_foundation::geometry::Size,

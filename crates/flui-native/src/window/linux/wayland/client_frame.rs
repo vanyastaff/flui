@@ -1285,7 +1285,7 @@ pub(crate) mod surfaces {
         Action, Button, ContentAnswer, ContentChrome, Frame, HeaderLook, Look, Part, Piece,
         PointerOnFrame, Rect, TitleMask, device_extent, paint_header, paint_margin, rounded,
     };
-    use crate::executor::BackgroundExecutor;
+    use crate::executor::NativeExecutor;
     use crate::owner::linux::wayland::{FramePointer, LoopWaker, WaylandState};
 
     /// The fonts the host's windows draw their titles with, made the first
@@ -1307,7 +1307,7 @@ pub(crate) mod surfaces {
         /// `waker` woken once the host's faces are in.
         pub(crate) fn get(
             &self,
-            executor: &BackgroundExecutor,
+            executor: &NativeExecutor,
             waker: &Weak<LoopWaker>,
         ) -> FontCollection {
             self.0

@@ -88,8 +88,8 @@ impl MotionSpec {
     /// use std::time::Duration;
     ///
     /// let spec = MotionSpec::default()
-    ///     .with_curve(curves::LINEAR)
-    ///     .with_duration(Duration::from_millis(500));
+    ///     .curve(curves::LINEAR)
+    ///     .duration(Duration::from_millis(500));
     /// assert_eq!(
     ///     spec,
     ///     MotionSpec::Curve {
@@ -99,7 +99,7 @@ impl MotionSpec {
     /// );
     /// ```
     #[must_use]
-    pub fn with_duration(self, duration: Duration) -> Self {
+    pub fn duration(self, duration: Duration) -> Self {
         let curve = match self {
             Self::Curve { curve, .. } => curve,
             Self::Spring(_) => SharedCurve::new(crate::curves::EASE_IN_OUT),
@@ -110,7 +110,7 @@ impl MotionSpec {
     /// Curve motion eased by `curve`, keeping this spec's duration. A spring
     /// has none to keep, so it takes [`DEFAULT_DURATION`](Self::DEFAULT_DURATION).
     #[must_use]
-    pub fn with_curve(self, curve: impl Curve + 'static) -> Self {
+    pub fn curve(self, curve: impl Curve + 'static) -> Self {
         let duration = match self {
             Self::Curve { duration, .. } => duration,
             Self::Spring(_) => Self::DEFAULT_DURATION,

@@ -94,9 +94,9 @@ impl Drop for ScriptedConnection {
 
 impl Stack for Scripted {
     fn open(&self, request: &HttpRequest) -> Result<Box<dyn Connection>, HttpError> {
-        if !request.url().starts_with("https://") {
+        if !request.url.starts_with("https://") {
             return Err(HttpError::InvalidUrl {
-                url: request.url().to_owned(),
+                url: request.url.clone(),
             });
         }
         Ok(Box::new(ScriptedConnection {

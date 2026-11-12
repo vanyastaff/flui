@@ -12,7 +12,6 @@ FLUI Foundation provides fundamental building blocks used throughout the FLUI UI
 - **Inspection**: the typed `inspect` model (`Inspect`, `SnapshotNode`) that render objects and layers describe themselves with
 - **Geometry**: `geometry` module — `Point`, `Offset`, `Size`, `Rect`, `RRect`, `EdgeInsets`, `Matrix4`, device-grid types and snapping (ADR-0098)
 - **Clocks and epochs**: `MonotonicClock` (`SystemClock`, `ManualClock`), `FrameEpoch`, `SurfaceGeneration`, `FrameStamp`
-- **WASM Support**: `WasmNotSendSync` trait for web compatibility
 
 ## Quick Start
 
@@ -147,20 +146,6 @@ value.set_value_force(100);  // Always notifies
 value.update(|v| *v += 1);   // Update with closure
 ```
 
-### WASM Compatibility
-
-```rust
-use flui_foundation::WasmNotSendSync;
-
-// WasmNotSendSync: Send + Sync on native, empty on WASM
-// This allows IDs and markers to work on both platforms
-
-fn use_in_thread<T: WasmNotSendSync>(value: T) {
-    // Works on native (requires Send + Sync)
-    // Works on WASM (no thread requirements)
-}
-```
-
 ### Geometry
 
 `flui_foundation::geometry` holds the geometry values every layer shares. A
@@ -207,7 +192,7 @@ The ID system follows wgpu's pattern for type-safe resource identification:
 pub struct RawId(NonZeroUsize);
 
 // Marker trait: Discriminates ID types (zero-sized)
-pub trait Marker: 'static + WasmNotSendSync + Debug {}
+pub trait Marker: 'static + Debug {}
 
 // Id<T>: Generic typed ID
 pub struct Id<T: Marker>(RawId, PhantomData<T>);
@@ -275,7 +260,7 @@ Foundation types are optimized for common UI patterns:
 
 Foundation values and notification channels have distinct thread boundaries:
 
-- **IDs**: `Send + Sync` (Copy types via `WasmNotSendSync`)
+- **IDs**: `Send + Sync`: `Copy` integers whose marker is held as `PhantomData<fn() -> T>`
 - **Keys**: `Send + Sync` (Copy types with atomic generation)
 - **ChangeNotifier**: owner-local; clones share one listener list through `Rc`
 

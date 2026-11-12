@@ -70,8 +70,8 @@ impl AnimationController {
     /// // Vsync; this drives it to completion by hand for the example.
     /// controller.tick_at(Duration::from_millis(100));
     /// let waker = Waker::noop();
-    /// let mut cx = Context::from_waker(waker);
-    /// assert_eq!(Pin::new(&mut run).poll(&mut cx), Poll::Ready(Ok(())));
+    /// let mut ctx = Context::from_waker(waker);
+    /// assert_eq!(Pin::new(&mut run).poll(&mut ctx), Poll::Ready(Ok(())));
     /// ```
     ///
     /// # Errors

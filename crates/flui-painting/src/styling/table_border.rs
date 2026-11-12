@@ -15,22 +15,22 @@ use crate::styling::{BorderRadius, BorderRadiusExt, BorderSide};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TableBorder {
     /// The top side of the outer border.
-    pub top: BorderSide<f64>,
+    pub top: BorderSide,
 
     /// The right side of the outer border.
-    pub right: BorderSide<f64>,
+    pub right: BorderSide,
 
     /// The bottom side of the outer border.
-    pub bottom: BorderSide<f64>,
+    pub bottom: BorderSide,
 
     /// The left side of the outer border.
-    pub left: BorderSide<f64>,
+    pub left: BorderSide,
 
     /// The interior side drawn between rows.
-    pub horizontal_inside: BorderSide<f64>,
+    pub horizontal_inside: BorderSide,
 
     /// The interior side drawn between columns.
-    pub vertical_inside: BorderSide<f64>,
+    pub vertical_inside: BorderSide,
 
     /// Corner rounding for the outer border.
     ///
@@ -54,12 +54,12 @@ impl TableBorder {
     /// Creates a border with explicit per-side styling.
     #[inline]
     pub const fn new(
-        top: BorderSide<f64>,
-        right: BorderSide<f64>,
-        bottom: BorderSide<f64>,
-        left: BorderSide<f64>,
-        horizontal_inside: BorderSide<f64>,
-        vertical_inside: BorderSide<f64>,
+        top: BorderSide,
+        right: BorderSide,
+        bottom: BorderSide,
+        left: BorderSide,
+        horizontal_inside: BorderSide,
+        vertical_inside: BorderSide,
     ) -> Self {
         Self {
             top,
@@ -74,7 +74,7 @@ impl TableBorder {
 
     /// A uniform border: every side (outer and interior) uses `side`.
     #[inline]
-    pub const fn all(side: BorderSide<f64>) -> Self {
+    pub const fn all(side: BorderSide) -> Self {
         Self {
             top: side,
             right: side,
@@ -89,7 +89,7 @@ impl TableBorder {
     /// A border where every outer side uses `outside` and every interior side
     /// uses `inside`.
     #[inline]
-    pub const fn symmetric(inside: BorderSide<f64>, outside: BorderSide<f64>) -> Self {
+    pub const fn symmetric(inside: BorderSide, outside: BorderSide) -> Self {
         Self {
             top: outside,
             right: outside,
@@ -134,7 +134,7 @@ impl TableBorder {
     /// delegates the outer edge to the same uniform/non-uniform logic
     /// `paint_box_decoration`'s border already uses).
     #[must_use]
-    pub fn outer_border(&self) -> crate::styling::Border<f64> {
+    pub fn outer_border(&self) -> crate::styling::Border {
         crate::styling::Border {
             top: Some(self.top),
             right: Some(self.right),

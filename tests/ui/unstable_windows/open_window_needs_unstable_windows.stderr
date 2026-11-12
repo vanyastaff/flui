@@ -1,0 +1,16 @@
+error[E0432]: unresolved import `flui::open_window`
+ --> tests/ui/unstable_windows/open_window_needs_unstable_windows.rs:3:5
+  |
+3 | use flui::open_window;
+  |     ^^^^^^-----------
+  |           |
+  |           no `open_window` in the root
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  |     feature = "unstable-windows"
+  |     ---------------------------- the item is gated behind the `unstable-windows` feature
+  | ))]
+  | pub use flui_app::app::open_window;
+  |                        ^^^^^^^^^^^

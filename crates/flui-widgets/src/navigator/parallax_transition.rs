@@ -76,7 +76,7 @@ fn middle_to_leading() -> Tween<TranslationFraction> {
 /// otherwise grown in from nothing toward the full shadow.
 #[derive(Debug, Clone)]
 struct EdgeShadow {
-    tween: Tween<BoxDecoration<f64>>,
+    tween: Tween<BoxDecoration>,
 }
 
 impl EdgeShadow {
@@ -104,9 +104,9 @@ impl EdgeShadow {
 }
 
 impl Animatable for EdgeShadow {
-    type Value = BoxDecoration<f64>;
+    type Value = BoxDecoration;
 
-    fn transform(&self, t: f64) -> BoxDecoration<f64> {
+    fn transform(&self, t: f64) -> BoxDecoration {
         if t <= 0.0 || t >= 1.0 {
             return BoxDecoration::new();
         }
@@ -193,11 +193,12 @@ impl PageTransitionBuilder for ParallaxPageTransition {
 
         // The inner slide transforms hit tests (the default); only the outer,
         // secondary one turns that off.
-        let mut primary_slide = SlideTransition::new(Rc::new(primary_position), shadowed);
+        let mut primary_slide = SlideTransition::new(Rc::new(primary_position)).child(shadowed);
         if let Some(direction) = text_direction {
             primary_slide = primary_slide.text_direction(direction);
         }
-        let mut secondary_slide = SlideTransition::new(Rc::new(secondary_position), primary_slide)
+        let mut secondary_slide = SlideTransition::new(Rc::new(secondary_position))
+            .child(primary_slide)
             .transform_hit_tests(false);
         if let Some(direction) = text_direction {
             secondary_slide = secondary_slide.text_direction(direction);

@@ -164,7 +164,7 @@ impl RenderBox for RenderErrorBox {
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(0.0)
     }
@@ -172,7 +172,7 @@ impl RenderBox for RenderErrorBox {
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(ERROR_BOX_FALLBACK_EXTENT)
     }
@@ -180,7 +180,7 @@ impl RenderBox for RenderErrorBox {
     fn compute_min_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(0.0)
     }
@@ -188,7 +188,7 @@ impl RenderBox for RenderErrorBox {
     fn compute_max_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         Ok(ERROR_BOX_FALLBACK_EXTENT)
     }
@@ -196,12 +196,12 @@ impl RenderBox for RenderErrorBox {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+        _ctx: &mut flui_rendering::context::BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         Ok(Self::size_for(&constraints))
     }
 
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Leaf>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Leaf>) {
         let size = ctx.size();
         let rect = Rect::from_origin_size(Point::ZERO, size);
         let background = if cfg!(debug_assertions) {

@@ -491,13 +491,13 @@ pub fn material_app_refresh_shows_the_circular_indicator() {
             vsync.clone(),
             MaterialApp::new(
                 RefreshIndicator::new(
+                    alternatives,
                     SingleChildScrollView::new()
                         .controller(ScrollController::new())
                         .child(SizedBox::new(300.0, 5000.0)),
-                    alternatives,
                 )
                 .controller(refresh.clone())
-                .on_refresh(|_cx| std::future::pending::<()>()),
+                .on_refresh(|_ctx| std::future::pending::<()>()),
             )
             .theme(ThemeData::light()),
         ),
@@ -837,13 +837,13 @@ pub fn expressive_material_app_refresh_shows_the_loading_indicator() {
             vsync.clone(),
             MaterialApp::new(
                 RefreshIndicator::new(
+                    alternatives,
                     SingleChildScrollView::new()
                         .controller(ScrollController::new())
                         .child(SizedBox::new(300.0, 5000.0)),
-                    alternatives,
                 )
                 .controller(refresh.clone())
-                .on_refresh(|_cx| std::future::pending::<()>()),
+                .on_refresh(|_ctx| std::future::pending::<()>()),
             )
             .theme(theme),
         ),

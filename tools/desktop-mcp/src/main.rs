@@ -34,7 +34,9 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use rmcp::ServiceExt as _;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::{LevelFilter, Targets};
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::process::Children;
 use crate::server::DesktopServer;
@@ -47,12 +49,23 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,xcap=off".into()),
+    // `RUST_LOG` as `target=level` pairs; one that is unset or does not parse
+    // falls back to the default.
+    let filter = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|directives| directives.parse::<Targets>().ok())
+        .unwrap_or_else(|| {
+            Targets::new()
+                .with_default(LevelFilter::INFO)
+                .with_target("xcap", LevelFilter::OFF)
+        });
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_ansi(false),
         )
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
+        .with(filter)
         .init();
 
     // Before any window, capture or input call: fixes the coordinate space.
@@ -162,11 +175,11 @@ struct ShutdownOnEof<R>(R);
 impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for ShutdownOnEof<R> {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        ctx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         let before = buf.filled().len();
-        let read = std::pin::Pin::new(&mut self.0).poll_read(cx, buf);
+        let read = std::pin::Pin::new(&mut self.0).poll_read(ctx, buf);
         if matches!(read, std::task::Poll::Ready(Ok(()))) && buf.filled().len() == before {
             desktop::stop_input();
         }

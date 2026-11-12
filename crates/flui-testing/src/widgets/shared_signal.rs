@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_view::prelude::*;
-use flui_view::{BuildContext, EventCx, LifecycleContext, SignalError};
+use flui_view::{BuildContext, EventContext, LifecycleContext, SignalError};
 
 struct Bound<T: 'static> {
     signal: Signal<T>,
@@ -109,7 +109,7 @@ impl<T: Clone + 'static> SharedSignal<T> {
         match bound.as_ref() {
             Some(bound) => bound
                 .writer
-                .write(|cx| bound.signal.peek(cx, &mut f))
+                .write(|ctx| bound.signal.peek(ctx, &mut f))
                 .expect("the bound signal is alive while its view is mounted"),
             None => f(&self.shared.initial.borrow()),
         }
@@ -129,7 +129,7 @@ impl<T: Clone + 'static> SharedSignal<T> {
         match bound.as_ref() {
             Some(bound) => bound
                 .writer
-                .write(|cx| bound.signal.update(cx, &mut f))
+                .write(|ctx| bound.signal.update(ctx, &mut f))
                 .expect("the bound signal is alive while its view is mounted"),
             None => f(&mut self.shared.initial.borrow_mut()),
         }
@@ -143,7 +143,7 @@ impl<T: Clone + 'static> SharedSignal<T> {
         });
     }
 
-    /// Change the value from an event callback that holds the caller's `cx`.
+    /// Change the value from an event callback that holds the caller's `ctx`.
     ///
     /// # Errors
     ///
@@ -154,10 +154,10 @@ impl<T: Clone + 'static> SharedSignal<T> {
     /// Before a view has bound it.
     pub fn update_in<R>(
         &self,
-        cx: &mut EventCx<'_>,
+        ctx: &mut EventContext<'_>,
         f: impl FnMut(&mut T) -> R,
     ) -> Result<R, SignalError> {
-        self.signal().update(cx, f)
+        self.signal().update(ctx, f)
     }
 
     /// [`update_in`](Self::update_in) with a new value.
@@ -169,9 +169,9 @@ impl<T: Clone + 'static> SharedSignal<T> {
     /// # Panics
     ///
     /// Before a view has bound it.
-    pub fn set_in(&self, cx: &mut EventCx<'_>, value: T) -> Result<(), SignalError> {
+    pub fn set_in(&self, ctx: &mut EventContext<'_>, value: T) -> Result<(), SignalError> {
         let mut value = Some(value);
-        self.update_in(cx, |current| {
+        self.update_in(ctx, |current| {
             *current = value.take().expect("BUG: the closure runs once");
         })
     }

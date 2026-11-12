@@ -33,7 +33,7 @@ use flui_foundation::inspect::{Fields, Inspect, Unit};
 
 use flui_rendering::{
     constraints::{SliverGeometry, child_paint_offset, grid_child_paint_offset},
-    context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
+    context::{PaintContext, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverMultiBoxAdaptorParentData,
     pipeline::LocalRenderInvalidationHandle,
     protocol::ChildLayout,
@@ -361,7 +361,7 @@ impl RenderSliver for RenderSliverList {
         Ok(geometry)
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         // A pinned child is placed, so only this skip keeps it off screen.
         for slot in 0..ctx.child_count() {
             if !self.pinned.is_pinned_slot(slot) {

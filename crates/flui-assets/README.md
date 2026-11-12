@@ -21,7 +21,7 @@ use flui_assets::{AssetRegistryBuilder, FontAsset};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a registry
-    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+    let registry = AssetRegistryBuilder::new().default_capacity().build();
 
     // Load a font
     let font = FontAsset::file("assets/Roboto-Regular.ttf");
@@ -58,7 +58,7 @@ use std::num::NonZeroU64;
 
 // ✅ This compiles
 let registry = AssetRegistryBuilder::new()
-    .with_capacity(CacheCapacity::Entries(NonZeroU64::new(256).expect("nonzero entry limit")))
+    .capacity(CacheCapacity::Entries(NonZeroU64::new(256).expect("nonzero entry limit")))
     .build();
 
 // ❌ This doesn't compile - cannot build without capacity
@@ -96,7 +96,7 @@ if cache.is_efficient() {
 ```rust
 use flui_assets::{AssetRegistryBuilder, FontAsset};
 
-let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+let registry = AssetRegistryBuilder::new().default_capacity().build();
 let font = FontAsset::file("fonts/Roboto-Regular.ttf");
 let handle = registry.load(font).await?;
 
@@ -118,7 +118,7 @@ flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["images"
 ```rust
 use flui_assets::{AssetRegistryBuilder, ImageAsset};
 
-let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+let registry = AssetRegistryBuilder::new().default_capacity().build();
 let image = ImageAsset::file("assets/logo.png");
 let handle = registry.load(image).await?;
 

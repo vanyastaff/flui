@@ -25,12 +25,12 @@ pub fn window_owners() -> ToolResult<HashMap<u32, u32>> {
     let windows = create_window_list(kCGWindowListOptionAll, kCGNullWindowID).ok_or_else(failed)?;
     let expected: HashSet<u32> = windows.iter().map(|id| *id).collect();
     let descriptions = create_description_from_array(windows).ok_or_else(failed)?;
-    // SAFETY: Quartz exports these immutable CFString constants for the
-    // process lifetime. Get-rule wrappers retain them while keys are used.
     #[expect(
         unsafe_code,
         reason = "Quartz dictionary keys are immutable process-lifetime CFString constants"
     )]
+    // SAFETY: Quartz exports these immutable CFString constants for the
+    // process lifetime. Get-rule wrappers retain them while keys are used.
     let (number, owner) = unsafe {
         (
             CFString::wrap_under_get_rule(kCGWindowNumber),

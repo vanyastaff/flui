@@ -135,8 +135,9 @@ self.nodes.get(id.get() - 1);
 `flui-native`, the core host, exposes one `Platform` trait over its native and headless hosts:
 
 ```rust
-// Sealed: `HostPlatform<H>` over a host's table is its one implementation.
-pub trait Platform: sealed::Sealed + Send + Sync + 'static {
+// Sealed: `HostPlatform<H>` over a host's table is its one implementation. It stays on its
+// owner thread (ADR-0327); another thread reaches it through its `PlatformProxy`.
+pub trait Platform: sealed::Sealed + 'static {
     // Lifecycle
     // The handler hears and answers what the platform has for the application:
     // its bootstrap, the quit, a reopen, a session end, a notice, the exit

@@ -43,11 +43,11 @@ members = [
     "crates/flui-cli",    # `flui` CLI: create, run, build, doctor, devices
 
     # pkg: official packages, built on flui-sdk alone (ADR-0088)
-    "packages/flui-material",  # Material Design theming and the M3 widget catalog
-    "packages/flui-cupertino", # Cupertino theming and widget family
-    "packages/flui-devtools",  # Profiler, timeline and inspector counters
-    "crates/flui-hot-reload",  # Hot reload; an official package still under crates/ (AGENTS.md)
-    "crates/flui-system",      # Capability crate: launcher and file dialogs (ADR-0154)
+    "packages/flui-material",   # Material Design theming and the M3 widget catalog
+    "packages/flui-cupertino",  # Cupertino theming and widget family
+    "packages/flui-devtools",   # Profiler, timeline and inspector counters
+    "packages/flui-hot-reload", # Hot reload: the dlopen reload hooks (ADR-0311)
+    "crates/flui-system",       # Capability crate: launcher and file dialogs (ADR-0154)
 
     # Examples and tools (tier-kind = "tool")
     "examples/desktop_scene",                # Hot-reloadable scene plugin, loaded by HotReloadDriver
@@ -314,7 +314,9 @@ tracing = "0.1"
 # set: it is what makes the `fmt` layer show a bridged record's real target
 # instead of the literal `"log"`. Left implicit, a future `default-features =
 # false` would silently relabel every `wgpu`/`naga` line in desktop output.
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi", "tracing-log"] }
+# `env-filter` stays off: it links a regex engine into every application for
+# directives FLUI does not use; `flui-log` filters with `filter::Targets`.
+tracing-subscriber = { version = "0.3", features = ["fmt", "ansi", "tracing-log"] }
 tracing-log = "0.2"
 tracing-forest = { version = "0.3", features = ["smallvec"] }
 # Native log sinks. Each is target-gated in the crates that use them.
@@ -350,7 +352,7 @@ flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev" }
 flui-runtime = { path = "crates/flui-runtime", version = "=0.2.0-dev" }
 flui-native = { path = "crates/flui-native", version = "=0.2.0-dev" }
 flui-app = { path = "crates/flui-app", version = "=0.2.0-dev" }
-flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev" }
+flui-hot-reload = { path = "packages/flui-hot-reload", version = "=0.2.0-dev" }
 flui-system = { path = "crates/flui-system", version = "=0.2.0-dev" }
 flui-material = { path = "packages/flui-material", version = "=0.2.0-dev" }
 flui-cupertino = { path = "packages/flui-cupertino", version = "=0.2.0-dev" }
@@ -586,33 +588,13 @@ unwrap_used = "warn"
 # `disallowed-types` in clippy.toml (std SipHash tables) is opt-in per crate root while
 # docs/gaps.md lists crates still on SipHash; the default stays off for the rest.
 disallowed_types = "allow"
-# `undocumented_unsafe_blocks` — re-evaluated, measured, reverted.
-# This workspace runs every clippy-capable job under `-D warnings`, so
-# `warn` here means "CI enforces it immediately", and the actual CI run
-# (not a local guess) came back red on every compiling job: clippy,
-# cross-typecheck, wasm-check, all three feature-matrix groups, and
-# cli-macos. Confirmed real, annotatable sites (each job aborts on its
-# first error, so this is a floor, not the true total — appkit/android
-# were never even reached before windows/ios aborted the job that would
-# have checked them): flui-native/src/window.rs:328,332;
-# platforms/{windows/{accessibility.rs:96, platform.rs:382,1998,
-# owner_control.rs:109, window.rs:117}, web/{clipboard.rs:26,
-# display.rs:13-14, executor.rs:15, platform.rs:49, window.rs:40},
-# ios/platform.rs:996}; flui-hot-reload/src/worker.rs:61;
-# flui-log/tests/a_rejected_env_override_still_installs.rs:37 — sixteen
-# sites, plus twelve more that CANNOT be annotated at all: paired
-# `unsafe impl` sites in six OUT_DIR-generated files under
-# flui-engine's build.rs (advanced_blend/blur/color_matrix/gamma/mode/
-# morphology_generated.rs), where a `// SAFETY:` comment would have to
-# live in codegen'd output, not source. Per this comment's own stated
-# rule: too many for `-D warnings`, revert to `allow`, keep the real
-# count instead of forcing green with prose. `dbg_macro`/`todo`/
-# `unimplemented` below are unaffected — zero hits across the same CI
-# matrix, confirmed via the same run's logs. The original point stands
-# for future unsafe code either way: write a SAFETY comment because the
-# invariant was checked, not because a lint failed — several stale ones
-# in flui-hot-reload came from writing the comment first.
-undocumented_unsafe_blocks = "allow"
+# Every `unsafe` block and `unsafe impl` carries a `// SAFETY:` comment that
+# names the invariant it relies on, directly above its statement (below any
+# multi-line attribute) or as the first line inside the block. Write it
+# because the invariant was checked, not because the lint failed. The one
+# exemption is `flui-engine`'s `wgsl_bindgen` output, included from OUT_DIR
+# through modules that carry an `#[expect]` with the reason.
+undocumented_unsafe_blocks = "warn"
 # `dbg_macro`/`todo`/`unimplemented`: restriction lints, off by default even
 # under `all`/`pedantic`. A `dbg!()` left in is a debug-session leftover, not
 # a review comment. `todo!()`/`unimplemented!()` are placeholders; the
@@ -757,7 +739,6 @@ order = 4
 edge-exceptions = [
     { to = "flui-cupertino", exit = "ADR-0088", reason = "the optional `cupertino` catalog re-export" },
     { to = "flui-devtools", exit = "ADR-0088", reason = "the optional `devtools` re-export" },
-    { to = "flui-hot-reload", exit = "ADR-0311", reason = "the optional `hot-reload` feature" },
     { to = "flui-material", exit = "ADR-0088", reason = "the optional `material` catalog re-export" },
 ]
 
@@ -769,6 +750,7 @@ ignored-paths = [
     "tests/ui/thread_boundary/material/*.rs",
     "tests/ui/thread_boundary/cupertino/*.rs",
     "tests/ui/unstable_input/*.rs",
+    "tests/ui/unstable_windows/*.rs",
     "tests/ui/native/*.rs",
 ]
 
@@ -793,7 +775,6 @@ flui-view = { workspace = true }
 flui-widgets = { workspace = true }
 flui-animation = { workspace = true }
 flui-app = { workspace = true }
-flui-hot-reload = { workspace = true, optional = true }
 flui-devtools = { workspace = true, optional = true }
 flui-painting = { workspace = true }
 flui-rendering = { workspace = true }
@@ -821,9 +802,6 @@ flui-interaction = { workspace = true }
 # === Platform (for examples) ===
 flui-native = { workspace = true }
 
-# === Hot-Reload (for examples) ===
-flui-hot-reload = { workspace = true }
-
 # === Test support (the widget harness `flui_testing::widgets` that
 # tests/agent_workflow.rs drives) ===
 flui-testing = { workspace = true }
@@ -839,12 +817,9 @@ trybuild = { workspace = true }
 # === Engine (for GPU examples and the readback test) ===
 flui-engine = { workspace = true, features = ["dx12"] }
 pollster = { workspace = true }
-# === Image encoding (scene_render example) ===
-image.workspace = true
 
 # === Logging ===
 tracing.workspace = true
-tracing-subscriber.workspace = true
 
 [features]
 testing = ["dep:flui-testing", "flui-rendering/testing"]
@@ -891,12 +866,12 @@ unstable-input = []
 # reads; the core host builds the extensions regardless.
 native = ["flui-app/native"]
 
-# Development-only reload machinery, off in an ordinary production graph. This
-# re-exports flui-hot-reload as `flui::hot_reload`; the application installs
-# its hook with `AppConfig::with_dev_reload` (ADR-0311 §2), and flui-app names
-# no reload crate. Without it the normal application graph excludes
-# flui-hot-reload.
-hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-hot-reload/host-hook"]
+# === Windows beyond the first ===
+# Additive and unstable. Publishes `flui::open_window`, `flui::open_secondary_window`
+# and `flui::WindowPolicy` (and their `flui::app` paths) until ADR-0091 §3–§5 are
+# built: a `Shared` window is refused and an open answers only that it was
+# admitted (`docs/gaps.md`). Without it an application has one window.
+unstable-windows = ["flui-app/unstable-windows"]
 
 # The profiler, timeline and inspector counters: re-exports flui-devtools as
 # `flui::devtools`. Without it the normal application graph excludes
@@ -962,7 +937,8 @@ path = "tests/surface.rs"
 
 # UI-runtime-bound handles refuse `std::thread::spawn` (compile-fail fixtures under
 # `tests/ui/thread_boundary/`), and the facade hides the unstable input vocabulary
-# without `unstable-input` (`tests/ui/unstable_input/`). Its own binary, a member of nextest's
+# without `unstable-input` (`tests/ui/unstable_input/`) and a second window without
+# `unstable-windows` (`tests/ui/unstable_windows/`). Its own binary, a member of nextest's
 # `trybuild` group, so the slow rustc runs never hold the ordinary suite.
 [[test]]
 name = "thread_boundary_ui"

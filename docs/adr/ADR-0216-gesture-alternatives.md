@@ -163,7 +163,7 @@ rows with the arrows onto the tile the assistive path invokes.
 GestureAlternatives::try_new(Alternative) -> Result<GestureAlternatives, GestureAlternativesError>
 enum Alternative { VisibleControl(ControlSpec), ContextMenu(MenuSpec), Companion(CompanionSpec) }
 ControlSpec::new(GestureCommand, content).control(GestureCommand, content).placement(ControlPlacement)
-MenuSpec::new(GestureCommand, presenter: impl Fn(&mut EventCx, MenuRequest)).item(GestureCommand)
+MenuSpec::new(GestureCommand, presenter: impl Fn(&mut EventContext, MenuRequest)).item(GestureCommand)
 CompanionSpec::new<I: Intent>(GestureCommand, &CompanionLink<I>).command(GestureCommand)
 CompanionSpec::node_for(&self, &GestureCommand) -> Result<SemanticsAnchor, CompanionGap>
 CompanionLink::<I>::new() -> CompanionLink<I>

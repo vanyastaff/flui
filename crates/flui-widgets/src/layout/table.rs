@@ -24,7 +24,7 @@ use flui_view::{
 /// debug-asserts every other row matches it.
 #[derive(Clone)]
 pub struct TableRow {
-    decoration: Option<BoxDecoration<f64>>,
+    decoration: Option<BoxDecoration>,
     cells: Vec<BoxedView>,
     key: Option<Box<dyn ViewKey>>,
 }
@@ -72,7 +72,7 @@ impl TableRow {
 
     /// Builder: paint `decoration` behind this row's cells.
     #[must_use]
-    pub fn decoration(mut self, decoration: BoxDecoration<f64>) -> Self {
+    pub fn decoration(mut self, decoration: BoxDecoration) -> Self {
         self.decoration = Some(decoration);
         self
     }
@@ -302,7 +302,7 @@ impl Table {
 
     /// One [`Option<BoxDecoration>`] per row, in row order — the shape
     /// `RenderTable::row_decorations` expects.
-    fn row_decorations(&self) -> Vec<Option<BoxDecoration<f64>>> {
+    fn row_decorations(&self) -> Vec<Option<BoxDecoration>> {
         self.rows.iter().map(|row| row.decoration.clone()).collect()
     }
 }

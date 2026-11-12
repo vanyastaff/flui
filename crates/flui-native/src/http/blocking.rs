@@ -107,7 +107,7 @@ impl<S: Stack> HttpClient for BlockingClient<S> {
     fn send(&self, request: HttpRequest) -> HttpFuture<HttpResponse> {
         let exchange = Arc::new(Exchange::default());
         // `None` past what the clock can name: no deadline to keep.
-        let due = Instant::now().checked_add(request.deadline());
+        let due = Instant::now().checked_add(request.deadline);
         if let Some(due) = due
             && let Err(error) = self.watchdog.watch(due, &exchange)
         {
@@ -144,7 +144,7 @@ fn run(
     exchange: &Arc<Exchange>,
     head_tx: oneshot::Sender<Result<HttpResponse, HttpError>>,
 ) {
-    let limit = request.body_limit();
+    let limit = request.body_limit;
     let mut connection = match stack.open(request) {
         Ok(connection) => connection,
         Err(error) => return refuse(exchange, head_tx, error),
@@ -329,8 +329,8 @@ struct HeadFuture {
 impl Future for HeadFuture {
     type Output = Result<HttpResponse, HttpError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let answer = std::task::ready!(Pin::new(&mut self.head).poll(cx));
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        let answer = std::task::ready!(Pin::new(&mut self.head).poll(ctx));
         self.answered = true;
         // A thread that left unanswered is one that died.
         Poll::Ready(answer.unwrap_or(Err(HttpError::Cancelled)))
@@ -353,10 +353,10 @@ struct Chunks {
 impl BodySource for Chunks {
     fn poll_chunk(
         self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        ctx: &mut Context<'_>,
     ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
         // Cloned before the lock: a waker's clone is the caller's code.
-        let waker = cx.waker().clone();
+        let waker = ctx.waker().clone();
         let (answer, replaced) = {
             let mut state = self.exchange.lock();
             if let Some(chunk) = state.chunks.pop_front() {

@@ -55,7 +55,7 @@ macro_rules! scroll_view_methods {
         impl<T, K> $view<T, K>
         where
             T: 'static,
-            K: Clone + Eq + Hash + fmt::Debug + Send + Sync + 'static,
+            K: Clone + Eq + Hash + fmt::Debug + 'static,
         {
             /// How items enter and leave — see
             /// [`SliverAnimatedList::transition`].
@@ -117,7 +117,7 @@ macro_rules! scroll_view_methods {
         impl<T, K> StatelessView for $view<T, K>
         where
             T: 'static,
-            K: Clone + Eq + Hash + fmt::Debug + Send + Sync + 'static,
+            K: Clone + Eq + Hash + fmt::Debug + 'static,
         {
             fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
                 self.scrolling.wrap(ctx, self.sliver.clone().boxed())
@@ -152,7 +152,7 @@ pub struct AnimatedList<T, K> {
 impl<T, K> AnimatedList<T, K>
 where
     T: 'static,
-    K: Clone + Eq + Hash + fmt::Debug + Send + Sync + 'static,
+    K: Clone + Eq + Hash + fmt::Debug + 'static,
 {
     /// A list of `items`, each keyed by `key` and shown by `builder`.
     ///
@@ -208,7 +208,7 @@ pub struct AnimatedGrid<T, K> {
 impl<T, K> AnimatedGrid<T, K>
 where
     T: 'static,
-    K: Clone + Eq + Hash + fmt::Debug + Send + Sync + 'static,
+    K: Clone + Eq + Hash + fmt::Debug + 'static,
 {
     /// A grid of `items` laid out by `grid_delegate`, each keyed by `key`
     /// and shown by `builder`.

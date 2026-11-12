@@ -236,9 +236,10 @@ pub use owner::{
     RebuildReasons, RecoveredAt, RecoveredPanic, UnmountHook,
 };
 pub use reactive::{
-    BuildInProgress, EventContextError, EventCx, EventError, EventOutcome, Reactive, ReadGraph,
-    ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot, SignalWriteExt,
-    SlotInfo, WriteTarget, Writer, WriterSource, callback, callback_ref, callback_with,
+    BuildInProgress, EventContext, EventContextError, EventError, EventOutcome, Reactive,
+    ReadGraph, ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot,
+    SignalWriteExt, SlotInfo, WriteTarget, Writer, WriterSource, callback, callback_ref,
+    callback_with,
 };
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
@@ -289,7 +290,7 @@ pub mod prelude {
     };
     // Signal writes (`set`/`update`/`set_if_changed`). Reads need no import:
     // `Signal::get` is inherent and takes the context as a `ReadScope`, so
-    // `ReadScope` is not in the prelude. `cx.scope()` still resolves on any
+    // `ReadScope` is not in the prelude. `ctx.scope()` still resolves on any
     // `BuildContext` without it (a supertrait's methods do); a `ScopeRef` is
     // opaque, so that reaches nothing but a signal read.
     pub use crate::reactive::SignalWriteExt;
@@ -297,7 +298,7 @@ pub mod prelude {
     // the source a widget opens it from, the outcome a callback reports, and
     // the helpers that fix a `let`-bound callback's signature (ADR-0086).
     pub use crate::reactive::{
-        EventContextError, EventCx, EventError, EventOutcome, Signal, WriterSource, callback,
+        EventContext, EventContextError, EventError, EventOutcome, Signal, WriterSource, callback,
         callback_ref, callback_with,
     };
     pub use crate::{

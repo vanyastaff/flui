@@ -2,7 +2,7 @@
 //!
 //! A reload tool — `flui-hot-reload`'s dlopen worker and scene plugin today —
 //! implements [`DevReloadHook`]; the application installs the instance on its
-//! configuration (`flui_app::AppConfig::with_dev_reload`), and the host drives
+//! configuration (`flui_app::AppConfig::dev_reload`), and the host drives
 //! it. The trait lives here, below the runtime, so the host never names the
 //! tool and the tool never names the host: `flui-app` has no edge to any
 //! reload crate, and a reload package reaches this module through `flui-sdk`

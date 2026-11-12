@@ -722,7 +722,7 @@ fn the_headless_window_plays_a_stale_source_on_its_actuator() {
         "the window's own actuator, which knows no device"
     );
     let unplugged = DeviceId::new(std::num::NonZeroU64::new(42).expect("nonzero"));
-    let request = HapticRequest::new(HapticTiming::Immediate).with_source(unplugged);
+    let request = HapticRequest::new(HapticTiming::Immediate).source(unplugged);
     assert_eq!(
         haptics.perform_with(HapticFeedback::Drop, &request),
         Submitted,

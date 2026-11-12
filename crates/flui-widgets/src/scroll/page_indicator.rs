@@ -11,7 +11,7 @@ use flui_foundation::geometry::{Point, Rect, Size};
 use flui_painting::{Canvas, Paint, styling::Color, typography::TextDirection};
 use flui_rendering::{delegates::CustomPainter, semantics::SemanticsRole};
 use flui_view::prelude::*;
-use flui_view::{EventCx, RebuildHandle, RebuildReason};
+use flui_view::{EventContext, RebuildHandle, RebuildReason};
 
 use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
@@ -391,33 +391,34 @@ impl ViewState<PageIndicator> for PageIndicatorState {
         let mut semantics = semantics.role(SemanticsRole::Slider);
         if page + 1 < count {
             let controller = controller.clone();
-            semantics = semantics.on_increment(move |_cx: &mut EventCx<'_>| {
+            semantics = semantics.on_increment(move |_ctx: &mut EventContext<'_>| {
                 turn(&controller, page + 1, reduced);
             });
         }
         if page > 0 {
             let controller = controller.clone();
-            semantics = semantics.on_decrement(move |_cx: &mut EventCx<'_>| {
+            semantics = semantics.on_decrement(move |_ctx: &mut EventContext<'_>| {
                 turn(&controller, page - 1, reduced);
             });
         }
         let tapped = Rc::clone(&self.live);
         let controller = controller.clone();
         let width = size.width;
-        let detector = GestureDetector::new().on_tap_up(move |_cx: &mut EventCx<'_>, details| {
-            let page = nearest(tapped.position());
-            let count = tapped.count.get();
-            let towards_end = details.local_position.dx > width / 2.0;
-            let forward = towards_end == (direction == TextDirection::Ltr);
-            let target = if forward {
-                (page + 1 < count).then_some(page + 1)
-            } else {
-                page.checked_sub(1)
-            };
-            if let Some(target) = target {
-                turn(&controller, target, reduced);
-            }
-        });
+        let detector =
+            GestureDetector::new().on_tap_up(move |_ctx: &mut EventContext<'_>, details| {
+                let page = nearest(tapped.position());
+                let count = tapped.count.get();
+                let towards_end = details.local_position.dx > width / 2.0;
+                let forward = towards_end == (direction == TextDirection::Ltr);
+                let target = if forward {
+                    (page + 1 < count).then_some(page + 1)
+                } else {
+                    page.checked_sub(1)
+                };
+                if let Some(target) = target {
+                    turn(&controller, target, reduced);
+                }
+            });
         semantics
             .child(detector.child(RepaintBoundary::new().child(paint)))
             .boxed()
