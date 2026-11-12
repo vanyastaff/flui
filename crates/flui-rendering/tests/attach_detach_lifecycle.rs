@@ -19,6 +19,7 @@ use std::{
 use flui_foundation::Leaf;
 use flui_rendering::pipeline::{LocalRenderInvalidationHandle, PipelineOwner};
 use flui_rendering::prelude::*;
+use flui_rendering::testing::SceneHost;
 
 use crate::common::BoxedRenderObject;
 
@@ -487,7 +488,8 @@ pub(crate) fn local_drain_failure_preserves_the_phase_tail_and_next_frame() {
     let id = owner.insert(probe(log.clone()));
     owner.set_root_id(Some(id));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(40.0, 40.0))));
-    let (mut owner, frame) = owner.run_frame();
+    let mut scene = SceneHost::new();
+    let (mut owner, frame) = scene.run_frame(owner);
     frame.expect("initial layout and paint");
     let layouts = log.layout_count.load(Ordering::SeqCst);
     let paints = log.paint_count.load(Ordering::SeqCst);
@@ -514,14 +516,14 @@ pub(crate) fn local_drain_failure_preserves_the_phase_tail_and_next_frame() {
         "the paint tail runs despite the earlier layout wake failure"
     );
     owner.set_on_need_visual_update(|| {});
-    let (owner, frame) = owner.run_frame();
+    let (owner, frame) = scene.run_frame(owner);
     frame.expect("the accepted tail remains runnable");
     assert_eq!(log.layout_count.load(Ordering::SeqCst), layouts + 1);
     assert_eq!(log.paint_count.load(Ordering::SeqCst), paints + 1);
     log.captured_handle()
         .mark_needs_layout()
         .expect("fresh invalidation");
-    let (_, frame) = owner.run_frame();
+    let (_, frame) = scene.run_frame(owner);
     frame.expect("fresh operation progresses after containment");
     assert_eq!(log.layout_count.load(Ordering::SeqCst), layouts + 2);
 }
@@ -564,7 +566,8 @@ pub(crate) fn a_layout_mark_during_paint_is_diagnosed() {
     let id = owner.insert(probe(log.clone()));
     owner.set_root_id(Some(id));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(40.0, 40.0))));
-    let (owner, frame) = owner.run_frame();
+    let mut scene = SceneHost::new();
+    let (owner, frame) = scene.run_frame(owner);
     frame.expect("initial layout and paint");
     let layouts = log.layout_count.load(Ordering::SeqCst);
 
@@ -572,7 +575,7 @@ pub(crate) fn a_layout_mark_during_paint_is_diagnosed() {
     log.captured_handle()
         .mark_needs_paint()
         .expect("live attachment");
-    let painted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || owner.run_frame()));
+    let painted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scene.run_frame(owner)));
 
     if cfg!(debug_assertions) {
         let Err(failure) = painted else {
@@ -587,7 +590,7 @@ pub(crate) fn a_layout_mark_during_paint_is_diagnosed() {
         let (owner, frame) = painted.expect("a release build only logs the mark");
         frame.expect("the paint pass completes");
         log.relayout_from_paint.set(false);
-        let (_, frame) = owner.run_frame();
+        let (_, frame) = scene.run_frame(owner);
         frame.expect("the mark applies next frame");
         assert_eq!(log.layout_count.load(Ordering::SeqCst), layouts + 1);
     }

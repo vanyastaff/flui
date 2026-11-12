@@ -68,6 +68,12 @@ impl PictureLayer {
         }
     }
 
+    /// A picture of `picture`, shared with whoever else holds it.
+    #[must_use]
+    pub fn from_shared(picture: Arc<DisplayList>) -> Self {
+        Self { picture }
+    }
+
     /// The recorded commands the backend replays.
     pub fn picture(&self) -> &DisplayList {
         &self.picture

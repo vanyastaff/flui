@@ -93,14 +93,15 @@ fn frame_after_alpha_change(
     force_repaint: bool,
 ) -> Vec<u8> {
     let (owner, opacity_id) = mount(0.5);
-    let (mut owner, result) = owner.run_frame();
+    let mut scene = flui_rendering::testing::SceneHost::new();
+    let (mut owner, result) = scene.run_frame(owner);
     result.expect("first frame");
 
     set_opacity(&mut owner, opacity_id, value);
     if force_repaint {
         owner.mark_needs_paint(opacity_id);
     }
-    let (owner, result) = owner.run_frame();
+    let (owner, result) = scene.run_frame(owner);
     let tree = result
         .expect("second frame")
         .expect("second frame produces a layer tree");
@@ -214,14 +215,15 @@ fn frame_after_transform_change(
     force_repaint: bool,
 ) -> Vec<u8> {
     let (owner, transform_id) = mount_transform(Matrix4::scaling(2.0, 2.0, 1.0));
-    let (mut owner, result) = owner.run_frame();
+    let mut scene = flui_rendering::testing::SceneHost::new();
+    let (mut owner, result) = scene.run_frame(owner);
     result.expect("first frame");
 
     set_transform(&mut owner, transform_id, matrix);
     if force_repaint {
         owner.mark_needs_paint(transform_id);
     }
-    let (owner, result) = owner.run_frame();
+    let (owner, result) = scene.run_frame(owner);
     let tree = result
         .expect("second frame")
         .expect("second frame produces a layer tree");
@@ -348,14 +350,15 @@ fn frame_after_radius_change(
     force_repaint: bool,
 ) -> Vec<u8> {
     let (owner, clip_id) = mount_clip_rrect(5.0);
-    let (mut owner, result) = owner.run_frame();
+    let mut scene = flui_rendering::testing::SceneHost::new();
+    let (mut owner, result) = scene.run_frame(owner);
     result.expect("first frame");
 
     set_border_radius(&mut owner, clip_id, radius);
     if force_repaint {
         owner.mark_needs_paint(clip_id);
     }
-    let (owner, result) = owner.run_frame();
+    let (owner, result) = scene.run_frame(owner);
     let tree = result
         .expect("second frame")
         .expect("second frame produces a layer tree");
@@ -462,7 +465,8 @@ fn canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture() {
     );
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(80.0, 40.0))));
-    let (_owner, frame) = owner.run_frame();
+    let mut scene = flui_rendering::testing::SceneHost::new();
+    let (_owner, frame) = scene.run_frame(owner);
     let layer_tree = frame.expect("paint frame").expect("layer tree");
     let renderer = pollster::block_on(HeadlessRenderer::new()).expect("GPU adapter for readback");
     let pixels = renderer
@@ -707,7 +711,8 @@ fn group_opacity_retains_fractional_alpha_until_composition() {
         );
         owner.set_root_id(Some(root));
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(16.0, 16.0))));
-        let (_owner, result) = owner.run_frame();
+        let mut scene = flui_rendering::testing::SceneHost::new();
+        let (_owner, result) = scene.run_frame(owner);
         let layers = result.expect("opacity frame").expect("painted layer tree");
         assert_eq!(
             flui_rendering::testing::inspect::first_opacity_alpha(&layers),
@@ -814,7 +819,8 @@ fn decoration_filters_preserve_tap_order_and_batch_identity() {
     );
     owner.set_root_id(Some(root));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(16.0, 16.0))));
-    let (_, frame) = owner.run_frame();
+    let mut scene = flui_rendering::testing::SceneHost::new();
+    let (_, frame) = scene.run_frame(owner);
     let layers = frame
         .expect("filtered image frame")
         .expect("painted layers");
@@ -902,7 +908,8 @@ fn decoration_filter_precision(filter: fn(f32) -> flui_painting::paint::ColorFil
             );
             owner.set_root_id(Some(root));
             owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(16.0, 16.0))));
-            let (_owner, result) = owner.run_frame();
+            let mut scene = flui_rendering::testing::SceneHost::new();
+            let (_owner, result) = scene.run_frame(owner);
             let layers = result
                 .expect("decoration frame")
                 .expect("painted layer tree");

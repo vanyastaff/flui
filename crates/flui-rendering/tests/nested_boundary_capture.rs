@@ -1,9 +1,8 @@
-//! A repaint boundary's capture holds its own region and a slot for each boundary nested in it.
+//! A repaint boundary's content holds its own region and a slot for each boundary nested in it.
 //!
-//! A clean boundary is replayed from its capture whatever is nested in it, and each nested
-//! boundary is decided on its own at its slot: grafted when clean, repainted when queued or
-//! without a capture. The oracle for "the retained output is the painted output" is a fresh
-//! owner painting the same tree from scratch.
+//! A clean boundary keeps its content whatever is nested in it, and each nested boundary is
+//! decided on its own: kept when clean, repainted alone when queued. The oracle for "the retained
+//! output is the painted output" is a fresh owner painting the same tree from scratch.
 
 use std::sync::{
     Arc, Mutex,
@@ -22,7 +21,7 @@ use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext, PaintAnchor, PaintCx},
     parent_data::BoxParentData,
     pipeline::{Idle, PipelineOwner},
-    testing::{TreeNode, box_node, tree, update_render_object},
+    testing::{SceneHost, TreeNode, box_node, tree, update_render_object},
     traits::RenderBox,
 };
 
@@ -34,8 +33,8 @@ fn mount(root: TreeNode) -> (PipelineOwner<Idle>, tree::RenderLabelRegistry) {
     (owner, registry)
 }
 
-fn frame(owner: PipelineOwner<Idle>) -> (PipelineOwner<Idle>, LayerTree) {
-    let (owner, result) = owner.run_frame();
+fn frame(scene: &mut SceneHost, owner: PipelineOwner<Idle>) -> (PipelineOwner<Idle>, LayerTree) {
+    let (owner, result) = scene.run_frame(owner);
     let tree = result
         .expect("frame")
         .expect("the frame produces a layer tree");
@@ -185,17 +184,17 @@ fn a_nested_boundary_mark_paints_only_that_boundary() {
         inner_tally,
         ..
     } = nested();
-    let (mut owner, _) = frame(owner);
+    let mut scene = SceneHost::new();
+    let (mut owner, _) = frame(&mut scene, owner);
     let (outer_before, inner_before) = (outer_tally.paints(), inner_tally.paints());
     let before = owner.counters();
 
     owner.mark_needs_paint(inner);
-    let (owner, _) = frame(owner);
+    let (owner, _) = frame(&mut scene, owner);
 
-    // The inner boundary is a render node of its own, with one tally under it.
-    // The root row repaints every frame (the root region is not retained), then the inner
-    // boundary and the tally under it.
-    assert_eq!(owner.counters().since(before).nodes_painted, 3);
+    // The inner boundary and the tally under it: the frame node and the outer boundary keep
+    // their contents, which still slot the inner node.
+    assert_eq!(owner.counters().since(before).nodes_painted, 2);
     assert_eq!(inner_tally.paints(), inner_before + 1);
     assert_eq!(
         outer_tally.paints(),
@@ -204,8 +203,8 @@ fn a_nested_boundary_mark_paints_only_that_boundary() {
     );
 }
 
-/// The nested boundary keeps its place between the inline runs on either side of it, and its
-/// layer is minted at replay under the layer its slot named.
+/// The nested boundary keeps its place between the inline runs on either side of it: the outer
+/// content, kept, holds a run, the slot of the inner node, and a run.
 #[test]
 fn a_replayed_slot_keeps_its_place_between_inline_runs() {
     let Nested {
@@ -214,35 +213,31 @@ fn a_replayed_slot_keeps_its_place_between_inline_runs() {
         inner,
         ..
     } = nested();
-    let (mut owner, first) = frame(owner);
+    let mut scene = SceneHost::new();
+    let (mut owner, first) = frame(&mut scene, owner);
+    let inner_node = owner.boundary_scene_node(inner).expect("published");
     owner.mark_needs_paint(inner);
-    let (_, second) = frame(owner);
+    let (owner, second) = frame(&mut scene, owner);
 
-    let kinds_under = |t: &LayerTree| -> Vec<String> {
-        let outer_layer = t
-            .iter()
-            .find(|(_, node)| node.render_id() == Some(outer))
-            .map(|(id, _)| id)
-            .expect("outer is stamped");
-        t.children(outer_layer)
-            .expect("outer layer")
-            .iter()
-            .map(|&id| describe(t.get_layer(id).expect("child of a live layer")))
-            .collect()
-    };
-    let order = kinds_under(&second);
-    assert_eq!(order.len(), 3, "run, nested boundary, run: {order:?}");
-    assert!(order[0].starts_with("Picture"), "{order:?}");
-    assert!(order[1].starts_with("Offset"), "{order:?}");
-    assert!(order[2].starts_with("Picture"), "{order:?}");
-    assert_eq!(order, kinds_under(&first));
+    let content = scene.content_of(&owner, outer).expect("published");
+    let order: Vec<&str> = content
+        .entries()
+        .iter()
+        .map(|entry| match entry {
+            flui_layer::Entry::Chunk { .. } => "run",
+            flui_layer::Entry::Slot { node, .. } if *node == inner_node => "inner",
+            flui_layer::Entry::Slot { .. } => "slot",
+            flui_layer::Entry::Effect { .. } => "effect",
+        })
+        .collect();
+    assert_eq!(order, ["run", "inner", "run"]);
     assert_eq!(fingerprint(&first), fingerprint(&second));
 }
 
-/// The repainted boundary carries a new token, and the boundary around it keeps its own: the
-/// differ sees the nested region change and nothing else.
+/// The repainted boundary is published with a new content, and the boundaries around and beside
+/// it keep theirs: the patch names the nested node and nothing else.
 #[test]
-fn a_repainted_nested_boundary_restamps_and_its_neighbours_keep_their_tokens() {
+fn a_repainted_nested_boundary_republishes_and_its_neighbours_keep_their_contents() {
     let Nested {
         owner,
         outer,
@@ -250,27 +245,27 @@ fn a_repainted_nested_boundary_restamps_and_its_neighbours_keep_their_tokens() {
         other,
         ..
     } = nested();
-    let tokens = |t: &LayerTree| {
-        t.iter()
-            .filter_map(|(_, node)| {
-                node.boundary()
-                    .map(|stamp| (stamp.render_id(), stamp.content().clone()))
-            })
-            .collect::<std::collections::HashMap<_, _>>()
+    let mut scene = SceneHost::new();
+    let (mut owner, _) = frame(&mut scene, owner);
+    let before = |scene: &SceneHost, owner: &PipelineOwner<Idle>, id| {
+        scene.content_of(owner, id).expect("published")
     };
-    let (mut owner, first) = frame(owner);
+    let (a_inner, a_outer, a_other) = (
+        before(&scene, &owner, inner),
+        before(&scene, &owner, outer),
+        before(&scene, &owner, other),
+    );
     owner.mark_needs_paint(inner);
-    let (_, second) = frame(owner);
-    let (a, b) = (tokens(&first), tokens(&second));
-    assert_ne!(a[&inner], b[&inner]);
-    assert_eq!(a[&outer], b[&outer]);
-    assert_eq!(a[&other], b[&other]);
+    let (owner, _) = frame(&mut scene, owner);
+    assert!(!Arc::ptr_eq(&a_inner, &before(&scene, &owner, inner)));
+    assert!(Arc::ptr_eq(&a_outer, &before(&scene, &owner, outer)));
+    assert!(Arc::ptr_eq(&a_other, &before(&scene, &owner, other)));
 }
 
-/// A nested boundary with no capture of its own (it holds a follower, which is never retained)
-/// repaints at its slot while the boundary around it is replayed.
+/// A nested boundary holding a follower is retained like any other: a sibling's repaint
+/// leaves both it and the boundary around it unpainted, and the frame matches.
 #[test]
-fn a_nested_boundary_without_a_capture_repaints_alone() {
+fn a_nested_boundary_holding_a_follower_is_retained() {
     let (outer_tally, inner_tally) = (PaintTally::new(), PaintTally::new());
     let link = flui_layer::LayerLink::new();
     let (owner, registry) = mount(
@@ -294,32 +289,31 @@ fn a_nested_boundary_without_a_capture_repaints_alone() {
             ),
     );
     let other = registry.get("other").expect("labelled");
-    let (mut owner, first) = frame(owner);
+    let mut scene = SceneHost::new();
+    let (mut owner, first) = frame(&mut scene, owner);
     let (outer_before, inner_before) = (outer_tally.paints(), inner_tally.paints());
 
     owner.mark_needs_paint(other);
-    let (_, second) = frame(owner);
+    let (_, second) = frame(&mut scene, owner);
 
     assert_eq!(
         outer_tally.paints(),
         outer_before,
-        "the outer region was replayed"
+        "the outer boundary was kept"
     );
     assert_eq!(
         inner_tally.paints(),
-        inner_before + 1,
-        "the uncaptured nested boundary repainted at its slot"
+        inner_before,
+        "the follower's boundary was kept"
     );
     assert_eq!(fingerprint(&first), fingerprint(&second));
 }
 
-/// A boundary that holds a leader is replayed from its capture, and the replayed leader is
-/// indexed where the boundary now stands: a sibling's relayout moves the boundary, and the
-/// follower resolves against the moved leader as it does for a fresh owner painting the same
-/// tree. The retained count and the paint count are the regression check; the comparison with
-/// the fresh owner guards correctness and passes with or without the fix.
+/// A boundary that holds a leader is retained, and its leader is resolved where the boundary now
+/// stands: a sibling's relayout moves the boundary, and the follower resolves against the moved
+/// leader as it does for a fresh owner painting the same tree.
 #[test]
-fn a_boundary_holding_a_leader_is_replayed_where_it_now_stands() {
+fn a_boundary_holding_a_leader_is_retained() {
     let link = flui_layer::LayerLink::new();
     let scene = |lead_width: f64, tally: &PaintTally| {
         box_node(RenderFlex::row())
@@ -341,55 +335,56 @@ fn a_boundary_holding_a_leader_is_replayed_where_it_now_stands() {
             .expect("the follower is painted");
         resolve_follower_transform(t, follower)
     };
-    let content_of = |t: &LayerTree, boundary: RenderId| {
-        t.iter()
-            .find_map(|(_, node)| {
-                node.boundary()
-                    .filter(|stamp| stamp.render_id() == boundary)
-                    .map(|stamp| stamp.content().clone())
-            })
-            .expect("the boundary is stamped")
-    };
 
     let tally = PaintTally::new();
     let (owner, registry) = mount(scene(20.0, &tally));
     let lead = registry.get("lead").expect("labelled");
     let leading = registry.get("leading").expect("labelled");
-    let (mut owner, first) = frame(owner);
+    let mut host = SceneHost::new();
+    let (mut owner, _) = frame(&mut host, owner);
     assert_eq!(
-        owner.retained_boundary_count(),
-        1,
-        "precondition: the leading boundary is retained, the following one is not"
+        owner.boundary_record_count(),
+        2,
+        "both boundaries are retained"
     );
     let paints = tally.paints();
+    let content = host.content_of(&owner, leading).expect("published");
 
     update_render_object::<RenderSizedBox, _>(&mut owner, lead, |sized| {
         sized.set_size(Some(30.0), Some(10.0))
     });
-    let (_, second) = frame(owner);
+    let (owner, second) = frame(&mut host, owner);
     assert_eq!(
         tally.paints(),
         paints,
-        "the moved leading boundary was replayed, not repainted"
+        "the moved leading boundary was kept, not repainted"
+    );
+    assert!(
+        Arc::ptr_eq(
+            &content,
+            &host.content_of(&owner, leading).expect("published")
+        ),
+        "the moved boundary keeps its content; only its placement changed"
     );
     assert_eq!(
-        content_of(&first, leading),
-        content_of(&second, leading),
-        "the replayed boundary keeps its content token"
+        host.version().leader_origin(link).map(|origin| origin.x),
+        Some(30.0),
+        "the version resolves the leader where the boundary now stands"
     );
 
     let (fresh, _) = mount(scene(30.0, &PaintTally::new()));
-    let (_, fresh) = frame(fresh);
+    let (_, fresh) = frame(&mut SceneHost::new(), fresh);
     assert_eq!(fingerprint(&second), fingerprint(&fresh));
     let origin = leader_origin(&second, link);
     assert_eq!(origin, leader_origin(&fresh, link));
-    assert_eq!(origin.expect("the replayed leader is indexed").x, 30.0);
+    assert_eq!(origin.expect("the leader is indexed").x, 30.0);
     assert_eq!(follower_transform(&second), follower_transform(&fresh));
 }
 
-/// A paint anchor inside the replayed region still governs the nested boundary that repaints.
+/// A boundary painted alone reads the paint anchor its parent's region gave it: the anchor in
+/// the kept parent content still governs the nested boundary that repaints (ADR-0304 §8).
 #[test]
-fn an_anchor_inside_the_replayed_region_reaches_the_repainted_boundary() {
+fn a_boundary_painted_alone_reads_the_anchor_its_parent_gave_it() {
     let tally = PaintTally::new();
     let (owner, registry) = mount(
         box_node(RenderFlex::row())
@@ -405,7 +400,8 @@ fn an_anchor_inside_the_replayed_region_reaches_the_repainted_boundary() {
             .child(leaf()),
     );
     let inner = registry.get("inner").expect("labelled");
-    let (mut owner, _) = frame(owner);
+    let mut scene = SceneHost::new();
+    let (mut owner, _) = frame(&mut scene, owner);
     let first_anchor = tally.anchor().expect("the tally sits under an anchor");
     assert!(
         first_anchor.offset.dx > 0.0,
@@ -414,7 +410,7 @@ fn an_anchor_inside_the_replayed_region_reaches_the_repainted_boundary() {
     let paints = tally.paints();
 
     owner.mark_needs_paint(inner);
-    let _ = frame(owner);
+    let _ = frame(&mut scene, owner);
 
     assert_eq!(tally.paints(), paints + 1);
     assert_eq!(tally.anchor(), Some(first_anchor));
@@ -442,7 +438,8 @@ fn an_anchor_outside_the_region_is_rebased_at_each_slot() {
             .child(leaf()),
     );
     let inner = registry.get("inner").expect("labelled");
-    let (mut owner, _) = frame(owner);
+    let mut scene = SceneHost::new();
+    let (mut owner, _) = frame(&mut scene, owner);
     let first_anchor = tally.anchor().expect("the tally sits under an anchor");
     assert!(
         first_anchor.offset.dx >= 20.0,
@@ -450,9 +447,52 @@ fn an_anchor_outside_the_region_is_rebased_at_each_slot() {
     );
 
     owner.mark_needs_paint(inner);
-    let _ = frame(owner);
+    let _ = frame(&mut scene, owner);
 
     assert_eq!(tally.anchor(), Some(first_anchor));
+}
+
+/// A boundary repainted alone under a clean boundary that moves in the same frame reads the
+/// anchor the moved placement gives it: the move is settled before the nested repaint.
+///
+/// Red-check: serve the nested boundary before its moved ancestor's placement is staged (it
+/// reads the placement of the frame before).
+#[test]
+fn a_boundary_under_a_moved_clean_boundary_reads_the_moved_anchor() {
+    let tally = PaintTally::new();
+    let (owner, registry) = mount(
+        box_node(RenderPaintAnchor::new()).child(
+            box_node(RenderFlex::row())
+                .child(box_node(RenderSizedBox::fixed(10.0, 10.0)).label("lead"))
+                .child(
+                    box_node(RenderRepaintBoundary::new()).label("moved").child(
+                        box_node(RenderFlex::row()).child(leaf()).child(
+                            box_node(RenderRepaintBoundary::new())
+                                .label("inner")
+                                .child(box_node(tally.clone())),
+                        ),
+                    ),
+                ),
+        ),
+    );
+    let lead = registry.get("lead").expect("labelled");
+    let inner = registry.get("inner").expect("labelled");
+    let mut scene = SceneHost::new();
+    let (mut owner, _) = frame(&mut scene, owner);
+    let first = tally.anchor().expect("the tally sits under an anchor");
+
+    update_render_object::<RenderSizedBox, _>(&mut owner, lead, |lead| {
+        lead.set_size(Some(40.0), Some(10.0))
+    });
+    owner.mark_needs_paint(inner);
+    let _ = frame(&mut scene, owner);
+
+    let moved = tally.anchor().expect("the tally sits under an anchor");
+    assert_eq!(
+        moved.offset.dx,
+        first.offset.dx + 30.0,
+        "the nested repaint reads the anchor of the moved placement"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -562,7 +602,8 @@ fn retained_frames_match_a_full_repaint_over_random_trees_and_marks() {
         let id = |name: String| registry.get(&name).expect("labelled");
         let mut alphas = vec![0.5; opacities];
         let mut rng = Lcg(seed ^ 0x9e37_79b9);
-        let (mut owner, _) = frame(owner);
+        let mut scene = SceneHost::new();
+        let (mut owner, _) = frame(&mut scene, owner);
 
         for step in 0..6 {
             if root_is_boundary && rng.next(4) == 0 {
@@ -578,11 +619,11 @@ fn retained_frames_match_a_full_repaint_over_random_trees_and_marks() {
                     o.set_opacity(alphas[k])
                 });
             }
-            let (next, retained) = frame(owner);
+            let (next, retained) = frame(&mut scene, owner);
             owner = next;
 
             let (reference, _) = mount(generate(seed, &alphas).root);
-            let (_, full) = frame(reference);
+            let (_, full) = frame(&mut SceneHost::new(), reference);
             assert_eq!(
                 fingerprint(&retained),
                 fingerprint(&full),
@@ -603,20 +644,12 @@ fn retained_frames_match_a_full_repaint_over_random_trees_and_marks() {
 fn the_generator_nests_boundaries() {
     let nested_somewhere = (0..48u64).any(|seed| {
         let spec = generate(seed, &[]);
-        let (owner, registry) = mount(spec.root);
-        let (_, t) = frame(owner);
-        let _ = registry;
-        // A stamped layer below another stamped layer is a nested boundary.
-        t.iter().any(|(id, node)| {
-            let mut above = t.parent(id);
-            let mut nested = false;
-            while let Some(ancestor) = above {
-                nested |= node.boundary().is_some()
-                    && t.get(ancestor).is_some_and(|n| n.boundary().is_some());
-                above = t.parent(ancestor);
-            }
-            nested
-        })
+        let (owner, _registry) = mount(spec.root);
+        let mut scene = SceneHost::new();
+        let _ = frame(&mut scene, owner);
+        // The scene's root slots the frame node, which slots the top-level boundaries: a node
+        // deeper than those is a boundary nested in another.
+        scene.version().nodes().any(|node| node.depth() >= 3)
     });
     assert!(nested_somewhere);
 }
@@ -648,12 +681,13 @@ fn rooted() -> (PipelineOwner<Idle>, RenderId, PaintTally, PaintTally) {
 #[test]
 fn a_root_boundary_is_replayed_when_only_a_nested_boundary_repaints() {
     let (owner, inner, root_tally, inner_tally) = rooted();
-    let (mut owner, first) = frame(owner);
+    let mut scene = SceneHost::new();
+    let (mut owner, first) = frame(&mut scene, owner);
     let (root_before, inner_before) = (root_tally.paints(), inner_tally.paints());
     let before = owner.counters();
 
     owner.mark_needs_paint(inner);
-    let (owner, second) = frame(owner);
+    let (owner, second) = frame(&mut scene, owner);
 
     // The inner boundary and the tally under it; the root and its row are replayed.
     assert_eq!(owner.counters().since(before).nodes_painted, 2);
@@ -675,11 +709,12 @@ fn a_layer_update_under_the_root_boundary_patches_the_retained_root() {
     };
     let (owner, registry) = mount(build(0.5));
     let opacity = registry.get("opacity").expect("labelled");
-    let (mut owner, _) = frame(owner);
+    let mut scene = SceneHost::new();
+    let (mut owner, _) = frame(&mut scene, owner);
     let painted = tally.paints();
 
     update_render_object::<RenderOpacity, _>(&mut owner, opacity, |o| o.set_opacity(0.25));
-    let (_, patched) = frame(owner);
+    let (_, patched) = frame(&mut scene, owner);
 
     assert_eq!(
         tally.paints(),
@@ -687,7 +722,7 @@ fn a_layer_update_under_the_root_boundary_patches_the_retained_root() {
         "the root was patched, not repainted"
     );
     let (reference, _) = mount(build(0.25));
-    let (_, full) = frame(reference);
+    let (_, full) = frame(&mut SceneHost::new(), reference);
     assert_eq!(fingerprint(&patched), fingerprint(&full));
 }
 
@@ -696,14 +731,15 @@ fn a_layer_update_under_the_root_boundary_patches_the_retained_root() {
 #[test]
 fn a_pixel_ratio_change_drops_the_retained_output() {
     let (owner, inner, root_tally, inner_tally) = rooted();
-    let (mut owner, _) = frame(owner);
+    let mut scene = SceneHost::new();
+    let (mut owner, _) = frame(&mut scene, owner);
     owner.mark_needs_paint(inner);
-    let (mut owner, _) = frame(owner);
+    let (mut owner, _) = frame(&mut scene, owner);
     let (root_before, inner_before) = (root_tally.paints(), inner_tally.paints());
 
     owner.set_device_pixel_ratio(2.0);
     owner.mark_needs_paint(inner);
-    let (_, _) = frame(owner);
+    let (_, _) = frame(&mut scene, owner);
 
     assert_eq!(root_tally.paints(), root_before + 1);
     assert_eq!(inner_tally.paints(), inner_before + 1);

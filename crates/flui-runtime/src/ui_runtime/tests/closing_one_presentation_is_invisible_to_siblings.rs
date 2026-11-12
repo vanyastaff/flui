@@ -1778,8 +1778,11 @@ pub(crate) fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
 
 /// A painted scene's layers, without its scene number: that counts paints, so two paints of the
 /// same content differ only in it.
-fn layer_content(scene: &flui_layer::Scene) -> String {
-    format!("{:?}", scene.tree().iter().collect::<Vec<_>>())
+fn layer_content(publication: &flui_layer::ScenePublication) -> String {
+    format!(
+        "{:?}",
+        publication.scene.flatten().iter().collect::<Vec<_>>()
+    )
 }
 
 /// How many [`PanicsOnDropFuture`]s were dropped in this process.

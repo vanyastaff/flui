@@ -6,7 +6,7 @@
 use std::sync::atomic::AtomicU32;
 
 use flui_foundation::geometry::{Rect, Size};
-use flui_layer::{DamageRect, DamageRegion, LayerDiffer, Region, TextureRegistration};
+use flui_layer::{DamageRect, DamageRegion, Region, TextureRegistration};
 use flui_painting::Alignment;
 use flui_painting::paint::{Image, TextureId};
 use flui_painting::styling::Color;
@@ -170,13 +170,12 @@ fn counting_sink(submits: &Arc<AtomicU32>) -> ScriptedSink {
     })
 }
 
-/// A sink that diffs every scene it is handed against the one before, as the
-/// raster lane does, and keeps each frame's damage.
+/// A sink that keeps the damage each published frame carries, as the
+/// raster lane reads it.
 fn damage_sink(damage: &Arc<Mutex<Vec<DamageRegion>>>) -> ScriptedSink {
     let damage = Arc::clone(damage);
-    let mut differ = LayerDiffer::default();
-    ScriptedSink::new(move |_, scene| {
-        damage.lock().push(differ.diff(scene, SURFACE));
+    ScriptedSink::new(move |_, publication| {
+        damage.lock().push(publication.damage);
         crate::sink::SubmitVerdict::Presented
     })
 }
@@ -301,4 +300,55 @@ pub(crate) fn unmounting_the_owner_retires_its_texture() {
         .texture_registry(fixture.ui_runtime.presentation_id())
         .expect("primary presentation");
     assert_eq!(registry.take_updates().retired, [id]);
+}
+
+/// A frame the sink did not show leaves its damage owed: the retry is
+/// published against the version still on screen and its damage covers the
+/// texture the unshown frame changed, though the retry itself changes
+/// nothing more.
+pub(crate) fn a_refused_submit_keeps_its_damage_owed() {
+    let fixture = mounted(Placement::Small);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut sink = {
+        let seen = Arc::clone(&seen);
+        ScriptedSink::new(move |index, publication| {
+            seen.lock().push((publication.base, publication.damage));
+            if index == 1 {
+                crate::sink::SubmitVerdict::Retry
+            } else {
+                crate::sink::SubmitVerdict::Presented
+            }
+        })
+    };
+    fixture.ui_runtime.render_frame(&mut sink);
+    feed(&fixture.shared, 9);
+    fixture.ui_runtime.render_frame(&mut sink);
+    fixture.ui_runtime.render_frame(&mut sink);
+
+    let seen = seen.lock();
+    assert_eq!(seen.len(), 3, "the refused frame is retried");
+    assert!(
+        seen[1].0.is_some(),
+        "the texture frame is published against the first"
+    );
+    assert_eq!(
+        seen[2].0, seen[1].0,
+        "the retry is published against the version still on screen"
+    );
+    let texture = DamageRect::try_covering(Rect::from_ltrb(100.0, 100.0, 120.0, 120.0), SURFACE)
+        .expect("finite")
+        .expect("the texture is on the surface");
+    let DamageRegion::Region(region) = seen[2].1 else {
+        panic!("the retry is drawn as a region: {:?}", seen[2].1);
+    };
+    assert!(
+        region
+            .rects()
+            .iter()
+            .any(|rect| rect.left() <= texture.left()
+                && rect.top() <= texture.top()
+                && rect.right() >= texture.right()
+                && rect.bottom() >= texture.bottom()),
+        "the retry still owes the texture the unshown frame changed: {region:?}"
+    );
 }

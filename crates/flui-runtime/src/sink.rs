@@ -7,7 +7,7 @@
 //! not-shown handling (ADR-0068). The host implements the trait; this crate
 //! names no backend, surface or GPU type.
 
-use flui_layer::Scene;
+use flui_layer::ScenePublication;
 
 /// What one submitted frame did, as the UI runtime's frame transaction needs to
 /// classify it: the behavioral buckets the UI runtime's submit arms distinguish,
@@ -87,17 +87,19 @@ pub enum SubmitVerdict {
 ///
 /// # Damage
 ///
-/// A submitted scene is always the whole frame; the UI runtime computes no damage.
-/// A host sink that wants partial repaint owns the comparison: `flui-app`'s
-/// raster lane runs a `flui_layer::LayerDiffer` over each scene it is handed
-/// and stamps the result on the frame (ADR-0087 §3). That damage is relative
-/// to the scene submitted before it, not to the one last presented, so the
-/// backend accumulates the damage of every frame it has not yet presented.
+/// A [`ScenePublication`] carries the whole retained scene version and the
+/// damage since the version the runtime last heard was shown (ADR-0304 §7).
+/// The runtime hears it when `submit` answers [`SubmitVerdict::Presented`] or
+/// [`SubmitVerdict::NoPresent`]; any other verdict leaves the damage owed, so
+/// the next publication covers this frame's changes too. A sink that keeps an
+/// image applies the damage only to an image of the publication's `base` or a
+/// later version of the same lineage on a surface of the same size, and draws
+/// in full otherwise: `flui_layer::RasterBase` holds that rule.
 pub trait FrameSink {
     /// Physical surface size in pixels, as layout's root constraints input.
     fn surface_size(&mut self) -> (u32, u32);
 
     /// Submit one composited scene for rasterization and classify what
     /// happened.
-    fn submit(&mut self, scene: Scene) -> SubmitVerdict;
+    fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict;
 }

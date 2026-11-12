@@ -12,7 +12,7 @@
 use std::cell::Cell;
 
 use flui_foundation::geometry::Point;
-use flui_layer::LayerTree;
+use flui_layer::SceneVersion;
 use flui_platform::{PlatformWindow, SystemUiOverlayStyle};
 
 /// Coalesces per-frame overlay-style probes into changes for the platform.
@@ -23,13 +23,14 @@ pub(crate) struct OverlayStyleCoalescer {
 }
 
 impl OverlayStyleCoalescer {
-    /// Probe `tree` at the middle of the top edge of a `width`-wide window.
+    /// Probe `scene` at the middle of the top edge of a `width`-wide window.
     /// A frame without an overlay annotation stages nothing and leaves the
     /// platform's current style alone.
-    pub(crate) fn stage(&self, tree: &LayerTree, width: f64) {
+    pub(crate) fn stage(&self, scene: &SceneVersion, width: f64) {
         let probe = Point::new(width * 0.5, 0.0);
         self.staged.set(
-            tree.find_annotation::<SystemUiOverlayStyle>(probe)
+            scene
+                .find_annotation::<SystemUiOverlayStyle>(probe)
                 .map(|style| *style),
         );
     }

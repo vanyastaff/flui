@@ -69,9 +69,9 @@ use flui_engine::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use flui_foundation::{FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress};
-use flui_layer::Scene;
 #[cfg(not(target_arch = "wasm32"))]
-use flui_layer::{DamageMode, LayerDiffer, SceneSnapshot};
+use flui_layer::{DamageMode, RasterBase, SceneSnapshot};
+use flui_layer::{Scene, ScenePublication};
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 #[cfg(not(target_arch = "wasm32"))]
 use parking_lot::Mutex;
@@ -103,6 +103,17 @@ struct LaneStampInner {
     /// not-yet-pumped resize, and layout must always use the size the
     /// platform most recently announced.
     physical_size: (u32, u32),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl LaneStampInner {
+    /// The surface a frame measured with this sample is drawn on.
+    fn surface_key(self) -> flui_layer::SurfaceKey {
+        flui_layer::SurfaceKey {
+            size: self.physical_size,
+            generation: self.surface_generation,
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -168,11 +179,10 @@ impl RasterResizeHook {
 
 /// The environment variable that switches damage production off for every
 /// presentation the process opens: `FLUI_DAMAGE=off` sends every frame as
-/// `Full` and never renders a partial frame (ADR-0087 §3). It empties the
-/// lane's `LayerDiffer` of previous-frame records and nothing else: the
-/// pipeline owner still grafts retained repaint-boundary output when it
-/// paints, and the backend still renders into its retained target when the
-/// surface needs an intermediate image.
+/// `Full` and never renders a partial frame (ADR-0087 §3). It changes what
+/// the lane hands the backend and nothing else: the pipeline still retains
+/// its repaint boundaries' contents, and the backend still renders into its
+/// retained target when the surface needs an intermediate image.
 /// It is the fallback for stale pixels in the field, read once per lane, and
 /// stays until an `AppConfig` switch carries the same choice per app.
 #[cfg(not(target_arch = "wasm32"))]
@@ -211,12 +221,11 @@ pub(crate) struct RasterLane<B: RasterBackend> {
     address: PresentationAddress,
     epoch: FrameEpoch,
     stamp: Arc<LaneStamp>,
-    /// Compares each submitted scene with the one submitted before it and
-    /// stamps the frame's damage (ADR-0087 §3). Relative to the last
-    /// SUBMITTED scene: a frame the owner rejects or a submit supersedes
-    /// still hands its damage to the backend, which keeps it until a frame
-    /// presents.
-    damage: LayerDiffer,
+    /// The version on screen, which a publication's damage must start at or
+    /// before to apply (ADR-0304 §7). Moved only by a frame the backend shows:
+    /// a frame it rejects leaves the runtime unacknowledged, so the next
+    /// publication's damage still covers it.
+    damage: RasterBase,
     /// The presentation's external textures, applied before each frame.
     textures: Option<flui_layer::TextureRegistry>,
 }
@@ -253,7 +262,7 @@ impl<B: RasterBackend> RasterLane<B> {
             address,
             epoch: FrameEpoch::ZERO,
             stamp,
-            damage: LayerDiffer::default(),
+            damage: RasterBase::default(),
             textures: None,
         };
         lane.set_damage_mode(damage_mode_from(std::env::var(DAMAGE_ENV).ok().as_deref()));
@@ -269,9 +278,8 @@ impl<B: RasterBackend> RasterLane<B> {
     }
 
     /// Switches damage production on or off for this presentation.
-    /// [`DamageMode::Off`] sends every frame as `Full` and keeps no
-    /// previous-frame records in the differ, so every frame pays for a full
-    /// render.
+    /// [`DamageMode::Off`] sends every frame as `Full`, so every frame pays
+    /// for a full render.
     pub(crate) fn set_damage_mode(&mut self, mode: DamageMode) {
         self.damage.set_mode(mode);
     }
@@ -346,7 +354,11 @@ impl<B: RasterBackend> RasterLane<B> {
 
     /// Stamps, submits, and synchronously pumps one frame, classifying the
     /// outcome for the UI runtime's frame transaction.
-    fn submit_sampled(&mut self, scene: Scene, surface: LaneStampInner) -> SubmitVerdict {
+    fn submit_sampled(
+        &mut self,
+        publication: ScenePublication,
+        surface: LaneStampInner,
+    ) -> SubmitVerdict {
         self.epoch = self.epoch.next();
         let epoch = self.epoch;
         let stamp = FrameStamp::new(
@@ -368,8 +380,11 @@ impl<B: RasterBackend> RasterLane<B> {
                 tracing::warn!(%error, "raster lane: external texture frame refused");
             }
         }
-        let damage = self.damage.diff(&scene, surface.physical_size);
-        let snapshot = SceneSnapshot::new(stamp, damage, scene);
+        let damage = self.damage.damage_for(&publication, surface.surface_key());
+        let shown = publication.scene.id();
+        // The engine draws the flattened tree until it walks versions itself.
+        let snapshot =
+            SceneSnapshot::of_version(stamp, publication.base, damage, publication.scene);
         if let Err(error) = self.handle.submit(snapshot) {
             match error {
                 // Inline, the owner lives in this very struct, so a refusal
@@ -395,9 +410,15 @@ impl<B: RasterBackend> RasterLane<B> {
             // outcome name. The pump runs inline, so the outcome carries the
             // backend's own answer for this very frame.
             PumpOutcome::Presented { disposition, .. } => match disposition {
-                PresentDisposition::Presented => SubmitVerdict::Presented,
+                PresentDisposition::Presented => {
+                    self.damage.shown(shown, surface.surface_key());
+                    SubmitVerdict::Presented
+                }
                 PresentDisposition::NotShown => SubmitVerdict::NotShown,
-                PresentDisposition::NoDamage => SubmitVerdict::NoPresent,
+                PresentDisposition::NoDamage => {
+                    self.damage.shown(shown, surface.surface_key());
+                    SubmitVerdict::NoPresent
+                }
             },
             PumpOutcome::SurfaceOutdated { stale, current, .. } => {
                 // Covers both a stale-stamp rejection and a mid-render
@@ -412,6 +433,8 @@ impl<B: RasterBackend> RasterLane<B> {
                     adopted = ?required,
                     "raster lane: surface stale, restamped for retry"
                 );
+                // The surface the image was on is gone.
+                self.damage.forget();
                 SubmitVerdict::SurfaceStale
             }
             PumpOutcome::ResourceOutdated { .. } => {
@@ -422,9 +445,15 @@ impl<B: RasterBackend> RasterLane<B> {
                 // rather than silently dropped, so the arm stays honest if
                 // that wiring lands without this match being revisited.
                 tracing::warn!("raster lane: frame rejected on the GPU-resource axis");
+                // The resources the image was drawn with are gone with it.
+                self.damage.forget();
                 SubmitVerdict::SurfaceStale
             }
-            PumpOutcome::DeviceLost { .. } => SubmitVerdict::DeviceLost,
+            PumpOutcome::DeviceLost { .. } => {
+                // The image went with the device: the next frame is drawn in full.
+                self.damage.forget();
+                SubmitVerdict::DeviceLost
+            }
             PumpOutcome::Dropped { reason, .. } => {
                 // Completion is the reliable retry authority. Telemetry acks
                 // can be dropped, and a stale completion cannot retry this epoch.
@@ -463,8 +492,8 @@ impl<B: RasterBackend> RasterLane<B> {
 
     /// Submits a test scene that was prepared for the current surface.
     #[cfg(test)]
-    fn submit_and_pump(&mut self, scene: Scene) -> SubmitVerdict {
-        self.submit_sampled(scene, self.stamp.sample())
+    fn submit_and_pump(&mut self, publication: ScenePublication) -> SubmitVerdict {
+        self.submit_sampled(publication, self.stamp.sample())
     }
 }
 
@@ -500,13 +529,13 @@ impl<B: RasterBackend> FrameSink for RasterFrame<'_, B> {
         self.measured_surface.physical_size
     }
 
-    fn submit(&mut self, scene: Scene) -> SubmitVerdict {
+    fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict {
         let Some(mut lane) = self.lane.try_lock() else {
             // Nothing was admitted or diffed. The runtime retains its epochs
             // and requests a full repaint for the next ordinary opportunity.
             return SubmitVerdict::Retry;
         };
-        lane.submit_sampled(scene, self.measured_surface)
+        lane.submit_sampled(publication, self.measured_surface)
     }
 }
 
@@ -565,7 +594,7 @@ impl<R: RasterBackend> FrameSink for DirectSink<'_, R> {
         self.renderer.size()
     }
 
-    fn submit(&mut self, scene: Scene) -> SubmitVerdict {
+    fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict {
         if let Some(textures) = &self.textures {
             let updates = textures.take_updates();
             if !updates.is_empty()
@@ -574,9 +603,10 @@ impl<R: RasterBackend> FrameSink for DirectSink<'_, R> {
                 tracing::warn!(%error, "external texture frame refused");
             }
         }
-        // Every frame is full on this path: it holds no differ, so the web
+        // Every frame is full on this path: it tracks no version on screen, so the web
         // runner repaints in full until it moves onto the lane.
         self.renderer.mark_full_repaint();
+        let scene = Scene::new(publication.scene.flatten());
         match self.renderer.render_scene(&scene) {
             Ok(PresentDisposition::Presented) => SubmitVerdict::Presented,
             Ok(PresentDisposition::NoDamage) => SubmitVerdict::NoPresent,
@@ -609,7 +639,6 @@ impl<R: RasterBackend> FrameSink for DirectSink<'_, R> {
 #[cfg(test)]
 mod tests {
     use flui_foundation::{PresentationId, UiRuntimeId};
-    use flui_layer::{CanvasLayer, Layer};
 
     use super::*;
 
@@ -620,13 +649,31 @@ mod tests {
         }
     }
 
-    /// A minimal non-empty scene: one canvas layer under a root.
-    fn scene_from_canvas() -> Scene {
-        Scene::new(flui_layer::LayerTree::new(Layer::from(CanvasLayer::new())))
+    const LANE_SURFACE: flui_layer::SurfaceKey = flui_layer::SurfaceKey {
+        size: (640, 480),
+        generation: flui_foundation::SurfaceGeneration::ZERO,
+    };
+
+    fn ten_by_ten_chunk(
+        owner_id: usize,
+        version: flui_layer::ContentVersion,
+    ) -> Arc<flui_layer::Chunk> {
+        let mut canvas = flui_painting::Canvas::new();
+        canvas.draw_rect(
+            flui_foundation::geometry::Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            &flui_painting::Paint::fill(flui_painting::styling::Color::RED),
+        );
+        Arc::new(flui_layer::Chunk::new(
+            flui_foundation::RenderId::new(owner_id),
+            0,
+            version,
+            canvas.finish(),
+        ))
     }
 
-    fn test_scene() -> Scene {
-        scene_from_canvas()
+    /// A minimal non-empty publication: a root slotting one canvas chunk.
+    fn test_scene() -> ScenePublication {
+        TestScene::new(flui_foundation::geometry::Offset::new(0.0, 0.0)).publication()
     }
 
     /// A scripted backend for lane-behavior tests: every render outcome is
@@ -739,42 +786,88 @@ mod tests {
         }
     }
 
-    /// A stamped root with one stamped boundary at `at`, 10x10.
-    fn stamped_scene(
-        root: &flui_layer::ContentToken,
-        child: &flui_layer::ContentToken,
-        at: flui_foundation::geometry::Offset<f64>,
-    ) -> Scene {
-        use flui_layer::{LayerNode, OffsetLayer, PictureLayer};
-        let mut tree = flui_layer::LayerTree::new(
-            LayerNode::new(Layer::from(OffsetLayer::zero()))
-                .with_boundary(flui_foundation::RenderId::new(1), root.clone()),
-        );
-        let root_id = tree.root();
-        let boundary = tree.push_child(
-            root_id,
-            LayerNode::new(Layer::from(OffsetLayer::new(at)))
-                .with_boundary(flui_foundation::RenderId::new(2), child.clone()),
-        );
-        let mut canvas = flui_painting::Canvas::new();
-        canvas.draw_rect(
-            flui_foundation::geometry::Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-            &flui_painting::Paint::fill(flui_painting::styling::Color::RED),
-        );
-        tree.push_child(boundary, Layer::from(PictureLayer::new(canvas.finish())));
-        Scene::new(tree)
+    /// A retained scene: a root slotting one 10x10 boundary placed at `at`.
+    struct TestScene {
+        owner: flui_layer::SceneOwner,
+        child: flui_layer::SceneNodeId,
+    }
+
+    impl TestScene {
+        fn new(at: flui_foundation::geometry::Offset<f64>) -> Self {
+            use flui_layer::{BoundaryContent, SceneOp};
+            let mut owner = flui_layer::SceneOwner::new();
+            let child;
+            {
+                let mut writer = owner.writer();
+                let root = writer.current().root();
+                child = writer.mint_node();
+                let version = writer.next_content_version().expect("a version");
+                let mut leaf = BoundaryContent::builder();
+                leaf.chunk(ten_by_ten_chunk(2, version));
+                writer.push(SceneOp::Publish {
+                    node: child,
+                    content: Arc::new(leaf.finish()),
+                });
+                let mut top = BoundaryContent::builder();
+                top.slot(child);
+                writer.push(SceneOp::Publish {
+                    node: root,
+                    content: Arc::new(top.finish()),
+                });
+                writer.push(SceneOp::Place {
+                    node: child,
+                    placement: flui_layer::Placement::try_new(at).expect("finite"),
+                });
+            }
+            owner.apply(LANE_SURFACE).expect("the first version");
+            Self { owner, child }
+        }
+
+        fn publication(&self) -> ScenePublication {
+            self.owner.publication()
+        }
+
+        fn acknowledge(&mut self, id: flui_layer::SceneVersionId) {
+            drop(self.owner.completed(Some(id)));
+        }
+
+        /// Republishes the child with fresh content at `at`.
+        fn republish_child(&mut self, at: flui_foundation::geometry::Offset<f64>, owner_id: usize) {
+            use flui_layer::{BoundaryContent, SceneOp};
+            {
+                let mut writer = self.owner.writer();
+                let version = writer.next_content_version().expect("a version");
+                let mut leaf = BoundaryContent::builder();
+                leaf.chunk(ten_by_ten_chunk(owner_id, version));
+                writer.push(SceneOp::Publish {
+                    node: self.child,
+                    content: Arc::new(leaf.finish()),
+                });
+                writer.push(SceneOp::Place {
+                    node: self.child,
+                    placement: flui_layer::Placement::try_new(at).expect("finite"),
+                });
+            }
+            self.owner.apply(LANE_SURFACE).expect("a patch");
+        }
+
+        fn apply_empty_patch(&mut self) {
+            let _ = self.owner.writer();
+            self.owner.apply(LANE_SURFACE).expect("an empty patch");
+        }
     }
 
     fn a_changed_boundary_reaches_the_backend_as_a_dirty_rect() {
         let mut lane = RasterLane::new(DamageRecordingBackend::default(), test_address(), 640, 480);
-        let root = flui_layer::ContentToken::mint();
         let at = flui_foundation::geometry::Offset::new(100.0, 50.0);
+        let mut scene = TestScene::new(at);
+        let publication = scene.publication();
+        let first = publication.scene.id();
+        assert_eq!(lane.submit_and_pump(publication), SubmitVerdict::Presented);
+        scene.acknowledge(first);
+        scene.republish_child(at, 3);
         assert_eq!(
-            lane.submit_and_pump(stamped_scene(&root, &flui_layer::ContentToken::mint(), at)),
-            SubmitVerdict::Presented
-        );
-        assert_eq!(
-            lane.submit_and_pump(stamped_scene(&root, &flui_layer::ContentToken::mint(), at)),
+            lane.submit_and_pump(scene.publication()),
             SubmitVerdict::Presented
         );
         lane.with_backend(|backend| {
@@ -790,26 +883,22 @@ mod tests {
         });
     }
 
-    /// An unchanged scene owes the screen nothing, so the frame does not
-    /// present and the loop may park.
     fn an_identical_scene_does_not_present() {
         let mut lane = RasterLane::new(DamageRecordingBackend::default(), test_address(), 640, 480);
-        let (root, child) = (
-            flui_layer::ContentToken::mint(),
-            flui_layer::ContentToken::mint(),
-        );
         let at = flui_foundation::geometry::Offset::new(100.0, 50.0);
-        assert_eq!(
-            lane.submit_and_pump(stamped_scene(&root, &child, at)),
-            SubmitVerdict::Presented
-        );
-        assert_eq!(
-            lane.submit_and_pump(stamped_scene(&root, &child, at)),
-            SubmitVerdict::NoPresent
-        );
+        let mut scene = TestScene::new(at);
+        let publication = scene.publication();
+        let first = publication.scene.id();
+        assert_eq!(lane.submit_and_pump(publication), SubmitVerdict::Presented);
+        scene.acknowledge(first);
+        scene.apply_empty_patch();
+        let publication = scene.publication();
+        assert!(matches!(
+            publication.damage,
+            flui_layer::DamageRegion::Unchanged
+        ));
+        assert_eq!(lane.submit_and_pump(publication), SubmitVerdict::NoPresent);
     }
-
-    /// `FLUI_DAMAGE` is the field fallback: `off` in any case turns damage
     /// off, and nothing else does, a typo included.
     fn the_damage_variable_selects_the_mode() {
         for off in ["off", "OFF", " Off "] {
@@ -830,20 +919,49 @@ mod tests {
     fn damage_off_sends_every_frame_full_and_retains_nothing() {
         let mut lane = RasterLane::new(DamageRecordingBackend::default(), test_address(), 640, 480);
         lane.set_damage_mode(DamageMode::Off);
-        let (root, child) = (
-            flui_layer::ContentToken::mint(),
-            flui_layer::ContentToken::mint(),
-        );
         let at = flui_foundation::geometry::Offset::new(100.0, 50.0);
-        for _ in 0..3 {
-            assert_eq!(
-                lane.submit_and_pump(stamped_scene(&root, &child, at)),
-                SubmitVerdict::Presented
-            );
-            assert_eq!(lane.damage.retained_boundaries(), 0);
+        let mut scene = TestScene::new(at);
+        for frame in 0..3_usize {
+            let publication = scene.publication();
+            let id = publication.scene.id();
+            assert_eq!(lane.submit_and_pump(publication), SubmitVerdict::Presented);
+            assert_eq!(lane.damage.shown_version(), Some(id));
+            scene.acknowledge(id);
+            scene.republish_child(at, frame + 10);
         }
         lane.with_backend(|backend| {
             assert_eq!(backend.full, 3);
+            assert_eq!(
+                backend.dirty,
+                [] as [flui_foundation::geometry::Rect<f64>; 0]
+            );
+        });
+    }
+
+    /// A publication whose base the lane never showed cannot apply its
+    /// damage: it draws full.
+    fn a_base_mismatch_renders_full() {
+        let at = flui_foundation::geometry::Offset::new(100.0, 50.0);
+        let mut lane = RasterLane::new(DamageRecordingBackend::default(), test_address(), 640, 480);
+        // The lane shows a version of another lineage.
+        let other = TestScene::new(at).publication();
+        assert_eq!(lane.submit_and_pump(other), SubmitVerdict::Presented);
+
+        // The owner acknowledges a version the lane never drew, then
+        // publishes a patch against it.
+        let mut scene = TestScene::new(at);
+        let first = scene.publication().scene.id();
+        scene.acknowledge(first);
+        scene.republish_child(at, 20);
+        let publication = scene.publication();
+        assert_eq!(publication.base, Some(first));
+        assert!(
+            matches!(publication.damage, flui_layer::DamageRegion::Region(_)),
+            "the owner's damage is a patch"
+        );
+        assert_eq!(lane.submit_and_pump(publication), SubmitVerdict::Presented);
+        lane.with_backend(|backend| {
+            assert_eq!(backend.full, 2, "the mismatched base draws full");
             assert_eq!(
                 backend.dirty,
                 [] as [flui_foundation::geometry::Rect<f64>; 0]
@@ -1078,6 +1196,10 @@ mod tests {
                 (
                     "damage_off_sends_every_frame_full_and_retains_nothing",
                     damage_off_sends_every_frame_full_and_retains_nothing as fn(),
+                ),
+                (
+                    "a_base_mismatch_renders_full",
+                    a_base_mismatch_renders_full as fn(),
                 ),
             ],
         );
