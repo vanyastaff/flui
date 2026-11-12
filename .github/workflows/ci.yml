@@ -755,7 +755,7 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────
   # public-api — the facade's public API against its committed snapshot
-  # `api/flui.txt` (ADR-0323), on every pull request that compiles anything,
+  # `api/flui.txt` (ADR-0324), on every pull request that compiles anything,
   # so the pull request that changes the surface carries its diff. Then
   # `send-positions` (ADR-0136 §3) over the same rustdoc builds, which cost it
   # nothing more. Locally: `cargo xtask public-api` (`--write` restates the

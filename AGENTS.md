@@ -153,7 +153,7 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | A caught panic payload nobody resumes goes to `discard_payload`; `mem::forget` is a deliberate leak with its reason at the call | clippy `mem_forget` |
 | Dependencies point down the tiers; an exception names the ADR that removes it | `xtask workspace`, `xtask reach` (ADR-0081) |
 | A Stable crate's public API names upstream types only as ADR-0089 §2 allows | `xtask api-closure` (CI `api-contracts` job, nightly rustdoc JSON) |
-| Every item the facade reaches is in `api/flui.txt`, so a pull request that changes the facade's API carries the diff (`--write` restates it) | `xtask public-api` (CI `public-api` job, nightly rustdoc JSON; ADR-0323) |
+| Every item the facade reaches is in `api/flui.txt`, so a pull request that changes the facade's API carries the diff (`--write` restates it) | `xtask public-api` (CI `public-api` job, nightly rustdoc JSON; ADR-0324) |
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
 | Every `static`/`thread_local!` outside tests has a `globals` entry (an ADR that removes it, or an ADR-0097 grant) | `xtask globals` |
 | Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit handler, a closure handed to the OS) is a constant or one call of `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16) | `xtask panic-boundary` |

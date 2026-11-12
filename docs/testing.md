@@ -1146,7 +1146,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `test-trybuild` | `cargo xtask test --nested --nested-group trybuild` | compile-fail suites; plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
 | `doc` | `cargo xtask doc-strict` (in `gate`) | — |
-| `public-api` | `cargo xtask public-api`, then `cargo xtask send-positions` | nightly (rustdoc JSON); `cargo xtask public-api --write` restates `api/flui.txt` when a change to the facade's API is meant (ADR-0323) |
+| `public-api` | `cargo xtask public-api`, then `cargo xtask send-positions` | nightly (rustdoc JSON); `cargo xtask public-api --write` restates `api/flui.txt` when a change to the facade's API is meant (ADR-0324) |
 | `deps` | `cargo xtask deps` | CI runs `--only policy` and `--only advisories` as two steps, with `--strict` (a missing cargo-deny or cargo-shear fails instead of being skipped); every lane but `docs` runs it; the advisories step blocks on main and on a pull request whose change is workspace-wide or touches `deny.toml`, and only reports on other pull requests, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
 | `doc-test` | `cargo test --workspace --locked --doc` (in `cargo xtask ci`) | — |
 | `miri` | `cargo xtask miri` | nightly + miri |

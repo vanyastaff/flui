@@ -1,5 +1,5 @@
 # The public API of `flui`, every feature on, as the Linux host builds it.
-# Written by `cargo xtask public-api --write` (ADR-0323); a pull request that
+# Written by `cargo xtask public-api --write` (ADR-0324); a pull request that
 # changes the API carries the diff of this file.
 pub mod flui
 pub struct flui::AppCapabilities { .. }

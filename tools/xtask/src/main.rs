@@ -131,7 +131,7 @@ enum Command {
     /// Check that every place the public API names `Send` or `Sync` is listed under
     /// ADR-0136 §3.
     SendPositions(send_positions::SendPositionsArgs),
-    /// Check the facade's public API against its committed snapshot `api/flui.txt` (ADR-0323).
+    /// Check the facade's public API against its committed snapshot `api/flui.txt` (ADR-0324).
     PublicApi(public_api::PublicApiArgs),
     /// Check that every `new` returning `Result` or `Option` is listed and the list only
     /// shrinks: such a constructor is `try_new` (AGENTS.md).

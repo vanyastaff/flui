@@ -1,5 +1,5 @@
 //! `cargo xtask public-api`: the facade's public API, one line per thing a
-//! user can name, against its committed snapshot `api/flui.txt` (ADR-0323).
+//! user can name, against its committed snapshot `api/flui.txt` (ADR-0324).
 //!
 //! **What counts.** rustdoc's JSON output for `flui` with every feature on
 //! the host, as `send-positions` loads it (the same builds, so the two share
@@ -394,7 +394,7 @@ impl Surface {
         }
         let mut text = format!(
             "# The public API of `{ROOT}`, every feature on, as the Linux host builds it.\n\
-             # Written by `cargo xtask public-api --write` (ADR-0323); a pull request that\n\
+             # Written by `cargo xtask public-api --write` (ADR-0324); a pull request that\n\
              # changes the API carries the diff of this file.\n"
         );
         for line in blocks.into_values().flatten() {
@@ -868,7 +868,7 @@ fn private_trait(index: &Json, implementation: &Json) -> bool {
 /// What the self-test must render for `send-positions`' fixture.
 const EXPECTED: &str = "\
 # The public API of `flui`, every feature on, as the Linux host builds it.
-# Written by `cargo xtask public-api --write` (ADR-0323); a pull request that
+# Written by `cargo xtask public-api --write` (ADR-0324); a pull request that
 # changes the API carries the diff of this file.
 pub mod fixture
 pub trait fixture::Bounded: Send

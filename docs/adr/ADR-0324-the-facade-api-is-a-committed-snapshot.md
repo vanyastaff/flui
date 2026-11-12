@@ -1,4 +1,4 @@
-# ADR-0323: The facade's public API is a committed snapshot every pull request keeps current
+# ADR-0324: The facade's public API is a committed snapshot every pull request keeps current
 
 - **Status:** Accepted (2026-11-12)
 - **Date:** 2026-11-12
