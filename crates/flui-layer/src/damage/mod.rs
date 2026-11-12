@@ -1,36 +1,41 @@
-//! The damage producer: which pixels of a frame changed since the previous
-//! one, from comparing the two frames' repaint-boundary stamps (ADR-0087 §3).
+//! Damage: which pixels of a frame changed since the image the raster side
+//! holds.
 //!
-//! Damage cannot come from which render objects repainted, because the
-//! objects that always repaint cover the screen (ADR-0061); it has to come
-//! from comparing consecutive layer trees. [`LayerDiffer`] pairs the layers a
-//! repaint boundary stamped ([`BoundaryStamp`](crate::BoundaryStamp)) by their
-//! `RenderId` and damages a boundary's *own region* — its subtree minus the
-//! subtrees of boundaries nested inside it — when its content token or its
-//! placement changed.
+//! The scene owner produces it as the footprint of each patch (ADR-0304 §4),
+//! closed over what filters read ([`close_over`]); a [`RasterBase`] decides
+//! whether a publication's damage applies to the image the raster side
+//! holds, under the [`DamageMode`] it repaints by. Damage cannot come from
+//! which render objects repainted, because the objects that always repaint
+//! cover the screen (ADR-0061); it comes from which scene nodes a patch
+//! changed.
 //!
-//! The walk runs on the host side of the raster boundary, over the frozen
-//! [`Scene`](crate::Scene) the raster lane is about to submit, and costs one
-//! pass over the tree. [`DamageMode::Off`] removes that cost entirely.
+//! The comparison of two consecutive layer trees that came before the
+//! retained scene, `LayerDiffer` over `BoundaryStamp`s, lives on behind the
+//! `testing` feature for the readback suites that still build trees by hand,
+//! until the engine draws versions (`docs/gaps.md`).
 
+mod base;
 pub(crate) mod closure;
+#[cfg(any(test, feature = "testing"))]
 mod differ;
 #[cfg(test)]
 mod tests;
 
+pub use base::RasterBase;
 pub use closure::{Closure, MAX_CLOSURE_ROUNDS, close_over, read_closure};
+#[cfg(any(test, feature = "testing"))]
 pub use differ::LayerDiffer;
 
-/// Whether a [`LayerDiffer`] produces damage, and when a region is large
+/// Whether the raster side draws damage, and when a region is large
 /// enough that a full repaint is cheaper.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DamageMode {
     /// Retain nothing and report every frame as
     /// [`DamageRegion::Full`](crate::DamageRegion::Full) for
-    /// [`FullReason::DamageOff`](crate::FullReason::DamageOff), without walking
-    /// the tree: the cost per frame is the cost of not having a differ.
+    /// [`FullReason::DamageOff`](crate::FullReason::DamageOff), without
+    /// reading the region: every frame pays for a full render.
     Off,
-    /// Diff every frame against the previous one.
+    /// Draw each frame's damage.
     On {
         /// The fraction of the surface above which a damaged rectangle is
         /// reported as `Full` instead: a partial repaint of most of the

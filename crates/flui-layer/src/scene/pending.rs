@@ -4,12 +4,18 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use smallvec::SmallVec;
+
 use super::content::BoundaryContent;
 use super::id::SceneVersionId;
 use crate::DamageRegion;
 
 /// The most versions the log holds; one more folds the two oldest.
 pub(crate) const PENDING_CAP: usize = 16;
+
+/// The contents one patch replaced, or a release hands back: a patch
+/// replaces few, so they are held inline.
+pub(crate) type Contents = SmallVec<[Arc<BoundaryContent>; 2]>;
 
 /// One applied version the raster side has not acknowledged.
 #[derive(Debug)]
@@ -18,7 +24,7 @@ struct PendingEntry {
     /// Its damage against the version applied before it.
     damage: DamageRegion,
     /// The contents its patch replaced or retired.
-    replaced: Vec<Arc<BoundaryContent>>,
+    replaced: Contents,
 }
 
 /// The unacknowledged versions, oldest first.
@@ -40,12 +46,12 @@ impl PendingLog {
         &mut self,
         id: SceneVersionId,
         damage: DamageRegion,
-        replaced: Vec<Arc<BoundaryContent>>,
-    ) -> Vec<Arc<BoundaryContent>> {
+        replaced: Contents,
+    ) -> Contents {
         let released = if self.entries.len() == PENDING_CAP {
             self.fold_oldest()
         } else {
-            Vec::new()
+            Contents::new()
         };
         self.entries.push_back(PendingEntry {
             id,
@@ -58,7 +64,7 @@ impl PendingLog {
     /// Folds the two oldest entries into one with the newer id and the union
     /// of their damage: it stays relative to the same base and only
     /// over-reports. Returns the older entry's contents.
-    fn fold_oldest(&mut self) -> Vec<Arc<BoundaryContent>> {
+    fn fold_oldest(&mut self) -> Contents {
         let (Some(older), Some(newer)) = (self.entries.pop_front(), self.entries.pop_front())
         else {
             unreachable!("BUG: the log folds only at capacity, which is more than one entry");
@@ -84,8 +90,8 @@ impl PendingLog {
 
     /// Drops the entries at or below `acked` and hands back the contents they
     /// replaced.
-    pub(crate) fn acknowledge(&mut self, acked: SceneVersionId) -> Vec<Arc<BoundaryContent>> {
-        let mut released = Vec::new();
+    pub(crate) fn acknowledge(&mut self, acked: SceneVersionId) -> Contents {
+        let mut released = Contents::new();
         while self
             .entries
             .front()
@@ -101,11 +107,11 @@ impl PendingLog {
     }
 
     /// Empties the log and hands back every content it held.
-    pub(crate) fn clear(&mut self) -> Vec<Arc<BoundaryContent>> {
+    pub(crate) fn clear(&mut self) -> Contents {
         self.entries
             .drain(..)
             .flat_map(|entry| entry.replaced)
-            .collect::<Vec<Arc<BoundaryContent>>>()
+            .collect::<Contents>()
     }
 
     /// Entries held now.

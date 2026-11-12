@@ -73,6 +73,7 @@ mod overlay_style;
 pub mod owner;
 pub mod presentation;
 mod presentation_forest;
+mod presentation_scene;
 pub mod pump;
 mod recording_wire;
 #[cfg(feature = "hot-reload")]

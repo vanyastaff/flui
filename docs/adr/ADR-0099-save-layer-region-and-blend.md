@@ -22,8 +22,9 @@ Three crates share one answer to "which pixels does a layer change":
 
 - **`flui-painting`** records `Canvas::save_layer(bounds, paint)` and reports each op's damage
   extent; a bounded save layer's extent is its bounds mapped through the current transform.
-- **`flui-layer`**'s `LayerDiffer` reports a layer-tree effect's extent; an opacity layer whose
-  blend changes pixels under a transparent source reports the viewport.
+- **`flui-layer`**'s scene reports an effect's extent in the footprint of the patch that changes it
+  (ADR-0304 §4); an opacity layer whose blend changes pixels under a transparent source reaches
+  everywhere the clips above it allow.
 - **`flui-engine`** composites the layer.
 
 The engine used to composite every save layer and opacity layer `SrcOver`-like, dropping texels
@@ -48,7 +49,8 @@ covers.
    exact quad rather than its bounding box.
 3. **Damage.** A damage producer reports at least the region of (1) for a layer in a mode of
    (2): `DrawOp`'s extent for a bounded save layer is its mapped bounds, an unbounded one is
-   unbounded, and `LayerDiffer` takes such an opacity layer as the viewport.
+   unbounded, and a scene patch that changes such an opacity layer damages everywhere the clips
+   above it allow.
 4. **Shader masks are not save layers.** A shader mask's blend mode combines its shader with its
    child. Its masked result composites `SrcOver`, under the clip in force where the mask was
    recorded. Applied at the composite, the default `Modulate` (or `SrcIn`, the gradient-text

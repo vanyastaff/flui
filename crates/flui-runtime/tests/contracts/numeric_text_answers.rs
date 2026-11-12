@@ -24,7 +24,7 @@ impl FrameSink for Sink {
         (400, 400)
     }
 
-    fn submit(&mut self, _: flui_layer::Scene) -> SubmitVerdict {
+    fn submit(&mut self, _: flui_layer::ScenePublication) -> SubmitVerdict {
         SubmitVerdict::Presented
     }
 }

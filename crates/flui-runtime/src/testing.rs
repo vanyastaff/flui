@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use flui_foundation::geometry::Size;
-use flui_layer::Scene;
+use flui_layer::ScenePublication;
 use flui_platform::{
     CursorError, CursorIcon, PlatformTextInput, PlatformWindow, WindowId, WindowIdMint,
 };
@@ -270,7 +270,7 @@ impl PlatformWindow for TestWindow {
 
 /// The scripted submit behavior a [`ScriptedSink`] carries: zero-based call
 /// index and submitted scene in, the verdict out.
-type SubmitScript = Box<dyn FnMut(u32, &Scene) -> SubmitVerdict + Send>;
+type SubmitScript = Box<dyn FnMut(u32, &ScenePublication) -> SubmitVerdict + Send>;
 
 /// Closure-configurable [`FrameSink`] double: the headless sink a UI runtime's
 /// frame transaction is tested against.
@@ -311,8 +311,11 @@ impl std::fmt::Debug for ScriptedSink {
 }
 
 impl ScriptedSink {
-    /// A sink whose `submit` runs the given script.
-    pub fn new(script: impl FnMut(u32, &Scene) -> SubmitVerdict + Send + 'static) -> Self {
+    /// A sink whose `submit` runs the given script, with the call's index and
+    /// the publication it was handed.
+    pub fn new(
+        script: impl FnMut(u32, &ScenePublication) -> SubmitVerdict + Send + 'static,
+    ) -> Self {
         Self {
             script: Box::new(script),
             submit_calls: 0,
@@ -362,9 +365,9 @@ impl FrameSink for ScriptedSink {
         self.size
     }
 
-    fn submit(&mut self, scene: Scene) -> SubmitVerdict {
+    fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict {
         let call_index = self.submit_calls;
         self.submit_calls += 1;
-        (self.script)(call_index, &scene)
+        (self.script)(call_index, &publication)
     }
 }

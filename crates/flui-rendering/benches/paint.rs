@@ -27,7 +27,7 @@ use flui_painting::paint::Path;
 use flui_painting::styling::{BorderRadius, BorderRadiusExt};
 use flui_rendering::hit_testing::PathClipTarget;
 use flui_rendering::pipeline::{PaintPhase, PipelineOwner};
-use flui_rendering::testing::update_render_object;
+use flui_rendering::testing::{SceneHost, update_render_object};
 
 // ============================================================================
 // run_compositing — flat tree, N nodes
@@ -62,11 +62,11 @@ fn bench_flat_run_paint(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
             b.iter_batched(
                 || helpers::build_flat_paint_ready(n),
-                |mut owner| {
-                    owner
-                        .run_paint()
-                        .expect("run_paint must succeed on a freshly composited flat tree");
-                    black_box(owner)
+                |(mut owner, mut scene)| {
+                    let (painted, _) =
+                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                    painted.expect("run_paint must succeed on a freshly composited flat tree");
+                    black_box((owner, scene))
                 },
                 criterion::BatchSize::SmallInput,
             );
@@ -85,11 +85,11 @@ fn bench_deep_run_paint(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(depth), &depth, |b, &depth| {
             b.iter_batched(
                 || helpers::build_deep_paint_ready(depth),
-                |mut owner| {
-                    owner
-                        .run_paint()
-                        .expect("run_paint must succeed on a freshly composited deep chain");
-                    black_box(owner)
+                |(mut owner, mut scene)| {
+                    let (painted, _) =
+                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                    painted.expect("run_paint must succeed on a freshly composited deep chain");
+                    black_box((owner, scene))
                 },
                 criterion::BatchSize::SmallInput,
             );
@@ -124,17 +124,17 @@ fn bench_single_dirty_boundary(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
             b.iter_batched(
                 || {
-                    let (mut owner, leaf_ids) = helpers::build_boundary_tree_painted_once(n);
+                    let (mut owner, scene, leaf_ids) = helpers::build_boundary_tree_painted_once(n);
                     // Dirty exactly one leaf; `mark_needs_paint` walks to its
                     // enclosing boundary, so the queue holds one boundary.
                     owner.mark_needs_paint(leaf_ids[0]);
-                    owner
+                    (owner, scene)
                 },
-                |mut owner| {
-                    owner
-                        .run_paint()
-                        .expect("run_paint must succeed with one dirty boundary");
-                    black_box(owner)
+                |(mut owner, mut scene)| {
+                    let (painted, _) =
+                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                    painted.expect("run_paint must succeed with one dirty boundary");
+                    black_box((owner, scene))
                 },
                 criterion::BatchSize::SmallInput,
             );
@@ -155,15 +155,16 @@ fn bench_nested_caret(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
             b.iter_batched(
                 || {
-                    let (mut owner, caret) = helpers::build_nested_boundary_tree_painted_once(n);
+                    let (mut owner, scene, caret) =
+                        helpers::build_nested_boundary_tree_painted_once(n);
                     owner.mark_needs_paint(caret);
-                    owner
+                    (owner, scene)
                 },
-                |mut owner| {
-                    owner
-                        .run_paint()
-                        .expect("run_paint must succeed with one dirty nested boundary");
-                    black_box(owner)
+                |(mut owner, mut scene)| {
+                    let (painted, _) =
+                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                    painted.expect("run_paint must succeed with one dirty nested boundary");
+                    black_box((owner, scene))
                 },
                 criterion::BatchSize::SmallInput,
             );
@@ -185,17 +186,17 @@ fn bench_eight_dirty_boundaries(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
             b.iter_batched(
                 || {
-                    let (mut owner, leaf_ids) = helpers::build_boundary_tree_painted_once(n);
+                    let (mut owner, scene, leaf_ids) = helpers::build_boundary_tree_painted_once(n);
                     for &id in &leaf_ids {
                         owner.mark_needs_paint(id);
                     }
-                    owner
+                    (owner, scene)
                 },
-                |mut owner| {
-                    owner
-                        .run_paint()
-                        .expect("run_paint must succeed with eight dirty boundaries");
-                    black_box(owner)
+                |(mut owner, mut scene)| {
+                    let (painted, _) =
+                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                    painted.expect("run_paint must succeed with eight dirty boundaries");
+                    black_box((owner, scene))
                 },
                 criterion::BatchSize::SmallInput,
             );
@@ -218,9 +219,10 @@ fn bench_eight_dirty_boundaries(c: &mut Criterion) {
 ///
 /// Read the two `layered` groups together, not separately:
 ///
-/// - **inline** — the leaves merge into one `PictureLayer`, so the retained
-///   capture is a handful of nodes at any `subtree` and the update arm is
-///   flat. This is the best case, and the one a background or a text run hits.
+/// - **inline** — plain leaves, each its own `PictureLayer` (a picture holds
+///   one render object's output, ADR-0304 §2), so the retained capture holds
+///   one picture per leaf and the update arm clones them all; nothing is
+///   re-recorded.
 /// - **layered** — every leaf is its own repaint boundary, so the capture's
 ///   layer count grows with `subtree` and the update arm grows with it too: a
 ///   graft clones every captured node. The win narrows to the ratio of
@@ -230,27 +232,27 @@ fn bench_eight_dirty_boundaries(c: &mut Criterion) {
 fn bench_effect_change(
     c: &mut Criterion,
     group: &str,
-    build: impl Fn(bool, usize) -> (PipelineOwner<PaintPhase>, RenderId),
+    build: impl Fn(bool, usize) -> (PipelineOwner<PaintPhase>, SceneHost, RenderId),
     mutate: impl Fn(&mut PipelineOwner<PaintPhase>, RenderId),
 ) {
     for (layered, name) in [(false, "inline"), (true, "layered")] {
         let mut bench_group = c.benchmark_group(format!("{group}/{name}"));
-        for &subtree in &[1_usize, 10, 100, 1_000] {
+        for &subtree in &[1_usize, 10, 100, 1_000, 10_000] {
             bench_group.bench_with_input(
                 BenchmarkId::new("update", subtree),
                 &subtree,
                 |b, &subtree| {
                     b.iter_batched(
                         || {
-                            let (mut owner, id) = build(layered, subtree);
+                            let (mut owner, scene, id) = build(layered, subtree);
                             mutate(&mut owner, id);
-                            owner
+                            (owner, scene)
                         },
-                        |mut owner| {
-                            owner
-                                .run_paint()
-                                .expect("run_paint must succeed after the effect change");
-                            black_box(owner)
+                        |(mut owner, mut scene)| {
+                            let (painted, _) =
+                                scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                            painted.expect("run_paint must succeed after the effect change");
+                            black_box((owner, scene))
                         },
                         criterion::BatchSize::SmallInput,
                     );
@@ -262,18 +264,18 @@ fn bench_effect_change(
                 |b, &subtree| {
                     b.iter_batched(
                         || {
-                            let (mut owner, id) = build(layered, subtree);
+                            let (mut owner, scene, id) = build(layered, subtree);
                             mutate(&mut owner, id);
                             // Force the old path: an explicit paint mark wins
                             // over the layer-update mark the setter reported.
                             owner.mark_needs_paint(id);
-                            owner
+                            (owner, scene)
                         },
-                        |mut owner| {
-                            owner
-                                .run_paint()
-                                .expect("run_paint must succeed after the effect change");
-                            black_box(owner)
+                        |(mut owner, mut scene)| {
+                            let (painted, _) =
+                                scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                            painted.expect("run_paint must succeed after the effect change");
+                            black_box((owner, scene))
                         },
                         criterion::BatchSize::SmallInput,
                     );
@@ -460,7 +462,7 @@ fn new_path_clip_pair() -> (
 fn bench_effect_change_in_lane(
     c: &mut Criterion,
     group: &str,
-    build: impl Fn(bool, usize, PathClipTarget) -> (PipelineOwner<PaintPhase>, RenderId),
+    build: impl Fn(bool, usize, PathClipTarget) -> (PipelineOwner<PaintPhase>, SceneHost, RenderId),
     mutate: impl Fn(&mut PipelineOwner<PaintPhase>, RenderId, PathClipTarget),
 ) {
     for (layered, name) in [(false, "inline"), (true, "layered")] {
@@ -475,18 +477,18 @@ fn bench_effect_change_in_lane(
                     b.iter_batched(
                         || {
                             lane.enter(|| {
-                                let (mut owner, id) = build(layered, subtree, target_a);
+                                let (mut owner, scene, id) = build(layered, subtree, target_a);
                                 mutate(&mut owner, id, target_b);
-                                owner
+                                (owner, scene)
                             })
                         },
-                        |mut owner| {
+                        |(mut owner, mut scene)| {
                             lane.enter(|| {
-                                owner
-                                    .run_paint()
-                                    .expect("run_paint must succeed after the effect change");
+                                let (painted, _) = scene
+                                    .apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                                painted.expect("run_paint must succeed after the effect change");
                             });
-                            black_box(owner)
+                            black_box((owner, scene))
                         },
                         criterion::BatchSize::SmallInput,
                     );
@@ -507,22 +509,22 @@ fn bench_effect_change_in_lane(
                     b.iter_batched(
                         || {
                             lane.enter(|| {
-                                let (mut owner, id) = build(layered, subtree, target_a);
+                                let (mut owner, scene, id) = build(layered, subtree, target_a);
                                 mutate(&mut owner, id, target_b);
                                 // Force the old path: an explicit paint mark
                                 // wins over the layer-update mark the setter
                                 // reported.
                                 owner.mark_needs_paint(id);
-                                owner
+                                (owner, scene)
                             })
                         },
-                        |mut owner| {
+                        |(mut owner, mut scene)| {
                             lane.enter(|| {
-                                owner
-                                    .run_paint()
-                                    .expect("run_paint must succeed after the effect change");
+                                let (painted, _) = scene
+                                    .apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                                painted.expect("run_paint must succeed after the effect change");
                             });
-                            black_box(owner)
+                            black_box((owner, scene))
                         },
                         criterion::BatchSize::SmallInput,
                     );

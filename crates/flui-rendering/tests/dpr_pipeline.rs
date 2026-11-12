@@ -9,7 +9,7 @@
 use flui_foundation::geometry::{Point, Rect, Size};
 use flui_layer::Layer;
 use flui_objects::RenderColoredBox;
-use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
+use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, testing::SceneHost};
 
 use crate::common::BoxedRenderObject;
 
@@ -28,9 +28,11 @@ pub(crate) fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
     let mut owner = owner.into_compositing();
     owner.run_compositing().expect("compositing");
     let mut owner = owner.into_paint();
-    owner.run_paint().expect("paint");
+    let mut scene = SceneHost::new();
+    let (painted, tree) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
+    painted.expect("paint");
 
-    let tree = owner.take_layer_tree().expect("layer tree");
+    let tree = tree.expect("layer tree");
     let root_id = tree.root();
     let root_node = tree.get(root_id).expect("root node");
 

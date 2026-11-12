@@ -24,7 +24,7 @@ use flui_animation::{Animation, AnimationController};
 use flui_foundation::geometry::Size;
 use flui_layer::{Layer, LayerTree};
 use flui_objects::{RenderColoredBox, RenderOpacity};
-use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
+use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, testing::SceneHost};
 
 use crate::common::BoxedRenderObject;
 
@@ -32,8 +32,8 @@ fn controller() -> AnimationController {
     AnimationController::builder(Duration::from_secs(1)).build()
 }
 
-fn frame(owner: PipelineOwner) -> (PipelineOwner, Option<LayerTree>) {
-    let (owner, result) = owner.run_frame();
+fn frame(scene: &mut SceneHost, owner: PipelineOwner) -> (PipelineOwner, Option<LayerTree>) {
+    let (owner, result) = scene.run_frame(owner);
     (owner, result.expect("frame must not error"))
 }
 
@@ -55,6 +55,7 @@ pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
 
     let ctrl = controller();
+    let mut scene = SceneHost::new();
     ctrl.forward().expect("forward");
 
     fn opacity_alpha(tree: &LayerTree) -> Option<f64> {
@@ -97,7 +98,7 @@ pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
             .set_opacity(1.0 - ctrl.value())
     };
     owner.apply_render_update_impact(fade, impact);
-    let (next, tree) = frame(owner);
+    let (next, tree) = frame(&mut scene, owner);
     owner = next;
     let tree = tree.expect("fully-opaque frame paints");
     assert!(
@@ -125,7 +126,7 @@ pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
                 .set_opacity(opacity);
             owner.apply_render_update_impact(fade, impact);
         }
-        let (next, tree) = frame(owner);
+        let (next, tree) = frame(&mut scene, owner);
         owner = next;
         let tree = tree.unwrap_or_else(|| panic!("fade frame {i} must paint"));
 
@@ -154,7 +155,7 @@ pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
             .set_opacity(1.0 - ctrl.value())
     };
     owner.apply_render_update_impact(fade, impact);
-    let (_owner, tree) = frame(owner);
+    let (_owner, tree) = frame(&mut scene, owner);
     let tree = tree.expect("the zero-alpha frame still produces a (empty) tree");
     assert!(
         !has_picture(&tree),

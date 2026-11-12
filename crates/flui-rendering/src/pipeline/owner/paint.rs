@@ -2,12 +2,13 @@
 
 use std::sync::Arc;
 
+use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Size};
-use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
-    AnnotatedRegionLayer, BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
-    ClipSuperellipseLayer, ContentToken, Layer, LayerNode, LayerTree, LeaderLayer, OffsetLayer,
-    OpacityLayer, PictureLayer, ShaderMaskLayer, TransformLayer,
+    AnnotatedRegionLayer, BackdropFilterLayer, BoundaryContent, Chunk, ClipPathLayer,
+    ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ContentBuilder, EntryIndex, Layer,
+    LeaderLayer, Lineage, OffsetLayer, OpacityLayer, Placement, SceneNodeId, SceneOp, SceneWriter,
+    ShaderMaskLayer, TransformLayer,
 };
 use flui_painting::DisplayList;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -42,23 +43,26 @@ impl PipelineOwner<PaintPhase> {
         rebind_phase(self)
     }
 
-    /// Paints all dirty render objects.
+    /// Paints the boundaries the queue owes and buffers the patch that
+    /// publishes them in `writer` (ADR-0304 §3, §8).
     ///
     /// Phase 3 of the rendering pipeline, as a **fragment composition**
     /// (sans-IO paint model): each node's `paint_raw` records a
     /// node-local fragment — draw runs, child markers, clip scopes —
-    /// which is immediately replayed into the frame's [`LayerTree`].
-    /// Adjacent inline draw runs merge into shared `PictureLayer`s;
-    /// repaint-boundary children are rebased to `Offset::ZERO` under
-    /// their own `OffsetLayer`; clip scopes become real clip layers.
+    /// which is immediately replayed into its boundary's
+    /// [`BoundaryContent`]. Adjacent inline draw runs of one render object
+    /// merge into a chunk, a run of another seals it (ADR-0304 §2); a
+    /// repaint-boundary child gets a content of its own at `Offset::ZERO`,
+    /// which its parent's content slots; clip scopes become effects.
     ///
-    /// A fresh `LayerTree` is produced every paint pass, but not a fresh
-    /// full one: a repaint boundary absent from the dirty set is grafted
-    /// from `retained_boundaries` rather than repainted, and the layers a
-    /// graft re-inserts are clones that share their `DisplayList` behind an
-    /// `Arc`. A boundary queued only for a composited-layer update is
-    /// grafted too, with just the effect layers of the node that asked for
-    /// the update rebuilt — see `layer_patches_for`.
+    /// Only owed boundaries paint: a boundary absent from the queue emits
+    /// nothing, one that moved emits a `Place`, and one queued only for a
+    /// composited-layer update is republished with just the effect layers of
+    /// the node that asked rebuilt — see `layer_patches_for`. The caller
+    /// applies the patch and reports the version with
+    /// [`scene_applied`](PipelineOwner::scene_applied); a patch never
+    /// reported, a renewed lineage or a new pixel ratio makes the next pass
+    /// repaint from the root.
     ///
     /// # Errors
     ///
@@ -71,7 +75,7 @@ impl PipelineOwner<PaintPhase> {
     /// [`PipelineOwner::run_layout`](super::PipelineOwner::run_layout), so
     /// completeness stays a runtime gate. The empty-queue variant of that
     /// chain is designed behavior and keeps returning `Ok`.
-    pub fn run_paint(&mut self) -> crate::error::RenderResult<()> {
+    pub fn run_paint(&mut self, writer: &mut SceneWriter<'_>) -> crate::error::RenderResult<()> {
         // Frame-completeness gate, BEFORE the empty-paint-queue early
         // return: the paint phase began with layout work still pending. A
         // direct phase chain that skipped `run_layout` with a serviced
@@ -82,7 +86,20 @@ impl PipelineOwner<PaintPhase> {
             return Err(crate::error::RenderError::PaintBeforeLayout);
         }
 
-        if !self.scheduler.has_paint_work() {
+        // A pass with nothing queued still repaints from the root when the
+        // scene it would patch is not the one the records describe.
+        #[expect(
+            clippy::float_cmp,
+            reason = "an unchanged ratio is bit-identical, not approximately equal"
+        )]
+        let owed = self.root_id.is_some()
+            && (self.staged_scene.is_some()
+                || self.retained_pixel_ratio != self.device_pixel_ratio
+                || self
+                    .scene_frame
+                    .as_ref()
+                    .is_none_or(|frame| frame.node.lineage() != writer.current().id().lineage()));
+        if !self.scheduler.has_paint_work() && !owed {
             return Ok(());
         }
 
@@ -113,7 +130,8 @@ impl PipelineOwner<PaintPhase> {
             clippy::disallowed_methods,
             reason = "ADR-0287: the paint pass leaves its phase and keeps the queue on a panic"
         )]
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.paint_in_phase())) {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.paint_in_phase(writer)))
+        {
             Ok(result) => result,
             Err(payload) => {
                 let _ = self.local_dirty.end_paint();
@@ -125,255 +143,117 @@ impl PipelineOwner<PaintPhase> {
 
     /// The paint pass proper, between entering and leaving the phase: see
     /// [`Self::run_paint`].
-    fn paint_in_phase(&mut self) -> crate::error::RenderResult<()> {
-        // Retained output was recorded for another pixel ratio (text shaping and hairline
-        // snapping depend on it), so none of it is replayed: every capture goes and the root,
-        // served without one, repaints the whole tree.
+    fn paint_in_phase(&mut self, writer: &mut SceneWriter<'_>) -> crate::error::RenderResult<()> {
+        let lineage = writer.current().id().lineage();
+        // The records name nodes of the version `writer` patches only while the
+        // last staged patch was applied (`scene_applied`) and the owner kept
+        // its lineage; otherwise they describe a scene nobody holds, and the
+        // frame repaints from the root. Retained output recorded for another
+        // pixel ratio is dropped too: text shaping and hairline snapping
+        // depend on it.
         #[expect(
             clippy::float_cmp,
             reason = "an unchanged ratio is bit-identical, not approximately equal"
         )]
-        if self.retained_pixel_ratio != self.device_pixel_ratio {
-            self.retained_boundaries.clear();
-            self.root_content = None;
+        let ratio_changed = self.retained_pixel_ratio != self.device_pixel_ratio;
+        // A patch never reported applied holds the only copies of the contents
+        // it recorded: the scene dropped its buffered operations when this
+        // patch opened. They go to the writer, which drops them outside this
+        // owner's borrow: their annotations are user values.
+        let unapplied = match self.staged_scene.take() {
+            Some(staged) => {
+                self.discard_staged(staged, writer);
+                true
+            }
+            None => false,
+        };
+        let renewed = self
+            .scene_frame
+            .as_ref()
+            .is_some_and(|frame| frame.node.lineage() != lineage);
+        if ratio_changed || unapplied || renewed {
+            self.forget_scene();
             self.retained_pixel_ratio = self.device_pixel_ratio;
         }
 
-        // Deepest-first ordering retained: the
-        // full-tree descent below repaints everything, but per-boundary
-        // dirty-driven repaints will rely on this order once retention
-        // lands, and keeping it now means the dirty-list semantics
-        // don't shift under that change.
+        // Deepest first, the order ADR-0304 §8 paints owed boundaries in.
         self.scheduler.sort_paint_deep_first();
 
-        // Which queued nodes the descent actually reached — the residue scan's
-        // oracle. Empty when there is no root to descend from, which correctly
-        // makes every queued entry unreached.
-        let mut reached: FxHashSet<RenderId> = FxHashSet::default();
+        // The pass's working collections, back in the owner once it commits;
+        // a pass that fails or unwinds leaves the next one fresh ones.
+        let mut scratch = self.paint_scratch.take().unwrap_or_default();
+        scratch.dirty_ids.clear();
+        scratch.layer_updates.clear();
+        // Whether the walk finished, so the composer's `visited` holds which
+        // queued nodes it reached — the residue scan's oracle. False when
+        // there is no root to paint from, which correctly makes every queued
+        // entry unreached.
+        let mut walked = false;
         if let Some(root_id) = self.root_id
-            && self.render_tree.get(root_id).is_some()
+            && let Some(root) = self.render_tree.get(root_id)
         {
-            // Build a set of dirty node IDs for O(1) lookup during the
-            // paint walk.
-            let dirty_ids: FxHashSet<RenderId> = self
-                .scheduler
-                .nodes_needing_paint()
-                .iter()
-                .map(|d| d.id)
-                .collect();
-
-            let root_boundary = self
-                .render_tree
-                .get(root_id)
-                .is_some_and(crate::storage::RenderNode::is_repaint_boundary)
-                .then_some(root_id);
+            let PaintScratch {
+                dirty_ids,
+                layer_updates,
+                composer: work,
+            } = &mut *scratch;
+            dirty_ids.extend(self.scheduler.nodes_needing_paint().iter().map(|d| d.id));
             // Boundaries queued only to have some node's own effect layers
-            // rebuilt. Intersected with "does not need paint", which is where
-            // paint precedence is enforced: a boundary marked for a real
-            // repaint after its layer-update mark drops out here: a node that
-            // needs paint is repainted, otherwise only its layer properties
-            // are updated.
-            //
-            // `dirty_ids` above deliberately stays the FULL queue, so a
-            // boundary becomes graft-eligible only by appearing in this set —
-            // the pre-existing retention path cannot change behaviour when
-            // nothing requested an update.
-            // The queue carries its own reason, so there is no second record
-            // to reconcile and nothing here reads a node flag. That matters
-            // because `run_paint`'s error arm returns before
-            // `clear_paint_queue`: after a pass that failed partway the queue
-            // is what the retry runs on, while every flag the walk touched is
-            // already clear. A classification kept anywhere else has to be
-            // proven consistent with this one at four write sites — and the
-            // orderings that broke it (update-then-paint, paint-then-update,
-            // and a mark arriving after the failure) are all just joins on one
-            // entry now.
-            let layer_updates: FxHashMap<RenderId, SmallVec<[RenderId; 2]>> = self
-                .scheduler
-                .nodes_needing_paint()
-                .iter()
-                .filter_map(|e| match &e.kind {
+            // rebuilt. The queue carries its own reason, so there is no second
+            // record to reconcile and nothing here reads a node flag: after a
+            // pass that failed partway the queue is what the retry runs on,
+            // while every flag the walk touched is already clear.
+            layer_updates.extend(self.scheduler.nodes_needing_paint().iter().filter_map(|e| {
+                match &e.kind {
                     crate::pipeline::PaintKind::LayerUpdate(targets) => {
                         Some((e.id, targets.clone()))
                     }
                     crate::pipeline::PaintKind::Repaint => None,
-                })
-                .collect();
-
-            // The root's content version: kept while the root is not queued
-            // (every paint change under it that no nested boundary absorbs
-            // queues the root, since `mark_needs_paint` stops at the nearest
-            // boundary), minted otherwise. Committed with the frame below; an
-            // errored frame drops a minted token, and the retry, finding the
-            // root still queued, mints again.
-            let root_stamp = root_boundary.map(|id| {
-                let kept = (!dirty_ids.contains(&id))
-                    .then_some(self.root_content.as_ref())
-                    .flatten()
-                    .filter(|(committed, _)| *committed == id)
-                    .map(|(_, token)| token.clone());
-                (id, kept.unwrap_or_else(ContentToken::mint))
-            });
-            let mut composer = FragmentComposer::new(self.device_pixel_ratio, root_stamp.clone());
-            let inputs = PaintInputs {
-                dirty_set: &dirty_ids,
-                layer_updates: &layer_updates,
-            };
-            // A root that is a repaint boundary is retained and replayed like
-            // any other; one that is not paints inline every pass.
-            let painted = match &root_stamp {
-                Some((_, content)) => {
-                    let root_layer = composer.root_layer();
-                    self.serve_boundary(
-                        &mut composer,
-                        root_id,
-                        root_layer,
-                        content.clone(),
-                        None,
-                        &inputs,
-                    )
                 }
-                None => self.paint_subtree(&mut composer, root_id, Offset::ZERO, None, &inputs),
+            }));
+            let root_is_boundary = root.is_repaint_boundary();
+            // The frame node is repainted when there is none, when the root
+            // paints inline and is queued, or when the root changed: anything
+            // under it is decided boundary by boundary below.
+            let frame_dirty = match &self.scene_frame {
+                None => true,
+                Some(frame) => {
+                    frame.root != root_id
+                        || frame.root_is_boundary != root_is_boundary
+                        || (!root_is_boundary && dirty_ids.contains(&root_id))
+                }
             };
+            let inputs = PaintInputs {
+                dirty_set: dirty_ids,
+                layer_updates,
+                frame_dirty,
+            };
+            let mut composer = FragmentComposer::new(writer, work);
+            let painted = self.paint_owed(&mut composer, root_id, root_is_boundary, &inputs);
             match painted {
                 Ok(()) => {
-                    let (
-                        layer_tree,
-                        follower_correlations,
-                        retained_captures,
-                        layer_patches,
-                        consumed_updates,
-                        visited,
-                        counts,
-                        child_paint_orders,
-                    ) = composer.finish();
-                    reached = visited;
-                    self.root_content = root_stamp;
+                    let PaintOutcome { staged, counts } = composer.finish(self, lineage);
                     self.counters.nodes_painted += counts.nodes_painted;
                     self.counters.layers_produced += counts.layers_produced;
                     self.counters.layers_reused += counts.layers_reused;
-                    tracing::debug!("run_paint: layer tree has {} layers", layer_tree.len());
+                    self.counters.scene_ops += staged.ops;
+                    tracing::debug!(ops = staged.ops, "run_paint: patch staged");
+                    self.staged_scene = Some(staged);
 
-                    // Commit the walk's retention decisions now that its
-                    // `&self` borrow has ended.
-                    let mut committed_captures: Vec<RenderId> = Vec::new();
-                    for (id, captured) in retained_captures {
-                        committed_captures.push(id);
-                        match captured {
-                            Some(subtree) => {
-                                self.retained_boundaries.insert(id, subtree);
-                            }
-                            None => {
-                                self.retained_boundaries.remove(&id);
-                            }
-                        }
-                    }
-
-                    // Write the patches into the stored captures, so the next
-                    // frame that grafts one replays the NEW property rather
-                    // than the value it was captured with. Skipped for a
-                    // boundary the loop above just replaced or evicted: that
-                    // capture is fresh output, already carrying the current
-                    // properties.
-                    // Now that the frame has committed, the requests those
-                    // patches serve are satisfied. An error above returned
-                    // before this point, leaving the flags set so the retry
-                    // re-derives them.
-                    //
-                    // Hygiene rather than correctness for the OUTPUT: patches
-                    // are idempotent over live properties, so a flag left set
-                    // is re-applied harmlessly by the next graft (a mutation
-                    // removing this loop leaves every test green). It matters
-                    // because a mark refuses itself while the flag is set, so
-                    // never clearing would stop the boundary being re-queued —
-                    // and the queued targets are what let the graft detect a
-                    // node whose effect layers appeared and refuse.
-                    for render_id in consumed_updates {
+                    // The requests the patch serves are satisfied once the frame
+                    // commits. An error above returned before this point, leaving
+                    // the flags set so the retry re-derives them; a mark refuses
+                    // itself while its flag is set, so a flag never cleared would
+                    // stop the boundary being re-queued.
+                    for render_id in work.consumed_updates.drain(..) {
                         if let Some(node) = self.render_tree.get(render_id) {
                             node.clear_needs_composited_layer_update();
                         }
                     }
-
-                    let mut served: FxHashSet<RenderId> =
-                        layer_patches.iter().map(|(id, _, _)| *id).collect();
-                    for (boundary_id, content, patches) in layer_patches {
-                        let Some(subtree) = self.retained_boundaries.get_mut(&boundary_id) else {
-                            continue;
-                        };
-                        // The token the frame stamped: a grafted boundary that
-                        // was queued (for a layer update) minted one, and the
-                        // capture must carry it, or the next frame that grafts
-                        // it would report the pre-patch version as changed
-                        // again.
-                        subtree.content = content;
-                        for (index, layer) in patches {
-                            if let Some(Entry::Layer(node)) = subtree.entries.get_mut(index) {
-                                node.layer = layer;
-                            }
-                        }
-                    }
-                    served.extend(committed_captures);
-
-                    // A boundary queued for an update that the walk never
-                    // reached — unplaced by its parent's latest layout, or in a
-                    // detached subtree — keeps a capture the request never got
-                    // to touch, and the residue scan below cannot see it
-                    // because a layer update leaves no `needs_paint` to test.
-                    // Its own flag also survives, and a mark refuses itself
-                    // while that flag is set, so nothing would re-queue it.
-                    //
-                    // Evicting is the bounded answer, and the same one the
-                    // residue scan gives for the paint case: the next frame
-                    // that reaches this boundary repaints it, which serves any
-                    // request correctly whatever shape it changed.
-                    let unserved: SmallVec<[RenderId; 2]> = layer_updates
-                        .keys()
-                        .copied()
-                        .filter(|id| !served.contains(id))
-                        .collect();
-                    if !unserved.is_empty() {
-                        self.retained_boundaries
-                            .retain(|id, _| !unserved.contains(id));
-                    }
-
-                    // Follower hit-testing: resolve each paint-phase-correlated
-                    // follower's composite-resolved transform against the SAME
-                    // fully-built layer_tree the GPU path (flui-engine's
-                    // `render_layer_recursive`) resolves against, reusing the
-                    // identical `resolve_follower_transform` — one algorithm, two
-                    // consumers (pixels + hit-test), not two copies of the
-                    // logic. The tree carries the leader index itself.
-                    let mut follower_transforms = FxHashMap::default();
-                    let mut hidden_follower_ids = FxHashSet::default();
-                    for (render_id, follower_layer_id, origin) in follower_correlations {
-                        debug_assert!(
-                            layer_tree
-                                .get_layer(follower_layer_id)
-                                .is_some_and(|layer| layer.as_follower().is_some()),
-                            "BUG: a follower correlation must name a Layer::Follower node"
-                        );
-                        match flui_layer::resolve_follower_transform(&layer_tree, follower_layer_id)
-                        {
-                            Some(transform) => {
-                                // The subtree is recorded with its accumulated origin
-                                // baked in and the engine applies `transform` outside
-                                // it, while the hit-test walk and input regions have
-                                // already subtracted that origin: conjugating by it gives
-                                // them the mapping paint applies.
-                                follower_transforms
-                                    .insert(render_id, conjugate(transform, -origin));
-                            }
-                            None => {
-                                hidden_follower_ids.insert(render_id);
-                            }
-                        }
-                    }
-                    self.last_follower_transforms = follower_transforms;
-                    self.last_hidden_follower_ids = hidden_follower_ids;
                     // Child paint orders: a node repainted this pass replaces what it
-                    // recorded before; one replayed from a capture keeps it. A node that
-                    // left the tree takes its entry with it.
-                    for (render_id, order) in child_paint_orders {
+                    // recorded before; one left clean keeps it. A node that left the
+                    // tree takes its entry with it.
+                    for (render_id, order) in work.child_paint_orders.drain(..) {
                         match order {
                             Some(order) => {
                                 self.last_child_paint_orders.insert(render_id, order);
@@ -386,22 +266,13 @@ impl PipelineOwner<PaintPhase> {
                     let tree = &self.render_tree;
                     self.last_child_paint_orders
                         .retain(|render_id, _| tree.get(*render_id).is_some());
-                    // Queued, not run: listeners run in the post-frame lane.
-                    self.leader_watches.check(&layer_tree);
-
-                    // A u64 of frames outlasts any process; reusing the last number instead
-                    // would let a kept layer id read the next scene's layer.
-                    self.scenes_painted = self
-                        .scenes_painted
-                        .checked_add(1)
-                        .expect("BUG: u64 scene numbers exhausted");
-                    let scene = std::num::NonZeroU64::new(self.scenes_painted)
-                        .expect("BUG: incremented from at least 0 just above");
-                    self.last_layer_tree = Some(layer_tree.with_scene(scene));
+                    walked = true;
                 }
                 Err(e) => {
-                    // Restore the debug invariant before propagating so
-                    // the owner stays consistent on the error path.
+                    // Nothing of the pass is kept: the patch buffered in
+                    // `writer` is never applied (ADR-0304 §10), and the queue
+                    // stays for the retry. Restore the debug invariant before
+                    // propagating so the owner stays consistent.
                     let _ = self.local_dirty.end_paint();
                     let _ = self.scheduler.exit_phase(PhaseKind::Paint);
                     return Err(e);
@@ -409,61 +280,44 @@ impl PipelineOwner<PaintPhase> {
             }
         }
 
-        // Dirty-list residue scan: any queued node the root descent did not
-        // REACH (multi-root, detached subtree, or a child its parent stopped
-        // laying out). Warn + clear so the bug is visible AND the dirty list
-        // doesn't accumulate across frames.
+        // Dirty-list residue scan: any queued node the paint did not REACH
+        // (multi-root, detached subtree, or a child its parent stopped laying
+        // out). Warn + clear so the bug is visible AND the dirty list doesn't
+        // accumulate across frames.
         //
         // Keyed on what the walk recorded, not on the node still being flagged
         // needs-paint. That flag is cleared by the walk itself while
         // `run_paint`'s error arm keeps the queue for a retry, so after a pass
         // that failed partway the flag test skips exactly the entries this scan
-        // exists to catch — and since the scan is also the only diagnostic on
-        // that path, it fails silently. A boundary left with a stale capture
-        // that way is grafted forever.
+        // exists to catch.
         for dirty_node in self.scheduler.nodes_needing_paint() {
-            if !reached.contains(&dirty_node.id)
-                && let Some(render_node) = self.render_tree.get(dirty_node.id)
-            {
+            let reached = walked && scratch.composer.visited.contains(&dirty_node.id);
+            if !reached && let Some(render_node) = self.render_tree.get(dirty_node.id) {
                 tracing::warn!(
                     id = dirty_node.id.as_u64(),
                     depth = dirty_node.depth,
                     "run_paint: dirty node not reached by root descent (multi-root, \
                      detached subtree, or a child its parent stopped laying out); \
-                     paint dropped, flag cleared, retained capture evicted"
+                     paint dropped, flag cleared, boundary record dropped"
                 );
                 render_node.clear_needs_paint();
-                // Dropping the invalidation must drop the cached output with
-                // it. `mark_needs_paint` stops at the nearest established
-                // boundary, so a node in this list IS one, and leaving its
-                // capture behind means the next frame that reaches it grafts
-                // output that was already known to be stale — the flag that
-                // would have forced a repaint has just been cleared here.
-                //
-                // Reachable through the placed-generation gate above: a child
-                // its parent stopped laying out is skipped, so a paint-only
-                // update it received while unplaced lands in this scan. If the
-                // parent later places it again with unchanged constraints its
-                // layout short-circuits and requeues nothing, and without this
-                // eviction the stale capture would be grafted.
-                self.retained_boundaries.remove(&dirty_node.id);
+                // Dropping the invalidation must drop the recorded output with
+                // it: the next frame that reaches this boundary would otherwise
+                // slot content already known to be stale. Its node stays
+                // published until the parent that names it repaints.
+                if let Some(staged) = self.staged_scene.as_mut() {
+                    staged.stale.push(dirty_node.id);
+                }
             }
         }
         // `clear()` retains capacity (preserve Vec backing across frames).
         self.scheduler.clear_paint_queue();
+        scratch.recycle();
+        self.paint_scratch = Some(scratch);
 
         // exit_phase clears debug_doing_paint AND drains mid-paint marks back
         // into dirty so paint marks made during this pass become next-frame
-        // work rather than being stranded.
-        //
-        // Finding 2 (intentional improvement over pre-refactor behavior):
-        // exit_phase also drains mid-marks on the ERROR path (the early-return
-        // above calls exit_phase before returning Err). Pre-refactor, the error
-        // path only cleared debug_doing_paint and did NOT drain mid-marks, so
-        // any mark made between enter_phase and the error was silently lost.
-        // The always-drain contract of exit_phase is the correct behavior:
-        // mid-paint marks scheduled before the error survive into the next
-        // frame's retry rather than being dropped.
+        // work rather than being stranded; on the error path above too.
         let layout_during_paint = self.local_dirty.end_paint();
         let _ = self.scheduler.exit_phase(PhaseKind::Paint);
         debug_assert!(
@@ -472,6 +326,217 @@ impl PipelineOwner<PaintPhase> {
              paint must not change geometry"
         );
 
+        Ok(())
+    }
+
+    /// Paints what the queue owes (ADR-0304 §8): each queued boundary with a
+    /// record and no repainting ancestor, alone, deepest first; then the
+    /// frame node when it is dirty, which reaches every boundary that has no
+    /// record yet through its parent's paint.
+    ///
+    /// A boundary under an ancestor that repaints this frame is left to that
+    /// ancestor, which reaches it again if it still places it: painted alone
+    /// first, it would read the anchor of the layout before, and painted
+    /// twice, it would cost twice.
+    fn paint_owed(
+        &self,
+        composer: &mut FragmentComposer<'_, '_, '_>,
+        root_id: RenderId,
+        root_is_boundary: bool,
+        inputs: &PaintInputs<'_>,
+    ) -> crate::error::RenderResult<()> {
+        // Served once every repaint above has staged the placements it may
+        // move them by.
+        let mut settled_later: SmallVec<[RenderId; 4]> = SmallVec::new();
+        for queued in self.scheduler.nodes_needing_paint() {
+            let id = queued.id;
+            if !self.boundary_records.contains_key(&id) {
+                continue;
+            }
+            if self.slotted_by_a_repaint(id, inputs) {
+                continue;
+            }
+            if self.under_a_repaint(id, inputs) {
+                settled_later.push(id);
+                continue;
+            }
+            self.serve_alone(composer, id, inputs)?;
+        }
+        if inputs.frame_dirty {
+            self.paint_frame(composer, root_id, root_is_boundary, inputs)?;
+        }
+        // Shallowest first, so a deferred boundary's placement is staged
+        // before one nested in it reads it.
+        for &id in settled_later.iter().rev() {
+            self.serve_alone(composer, id, inputs)?;
+        }
+        Ok(())
+    }
+
+    /// Paints the frame node's content: the device-pixel-ratio layer over the
+    /// root, inline or slotted.
+    fn paint_frame(
+        &self,
+        composer: &mut FragmentComposer<'_, '_, '_>,
+        root_id: RenderId,
+        root_is_boundary: bool,
+        inputs: &PaintInputs<'_>,
+    ) -> crate::error::RenderResult<()> {
+        composer.begin_boundary(None);
+        let root_layer = if (self.device_pixel_ratio - 1.0).abs() < f64::EPSILON {
+            Layer::Offset(OffsetLayer::zero())
+        } else {
+            Layer::Transform(TransformLayer::new(
+                flui_foundation::geometry::Matrix4::scaling(
+                    self.device_pixel_ratio,
+                    self.device_pixel_ratio,
+                    1.0,
+                ),
+            ))
+        };
+        // The device-pixel-ratio layer is the frame's own: no render object
+        // pushed it, so it is filed under the root, after the root's effects
+        // in ordinal space because they live in another content.
+        composer.push_layer(root_id, root_layer);
+        let painted = if root_is_boundary {
+            // The root sits at the frame's origin whatever its own offset says,
+            // as it always has: its record carries a zero override.
+            self.place_boundary(
+                composer,
+                root_id,
+                Offset::ZERO,
+                Some(Offset::ZERO),
+                None,
+                inputs,
+            )
+        } else {
+            self.paint_subtree(composer, root_id, Offset::ZERO, None, inputs)
+        };
+        composer.pop_layer();
+        painted?;
+        composer.finish_frame(self, root_id, root_is_boundary);
+        Ok(())
+    }
+
+    /// Whether the walk of another content reaches the boundary `id` this
+    /// frame, so it is not served alone: its parent's content (the frame
+    /// node's, for a top-level boundary) is repainted, which paints it at its
+    /// slot. A repaint reaches only the boundaries its content slots; one
+    /// nested under a clean boundary is served alone. A boundary whose chain
+    /// no longer reaches the frame node is not served at all.
+    fn slotted_by_a_repaint(&self, id: RenderId, inputs: &PaintInputs<'_>) -> bool {
+        let Some(record) = self.boundary_records.get(&id) else {
+            return true;
+        };
+        let reached = match record.placed.parent {
+            None => inputs.frame_dirty,
+            Some(parent) => inputs.repaints(parent),
+        };
+        if reached {
+            return true;
+        }
+        let mut at = record.placed.parent;
+        while let Some(ancestor) = at {
+            let Some(record) = self.boundary_records.get(&ancestor) else {
+                // A chain broken by a removed ancestor reaches nothing.
+                return true;
+            };
+            at = record.placed.parent;
+        }
+        false
+    }
+
+    /// Whether a boundary above `id`'s parent repaints this frame, or the
+    /// frame node does above a chain of clean boundaries: that repaint may
+    /// move the clean boundaries between, so `id` is served alone only once
+    /// their placements are staged.
+    fn under_a_repaint(&self, id: RenderId, inputs: &PaintInputs<'_>) -> bool {
+        let mut at = self
+            .boundary_records
+            .get(&id)
+            .and_then(|record| record.placed.parent);
+        while let Some(ancestor) = at {
+            let Some(record) = self.boundary_records.get(&ancestor) else {
+                return false;
+            };
+            match record.placed.parent {
+                Some(parent) if inputs.repaints(parent) => return true,
+                Some(parent) => at = Some(parent),
+                None => return inputs.frame_dirty,
+            }
+        }
+        false
+    }
+
+    /// Where `id`'s slot puts it: the placement staged this frame when its
+    /// parent's repaint placed it, else the one its record holds.
+    fn placed_of(&self, composer: &FragmentComposer<'_, '_, '_>, id: RenderId) -> Option<Placed> {
+        composer
+            .staged_placed(id)
+            .or_else(|| self.boundary_records.get(&id).map(|record| record.placed))
+    }
+
+    /// The paint anchor a walk from the root would hand the boundary `id` at
+    /// its slot, derived from its placements' `parent` chain (ADR-0304 §8):
+    /// O(depth), and never stale, since an ancestor that moved changed only
+    /// its own placement, staged this frame or recorded before.
+    fn inherited_anchor(
+        &self,
+        composer: &FragmentComposer<'_, '_, '_>,
+        id: RenderId,
+    ) -> Option<AnchorFrame> {
+        let mut chain: SmallVec<[Placed; 8]> = SmallVec::new();
+        let mut at = Some(id);
+        while let Some(current) = at {
+            let placed = self.placed_of(composer, current)?;
+            chain.push(placed);
+            if placed.slot_anchor.is_some() {
+                break;
+            }
+            at = placed.parent;
+        }
+        // Outermost first: the frame that reaches the slot of the innermost.
+        let mut frame: Option<AnchorFrame> = None;
+        for (depth, placed) in chain.iter().enumerate().rev() {
+            let at_slot = placed.slot_anchor.or(frame);
+            if depth == 0 {
+                return at_slot;
+            }
+            frame = at_slot.map(|anchor| anchor.rebased(placed.placement));
+        }
+        None
+    }
+
+    /// Serves a queued boundary whose ancestors are all clean, where its
+    /// record says it stands.
+    fn serve_alone(
+        &self,
+        composer: &mut FragmentComposer<'_, '_, '_>,
+        id: RenderId,
+        inputs: &PaintInputs<'_>,
+    ) -> crate::error::RenderResult<()> {
+        if composer.served(id) {
+            return Ok(());
+        }
+        let Some(record) = self.boundary_records.get(&id) else {
+            return Ok(());
+        };
+        let Some(node) = self.render_tree.get(id) else {
+            return Ok(());
+        };
+        if !node.is_repaint_boundary() {
+            return Ok(());
+        }
+        let placement = self
+            .placed_of(composer, id)
+            .map_or(record.placed.placement, |placed| placed.placement);
+        let region_anchor = self
+            .inherited_anchor(composer, id)
+            .map(|anchor| anchor.rebased(placement));
+        let fresh = self.refresh_boundary(composer, id, Some(record), region_anchor, inputs)?;
+        if let Some(fresh) = fresh {
+            composer.stage_record(id, fresh);
+        }
         Ok(())
     }
 
@@ -484,7 +549,7 @@ impl PipelineOwner<PaintPhase> {
     /// erasing the evidence.
     fn paint_subtree(
         &self,
-        composer: &mut FragmentComposer,
+        composer: &mut FragmentComposer<'_, '_, '_>,
         node_id: RenderId,
         origin: Offset,
         anchor: Option<AnchorFrame>,
@@ -493,22 +558,29 @@ impl PipelineOwner<PaintPhase> {
         ensure_stack(|| self.paint_subtree_impl(composer, node_id, origin, anchor, inputs))
     }
 
-    /// The effect-layer replacements a grafted `subtree` needs this frame, or
+    /// Fills `patches` with the effect-layer replacements `record`'s content
+    /// needs this frame and returns the nodes whose requests they serve, or
     /// `Ok(None)` when one of them cannot be expressed as a patch.
     ///
-    /// Walks the nodes whose own effect layers this capture holds and rebuilds
+    /// Walks the nodes whose own effect layers this content holds and rebuilds
     /// those of them that asked for a composited-layer update, through the
     /// same [`own_effect_layers`] the paint walk uses. Everything else in the
-    /// capture is replayed untouched.
+    /// content is kept untouched.
     ///
     /// Returns `Ok(None)` — meaning "repaint instead" — when a node's effect
-    /// layers no longer have the same SHAPE they were captured with: a
+    /// layers no longer have the same SHAPE they were recorded with: a
     /// different count, or a different layer kind at the same position. Both
     /// are structural changes a patch cannot express (an alpha crossing out of
     /// the layered range drops its layer entirely), and both are correctly
-    /// served by a repaint. Comparing the discriminant per position rather
-    /// than just the count is what catches the case where one effect appears
-    /// as another disappears and the count is unchanged.
+    /// served by a repaint.
+    ///
+    /// A target that owns no effect in this content cannot be served by a
+    /// patch either: its effect layers did not exist when the content was
+    /// recorded. A childless `RenderRotatedBox` is a real caller of that
+    /// branch: its setter reports `COMPOSITED_LAYER_UPDATE` for a same-parity
+    /// turn change whether or not it has a child, while `paint_effects`
+    /// returns no transform without one. An empty patch reported as `Some`
+    /// would keep the stale content and strand the node's own flag.
     ///
     /// # Errors
     ///
@@ -518,81 +590,39 @@ impl PipelineOwner<PaintPhase> {
     /// the queued update survives for the retry.
     fn layer_patches_for(
         &self,
-        subtree: &RetainedSubtree,
+        record: &BoundaryRecord,
         targets: &[RenderId],
-    ) -> crate::error::RenderResult<Option<LayerPatch>> {
-        // A node that asked for an update this frame but owns no slot in this
-        // capture cannot be served by a patch: its effect layers did not exist
-        // when the capture was taken, so there is nothing to replace and the
-        // loop below would never even look at it. That is a shape change, and
-        // a repaint is the only thing that can express it.
-        //
-        // A childless `RenderRotatedBox` is a real, reachable caller of this
-        // branch: its setter reports `COMPOSITED_LAYER_UPDATE` for a
-        // same-parity turn change whether or not it has a child (no
-        // `has_child` gate), `paint_effects` returns a `None` transform
-        // without a child, so it never owns an effect slot to begin with — and
-        // `RotatedBox::new(n)` seeds an empty child by default, so a bare
-        // rebuild hits exactly this. Without this guard the loop below walks
-        // EXISTING slots, silently skips a target that has none, and reports
-        // `Some` — an empty, no-op patch that grafts the boundary's stale
-        // capture instead of refusing. `run_paint`'s `consumed_updates` bookkeeping
-        // then never clears the node's own `NEEDS_COMPOSITED_LAYER_UPDATE`
-        // flag either (that list is populated from what this function
-        // consumes, or from a REAL paint walk — neither runs on the silent
-        // no-op path), stranding the flag set and self-refusing every later
-        // mark to the same node. A test for it must observe the flag staying
-        // set, not the emitted frame, which looks the same either way for a
-        // node that paints nothing regardless.
+        patches: &mut Vec<(EntryIndex, Layer)>,
+    ) -> crate::error::RenderResult<Option<SmallVec<[RenderId; 2]>>> {
         if targets.iter().any(|target| {
-            !subtree
-                .effect_slots
+            !record
+                .effect_slots()
                 .iter()
                 .any(|(owner, _)| owner == target)
         }) {
             return Ok(None);
         }
-        let mut patches = Vec::new();
-        // Nodes whose request this patch serves. Returned rather than cleared
-        // here, and cleared by `run_paint` only once the frame commits: the
-        // walk can still fail after this point (a later sibling's `paint_raw`
-        // can poison), and that path discards the composer with its patches
-        // while the dirty queue survives for the retry. Clearing during the
-        // walk would leave the retry seeing no pending request, grafting the
-        // old layer, and going visibly stale until something else mutates.
+        patches.clear();
+        // Nodes whose request this patch serves, cleared by `run_paint` only
+        // once the frame commits: the walk can still fail after this point.
         let mut consumed: SmallVec<[RenderId; 2]> = SmallVec::new();
-        // Iterated in capture order (the `Vec`'s order) rather than hash
-        // order: a target this loop rebuilds resolves in the same sequence a
-        // full repaint's paint walk would visit it in — see the field doc on
-        // `RetainedSubtree::effect_slots`.
-        for (render_id, slots) in &subtree.effect_slots {
+        // In record order, so a target resolves in the sequence a full
+        // repaint's paint walk would visit it in.
+        for (render_id, slots) in record.effect_slots() {
             let render_id = *render_id;
             let Some(node) = self.render_tree.get(render_id) else {
-                // The node is gone but its layers are still in the capture.
-                // Nothing asked for an update, so replaying them is what a
-                // clean frame would do anyway.
+                // The node is gone but its layers are still in the content.
+                // Nothing asked for an update, so keeping them is what a clean
+                // frame would do anyway.
                 continue;
             };
             if !node.needs_composited_layer_update() {
                 continue;
             }
-            // `AssertUnwindSafe` is sound here for the same reason the paint
-            // walk's own `paint_raw` wrapper is: the closure captures `node`
-            // (a view over the `dyn RenderObject` state) and `slots.origin`
-            // by shared reference. Two different things are at stake if
-            // `paint_effects` panics, and only one of them is protected
-            // here: the node's OWN state (interior-mutable fields, if it has
-            // any) may be left torn, and nothing below repairs that — it is
-            // the render object's problem, not this function's. What IS
-            // protected is this function's pipeline bookkeeping: the `?`
-            // below returns out of this function before `consumed` (see its
-            // doc above) is ever handed back to the caller, so the
-            // composited-layer-update request this loop would have consumed
-            // stays on the queue, untouched, for the retry.
-            // Refusing here and falling back to a repaint was rejected: the
-            // repaint calls this same `paint_effects` on the same node and
-            // would panic a second time, so the poison must surface once,
-            // not be laundered into an infinite retry loop.
+            // A panic here poisons once rather than falling back to a repaint,
+            // which would call the same `paint_effects` and panic again; the
+            // `?` returns before `consumed` reaches the caller, so the request
+            // stays queued for the retry.
             #[expect(
                 clippy::disallowed_methods,
                 reason = "ADR-0287: paint_effects runs contained; a panic poisons without a retry loop"
@@ -607,42 +637,28 @@ impl PipelineOwner<PaintPhase> {
                 return Ok(None);
             }
             for (&index, layer) in slots.indices.iter().zip(fresh) {
-                // Indices come from this same capture, so they are in range by
-                // construction — but this runs inside the paint walk, where an
-                // out-of-range index would panic a frame rather than lose one
-                // reuse. Refusing degrades to a repaint, which is always
-                // correct.
-                let Some(Entry::Layer(captured)) = subtree.entries.get(index) else {
-                    debug_assert!(false, "BUG: effect slot index outside its own capture");
+                let Some(recorded) = record.content.effect_layer(index) else {
+                    debug_assert!(false, "BUG: an effect slot names no effect of its content");
                     return Ok(None);
                 };
-                // Under the FIXED order `own_effect_layers` emits (opacity,
-                // clip, transform), the count check above plus this
-                // per-position discriminant compare is a COMPLETE shape
-                // check — no stored shape is needed. It is conservative
-                // rather than load-bearing: the effect chain is positional
-                // (`capture` records it in push order, `replay` swaps only
-                // `layer` at those indices), so a same-count kind change
-                // patched positionally would already yield the repaint's
-                // tree; refusing it only trades a correct patch for a
-                // repaint, and that refusal is observable as one. No
-                // production producer changes its own clip kind at runtime,
-                // and no test pins the fallback.
-                if std::mem::discriminant(&layer) != std::mem::discriminant(&captured.layer) {
+                // Under the fixed order `own_effect_layers` emits (opacity,
+                // clip, transform), the count check plus this per-position
+                // kind compare is a complete shape check.
+                if std::mem::discriminant(&layer) != std::mem::discriminant(recorded) {
                     return Ok(None);
                 }
                 patches.push((index, layer));
             }
             consumed.push(render_id);
         }
-        Ok(Some(LayerPatch { patches, consumed }))
+        Ok(Some(consumed))
     }
 
     /// Body of [`Self::paint_subtree`]; split out so every recursion
     /// level enters through the [`ensure_stack`] probe.
     fn paint_subtree_impl(
         &self,
-        composer: &mut FragmentComposer,
+        composer: &mut FragmentComposer<'_, '_, '_>,
         node_id: RenderId,
         origin: Offset,
         anchor: Option<AnchorFrame>,
@@ -660,7 +676,7 @@ impl PipelineOwner<PaintPhase> {
         // unconditional insert would cost a hash write per render object per
         // frame to answer a question about a handful of ids.
         if inputs.dirty_set.contains(&node_id) {
-            composer.visited.insert(node_id);
+            composer.work.visited.insert(node_id);
         }
 
         let is_repaint_boundary = render_node.is_repaint_boundary();
@@ -720,7 +736,7 @@ impl PipelineOwner<PaintPhase> {
         // Recorded before the early returns below: a node skipped for layout
         // must not strand the request either.
         if render_node.needs_composited_layer_update() {
-            composer.consumed_updates.push(node_id);
+            composer.work.consumed_updates.push(node_id);
         }
 
         // Fully transparent subtree: skip recording entirely. Children
@@ -820,7 +836,7 @@ impl PipelineOwner<PaintPhase> {
         // paint).
         let effect_layers = own_effects.len();
         for layer in own_effects {
-            let layer_id = composer.push_layer(layer);
+            let layer_id = composer.push_layer(node_id, layer);
             // Record where this node's own effect layers landed, so a later
             // frame can rebuild just these and replay everything else.
             composer.record_effect_layer(node_id, layer_id, origin);
@@ -832,7 +848,7 @@ impl PipelineOwner<PaintPhase> {
         let mut scope_opacity: SmallVec<[f64; 4]> = SmallVec::new();
         for op in fragment.ops {
             match op {
-                FragmentOp::Run(list) => composer.append_run(list),
+                FragmentOp::Run(list) => composer.append_run(node_id, list),
                 FragmentOp::Push(scope) => {
                     // Follower hit-testing: capture the RenderId -> LayerId
                     // correlation as a near-free byproduct of pushing a
@@ -844,16 +860,17 @@ impl PipelineOwner<PaintPhase> {
                         FragmentScope::Opacity(opacity) => opacity.alpha(),
                         _ => 1.0,
                     });
-                    let layer_id = composer.push_layer(scope_layer(*scope, origin));
+                    let layer_id = composer.push_layer(node_id, scope_layer(*scope, origin));
                     if is_follower {
                         composer.record_follower_correlation(node_id, layer_id, origin);
                     }
                 }
                 FragmentOp::PushTransform(matrix) => {
                     scope_opacity.push(1.0);
-                    composer.push_layer(Layer::Transform(TransformLayer::new(conjugate(
-                        *matrix, origin,
-                    ))));
+                    composer.push_layer(
+                        node_id,
+                        Layer::Transform(TransformLayer::new(conjugate(*matrix, origin))),
+                    );
                 }
                 FragmentOp::Pop => {
                     scope_opacity.pop();
@@ -914,8 +931,8 @@ impl PipelineOwner<PaintPhase> {
                             inputs,
                         )?;
                     } else {
-                        // Inline children bake into the shared picture
-                        // space — runs merge, no extra layer.
+                        // Inline children paint in the parent's layer space,
+                        // origin baked in, into pictures of their own.
                         self.paint_subtree(
                             composer,
                             child_id,
@@ -939,6 +956,7 @@ impl PipelineOwner<PaintPhase> {
                     .enumerate()
                     .all(|(position, child)| child.slot == position && child.opacity == 1.0);
             composer
+                .work
                 .child_paint_orders
                 .push((node_id, (!plain).then_some(painted_children)));
         }
@@ -950,18 +968,16 @@ impl PipelineOwner<PaintPhase> {
         Ok(())
     }
 
-    /// Places the repaint boundary `child_id` under the layer the composer is
-    /// building: stamps its `OffsetLayer`, then either replays the boundary's
-    /// retained capture or paints it afresh and captures the result.
+    /// Places the repaint boundary `child_id` in the content the composer is
+    /// building: serves it (paints it afresh, patches its composited layers,
+    /// or leaves it as it is), slots its node there, and places the node
+    /// where the walk put it.
     ///
-    /// Reached where the walk meets a boundary child and, through
-    /// [`Self::replay`], at each [`NestedSlot`] of a capture being reused, so a
-    /// nested boundary is decided on its own whatever its enclosing boundary
-    /// does. `origin` is the parent's accumulated origin in the current layer
-    /// space and `anchor` the paint-anchor frame in force at the parent.
+    /// `origin` is the parent's accumulated origin in the current layer space
+    /// and `anchor` the paint-anchor frame in force at the parent.
     fn place_boundary(
         &self,
-        composer: &mut FragmentComposer,
+        composer: &mut FragmentComposer<'_, '_, '_>,
         child_id: RenderId,
         origin: Offset,
         offset_override: Option<Offset>,
@@ -973,11 +989,9 @@ impl PipelineOwner<PaintPhase> {
         })
     }
 
-    /// Body of [`Self::place_boundary`]; split out so every recursion level
-    /// enters through the [`ensure_stack`] probe.
     fn place_boundary_impl(
         &self,
-        composer: &mut FragmentComposer,
+        composer: &mut FragmentComposer<'_, '_, '_>,
         child_id: RenderId,
         origin: Offset,
         offset_override: Option<Offset>,
@@ -987,215 +1001,151 @@ impl PipelineOwner<PaintPhase> {
         let Some(child_node) = self.render_tree.get(child_id) else {
             return Ok(());
         };
-        // Authoritative child position: RenderState.offset, committed by the
-        // layout walk; paint_child_at overrides it explicitly.
-        let position = offset_override.unwrap_or_else(|| child_node.offset());
-        let dirty_set = inputs.dirty_set;
-        let capture = self.retained_boundaries.get(&child_id);
-
-        // The boundary's content version, certified here
-        // (`flui-rendering`'s ARCHITECTURE.md, "Paint certifies a boundary's
-        // content token"): kept only while the boundary is absent from the FULL
-        // queue — so a layer update counts as a change — and still has a
-        // retained capture to vouch for what it painted last. Everything else
-        // mints. Decided before the push because the stamp sits on the layer
-        // pushed next, and it holds whichever way the boundary is served
-        // below: a replay carries exactly the certified content.
-        let content = (!dirty_set.contains(&child_id))
-            .then_some(capture)
-            .flatten()
-            .map_or_else(ContentToken::mint, |subtree| subtree.content.clone());
-        // Boundary children rebase to ZERO under their own OffsetLayer so a
-        // future offset-only move is a layer-property update, not a repaint.
-        let boundary_root = composer.push_boundary_layer(
-            Layer::Offset(OffsetLayer::new(origin + position)),
-            child_id,
-            content.clone(),
-        );
-        composer.slot_info.insert(
-            boundary_root,
-            SlotPlacement {
-                origin,
-                offset_override,
-                anchor: anchor.filter(|frame| frame.local),
-            },
-        );
-
-        // The boundary's layer space starts at its own origin, so the anchor's
-        // base moves with it.
-        let region_anchor = anchor.map(|frame| frame.rebased(origin + position));
-        let placed = self.serve_boundary(
-            composer,
-            child_id,
-            boundary_root,
-            content,
-            region_anchor,
-            inputs,
-        );
-        // Popped on the error path too, so the stack stays balanced.
-        composer.pop_layer();
-        placed
-    }
-
-    /// Fills the layer `boundary_root`, already pushed or the composer's root,
-    /// with the output of the repaint boundary `boundary_id`: its retained
-    /// capture replayed (with a layer patch when a node asked for one), or a
-    /// fresh paint that is captured for the next frame. `content` is the token
-    /// the boundary is stamped with; `region_anchor` the paint-anchor frame at
-    /// its own origin.
-    fn serve_boundary(
-        &self,
-        composer: &mut FragmentComposer,
-        boundary_id: RenderId,
-        boundary_root: LayerId,
-        content: ContentToken,
-        region_anchor: Option<AnchorFrame>,
-        inputs: &PaintInputs<'_>,
-    ) -> crate::error::RenderResult<()> {
-        let dirty_set = inputs.dirty_set;
-        // Three dispositions, read straight off the queue: queued for a
-        // repaint, queued only for a composited-layer update, or not queued at
-        // all. The last two both reuse the retained output; only the first
-        // descends. Sound only because the queue is exact: `run_layout` marks
-        // every boundary layout touched and `mark_needs_paint` marks the rest,
-        // so absence from `dirty_set` genuinely means unchanged content.
-        let update_targets = inputs.layer_updates.get(&boundary_id);
-        let queued_for_repaint = update_targets.is_none() && dirty_set.contains(&boundary_id);
-        let retained = (!queued_for_repaint)
-            .then(|| self.retained_boundaries.get(&boundary_id))
-            .flatten();
-        // `None` here means the structure changed under a layer-update request
-        // (a node gained or lost an effect layer), which a patch cannot express
-        // — fall back to a full repaint, which rebuilds it correctly. An `Err`
-        // here means a target's own effect layers panicked while being
-        // rebuilt; it propagates as a poisoned frame rather than falling back.
-        let patch = retained
-            .map(|subtree| {
-                self.layer_patches_for(subtree, update_targets.map_or(&[][..], |targets| targets))
-            })
-            .transpose()?
-            .flatten();
-        if let (Some(subtree), Some(patch)) = (retained, patch) {
-            let LayerPatch { patches, consumed } = patch;
-            if !patches.is_empty() {
-                tracing::trace!(
-                    boundary = boundary_id.as_u64(),
-                    layers = patches.len(),
-                    "paint: composited-layer update, subtree replayed"
-                );
-            }
-            // Reused rather than descended into, but reached. Same
-            // queue-scoped rule as the walk's own record.
-            if dirty_set.contains(&boundary_id) {
-                composer.visited.insert(boundary_id);
-            }
-            let replayed = self.replay(composer, subtree, &patches, region_anchor, inputs);
-            composer.consumed_updates.extend(consumed);
-            // Pushed even when empty: this doubles as the record that the frame
-            // SERVED this boundary, which `run_paint` uses to tell a boundary
-            // it reused from one the walk never reached. The write-back loop
-            // treats an empty patch list as a no-op.
-            //
-            // The stored capture has to move with the frame. Patching only the
-            // emitted tree would leave the cache at the old value, and a later
-            // frame that replays it for an unrelated reason would silently
-            // revert the property for good.
-            composer.layer_patches.push((boundary_id, content, patches));
-            replayed
+        let computed = origin + offset_override.unwrap_or_else(|| child_node.offset());
+        let committed = self.boundary_records.get(&child_id);
+        // Non-finite geometry is never published (ADR-0054): the boundary stays
+        // where its slot last put it, at its parent's origin when it has never
+        // been placed, and its record holds that placement, so the next frame
+        // finds nothing to move.
+        let placement = if computed.is_finite() {
+            computed
         } else {
-            let painted =
-                self.paint_subtree(composer, boundary_id, Offset::ZERO, region_anchor, inputs);
-            // Seal before capturing: the boundary's trailing run is part of its
-            // output, and `pop_layer` would otherwise flush it after the
-            // snapshot was taken.
-            composer.seal_picture();
-            painted.map(|()| {
-                // `None` evicts: a subtree that GAINED a follower must not be
-                // served its pre-link form. See `capture`.
-                let captured = composer.capture(boundary_root, content);
-                composer.retained_captures.push((boundary_id, captured));
-            })
-        }
-    }
-
-    /// Re-inserts a capture's entries, in paint order, under the layer the
-    /// composer is building, and places each nested boundary at its slot.
-    ///
-    /// Mints fresh ids and maps the flattened parent indices through them, so
-    /// the result is structurally identical to what painting would have
-    /// produced — the layers themselves are clones, cheap because a
-    /// `PictureLayer` shares its `DisplayList` behind an `Arc`. A slot is
-    /// decided by [`Self::place_boundary`], from the boundary's current
-    /// position and queue state, with `frame` rebased to it.
-    fn replay(
-        &self,
-        composer: &mut FragmentComposer,
-        retained: &RetainedSubtree,
-        patches: &[(usize, Layer)],
-        frame: Option<AnchorFrame>,
-        inputs: &PaintInputs<'_>,
-    ) -> crate::error::RenderResult<()> {
-        // Indexed once rather than scanned per entry. A linear `find` inside the
-        // clone loop is O(retained entries x patched layers), and both operands
-        // grow together on exactly the tree this feature targets — many
-        // animated opacities under one boundary, all updating in one frame.
-        let patch_by_index: FxHashMap<usize, &Layer> = patches
-            .iter()
-            .map(|(index, layer)| (*index, layer))
-            .collect();
-        // Seal first: an open picture run belongs BEFORE the replayed content
-        // in draw order, exactly as it would if the boundary had painted.
-        composer.seal_picture();
-        let root = composer.current_parent();
-
-        // `None` for a slot, which owns no layer of this capture.
-        let mut minted: Vec<Option<LayerId>> = Vec::with_capacity(retained.entries.len());
-        for (index, entry) in retained.entries.iter().enumerate() {
-            let parent_of = |parent: Option<usize>, minted: &[Option<LayerId>]| {
-                parent.map_or(root, |i| {
-                    minted[i].expect("BUG: an entry's parent is a layer, never a slot")
-                })
-            };
-            match entry {
-                Entry::Layer(node) => {
-                    // A patched index re-emits this node's layer built from the
-                    // render object's CURRENT properties instead of the captured
-                    // one; everything else is the cheap `Arc`-sharing clone
-                    // retention is built on.
-                    //
-                    // The two are counted apart: a patched layer is new output
-                    // built this pass, not a reuse, and folding it into
-                    // `layers_reused` would hide exactly the per-layer cost an
-                    // animated opacity pays.
-                    let layer = if let Some(layer) = patch_by_index.get(&index) {
-                        composer.counts.layers_produced += 1;
-                        (*layer).clone()
+            tracing::warn!(
+                boundary = child_id.as_u64(),
+                offset = ?computed,
+                "paint: a boundary placed at a non-finite offset keeps its last placement"
+            );
+            committed.map_or_else(
+                || {
+                    if origin.is_finite() {
+                        origin
                     } else {
-                        composer.counts.layers_reused += 1;
-                        node.layer.clone()
-                    };
-                    let parent = parent_of(node.parent, &minted);
-                    let id = composer.tree.push_child(parent, LayerNode::new(layer));
-                    minted.push(Some(id));
+                        Offset::ZERO
+                    }
+                },
+                |record| record.placed.placement,
+            )
+        };
+        let region_anchor = anchor.map(|frame| frame.rebased(placement));
+        let node = if composer.served(child_id) {
+            composer.node_of(self, child_id)
+        } else {
+            match self.refresh_boundary(composer, child_id, committed, region_anchor, inputs)? {
+                Some(fresh) => {
+                    let node = fresh.node;
+                    composer.stage_record(child_id, fresh);
+                    Some(node)
                 }
-                Entry::Slot(slot) => {
-                    minted.push(None);
-                    let parent = parent_of(slot.parent, &minted);
-                    composer.adopt_parent(parent);
-                    let nested = self.place_boundary(
-                        composer,
-                        slot.boundary,
-                        slot.origin,
-                        slot.offset_override,
-                        slot.anchor.or(frame),
-                        inputs,
-                    );
-                    composer.pop_layer();
-                    nested?;
-                }
+                None => committed.map(|record| record.node),
             }
+        };
+        let Some(node) = node else {
+            debug_assert!(false, "BUG: a served boundary has a node");
+            return Ok(());
+        };
+        let placed = Placed {
+            origin,
+            offset_override,
+            // A capture stores the frame only when the anchor is a node of the
+            // region being painted; an inherited one is derived again from the
+            // parent's record.
+            slot_anchor: anchor.filter(|frame| frame.local),
+            parent: composer.current_boundary(),
+            placement,
+        };
+        composer.slot(child_id, node);
+        let before = committed.filter(|record| record.node == node);
+        if before.is_none_or(|record| record.placed.placement != placement) {
+            composer.place(node, placement);
+        }
+        if before.is_none_or(|record| record.placed != placed) {
+            composer.stage_placed(child_id, placed);
         }
         Ok(())
+    }
+
+    /// What `id`'s content becomes this frame: a fresh record when it is
+    /// repainted or its composited layers are patched, `None` when it stays
+    /// as `committed` holds it.
+    ///
+    /// A boundary without a record, queued for a repaint, or whose record was
+    /// dropped as stale is painted afresh in a content of its own, at its own
+    /// origin. One queued only for a composited-layer update is republished
+    /// with that node's effects rebuilt, every other entry shared.
+    fn refresh_boundary(
+        &self,
+        composer: &mut FragmentComposer<'_, '_, '_>,
+        id: RenderId,
+        committed: Option<&BoundaryRecord>,
+        region_anchor: Option<AnchorFrame>,
+        inputs: &PaintInputs<'_>,
+    ) -> crate::error::RenderResult<Option<BoundaryRecord>> {
+        composer.mark_served(id);
+        if inputs.dirty_set.contains(&id) {
+            composer.work.visited.insert(id);
+        }
+        let update_targets = inputs.layer_updates.get(&id);
+        let kept = committed.filter(|record| {
+            !(record.stale || update_targets.is_none() && inputs.dirty_set.contains(&id))
+        });
+        if let Some(record) = kept {
+            let Some(targets) = update_targets else {
+                return Ok(None);
+            };
+            // Lent out of the composer while the patch is built; an error
+            // leaves the composer a fresh one.
+            let mut patches = std::mem::take(&mut composer.work.layer_patches);
+            let served = self.layer_patches_for(record, targets, &mut patches)?;
+            let fresh = served.map(|consumed| {
+                composer.work.consumed_updates.extend(consumed);
+                if patches.is_empty() {
+                    return None;
+                }
+                tracing::trace!(
+                    boundary = id.as_u64(),
+                    layers = patches.len(),
+                    "paint: composited-layer update, content republished"
+                );
+                let rebuilt = patches.len() as u64;
+                let content = record
+                    .content
+                    .with_effects(patches.drain(..))
+                    .expect("BUG: a layer patch names effects of the content it patches");
+                composer.counts.layers_produced += rebuilt;
+                composer.counts.layers_reused +=
+                    (content.entries().len() as u64).saturating_sub(rebuilt);
+                let fresh = BoundaryRecord {
+                    content: Arc::new(content),
+                    ..record.clone()
+                };
+                // The patched content keeps every slot of the one it replaces.
+                composer
+                    .work
+                    .slotted
+                    .extend(fresh.children.iter().map(|&(_, node)| node));
+                composer.publish(fresh.node, Arc::clone(&fresh.content));
+                Some(fresh)
+            });
+            patches.clear();
+            composer.work.layer_patches = patches;
+            if let Some(fresh) = fresh {
+                return Ok(fresh);
+            }
+        }
+        composer.begin_boundary(Some(id));
+        let painted = self.paint_subtree(composer, id, Offset::ZERO, region_anchor, inputs);
+        let build = composer.end_boundary();
+        painted?;
+        let node = match committed {
+            Some(record) => record.node,
+            None => composer.mint_node(),
+        };
+        let fresh = build.into_record(
+            node,
+            committed.map_or(Placed::UNPLACED, |record| record.placed),
+        );
+        composer.publish(node, Arc::clone(&fresh.content));
+        Ok(Some(fresh))
     }
 }
 
@@ -1203,126 +1153,265 @@ impl PipelineOwner<PaintPhase> {
 // Fragment composition (paint phase plumbing)
 // ============================================================================
 
-/// A repaint boundary's painted output, kept for reuse on a later frame.
-///
-/// The boundary's own region only: the layers it painted itself, flattened in
-/// preorder with local indices, and a [`NestedSlot`] where each repaint
-/// boundary nested in it sits (ADR-0253). `parent` is `None` for an entry that
-/// hung directly off the boundary's own `OffsetLayer`, and `Some(i)` for a
-/// child of `entries[i]`. Local indices rather than `LayerId`s because every
-/// frame builds a fresh `LayerTree` whose slab indices differ — replaying mints
-/// new ids and maps them through this vector.
-///
-/// This is offset-independent, which is what makes it reusable at all: the
-/// paint walk rebases a boundary's subtree to `Offset::ZERO` under its own
-/// `OffsetLayer`, so a boundary that merely MOVED needs a different offset on
-/// the layer above and nothing else.
+/// What the owner keeps for each repaint boundary it published (ADR-0304 §8):
+/// its node, the content it published there, and the values a walk from the
+/// root would hand it at its slot, so a boundary painted alone paints as it
+/// would under its parent.
 #[derive(Clone, Debug)]
-pub(super) struct RetainedSubtree {
-    /// Paint order, one stream: an inline run between two nested boundaries
-    /// stays between them, so blend and occlusion order are the painted order
-    /// whatever the capture state.
-    entries: Vec<Entry>,
-    /// The content version the boundary was stamped with when this capture
-    /// was taken or last served — what a later frame keeps while the
-    /// boundary stays clean.
-    content: ContentToken,
-    /// Where each render node's OWN effect layers landed in `entries`.
-    ///
-    /// This is what makes an update-only commit addressable: a node whose
-    /// alpha changed but whose painted content did not can have exactly these
-    /// entries rebuilt while the rest of the capture is replayed untouched.
-    ///
-    /// Keyed by the node that pushed them, so it covers every node inside the
-    /// boundary's region, not just the boundary itself — an `Opacity` nested
-    /// three levels down is addressable without being a boundary of its own,
-    /// which is the whole reason this design does not need to promote one. A
-    /// node inside a NESTED boundary is addressed through that boundary's own
-    /// capture.
-    ///
-    /// A `Vec`, not a map, and appended at each render id's FIRST appearance
-    /// during `capture`'s pre-order walk: capture order equals paint order,
-    /// so the patch arm in `layer_patches_for` resolves and rebuilds targets
-    /// in the order a full repaint would — a stateful path clipper (a `Fn`
-    /// that observes and mutates on every call) sees the same call sequence
-    /// either way. A hash map's iteration order does not carry that
-    /// guarantee. Looked up by linear scan rather than a side index: the
-    /// number of effect-owning nodes per boundary is typically small (1-2
-    /// patch targets per frame), and the `paint` benchmark's `layered`
-    /// update arm at 1,000 nodes — the one that walks this list per patch
-    /// attempt — is unchanged within measurement noise against a hash-map
-    /// version of this same field. Revisit with a side `RenderId -> usize`
-    /// index if a real tree grows this list long enough to change that.
-    effect_slots: Vec<(RenderId, EffectSlots)>,
+pub(super) struct BoundaryRecord {
+    node: SceneNodeId,
+    content: Arc<BoundaryContent>,
+    placed: Placed,
+    /// Each node whose own effect layers this content holds, the entries of
+    /// those layers, and the origin they were built at: what a
+    /// composited-layer update rebuilds; shared by the record a
+    /// composited-layer update makes, and `None` when there are none.
+    effect_slots: Option<Arc<[(RenderId, EffectSlots)]>>,
+    /// Each follower effect in the content, with the origin its subtree paints
+    /// at, for hit-testing and input regions.
+    followers: SmallVec<[(RenderId, EntryIndex, Offset); 1]>,
+    /// The boundaries the content slots.
+    children: SmallVec<[(RenderId, SceneNodeId); 4]>,
+    /// Dropped by the residue scan: a paint was owed and never made, so the
+    /// next frame that reaches the boundary repaints it into the same node.
+    stale: bool,
 }
 
-/// One entry of a capture's paint-order stream.
-#[derive(Clone, Debug)]
-enum Entry {
-    /// A layer the boundary painted itself.
-    Layer(RetainedNode),
-    /// The place a nested repaint boundary sits.
-    Slot(NestedSlot),
+impl BoundaryRecord {
+    /// The node the boundary is published at.
+    pub(super) fn node(&self) -> SceneNodeId {
+        self.node
+    }
+
+    /// Each node whose own effect layers the content holds, with their
+    /// entries and origin.
+    fn effect_slots(&self) -> &[(RenderId, EffectSlots)] {
+        self.effect_slots.as_deref().unwrap_or_default()
+    }
 }
 
-/// An ordered hole in a capture's entry stream, at the position the painting
-/// walk reached a nested repaint boundary.
-///
-/// The slot owns the nested boundary's `OffsetLayer`: replay mints it from the
-/// boundary's CURRENT position and content token, so a repainted nested
-/// boundary always carries a new stamp for the damage differ and a boundary
-/// that moved needs only the new offset. Everything here is relative to the
-/// enclosing region, never an absolute anchor.
-#[derive(Clone, Copy, Debug)]
-struct NestedSlot {
-    boundary: RenderId,
-    /// The entry whose layer the boundary hung under, `None` for the region's
-    /// own `OffsetLayer`.
-    parent: Option<usize>,
-    /// The enclosing node's accumulated origin in the region's layer space.
+/// Where a boundary's slot put it, as its parent's paint last placed it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Placed {
+    /// The parent's accumulated origin in its layer space at the slot.
     origin: Offset,
-    /// Where the parent painted the child through `paint_child_at` (a
-    /// `FractionalTranslation`-style wrapper whose committed child offset stays
-    /// zero), else `None` and the child's committed layout offset is read at
-    /// replay. The override is part of the clean parent's own paint, so it is
-    /// stored, not re-derived.
+    /// The offset the parent painted it at instead of its own, if any.
     offset_override: Option<Offset>,
-    /// The anchor frame in force at the enclosing node when a paint anchor
-    /// INSIDE this region governs it: that frame depends only on this
-    /// region's own paint. `None` when the anchor came from outside, which
-    /// replay takes from where the region is placed now.
-    anchor: Option<AnchorFrame>,
+    /// The paint anchor in force at the slot when the anchor is a node of the
+    /// parent's region; an inherited one is derived from the parent's record.
+    slot_anchor: Option<AnchorFrame>,
+    /// The boundary that slots it, `None` for the frame node.
+    parent: Option<RenderId>,
+    /// Its node's offset in the parent's content: `origin` plus its position.
+    placement: Offset,
 }
 
-/// One boundary's worth of composited-layer update work, decided during the
-/// paint walk and applied by `run_paint` once the frame commits.
-struct LayerPatch {
-    /// `(index into RetainedSubtree::entries, replacement layer)`.
-    patches: Vec<(usize, Layer)>,
-    /// The nodes whose pending-update flag this patch serves.
-    consumed: SmallVec<[RenderId; 2]>,
+impl Placed {
+    /// A record not placed yet; the slot that names it places it.
+    const UNPLACED: Self = Self {
+        origin: Offset::ZERO,
+        offset_override: None,
+        slot_anchor: None,
+        parent: None,
+        placement: Offset::ZERO,
+    };
 }
 
-/// Where one render node's own effect layers live inside a [`RetainedSubtree`],
-/// plus what is needed to rebuild them.
+/// The frame node a pipeline publishes its root under: the device-pixel-ratio
+/// layer, and the root's slot or its inline paint.
+#[derive(Clone, Debug)]
+pub(super) struct FrameRecord {
+    node: SceneNodeId,
+    root: RenderId,
+    root_is_boundary: bool,
+    followers: SmallVec<[(RenderId, EntryIndex, Offset); 1]>,
+    children: SmallVec<[(RenderId, SceneNodeId); 4]>,
+}
+
+impl FrameRecord {
+    /// The node the frame is published at, which the scene's root slots.
+    pub(super) fn node(&self) -> SceneNodeId {
+        self.node
+    }
+}
+
+/// A paint pass's patch, staged until the patch it buffered is applied.
+#[derive(Debug, Default)]
+pub(super) struct StagedScene {
+    /// Records replaced (`Some`) or dropped (`None`).
+    pub(super) records: FxHashMap<RenderId, Option<BoundaryRecord>>,
+    /// New placements of records the pass kept.
+    placed: FxHashMap<RenderId, Placed>,
+    /// Records the residue scan found owing a paint.
+    stale: Vec<RenderId>,
+    frame: Option<FrameRecord>,
+    /// Nodes of removed boundaries still named by a parent the pass did not
+    /// republish.
+    orphans: Vec<SceneNodeId>,
+    /// Operations the pass buffered.
+    pub(super) ops: u64,
+}
+
+impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
+    /// Takes in what the patch this owner's last paint buffered became: the
+    /// version it was applied as (ADR-0304 §8).
+    ///
+    /// Commits the paint's records, then places followers for hit-testing
+    /// and input regions and reads the leaders for watches off `version`.
+    /// A patch never applied is never reported: the next paint finds it
+    /// staged still, drops every record, and repaints from the root, as it
+    /// does after a refused patch renews the owner's lineage (ADR-0304 §10).
+    ///
+    /// Returns the version the watches held before, which the caller drops
+    /// once it holds no borrow of this owner: its annotations are user
+    /// values whose `Drop` is user code.
+    #[must_use = "the version this one replaces drops its annotations, user code: drop it once no pipeline borrow is held"]
+    pub fn scene_applied(
+        &mut self,
+        version: &flui_layer::SceneVersion,
+    ) -> Option<flui_layer::SceneVersion> {
+        let staged = self.staged_scene.take()?;
+        let StagedScene {
+            mut records,
+            mut placed,
+            mut stale,
+            frame,
+            orphans,
+            ops: _,
+        } = staged;
+        for (id, record) in records.drain() {
+            if let Some(record) = record {
+                if record.followers.is_empty() {
+                    self.follower_boundaries.remove(&id);
+                } else {
+                    self.follower_boundaries.insert(id);
+                }
+                self.boundary_records.insert(id, record);
+            } else {
+                self.follower_boundaries.remove(&id);
+                self.boundary_records.remove(&id);
+            }
+        }
+        for (id, placed) in placed.drain() {
+            if let Some(record) = self.boundary_records.get_mut(&id) {
+                record.placed = placed;
+            }
+        }
+        for id in stale.drain(..) {
+            if let Some(record) = self.boundary_records.get_mut(&id) {
+                record.stale = true;
+            }
+        }
+        let previous_orphans = std::mem::replace(&mut self.orphaned_nodes, orphans);
+        if let Some(scratch) = self.paint_scratch.as_mut() {
+            scratch.recycle_staged(records, placed, stale, previous_orphans);
+        }
+        if let Some(frame) = frame {
+            self.scene_frame = Some(frame);
+            // A patch with a frame retired every abandoned node it could
+            // still find.
+            self.abandoned_nodes.clear();
+        }
+
+        // Follower hit-testing: each follower's composite-resolved transform,
+        // read off the applied version the engine resolves against, one
+        // algorithm for pixels and hit-tests.
+        self.last_follower_transforms.clear();
+        self.last_hidden_follower_ids.clear();
+        let frame_followers = self.scene_frame.iter().flat_map(|frame| {
+            frame
+                .followers
+                .iter()
+                .map(|follower| (frame.node, follower))
+        });
+        let boundary_followers = self.follower_boundaries.iter().filter_map(|id| {
+            let record = self.boundary_records.get(id)?;
+            Some(
+                record
+                    .followers
+                    .iter()
+                    .map(|follower| (record.node, follower)),
+            )
+        });
+        for (node, &(render_id, entry, origin)) in
+            frame_followers.chain(boundary_followers.flatten())
+        {
+            match version.follower_transform(flui_layer::EntryAddress { node, entry }) {
+                // The subtree is recorded with its accumulated origin baked
+                // in and the engine applies `transform` outside it, while the
+                // hit-test walk and input regions have already subtracted that
+                // origin: conjugating by it gives them the mapping paint
+                // applies.
+                Some(transform) => {
+                    self.last_follower_transforms
+                        .insert(render_id, conjugate(transform, -origin));
+                }
+                None => {
+                    self.last_hidden_follower_ids.insert(render_id);
+                }
+            }
+        }
+        // Queued, not run: listeners run in the post-frame lane.
+        self.leader_watches.check(version)
+    }
+
+    /// Gives up a patch that was never applied: its contents go to `writer`,
+    /// its collections back to the scratch.
+    fn discard_staged(&mut self, staged: StagedScene, writer: &mut SceneWriter<'_>) {
+        let StagedScene {
+            mut records,
+            placed,
+            stale,
+            orphans,
+            ..
+        } = staged;
+        for record in records.drain().filter_map(|(_, record)| record) {
+            writer.discard(record.content);
+        }
+        if let Some(scratch) = self.paint_scratch.as_mut() {
+            scratch.recycle_staged(records, placed, stale, orphans);
+        }
+    }
+
+    /// The node this owner publishes its frame at, which the scene's root
+    /// content slots; `None` before its first paint was applied.
+    #[must_use]
+    pub fn scene_frame_node(&self) -> Option<flui_layer::SceneNodeId> {
+        self.staged_scene
+            .as_ref()
+            .and_then(|staged| staged.frame.as_ref())
+            .or(self.scene_frame.as_ref())
+            .map(FrameRecord::node)
+    }
+
+    /// Whether the last paint buffered a patch not reported as applied yet.
+    #[must_use]
+    pub fn scene_staged(&self) -> bool {
+        self.staged_scene.is_some()
+    }
+
+    /// Drops every record of the scene: the next paint repaints from the
+    /// root into new nodes.
+    ///
+    /// The nodes the records named stay owed a retirement: the scene the
+    /// writer patches may still hold them, and only a `Retire` frees a node.
+    pub(super) fn forget_scene(&mut self) {
+        let frame = self.scene_frame.take().map(|frame| frame.node);
+        let boundaries = self.boundary_records.drain().map(|(_, record)| record.node);
+        self.abandoned_nodes
+            .extend(frame.into_iter().chain(boundaries));
+        self.abandoned_nodes.append(&mut self.orphaned_nodes);
+        self.follower_boundaries.clear();
+        self.staged_scene = None;
+    }
+}
+
+/// The effect entries one node pushed in a content, and the origin it
+/// painted at.
 #[derive(Clone, Debug)]
 struct EffectSlots {
-    /// Indices into [`RetainedSubtree::entries`], in push order (outermost
-    /// first) — the same order [`own_effect_layers`] returns.
-    indices: SmallVec<[usize; 3]>,
-    /// The accumulated origin this node painted at.
-    ///
-    /// Kept because a transform layer is conjugated by it. A property-only
-    /// update cannot have moved the node — a move is a layout change, which
-    /// repaints the boundary and discards this capture — so replaying the
-    /// captured origin is correct by construction.
+    indices: SmallVec<[EntryIndex; 3]>,
     origin: Offset,
-}
-
-#[derive(Clone, Debug)]
-struct RetainedNode {
-    layer: Layer,
-    parent: Option<usize>,
 }
 
 /// The layers a node pushes for its OWN effects, in push order (outermost
@@ -1370,13 +1459,13 @@ fn own_effect_layers(effects: PaintEffects, origin: Offset) -> SmallVec<[Layer; 
 /// anchor. Inline children share the layer space and the frame; a repaint
 /// boundary starts a layer space at its own origin, so its subtree gets the
 /// frame [`rebased`](Self::rebased) there.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct AnchorFrame {
     base: Offset,
     size: Size,
     /// `true` while the anchor is a node of the repaint-boundary region being
     /// painted, `false` when the region inherited it from outside. A capture
-    /// stores the frame only in the first case — see [`NestedSlot::anchor`].
+    /// stores the frame only in the first case.
     local: bool,
 }
 
@@ -1400,16 +1489,6 @@ impl AnchorFrame {
     }
 }
 
-/// How a nested boundary's `OffsetLayer` was placed this pass: the part of its
-/// [`NestedSlot`] that only the painting walk knows. See
-/// [`FragmentComposer::slot_info`].
-#[derive(Clone, Copy, Debug)]
-struct SlotPlacement {
-    origin: Offset,
-    offset_override: Option<Offset>,
-    anchor: Option<AnchorFrame>,
-}
-
 /// The paint queue as one pass reads it.
 struct PaintInputs<'a> {
     /// Every queued node: a boundary absent from it is clean.
@@ -1417,367 +1496,645 @@ struct PaintInputs<'a> {
     /// Boundaries queued only for composited-layer updates, with the nodes that
     /// asked.
     layer_updates: &'a FxHashMap<RenderId, SmallVec<[RenderId; 2]>>,
+    /// Whether the frame node is repainted this pass.
+    frame_dirty: bool,
 }
 
-/// Builds the frame's [`LayerTree`] from replayed paint fragments,
-/// merging adjacent inline draw runs into shared `PictureLayer`s.
-///
-/// Sealing discipline mirrors the recorder's: the open run is flushed
-/// into a `PictureLayer` whenever a layer boundary needs ordering
-/// (push/pop) and at [`Self::finish`]. The stack always holds at least
-/// the root `OffsetLayer`.
+impl PaintInputs<'_> {
+    /// Whether the boundary `id` is queued for a repaint rather than only a
+    /// composited-layer update.
+    fn repaints(&self, id: RenderId) -> bool {
+        self.dirty_set.contains(&id) && !self.layer_updates.contains_key(&id)
+    }
+}
+
+/// One boundary's content while its paint is replayed into it.
 #[derive(Debug)]
-struct FragmentComposer {
-    tree: LayerTree,
-    stack: Vec<LayerId>,
+struct BoundaryBuild {
+    /// The boundary, `None` for the frame node.
+    boundary: Option<RenderId>,
+    /// Which content of the pass this is: the key its render objects'
+    /// ordinals and effect slots are filed under in the composer.
+    serial: u64,
+    builder: ContentBuilder,
     open: DisplayList,
-    /// `(RenderId, LayerId, origin)` correlation for each `Layer::Follower` pushed
-    /// this paint pass (flui-rendering ARCHITECTURE.md, follower hit-testing) — the general `RenderId -> LayerId`
-    /// primitive independently wanted by the snapshot/harness subtree-scoping
-    /// TODOs (`testing/snapshot.rs`, `testing/harness.rs`), shipped narrowed
-    /// to followers for now. `run_paint` resolves each entry post-paint via
-    /// `flui_layer::resolve_follower_transform` into `PipelineOwner
-    /// ::last_follower_transforms` / `::last_hidden_follower_ids`.
-    follower_correlations: Vec<(RenderId, LayerId, Offset)>,
-    /// For each node painted this pass that has children, the children it painted in the
-    /// order it painted them when that is not every child first to last (`None` when it
-    /// is), applied by `run_paint` to `PipelineOwner::last_child_paint_orders`.
+    /// The render object whose runs `open` holds, `None` while it is empty: a
+    /// chunk holds one render object's output (ADR-0304 §2), so a run of
+    /// another seals it first.
+    open_owner: Option<RenderId>,
+    effect_slots: Vec<(RenderId, EffectSlots)>,
+    followers: SmallVec<[(RenderId, EntryIndex, Offset); 1]>,
+    children: SmallVec<[(RenderId, SceneNodeId); 4]>,
+}
+
+impl BoundaryBuild {
+    fn new(boundary: Option<RenderId>, serial: u64) -> Self {
+        Self {
+            boundary,
+            serial,
+            builder: BoundaryContent::builder(),
+            open: DisplayList::new(),
+            open_owner: None,
+            effect_slots: Vec::new(),
+            followers: SmallVec::new(),
+            children: SmallVec::new(),
+        }
+    }
+
+    /// The record of the content built, published at `node`.
+    fn into_record(self, node: SceneNodeId, placed: Placed) -> BoundaryRecord {
+        BoundaryRecord {
+            node,
+            content: Arc::new(self.builder.finish()),
+            placed,
+            effect_slots: (!self.effect_slots.is_empty()).then(|| Arc::from(self.effect_slots)),
+            followers: self.followers,
+            children: self.children,
+            stale: false,
+        }
+    }
+}
+
+/// The collections a paint pass fills and empties, kept by the owner across
+/// frames so a pass allocates only when it outgrows them.
+///
+/// A pass takes them out of the owner and puts them back once it committed;
+/// one that fails or unwinds leaves empty ones behind, which serve the next
+/// pass the same. Each is cleared when it is taken, so what a failed pass
+/// left in one is never read.
+#[derive(Debug, Default)]
+pub(super) struct PaintScratch {
+    /// The queued nodes, as a set.
+    dirty_ids: FxHashSet<RenderId>,
+    /// The boundaries queued only for composited-layer updates.
+    layer_updates: FxHashMap<RenderId, SmallVec<[RenderId; 2]>>,
+    composer: ComposerScratch,
+}
+
+impl PaintScratch {
+    /// Empties every collection for the next pass, dropping one this pass
+    /// grew past [`KEPT_CAPACITY`]: clearing a hash table costs its capacity,
+    /// so a large frame must not make every later small one pay for it.
+    fn recycle(&mut self) {
+        recycle_set(&mut self.dirty_ids);
+        recycle_map(&mut self.layer_updates);
+        let composer = &mut self.composer;
+        recycle_vec(&mut composer.builds);
+        recycle_vec(&mut composer.publishes);
+        recycle_vec(&mut composer.places);
+        recycle_set(&mut composer.served);
+        recycle_set(&mut composer.slotted);
+        recycle_vec(&mut composer.child_paint_orders);
+        recycle_vec(&mut composer.consumed_updates);
+        recycle_set(&mut composer.visited);
+        recycle_map(&mut composer.ordinals);
+        recycle_map(&mut composer.effect_owner);
+        recycle_vec(&mut composer.layer_patches);
+        recycle_set(&mut composer.republished);
+        recycle_vec(&mut composer.retired);
+        recycle_set(&mut composer.retired_set);
+        recycle_vec(&mut composer.unslotted);
+        recycle_map(&mut composer.records);
+        recycle_map(&mut composer.placed);
+        recycle_vec(&mut composer.stale);
+        recycle_vec(&mut composer.orphans);
+    }
+
+    /// Hands back the maps a staged patch held, for the next pass to stage
+    /// into.
+    fn recycle_staged(
+        &mut self,
+        mut records: FxHashMap<RenderId, Option<BoundaryRecord>>,
+        mut placed: FxHashMap<RenderId, Placed>,
+        mut stale: Vec<RenderId>,
+        mut orphans: Vec<SceneNodeId>,
+    ) {
+        recycle_map(&mut records);
+        recycle_map(&mut placed);
+        recycle_vec(&mut stale);
+        recycle_vec(&mut orphans);
+        let composer = &mut self.composer;
+        composer.records = records;
+        composer.placed = placed;
+        composer.stale = stale;
+        composer.orphans = orphans;
+    }
+}
+
+/// The most entries a collection [`PaintScratch`] keeps between passes may
+/// have room for.
+const KEPT_CAPACITY: usize = 1024;
+
+fn recycle_map<K, V>(map: &mut FxHashMap<K, V>) {
+    if map.capacity() > KEPT_CAPACITY {
+        *map = FxHashMap::default();
+    } else {
+        map.clear();
+    }
+}
+
+fn recycle_set<K>(set: &mut FxHashSet<K>) {
+    if set.capacity() > KEPT_CAPACITY {
+        *set = FxHashSet::default();
+    } else {
+        set.clear();
+    }
+}
+
+fn recycle_vec<T>(vec: &mut Vec<T>) {
+    if vec.capacity() > KEPT_CAPACITY {
+        *vec = Vec::new();
+    } else {
+        vec.clear();
+    }
+}
+
+/// What [`FragmentComposer`] works in, between passes.
+#[derive(Debug, Default)]
+struct ComposerScratch {
+    builds: Vec<BoundaryBuild>,
+    publishes: Vec<(SceneNodeId, Arc<BoundaryContent>)>,
+    places: Vec<(SceneNodeId, Offset)>,
+    served: FxHashSet<RenderId>,
+    slotted: FxHashSet<SceneNodeId>,
     child_paint_orders: Vec<(RenderId, Option<ChildPaintOrder>)>,
-    /// Retention decisions taken during the walk, applied by `run_paint` once
-    /// the walk's `&self` borrow ends.
-    ///
-    /// `Some` replaces the boundary's stored output, `None` evicts it. The
-    /// walk itself only has `&self`, so this is the same side-collection shape
-    /// the layout walk uses for the sinks it cannot commit in place.
-    retained_captures: Vec<(RenderId, Option<RetainedSubtree>)>,
-    /// What each nested boundary's `OffsetLayer` was placed with, so `capture`
-    /// can turn the layer back into a [`NestedSlot`] of the enclosing capture.
-    slot_info: FxHashMap<LayerId, SlotPlacement>,
-    /// Which render node owns each effect layer pushed this pass, and the
-    /// origin it painted at.
-    ///
-    /// Maintained incrementally rather than as a log the captures re-index:
-    /// `capture` runs once per repainted boundary, so rebuilding this map
-    /// inside it would make the paint pass O(boundaries x effect layers) even
-    /// though each capture only looks up the layers it actually visits.
-    effect_owner: FxHashMap<LayerId, (RenderId, Offset)>,
-    /// Patches applied to a grafted capture this pass, to be written back into
-    /// the stored capture by `run_paint` once the walk's `&self` borrow ends.
-    ///
-    /// Without the write-back the cache would keep the value it was captured
-    /// with, and a later frame that grafts it for an unrelated reason would
-    /// revert the property permanently — the failure a two-frame test cannot
-    /// see.
-    layer_patches: Vec<(RenderId, ContentToken, Vec<(usize, Layer)>)>,
-    /// Nodes whose pending-update flag this pass's patches serve, cleared by
-    /// `run_paint` on the commit path only — see [`LayerPatch::consumed`].
     consumed_updates: Vec<RenderId>,
-    /// Every render node this pass's descent actually reached.
-    ///
-    /// The residue scan needs "was this queued node reached", and the only
-    /// honest answer is one the walk records. Its previous test — is the node
-    /// STILL flagged needs-paint — is blind after a pass that failed partway,
-    /// because the walk clears that flag as it goes while `run_paint`'s error
-    /// arm keeps the queue for the retry. The scan would then skip exactly the
-    /// entries it exists to catch, silently, since it is also the only
-    /// diagnostic on that path.
     visited: FxHashSet<RenderId>,
-    /// Nodes painted and layers created or grafted this pass, folded into the
+    ordinals: FxHashMap<(u64, RenderId), (u32, u32)>,
+    effect_owner: FxHashMap<(u64, RenderId), usize>,
+    layer_patches: Vec<(EntryIndex, Layer)>,
+    republished: FxHashSet<SceneNodeId>,
+    retired: Vec<SceneNodeId>,
+    retired_set: FxHashSet<SceneNodeId>,
+    unslotted: Vec<RenderId>,
+    /// A staged patch's maps, handed back by `scene_applied`.
+    records: FxHashMap<RenderId, Option<BoundaryRecord>>,
+    placed: FxHashMap<RenderId, Placed>,
+    stale: Vec<RenderId>,
+    /// The orphan list the owner held before the last applied patch
+    /// replaced it, emptied, for the next pass to collect into.
+    orphans: Vec<SceneNodeId>,
+}
+
+impl ComposerScratch {
+    /// Empties every collection; each was emptied when the last pass that
+    /// used it ended, so this costs nothing unless that pass failed.
+    fn clear(&mut self) {
+        self.builds.clear();
+        self.publishes.clear();
+        self.places.clear();
+        self.served.clear();
+        self.slotted.clear();
+        self.child_paint_orders.clear();
+        self.consumed_updates.clear();
+        self.visited.clear();
+        self.ordinals.clear();
+        self.effect_owner.clear();
+        self.layer_patches.clear();
+        self.republished.clear();
+        self.retired.clear();
+        self.retired_set.clear();
+        self.unslotted.clear();
+        self.records.clear();
+        self.placed.clear();
+        self.stale.clear();
+    }
+}
+
+/// What a paint pass leaves for `run_paint` to commit.
+struct PaintOutcome {
+    staged: StagedScene,
+    counts: PaintCounts,
+}
+
+/// Replays paint fragments into the contents of the boundaries a pass
+/// paints, and buffers the patch that publishes them (ADR-0304 §3, §8).
+///
+/// Sealing discipline mirrors the recorder's: the open run is sealed into a
+/// [`Chunk`] whenever an effect or a slot needs ordering, whenever the
+/// render object painting the next run changes, and when the boundary's
+/// content ends. A chunk therefore holds one render object's output
+/// (ADR-0304 §2), and a render object that repaints changes only its own
+/// chunks.
+///
+/// Operations are buffered here and handed to the writer when the pass ends,
+/// in the order the owner applies them: every content child first, then
+/// placements, then retirements.
+struct FragmentComposer<'w, 'o, 's> {
+    writer: &'w mut SceneWriter<'o>,
+    /// The pass's working collections, which the owner keeps between passes.
+    work: &'s mut ComposerScratch,
+    /// The serial the next content begun takes.
+    next_serial: u64,
+    staged: StagedScene,
+    /// Set when the owner's sequence ran out for a chunk: the patch is then
+    /// refused by `apply` too, which renews the lineage (ADR-0304 §10).
+    exhausted: bool,
+    /// Nodes painted and layers created or kept this pass, folded into the
     /// owner's `PipelineCounters` by `run_paint` on the commit path only.
     counts: PaintCounts,
 }
 
-impl FragmentComposer {
-    /// `device_pixel_ratio` becomes the root layer's scale: the
-    /// framework paints in LOGICAL pixels, the engine rasterizes in
-    /// physical surface pixels — the root transform is the single
-    /// place the two meet.
-    ///
-    /// `root_boundary` stamps the root layer when the root render object
-    /// declares itself a repaint boundary (`RenderView` does). It has to be
-    /// threaded in here rather than applied later, because the root is never
-    /// reached by `push_boundary_layer`: that fires from the PARENT's child
-    /// loop, and the root has no parent. Without it the tree carries a
-    /// boundary nothing can identify -- the worst shape for anything pairing
-    /// boundaries across frames, which is what the stamp exists for. It
-    /// carries the root's content token, certified by `run_paint`.
-    fn new(device_pixel_ratio: f64, root_boundary: Option<(RenderId, ContentToken)>) -> Self {
-        let root_layer = if (device_pixel_ratio - 1.0).abs() < f64::EPSILON {
-            Layer::Offset(OffsetLayer::zero())
-        } else {
-            Layer::Transform(TransformLayer::new(
-                flui_foundation::geometry::Matrix4::scaling(
-                    device_pixel_ratio,
-                    device_pixel_ratio,
-                    1.0,
-                ),
-            ))
+impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
+    fn new(writer: &'w mut SceneWriter<'o>, work: &'s mut ComposerScratch) -> Self {
+        work.clear();
+        let staged = StagedScene {
+            records: std::mem::take(&mut work.records),
+            placed: std::mem::take(&mut work.placed),
+            stale: std::mem::take(&mut work.stale),
+            orphans: std::mem::take(&mut work.orphans),
+            ..StagedScene::default()
         };
-        let root_node = LayerNode::new(root_layer);
-        let tree = LayerTree::new(match root_boundary {
-            Some((id, content)) => root_node.with_boundary(id, content),
-            None => root_node,
-        });
         Self {
-            stack: vec![tree.root()],
-            tree,
-            open: DisplayList::new(),
-            follower_correlations: Vec::new(),
-            child_paint_orders: Vec::new(),
-            retained_captures: Vec::new(),
-            slot_info: FxHashMap::default(),
-            effect_owner: FxHashMap::default(),
-            layer_patches: Vec::new(),
-            consumed_updates: Vec::new(),
-            visited: FxHashSet::default(),
+            writer,
+            work,
+            next_serial: 0,
+            staged,
+            exhausted: false,
             counts: PaintCounts::default(),
         }
     }
 
-    /// The layer the whole frame hangs under.
-    fn root_layer(&self) -> LayerId {
-        self.tree.root()
-    }
-
-    /// Counts one render node whose `paint_raw` ran this pass.
     fn note_painted(&mut self) {
         self.counts.nodes_painted += 1;
     }
 
-    /// Merges a sealed run while keeping its canvas clips local to that run.
-    fn append_run(&mut self, run: DisplayList) {
-        self.open.append_isolated(run);
+    fn build(&mut self) -> &mut BoundaryBuild {
+        self.work
+            .builds
+            .last_mut()
+            .expect("BUG: paint replays only inside a boundary's content")
     }
 
-    /// Flushes the open picture into a `PictureLayer` under the
-    /// current stack top (no-op when empty).
-    /// The layer everything recorded right now hangs off.
-    ///
-    /// One accessor rather than the same `stack.last().expect(..)` repeated at
-    /// every insertion point: the invariant has one owner, and the message
-    /// naming it is written once.
-    fn current_parent(&self) -> LayerId {
-        *self.stack.last().expect(
-            "BUG: the composer stack always holds the root layer — pop_layer refuses to remove it",
-        )
+    /// The boundary whose content is being built, `None` for the frame node.
+    fn current_boundary(&self) -> Option<RenderId> {
+        self.work.builds.last().and_then(|build| build.boundary)
+    }
+
+    fn begin_boundary(&mut self, boundary: Option<RenderId>) {
+        let serial = self.next_serial;
+        self.next_serial = serial
+            .checked_add(1)
+            .expect("BUG: a pass begins fewer than 2^64 contents");
+        self.work.builds.push(BoundaryBuild::new(boundary, serial));
+    }
+
+    /// Ends the innermost content, its open run sealed.
+    fn end_boundary(&mut self) -> BoundaryBuild {
+        self.seal_picture();
+        self.work
+            .builds
+            .pop()
+            .expect("BUG: a boundary's content ends after it began")
+    }
+
+    fn served(&self, id: RenderId) -> bool {
+        self.work.served.contains(&id)
+    }
+
+    fn mark_served(&mut self, id: RenderId) {
+        self.work.served.insert(id);
+    }
+
+    /// The node of a boundary served this pass.
+    fn node_of(&self, owner: &PipelineOwner<PaintPhase>, id: RenderId) -> Option<SceneNodeId> {
+        match self.staged.records.get(&id) {
+            Some(Some(record)) => Some(record.node),
+            Some(None) => None,
+            None => owner.boundary_records.get(&id).map(|record| record.node),
+        }
+    }
+
+    fn stage_record(&mut self, id: RenderId, record: BoundaryRecord) {
+        self.staged.placed.remove(&id);
+        self.staged.records.insert(id, Some(record));
+    }
+
+    /// The placement a repaint staged for `id` this pass, if any.
+    fn staged_placed(&self, id: RenderId) -> Option<Placed> {
+        match self.staged.records.get(&id) {
+            Some(Some(record)) => Some(record.placed),
+            _ => self.staged.placed.get(&id).copied(),
+        }
+    }
+
+    fn stage_placed(&mut self, id: RenderId, placed: Placed) {
+        match self.staged.records.get_mut(&id) {
+            Some(Some(record)) => record.placed = placed,
+            _ => {
+                self.staged.placed.insert(id, placed);
+            }
+        }
+    }
+
+    fn mint_node(&mut self) -> SceneNodeId {
+        self.writer.mint_node()
+    }
+
+    fn publish(&mut self, node: SceneNodeId, content: Arc<BoundaryContent>) {
+        self.work.publishes.push((node, content));
+    }
+
+    fn place(&mut self, node: SceneNodeId, placement: Offset) {
+        self.work.places.push((node, placement));
+    }
+
+    /// Slots the child boundary `id`, published at `node`, where the
+    /// innermost content stands.
+    fn slot(&mut self, id: RenderId, node: SceneNodeId) {
+        self.seal_picture();
+        let build = self.build();
+        build.builder.slot(node);
+        build.children.push((id, node));
+        self.work.slotted.insert(node);
+    }
+
+    /// Merges a sealed run of `owner`'s paint while keeping its canvas clips
+    /// local to that run; a run of another render object seals the open
+    /// chunk first.
+    fn append_run(&mut self, owner: RenderId, run: DisplayList) {
+        // An empty run draws nothing, so it seals nothing; it is still
+        // appended for the refusal counts it carries.
+        if !run.is_empty() && self.build().open_owner != Some(owner) {
+            self.seal_picture();
+            self.build().open_owner = Some(owner);
+        }
+        self.build().open.append_isolated(run);
     }
 
     fn seal_picture(&mut self) {
-        if self.open.is_empty() {
+        let Some(build) = self.work.builds.last_mut() else {
+            return;
+        };
+        let owner = build.open_owner.take();
+        if build.open.is_empty() {
             return;
         }
-        let list = std::mem::take(&mut self.open);
-        let parent = self.current_parent();
-        let _ = self
-            .tree
-            .push_child(parent, Layer::from(PictureLayer::new(list)));
+        let list = std::mem::take(&mut build.open);
+        let Some(owner) = owner else {
+            debug_assert!(
+                false,
+                "BUG: a non-empty run has the render object that painted it"
+            );
+            return;
+        };
+        let Ok(version) = self.writer.next_content_version() else {
+            // The patch cannot be applied either; its refusal renews the
+            // lineage and the next frame repaints in full.
+            self.exhausted = true;
+            return;
+        };
+        let build = self
+            .work
+            .builds
+            .last_mut()
+            .expect("BUG: the content sealed is still open");
+        let ordinal = &mut self
+            .work
+            .ordinals
+            .entry((build.serial, owner))
+            .or_default()
+            .1;
+        let chunk = Chunk::new(owner, *ordinal, version, list);
+        *ordinal += 1;
+        build.builder.chunk(Arc::new(chunk));
         self.counts.layers_produced += 1;
     }
 
-    /// Inserts `layer` under the current stack top, returning its freshly
-    /// minted `LayerId` — the caller (`paint_subtree_impl`'s fragment-op
-    /// replay loop) uses this to record the `RenderId -> LayerId`
-    /// correlation for `Layer::Follower` pushes (flui-rendering ARCHITECTURE.md, follower hit-testing).
-    fn push_layer(&mut self, layer: Layer) -> LayerId {
-        self.push_layer_node(LayerNode::new(layer))
-    }
-
-    /// Push the layer a repaint boundary hangs under, stamped with that
-    /// boundary's id.
-    ///
-    /// The stamp is what lets two consecutive frames be compared: every frame
-    /// builds a fresh `LayerTree` with fresh slab indices, so `LayerId` pairs
-    /// nothing, and damage has to come from comparing layer trees rather than
-    /// from which render objects repainted (ADR-0061 — the ones that always
-    /// repaint cover the screen). The other half of that comparison — "is
-    /// this content unchanged" — is `content`, the token the paint walk
-    /// certified for this boundary. Picture `Arc`s cannot answer it: an
-    /// enclosing boundary re-records its inline pictures whenever something
-    /// nested in it is dirty.
-    ///
-    /// **Exactly one layer per boundary carries the stamp**, and it is this
-    /// one: the `OffsetLayer` a boundary child rebases under, which is also
-    /// the node a retained subtree is grafted beneath. Stamping a node's
-    /// effect layers or a fragment's structural pushes as well would put
-    /// several layers under one id and make pairing ambiguous — so those go
-    /// through [`Self::push_layer`] and stay unstamped.
-    fn push_boundary_layer(
-        &mut self,
-        layer: Layer,
-        boundary_id: RenderId,
-        content: ContentToken,
-    ) -> LayerId {
-        self.push_layer_node(LayerNode::new(layer).with_boundary(boundary_id, content))
-    }
-
-    fn push_layer_node(&mut self, node: LayerNode) -> LayerId {
+    /// Pushes `layer`, an effect `owner` painted, and opens it.
+    fn push_layer(&mut self, owner: RenderId, layer: Layer) -> EntryIndex {
         self.seal_picture();
-        let parent = self.current_parent();
-        let id = self.tree.push_child(parent, node);
-        self.stack.push(id);
+        let build = self
+            .work
+            .builds
+            .last_mut()
+            .expect("BUG: paint replays only inside a boundary's content");
+        let ordinal = &mut self
+            .work
+            .ordinals
+            .entry((build.serial, owner))
+            .or_default()
+            .0;
+        let index = build.builder.push_effect(layer, owner, *ordinal);
+        *ordinal += 1;
         self.counts.layers_produced += 1;
-        id
-    }
-
-    /// Records that `layer_id` is one of `render_id`'s own effect layers.
-    ///
-    /// Flat and unconditional: which capture (if any) ends up owning this
-    /// layer is not known until [`Self::capture`] runs, and a node's effect
-    /// layers can be flattened into SEVERAL captures at once when boundaries
-    /// nest, so the resolution has to happen per capture rather than here.
-    fn record_effect_layer(&mut self, render_id: RenderId, layer_id: LayerId, origin: Offset) {
-        self.effect_owner.insert(layer_id, (render_id, origin));
-    }
-
-    /// Records a `(RenderId, LayerId)` correlation for a pushed
-    /// `Layer::Follower` node (flui-rendering ARCHITECTURE.md, follower hit-testing).
-    fn record_follower_correlation(
-        &mut self,
-        render_id: RenderId,
-        follower_layer_id: LayerId,
-        origin: Offset,
-    ) {
-        self.follower_correlations
-            .push((render_id, follower_layer_id, origin));
-    }
-
-    /// Flatten everything painted under `root` into a reusable
-    /// [`RetainedSubtree`].
-    ///
-    /// Called after the boundary's own paint finished and its trailing picture
-    /// run was sealed, so the tree under `root` is complete.
-    ///
-    /// Returns `None` when the region holds a `Follower` (see
-    /// [`capture_refuses`]): a follower needs the `RenderId` correlation
-    /// (`follower_correlations`) that the flattened form does not carry, so
-    /// its hit-test offset would go stale on every reused frame. Refusing it
-    /// is the bounded answer; carrying the correlation through the capture is
-    /// the complete one. A `Leader` is captured: replay pushes it through
-    /// `LayerTree::push_child`, which indexes it as a painted one.
-    ///
-    /// A nested repaint boundary's `OffsetLayer` becomes a [`NestedSlot`] and its
-    /// content is not copied: the nested boundary keeps its own capture.
-    fn capture(&self, root: LayerId, content: ContentToken) -> Option<RetainedSubtree> {
-        let mut entries: Vec<Entry> = Vec::new();
-        // `effect_owner` is maintained incrementally by `record_effect_layer`,
-        // so this walk answers "is this layer somebody's effect layer" in O(1)
-        // without re-indexing anything per capture.
-        //
-        // Appended at a render id's FIRST appearance below, so this list ends
-        // up in the same order the pre-order walk below visits render ids —
-        // see the field doc on `RetainedSubtree::effect_slots`.
-        let mut effect_slots: Vec<(RenderId, EffectSlots)> = Vec::new();
-
-        // (tree id, parent index in `entries`)
-        let mut stack: Vec<(LayerId, Option<usize>)> = self
-            .tree
-            .children(root)?
-            .iter()
-            .rev()
-            .map(|&id| (id, None))
-            .collect();
-
-        while let Some((id, parent)) = stack.pop() {
-            let node = self.tree.get(id)?;
-            let index = entries.len();
-            if let Some(stamp) = node.boundary() {
-                // Only `push_boundary_layer` stamps a layer, and it records the
-                // placement in the same call.
-                let placement = self.slot_info.get(&id)?;
-                entries.push(Entry::Slot(NestedSlot {
-                    boundary: stamp.render_id(),
-                    parent,
-                    origin: placement.origin,
-                    offset_override: placement.offset_override,
-                    anchor: placement.anchor,
-                }));
-                continue;
-            }
-            let layer = node.layer();
-            if capture_refuses(layer) {
-                return None;
-            }
-            if let Some(&(render_id, origin)) = self.effect_owner.get(&id) {
-                // Find-or-push, not `entry().or_insert_with()`: this is a
-                // `Vec` so the first appearance of `render_id` fixes its
-                // position, which is what keeps `effect_slots` capture-
-                // ordered. A short linear scan — see the field doc.
-                if let Some((_, slots)) = effect_slots
-                    .iter_mut()
-                    .find(|(owner, _)| *owner == render_id)
-                {
-                    slots.indices.push(index);
-                } else {
-                    let mut indices = SmallVec::new();
-                    indices.push(index);
-                    effect_slots.push((render_id, EffectSlots { indices, origin }));
-                }
-            }
-            entries.push(Entry::Layer(RetainedNode {
-                layer: layer.clone(),
-                parent,
-            }));
-            for &child in node.children().iter().rev() {
-                stack.push((child, Some(index)));
-            }
-        }
-        Some(RetainedSubtree {
-            entries,
-            content,
-            effect_slots,
-        })
-    }
-
-    /// Makes `id` the layer everything recorded next hangs under, until
-    /// [`Self::pop_layer`]. Replay uses it to place a nested boundary under the
-    /// layer its slot named.
-    fn adopt_parent(&mut self, id: LayerId) {
-        self.seal_picture();
-        self.stack.push(id);
+        index
     }
 
     fn pop_layer(&mut self) {
         self.seal_picture();
+        let closed = self.build().builder.pop_effect();
         debug_assert!(
-            self.stack.len() > 1,
+            closed.is_some(),
             "composer pop without matching push — fragment scope ops are \
              balanced by the recorder, so an underflow means the replay \
              loop pushed/popped asymmetrically",
         );
-        if self.stack.len() > 1 {
-            self.stack.pop();
+    }
+
+    /// Files the effect at `index` as one of `render_id`'s own, built at
+    /// `origin`, for a later composited-layer update.
+    fn record_effect_layer(&mut self, render_id: RenderId, index: EntryIndex, origin: Offset) {
+        let build = self
+            .work
+            .builds
+            .last_mut()
+            .expect("BUG: paint replays only inside a boundary's content");
+        if let Some(&at) = self.work.effect_owner.get(&(build.serial, render_id)) {
+            build.effect_slots[at].1.indices.push(index);
+        } else {
+            self.work
+                .effect_owner
+                .insert((build.serial, render_id), build.effect_slots.len());
+            let mut indices = SmallVec::new();
+            indices.push(index);
+            build
+                .effect_slots
+                .push((render_id, EffectSlots { indices, origin }));
         }
     }
 
-    fn finish(
-        mut self,
-    ) -> (
-        LayerTree,
-        Vec<(RenderId, LayerId, Offset)>,
-        Vec<(RenderId, Option<RetainedSubtree>)>,
-        Vec<(RenderId, ContentToken, Vec<(usize, Layer)>)>,
-        Vec<RenderId>,
-        FxHashSet<RenderId>,
-        PaintCounts,
-        Vec<(RenderId, Option<ChildPaintOrder>)>,
+    /// Notes the follower effect at `index`, pushed by `render_id` painting at
+    /// `origin`, to place for hit-testing once the patch is applied.
+    fn record_follower_correlation(
+        &mut self,
+        render_id: RenderId,
+        index: EntryIndex,
+        origin: Offset,
     ) {
-        self.seal_picture();
-        debug_assert_eq!(
-            self.stack.len(),
-            1,
-            "composer finished with unbalanced layer stack — every \
-             push_layer in the replay loop must have a matching pop_layer",
+        self.build().followers.push((render_id, index, origin));
+    }
+
+    /// Ends the frame node's content and publishes it.
+    fn finish_frame(
+        &mut self,
+        owner: &PipelineOwner<PaintPhase>,
+        root: RenderId,
+        root_is_boundary: bool,
+    ) {
+        let build = self.end_boundary();
+        let lineage = self.writer.current().id().lineage();
+        let node = match &owner.scene_frame {
+            Some(frame) if frame.node.lineage() == lineage => frame.node,
+            _ => self.mint_node(),
+        };
+        self.publish(node, Arc::new(build.builder.finish()));
+        self.staged.frame = Some(FrameRecord {
+            node,
+            root,
+            root_is_boundary,
+            followers: build.followers,
+            children: build.children,
+        });
+    }
+
+    /// Retires what no content names any longer, hands the buffered patch to
+    /// the writer, and returns what the owner commits; the pass's consumed
+    /// updates, reached nodes and child paint orders stay in its working
+    /// collections.
+    fn finish(mut self, owner: &PipelineOwner<PaintPhase>, lineage: Lineage) -> PaintOutcome {
+        debug_assert!(
+            self.work.builds.is_empty(),
+            "BUG: a boundary's content was left open"
         );
-        (
-            self.tree,
-            self.follower_correlations,
-            self.retained_captures,
-            self.layer_patches,
-            self.consumed_updates,
-            self.visited,
-            self.counts,
-            self.child_paint_orders,
-        )
+        let mut republished = std::mem::take(&mut self.work.republished);
+        let mut retired = std::mem::take(&mut self.work.retired);
+        let mut retired_set = std::mem::take(&mut self.work.retired_set);
+        // The children a republished content no longer slots, with every
+        // boundary recorded under them: unplaced by their parent's latest
+        // layout, or moved to a parent that did not slot them this pass.
+        let mut unslotted = std::mem::take(&mut self.work.unslotted);
+        republished.clear();
+        retired.clear();
+        retired_set.clear();
+        unslotted.clear();
+        republished.extend(self.work.publishes.iter().map(|(node, _)| *node));
+        let old_children = |id: &Option<RenderId>| -> &[(RenderId, SceneNodeId)] {
+            match id {
+                Some(id) => owner
+                    .boundary_records
+                    .get(id)
+                    .map_or(&[][..], |record| &record.children[..]),
+                None => owner
+                    .scene_frame
+                    .as_ref()
+                    .map_or(&[][..], |frame| &frame.children[..]),
+            }
+        };
+        let mut republished_boundaries: SmallVec<[Option<RenderId>; 8]> = self
+            .staged
+            .records
+            .iter()
+            .filter_map(|(id, record)| record.as_ref().map(|_| Some(*id)))
+            .collect();
+        if self.staged.frame.is_some() {
+            republished_boundaries.push(None);
+        }
+        for boundary in &republished_boundaries {
+            for &(child, node) in old_children(boundary) {
+                if !self.work.slotted.contains(&node) && retired_set.insert(node) {
+                    retired.push(node);
+                    unslotted.push(child);
+                }
+            }
+        }
+        while let Some(id) = unslotted.pop() {
+            let below: SmallVec<[(RenderId, SceneNodeId); 4]> = match self.staged.records.get(&id) {
+                Some(Some(record)) => record.children.clone(),
+                Some(None) => SmallVec::new(),
+                None => owner
+                    .boundary_records
+                    .get(&id)
+                    .map(|record| record.children.clone())
+                    .unwrap_or_default(),
+            };
+            self.staged.records.insert(id, None);
+            for (child, node) in below {
+                if !self.work.slotted.contains(&node) && retired_set.insert(node) {
+                    retired.push(node);
+                    unslotted.push(child);
+                }
+            }
+        }
+        // Nodes of a scene whose records the owner dropped: retired while the
+        // version this patch applies to still holds them. The frame this pass
+        // published replaces the one the host slotted; a pass without one
+        // leaves them for the pass that has.
+        let current = self.writer.current();
+        let abandoned = if self.staged.frame.is_some() {
+            &owner.abandoned_nodes[..]
+        } else {
+            &[]
+        };
+        for &node in abandoned {
+            if node.lineage() == lineage
+                && current.node(node).is_some()
+                && !self.work.slotted.contains(&node)
+                && retired_set.insert(node)
+            {
+                retired.push(node);
+            }
+        }
+        // Removed boundaries: retired once no unchanged parent names them.
+        let mut orphans = std::mem::take(&mut self.staged.orphans);
+        orphans.clear();
+        orphans.extend(
+            owner
+                .orphaned_nodes
+                .iter()
+                .copied()
+                .filter(|node| node.lineage() == lineage && current.node(*node).is_some()),
+        );
+        loop {
+            let before = orphans.len();
+            orphans.retain(|&node| {
+                if retired_set.contains(&node) {
+                    return false;
+                }
+                let parent = current.node(node).and_then(flui_layer::SceneNode::parent);
+                let free = parent.is_none_or(|parent| {
+                    republished.contains(&parent) || retired_set.contains(&parent)
+                });
+                if free && !self.work.slotted.contains(&node) {
+                    retired_set.insert(node);
+                    retired.push(node);
+                    false
+                } else {
+                    true
+                }
+            });
+            if orphans.len() == before {
+                break;
+            }
+        }
+        self.staged.orphans = orphans;
+
+        let mut ops = 0u64;
+        for (node, content) in self.work.publishes.drain(..) {
+            self.writer.push(SceneOp::Publish { node, content });
+            ops += 1;
+        }
+        for (node, offset) in self.work.places.drain(..) {
+            let placement = Placement::try_new(offset)
+                .expect("BUG: a boundary is placed only at a finite offset");
+            self.writer.push(SceneOp::Place { node, placement });
+            ops += 1;
+        }
+        for node in retired.drain(..) {
+            self.writer.push(SceneOp::Retire { node });
+            ops += 1;
+        }
+        if self.exhausted {
+            tracing::warn!("paint: scene content versions exhausted; the patch will be refused");
+        }
+        self.work.republished = republished;
+        self.work.retired = retired;
+        self.work.retired_set = retired_set;
+        self.work.unslotted = unslotted;
+        self.staged.ops = ops;
+        let staged = std::mem::take(&mut self.staged);
+        let counts = self.counts;
+        PaintOutcome { staged, counts }
     }
 }
 
@@ -1838,7 +2195,7 @@ fn backdrop_filter_at(
 /// position.
 ///
 /// Always a real layer today; lowering non-composited clips back into
-/// canvas clips inside the merged picture is a composer-side optimization
+/// canvas clips inside a picture is a composer-side optimization
 /// gated on the `needs_compositing` bits — correctness is identical
 /// either way, so the recording API does not expose the choice.
 fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
@@ -1957,37 +2314,4 @@ pub(super) type ChildPaintOrder = SmallVec<[PaintedChild; 4]>;
 pub(super) struct PaintedChild {
     pub(super) slot: usize,
     pub(super) opacity: f64,
-}
-
-/// Whether [`capture`](FragmentComposer::capture) refuses a region that holds
-/// `layer`.
-///
-/// A `Follower` is placed for hit-testing and input regions through the
-/// `(RenderId, LayerId, origin)` correlation `record_follower_correlation`
-/// writes only while the follower paints, and a capture does not carry it.
-/// A `Leader` is replayed: `LayerTree::push_child` indexes it again when
-/// replay pushes it. Every variant is named, so a new layer kind is decided
-/// here before it can be captured.
-fn capture_refuses(layer: &Layer) -> bool {
-    match layer {
-        Layer::Follower(_) => true,
-        Layer::Canvas(_)
-        | Layer::Picture(_)
-        | Layer::Texture(_)
-        | Layer::PlatformView(_)
-        | Layer::PerformanceOverlay(_)
-        | Layer::ClipRect(_)
-        | Layer::ClipRRect(_)
-        | Layer::ClipPath(_)
-        | Layer::ClipSuperellipse(_)
-        | Layer::Offset(_)
-        | Layer::Transform(_)
-        | Layer::Opacity(_)
-        | Layer::ColorFilter(_)
-        | Layer::ImageFilter(_)
-        | Layer::ShaderMask(_)
-        | Layer::BackdropFilter(_)
-        | Layer::Leader(_)
-        | Layer::AnnotatedRegion(_) => false,
-    }
 }

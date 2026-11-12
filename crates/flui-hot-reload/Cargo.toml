@@ -59,6 +59,10 @@ flui-view = { workspace = true, features = ["testing"] }
 # `TextContextHandle::with`).
 flui-painting = { workspace = true, features = ["testing"] }
 flui-rendering = { workspace = true, features = ["testing"] }
+# The leader-watch test mounts a raw leader and watches it through the
+# scheduler's post-frame lane.
+flui-objects = { workspace = true }
+flui-scheduler = { workspace = true }
 
 [lints]
 workspace = true

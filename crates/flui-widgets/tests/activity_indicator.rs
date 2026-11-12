@@ -183,15 +183,19 @@ fn indicator_ticks_preserve_surrounding_paint_content() {
         vsync,
     );
     laid.pump_for(Duration::ZERO);
+    // The red box is the first picture the root boundary paints; a tick that
+    // keeps the boundary's content keeps that recording itself.
     let surrounding_content = |laid: &LaidOut| {
         laid.layer_tree()
             .expect("painted scene")
             .iter()
-            .find_map(|(_, node)| {
-                node.boundary()
-                    .map(|stamp| (stamp.render_id(), stamp.content().clone()))
+            .find_map(|(_, node)| match node.layer() {
+                flui_rendering::layer::Layer::Picture(picture) => {
+                    Some(std::ptr::from_ref(picture.picture()).addr())
+                }
+                _ => None,
             })
-            .expect("the presentation's root certifies its own pixels")
+            .expect("the presentation's root paints the surrounding box")
     };
     let original = surrounding_content(&laid);
     let mut previous_arc = only_arc(&laid);
@@ -202,7 +206,7 @@ fn indicator_ticks_preserve_surrounding_paint_content() {
         assert_eq!(
             surrounding_content(&laid),
             original,
-            "an indicator tick must preserve the surrounding boundary's content certificate"
+            "an indicator tick keeps the surrounding boundary's recorded content"
         );
         previous_arc = current_arc;
     }

@@ -1835,8 +1835,8 @@ impl Renderer {
         scene: &flui_layer::Scene,
     ) -> Result<PresentDisposition, EngineError> {
         // Damage arrives from the raster owner, which applies each frame's
-        // `flui_layer::DamageRegion` (the `LayerDiffer`'s comparison of
-        // consecutive layer trees, ADR-0087 §3) to the tracker before calling
+        // `flui_layer::DamageRegion` (the footprint of the scene patches since
+        // the version on screen, ADR-0304 §5) to the tracker before calling
         // this. Widgets reporting their own bounds does not work, and ADR-0061
         // records why: the objects that always repaint cover the screen.
         self.frame

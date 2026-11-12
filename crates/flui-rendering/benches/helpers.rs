@@ -15,7 +15,7 @@ use flui_rendering::{
     BoxProtocol, RenderObject,
     constraints::BoxConstraints,
     pipeline::{Compositing, Layout, PaintPhase, PipelineOwner},
-    testing::{TreeNode, box_node, tree},
+    testing::{SceneHost, TreeNode, box_node, tree},
 };
 
 /// Tight 200×200 root constraint used across all bench tree shapes.
@@ -92,14 +92,14 @@ pub fn build_wide(n: usize) -> PipelineOwner<Layout> {
 /// Build a flat tree already advanced through layout and compositing, ready
 /// for `run_paint`. The layout and compositing phases are run in setup so the
 /// paint bench measures only `run_paint` cost.
-pub fn build_flat_paint_ready(n: usize) -> PipelineOwner<PaintPhase> {
-    advance_to_paint(build_flat(n))
+pub fn build_flat_paint_ready(n: usize) -> (PipelineOwner<PaintPhase>, SceneHost) {
+    (advance_to_paint(build_flat(n)), SceneHost::new())
 }
 
 /// Build a deep chain already advanced through layout and compositing, ready
 /// for `run_paint`.
-pub fn build_deep_paint_ready(depth: usize) -> PipelineOwner<PaintPhase> {
-    advance_to_paint(build_deep(depth))
+pub fn build_deep_paint_ready(depth: usize) -> (PipelineOwner<PaintPhase>, SceneHost) {
+    (advance_to_paint(build_deep(depth)), SceneHost::new())
 }
 
 /// Build a compositing-only-ready owner from a flat tree (layout run, not yet
@@ -138,12 +138,13 @@ fn advance_to_paint(mut layout_owner: PipelineOwner<Layout>) -> PipelineOwner<Pa
 /// caller marks some subset of the returned leaves and re-runs paint, so the
 /// measurement is the cost of a frame in which almost nothing changed.
 ///
-/// The warm-up pass's layer tree is TAKEN before returning. Leaving it in
-/// place would make the timed `run_paint` drop an entire N-boundary tree while
-/// building the next one, putting an O(N) destruction inside the measurement
-/// that a real frame does not pay: `PipelineOwner::run_frame` ends with
-/// `take_layer_tree()` before returning to idle.
-pub fn build_boundary_tree_painted_once(n: usize) -> (PipelineOwner<PaintPhase>, Vec<RenderId>) {
+/// The warm-up pass's flattened tree is dropped before returning, so the timed
+/// `run_paint` does not destroy an N-boundary tree inside the measurement. The
+/// returned [`SceneHost`] keeps the scene the warm-up applied, so the timed
+/// frame is a patch against it, as in a running application.
+pub fn build_boundary_tree_painted_once(
+    n: usize,
+) -> (PipelineOwner<PaintPhase>, SceneHost, Vec<RenderId>) {
     const LABELS: [&str; 8] = [
         "leaf-0", "leaf-1", "leaf-2", "leaf-3", "leaf-4", "leaf-5", "leaf-6", "leaf-7",
     ];
@@ -175,11 +176,11 @@ pub fn build_boundary_tree_painted_once(n: usize) -> (PipelineOwner<PaintPhase>,
     );
 
     let mut owner = advance_to_paint(owner.into_layout());
-    owner
-        .run_paint()
-        .expect("the first paint must succeed on a freshly composited tree");
-    drop(owner.take_layer_tree());
-    (owner, leaf_ids)
+    let mut scene = SceneHost::new();
+    let (painted, warm_up) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
+    painted.expect("the first paint must succeed on a freshly composited tree");
+    drop(warm_up);
+    (owner, scene, leaf_ids)
 }
 
 /// N list items, each a repaint boundary around a row of inline leaves and one
@@ -187,7 +188,9 @@ pub fn build_boundary_tree_painted_once(n: usize) -> (PipelineOwner<PaintPhase>,
 ///
 /// Returns the owner and the leaf inside item 0's inner boundary: marking it
 /// dirties only that inner boundary, the case a blinking caret produces.
-pub fn build_nested_boundary_tree_painted_once(n: usize) -> (PipelineOwner<PaintPhase>, RenderId) {
+pub fn build_nested_boundary_tree_painted_once(
+    n: usize,
+) -> (PipelineOwner<PaintPhase>, SceneHost, RenderId) {
     let spec = box_node(RenderFlex::row()).children((0..n).map(|i| {
         let caret = box_node(RenderColoredBox::red(1.0, 1.0));
         let caret = if i == 0 { caret.label("caret") } else { caret };
@@ -206,11 +209,11 @@ pub fn build_nested_boundary_tree_painted_once(n: usize) -> (PipelineOwner<Paint
     let caret = registry.get("caret").expect("item 0 labels its caret");
 
     let mut owner = advance_to_paint(owner.into_layout());
-    owner
-        .run_paint()
-        .expect("the first paint must succeed on a freshly composited tree");
-    drop(owner.take_layer_tree());
-    (owner, caret)
+    let mut scene = SceneHost::new();
+    let (painted, warm_up) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
+    painted.expect("the first paint must succeed on a freshly composited tree");
+    drop(warm_up);
+    (owner, scene, caret)
 }
 
 // ============================================================================
@@ -234,9 +237,9 @@ pub fn build_nested_boundary_tree_painted_once(n: usize) -> (PipelineOwner<Paint
 /// `layered` decides what those leaves are, and it is the difference between
 /// two very different cost curves:
 ///
-/// - `false` — plain inline leaves. They merge into ONE `PictureLayer` sharing
-///   an `Arc<DisplayList>`, so the retained capture is a handful of nodes
-///   whatever `subtree` is, and grafting is O(1).
+/// - `false` — plain inline leaves, each its own `PictureLayer` sharing an
+///   `Arc<DisplayList>` (a picture holds one render object's output, ADR-0304
+///   §2), so grafting clones one picture per leaf and re-records nothing.
 /// - `true` — each leaf under its own `RenderRepaintBoundary`, so the capture's
 ///   layer count grows with `subtree` and grafting is O(retained layers): a
 ///   graft still clones every captured node. This is the shape that shows the
@@ -252,7 +255,7 @@ pub fn build_effect_tree(
     layered: bool,
     subtree: usize,
     effect: impl RenderObject<BoxProtocol> + 'static,
-) -> (PipelineOwner<PaintPhase>, RenderId) {
+) -> (PipelineOwner<PaintPhase>, SceneHost, RenderId) {
     let content = box_node(RenderFlex::row()).children((0..subtree).map(|_| {
         let leaf = box_node(RenderColoredBox::red(1.0, 1.0));
         if layered {
@@ -275,9 +278,9 @@ pub fn build_effect_tree(
     let effect_id = registry.get("effect").expect("effect is labelled");
 
     let mut owner = advance_to_paint(owner.into_layout());
-    owner
-        .run_paint()
-        .expect("the first paint must succeed on a freshly composited tree");
-    drop(owner.take_layer_tree());
-    (owner, effect_id)
+    let mut scene = SceneHost::new();
+    let (painted, warm_up) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
+    painted.expect("the first paint must succeed on a freshly composited tree");
+    drop(warm_up);
+    (owner, scene, effect_id)
 }

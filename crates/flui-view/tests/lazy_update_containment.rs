@@ -10,6 +10,7 @@ use flui_objects::{RenderSizedBox, RenderViewport};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
+use flui_rendering::testing::SceneHost;
 use flui_view::element::SliverList;
 use flui_view::{
     BoxedView, BuildOwner, ElementTree, ErrorView, LifecycleHook, RecoveredAt, RenderView, View,
@@ -117,9 +118,17 @@ fn lazy_viewport(armed: &Rc<Cell<bool>>) -> LazyViewport {
     }
 }
 
-fn run_frame(tree: &mut ElementTree, owner: &mut BuildOwner, pipeline: &PipelineCell) {
-    owner
-        .run_frame_with_layout_builders(tree, pipeline)
+fn run_frame(
+    scene: &mut SceneHost,
+    tree: &mut ElementTree,
+    owner: &mut BuildOwner,
+    pipeline: &PipelineCell,
+) {
+    scene
+        .drive_cell(pipeline, |writer| {
+            owner.run_frame_with_layout_builders(tree, pipeline, writer)
+        })
+        .0
         .expect("the lazy viewport frame must complete");
 }
 
@@ -168,6 +177,7 @@ fn assert_item_residents(tree: &ElementTree, host: ElementId) -> Vec<ElementId> 
 }
 
 pub(crate) fn lazy_render_update_panic_substitutes_at_its_logical_index() {
+    let mut scene = SceneHost::new();
     let pipeline = PipelineCell::new(PipelineOwner::new(
         flui_rendering::TextContextHandle::standalone(),
     ));
@@ -189,7 +199,7 @@ pub(crate) fn lazy_render_update_panic_substitutes_at_its_logical_index() {
         pipeline_owner.set_root_id(Some(render_root));
         pipeline_owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 200.0))));
     });
-    run_frame(&mut tree, &mut owner, &pipeline);
+    run_frame(&mut scene, &mut tree, &mut owner, &pipeline);
     let host = sliver_host(&tree, root);
     let before = assert_item_residents(&tree, host);
     assert!(owner.take_recovered_panics().is_empty());
@@ -198,7 +208,7 @@ pub(crate) fn lazy_render_update_panic_substitutes_at_its_logical_index() {
     // as it rebuilds, inside this frame's lazy service pass.
     armed.set(true);
     update_root(&mut tree, &mut owner, root, &lazy_viewport(&armed));
-    run_frame(&mut tree, &mut owner, &pipeline);
+    run_frame(&mut scene, &mut tree, &mut owner, &pipeline);
 
     let after = residents(&tree, host);
     assert_eq!(
@@ -259,7 +269,7 @@ pub(crate) fn lazy_render_update_panic_substitutes_at_its_logical_index() {
     // refresh replaces the error view at that index and leaves no orphan behind.
     armed.set(false);
     update_root(&mut tree, &mut owner, root, &lazy_viewport(&armed));
-    run_frame(&mut tree, &mut owner, &pipeline);
+    run_frame(&mut scene, &mut tree, &mut owner, &pipeline);
     let healed = assert_item_residents(&tree, host);
     assert!(tree.get(substitute).is_none(), "the substitute is evicted");
     for index in (0..ITEM_COUNT).filter(|index| *index != PANICKING_INDEX) {

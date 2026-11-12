@@ -229,6 +229,8 @@ struct TreeBinding {
     build_owner: BuildOwner,
     tree: ElementTree,
     pipeline_owner: PipelineCell,
+    /// The retained scene the pipeline's frames are applied to.
+    scene: flui_rendering::testing::SceneHost,
 }
 
 /// A deterministic, non-singleton headless frame driver.
@@ -304,7 +306,7 @@ pub struct HeadlessBinding {
     /// [`layer_tree`](Self::layer_tree).
     ///
     /// `None` before the first painted frame and for a gesture-only binding.
-    last_layer_tree: Option<LayerTree>,
+    last_layer_tree: CommittedFrame,
     /// Whether the immediately preceding frame produced a fresh layer tree.
     last_frame_painted: bool,
     /// Number of frames that produced a fresh layer tree.
@@ -384,7 +386,7 @@ impl HeadlessBinding {
             owner_frame,
             interaction_lane,
             presentation_alive: std::rc::Rc::new(()),
-            last_layer_tree: None,
+            last_layer_tree: CommittedFrame::default(),
             last_frame_painted: false,
             painted_frame_count: 0,
             last_frame_report: FrameReport::default(),
@@ -594,6 +596,7 @@ impl HeadlessBinding {
             tree,
             pipeline_owner,
             committed_layer_tree,
+            flui_rendering::testing::SceneHost::new(),
             bootstrap::BuildCapabilities::Installed,
         );
     }
@@ -613,6 +616,7 @@ impl HeadlessBinding {
         tree: ElementTree,
         pipeline_owner: PipelineCell,
         committed_layer_tree: Option<LayerTree>,
+        scene: flui_rendering::testing::SceneHost,
         capabilities: bootstrap::BuildCapabilities,
     ) {
         // Widgets spawn into the driver this binding's frame step
@@ -638,9 +642,10 @@ impl HeadlessBinding {
             build_owner,
             tree,
             pipeline_owner,
+            scene,
         });
         self.last_frame_painted = committed_layer_tree.is_some();
-        self.last_layer_tree = committed_layer_tree;
+        self.last_layer_tree = CommittedFrame::of_tree(committed_layer_tree);
         // The previous tree's last pump says nothing about this one.
         self.last_frame_report = FrameReport::default();
         if self.last_frame_painted {
@@ -820,7 +825,7 @@ impl HeadlessBinding {
     /// [`Self::did_paint_last_frame`] when the distinction matters.
     #[must_use]
     pub fn layer_tree(&self) -> Option<&LayerTree> {
-        self.last_layer_tree.as_ref()
+        self.last_layer_tree.tree()
     }
 
     /// Whether the immediately preceding frame produced a fresh layer tree.
@@ -1218,11 +1223,11 @@ impl HeadlessBinding {
                         // before build/layout/paint. Keep raw-owner animation
                         // work under that same profiling and execution extent.
                         vsync.tick_all(&tick);
-                        let (painted_layer_tree, report) = Self::run_pipeline(tree);
+                        let (painted, report) = Self::run_pipeline(tree);
                         *last_frame_report = report;
-                        *last_frame_painted = painted_layer_tree.is_some();
-                        if let Some(layer_tree) = painted_layer_tree {
-                            *last_layer_tree = Some(layer_tree);
+                        *last_frame_painted = painted.is_some();
+                        if let Some(frame) = painted {
+                            *last_layer_tree = frame;
                             *painted_frame_count = painted_frame_count.saturating_add(1);
                         }
 
@@ -1271,12 +1276,12 @@ impl HeadlessBinding {
     /// → paint, plus the lazy-sliver service pass. Runs inside
     /// `OwnerFrame::drive_frame`'s persistent slot.
     ///
-    /// Returns the composited [`LayerTree`] this frame produced — `None` for a
+    /// Returns the frame this pass committed, flattened when a test asks — `None` for a
     /// gesture-only binding, and `None` when nothing was dirty enough to
     /// repaint. `pump_frame` stores it in
     /// [`last_layer_tree`](Self::last_layer_tree). Alongside it, the frame's
     /// [`FrameReport`] (all zeros for a gesture-only binding).
-    fn run_pipeline(tree: &mut Option<TreeBinding>) -> (Option<LayerTree>, FrameReport) {
+    fn run_pipeline(tree: &mut Option<TreeBinding>) -> (Option<CommittedFrame>, FrameReport) {
         let Some(tree_binding) = tree.as_mut() else {
             return (None, FrameReport::default());
         };
@@ -1303,13 +1308,20 @@ impl HeadlessBinding {
         // out per layout pass and lets the checkout end before running the
         // builders, whose `build_scope` mounts render objects through this
         // same cell.
-        let result = tree_binding
-            .build_owner
-            .run_frame_with_layout_builders(&mut tree_binding.tree, &tree_binding.pipeline_owner);
+        let TreeBinding {
+            build_owner,
+            tree: element_tree,
+            pipeline_owner,
+            scene,
+        } = tree_binding;
+        let scene_before = SceneReport::read(scene.owner_mut());
+        let (result, applied) = scene.apply_cell(pipeline_owner, |writer| {
+            build_owner.run_frame_with_layout_builders(element_tree, pipeline_owner, writer)
+        });
         // A headless frame over an already-mounted, rooted tree must succeed;
         // a pipeline error here is a regression, surfaced loudly (the harness
         // and production frame path expect the same).
-        let layer_tree = result.expect("headless pump_frame: pipeline run_frame should succeed");
+        result.expect("headless pump_frame: pipeline run_frame should succeed");
         // Reported with the checkout released, as the production frame does.
         tree_binding.pipeline_owner.report_semantics_diagnostics();
         assert_semantics_clean(&tree_binding.pipeline_owner);
@@ -1331,8 +1343,13 @@ impl HeadlessBinding {
         let report = FrameReport {
             build: tree_binding.build_owner.last_frame_build_report(),
             pipeline: after.since(before),
+            scene: SceneReport::since(tree_binding.scene.owner_mut(), scene_before, applied),
         };
-        (layer_tree, report)
+        let frame = applied
+            .then(|| tree_binding.pipeline_owner.scene_frame_node())
+            .flatten()
+            .map(|node| CommittedFrame::of_version(tree_binding.scene.version().clone(), node));
+        (frame, report)
     }
 }
 
@@ -1350,6 +1367,9 @@ pub struct FrameReport {
     pub build: flui_view::FrameBuildReport,
     /// The pipeline's work, differenced across the frame.
     pub pipeline: flui_rendering::pipeline::PipelineCounters,
+    /// The retained scene's work: what the frame's patch changed and what
+    /// applying it cost (ADR-0304 §4, §8).
+    pub scene: SceneReport,
 }
 
 impl FrameReport {
@@ -1357,7 +1377,7 @@ impl FrameReport {
     /// names are the perf baseline's keys, so renaming one is a baseline
     /// change.
     #[must_use]
-    pub fn counters(&self) -> [(&'static str, u64); 10] {
+    pub fn counters(&self) -> [(&'static str, u64); 15] {
         let p = &self.pipeline;
         [
             ("elements_rebuilt", self.build.elements_built as u64),
@@ -1370,6 +1390,11 @@ impl FrameReport {
             ("layers_reused", p.layers_reused),
             ("semantics_nodes_updated", p.semantics_nodes_updated),
             ("frames_produced", p.frames_produced),
+            ("scene_ops", p.scene_ops),
+            ("damage_rects", self.scene.damage_rects),
+            ("damage_full", self.scene.damage_full),
+            ("scene_nodes_visited", self.scene.scene_nodes_visited),
+            ("scene_depth_updates", self.scene.scene_depth_updates),
         ]
     }
 }
@@ -1393,6 +1418,109 @@ impl std::ops::AddAssign<&FrameReport> for FrameReport {
             }
         }
         self.pipeline += rhs.pipeline;
+        self.scene += rhs.scene;
+    }
+}
+
+/// The last frame a headless binding committed: the scene version and the
+/// pipeline's frame node, flattened into a [`LayerTree`] the first time a
+/// test asks, so a frame nobody inspects costs no copy of the scene.
+#[derive(Debug, Default)]
+struct CommittedFrame {
+    source: Option<(
+        flui_rendering::layer::SceneVersion,
+        flui_rendering::layer::SceneNodeId,
+    )>,
+    tree: std::cell::OnceCell<Option<LayerTree>>,
+}
+
+impl CommittedFrame {
+    /// A tree the caller already holds.
+    fn of_tree(tree: Option<LayerTree>) -> Self {
+        Self {
+            source: None,
+            tree: std::cell::OnceCell::from(tree),
+        }
+    }
+
+    /// The frame node `node` paints in `version`.
+    fn of_version(
+        version: flui_rendering::layer::SceneVersion,
+        node: flui_rendering::layer::SceneNodeId,
+    ) -> Self {
+        Self {
+            source: Some((version, node)),
+            tree: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn tree(&self) -> Option<&LayerTree> {
+        self.tree
+            .get_or_init(|| {
+                self.source
+                    .as_ref()
+                    .and_then(|(version, node)| version.flatten_node(*node))
+            })
+            .as_ref()
+    }
+}
+
+/// What one frame's scene patch did, as the perf baseline counts it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SceneReport {
+    /// Rectangles of the patch's damage; `0` for a frame that applied none
+    /// or damaged nothing.
+    pub damage_rects: u64,
+    /// Patches whose damage was the whole surface.
+    pub damage_full: u64,
+    /// Scene nodes the apply copied or created.
+    pub scene_nodes_visited: u64,
+    /// Node depths the apply recomputed.
+    pub scene_depth_updates: u64,
+}
+
+impl SceneReport {
+    /// The owner's running totals, before a frame.
+    fn read(owner: &mut flui_rendering::layer::SceneOwner) -> Self {
+        Self {
+            damage_rects: 0,
+            damage_full: 0,
+            scene_nodes_visited: owner.table_copies() + owner.table_nodes_created(),
+            scene_depth_updates: owner.depth_updates(),
+        }
+    }
+
+    /// The work since `before`, with the damage of the patch the owner
+    /// applied last when the frame `applied` one.
+    fn since(owner: &mut flui_rendering::layer::SceneOwner, before: Self, applied: bool) -> Self {
+        let now = Self::read(owner);
+        let (damage_rects, damage_full) = if applied {
+            match owner.patch_damage() {
+                flui_rendering::layer::DamageRegion::Unchanged => (0, 0),
+                flui_rendering::layer::DamageRegion::Region(region) => {
+                    (region.rects().len() as u64, 0)
+                }
+                flui_rendering::layer::DamageRegion::Full(_) => (0, 1),
+            }
+        } else {
+            (0, 0)
+        };
+        Self {
+            damage_rects,
+            damage_full,
+            scene_nodes_visited: now.scene_nodes_visited - before.scene_nodes_visited,
+            scene_depth_updates: now.scene_depth_updates - before.scene_depth_updates,
+        }
+    }
+}
+
+impl std::ops::AddAssign for SceneReport {
+    fn add_assign(&mut self, rhs: Self) {
+        self.damage_rects += rhs.damage_rects;
+        self.damage_full += rhs.damage_full;
+        self.scene_nodes_visited += rhs.scene_nodes_visited;
+        self.scene_depth_updates += rhs.scene_depth_updates;
     }
 }
 

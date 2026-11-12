@@ -19,10 +19,10 @@ Citations below name symbols, not line numbers.
 | `ColorFilterLayer`, `ImageFilterLayer`, `ShaderMaskLayer`, `BackdropFilterLayer` | `color_filter.rs`, `image_filter.rs`, `shader_mask.rs`, `backdrop_filter.rs` | |
 | `LayerLink`, `LeaderLayer`, `FollowerLayer`, `LeaderClip` | [`src/link.rs`](src/link.rs) `LayerLink` + `resolve_follower_transform`; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
 | `AnnotatedRegionLayer` | `annotated_region.rs` | Carries an `AnnotationValue`; written by `RenderAnnotatedRegion`, read by `LayerTree::find_annotations` (`src/tree/annotations.rs`); see [Producers](#producers). |
-| `SceneBuilder` push/pop | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is built through the tree (decision 5). |
+| `SceneBuilder` push/pop | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is a scene patch (decision 5). |
 | `Scene` | [`src/scene/mod.rs`](src/scene/mod.rs) `Scene` | A frozen `LayerTree` (decision 6). |
-| Retained scene | [`src/scene/`](src/scene/) `SceneOwner`, `SceneVersion`, `BoundaryContent`, `SceneOp` | A persistent version changed by typed patches (decision 9); no producer yet, see the ADR-0304 item of [`docs/gaps.md`](../../docs/gaps.md). |
-| Retained layers across frames | none | The engine rebuilds every frame from the tree. Cross-frame reuse of painted output is `flui-rendering`'s (`FragmentComposer::capture`/`graft`, keyed on the boundary's `RenderId`); cross-frame damage is `LayerDiffer`'s comparison of boundary stamps (`RenderId` plus `ContentToken`, decision 8), not a retained engine layer. |
+| Retained scene | [`src/scene/`](src/scene/) `SceneOwner`, `SceneVersion`, `BoundaryContent`, `SceneOp` | A persistent version changed by typed patches (decision 9), which `flui-rendering`'s paint writes; what ADR-0304 still owes is its item of [`docs/gaps.md`](../../docs/gaps.md). |
+| Retained layers across frames | the retained scene (decision 9) | A clean repaint boundary keeps its `BoundaryContent` in the next version and costs no operation; the engine draws the version flattened to a tree. Cross-frame damage is the footprint of the patch (decision 9), not a comparison of frames. |
 | Composition callbacks | none | They would fire after a scene-add step this architecture does not have. |
 | `Layer::Canvas(CanvasLayer)` | `Layer::Canvas(CanvasLayer)` | A live recorder inside the tree; see [Producers](#producers). |
 
@@ -102,10 +102,11 @@ Tests: `tests/follower.rs`, run as `follower_resolution` in `tests/main.rs`
 `a_singular_transform_on_a_chain_resolves_to_nothing`,
 `followers_nested_past_the_limit_resolve_to_nothing`, …).
 
-### 5. `SceneBuilder` is secondary; the composer builds the frame through the tree
+### 5. `SceneBuilder` is secondary; the composer writes the frame into the retained scene
 
-`flui-rendering`'s `FragmentComposer` inserts straight through `insert_root`/`push_child`, and
-`SceneBuilder` is the push/pop shape for hand-authored scenes (`flui_app::run_direct`, examples,
+`flui-rendering`'s `FragmentComposer` writes each repainted boundary's content through
+`ContentBuilder` into a `SceneWriter` patch (decision 9), and the engine draws the applied version
+through `SceneVersion::flatten`. `SceneBuilder` is the push/pop shape for hand-authored scenes (`flui_app::run_direct`, examples,
 the GPU readback tests). `pop` returns `Option<LayerId>` — an empty stack is absence, the
 `Vec::pop` contract — so the crate has no error type. The builder's typed `push_*`/`add_*` are
 one-line conveniences over `push(impl Into<Layer>)` / `add(..)`; a variant without one is reached
@@ -123,8 +124,8 @@ that the type is nameable without an engine dependency — not its field set.
 ### 7. Runtime state lives with its owner
 
 `DamageTracker` (the renderer's per-frame dirty accumulator, ADR-0061's consuming half) moved to
-`flui-engine/src/damage.rs`; the seam message `DamageRegion` and its producer, `LayerDiffer`
-(decision 8), are defined here. Its
+`flui-engine/src/damage.rs`; the seam message `DamageRegion` and its producer, the footprint of a scene patch
+(decision 9), are defined here. Its
 tracker's three-rect merge was removed with the move (the seam's `Region` keeps up to eight disjoint rects, ADR-0304 §5): the one consumer reads `damage_rect()`, the bounding
 union, through which the merge was unobservable. The overlay's numbers (a frame-clock reading of the
 presentation's frame history) are computed in `flui-runtime`, beside the presentation that knows when a frame was
@@ -136,12 +137,14 @@ one recorder of the layer's readout; it holds no state.
 crosses the engine boundary as itself rather than as a `u32`
 (`performance_overlay_readout_rows`).
 
-### 8. Damage is a diff of boundary stamps — [ADR-0087 §3](../../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md)
+### 8. The stamp differ is the damage oracle — [ADR-0304 §4](../../docs/adr/ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
 
-A repaint boundary's layer carries a `BoundaryStamp`: its `RenderId`, which pairs the layer with
-the previous frame's (every frame's `LayerId`s are fresh), and a `ContentToken`, which the paint
-pass keeps while the boundary is clean and mints otherwise (`flui-rendering`'s
-`ARCHITECTURE.md`, "Paint certifies a boundary's content token"). `LayerDiffer::diff` walks the
+Production damage is the footprint of a scene patch (decision 9). `LayerDiffer`, `BoundaryStamp`
+and `ContentToken` stay behind the `testing` feature as the independent answer the footprint is
+checked against: a frame's damage must cover what the differ finds between two layer trees. A
+stamped layer carries a `BoundaryStamp`: a `RenderId`, which pairs the layer with the previous
+tree's (every tree's `LayerId`s are fresh), and a `ContentToken`, kept while the content is the
+same and minted otherwise. `LayerDiffer::diff` walks the
 frozen tree once with an explicit stack, recording per stamp its token, its placement (the
 accumulated transform and the effect layers above it, compared with `Layer::same_effect`) and its
 own region in surface pixels (its subtree minus nested boundaries' subtrees, from each picture's
@@ -167,18 +170,17 @@ twice) or above `DamageMode::On::full_above`, `Unchanged` for nothing, and other
 `DamageRect` in whole pixels, rounded outward with a 1 px anti-aliasing margin. `DamageMode::Off`
 retains nothing and does not walk.
 
-Why a token rather than `Arc::ptr_eq` on pictures: a boundary that repaints for any reason re-records its inline
-pictures, so pointer identity reports it changed on frames
-whose content did not. Why an `Arc<()>` rather than a counter: a counter restarts with each
-`PipelineOwner`, and the differ, holding the previous frame's clones, makes an allocation
-address impossible to reuse while compared. The differ pairs by the boundary `RenderId` and decides "unchanged" by the token, and
-the granularity is one boundary's own region, not a layer. `damage_diff` bench: about 200 µs for
-1,000 boundaries, 4 ns with the mode off. Tests: `src/damage/tests.rs`,
+Why the differ stays: the footprint reads only the patch's operations, so a footprint rule that
+misses a change under-reports silently; the differ derives damage from the two whole trees, an
+answer that shares none of the footprint's bookkeeping (`patch_damage_covers_diff_damage`). It is
+not on the frame path: a walk of every layer each frame is the cost the retained scene removed
+(`damage_diff` bench: about 200 µs for 1,000 boundaries). Tests: `src/damage/tests.rs`,
 `scene_snapshot.rs`'s `union_table` and `bounds_round_outward_with_aa_margin`.
 
 ### 9. The retained scene is a persistent value — [ADR-0304 §1–§3](../../docs/adr/ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
 
-A `SceneVersion` is an `Arc` over its nodes, kept in a path-copying table of fanout 32
+A `SceneVersion` is an `Arc` over its nodes, kept in a path-copying table of branches of 32 over
+leaves of 8
 (`src/scene/table.rs`) written here rather than taken from a persistent-collection crate: the
 scene needs lookup, insert, remove and an ordered walk. A write copies its path from the root to
 its leaf and shares every other subtree with the version before it; writes into one leaf share
@@ -194,7 +196,14 @@ though both mint the same slot keys, so a cache keyed by a `SceneNodeId` serves 
 a version every reference is the bare slot key, and the public id is assembled from the version's
 lineage. A boundary's content is one paint-order stream of `Entry::{Effect, Chunk, Slot}` built by
 `ContentBuilder`, which makes every entry's parent an earlier effect by construction. A chunk is
-one render object's run; its bounds and textures are read from its `DisplayList`.
+one render object's run; its bounds and textures are read from its `DisplayList`. An effect's
+layer is held beside the stream, one per effect in paint order (`BoundaryContent::effect_layer`);
+the stream sits in an `Arc` with everything that depends on the entries alone: each effect's
+entry, the effects and slots in order, each effect's scope end and the union of its direct
+chunks' bounds, the union of the top-level chunks' bounds, the slots by node, and the chunks'
+texture and closure entries. `with_effects`, the composited-layer update, copies the layers,
+rebuilds the indexes they feed (links, texture layers, filter closures) and shares the stream, so
+it costs the content's effects and never its chunks.
 
 `SceneOwner::apply` builds the patch on a copy of the version and keeps it only when every
 operation is valid: an id of another lineage, an unknown or stale id, a retired node a slot still
@@ -204,9 +213,11 @@ marks the owner keeps across patches, so an apply hashes nothing; a republished 
 only the children it gains or loses, and leaves the indexes when its link, texture and filter
 entries are the old ones. `ContentVersion` and `SceneVersionId` draw from one `IdMint` per owner
 under a `Lineage` from a process `AtomicIdMint`, so a replaced or renewed owner never repeats one;
-a spent sequence refuses with `VersionsExhausted` and `renew` starts a new lineage, with empty
-slots, whose next publication is `Full(Resync(_))`. `SceneVersion::flatten` (feature `testing`) is
-the layer-tree oracle a retained frame is compared against.
+a spent sequence refuses with `VersionsExhausted`; `renew` starts a new lineage, runs the
+sequence on unless it is spent, and starts with empty
+slots, whose next publication is `Full(Resync(_))`. `SceneVersion::flatten` is the layer tree the
+raster lane hands the engine until the engine walks the version itself, and the oracle a retained
+frame is compared against (ADR-0304 §11).
 
 An apply's damage is the footprint of its operations (ADR-0304 §4, `src/scene/footprint.rs`),
 read under the version before and the version after. A node record keeps its subtree bounds in
@@ -214,7 +225,9 @@ its own space: `Publish` recomputes them exactly, deepest node first, and every 
 grows its ancestors' bounds by union, so a footprint over-reports and never under-reports. A
 republished content pairs its entries by key (a chunk and an effect by owner and ordinal, a slot
 by its node); a changed chunk or effect, or an unpaired entry, damages its old and new scope, and
-kept entries outside the longest increasing run of their old order damage both positions. `Place`
+kept entries outside the longest increasing run of their old order damage both positions. A
+content that shares its predecessor's stream skips the pairing: each changed effect none of whose
+ancestors changed damages its scope under both versions. `Place`
 damages the moved subtree at both placements. After the operations every follower is resolved
 again in both versions against its link's last attached leader (a published node no slot
 reaches draws nothing and never shadows it), and one whose transform changed damages its subtree
@@ -227,7 +240,8 @@ its own to the maximum of its children's, a sum along a chain), and a
 footprint adds it once mapped to the surface. The region then closes over the filtered nodes of
 both versions. A follower under `LeaderClip::Hide` is damaged when the patch changes a node on its
 leader's branch, and so is every follower whose chains pass through it, since hidden it hides
-them. Footprints fold an effect chain from its last entry back, without recursion; a clip over
+them. A scope's footprint folds only its effects and slots, from the last back and without
+recursion, each effect starting from its direct chunks' union; a clip over
 filters with a kernel bounds their scope by the clip. A node's foreground filter inputs are read
 only once the damage meets its subtree footprint, in one fold; until then only the content's
 closure entries are visited, never its other chunks. A surface
@@ -243,13 +257,15 @@ buffers. An acknowledgement moves forward only and ignores another lineage or a 
 applied. `apply` (in `Applied::released`), `completed` and `renew` return what they release as
 `ReleasedContents`, the version an apply replaced and the contents a fold let go of included, which a caller
 holding the owner in a `RefCell` passes to an `Outbox`: a released annotation value's destructor is
-user code and finds the owner free.
+user code and finds the owner free. A painter that gives up contents it recorded for a patch never
+applied hands them to `SceneWriter::discard`; the owner drops them when `writer` opens the next
+patch or `renew` returns them, both outside the painter's borrows.
 
 Pinned by `layer_it`: `pending_log_contract`, `scene_patch_damage`, `patch_damage_covers_diff_damage` (random patches,
 whose damage must cover what `LayerDiffer` finds between the flattened versions),
 `scene_apply_contract`, `content_version_contract` and `scene_table_cost`
-(an apply's copies are at most its operations times the table height, equal at 1 100 and 30 000
-nodes, and a republished parent copies as much at 40 children as at 1 000); the table's model
+(an apply's copies are at most its operations times the table height, equal at 1 100 and 8 000
+nodes, and a republished parent copies as much at 40 children as at 200); the table's model
 test against `BTreeMap` is `scene::table::tests`.
 
 ### Deleted, with the reason
@@ -310,8 +326,8 @@ which no production path calls yet. Whether each unproduced variant is "not wire
 | `Lineage::fresh` | `static AtomicIdMint<NonZeroU64>` (`counter` grant) | Identity only; minted from every UI thread, never wraps, refuses with `IdExhausted` |
 | `SceneVersion` | `Arc` over persistent tables of `Arc` nodes | Immutable once applied; `Send + Sync` by its auto traits (`a_version_is_send_and_sync`), shared by the owner and the raster side |
 | `SceneOwner` | owned ledger and `IdMint` | Single owner (the UI runtime); `Send`, not `Sync` |
-| `ContentToken` | `Arc<()>`, compared by `Arc::ptr_eq` | Identity only; no data behind the pointer, no `static` |
-| `LayerDiffer` | owned records of one frame | Single owner (the host's raster lane); no lock |
+| `ContentToken` (feature `testing`) | `Arc<()>`, compared by `Arc::ptr_eq` | Identity only; no data behind the pointer, no `static` |
+| `LayerDiffer` (feature `testing`) | owned records of one tree | Single owner (the test that compares); no lock |
 | `TextureRegistry` | `Arc` of a `parking_lot::Mutex` over the registry state, plus `Arc<dyn Fn() + Send + Sync>` wake and listeners | Shared by one presentation with frame producers on any thread (`src/texture_registry.rs`) |
 
 No `unsafe` in the crate. Its one lock is `TextureRegistry`'s; its `dyn`s are that registry's

@@ -71,6 +71,7 @@ pub mod inspect;
 pub mod parent_data;
 pub mod queries;
 mod report;
+pub mod scene;
 pub mod sliver;
 pub mod snapshot;
 pub mod tree;
@@ -94,6 +95,7 @@ pub use inspect::{Probe, hit_path_with_transforms, localize_hit_point};
 pub use parent_data::ParentDataSeed;
 pub use queries::BoxQueryRun;
 pub use report::FrameReport;
+pub use scene::{SceneHost, compose_root};
 pub use snapshot::{
     DrawCommandSummary, DrawKind, assert_any, collect_commands, commands_of,
     serialize_layer_subtree, serialize_layer_tree, snapshot_subtree, snapshot_tree,

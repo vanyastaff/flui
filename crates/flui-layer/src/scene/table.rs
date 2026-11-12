@@ -1,12 +1,15 @@
 //! The persistent table under a scene version (ADR-0304 §1).
 //!
-//! A trie of fanout 32 over a `u64` key: each level consumes five bits, the
-//! leaves hold the values, and every node sits under an [`Arc`]. A write
-//! copies the path from the root to its leaf ([`Arc::make_mut`] on each
-//! level) and shares every other subtree with the table it was cloned from,
-//! so cloning a table is one reference-count increment and a write costs its
-//! height in copied nodes. Writes that land in one leaf share that path: the
-//! first copies it, the rest find it already unshared.
+//! A trie over a `u64` key: the leaf level consumes three bits and holds the
+//! values, each level above it consumes five, and every node sits under an
+//! [`Arc`]. A write copies the path from the root to its leaf
+//! ([`Arc::make_mut`] on each level) and shares every other subtree with the
+//! table it was cloned from, so cloning a table is one reference-count
+//! increment and a write costs its height in copied nodes. Writes that land
+//! in one leaf share that path: the first copies it, the rest find it already
+//! unshared. A leaf holds eight values, not thirty-two, because its values
+//! are stored inline and a write copies all of them: a narrow leaf keeps that
+//! copy to a few cache lines, while the wide branches above keep the height.
 //!
 //! The height is the fewest levels whose capacity holds the largest key
 //! written; it grows by one new root per level when a key passes the
@@ -14,14 +17,16 @@
 
 use std::sync::Arc;
 
-/// Bits of the key each level consumes.
+/// Bits of the key each branch level consumes.
 const BITS: u32 = 5;
-/// Children per node.
+/// Children per branch.
 const FANOUT: usize = 1 << BITS;
-/// The key bits one level indexes by.
-const MASK: u64 = (FANOUT as u64) - 1;
-/// Levels that index a full `u64` key: `ceil(64 / 5)`.
-const MAX_HEIGHT: u32 = u64::BITS.div_ceil(BITS);
+/// Bits of the key the leaf level consumes.
+const LEAF_BITS: u32 = 3;
+/// Values per leaf.
+const LEAF_FANOUT: usize = 1 << LEAF_BITS;
+/// Levels that index a full `u64` key: the leaf, then `ceil(61 / 5)`.
+const MAX_HEIGHT: u32 = 1 + (u64::BITS - LEAF_BITS).div_ceil(BITS);
 
 /// What writes cost a table: the nodes copied because another version still
 /// shared them, and the nodes allocated new.
@@ -44,7 +49,7 @@ enum Node<T> {
 struct Branch<T>([Option<Node<T>>; FANOUT]);
 
 #[derive(Clone)]
-struct Leaf<T>([Option<T>; FANOUT]);
+struct Leaf<T>([Option<T>; LEAF_FANOUT]);
 
 impl<T> Node<T> {
     /// An empty node for `level` (0 is the leaf level).
@@ -95,14 +100,18 @@ impl<T> Default for Table<T> {
 
 /// The fewest levels whose capacity holds `key`.
 fn height_for(key: u64) -> u32 {
-    key.bit_width().div_ceil(BITS).max(1)
+    1 + key.bit_width().saturating_sub(LEAF_BITS).div_ceil(BITS)
 }
 
 /// The child slot `key` takes at `level` (0 is the leaf level).
 fn digit(key: u64, level: u32) -> usize {
-    // `level < MAX_HEIGHT`, so the shift is at most 60, and the masked value
-    // is below FANOUT.
-    ((key >> (BITS * level)) & MASK) as usize
+    // `level < MAX_HEIGHT`, so the shift is at most 63, and the masked value
+    // is below the level's fanout.
+    let (shift, bits) = match level {
+        0 => (0, LEAF_BITS),
+        _ => (LEAF_BITS + BITS * (level - 1), BITS),
+    };
+    ((key >> shift) & ((1 << bits) - 1)) as usize
 }
 
 /// `node` made unshared, counting a clone when another version holds it.
@@ -276,14 +285,18 @@ impl<'a, T> Iterator for Iter<'a, T> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             let (node, next, prefix) = self.stack.last_mut()?;
-            if *next == FANOUT {
+            let (fanout, bits) = match *node {
+                Node::Branch(_) => (FANOUT, BITS),
+                Node::Leaf(_) => (LEAF_FANOUT, LEAF_BITS),
+            };
+            if *next == fanout {
                 self.stack.pop();
                 continue;
             }
             let at = *next;
             *next += 1;
-            // `at < FANOUT`, so the widening cast stays in range.
-            let key = (*prefix << BITS) | at as u64;
+            // `at < fanout`, so the widening cast stays in range.
+            let key = (*prefix << bits) | at as u64;
             match *node {
                 Node::Branch(branch) => {
                     if let Some(child) = branch.0[at].as_ref() {
@@ -413,7 +426,7 @@ mod tests {
         }
         let _shared = table.clone();
         let mut cost = TableCost::default();
-        for k in 64..96u64 {
+        for k in 64..72u64 {
             table.insert(k, 1, &mut cost);
         }
         assert_eq!(cost.copies, u64::from(table.height()));
@@ -424,13 +437,13 @@ mod tests {
     fn growing_past_the_capacity_adds_one_node_per_level() {
         let mut table = Table::<u32>::default();
         let mut cost = TableCost::default();
-        for k in 0..1_024u64 {
+        for k in 0..256u64 {
             table.insert(k, 0, &mut cost);
         }
         assert_eq!(table.height(), 2);
         let shared = table.clone();
         let mut cost = TableCost::default();
-        table.insert(1_024, 0, &mut cost);
+        table.insert(256, 0, &mut cost);
         assert_eq!(table.height(), 3);
         // The new root, a branch for the new second level and the new leaf.
         assert_eq!(
@@ -445,7 +458,7 @@ mod tests {
         };
         assert!(same(
             children.0[0].as_ref().expect("the old root"),
-            shared.root.as_ref().expect("1 024 keys"),
+            shared.root.as_ref().expect("256 keys"),
         ));
     }
 
