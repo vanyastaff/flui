@@ -1,42 +1,12 @@
-error[E0277]: `Rc<std::cell::Cell<WidgetStates>>` cannot be sent between threads safely
+error[E0277]: `Rc<widget_state::SharedStates>` cannot be sent between threads safely
   --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:13:30
    |
 13 |     require_thread_spawnable(states);
-   |     ------------------------ ^^^^^^ `Rc<std::cell::Cell<WidgetStates>>` cannot be sent between threads safely
+   |     ------------------------ ^^^^^^ `Rc<widget_state::SharedStates>` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
    |
-   = help: within `WidgetStatesController`, the trait `Send` is not implemented for `Rc<std::cell::Cell<WidgetStates>>`
-note: required because it appears within the type `WidgetStatesController`
-  --> crates/flui-widgets/src/widget_state.rs
-   |
-   | pub struct WidgetStatesController {
-   |            ^^^^^^^^^^^^^^^^^^^^^^
-note: required by a bound in `require_thread_spawnable`
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:5:32
-   |
- 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
-   |                                ^^^^ required by this bound in `require_thread_spawnable`
-
-error[E0277]: `Rc<notifier_generic::ListenerStorage<()>>` cannot be sent between threads safely
-  --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:13:30
-   |
-13 |     require_thread_spawnable(states);
-   |     ------------------------ ^^^^^^ `Rc<notifier_generic::ListenerStorage<()>>` cannot be sent between threads safely
-   |     |
-   |     required by a bound introduced by this call
-   |
-   = help: within `WidgetStatesController`, the trait `Send` is not implemented for `Rc<notifier_generic::ListenerStorage<()>>`
-note: required because it appears within the type `Notifier<()>`
-  --> crates/flui-foundation/src/notifier_generic.rs
-   |
-   | pub struct Notifier<Arg> {
-   |            ^^^^^^^^
-note: required because it appears within the type `ChangeNotifier`
-  --> crates/flui-foundation/src/notifier.rs
-   |
-   | pub struct ChangeNotifier {
-   |            ^^^^^^^^^^^^^^
+   = help: within `WidgetStatesController`, the trait `Send` is not implemented for `Rc<widget_state::SharedStates>`
 note: required because it appears within the type `WidgetStatesController`
   --> crates/flui-widgets/src/widget_state.rs
    |
