@@ -519,3 +519,81 @@ fn a_pixel_ratio_change_retires_the_nodes_it_replaces() {
         );
     }
 }
+
+/// A parent that paints its one child only while the flag it holds is set.
+#[derive(Debug)]
+struct PaintsChildWhen(std::rc::Rc<std::cell::Cell<bool>>);
+
+impl flui_foundation::inspect::Inspect for PaintsChildWhen {
+    fn kind(&self) -> &'static str {
+        "PaintsChildWhen"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
+
+impl flui_rendering::traits::RenderBox for PaintsChildWhen {
+    type Arity = flui_foundation::Single;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_foundation::Single,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> flui_rendering::RenderResult<Size> {
+        let constraints = *ctx.constraints();
+        ctx.layout_child(0, constraints.loosen())?;
+        Ok(constraints.biggest())
+    }
+
+    flui_rendering::forward_single_child_box_queries!();
+
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Single>) {
+        if self.0.get() {
+            ctx.paint_child();
+        }
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<
+            '_,
+            flui_foundation::Single,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> bool {
+        false
+    }
+}
+
+/// A parent that left its child out and then paints it again presents the
+/// child: the order the earlier frame kept for it is dropped, though a parent
+/// painting every child in place keeps no order of its own.
+///
+/// Red-check: queue nothing for a plain order (the child stays left out).
+#[test]
+fn a_parent_painting_its_child_again_drops_the_order_that_left_it_out() {
+    let shows = std::rc::Rc::new(std::cell::Cell::new(false));
+    let (owner, registry) = mount(
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(PaintsChildWhen(std::rc::Rc::clone(&shows)))
+                .label("parent")
+                .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+        ),
+    );
+    let parent = registry.get("parent").expect("labelled");
+    let child = registry.get("child").expect("labelled");
+    let presents =
+        |owner: &PipelineOwner<Idle>| owner.presented_nodes().iter().any(|node| node.id == child);
+    let mut scene = SceneHost::new();
+    let mut owner = frame(&mut scene, owner);
+    assert!(!presents(&owner), "precondition: the child is left out");
+
+    shows.set(true);
+    owner.mark_needs_paint(parent);
+    owner = frame(&mut scene, owner);
+    assert!(presents(&owner), "the child painted again is presented");
+}
