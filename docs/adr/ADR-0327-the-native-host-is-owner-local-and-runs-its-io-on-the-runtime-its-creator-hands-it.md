@@ -6,8 +6,9 @@
   that makes `tokio::runtime::Handle` `pub(crate)` in the core host: `NativeExecutor::from_tokio`
   takes one); [ADR-0082](ADR-0082-platform-api-contract-crate.md) §4 only (an owner-only
   callback is kept sound by `OwnerSlot`'s run-time refusal: the compiler keeps it sound once the
-  window is not `Send`); [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §2 only (which
-  methods stay on a `Send + Sync` `Platform`)
+  window is not `Send`); [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §1's `shared()` and §2 only (which
+  methods stay on a `Send + Sync` `Platform`; another thread reaches the owner through
+  `PlatformProxy` alone)
 - **Related:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md)
   §1, §2 and §4 (the rule this record applies to `flui-native`, and the five capability traits
   of `flui-platform` whose bounds wait on it), [ADR-0047](ADR-0047-unified-execution-services.md)
@@ -89,16 +90,20 @@ Values another thread reaches keep `Send + Sync`, each with its ADR-0323 §2 kin
 
 | Value | Who reaches it | Kind |
 |---|---|---|
-| `OwnerSignal`: the `WindowRequest` queue, `quit`, window alarms | worker threads and UI runtimes through `PlatformProxy`, the driver agent's thread, IO tasks that wake the owner | handle |
-| `PlatformProxy`, `ProxyTransport`, `PendingWindow`, `OpenedWindow`, the `WindowRequest` factory (`FnOnce + Send`) | off-thread `open_window`, worker threads | handle |
+| `OwnerSignal`: the `WindowRequest` queue, `quit`, the exit-policy request, window alarms | worker threads and UI runtimes through `PlatformProxy`, the driver agent's thread, IO tasks that wake the owner | handle |
+| `PlatformProxy`, `ProxyTransport`, `PendingWindow`, `OpenedWindow`, the `WindowRequest` factory (`FnOnce + Send`) | off-thread `open_window`, worker threads, `OpenWake`, `PendingRequestState` and the keep-alive exit notifier (`flui-app`) | handle |
 | `Doorbell`, `WindowWake` | IO-pool threads, zbus's own thread, the clipboard and drag threads | waker |
-| `SharedPlatform` | `OpenWake`, `PendingRequestState` (`flui-app`) | handle |
 
-`OwnerSignal` loses its `opener: Mutex<Option<Weak<dyn Platform>>>`: it hands requests to the loop,
-and the loop opens windows in its own turn through the `Weak<dyn Platform>` it holds.
-`SharedPlatform` narrows to `Arc<OwnerSignal>` and the facts captured at start (`name`,
-`app_path`, `launch_value`, `session_end_support`, `window_capabilities`); it holds no
-`Arc<dyn Platform>`.
+`OwnerSignal` holds no `Arc<dyn Platform>`: it hands requests to the loop, and the loop opens
+windows and asks the exit policy again in its own turn, through the `Weak<dyn Platform>` the owner
+thread keeps for it (an `OwnerSlot` until the per-host `Rc` step of §5 moves it into the loop).
+`SharedPlatform` is removed. Of what it forwarded, another thread needed one request, asking the
+exit policy again once a keep-alive service ends, which `PlatformProxy::request_exit_policy_reevaluation`
+carries as a coalesced flag the owner's next turn settles (asked on the owner, it asks the
+platform at once). Every other caller (`launch_value`,
+`data_store`, `data_transfer`) is on the owner and reads `OwnerPlatform`; the file prompts and
+shell dispatches it forwarded had no caller and stay on `Platform` for the system capability crate
+(ADR-0151 §9).
 
 ### §3. The host runs its IO on the runtime its creator hands it
 

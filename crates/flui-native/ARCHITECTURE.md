@@ -179,7 +179,7 @@ trait depends on `flui-platform` instead.
   thread and a closed window, and, on a Mac, the AppKit backdrop's views.
 - **The owner thread's machinery lives in `owner/`, which names no feature
   (ADR-0151 §10).** `owner` holds the owner-thread capability (`OwnerPlatform`,
-  `SharedPlatform`, `PlatformProxy`, `PendingWindow`, their errors, and the
+  `PlatformProxy`, `PendingWindow`, their errors, and the
   crate-private `OwnerHooks` and `ProxyTransport` a host implements),
   `owner::signal` the coalesced owner turns and quit admission, `owner::slot`
   the owner-thread storage for a value that is not `Send`, and
@@ -1466,11 +1466,11 @@ their SDK and device verification; portable receipt tests do not establish it.
 
 ### Owner capability boundaries have external compiler witnesses
 
-`OwnerPlatform` stays owner-local, and callers obtain its thread-safe residual
-through `shared`. A text-store host is reached through that owner capability;
+`OwnerPlatform` stays owner-local, and another thread reaches the owner only
+through `PlatformProxy`. A text-store host is reached through that owner capability;
 the hidden token cannot be imported or forged with `Default` outside this crate.
 `trybuild_ui::ui_tests` pins the external caller diagnostics alongside valid
-owner-local access and `SharedPlatform` thread bounds. It also checks each
+owner-local access and `PlatformProxy` thread bounds. It also checks each
 retired tracker, embedder and timestamp name independently (ADR-0082 §5).
 
 ### Win32 mouse samples preserve their queued generation times

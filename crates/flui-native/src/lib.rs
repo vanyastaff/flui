@@ -320,8 +320,8 @@ pub use process::end_process;
 // handed to `on_ready`, never re-exported with a public minting seam.
 pub use owner::{
     OpenWindowError, OpenedWindow, OpenedWindowReach, OwnerPlatform, PendingWindow, PlatformProxy,
-    ProxySendError, SharedPlatform, WaitError, WakeRegistrationError, WindowHandlerFactory,
-    WindowOpen, WindowRequest,
+    ProxySendError, WaitError, WakeRegistrationError, WindowHandlerFactory, WindowOpen,
+    WindowRequest,
 };
 
 /// Get the current platform implementation

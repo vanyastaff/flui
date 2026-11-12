@@ -84,7 +84,6 @@ enum CompletionState {
 }
 struct OpenWake {
     proxy: PlatformProxy,
-    shared: flui_native::SharedPlatform,
     ingress: std::sync::Weak<Ingress>,
     batch: Arc<()>,
     ready: AtomicBool,
@@ -147,7 +146,7 @@ impl Wake for OpenWake {
                     || tracing::error!(%error, "main-window cleanup wake failed; cleanup requires a later owner event or shutdown"),
                 );
             }
-            self.shared.request_exit_policy_reevaluation();
+            super::host::reevaluate_exit_policy(&self.proxy);
         }
     }
 }
@@ -305,8 +304,6 @@ impl MainController {
                 self.pending = Some(pending);
                 self.pending_wake = Some(Arc::new(OpenWake {
                     proxy: with_owner_platform(flui_native::OwnerPlatform::proxy)
-                        .expect("BUG: current owner"),
-                    shared: with_owner_platform(flui_native::OwnerPlatform::shared)
                         .expect("BUG: current owner"),
                     ingress: Arc::downgrade(&self.ingress),
                     batch: self.ingress.active_batch(),
@@ -468,7 +465,7 @@ impl MainController {
         self.cancel_pending();
         self.ingress.settle(Err(error.clone()));
         self.report_failure(error);
-        with_owner_platform(|owner| owner.shared().request_exit_policy_reevaluation());
+        with_owner_platform(flui_native::OwnerPlatform::request_exit_policy_reevaluation);
     }
     fn report_failure(&mut self, error: AppWindowError) {
         contain(|| tracing::error!(%error, "main window request failed"));
@@ -949,8 +946,6 @@ where
                 ..
             } = application;
             let proxy = owner.proxy();
-            // What the driver agent's launch is read through.
-            let launch = owner.shared();
             let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
             let handle = ingress.handle();
             install_owner_platform(owner)?;
@@ -984,7 +979,7 @@ where
             });
             let served = crate::app::agent::install_from_launch(
                 &mut config,
-                |key| launch.launch_value(key),
+                |key| with_owner_platform(|owner| owner.launch_value(key)).flatten(),
                 &ended,
                 super::journals_native(),
             );
@@ -1075,7 +1070,7 @@ where
                 let _ = handle.ingress.quit_now();
             }
             drive_main_window();
-            with_owner_platform(|owner| owner.shared().request_exit_policy_reevaluation());
+            with_owner_platform(flui_native::OwnerPlatform::request_exit_policy_reevaluation);
             Ok(())
         }))
     }));

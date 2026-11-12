@@ -1205,7 +1205,7 @@ pub(crate) struct ServiceRegistry {
     /// Fired (from whatever worker thread the service ran on) when a
     /// `KeepsAppAlive` service reports its exit — the runner wires this to
     /// the platform's coalesced exit-policy re-evaluation request
-    /// (`SharedPlatform::request_exit_policy_reevaluation`). Without it, a
+    /// (`PlatformProxy::request_exit_policy_reevaluation`). Without it, a
     /// last-window close vetoed by a running keep-alive service would
     /// never be re-decided once that service completes: no window remains
     /// to produce the close event that consults the policy, so the veto

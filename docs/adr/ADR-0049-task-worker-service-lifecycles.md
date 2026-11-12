@@ -82,8 +82,8 @@ consult site, so with zero windows left nothing would ever re-ask it — the pro
 forever once the vetoing service completed. The release chain closes that hole: a keep-alive
 service's exit (observed on whatever worker thread ran it, after its completion send) fires the
 registry's exit notifier, which the bootstrap wires to
-`SharedPlatform::request_exit_policy_reevaluation` — a new any-thread, coalesced `Platform`
-request (default no-op; on the `SharedPlatform` fence because it is enqueue-and-wake only). The
+`PlatformProxy::request_exit_policy_reevaluation` — an any-thread, coalesced request the owner's
+next turn settles by asking the platform's exit policy again (ADR-0327 §2). The
 winit backend carries it on the control lane's non-starvable flag (the `request_quit` twin) and,
 in its owner-thread drain, re-consults the hook exactly as the `CloseRequested` arm does — only
 when its own window map is empty — exiting if the hook now allows. The headless mock parks the

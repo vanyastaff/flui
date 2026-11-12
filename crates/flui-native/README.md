@@ -25,7 +25,7 @@ platform.rs      Platform, AppHandler, and HostPlatform<H>, its one
                  implementation
 host_window.rs   HostWindow: a PlatformWindow plus its accessibility bridge
 host.rs, hosts/  a host's table of positions, one table per host
-owner/           OwnerPlatform, SharedPlatform, PlatformProxy; the owner-turn
+owner/           OwnerPlatform, PlatformProxy; the owner-turn
                  signal, the owner-thread slot, the panic boundary, the
                  delivery to the application's handler (AppDelivery), each
                  window's delivery to its

@@ -377,7 +377,7 @@ enum PendingPhase {
 struct PendingRequestState {
     state: parking_lot::Mutex<(PendingPhase, bool)>,
     count: Arc<std::sync::atomic::AtomicUsize>,
-    platform: flui_native::SharedPlatform,
+    proxy: flui_native::PlatformProxy,
 }
 #[cfg(all(
     not(target_os = "android"),
@@ -391,7 +391,7 @@ impl PendingRequestState {
             previous > 0,
             "BUG: pending window reservation released twice"
         );
-        self.platform.request_exit_policy_reevaluation();
+        super::host::reevaluate_exit_policy(&self.proxy);
     }
     fn fail(&self) -> bool {
         let failed = {
@@ -464,14 +464,14 @@ impl Drop for WindowReservation {
     not(target_arch = "wasm32")
 ))]
 fn reserve_window() -> Result<WindowReservation, AppWindowError> {
-    let platform = with_owner_platform(flui_native::OwnerPlatform::shared)
+    let proxy = with_owner_platform(flui_native::OwnerPlatform::proxy)
         .ok_or(AppWindowError::NoOwnerLoop)?;
     let count = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().pending_window_reservations));
     count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     Ok(WindowReservation(Arc::new(PendingRequestState {
         state: parking_lot::Mutex::new((PendingPhase::Waiting, true)),
         count,
-        platform,
+        proxy,
     })))
 }
 #[cfg(all(
