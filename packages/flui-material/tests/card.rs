@@ -31,7 +31,10 @@ pub fn card_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     });
 
     let laid = lay_out(
-        Theme::new(theme, Card::new(ColoredBox::new(Color::rgb(1, 2, 3)))),
+        Theme::new(
+            theme,
+            Card::new().child(ColoredBox::new(Color::rgb(1, 2, 3))),
+        ),
         tight(200.0, 200.0),
     );
 

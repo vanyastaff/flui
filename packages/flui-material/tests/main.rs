@@ -26,6 +26,9 @@ mod carousel_view;
 #[path = "checkbox.rs"]
 mod checkbox;
 
+#[path = "child_form.rs"]
+mod child_form;
+
 #[path = "chip.rs"]
 mod chip;
 
@@ -728,6 +731,10 @@ fn surface_contracts() {
         (
             "card::card theme slot reaches the mounted materials color and elevation",
             card::card_theme_slot_reaches_the_mounted_materials_color_and_elevation,
+        ),
+        (
+            "child_form::optional child is a builder and may be absent",
+            child_form::optional_child_is_a_builder_and_may_be_absent,
         ),
         (
             "divider::widget color override wins over the divider theme",

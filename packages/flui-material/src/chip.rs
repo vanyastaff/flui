@@ -530,13 +530,14 @@ impl StatelessView for Chip {
         });
 
         let delete_view = self.on_deleted.clone().map(|on_deleted| {
-            let mut delete_button = InkWell::new(IconTheme::new(
-                IconThemeData::default()
-                    .size(CHIP_ICON_SIZE)
-                    .color(delete_icon_color),
-                Icon::new(cancel_icon_data()),
-            ))
-            .shape(MaterialShape::Stadium);
+            let mut delete_button = InkWell::new()
+                .child(IconTheme::new(
+                    IconThemeData::default()
+                        .size(CHIP_ICON_SIZE)
+                        .color(delete_icon_color),
+                    Icon::new(cancel_icon_data()),
+                ))
+                .shape(MaterialShape::Stadium);
             if self.enabled {
                 delete_button = delete_button.on_tap(move |ctx| on_deleted(ctx));
             }
@@ -556,7 +557,7 @@ impl StatelessView for Chip {
             ConstrainedBox::new(chip_content_constraints(padding, label_padding)).child(content),
         );
 
-        let mut ink_well = InkWell::new(padded_content).shape(shape);
+        let mut ink_well = InkWell::new().child(padded_content).shape(shape);
         if self.is_pressable() {
             let on_pressed = self.on_pressed.clone();
             ink_well = ink_well.on_tap(move |ctx| {
@@ -817,13 +818,14 @@ impl StatelessView for FilterChip {
         };
 
         let delete_view = self.on_deleted.clone().map(|on_deleted| {
-            let mut delete_button = InkWell::new(IconTheme::new(
-                IconThemeData::default()
-                    .size(CHIP_ICON_SIZE)
-                    .color(delete_icon_color),
-                Icon::new(clear_icon_data()),
-            ))
-            .shape(MaterialShape::Stadium);
+            let mut delete_button = InkWell::new()
+                .child(IconTheme::new(
+                    IconThemeData::default()
+                        .size(CHIP_ICON_SIZE)
+                        .color(delete_icon_color),
+                    Icon::new(clear_icon_data()),
+                ))
+                .shape(MaterialShape::Stadium);
             if enabled {
                 delete_button = delete_button.on_tap(move |ctx| on_deleted(ctx));
             }
@@ -843,7 +845,7 @@ impl StatelessView for FilterChip {
             ConstrainedBox::new(chip_content_constraints(padding, label_padding)).child(content),
         );
 
-        let mut ink_well = InkWell::new(padded_content).shape(shape);
+        let mut ink_well = InkWell::new().child(padded_content).shape(shape);
         if enabled {
             let on_selected = self.on_selected.clone();
             ink_well = ink_well.on_tap(move |ctx| {

@@ -375,15 +375,16 @@ impl ViewState<Switch> for SwitchState {
         let interactive = view.is_interactive();
         let next_value = !view.value;
         let on_changed = view.on_changed.clone();
-        let mut ink_well = InkWell::new(
-            CustomPaint::new()
-                .size(Size::new(SWITCH_TAP_TARGET_WIDTH, SWITCH_TAP_TARGET_HEIGHT))
-                .painter(painter),
-        )
-        .shape(MaterialShape::Stadium)
-        .overlay_color(overlay_color)
-        .states_controller(self.states.clone())
-        .focus_indicator(FocusIndicator::Halo);
+        let mut ink_well = InkWell::new()
+            .child(
+                CustomPaint::new()
+                    .size(Size::new(SWITCH_TAP_TARGET_WIDTH, SWITCH_TAP_TARGET_HEIGHT))
+                    .painter(painter),
+            )
+            .shape(MaterialShape::Stadium)
+            .overlay_color(overlay_color)
+            .states_controller(self.states.clone())
+            .focus_indicator(FocusIndicator::Halo);
         if interactive {
             ink_well = ink_well.on_tap(move |ctx| {
                 if let Some(handler) = &on_changed {
