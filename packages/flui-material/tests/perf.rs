@@ -199,7 +199,7 @@ fn baseline(scenario: &str) -> Vec<(String, u64)> {
             let value = value.trim().parse::<u64>().ok()?;
             Some((name.trim().to_owned(), value))
         })
-        .collect()
+        .collect::<Vec<(String, u64)>>()
 }
 
 /// Writes `counts` as `<FLUI_PERF_OUT>/<scenario>.toml` when that variable is set.
