@@ -157,3 +157,69 @@ fn a_long_press_longer_than_the_answer_budget_is_delivered() {
     let took = t.clock().elapsed().checked_sub(before).unwrap_or_default();
     assert!(took >= Duration::from_secs(2), "the press lasted {took:?}");
 }
+
+/// A completion the test wakes between frames is polled by the frame the
+/// expectation's first read runs; the expectation reads the tree that frame
+/// committed before it calls the application idle.
+#[test]
+fn an_expectation_reads_the_tree_a_ready_completion_committed() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::task::{Context, Poll, Waker};
+
+    use flui_widgets::{FutureBuilder, FutureFactory, SnapshotBuilder};
+
+    let waker: Rc<RefCell<Option<Waker>>> = Rc::default();
+    let ready: Rc<RefCell<bool>> = Rc::default();
+    let factory: FutureFactory<u32, ()> = {
+        let waker = Rc::clone(&waker);
+        let ready = Rc::clone(&ready);
+        Rc::new(move || {
+            let waker = Rc::clone(&waker);
+            let ready = Rc::clone(&ready);
+            Box::pin(std::future::poll_fn(move |cx: &mut Context<'_>| {
+                if *ready.borrow() {
+                    return Poll::Ready(Ok(7));
+                }
+                *waker.borrow_mut() = Some(cx.waker().clone());
+                Poll::Pending
+            }))
+        })
+    };
+    let builder: SnapshotBuilder<u32, ()> = Rc::new(|_ctx, snapshot| {
+        let text = snapshot
+            .data()
+            .map_or_else(|| "waiting".to_owned(), |value| format!("got {value}"));
+        Text::new(text).into_view().boxed()
+    });
+    let mut t = Tester::mount(FutureBuilder::keyed(Some(1_u32), factory, builder));
+    t.expect(find::text("waiting")).to_exist();
+
+    *ready.borrow_mut() = true;
+    waker
+        .borrow_mut()
+        .take()
+        .expect("the first poll stored its waker")
+        .wake();
+    t.expect(find::text("got 7")).to_exist();
+}
+
+#[test]
+fn a_drag_scrolls_a_default_scroll_view() {
+    use flui_widgets::ListView;
+
+    let items: Vec<_> = (0..40)
+        .map(|index| Text::new(format!("Item {index}")))
+        .collect();
+    let mut t = Tester::mount_in(ListView::new(50.0, items), TestWindow::new(200, 300));
+    let before = t.rect(&find::text("Item 1"));
+    t.drag(
+        &find::text("Item 1"),
+        0.0,
+        -100.0,
+        Duration::from_millis(200),
+    );
+    t.pump_and_settle();
+    let after = t.rect(&find::text("Item 1"));
+    assert!(after.y < before.y - 50.0, "{before:?} -> {after:?}");
+}

@@ -888,6 +888,11 @@ fn wait(
     holds: impl Fn(&mut Tester, &[Match]) -> Result<(), String>,
 ) -> Result<(), TestError> {
     let mut waited = Duration::ZERO;
+    // A read is answered at the drain that opens a frame, from the tree the
+    // frame before committed; the frame it opens may then run ready work and
+    // commit what the expectation waits for. So an idle application is
+    // judged only on a read made after a frame in which it stayed idle.
+    let mut read_after_idle = false;
     loop {
         let matches = tester.try_find_all(locator)?;
         let found = match holds(tester, &matches) {
@@ -897,6 +902,10 @@ fn wait(
         let next = tester.host.time_to_next_frame();
         let due = next.filter(|wait| *wait <= FRAME);
         if due.is_none() {
+            if !read_after_idle {
+                read_after_idle = true;
+                continue;
+            }
             return Err(TestError::Idle {
                 expected: expected.to_owned(),
                 locator: Box::new(locator.clone()),
@@ -914,6 +923,7 @@ fn wait(
                 shown: tester.shown(),
             });
         }
+        read_after_idle = false;
         tester.pump();
         waited += FRAME;
     }
@@ -948,7 +958,9 @@ fn source_span(source: &InputSource) -> u64 {
 fn pointer(actions: Vec<PointerAction>) -> InputSource {
     InputSource::Pointer {
         id: "tester".to_owned(),
-        device: PointerDevice::Mouse,
+        // A touch contact, as `flutter_test` taps and drags: a scroll view's
+        // default behaviour drags by touch, not by mouse.
+        device: PointerDevice::Touch,
         actions,
     }
 }
