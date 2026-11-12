@@ -125,6 +125,7 @@ fn a_payload_past_its_limit_is_too_large() {
     );
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 proptest::proptest! {
     /// What a drag source sends becomes a payload of exactly the length
     /// `decoded_len` measured, the figure a fetch refuses an oversized one by

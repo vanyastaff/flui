@@ -293,6 +293,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     proptest::proptest! {
         /// What an owner sends decodes in every form to exactly the length
         /// `decoded_len` measured, the figure a reader refuses an oversized

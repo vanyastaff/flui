@@ -320,6 +320,7 @@ fn ole_drag_drop_contracts() {
 
 /// Bytes another process put in a clipboard format: anything, or for
 /// `CF_HTML` an offset header with arbitrary offsets ahead of anything.
+#[cfg(not(target_arch = "wasm32"))]
 fn foreign_bytes() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
     use proptest::prelude::*;
     let html = (any::<u32>(), any::<u32>(), any::<u32>(), any::<u32>(), proptest::collection::vec(any::<u8>(), 0..128))
@@ -336,6 +337,7 @@ fn foreign_bytes() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
     prop_oneof![proptest::collection::vec(any::<u8>(), 0..256), html]
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 proptest::proptest! {
     /// What another process put in each clipboard format decodes to a
     /// payload or to `TransferError::Decode`, without a panic, and the

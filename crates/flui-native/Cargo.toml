@@ -634,10 +634,6 @@ cfg_aliases = { workspace = true }
 flui-testing = { path = "../flui-testing" }
 # `fonts::android`'s parse, which runs on every host over recorded files.
 roxmltree.workspace = true
-# Arbitrary bytes into the parsers of what another process sends (the XIM
-# codec, clipboard and drag payloads, Wayland arrays); the nightly run raises
-# `PROPTEST_CASES`.
-proptest = { workspace = true }
 # The host's own test support, the `testing` module, and the `http` client its
 # tests run against a loopback server. Checkout-only test edge:
 # versionless, so Cargo drops it from the published manifest.
@@ -661,6 +657,13 @@ serde_json = { workspace = true, features = ["float_roundtrip"] }
 # The parity table `docs/platform-parity.md` is rendered from
 # (`platform-parity.toml`, `testing::parity`).
 toml = { workspace = true }
+
+# Arbitrary bytes into the parsers of what another process sends (the XIM
+# codec, clipboard and drag payloads, Wayland arrays); the nightly run raises
+# `PROPTEST_CASES`. Not on wasm32: its random source, getrandom, has no
+# backend there without a feature this crate does not ship.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest = { workspace = true }
 
 # Browser API fixtures mutate JS globals and therefore have their own process.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

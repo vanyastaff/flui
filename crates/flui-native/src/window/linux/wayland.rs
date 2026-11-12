@@ -751,6 +751,7 @@ pub(crate) mod configure {
             assert_eq!(protocol_extent(-3.0), 0);
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
         proptest::proptest! {
             /// A configure's states array and a capabilities announcement read
             /// as the whole values they hold, whatever the compositor wrote: a
