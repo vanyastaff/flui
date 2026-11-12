@@ -908,6 +908,7 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────
   # miri checks selected ownership and containment contracts without a GPU:
+  # flui-foundation and flui-log whole, the rendering storage arena,
   # rendering owner failure/publishing families, public GlobalKey migration,
   # surface-before-target destruction and cancellation of renderer construction.
   # The same scopes are used by `cargo xtask miri`; they are not a full
@@ -942,6 +943,19 @@ jobs:
       # `+nightly` is required: the committed rust-toolchain.toml pin overrides
       # the job's installed default toolchain, and the pinned stable has no
       # miri component (first run failed exactly there).
+      #
+      # The ground every crate above stands on: flui-foundation's id newtypes,
+      # notifiers and claim slot, flui-log's layer downcast, and the
+      # render-node arena of flui-rendering. Every unit test of the first two
+      # (their integration suites spawn processes, which Miri cannot), the
+      # `storage::` module of the third.
+      - name: cargo miri test (flui-foundation)
+        run: cargo +nightly miri test -p flui-foundation --lib --locked
+      - name: cargo miri test (flui-log)
+        run: cargo +nightly miri test -p flui-log --lib --locked
+      - name: cargo miri test (rendering storage)
+        run: cargo +nightly miri test -p flui-rendering --lib --locked storage::
+
       - name: cargo miri test (pipeline::owner)
         run: cargo +nightly miri test -p flui-rendering --lib --locked pipeline::owner
 

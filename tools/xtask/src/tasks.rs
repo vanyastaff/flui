@@ -648,6 +648,12 @@ fn gpu_test_plan(backend: Option<GpuBackend>) -> Vec<Step> {
 }
 
 /// CI's `miri` job: selected ownership and containment contracts under Miri.
+/// - flui-foundation and flui-log, every unit test: the id newtypes' unchecked
+///   constructors, notifiers, the claim slot and the log backend's layer
+///   downcast, which every crate above builds on. Their integration suites
+///   spawn processes, which Miri cannot.
+/// - flui-rendering `storage::`: the render-node arena, its generations and
+///   tree links.
 /// - flui-rendering `pipeline::owner`: owner failure and semantics publishing
 ///   families, including retirement of caught text panic payloads.
 /// - flui-rendering `lease_` and `rendering_it::layout_failure_matrix`: the layout walk's lease
@@ -664,6 +670,9 @@ fn gpu_test_plan(backend: Option<GpuBackend>) -> Vec<Step> {
 /// not lints.
 fn miri_plan() -> Vec<Step> {
     [
+        ("flui-foundation", "--lib", ""),
+        ("flui-log", "--lib", ""),
+        ("flui-rendering", "--lib", "storage::"),
         ("flui-rendering", "--lib", "pipeline::owner"),
         ("flui-rendering", "--lib", "lease_"),
         (
@@ -683,7 +692,8 @@ fn miri_plan() -> Vec<Step> {
     .map(|(package, target, filter)| {
         Cmd::cargo(["+nightly", "miri", "test", "-p", package])
             .split(target)
-            .args(["--locked", filter])
+            .args(["--locked"])
+            .args((!filter.is_empty()).then_some(filter))
             .env("CARGO_BUILD_WARNINGS", "warn")
             .into()
     })

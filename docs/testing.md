@@ -1032,6 +1032,9 @@ cargo xtask test --nested --nested-group trybuild             # test-trybuild: c
 cargo xtask platform-test                                    # native platform suites, default and all features
 cargo xtask cli-test                                         # native CLI suite
 cargo test --workspace --locked --doc
+cargo +nightly miri test -p flui-foundation --lib             # miri job: every unit test of the
+cargo +nightly miri test -p flui-log --lib                    # two base crates, and the render-node
+cargo +nightly miri test -p flui-rendering --lib storage::    # arena; `cargo xtask miri` runs them all
 cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # miri job; NARROW — every
                                                               # unit test under that module, including PipelineCell
                                                               # checkout, an owner-local run_frame traversal, a
