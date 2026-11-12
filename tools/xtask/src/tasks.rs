@@ -976,6 +976,12 @@ pub(crate) struct FeatureMatrixArgs {
     /// (shard k of N of the per-feature passes).
     #[arg(long, default_value = "all", value_parser = Slice::parse)]
     slice: Slice,
+    /// Instead of the workspace, the per-feature passes over these packages
+    /// only (`-p a -p b`, the `hack_args` of `cargo xtask affected`): what a
+    /// pull request's `feature-scope` job runs, a `k/N` slice of them per
+    /// runner.
+    #[arg(long)]
+    packages: Option<String>,
     #[command(flatten)]
     pub(crate) run: RunOpts,
 }
@@ -983,9 +989,30 @@ pub(crate) struct FeatureMatrixArgs {
 /// `cargo xtask feature-matrix`: clippy every feature on its own (cargo-hack).
 ///
 /// `facade-combos`, then the per-feature passes; `--slice` picks the part one
-/// CI runner does. Needs cargo-hack.
+/// CI runner does, `--packages` narrows the passes to the packages a change
+/// touches. Needs cargo-hack.
 pub(crate) fn feature_matrix(args: &FeatureMatrixArgs) -> anyhow::Result<ExitCode> {
-    done(feature_matrix_stage(args.run.runner(), args.slice))
+    match &args.packages {
+        Some(packages) => done(
+            args.run
+                .runner()
+                .every(&feature_scope_plan(packages, args.slice)?),
+        ),
+        None => done(feature_matrix_stage(args.run.runner(), args.slice)),
+    }
+}
+
+/// The per-feature passes over `packages` alone (`-p a -p b`), or `slice`'s
+/// share of them.
+fn feature_scope_plan(packages: &str, slice: Slice) -> anyhow::Result<Vec<Step>> {
+    let packages = match slice {
+        Slice::All => packages.to_owned(),
+        Slice::Shard { index, count } => format!("{packages} --partition {index}/{count}"),
+        Slice::Combinations => {
+            anyhow::bail!("--packages narrows the per-feature passes, not the facade combinations")
+        }
+    };
+    Ok(hack_passes(&packages).map(Step::from).into())
 }
 
 /// Arguments for `cargo xtask native-features`.
@@ -1474,6 +1501,29 @@ mod tests {
         }
     }
 
+    /// `--packages` runs the two per-feature passes over the packages given,
+    /// no combination and no shard of the workspace.
+    fn feature_scope_lints_each_feature_of_the_given_packages() {
+        let packages = "-p flui-runtime -p flui-app";
+        let pass = |rest: &str| {
+            format!("$ cargo hack clippy {packages}{rest} --locked --each-feature --keep-going")
+        };
+        let both = |rest: &str| {
+            [
+                format!("{} -- -D warnings", pass(rest)),
+                format!("{} --tests --benches --examples -- -D warnings", pass(rest)),
+            ]
+        };
+        let plan = |slice| lines(&feature_scope_plan(packages, slice).expect("a pass slice"));
+        assert_eq!(plan(Slice::All), both(""));
+        // a runner's share of the same commands, as main's shards split the workspace
+        assert_eq!(
+            plan(Slice::Shard { index: 2, count: 3 }),
+            both(" --partition 2/3")
+        );
+        assert!(feature_scope_plan(packages, Slice::Combinations).is_err());
+    }
+
     fn native_feature_slices_lint_each_feature_alone_with_and_without_all_targets() {
         let plan = lines(&native_feature_slice_plan(None));
         assert_eq!(plan.len(), 8);
@@ -1535,6 +1585,10 @@ mod tests {
                 (
                     "feature_matrix_slices_parse",
                     feature_matrix_slices_parse as fn(),
+                ),
+                (
+                    "feature_scope_lints_each_feature_of_the_given_packages",
+                    feature_scope_lints_each_feature_of_the_given_packages as fn(),
                 ),
                 (
                     "native_feature_slices_lint_each_feature_alone_with_and_without_all_targets",

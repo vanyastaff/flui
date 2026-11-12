@@ -26,6 +26,7 @@ use regex::Regex;
 use serde::Deserialize;
 
 use super::aggregator::WIDE_CONDITION;
+use super::diagnostics;
 
 /// Documentation: a change made only of these compiles nothing.
 ///
@@ -309,9 +310,6 @@ pub(super) struct Dependency {
     pub(super) name: String,
     /// `None` for a normal dependency, else `dev` or `build`.
     pub(super) kind: Option<String>,
-    #[serde(default)]
-    pub(super) optional: bool,
-    pub(super) rename: Option<String>,
     path: Option<PathBuf>,
 }
 
@@ -525,7 +523,7 @@ impl Repo {
         Ok(self.workspace.get_or_init(|| ws))
     }
 
-    fn git(&self, args: &[&str]) -> anyhow::Result<String> {
+    pub(super) fn git(&self, args: &[&str]) -> anyhow::Result<String> {
         let out = Command::new("git")
             .args(args)
             .current_dir(&self.root)
@@ -593,6 +591,9 @@ pub(super) struct Scope {
     /// Packages whose `Cargo.toml` changed.
     pub(super) manifests: Vec<String>,
     pub(super) heavy_required: bool,
+    /// The changed file that can change a trybuild expectation, if any
+    /// ([`diagnostics::changed_input`]): a pull request then runs the suites.
+    pub(super) trybuild_input: Option<String>,
     pub(super) reason: String,
 }
 
@@ -604,6 +605,7 @@ impl Scope {
             seeds: Vec::new(),
             manifests: Vec::new(),
             heavy_required: false,
+            trybuild_input: None,
             reason,
         }
     }
@@ -620,6 +622,51 @@ fn first_five(files: &[&str]) -> String {
 
 /// Classifies the changed `files` (repo-relative, `/`-separated).
 pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
+    let mut scope = classify_packages(repo, files)?;
+    if scope.mode == Mode::Full && !files.is_empty() {
+        // a workspace-wide input (Cargo.lock, ci.yml) beside a crate's change
+        // still names that crate: the per-feature pass runs over it
+        let owners = owners(repo.workspace()?, files);
+        scope.seeds = owners.seeds.into_iter().collect();
+        scope.manifests = owners.manifests.into_iter().collect();
+    }
+    scope.trybuild_input = diagnostics::changed_input(repo, files)?.map(str::to_owned);
+    Ok(scope)
+}
+
+/// The packages the changed code files belong to, the ones whose manifest
+/// changed, and the code files no package owns.
+struct Owners<'f> {
+    seeds: BTreeSet<String>,
+    manifests: BTreeSet<String>,
+    unknown: Vec<&'f str>,
+}
+
+fn owners<'f>(ws: &Workspace, files: &'f [String]) -> Owners<'f> {
+    let mut owners = Owners {
+        seeds: BTreeSet::new(),
+        manifests: BTreeSet::new(),
+        unknown: Vec::new(),
+    };
+    for f in files.iter().map(String::as_str) {
+        if is_docs_only(f) || matches_any(f, TOOLING) {
+            continue;
+        }
+        match ws.owning_package(f) {
+            Some(pkg) => {
+                owners.seeds.insert(pkg.to_owned());
+                if f == "Cargo.toml" || f.ends_with("/Cargo.toml") {
+                    owners.manifests.insert(pkg.to_owned());
+                }
+            }
+            None => owners.unknown.push(f),
+        }
+    }
+    owners
+}
+
+/// The mode and the packages of the changed `files`.
+fn classify_packages(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
     let code: Vec<&str> = files
         .iter()
         .map(String::as_str)
@@ -667,21 +714,11 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         ));
     }
     let ws = repo.workspace()?;
-    let (mut seeds, mut manifests, mut unknown) = (BTreeSet::new(), BTreeSet::new(), Vec::new());
-    for f in code {
-        if matches_any(f, TOOLING) {
-            continue;
-        }
-        match ws.owning_package(f) {
-            Some(pkg) => {
-                seeds.insert(pkg.to_owned());
-                if f == "Cargo.toml" || f.ends_with("/Cargo.toml") {
-                    manifests.insert(pkg.to_owned());
-                }
-            }
-            None => unknown.push(f),
-        }
-    }
+    let Owners {
+        seeds,
+        manifests,
+        unknown,
+    } = owners(ws, files);
     if !unknown.is_empty() {
         let reason = format!(
             "no package owns: {} (conservatively: everything)",
@@ -708,6 +745,7 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         seeds: seed_list,
         manifests: manifests.into_iter().collect(),
         heavy_required: false,
+        trybuild_input: None,
         reason,
     })
 }
