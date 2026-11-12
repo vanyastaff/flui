@@ -919,7 +919,7 @@ mod win32 {
             let platform = WindowsPlatform::try_new().expect("native Windows platform");
             let log = AppLog::new();
             log.bootstrap(|owner| {
-                owner.shared().request_exit_policy_reevaluation();
+                owner.request_exit_policy_reevaluation();
                 Ok(())
             });
             let first = Cell::new(true);
@@ -928,7 +928,7 @@ mod win32 {
                     return;
                 }
                 if first.replace(false) {
-                    owner.shared().request_exit_policy_reevaluation();
+                    owner.request_exit_policy_reevaluation();
                     panic!("first failure");
                 }
                 owner.proxy().request_quit().expect("the loop takes a quit");
@@ -953,12 +953,12 @@ mod win32 {
                 }
             }
             let platform = WindowsPlatform::try_new().expect("native Windows platform");
+            let capture = PanicsOnDrop;
+            platform.on_keyboard_layout_change(Box::new(move || {
+                let _ = &capture;
+            }));
             let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 Box::new(platform).run(crate::app::on_ready(|owner| {
-                    let capture = PanicsOnDrop;
-                    owner.shared().on_keyboard_layout_change(Box::new(move || {
-                        let _ = &capture;
-                    }));
                     owner.proxy().request_quit().expect("the loop takes a quit");
                     Ok(())
                 }))

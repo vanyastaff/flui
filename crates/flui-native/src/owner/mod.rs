@@ -124,7 +124,6 @@ pub(crate) mod windows;
 
 use std::fmt;
 use std::marker::PhantomData;
-use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::ThreadId;
@@ -135,8 +134,7 @@ use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use crate::error::PlatformError;
 use crate::host_window::{HostWindow, OwnerThreadToken};
-use crate::platform::{PathPromptOptions, Platform};
-use crate::task::Task;
+use crate::platform::Platform;
 use flui_platform::data_transfer::DragTransport;
 use flui_platform::{WindowHandler, WindowId, WindowOptions};
 use signal::{OwnerSignal, SignalTransport};
@@ -302,16 +300,32 @@ impl OwnerPlatform {
         self.platform.quit();
     }
 
-    /// Escapes to the residual thread-safe surface:
-    /// callback registration, and the rest of §2's "stays on
-    /// `Platform`" list, wrapped in a `Clone + Send + Sync` handle a
-    /// `std::thread::scope` worker can freely hold — see
-    /// [`SharedPlatform`]'s own doc for why this can no longer be
-    /// `&dyn Platform` (that type is still `Send + Sync` in full,
-    /// owner-affine methods included, until the owner-thread methods leave `Platform` (ADR-0039)).
+    /// Ask the application handler's exit policy again, in the owner's
+    /// coming turn; see [`Platform::request_exit_policy_reevaluation`].
+    /// Another thread asks through
+    /// [`PlatformProxy::request_exit_policy_reevaluation`].
+    pub fn request_exit_policy_reevaluation(&self) {
+        self.platform.request_exit_policy_reevaluation();
+    }
+
+    /// The value the process was launched with under `key`; see
+    /// [`Platform::launch_value`].
     #[must_use]
-    pub fn shared(&self) -> SharedPlatform {
-        SharedPlatform::new(Arc::clone(&self.platform))
+    pub fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        self.platform.launch_value(key)
+    }
+
+    /// Where the application `app` keeps its data, or `None` when this
+    /// platform has nowhere to keep it.
+    #[must_use]
+    pub fn data_store(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataStore> {
+        self.platform.data_store(app)
+    }
+
+    /// The drag-and-drop transport (ADR-0312 §4).
+    #[must_use]
+    pub fn data_transfer(&self) -> Arc<dyn DragTransport> {
+        self.platform.data_transfer()
     }
 
     /// Mints a cross-thread capability, handed to workers, UI runtimes, or
@@ -342,165 +356,6 @@ impl OwnerPlatform {
 // by every `cargo check`, including cross-typecheck on win/mac, because
 // `static_assertions` is a real (non-dev) dependency (see Cargo.toml).
 assert_not_impl_any!(OwnerPlatform: Send, Sync);
-
-// ============================================================================
-// SharedPlatform
-// ============================================================================
-
-/// The thread-safe residual of [`Platform`] — every operation NOT gated on
-/// owner-thread affinity, per ADR-0039 §2's "what stays" table.
-///
-/// `Clone + Send + Sync`: unlike `&dyn Platform` (which is `Platform: Send +
-/// Sync` in full, `open_window`/`quit`/`activate`/`display_snapshot`/
-/// `keyboard_layout`/`active_window`
-/// included), a `SharedPlatform` genuinely can cross a `std::thread::scope`
-/// boundary into safe code without smuggling an owner-affine call along
-/// with it — **the method list below IS the fence**: every method on this
-/// type is safe to call from any thread, and no owner-affine method is
-/// ever added to it. Minted only by [`OwnerPlatform::shared`].
-///
-/// This is the compile-time-checked half of the owner-platform capability
-/// (`assert_impl_all!` below); `Platform` itself (the trait `dyn` object underneath) remains
-/// runtime-checked (`OwnerAffinity` debug-asserts) until the owner-thread methods leave `Platform` and split its
-/// owner-affine methods off entirely.
-#[derive(Clone)]
-pub struct SharedPlatform {
-    platform: Arc<dyn Platform>,
-}
-
-impl fmt::Debug for SharedPlatform {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SharedPlatform")
-            .field("platform", &self.platform.name())
-            .finish_non_exhaustive()
-    }
-}
-
-impl SharedPlatform {
-    pub(crate) fn new(platform: Arc<dyn Platform>) -> Self {
-        Self { platform }
-    }
-
-    /// The platform's name for debugging/logging.
-    #[must_use]
-    pub fn name(&self) -> &'static str {
-        self.platform.name()
-    }
-
-    /// The application's executable path.
-    ///
-    /// # Errors
-    /// Propagates the backend's own lookup failure as
-    /// [`PlatformError::AppPath`].
-    pub fn app_path(&self) -> Result<PathBuf, PlatformError> {
-        self.platform.app_path()
-    }
-
-    /// The value the process was launched with under `key`; see [`Platform::launch_value`].
-    #[must_use]
-    pub fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
-        self.platform.launch_value(key)
-    }
-
-    /// Where the application `app` keeps its data, or `None` when this
-    /// platform has nowhere to keep it.
-    #[must_use]
-    pub fn data_store(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataStore> {
-        self.platform.data_store(app)
-    }
-
-    /// The drag-and-drop transport (ADR-0312 §4).
-    #[must_use]
-    pub fn data_transfer(&self) -> Arc<dyn DragTransport> {
-        self.platform.data_transfer()
-    }
-
-    /// Tells the platform the application released the session end it asked to
-    /// wait for; see [`Platform::release_session_end`].
-    pub fn release_session_end(&self) {
-        self.platform.release_session_end();
-    }
-
-    /// What the platform does for the application when the user's session
-    /// ends. See [`Platform::session_end_support`].
-    #[must_use]
-    pub fn session_end_support(&self) -> flui_platform::SessionEndSupport {
-        self.platform.session_end_support()
-    }
-
-    /// The commands and observations every window of this platform has, known
-    /// before one opens; see [`Platform::window_capabilities`].
-    #[must_use]
-    pub fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
-        self.platform.window_capabilities()
-    }
-
-    /// The frame a decorated window adds to its content size on a display of
-    /// scale `scale_factor`; see [`Platform::window_frame_inset`].
-    #[must_use]
-    pub fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
-        self.platform.window_frame_inset(scale_factor)
-    }
-
-    /// Requests that the owner thread ask the application handler's exit
-    /// policy again — see [`Platform::request_exit_policy_reevaluation`]'s
-    /// doc for the full contract. On this fence deliberately: it is the one
-    /// exit-path operation a *worker* thread legitimately needs (a keep-alive
-    /// application service completing is what makes a prior last-window veto
-    /// stale), it is coalesced and enqueue-and-wake only — the handler itself
-    /// is always asked on the owner thread, never here.
-    pub fn request_exit_policy_reevaluation(&self) {
-        self.platform.request_exit_policy_reevaluation();
-    }
-
-    /// Registers a callback for keyboard layout changes.
-    pub fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
-        self.platform.on_keyboard_layout_change(callback);
-    }
-
-    /// Opens a URL with the system's default handler.
-    pub fn open_url(&self, url: &str) {
-        self.platform.open_url(url);
-    }
-
-    /// Reveals a path in the platform's file manager.
-    pub fn reveal_path(&self, path: &Path) {
-        self.platform.reveal_path(path);
-    }
-
-    /// Opens a path with the system's default application.
-    pub fn open_path(&self, path: &Path) {
-        self.platform.open_path(path);
-    }
-
-    /// Shows a file/directory picker dialog. Returns selected paths, or
-    /// `None` if the user cancelled (cancelling is not an error); a dialog
-    /// that could not run resolves to [`PlatformError::Dialog`]. Runs
-    /// asynchronously on a background thread.
-    pub fn prompt_for_paths(
-        &self,
-        options: PathPromptOptions,
-    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
-        self.platform.prompt_for_paths(options)
-    }
-
-    /// Shows a "Save As" dialog for selecting a new file path. Returns the
-    /// selected path, or `None` if the user cancelled (cancelling is not an
-    /// error); a dialog that could not run resolves to
-    /// [`PlatformError::Dialog`].
-    pub fn prompt_for_new_path(
-        &self,
-        directory: &Path,
-        suggested_name: Option<&str>,
-    ) -> Task<Result<Option<PathBuf>, PlatformError>> {
-        self.platform.prompt_for_new_path(directory, suggested_name)
-    }
-}
-
-// The evidence that `SharedPlatform` genuinely is the thread-safe
-// escape hatch its doc promises — expanded by every `cargo check`, same
-// discipline as `OwnerPlatform`'s `assert_not_impl_any!` above.
-assert_impl_all!(SharedPlatform: Send, Sync, Clone);
 
 /// Result of an owner-thread window-open request.
 #[must_use = "a Pending window creation must be waited on or polled; \
@@ -741,6 +596,21 @@ impl PlatformProxy {
     /// fails.
     pub fn request_quit(&self) -> Result<(), ProxySendError<()>> {
         self.transport.request_quit()
+    }
+
+    /// Ask the owner to ask the application handler's exit policy again: what
+    /// a keep-alive service ending on a worker thread asks, since a veto the
+    /// policy gave while the service held the application is stale once it
+    /// lets go (see [`Platform::request_exit_policy_reevaluation`]). From
+    /// another thread the owner asks in its next turn, and a burst costs one
+    /// turn; on the owner the platform is asked at once.
+    ///
+    /// # Errors
+    /// `OwnerGone` once the owner stopped, `Unsupported` on a backend whose
+    /// owner asks no exit policy for other threads, `WakeFailed` when the
+    /// turn could not be posted (the request stays owed).
+    pub fn request_exit_policy_reevaluation(&self) -> Result<(), ProxySendError<()>> {
+        self.transport.request_exit_policy_reevaluation()
     }
 
     /// True iff the calling thread is the event-loop owner. Diagnostic
@@ -1122,6 +992,9 @@ pub(crate) trait ProxyTransport: Send + Sync {
     /// See [`ProxySendError`]. [`ProxySendError::Unsupported`] on a
     /// lane-less backend is **permanent** — not a transient condition.
     fn request_quit(&self) -> Result<(), ProxySendError<()>>;
+
+    /// Asks the owner to ask the exit policy again — coalesced.
+    fn request_exit_policy_reevaluation(&self) -> Result<(), ProxySendError<()>>;
 
     /// The thread identity of the event-loop owner (diagnostic only).
     fn owner_thread(&self) -> ThreadId;

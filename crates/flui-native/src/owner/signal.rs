@@ -16,6 +16,7 @@
 pub(crate) type WindowWake = Arc<dyn Fn() + Send + Sync>;
 
 use super::panic_boundary::contain_owner_callback;
+use super::slot::OwnerSlot;
 use crate::{
     OpenWindowError, OpenedWindow, PendingWindow, PlatformError, ProxySendError,
     WakeRegistrationError, WindowRequest, platform::Platform,
@@ -112,12 +113,23 @@ struct State {
     /// Window opens other threads asked for, oldest first, waiting for an
     /// owner turn; at most [`OPEN_LANE_CAPACITY`].
     opens: VecDeque<QueuedOpen>,
+    /// Another thread asked the owner to ask the exit policy again;
+    /// coalesced, settled in the owner's next turn.
+    reevaluate_exit: bool,
+    /// Whether the owner opens the windows other threads ask for.
+    opens_windows: bool,
 }
 
 impl State {
     /// Whether anything waits for an owner turn.
     fn has_work(&self) -> bool {
-        self.pending || self.quit || !self.window_wakes.is_empty() || !self.opens.is_empty()
+        self.pending || self.quit || self.has_owner_work()
+    }
+
+    /// Whether work the owner runs before the application's turn waits: a
+    /// window's work, a window open, an exit-policy request.
+    fn has_owner_work(&self) -> bool {
+        !self.window_wakes.is_empty() || !self.opens.is_empty() || self.reevaluate_exit
     }
 }
 
@@ -141,9 +153,12 @@ pub(crate) struct OwnerSignal {
     notify: Notify,
     owner: Mutex<ThreadId>,
     shared: SharedTurnSlot,
-    /// The platform that opens the windows other threads ask for; `None`
-    /// where the owner opens none for them.
-    opener: Mutex<Option<Weak<dyn Platform>>>,
+    /// The platform the owner opens the windows other threads ask for
+    /// through, and asks the exit policy again through; `None` where the
+    /// owner opens none for them. The platform itself is the owner thread's:
+    /// the slot holds it in that thread's table, and no other thread reaches
+    /// it (ADR-0327 §2).
+    platform: Mutex<Option<OwnerSlot<Weak<dyn Platform>>>>,
 }
 
 impl OwnerSignal {
@@ -158,19 +173,84 @@ impl OwnerSignal {
                 quit: false,
                 window_wakes: Vec::new(),
                 opens: VecDeque::new(),
+                reevaluate_exit: false,
+                opens_windows: false,
             }),
             notify,
             owner: Mutex::new(std::thread::current().id()),
             shared: SharedTurnSlot::default(),
-            opener: Mutex::new(None),
+            platform: Mutex::new(None),
         })
     }
-    /// Let the owner open the windows other threads ask for
+    /// Let the owner ask `platform`'s exit policy again when another thread
+    /// asks
+    /// ([`PlatformProxy::request_exit_policy_reevaluation`](crate::PlatformProxy::request_exit_policy_reevaluation)).
+    /// Called on the owner thread, whose table keeps the platform.
+    pub(crate) fn serve_platform(&self, platform: &Arc<dyn Platform>) {
+        let slot = OwnerSlot::new();
+        if slot.replace(Arc::downgrade(platform)).is_err() {
+            tracing::error!("the owner's platform has no slot: owner slots are exhausted");
+            return;
+        }
+        // The slot it replaces drops its value on this, its owner, thread.
+        let replaced = self.platform.lock().replace(slot);
+        drop(replaced);
+    }
+    /// [`serve_platform`](Self::serve_platform), and let the owner open the
+    /// windows other threads ask for
     /// ([`PlatformProxy::open_window`](crate::PlatformProxy::open_window))
     /// through `platform`, whose loop keeps each until it closes, as it keeps
     /// the windows the owner opens itself.
     pub(crate) fn open_windows_through(&self, platform: &Arc<dyn Platform>) {
-        *self.opener.lock() = Some(Arc::downgrade(platform));
+        self.serve_platform(platform);
+        self.state.lock().opens_windows = true;
+    }
+    /// The owner's platform, on the owner thread while it lives.
+    fn owner_platform(&self) -> Option<Arc<dyn Platform>> {
+        self.platform
+            .lock()
+            .as_ref()
+            .and_then(OwnerSlot::cloned)
+            .and_then(|platform| platform.upgrade())
+    }
+    /// Ask the owner to ask the exit policy again: on the owner, whose table
+    /// holds the platform, at once; from another thread, in the owner's next
+    /// turn, coalesced.
+    ///
+    /// # Errors
+    ///
+    /// `OwnerGone` once the owner stopped accepting work, `Unsupported` where
+    /// it has no platform to ask through, `WakeFailed` when the turn could not
+    /// be posted (the request stays owed).
+    pub(crate) fn request_exit_policy_reevaluation(&self) -> Result<(), ProxySendError<()>> {
+        if self.platform.lock().is_none() {
+            return Err(ProxySendError::Unsupported { rejected: () });
+        }
+        if !self.accepting() {
+            return Err(ProxySendError::OwnerGone { rejected: () });
+        }
+        if let Some(platform) = self.owner_platform() {
+            // The owner asks its own platform: no turn is spent on it.
+            platform.request_exit_policy_reevaluation();
+            return Ok(());
+        }
+        {
+            let mut state = self.state.lock();
+            if !state.accepting {
+                return Err(ProxySendError::OwnerGone { rejected: () });
+            }
+            state.reevaluate_exit = true;
+        }
+        self.schedule()
+    }
+    /// Ask the platform's exit policy again, when another thread asked.
+    fn run_exit_reevaluation(&self) {
+        if !std::mem::take(&mut self.state.lock().reevaluate_exit) {
+            return;
+        }
+        if let Some(platform) = self.owner_platform().filter(|_| self.accepting()) {
+            contain_owner_callback(|| platform.request_exit_policy_reevaluation());
+        }
     }
     /// Queue a window open for the owner's next turn.
     #[expect(
@@ -181,7 +261,7 @@ impl OwnerSignal {
         &self,
         request: WindowRequest,
     ) -> Result<PendingWindow, ProxySendError<WindowRequest>> {
-        if self.opener.lock().is_none() {
+        if !self.state.lock().opens_windows {
             return Err(ProxySendError::Unsupported { rejected: request });
         }
         // No owner parks on an abandoned request: the drain finds it.
@@ -224,19 +304,16 @@ impl OwnerSignal {
     /// open, or, when the owner stops meanwhile, with `OwnerGone`.
     fn run_opens(&self) {
         let opens = std::mem::take(&mut self.state.lock().opens);
-        let opener = self.opener.lock().clone();
+        let platform = self.owner_platform();
         for QueuedOpen { request, slot } in opens {
             // Each request is answered in its own containment: a requester's
             // waker that panics on delivery leaves the rest answered and the
             // turn able to end.
             contain_owner_callback(|| {
-                let platform = opener
-                    .as_ref()
-                    .and_then(Weak::upgrade)
-                    .filter(|_| self.accepting());
+                let platform = platform.as_ref().filter(|_| self.accepting());
                 match platform {
                     Some(platform) if !slot.is_abandoned() => {
-                        let result = open_requested(&*platform, request);
+                        let result = open_requested(&**platform, request);
                         if let Err(unclaimed) = slot.deliver(result) {
                             // Its requester let go meanwhile; an opened window
                             // stays with the loop until it closes.
@@ -445,6 +522,7 @@ impl OwnerSignal {
             state.pending = false;
             state.queued = false;
             state.quit = false;
+            state.reevaluate_exit = false;
             (self.shared.take(), std::mem::take(&mut state.opens))
         };
         contain_owner_callback(|| drop(callback));
@@ -520,16 +598,15 @@ impl OwnerTurn<'_> {
                 state.quit = false;
                 return true;
             }
-            if state.accepting
-                && state.running
-                && (!state.window_wakes.is_empty() || !state.opens.is_empty())
-            {
-                // Windows other threads asked for open, and a window's work
-                // runs, in a turn of their own, before the application's
-                // turn; work they ask for gets a later turn.
+            if state.accepting && state.running && state.has_owner_work() {
+                // Windows other threads asked for open, an exit-policy request
+                // from another thread and a window's work run in a turn of
+                // their own, before the application's turn; work they ask for
+                // gets a later turn.
                 state.active = true;
                 drop(state);
                 signal.run_opens();
+                signal.run_exit_reevaluation();
                 signal.run_window_wakes();
                 signal.state.lock().active = false;
                 signal.rearm();
@@ -607,6 +684,12 @@ impl super::ProxyTransport for SignalTransport {
             .upgrade()
             .ok_or(ProxySendError::OwnerGone { rejected: () })?
             .request_quit()
+    }
+    fn request_exit_policy_reevaluation(&self) -> Result<(), ProxySendError<()>> {
+        self.signal
+            .upgrade()
+            .ok_or(ProxySendError::OwnerGone { rejected: () })?
+            .request_exit_policy_reevaluation()
     }
     fn owner_thread(&self) -> ThreadId {
         self.owner

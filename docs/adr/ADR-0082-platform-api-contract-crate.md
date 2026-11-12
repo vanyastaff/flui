@@ -117,7 +117,7 @@ release, not in the move.
 ### 2. `flui-native` keeps the backends and the host-facing surface
 
 `flui-native` becomes tier H, kind `internal`. It keeps every OS backend, the host-facing
-`Platform` trait, `OwnerPlatform`, `SharedPlatform`, `PlatformProxy`, `PendingWindow`/`WindowOpen`,
+`Platform` trait, `OwnerPlatform`, `PlatformProxy`, `PendingWindow`/`WindowOpen`,
 the prompt APIs, and, until the amendment below, `PlatformAccessibility` (its signatures are
 AccessKit's). Only composition
 roots depend on it: `flui-app`, and tests that drive a backend.
@@ -223,11 +223,11 @@ A trait signature cannot differ per backend, so the order is:
    **and** registration is reachable only through types that prove the owner thread.
 
 While the host is `Send + Sync`, the refusal in step 1 is what keeps step 2 sound; once the host
-is owner-local ([ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) §1) the compiler keeps it sound and the refusal goes. `Platform`, `PlatformWindow` and
-`SharedPlatform` are `Send + Sync` and their registrations take `&self`, so without it any thread
+is owner-local ([ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) §1) the compiler keeps it sound and the refusal goes. `Platform` and `PlatformWindow`
+are `Send + Sync` and their registrations take `&self`, so without it any thread
 could hand over a closure that captures an `Rc` and have it run on the owner while the `Rc`'s
 other handle stays on the registering thread. Step 2 therefore also moves registration behind
-owner-proof types: the platform hooks (`on_quit`, `on_window_event`, …) from `SharedPlatform` to
+owner-proof types: the platform hooks (`on_quit`, `on_window_event`, …) onto
 `OwnerPlatform`, and window callbacks through an owner-minted `!Send` registrar — for example
 `OwnerPlatform::window(&self, &Arc<dyn PlatformWindow>) -> OwnerWindow<'_>`, which fits the
 host-side window subtrait of §3's second change.

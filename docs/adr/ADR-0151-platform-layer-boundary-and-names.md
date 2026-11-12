@@ -530,7 +530,7 @@ crates/flui-native/
     hosts/                  one table per host and its constructor, nothing else:
                             windows.rs apple.rs android.rs web.rs linux.rs (Wayland and X11) headless.rs
     owner/                  the owner thread and each platform's loop (std's sys/pal): OwnerPlatform,
-                            SharedPlatform, PlatformProxy, the signal and slot, the panic boundary, the one
+                            PlatformProxy, the signal and slot, the panic boundary, the one
                             call point for user code, journal/ (ADR-0215 §4, built under the driver feature;
                             its schema is declared in flui-protocol);
                             windows.rs apple.rs android.rs web.rs linux/{wayland,x11}.rs headless.rs

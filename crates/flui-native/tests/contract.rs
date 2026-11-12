@@ -5587,7 +5587,7 @@ mod native_windows {
             let releaser = Arc::clone(&releaser);
             move |log, owner| {
                 let allow = Arc::new(AtomicBool::new(false));
-                let shared = owner.shared();
+                let shared = owner.proxy();
                 log.answer_exit_with({
                     let allow = Arc::clone(&allow);
                     let answers = Arc::clone(&answers);
@@ -5611,7 +5611,9 @@ mod native_windows {
                     }
                     std::thread::sleep(Duration::from_millis(200));
                     allow.store(true, Ordering::SeqCst);
-                    shared.request_exit_policy_reevaluation();
+                    shared
+                        .request_exit_policy_reevaluation()
+                        .expect("the owner takes the request");
                 });
                 *releaser.lock().expect("releaser") = Some(worker);
             }
@@ -5638,7 +5640,7 @@ mod native_windows {
             let calls = Arc::clone(&calls);
             let releaser = Arc::clone(&releaser);
             move |log, owner| {
-                let shared = owner.shared();
+                let shared = owner.proxy();
                 log.answer_exit_with({
                     let calls = Arc::clone(&calls);
                     move || {
@@ -5662,7 +5664,9 @@ mod native_windows {
                         std::thread::sleep(Duration::from_millis(5));
                     }
                     std::thread::sleep(Duration::from_millis(200));
-                    shared.request_exit_policy_reevaluation();
+                    shared
+                        .request_exit_policy_reevaluation()
+                        .expect("the owner takes the request");
                 });
                 *releaser.lock().expect("releaser") = Some(worker);
             }

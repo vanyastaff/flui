@@ -443,7 +443,7 @@ seam.
   SDL returns a string (the lines are in Context above). The payload-free notification stays too.
 - **Owner-turn application of commands** (ADR-0237 decision 4): a native call that re-enters the
   window procedure synchronously stays out of user code.
-- **`OwnerPlatform` as a `!Send` proof, `SharedPlatform` as the fence.** winit's window is `Send +
+- **`OwnerPlatform` as a `!Send` proof, `PlatformProxy` as the fence.** winit's window is `Send +
   Sync`; GPUI and Slint get the effect by leaving `Send` off but have no proof type for the loop
   thread.
 - **`DispatchEventResult` and its deferred forms.** The references return a plain answer: Masonry a

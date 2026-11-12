@@ -542,7 +542,6 @@ fn explicit_platform_quit_detaches_every_installed_ui_runtime() {
     // once the bootstrap returned.
     platform
         .run(crate::app::runner::app_handler(move |owner| {
-            let shared = owner.shared();
             install_owner_platform(owner).expect("install owner wake transport");
             let primary = install_test_ui_runtime();
             let secondary = install_ui_runtime_alongside(
@@ -558,7 +557,8 @@ fn explicit_platform_quit_detaches_every_installed_ui_runtime() {
             }
             super::super::host::install_platform_quit_hook();
             super::super::host::route_exit_policy(|| true);
-            shared.request_exit_policy_reevaluation();
+            with_owner_platform(flui_native::OwnerPlatform::request_exit_policy_reevaluation)
+                .expect("the owner is installed");
             assert!(reevaluation.drive(), "the exit policy allowed the quit");
             kept.borrow_mut().extend([primary, secondary]);
             Ok(())

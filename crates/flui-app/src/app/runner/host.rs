@@ -76,7 +76,7 @@ pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
     let store = storage_dir(config)
         .ok_or_else(|| refused(flui_platform::UnsupportedReason::NotRegistered))
         .and_then(|dir| {
-            with_owner_platform(|owner| owner.shared().data_store(&dir))
+            with_owner_platform(|owner| owner.data_store(&dir))
                 .flatten()
                 .ok_or_else(|| {
                     tracing::warn!(
@@ -952,7 +952,7 @@ pub(crate) fn install_owner_platform(
     // a runner builds afterwards acquires it (`runtime_capabilities`).
     let clipboard = owner.clipboard();
     let primary_selection = owner.primary_selection();
-    let data_transfer = owner.shared().data_transfer();
+    let data_transfer = owner.data_transfer();
     let (previous, previous_owner_turn_wake, previous_host, previous_clipboard) =
         APP_RUNTIME.with(|slot| {
             let mut state = slot.borrow_mut();
@@ -1286,7 +1286,7 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
         }
         should_exit
     });
-    let shared = with_owner_platform(flui_native::OwnerPlatform::shared);
+    let proxy = with_owner_platform(flui_native::OwnerPlatform::proxy);
 
     // The exit policy is otherwise only asked when a window closes, so a
     // veto owed to a running keep-alive service (issue #558) would be
@@ -1303,16 +1303,16 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
     // thread) leaves nothing to wire. Not compiled on wasm32, where the
     // lifecycle layer (and so the notifier seam) does not exist.
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(shared) = shared {
+    if let Some(proxy) = proxy {
         APP_RUNTIME.with(|slot| {
             slot.borrow_mut()
                 .set_lifecycle_exit_notifier(std::sync::Arc::new(move || {
-                    shared.request_exit_policy_reevaluation();
+                    super::main_window::reevaluate_exit_policy(&proxy);
                 }));
         });
     }
     #[cfg(target_arch = "wasm32")]
-    drop(shared);
+    drop(proxy);
 }
 
 /// Route the desktop platform's quit to the main window and the quit
@@ -1436,38 +1436,6 @@ pub(super) fn desktop_secondary_wake_deadline(
 ///     bindings drive their own binding-local `UpdateScheduler`, never a UI runtime
 ///     installed into `APP_RUNTIME`, so fences (a) and (b) are the
 ///     load-bearing ones there — stated here, not hidden.
-///
-/// # `owner.shared()`'s method list is a compile-time fence too
-///
-/// Code reached through this accessor that isn't owner-thread-affine goes
-/// through [`OwnerPlatform::shared`](flui_native::OwnerPlatform::shared),
-/// which returns `SharedPlatform` — a type whose method list IS the fence
-/// (no owner-affine method, e.g. `open_window`, is ever added to it; see
-/// its own rustdoc). The failing and passing examples differ only in the
-/// window-opening receiver: the shared residual has no `open_window`, while
-/// the owner capability does.
-///
-/// ```compile_fail,E0599
-/// use std::rc::Rc;
-///
-/// use flui_native::OwnerPlatform;
-/// use flui_platform::{WindowHandler, WindowOptions};
-///
-/// fn open(owner: &OwnerPlatform, options: WindowOptions, handler: Rc<dyn WindowHandler>) {
-///     let _ = owner.shared().open_window(options, handler);
-/// }
-/// ```
-///
-/// ```
-/// use std::rc::Rc;
-///
-/// use flui_native::OwnerPlatform;
-/// use flui_platform::{WindowHandler, WindowOptions};
-///
-/// fn open(owner: &OwnerPlatform, options: WindowOptions, handler: Rc<dyn WindowHandler>) {
-///     let _ = owner.open_window(options, handler);
-/// }
-/// ```
 ///
 /// # Native re-entry
 ///

@@ -518,6 +518,7 @@ impl host::Loop for HeadlessLoop {
         let owner_thread = thread::current().id();
 
         let hooks: Arc<dyn OwnerHooks> = if deferred_window_open {
+            signal.serve_platform(&platform);
             Arc::new(HeadlessDeferredOwnerHooks {
                 state: state_handle,
                 signal: Arc::clone(&signal),
