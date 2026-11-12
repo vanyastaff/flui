@@ -364,7 +364,9 @@ executor runs each command under its own catch, in both placements.
   (`renderer.rs:1641`). Every slot's frames settle `DeviceLost` until the rebuild succeeds.
 - One `DeviceRebuilds` per executor, which owns the one context, holds ADR-0267's backoff (16 ms
   doubling to a one-second ceiling) and its ceiling (ten failures at it) on the clock the executor
-  is built with, so a manual clock walks it. The executor's record publishes the state as
+  is built with, so a manual clock walks it; a failed attempt's wait runs from when the attempt
+  ended, since the request blocks for as long as the driver takes. The executor's record
+  publishes the state as
   `DeviceHealth { Healthy, Rebuilding { attempts }, GivenUp { attempts } }`, which the host maps to
   ADR-0267's `DeviceRecovery { Pending, Failed, Abandoned }`, with when the next rebuild may run
   (`RasterSender::device_retry_at`, for the host's wake) and why the last one failed
@@ -373,7 +375,8 @@ executor runs each command under its own catch, in both placements.
   slots are served, with its first rebuild due now (`device_retry_at` answers the current instant),
   so the owner runs the next turn. A rebuild that panics counts as a failure and its panic is
   resumed once the turn has served every slot; the context counts its device lost until every
-  slot is on the new one, so a rebuild that unwinds part way is asked for again from the start,
+  slot is on the new one, so a rebuild that unwinds part way is asked for again from the start
+  (what an unwound attempt refused is kept and answered by the attempt that finishes),
   and the executor restamps every slot whenever a lost device renders again, whichever way it
   came back. A backend that cannot rebuild where the executor runs (the web, below) is given up
   at the first due attempt. After `GivenUp` the context stays given up until

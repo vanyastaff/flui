@@ -131,6 +131,39 @@ impl SlotTable {
     }
 }
 
+/// The slots a device rebuild found the new device cannot serve, kept across
+/// attempts: a window whose surface an attempt dropped answers `Ok` to the
+/// next (it is released), so a rebuild that unwinds or fails after the drop
+/// must not forget that the owner owes it a surface (ADR-0305 §8).
+#[derive(Default)]
+struct RebuildRefusals {
+    held: Vec<(SlotId, EngineError)>,
+}
+
+impl RebuildRefusals {
+    /// The new device cannot serve `slot`, for `error`.
+    fn refuse(&mut self, slot: SlotId, error: EngineError) {
+        self.held.retain(|(held, _)| *held != slot);
+        self.held.push((slot, error));
+    }
+
+    /// The new device serves `slot`; one left without its target (a window
+    /// an earlier attempt released) keeps its refusal.
+    fn served(&mut self, slot: SlotId, holds_target: bool) {
+        if holds_target {
+            self.held.retain(|(held, _)| *held != slot);
+        }
+    }
+
+    /// The refusals of the rebuild that finished, for the slots the context
+    /// holds.
+    fn take(&mut self, holds: impl Fn(SlotId) -> bool) -> Vec<(SlotId, EngineError)> {
+        let mut refused = std::mem::take(&mut self.held);
+        refused.retain(|(slot, _)| holds(*slot));
+        refused
+    }
+}
+
 /// How a context's device was requested, so a rebuild asks for the same kind
 /// on the same instance (ADR-0305 §8).
 #[derive(Debug, Clone, Copy)]
@@ -238,6 +271,8 @@ pub struct GpuContext {
     /// the old one and cleared once every slot is on it, so a rebuild that
     /// unwinds part way leaves the device lost (ADR-0305 §8).
     rebuilding: bool,
+    /// What the attempts of the rebuild under way refused.
+    refusals: RebuildRefusals,
     /// The painter every slot records and replays with: its pipelines per
     /// target format, the glyph atlas and the image and path caches.
     ///
@@ -483,6 +518,7 @@ impl GpuContext {
             recipe,
             domain,
             rebuilding: false,
+            refusals: RebuildRefusals::default(),
             painter: None,
             pipelines: None,
             blit: None,
@@ -546,10 +582,10 @@ impl GpuContext {
             adapter,
             domain,
             slots,
+            refusals,
             ..
         } = self;
         let gpu = gpu_of(adapter, domain);
-        let mut refused = Vec::new();
         for (id, slot) in slots.iter_mut() {
             let rebuilt = match slot {
                 SurfaceSlot::Offscreen(entry) => {
@@ -558,16 +594,22 @@ impl GpuContext {
                     // nothing until a resize makes one.
                     let made = offscreen_texture(domain, max_dim, entry.size, entry.format);
                     entry.texture = made.as_ref().ok().cloned();
-                    made.map(drop)
+                    made.map(|_| true)
                 }
-                SurfaceSlot::Window(window) => window.rebuild(&gpu),
+                SurfaceSlot::Window(window) => {
+                    window.rebuild(&gpu).map(|()| window.surface().is_some())
+                }
             };
-            if let Err(error) = rebuilt {
-                refused.push((id, error));
+            // Each answer is recorded as it is found, so an attempt that
+            // unwinds part way leaves what it refused for the next.
+            match rebuilt {
+                Ok(holds_target) => refusals.served(id, holds_target),
+                Err(error) => refusals.refuse(id, error),
             }
         }
         self.rebuilding = false;
-        Ok(refused)
+        let slots = &self.slots;
+        Ok(self.refusals.take(|id| slots.get(id).is_some()))
     }
 
     /// The device domain every slot submits through.
@@ -1152,6 +1194,28 @@ mod tests {
     use crate::raster_executor::{
         RasterCommand, RasterExecutor, RasterVerdict, SendReceipt, SlotConfig, SlotId, SlotTarget,
     };
+
+    /// A window an interrupted attempt released answers `Ok` to the next
+    /// attempt: its refusal survives to the rebuild that finishes, while a
+    /// slot the next attempt serves, or one detached meanwhile, drops its own.
+    #[test]
+    fn a_refusal_outlives_the_attempt_that_found_it() {
+        let [released, retried, detached] = [0, 1, 2]
+            .map(|index| SlotId::new_gen(index, flui_foundation::generation::Generation::FIRST));
+        let mut refusals = super::RebuildRefusals::default();
+        // The first attempt unwinds after these.
+        refusals.refuse(released, EngineError::IncompatibleSurface);
+        refusals.refuse(retried, EngineError::GpuUnavailable);
+        refusals.refuse(detached, EngineError::IncompatibleSurface);
+        // The next finishes: the released window is still without a surface.
+        refusals.served(released, false);
+        refusals.served(retried, true);
+        let refused = refusals.take(|slot| slot != detached);
+        assert_eq!(refused.len(), 1);
+        assert_eq!(refused[0].0, released);
+        assert!(matches!(refused[0].1, EngineError::IncompatibleSurface));
+        assert!(refusals.take(|_| true).is_empty(), "taken once");
+    }
 
     /// A red square beside a black glyph, so a frame samples both the shape
     /// pipelines and the glyph atlas.

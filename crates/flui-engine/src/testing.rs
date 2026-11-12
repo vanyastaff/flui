@@ -1,9 +1,9 @@
 //! Test support for code that drives the raster executor without a GPU
 //! (ADR-0243: the fake sits beside its contract, [`SlotBackend`]).
 
-use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
-use flui_foundation::{geometry::DeviceSize, memory::MemoryPressureLevel};
+use flui_foundation::{ManualClock, geometry::DeviceSize, memory::MemoryPressureLevel};
 use flui_layer::{DamageRegion, Scene};
 use flui_platform::DisplayColor;
 
@@ -72,6 +72,8 @@ struct Script {
     device_lost: bool,
     lose_in_next_render: bool,
     no_inline_rebuild: bool,
+    /// The clock each rebuild advances, and by how much.
+    rebuild_takes: Option<(ManualClock, Duration)>,
 }
 
 /// A [`SlotBackend`] with no GPU: it logs every call and answers from a
@@ -136,6 +138,12 @@ impl ScriptedSlots {
     /// the web's context does.
     pub fn cannot_rebuild_inline(&self) {
         self.script.borrow_mut().no_inline_rebuild = true;
+    }
+
+    /// Every device rebuild from now on advances `clock` by `took`, as a
+    /// driver that blocks the attempt does.
+    pub fn rebuilds_take(&self, clock: &ManualClock, took: Duration) {
+        self.script.borrow_mut().rebuild_takes = Some((clock.clone(), took));
     }
 
     /// Answer the next unanswered device rebuild with `answer`; one the
@@ -278,6 +286,10 @@ impl SlotBackend for ScriptedSlots {
     }
 
     fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
+        let takes = self.script.borrow().rebuild_takes.clone();
+        if let Some((clock, took)) = takes {
+            clock.advance(took);
+        }
         match self.answer(SlotCall::RebuildDevice) {
             None | Some(ScriptedAnswer::Answer(_)) => {
                 let mut script = self.script.borrow_mut();

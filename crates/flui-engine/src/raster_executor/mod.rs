@@ -364,10 +364,14 @@ impl<B: SlotBackend> RasterExecutor<B> {
         }
         let mut failure = None;
         let mut failed = None;
-        let now = self.clock.now();
+        let mut now = self.clock.now();
         if self.rebuilds.due(now) {
             if self.backend.rebuilds_inline() {
-                match first.contain(|| self.backend.rebuild_device()) {
+                let attempt = first.contain(|| self.backend.rebuild_device());
+                // The attempt blocks for as long as the driver takes: the next
+                // one waits out its backoff from when this one ended.
+                now = self.clock.now();
+                match attempt {
                     Some(Ok(refused)) => {
                         self.rebuilds.recovered();
                         // The slots are restamped before the health says the

@@ -1638,6 +1638,31 @@ fn a_failed_rebuild_is_reported_and_the_next_waits_out_its_backoff() {
     );
 }
 
+/// A rebuild that blocks before it fails arms the next from when it ended,
+/// so a slow driver is not asked again the moment it answers.
+#[test]
+fn a_slow_failed_rebuild_waits_its_backoff_from_when_it_ended() {
+    let mut rig = rig();
+    let _at = attached(&mut rig, 1);
+    rig.backend.lose_device();
+    rig.backend
+        .rebuilds_take(&rig.clock, Duration::from_millis(500));
+    rig.backend
+        .script_rebuild(ScriptedAnswer::Fail(EngineError::GpuUnavailable));
+    let _ = rig.executor.turn();
+    let retry_at = rig
+        .sender
+        .device_retry_at()
+        .expect("a failed rebuild arms the next");
+    assert_eq!(
+        retry_at.duration_since(MonotonicClock::now(&rig.clock)),
+        Duration::from_millis(16),
+        "the first wait runs from the attempt's end"
+    );
+    let _ = rig.executor.turn();
+    assert_eq!(rebuilds(&rig.backend), 1, "no rebuild before the deadline");
+}
+
 /// A rebuild that keeps failing at the backoff's ceiling is given up: frames
 /// settle `DeviceLost` and no rebuild runs, however long, until the owner
 /// sends `RetryDevice`; then the device renders again (ADR-0267).
