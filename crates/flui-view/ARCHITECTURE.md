@@ -865,11 +865,12 @@ imposing a generation advance on retained slots.
 
 ### Object keys own their identity
 
-`ObjectKey` stores the erased owning Arc alone. `Arc::ptr_eq` compares its
-allocation identity, while hash and debug formatting use its data address.
-Cloned keys keep that allocation live; equal values in separate allocations
-remain different keys. Automatic Send/Sync follow the stored Arc's bounds,
-without duplicate pointer state or manual unsafe implementations.
+`ObjectKey` stores the erased owning `Rc` alone, cloned from the `&Rc<T>` its
+constructor takes. `Rc::ptr_eq` compares its allocation identity, while hash
+and debug formatting use its data address. Cloned keys keep that allocation
+live, so the address cannot be reused while a key compares it; equal values in
+separate allocations remain different keys. A key is owner-local: it lives in
+views and elements on the owner thread and carries no thread bound (ADR-0323 §4).
 
 The public constructor doctest distinguishes shared and separate allocations.
 `object_keys_follow_retained_allocations_through_reorder` in

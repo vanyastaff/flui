@@ -464,3 +464,7 @@ fn signal_read_and_write_matrix() {
         ],
     );
 }
+
+// Keys, stream builders and binding observers carry no thread bound (ADR-0323 §4).
+#[path = "owner_local.rs"]
+mod owner_local;
