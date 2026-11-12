@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-10-30)
 - **Date:** 2026-10-30
+- **Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) for §4 (where
+  parallel work leaves the owner thread).
 - **Supersedes:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md), the verdict's sentence "Multiple
   UI runtimes may execute concurrently" and §1's sentence on runtime count per owner thread only
   (the ownership levels, the `!Send` model and the rest of §1 stand);

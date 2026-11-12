@@ -6,6 +6,9 @@
 - **Superseded-by:** [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md) for the verdict's
   sentence "Multiple UI runtimes may execute concurrently" and §1's sentence on runtime count per
   owner thread: every UI runtime runs on one owner thread.
+- **Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) for §2 (the
+  thread-affinity table) and §9's first two items (the public API's thread affinity and the
+  cross-thread vocabulary): one record states what stays on the owner thread and what crosses.
 - **Date:** 2026-07-11
 - **Revised:** 2026-11-03 — the title no longer calls FLUI a multi-threaded runtime: one owner
   thread hosts every UI runtime (ADR-0266), and the parallelism is outside the UI transaction.

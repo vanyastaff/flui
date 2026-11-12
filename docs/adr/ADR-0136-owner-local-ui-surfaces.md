@@ -13,6 +13,8 @@
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   §2's teardown item only where it retains later panics and, during an unwind, the values without
   running their destructors: they are destroyed under the teardown's containment.
+- **Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) for §3 (the two
+  gates and the kinds of value that cross a thread).
 - **Supersedes:** [ADR-0018](ADR-0018-async-builder-seam.md) D3 and D5 (where the driver's
   tasks live and what may be spawned), [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §2
   (which UI capabilities are `!Send`), [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md)
