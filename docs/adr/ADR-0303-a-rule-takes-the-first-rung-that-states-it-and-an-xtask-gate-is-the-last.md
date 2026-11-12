@@ -212,9 +212,14 @@ of its own.
 
   No list of these files is stored, so there is none to keep in step with the expectations.
 
-  A passing case also reads the public API of every crate it uses, which no line names. A change
-  to that API that breaks only a passing case still turns main red; making every source of those
-  crates an input would run the suites on most pull requests.
+  What these inputs miss is a declaration a case depends on that its output does not name. A
+  passing case depends on the public API of every crate it uses. A compile-fail case can depend
+  on a field's privacy or a missing bound. For example, making a private field `pub` lets its
+  privacy case compile, and the expectation cites only the fixture. A change of that kind still
+  turns main red, where `test-trybuild` runs on every merge and the break is fixed forward.
+  Closing the gap would make every source of a crate a suite compiles an input, and the suites
+  would then run on most pull requests. The inputs above cover the drift main has shown: a type
+  an expectation names, and a message copied into one.
 - **The narrow form runs over the changed crates.** `feature-scope` runs feature-matrix's
   `cargo hack clippy --each-feature` over the changed crates that have features, and over every
   crate whose manifest changed (`hack_args`). It does this in a pull request's full mode too, when
