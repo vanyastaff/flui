@@ -35,7 +35,7 @@ an async worker, and sent the result down a oneshot. Five defects followed from 
 ## Decision
 
 1. **The registry keeps the decoded images of the loads it bridges.** `AssetRegistry` owns an LRU
-   bounded by pixel bytes (`AssetRegistryBuilder::with_decoded_image_budget`; 256 MiB, 64 MiB on
+   bounded by pixel bytes (`AssetRegistryBuilder::decoded_image_budget`; 256 MiB, 64 MiB on
    Android, iOS and the web), a pending map, and `cached_image(&ImageSource)` as the synchronous
    probe. An image larger than the budget is handed to its waiters and not kept. There is no
    process-wide image cache; the `image::decode_cache::CACHE` global and its allowlist entry are
@@ -49,7 +49,7 @@ an async worker, and sent the result down a oneshot. Five defects followed from 
    leaves the newer entry alone. A task that panics or is dropped by its runtime settles its entry
    from a drop guard and closes its waiters.
 3. **Decodes run on the loading runtime's blocking pool behind slots.** The decode runs in
-   `spawn_blocking`, at most `with_decode_threads` at once (half the cores, at most four). A
+   `spawn_blocking`, at most `decode_threads` at once (half the cores, at most four). A
    host's async workers never decode. At admission, on the calling thread and under the lock
    that assigns its order, a load reserves one of four load slots per decode thread, so a task
    that first runs late keeps its place; the task waits for that reservation before reading and

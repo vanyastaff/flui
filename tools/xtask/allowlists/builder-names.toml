@@ -5,36 +5,6 @@
 # entry that is no longer one.
 
 [[allow]]
-crate = "flui-assets"
-type = "AssetRegistryBuilder"
-method = "with_cache_config"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-assets"
-type = "AssetRegistryBuilder"
-method = "with_capacity"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-assets"
-type = "AssetRegistryBuilder"
-method = "with_decode_threads"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-assets"
-type = "AssetRegistryBuilder"
-method = "with_decoded_image_budget"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-assets"
-type = "AssetRegistryBuilder"
-method = "with_default_capacity"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
 crate = "flui-cli"
 type = "BuilderContextBuilder"
 method = "with_bundle"

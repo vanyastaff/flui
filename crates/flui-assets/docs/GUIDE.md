@@ -15,7 +15,7 @@ use flui_assets::{AssetRegistryBuilder, FontAsset};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+    let registry = AssetRegistryBuilder::new().default_capacity().build();
     let font = registry.load(FontAsset::file("assets/font.ttf")).await?;
     println!("Font loaded: {} bytes", font.bytes.len());
     Ok(())
@@ -37,7 +37,7 @@ use flui_assets::{AssetRegistryBuilder, CacheCapacity};
 use std::num::NonZeroU64;
 
 let registry = AssetRegistryBuilder::new()
-    .with_capacity(CacheCapacity::Entries(NonZeroU64::new(256).expect("nonzero entry limit")))
+    .capacity(CacheCapacity::Entries(NonZeroU64::new(256).expect("nonzero entry limit")))
     .build();
 ```
 
@@ -54,7 +54,7 @@ let config = AssetCacheConfig {
     time_to_live: CacheExpiration::NEVER,
     time_to_idle: CacheExpiration::after(Duration::from_mins(2))?,
 };
-let registry = AssetRegistryBuilder::new().with_cache_config(config).build();
+let registry = AssetRegistryBuilder::new().cache_config(config).build();
 ```
 
 `CacheExpiration::after` rejects unsupported durations before cache construction.
@@ -66,7 +66,7 @@ nor expiration limits memory retained by consumer handles.
 ```rust
 use flui_assets::{AssetRegistryBuilder, FontAsset};
 
-let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+let registry = AssetRegistryBuilder::new().default_capacity().build();
 let first = registry.load(FontAsset::file("font.ttf")).await?;
 let second = registry.load(FontAsset::file("font.ttf")).await?;
 assert!(first.ptr_eq(&second));
@@ -98,7 +98,7 @@ let font = FontAsset::file(path.as_str());
 ```rust
 use flui_assets::{AssetKey, AssetRegistryBuilder, FontAsset};
 
-let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+let registry = AssetRegistryBuilder::new().default_capacity().build();
 let key = AssetKey::new("font.ttf");
 registry.invalidate::<FontAsset>(&key).await;
 registry.clear::<FontAsset>().await;
