@@ -38,11 +38,11 @@
 | R13 бюджеты | гейты `cargo xtask perf --check` держат аллокации, байты и узлы; бюджетов времени кадра, памяти и старта на эталонной машине нет | замер и публикация бюджетов, профиль фаз кадра | тред perf-гейтов, после ворот рендера | не начато |
 | R14 платформы | Windows: нативные строки идут через `flui-driver` (FD11 не сделан; `cargo xtask device` удалён); Linux: нативный хост, CI; статусы — [`platform-parity.md`](../../../platform-parity.md) | нативный прогон приёмки на Windows на SHA релиза | тред драйвера, владелец (устройство) | не начато |
 | R15 CI | CI main и ночные прогоны сейчас красные: #2454, #2455 | зелёные 7 дней до тега; версия во всех манифестах; `CHANGELOG.md` из `changelog.d/` | координатор перед тегом | не начато |
-| R16 issue | таблица ниже | закрыть исправленные; остальные в release notes | координатор | в работе |
+| R16 issue | таблица ниже: #1043, #551, #1092, #1040 закрыты с тестами; 15 открыты и стоят у ворот и требований | release notes для оставшихся | координатор | в работе |
 | R17 книга | 529 строк в `book/src`; фрагменты `rust,ignore` учат удалённым формам (`column!`, сигналы в `init_state`); учебника нет | включения из компилируемых файлов и сборка в CI; учебник по приложению приёмки после R14, R15 и R19 | тред «Сделать книгу компилируемой и написать учебник» | не начато |
 | R18 форма виджета | конструктор с setter'ами, дети как `ViewSeq` (`Column::new((a, b))`), макросы `column!` удалены; ребёнок передаётся позиционно в одних конструкторах и `.child()` в других, `on_press` рядом с `on_pressed`, `cx` рядом с `ctx` | правило и табличный тест; правки по нему | тред «Привести имена и форму child к одному правилу»; контролы Material — тред перевода контролов | не начато |
 | R19 тестовый API | см. ворота | один вход `flui::testing` на локаторах драйвера; лишние драйверы из фасада; шаблон `flui create`; диагностика переполнения Flex (`crates/flui-objects/src/layout/flex.rs`) после ворот рендера | тред «Дать авторам один тестовый API» | не начато |
-| R20 агент | `flui run --agent`, `flui mcp`, `flui record` (`crates/flui-cli/src/commands/`); `an_agent_reads_and_taps_the_app_run_with_agent_through_mcp` (`crates/flui-cli/tests/cli_agent.rs`) на тестовом приложении; `an_agent_presses_the_counter_on_a_live_device` (`cli_live_agent.rs`) на счётчике в ночных прогонах | CI-строка с MCP-сессией (locate, act, inspect, snapshot) на приложении приёмки headless; ночной прогон macOS или пометка «без прогона»; README: experimental | тред драйвера | в работе |
+| R20 агент | `flui run --agent`, `flui mcp` (окна, дерево, действие, часы анимации), `flui record` (`crates/flui-cli/src/commands/`); ночные прогоны на десктопах: `an_agent_drives_the_acceptance_app_on_the_desktop` (приложение приёмки: главная → Settings → назад) и `an_agent_presses_the_counter_on_a_live_device` (`crates/flui-cli/tests/cli_live_agent.rs`) | зелёный ночной прогон обоих сценариев на Windows, Linux и macOS (иначе macOS «без прогона»); README: experimental | тред драйвера | в работе |
 | R21 имена | см. ворота | подтверждение списка владельцем; публикация заглушек | тред «Занять имена крейтов на crates.io» | в работе |
 | R22 пустые фичи | у фасада пустые `localizations` и `gpu-readback-tests`; четыре пустые `signals` (ADR-0085 §5 в `docs/gaps.md`) | удалить или дать действие | тред «Убрать лишнее из графа и фич» | не начато |
 | R23 профиль шаблонов | в шаблонах `flui create` только `[profile.release]` | dev-профиль в шаблонах; базовая линия холодной сборки | тред «Убрать лишнее из графа и фич» | не начато |
@@ -53,30 +53,38 @@
 
 ## Открытые issue critical и high
 
-Сверка с main 2026-11-12 чтением кода. «Закрыть» — код на main уже делает то, что просит issue,
-или работу заменил названный ADR; закрывает владелец или координатор.
+Сверка с main 2026-11-12. Issue закрыт, когда тест на main доказывает то, что он просит, и
+прогон этого теста записан в комментарии к issue. Остальные стоят у ворот или требования, к
+которым относятся, с тем, кто их ведёт.
 
-| Issue | О чём | Состояние на main | Для релиза |
-|---|---|---|---|
-| #1043 (critical) | время жизни нативного окна в `Renderer` | `Renderer::new(target: impl WindowTarget)`, поверхность через `SurfaceFactory` и `SurfaceLease` (`crates/flui-engine/src/renderer.rs`), `create_surface_unsafe` нет | закрыть |
-| #551 (critical) | `OwnerPlatform` и власть цикла событий | `OwnerPlatform` в `flui-app`; ADR-0039, ADR-0083, ADR-0254 | закрыть с указателем |
-| #566 (critical) | трекер Runtime.1 | зонтик над #551, #558–#565 | пересобрать или закрыть с указателем на эту спеку |
-| #563 (critical) | инфраструктура соответствия native и headless | частично: `HeadlessHost`, записи и повтор в `flui-testing`; прогоны в записи [Most implemented rows never ran on their environment](../../../gaps.md#most-implemented-rows-never-ran-on-their-environment) | release notes (матрица платформ) |
-| #546 (critical) | корпус верности виджетов Flutter 3.44 | чек-лист вехи, зависит от #540, #542 | release notes |
-| #1092 | раскладка клавиш winit | winit удалён из workspace, нативные хосты в `flui-native` | закрыть как устаревший |
-| #1040 | устаревшие уведомления фокуса при повторном входе | очередь `pending_focus_transitions` (`crates/flui-interaction/src/focus/manager.rs`) | закрыть |
-| #542 | именованные маршруты, PopScope с результатом | заменён ADR-0093 (R16) | закрыть с указателем |
-| #558 | жизненные циклы Task, Worker, Service | ADR-0049; сервисы и протокол закрытия есть; `ProcessWorker` отложен | закрыть с указателем |
-| #1037 | частичный damage по идентичности слоя | на нативных хостах есть (ADR-0304); веб рисует кадр целиком (`DirectSink`) | release notes (веб) |
-| #1039 | локальные линейные коммиты топологии рендера | квадратичное удаление ушло; глобальный флаг `needs_render_reorder` и обход леса остались (`crates/flui-view/src/tree/element_tree.rs`) | release notes (производительность) |
-| #1041 | обход всей арены при заимствовании грязных поддеревьев | `collect_disjoint_mut` обходит slab на каждый корень (`crates/flui-rendering/src/storage/tree.rs`) | release notes (производительность) |
-| #1091 | изменения геометрии текста без полного relayout | канала нет | после релиза, новый API |
-| #540 | выделение, многострочность, скрытый ввод в `EditableText` | выделение, скрытие и ручки есть; многострочного поля нет ([No text input on mobile and the Web](../../../gaps.md#no-text-input-on-mobile-and-the-web)) | release notes |
-| #559 | поток растра и политика задержки | ADR-0045 заменён ADR-0305; остаток — пункт ADR-0305 в `docs/gaps.md` | release notes (растр синхронный) |
-| #560 | рантайм под управлением хоста, interop с wgpu | нет; запись [Add-to-app](../../../gaps.md#add-to-app-no-flui-view-inside-an-existing-native-app) | вне scope |
-| #562 | ворота последовательного и параллельного исполнения | отложено до параллельной раскладки (D5) | вне scope |
-| #564 | эталонное многооконное приложение | нет | вне scope |
-| #565 | выпуск проверенного публичного API Runtime.1 | покрывается R3 и R19 | закрыть с указателем на эту спеку |
+### Закрыты с доказательством
+
+| Issue | О чём | Тест на main |
+|---|---|---|
+| #1043 (critical) | время жизни нативного окна в `Renderer` | `renderer_new_rejects_borrowed_window` и `surface_factory_rejects_borrowed_window` (`crates/flui-engine/tests/compile_fail/`): заимствованное окно не проходит `Renderer::new`, цель держит `Arc<dyn WindowTarget>` |
+| #551 (critical) | `OwnerPlatform` и власть цикла событий | `owner_platform_is_not_send` (`crates/flui-native/tests/ui/`), `proxy_open_window_contract` (`crates/flui-native/tests/proxy_open_window.rs`): владелец не покидает поток, очередь окон ограничена и возвращает запрос |
+| #1040 | устаревшие уведомления фокуса при повторном входе | `node_listener_reentry_publishes_each_transition_in_order` (репродьюсер issue, A → B → C и A → B → C → B) и `bounded_focus_reentry_publishes_in_order_and_recovers` (`crates/flui-interaction/tests/focus_retention.rs`) |
+| #1092 | раскладка физических клавиш winit | winit удалён; клавиши нативных хостов: `an_evdev_code_names_its_physical_key` (`crates/flui-native/src/input/linux/xkb.rs`), `physical_keys_agree_across_backends` (`crates/flui-native/tests/backend_conformance.rs`), гейт `cargo xtask key-vocabulary`; доставка до виджета — #1123 |
+
+### Открыты
+
+| Issue | О чём | Состояние на main | Ворота или требование | Кто ведёт |
+|---|---|---|---|---|
+| #1037 | частичный damage по идентичности слоя | на нативных хостах есть (ADR-0304); веб рисует кадр целиком (`DirectSink`) | ворота «Рендер» (пункт ADR-0304 в `docs/gaps.md`) | спека `render-scaling` |
+| #559 | поток растра и политика задержки | ADR-0045 заменён ADR-0305; остаток — пункт ADR-0305 в `docs/gaps.md` | ворота «Рендер» | тред «Один GpuContext» |
+| #565 | выпуск проверенного публичного API | нет одного теста: это ревью поверхности | ворота «Снимок публичного API» (R3) | тред «Снять снимок публичного API» |
+| #563 (critical) | инфраструктура соответствия native и headless | `HeadlessHost`, записи и повтор в `flui-testing`; прогоны — запись [Most implemented rows never ran on their environment](../../../gaps.md#most-implemented-rows-never-ran-on-their-environment) | R14 | тред драйвера (FD11), ночные прогоны |
+| #542 | именованные маршруты, PopScope с результатом | ADR-0093 убирает именованные маршруты; `push_for_result` и `pop_with` есть, `PageHandle` и `maybe_pop` нет | R25 | тред «Оставить одну форму навигации»; закрыть с указателем на ADR-0093, когда R25 готово |
+| #558 | жизненные циклы Task, Worker, Service | ADR-0049; сервисы, протокол закрытия и `Persisted` есть; `ProcessWorker` отложен; одного теста на весь issue нет | R10, R11 | спека `teardown`; переписать issue под остаток |
+| #1039 | локальные линейные коммиты топологии рендера | квадратичное удаление ушло; глобальный `needs_render_reorder` и обход леса остались (`crates/flui-view/src/tree/element_tree.rs`) | R13 | тред perf-гейтов |
+| #1041 | обход всей арены при заимствовании грязных поддеревьев | `collect_disjoint_mut` обходит slab на каждый корень (`crates/flui-rendering/src/storage/tree.rs`) | R13 | тред perf-гейтов |
+| #540 | выделение, многострочность, скрытый ввод в `EditableText` | выделение, скрытие и ручки есть; многострочного поля нет ([No text input on mobile and the Web](../../../gaps.md#no-text-input-on-mobile-and-the-web)) | R7; release notes | владельца нет, назначает координатор |
+| #546 (critical) | корпус верности виджетов Flutter 3.44 | чек-лист вехи над #540, #542 | release notes | координатор |
+| #566 (critical) | трекер Runtime.1 | зонтик над #551, #558–#565; эта таблица его заменяет | — | координатор: закрыть с указателем на эту спеку |
+| #1091 | изменения геометрии текста без полного relayout | канала нет | после релиза, новый API | тред perf-гейтов (текстовая полоса) |
+| #560 | рантайм под управлением хоста, interop с wgpu | нет; запись [Add-to-app](../../../gaps.md#add-to-app-no-flui-view-inside-an-existing-native-app) | вне scope | — |
+| #562 | ворота последовательного и параллельного исполнения | отложено до параллельной раскладки (D5) | вне scope | — |
+| #564 | эталонное многооконное приложение | нет | вне scope | — |
 
 ## Требование → доказательство
 
@@ -85,7 +93,7 @@
 | R4 | `ordinary_facade_graph_excludes_test_support` | есть, без HTTP и TLS в запрещённом списке |
 | R5, R6 | строки persistence на приложении приёмки (`tests/fixtures/acceptance_app/persistence.rs`) | есть headless |
 | R10, R11 | строки teardown на приложении приёмки (`tests/fixtures/acceptance_app/teardown.rs`) | есть headless |
-| R20 | `an_agent_reads_and_taps_the_app_run_with_agent_through_mcp`, `an_agent_presses_the_counter_on_a_live_device` | есть на тестовом приложении и счётчике; строки на приложении приёмки нет |
+| R20 | `an_agent_drives_the_acceptance_app_on_the_desktop`, `an_agent_presses_the_counter_on_a_live_device` (ночные, `FLUI_CLI_LIVE_DEVICE=desktop`), `an_agent_reads_and_taps_the_app_run_with_agent_through_mcp` (PR CI, тестовое приложение) | есть; ждёт зелёного ночного прогона |
 | остальные | из `tasks.md` спек фич и PR тредов | — |
 
 ## Карточки (мелкие правки без спеки)
