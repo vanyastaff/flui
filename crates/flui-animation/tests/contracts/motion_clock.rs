@@ -821,7 +821,7 @@ fn reduced_motion_settles_finite_and_paused_runs_once() {
                     } else {
                         RepeatMode::Restart
                     })
-                    .with_iterations(flui_animation::Iterations::Finite(count)),
+                    .iterations(flui_animation::Iterations::Finite(count)),
                 )
             } else if reverse {
                 controller.reverse()

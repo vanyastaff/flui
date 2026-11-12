@@ -982,7 +982,7 @@ fn unbound_finite_repeat_lands_on_its_last_leg() {
         .controller()
         .repeat(
             flui_animation::RepeatSpec::new(RepeatMode::Alternate)
-                .with_iterations(flui_animation::Iterations::Finite(4)),
+                .iterations(flui_animation::Iterations::Finite(4)),
         )
         .expect("finite repeat");
     assert_eq!(owner.controller().value(), 0.0);

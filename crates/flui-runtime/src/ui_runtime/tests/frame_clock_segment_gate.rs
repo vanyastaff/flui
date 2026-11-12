@@ -251,12 +251,13 @@ pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
         let controller = owner.controller();
         let run = match kind {
             "repeat" | "finite repeat" => controller.repeat(
-                flui_animation::RepeatSpec::new(flui_animation::RepeatMode::Restart)
-                    .with_iterations(if kind == "finite repeat" {
+                flui_animation::RepeatSpec::new(flui_animation::RepeatMode::Restart).iterations(
+                    if kind == "finite repeat" {
                         flui_animation::Iterations::Finite(3)
                     } else {
                         flui_animation::Iterations::Infinite
-                    }),
+                    },
+                ),
             ),
             "spring" => controller.animate_with(
                 SpringSimulation::try_new(

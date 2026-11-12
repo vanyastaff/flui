@@ -283,8 +283,8 @@ fn repeat_consumes_all_cycles_in_one_long_frame() {
     let (_owner, c) = controller(100);
     c.repeat(
         RepeatSpec::new(RepeatMode::Restart)
-            .with_period(Duration::from_millis(10))
-            .with_iterations(Iterations::Finite(4)),
+            .period(Duration::from_millis(10))
+            .iterations(Iterations::Finite(4)),
     )
     .unwrap();
     assert_eq!(c.status(), AnimationStatus::Forward);
@@ -299,7 +299,7 @@ fn repeat_rejects_an_empty_range() {
     let (_owner, c) = controller(100);
     let outside = ValueRange::try_new(2.0, 3.0).expect("ordered range");
     assert!(matches!(
-        c.repeat(RepeatSpec::new(RepeatMode::Restart).with_range(outside)),
+        c.repeat(RepeatSpec::new(RepeatMode::Restart).range(outside)),
         Err(AnimationError::InvalidRepeatRange {
             min: 1.0,
             max: 1.0,
@@ -321,9 +321,9 @@ fn zero_iterations_settle_at_the_call_without_landing() {
         let run = c
             .repeat(
                 RepeatSpec::new(mode)
-                    .with_range(range)
-                    .with_period(Duration::from_secs(1))
-                    .with_iterations(Iterations::Finite(0)),
+                    .range(range)
+                    .period(Duration::from_secs(1))
+                    .iterations(Iterations::Finite(0)),
             )
             .expect("zero iterations");
         assert!(run.is_complete(), "{mode:?}");
@@ -340,7 +340,7 @@ fn repeat_value_is_partition_invariant_across_a_skipped_cycle() {
         let (_direct_owner, direct) = controller(1000);
         let (_partitioned_owner, partitioned) = controller(1000);
         for c in [&direct, &partitioned] {
-            c.repeat(RepeatSpec::new(mode).with_period(Duration::from_secs(1)))
+            c.repeat(RepeatSpec::new(mode).period(Duration::from_secs(1)))
                 .unwrap();
         }
         direct.tick_at(Duration::from_millis(1250));
@@ -358,7 +358,7 @@ fn repeat_value_is_partition_invariant_across_a_skipped_cycle() {
 
 fn finite_bounce_holds_stale_samples_and_settles_on_its_final_leg() {
     let (_owner, c) = controller(100);
-    c.repeat(RepeatSpec::new(RepeatMode::Alternate).with_iterations(Iterations::Finite(4)))
+    c.repeat(RepeatSpec::new(RepeatMode::Alternate).iterations(Iterations::Finite(4)))
         .unwrap();
     for (millis, expected, tolerance) in [
         (25, 0.25, 1e-6),
@@ -371,12 +371,12 @@ fn finite_bounce_holds_stale_samples_and_settles_on_its_final_leg() {
         assert!((c.value() - expected).abs() < tolerance, "millis={millis}");
     }
     let (_owner, c) = controller(100);
-    c.repeat(RepeatSpec::new(RepeatMode::Alternate).with_iterations(Iterations::Finite(4)))
+    c.repeat(RepeatSpec::new(RepeatMode::Alternate).iterations(Iterations::Finite(4)))
         .unwrap();
     c.tick_at(Duration::from_millis(160));
     assert!((c.value() - 0.4).abs() < 1e-6);
     let (_owner, c) = controller(100);
-    c.repeat(RepeatSpec::new(RepeatMode::Alternate).with_iterations(Iterations::Finite(4)))
+    c.repeat(RepeatSpec::new(RepeatMode::Alternate).iterations(Iterations::Finite(4)))
         .unwrap();
     c.tick_at(Duration::from_millis(400));
     assert!((c.value() - 0.0).abs() < 1e-6);
@@ -387,8 +387,8 @@ fn maximum_elapsed_time_exhausts_a_finite_repeat() {
     let (_owner, c) = controller(100);
     c.repeat(
         RepeatSpec::new(RepeatMode::Restart)
-            .with_period(Duration::from_millis(100))
-            .with_iterations(Iterations::Finite(2)),
+            .period(Duration::from_millis(100))
+            .iterations(Iterations::Finite(2)),
     )
     .unwrap();
     c.tick_at(Duration::MAX);
@@ -402,8 +402,8 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
     let future = c
         .repeat(
             RepeatSpec::new(RepeatMode::Alternate)
-                .with_period(Duration::ZERO)
-                .with_iterations(Iterations::Finite(3)),
+                .period(Duration::ZERO)
+                .iterations(Iterations::Finite(3)),
         )
         .unwrap();
     assert!(future.is_complete());
@@ -414,7 +414,7 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
     assert!((c.value() - 1.0).abs() < 1e-6);
     let (_owner, c) = controller(100);
     let future = c
-        .repeat(RepeatSpec::new(RepeatMode::Restart).with_period(Duration::ZERO))
+        .repeat(RepeatSpec::new(RepeatMode::Restart).period(Duration::ZERO))
         .unwrap();
     assert!(future.is_complete());
     assert!((c.value() - 1.0).abs() < 1e-6);
@@ -423,7 +423,7 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
 
 fn repeat_reverse_leg_velocity_is_negative() {
     let (_owner, c) = controller(100);
-    c.repeat(RepeatSpec::new(RepeatMode::Alternate).with_period(Duration::from_secs(1)))
+    c.repeat(RepeatSpec::new(RepeatMode::Alternate).period(Duration::from_secs(1)))
         .unwrap();
     c.tick_at(Duration::from_millis(1500));
     assert!((c.value() - 0.5).abs() < 1e-6);

@@ -5,36 +5,6 @@
 # entry that is no longer one.
 
 [[allow]]
-crate = "flui-animation"
-type = "MotionSpec"
-method = "with_curve"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-animation"
-type = "MotionSpec"
-method = "with_duration"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-animation"
-type = "RepeatSpec"
-method = "with_iterations"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-animation"
-type = "RepeatSpec"
-method = "with_period"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-animation"
-type = "RepeatSpec"
-method = "with_range"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
 crate = "flui-assets"
 type = "AssetRegistryBuilder"
 method = "with_cache_config"

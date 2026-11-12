@@ -1340,7 +1340,7 @@ impl Shared {
         let gap = self.gap(view);
         let placement = Placement::new(
             self.clock.borrow().controller().clone(),
-            MotionSpec::default().with_duration(SLIDE),
+            MotionSpec::default().duration(SLIDE),
             self.records_in(view, gap),
             self.generation.get(),
         );

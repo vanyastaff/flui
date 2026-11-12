@@ -574,7 +574,7 @@ deadline. Direct keyframe sampling retains the curve's authored time scale.
 
 ### Changing one half of a motion spec keeps the other
 
-`MotionSpec::with_duration` keeps the easing and `with_curve` keeps the
+`MotionSpec::duration` keeps the easing and `MotionSpec::curve` keeps the
 duration, so `.curve(..).duration(..)` and `.duration(..).curve(..)` on an
 implicit widget's `MotionBuilder` agree. A spring has neither half: asked for a
 duration it takes the default easing (`EASE_IN_OUT`), asked for a curve it
@@ -909,7 +909,7 @@ active repeat.** `RepeatRun::period` is resolved ONCE at the call
 through to `current_duration()`'s live `duration`/`reverse_duration` lookup
 whenever `period` defaulted would let the reverse leg of a bounce with a defaulted period
 could pick up `reverse_duration` instead of the forward leg's period
-(contradicting `RepeatSpec::with_period`'s "instead of the forward
+(contradicting `RepeatSpec::period`'s "instead of the forward
 duration"), and a live `set_duration` mid-repeat change the running period out
 from under it. Resolving once avoids both, and keeps the modular-nanosecond
 arithmetic in `tick_repeat` exact (one divisor for every leg).

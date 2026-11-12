@@ -219,8 +219,8 @@ controller.repeat(RepeatMode::Alternate)?; // Alternate: 0→1→0→1→...
 let range = ValueRange::try_new(0.2, 0.8).expect("finite, ordered range");
 controller.repeat(
     RepeatSpec::new(RepeatMode::Alternate)
-        .with_range(range)
-        .with_iterations(Iterations::Finite(3)),
+        .range(range)
+        .iterations(Iterations::Finite(3)),
 )?;
 # drop(controller);
 # Ok(())
