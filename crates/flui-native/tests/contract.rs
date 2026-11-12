@@ -845,13 +845,13 @@ mod native_windows {
         Opened::on(
             platform,
             WindowOptions::default()
-                .with_visible(false)
-                .with_frame(if decorated {
+                .visible(false)
+                .frame(if decorated {
                     WindowFrame::System
                 } else {
                     WindowFrame::None
                 })
-                .with_size(Size::new(320.0, 240.0)),
+                .size(Size::new(320.0, 240.0)),
         )
         .expect("create actual hidden Win32 window")
     }
@@ -917,8 +917,8 @@ mod native_windows {
         Opened::on(
             platform,
             WindowOptions::default()
-                .with_visible(true)
-                .with_size(Size::new(160.0, 120.0)),
+                .visible(true)
+                .size(Size::new(160.0, 120.0)),
         )
         .expect("create actual shown Win32 window")
     }
@@ -990,8 +990,8 @@ mod native_windows {
                 let window = Opened::ready(
                     &owner,
                     WindowOptions::default()
-                        .with_visible(true)
-                        .with_size(Size::new(160.0, 120.0)),
+                        .visible(true)
+                        .size(Size::new(160.0, 120.0)),
                 );
                 let initial = web_time::Instant::now() + Duration::from_millis(80);
                 let state = Arc::new(Mutex::new((Some(initial), 0_usize)));
@@ -1107,8 +1107,8 @@ mod native_windows {
                     let _window = Opened::ready(
                         &owner,
                         WindowOptions::default()
-                            .with_visible(visible)
-                            .with_size(Size::new(160.0, 120.0)),
+                            .visible(visible)
+                            .size(Size::new(160.0, 120.0)),
                     );
                 }
                 let watchdog = owner.proxy();
@@ -1142,8 +1142,8 @@ mod native_windows {
                 let window = Opened::ready(
                     &owner,
                     WindowOptions::default()
-                        .with_visible(true)
-                        .with_size(Size::new(160.0, 120.0)),
+                        .visible(true)
+                        .size(Size::new(160.0, 120.0)),
                 );
                 let hwnd = hwnd_of(&window);
                 // SAFETY: the live wrapper owns this HWND on its creating
@@ -1260,8 +1260,8 @@ mod native_windows {
                 let window = Opened::ready(
                     &owner,
                     WindowOptions::default()
-                        .with_visible(minimized)
-                        .with_size(Size::new(160.0, 120.0)),
+                        .visible(minimized)
+                        .size(Size::new(160.0, 120.0)),
                 );
                 let hwnd = hwnd_of(&window);
                 if minimized {
@@ -1331,8 +1331,8 @@ mod native_windows {
                     let window = Opened::ready(
                         &owner,
                         WindowOptions::default()
-                            .with_visible(true)
-                            .with_size(Size::new(160.0, 120.0)),
+                            .visible(true)
+                            .size(Size::new(160.0, 120.0)),
                     );
                     windows.push(Rc::clone(&window));
                     if index == 0 {
@@ -5547,8 +5547,8 @@ mod native_windows {
         owner
             .open_window(
                 WindowOptions::default()
-                    .with_visible(false)
-                    .with_size(Size::new(320.0, 240.0)),
+                    .visible(false)
+                    .size(Size::new(320.0, 240.0)),
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("create actual hidden Win32 window")
@@ -5770,7 +5770,7 @@ mod native_appkit {
     )]
     fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
         let platform = flui_native::current_platform().expect("AppKit platform");
-        let window = crate::Opened::on(&*platform, WindowOptions::default().with_visible(false))
+        let window = crate::Opened::on(&*platform, WindowOptions::default().visible(false))
             .expect("AppKit window");
         let target = window.surface_target();
         let RawWindowHandle::AppKit(handle) =

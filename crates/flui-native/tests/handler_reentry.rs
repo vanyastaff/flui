@@ -754,8 +754,8 @@ mod win32 {
 
     fn hidden() -> WindowOptions {
         WindowOptions::default()
-            .with_title("handler reentry")
-            .with_visible(false)
+            .title("handler reentry")
+            .visible(false)
     }
 
     /// Dispatch this thread's messages until `done`, for at most two seconds;
