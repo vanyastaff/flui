@@ -204,7 +204,7 @@ fn restore_fits_the_frame_the_window_opens_with() {
         ("no frame", WindowFrame::None, 1920.0),
     ];
     for (case, frame, width) in table {
-        let mut options = WindowOptions::default().with_frame(frame);
+        let mut options = WindowOptions::default().frame(frame);
         restore_into(
             &mut options,
             &placement,

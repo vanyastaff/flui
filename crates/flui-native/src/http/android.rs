@@ -121,7 +121,7 @@ struct UrlConnections;
 
 impl Stack for UrlConnections {
     fn open(&self, request: &HttpRequest) -> Result<Box<dyn Connection>, HttpError> {
-        let url = request.url();
+        let url = request.url.as_str();
         let scheme = url.split_once("://").map(|(scheme, _)| scheme);
         if !scheme.is_some_and(|scheme| {
             scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
@@ -147,7 +147,7 @@ impl Stack for UrlConnections {
 
 /// `new URL(url).openConnection()`, set up for `request` but not connected.
 fn open(env: &mut Env<'_>, request: &HttpRequest) -> jni::errors::Result<Global<JObject<'static>>> {
-    let url = env.new_string(request.url())?;
+    let url = env.new_string(request.url.as_str())?;
     let url = env.new_object(
         jni_str!("java/net/URL"),
         jni_sig!("(Ljava/lang/String;)V"),
@@ -161,7 +161,7 @@ fn open(env: &mut Env<'_>, request: &HttpRequest) -> jni::errors::Result<Global<
             &[],
         )?
         .l()?;
-    let method = env.new_string(request.method().as_str())?;
+    let method = env.new_string(request.method.as_str())?;
     env.call_method(
         &connection,
         jni_str!("setRequestMethod"),
@@ -176,7 +176,7 @@ fn open(env: &mut Env<'_>, request: &HttpRequest) -> jni::errors::Result<Global<
         env.call_method(&connection, setter, jni_sig!("(I)V"), &[JValue::Int(value)])?
             .v()?;
     }
-    for (name, value) in request.headers().iter() {
+    for (name, value) in request.headers.iter() {
         let name = env.new_string(name.as_str())?;
         // A header value is a byte string: one character per byte.
         let value: String = value.as_bytes().iter().copied().map(char::from).collect();
@@ -220,7 +220,7 @@ impl Connection for UrlConnection {
         let Answered { head, stream } = self
             .vm
             .attach_current_thread(|env| send(env, &connection, request))
-            .map_err(|error| failure(error, Stage::Send, request.url()))?;
+            .map_err(|error| failure(error, Stage::Send, request.url.as_str()))?;
         self.stream = stream;
         head
     }
@@ -230,7 +230,7 @@ impl Connection for UrlConnection {
             self.drained = true;
             return Ok(None);
         };
-        let url = self.request.url();
+        let url = self.request.url.as_str();
         let buffer = &mut self.buffer;
         let read = self
             .vm
@@ -300,7 +300,7 @@ fn send(
     connection: &Global<JObject<'static>>,
     request: &HttpRequest,
 ) -> jni::errors::Result<Answered> {
-    if !request.body().is_empty() {
+    if !request.body.is_empty() {
         env.call_method(
             connection,
             jni_str!("setDoOutput"),
@@ -308,7 +308,7 @@ fn send(
             &[JValue::Bool(true)],
         )?
         .v()?;
-        let length = i64::try_from(request.body().len()).unwrap_or(i64::MAX);
+        let length = i64::try_from(request.body.len()).unwrap_or(i64::MAX);
         env.call_method(
             connection,
             jni_str!("setFixedLengthStreamingMode"),
@@ -324,7 +324,7 @@ fn send(
                 &[],
             )?
             .l()?;
-        let body = env.byte_array_from_slice(request.body())?;
+        let body = env.byte_array_from_slice(&request.body)?;
         env.call_method(
             &output,
             jni_str!("write"),

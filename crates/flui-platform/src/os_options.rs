@@ -23,9 +23,9 @@
 //! use flui_platform::WindowOptions;
 //! use flui_platform::os_options::{OsWindowOptions, Win32WindowOptions, WindowsCornerPreference};
 //!
-//! let options = WindowOptions::default().with_os_options(
-//!     OsWindowOptions::default().with_windows(
-//!         Win32WindowOptions::default().with_corner_preference(WindowsCornerPreference::DoNotRound),
+//! let options = WindowOptions::default().os_options(
+//!     OsWindowOptions::default().windows(
+//!         Win32WindowOptions::default().corner_preference(WindowsCornerPreference::DoNotRound),
 //!     ),
 //! );
 //! assert!(options.os_options.windows.is_some());
@@ -48,14 +48,14 @@ pub struct OsWindowOptions {
 impl OsWindowOptions {
     /// Set what the Android Activity's window is created with.
     #[must_use]
-    pub fn with_android(mut self, android: AndroidWindowOptions) -> Self {
+    pub fn android(mut self, android: AndroidWindowOptions) -> Self {
         self.android = Some(android);
         self
     }
 
     /// Set what a Win32 window is created with.
     #[must_use]
-    pub fn with_windows(mut self, windows: Win32WindowOptions) -> Self {
+    pub fn windows(mut self, windows: Win32WindowOptions) -> Self {
         self.windows = Some(windows);
         self
     }
@@ -79,17 +79,14 @@ pub struct Win32WindowOptions {
 impl Win32WindowOptions {
     /// Set how the window's corners are rounded.
     #[must_use]
-    pub const fn with_corner_preference(
-        mut self,
-        corner_preference: WindowsCornerPreference,
-    ) -> Self {
+    pub const fn corner_preference(mut self, corner_preference: WindowsCornerPreference) -> Self {
         self.corner_preference = corner_preference;
         self
     }
 
     /// Set the theme the title bar and borders are drawn in.
     #[must_use]
-    pub const fn with_theme(mut self, theme: WindowsTheme) -> Self {
+    pub const fn theme(mut self, theme: WindowsTheme) -> Self {
         self.theme = theme;
         self
     }
@@ -149,7 +146,7 @@ pub struct AndroidWindowOptions {
 impl AndroidWindowOptions {
     /// Set the colour mode the window asks the display for.
     #[must_use]
-    pub const fn with_color_mode(mut self, color_mode: AndroidColorMode) -> Self {
+    pub const fn color_mode(mut self, color_mode: AndroidColorMode) -> Self {
         self.color_mode = color_mode;
         self
     }

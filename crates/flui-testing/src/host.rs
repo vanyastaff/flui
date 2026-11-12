@@ -1176,7 +1176,7 @@ impl HeadlessHost {
         let vsync = self.event_now();
         let mut request = flui_platform::FrameRequest::new(vsync);
         if let Some(presented) = self.presented.take() {
-            request = request.with_presented(presented);
+            request = request.presented(presented);
         }
         for presentation in self.presentation_ids() {
             self.ui_runtime.note_frame_request(presentation, request);

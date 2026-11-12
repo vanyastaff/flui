@@ -124,9 +124,9 @@
 //!     let platform = headless_platform();
 //!
 //!     let options = WindowOptions::default()
-//!         .with_title("Test")
-//!         .with_size(Size::new(800.0, 600.0))
-//!         .with_visible(true);
+//!         .title("Test")
+//!         .size(Size::new(800.0, 600.0))
+//!         .visible(true);
 //!
 //!     let handler = RecordingWindowHandler::new();
 //!     let window = platform

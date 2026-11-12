@@ -51,7 +51,7 @@ fn frame_request_at(
         now_nanos.saturating_sub(nanos(age)),
     ));
     match until_present {
-        Some(wait) => request.with_target_present(flui_platform::EventTime::from_nanos(
+        Some(wait) => request.target_present(flui_platform::EventTime::from_nanos(
             now_nanos.saturating_add(nanos(wait)),
         )),
         None => request,
@@ -142,7 +142,7 @@ impl PresentationReports {
             Some(presented) if presented.at <= now => {
                 reported.pending = None;
                 reported.carried = Some(presented.at);
-                request.with_presented(presented)
+                request.presented(presented)
             }
             Some(_) | None => request,
         }

@@ -26,8 +26,8 @@ fn open(platform: &WindowsPlatform, title: &str) -> Rc<dyn HostWindow> {
     platform
         .open_window(
             WindowOptions::default()
-                .with_title(title)
-                .with_size(Size::new(160.0, 120.0)),
+                .title(title)
+                .size(Size::new(160.0, 120.0)),
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window")

@@ -52,7 +52,7 @@ fn decode_error_then_recovery() {
         2,
         "a decoded image is served without HTTP"
     );
-    let limit = http.requests()[0].body_limit();
+    let limit = http.requests()[0].body_limit;
     assert_eq!(limit, 256 * 1024 * 1024, "the registry bounds the body");
 }
 

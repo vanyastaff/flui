@@ -149,7 +149,7 @@ mod cases {
         let handler = RecordingWindowHandler::new();
         let window = platform
             .open_window(
-                WindowOptions::default().with_title("input"),
+                WindowOptions::default().title("input"),
                 Rc::clone(&handler) as _,
             )
             .expect("a Wayland window opens");
@@ -373,7 +373,7 @@ mod cases {
         let handler = RecordingWindowHandler::new();
         let window = platform
             .open_window(
-                WindowOptions::default().with_title("drag"),
+                WindowOptions::default().title("drag"),
                 Rc::clone(&handler) as _,
             )
             .expect("a Wayland window opens");

@@ -632,7 +632,7 @@ pub mod linux {
                     let handler = flui_testing::window_handler::RecordingWindowHandler::new();
                     let window = owner
                         .open_window(
-                            flui_platform::WindowOptions::default().with_visible(false),
+                            flui_platform::WindowOptions::default().visible(false),
                             handler.clone(),
                         )?
                         .try_ready()?;
