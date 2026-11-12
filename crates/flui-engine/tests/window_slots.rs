@@ -27,12 +27,12 @@ struct Rig {
 }
 
 fn rig() -> Rig {
+    rig_on(std::rc::Rc::new(flui_foundation::SystemClock))
+}
+
+fn rig_on(clock: std::rc::Rc<dyn flui_foundation::MonotonicClock>) -> Rig {
     let backend = ScriptedSlots::new();
-    let (executor, sender) = RasterExecutor::new(
-        backend.clone(),
-        std::rc::Rc::new(flui_foundation::SystemClock),
-        || {},
-    );
+    let (executor, sender) = RasterExecutor::new(backend.clone(), clock, || {});
     let display: Arc<dyn DisplayConnection> = Arc::new(FakeDisplay);
     Rig {
         executor,
@@ -591,4 +591,51 @@ fn a_window_over_the_rebuilt_device_limit_waits_for_a_size_that_fits() {
     let _ = rig.frame(slot, resized, 1);
     let _ = rig.executor.turn();
     assert_eq!(rig.verdicts(slot), [(1, RasterVerdict::Presented)]);
+}
+
+/// A clock that panics once its timeline passes `after`: the owner's code
+/// failing on a read the executor makes.
+#[derive(Debug)]
+struct PanicsPast {
+    clock: flui_foundation::ManualClock,
+    after: std::time::Duration,
+}
+
+impl flui_foundation::MonotonicClock for PanicsPast {
+    fn now(&self) -> std::time::Instant {
+        assert!(self.clock.elapsed() <= self.after, "injected clock panic");
+        flui_foundation::MonotonicClock::now(&self.clock)
+    }
+}
+
+/// A rebuild that succeeds is committed before the executor reads the
+/// owner's clock again: a clock that panics once the slow attempt has ended
+/// cannot drop the refusal the attempt answered, so the window still asks for
+/// a new surface.
+#[test]
+fn a_rebuild_refusal_is_committed_before_the_clock_is_read_again() {
+    let clock = flui_foundation::ManualClock::new();
+    let mut rig = rig_on(std::rc::Rc::new(PanicsPast {
+        clock: clock.clone(),
+        after: std::time::Duration::from_secs(1),
+    }));
+    let (slot, _) = rig.sized_window();
+    rig.backend.lose_device();
+    rig.backend
+        .rebuilds_take(&clock, std::time::Duration::from_secs(2));
+    rig.backend
+        .refuse_on_rebuild(slot, EngineError::IncompatibleSurface);
+    let mut caught = flui_foundation::panic::FirstPanic::new();
+    let _ = caught.contain(|| rig.executor.turn());
+    if let Some(payload) = caught.into_payload() {
+        flui_foundation::panic::discard_payload(payload);
+    }
+    assert!(
+        rig.sender.record(slot).expect("held").wants_surface,
+        "the owner makes a new surface"
+    );
+    assert!(matches!(
+        rig.sender.take_failure(slot),
+        Some(SlotFailure::Refused(EngineError::IncompatibleSurface))
+    ));
 }

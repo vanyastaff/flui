@@ -368,9 +368,12 @@ impl<B: SlotBackend> RasterExecutor<B> {
         if self.rebuilds.due(now) {
             if self.backend.rebuilds_inline() {
                 let attempt = first.contain(|| self.backend.rebuild_device());
-                // The attempt blocks for as long as the driver takes: the next
-                // one waits out its backoff from when this one ended.
-                now = self.clock.now();
+                // A failed attempt blocked for as long as the driver took: the
+                // next waits out its backoff from when this one ended. The
+                // clock is the owner's code, so it is read under containment
+                // and only once the attempt's own answer is committed.
+                let ended =
+                    |first: &mut FirstPanic| first.contain(|| self.clock.now()).unwrap_or(now);
                 match attempt {
                     Some(Ok(refused)) => {
                         self.rebuilds.recovered();
@@ -382,9 +385,13 @@ impl<B: SlotBackend> RasterExecutor<B> {
                     }
                     Some(Err(error)) => {
                         failure = Some(error);
+                        now = ended(first);
                         failed = Some(self.rebuilds.record_failure(now));
                     }
-                    None => failed = Some(self.rebuilds.record_failure(now)),
+                    None => {
+                        now = ended(first);
+                        failed = Some(self.rebuilds.record_failure(now));
+                    }
                 }
                 if failed.is_some() && !self.backend.device_lost() {
                     // The rebuild failed with its new device in place: the
