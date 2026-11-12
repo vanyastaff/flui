@@ -546,6 +546,10 @@ fn recording_contract() {
                 recording::interning_shares_arc_for_identical_paints,
             ),
             (
+                "a_taken_recording_shares_its_plain_paints_with_the_next",
+                recording::a_taken_recording_shares_its_plain_paints_with_the_next,
+            ),
+            (
                 "a_finished_display_list_is_sendable_to_another_thread",
                 recording::a_finished_display_list_is_sendable_to_another_thread,
             ),

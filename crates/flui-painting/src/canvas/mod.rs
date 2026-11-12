@@ -62,9 +62,17 @@ pub struct Canvas {
     /// are finite, checked once when it was interned.
     ///
     /// Equal paints share an allocation. `Paint` is not `Hash`, so lookup
-    /// uses equality over this vector. `reset()` clears the pool.
+    /// uses equality over this vector. `reset()` clears the pool;
+    /// [`Canvas::take_recording`] keeps up to [`KEPT_PAINTS`] of its
+    /// shader-free paints for the next recording.
     pub(crate) paint_pool: SmallVec<[InternedPaint; 4]>,
 }
+
+/// How many interned paints [`Canvas::take_recording`] keeps for the next
+/// recording: the ones interned last, so a canvas that records many runs in
+/// turn (one per render object of a pass) allocates each paint it repeats
+/// once, and the scan an intern costs stays short.
+const KEPT_PAINTS: usize = 4;
 
 /// A paint of the canvas's pool and whether its values are finite.
 #[derive(Debug, Clone)]
@@ -134,6 +142,38 @@ impl Canvas {
         save_depth = self.save_stack.len(),
     ))]
     pub fn finish(self) -> DisplayList {
+        self.report_finished();
+        self.display_list
+    }
+
+    /// Finishes the recording made so far, as [`Self::finish`] does, and
+    /// leaves the canvas empty at the identity transform to record the next
+    /// one.
+    ///
+    /// The last few paints it interned that hold no shader stay interned: a
+    /// next recording drawing with an equal paint shares its allocation. A
+    /// paint with a shader is let go, since a shader can hold a caller's
+    /// image whose last drop must not wait for a later recording.
+    #[tracing::instrument(skip(self), fields(
+        commands = self.display_list.len(),
+        save_depth = self.save_stack.len(),
+    ))]
+    #[must_use = "the recording is returned; dropping it discards what was drawn"]
+    pub fn take_recording(&mut self) -> DisplayList {
+        self.report_finished();
+        let recording = std::mem::take(&mut self.display_list);
+        self.transform = Matrix4::identity();
+        self.save_stack.clear();
+        self.paint_pool
+            .retain(|interned| interned.paint.shader.is_none());
+        let surplus = self.paint_pool.len().saturating_sub(KEPT_PAINTS);
+        self.paint_pool.drain(..surplus);
+        recording
+    }
+
+    /// What [`Self::finish`] and [`Self::take_recording`] report about the
+    /// recording they end.
+    fn report_finished(&self) {
         debug_assert!(
             self.save_stack.is_empty(),
             "Canvas finished with {} unrestored save() calls",
@@ -161,8 +201,6 @@ impl Canvas {
             bounds = ?self.display_list.bounds(),
             "Canvas finalized"
         );
-
-        self.display_list
     }
 
     /// Returns a reference to the inner display list without consuming
