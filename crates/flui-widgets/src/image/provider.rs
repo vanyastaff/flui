@@ -564,9 +564,16 @@ impl ImageProvider for FileImage {
     }
 }
 
-/// Reads `path` whole, telling a missing file from one that cannot be read.
+/// Reads `path` whole, telling a missing file from one that cannot be read,
+/// and refusing a file past
+/// [`MAX_ENCODED_IMAGE_BYTES`](flui_painting::paint::MAX_ENCODED_IMAGE_BYTES)
+/// before it is buffered.
 fn read_file(path: &std::path::Path) -> Result<Vec<u8>, ImageProviderError> {
-    std::fs::read(path).map_err(|e| {
+    use std::io::Read as _;
+
+    use flui_painting::paint::MAX_ENCODED_IMAGE_BYTES;
+
+    let failed = |e: std::io::Error| {
         if e.kind() == std::io::ErrorKind::NotFound {
             ImageProviderError::FileNotFound {
                 path: path.to_path_buf(),
@@ -577,35 +584,46 @@ fn read_file(path: &std::path::Path) -> Result<Vec<u8>, ImageProviderError> {
                 reason: e.to_string(),
             }
         }
-    })
+    };
+    let too_large = || ImageProviderError::ReadFailed {
+        path: path.to_path_buf(),
+        reason: format!("the file is larger than {MAX_ENCODED_IMAGE_BYTES} bytes"),
+    };
+    let file = std::fs::File::open(path).map_err(failed)?;
+    if file.metadata().map_err(failed)?.len() > MAX_ENCODED_IMAGE_BYTES {
+        return Err(too_large());
+    }
+    // The length is a hint, not a bound: the file can grow while it is read,
+    // so the read stops one byte past the limit and that byte refuses it.
+    let mut bytes = Vec::new();
+    file.take(MAX_ENCODED_IMAGE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(failed)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_ENCODED_IMAGE_BYTES {
+        return Err(too_large());
+    }
+    Ok(bytes)
 }
 
 // ---------------------------------------------------------------------------
 // Internal decode helper
 // ---------------------------------------------------------------------------
 
-/// Decodes encoded bytes (PNG, JPEG, GIF, …) into a [`PixelImage`].
+/// Decodes encoded bytes (PNG, JPEG, GIF) into a [`PixelImage`] through
+/// [`PixelImage::decode`], which refuses an image past its decoded-size limit
+/// before decoding it.
 ///
 /// Gated on the `images` feature. Returns
 /// [`ImageProviderError::DecoderUnavailable`] when the feature is absent so
 /// the widget renders an empty box without a compile error.
 ///
-/// Used by [`MemoryImage`] and [`FileImage`] only — `AssetImage`/`NetworkImage`
-/// (`asset-images` feature) decode through `flui-assets`'
-/// own `image`-crate usage instead, not this helper.
+/// Used by [`MemoryImage`] and [`FileImage`]; `AssetImage`/`NetworkImage`
+/// (`asset-images` feature) reach the same decoder through `flui-assets`.
 fn decode_bytes(bytes: &[u8]) -> Result<PixelImage, ImageProviderError> {
     #[cfg(feature = "images")]
     {
-        let dynamic =
-            image::load_from_memory(bytes).map_err(|e| ImageProviderError::DecodeFailed {
-                reason: e.to_string(),
-            })?;
-        let rgba = dynamic.to_rgba8();
-        let (width, height) = rgba.dimensions();
-        PixelImage::try_from_rgba8(width, height, rgba.into_raw()).map_err(|e| {
-            ImageProviderError::DecodeFailed {
-                reason: e.to_string(),
-            }
+        PixelImage::decode(bytes).map_err(|error| ImageProviderError::DecodeFailed {
+            reason: error.to_string(),
         })
     }
 

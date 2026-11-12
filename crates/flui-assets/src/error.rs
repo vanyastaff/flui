@@ -105,13 +105,3 @@ impl From<std::io::Error> for AssetError {
         AssetError::Io(err.to_string())
     }
 }
-
-#[cfg(feature = "images")]
-impl From<image::ImageError> for AssetError {
-    fn from(err: image::ImageError) -> Self {
-        AssetError::DecodeFailed {
-            path: "unknown".to_string(),
-            reason: err.to_string(),
-        }
-    }
-}

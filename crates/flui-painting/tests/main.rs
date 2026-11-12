@@ -173,6 +173,8 @@ mod decoration_unit;
 mod font_registration;
 #[path = "host_faces_oracle.rs"]
 mod host_faces_oracle;
+#[path = "image_decode.rs"]
+mod image_decode;
 #[path = "image_placement.rs"]
 mod image_placement;
 #[path = "parley_metrics_oracle.rs"]
@@ -912,6 +914,29 @@ fn text_paint_attributes_contract() {
             (
                 "a_text_shadow_extent_covers_its_blur",
                 tpa::a_text_shadow_extent_covers_its_blur,
+            ),
+        ],
+    );
+}
+
+/// Encoded bytes nobody vouches for decode within the limit or fail typed
+/// (`Image::decode`).
+#[test]
+fn image_decode_contract() {
+    run_cases(
+        "image_decode",
+        &[
+            (
+                "a_png_decodes_to_its_pixels",
+                image_decode::a_png_decodes_to_its_pixels,
+            ),
+            (
+                "a_header_past_the_limit_is_refused_before_decoding",
+                image_decode::a_header_past_the_limit_is_refused_before_decoding,
+            ),
+            (
+                "arbitrary_bytes_decode_or_fail_typed",
+                image_decode::arbitrary_bytes_decode_or_fail_typed,
             ),
         ],
     );
