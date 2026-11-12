@@ -99,8 +99,8 @@ Cargo.lock
 /// # Builder Methods
 ///
 /// - [`template`](Self::template) - Set the template type (default: Counter)
-/// - [`with_git`](Self::with_git) - Enable/disable git initialization (default: true)
-/// - [`with_cargo_check`](Self::with_cargo_check) - Enable/disable cargo check (default: true)
+/// - [`git`](Self::git) - Enable/disable git initialization (default: true)
+/// - [`cargo_check`](Self::cargo_check) - Enable/disable cargo check (default: true)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemplateBuilder {
     name: ProjectName,
@@ -144,7 +144,7 @@ impl TemplateBuilder {
     /// Configure whether to initialize a git repository.
     ///
     /// Default is `true`.
-    pub fn with_git(mut self, init: bool) -> Self {
+    pub fn git(mut self, init: bool) -> Self {
         self.init_git = init;
         self
     }
@@ -164,7 +164,7 @@ impl TemplateBuilder {
     /// Configure whether to run cargo check after generation.
     ///
     /// Default is `true`.
-    pub fn with_cargo_check(mut self, check: bool) -> Self {
+    pub fn cargo_check(mut self, check: bool) -> Self {
         self.run_cargo_check = check;
         self
     }

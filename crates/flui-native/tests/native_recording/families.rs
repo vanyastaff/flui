@@ -780,9 +780,9 @@ fn captured_session(privacy: flui_native::journal::recorder::Privacy) -> Capture
     // Displays the OS identifies, by keys that name the hardware.
     let platform = HeadlessPlatform::new().with_displays(vec![
         flui_native::DisplaySpec::new("Built-in Retina", 1440, 900)
-            .with_persistent_key("EDID-0610-A050-SERIAL-C02XL0"),
+            .persistent_key("EDID-0610-A050-SERIAL-C02XL0"),
         flui_native::DisplaySpec::new("Studio Display", 2560, 1440)
-            .with_persistent_key("7A1C2E44-5B6D-4F0E-9C3A-2D8E1F4B6A90"),
+            .persistent_key("7A1C2E44-5B6D-4F0E-9C3A-2D8E1F4B6A90"),
     ]);
     let events = platform.host_events();
     let sources = Sources::of(&platform);
