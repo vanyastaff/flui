@@ -104,6 +104,9 @@ weak-handle and thread-boundary rules in this section still apply.
 
 ### 3. A value crosses a thread because the compiler proves it may; two gates hold the exceptions
 
+**Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) §2 and §3, which
+state the gates and the kinds of value that cross.
+
 §2 holds because the compiler refuses an owner-local value on another thread. Nothing is made
 `Send` or `Sync` by assertion, and the places that do cross are lists that only shrink:
 

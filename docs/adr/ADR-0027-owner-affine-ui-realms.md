@@ -124,6 +124,10 @@ another at 144 Hz, a background one frozen), and raster scheduling (GPU backpres
 
 ### 2. Thread-affinity model — the compiler states the rules
 
+**Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) §1 and §2,
+which state what stays on the owner thread and what crosses; the table below is the record of
+the earlier wording.
+
 **Superseded-by:** [ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md) for async task
 ownership: `OwnerFrame`, `AsyncDriver`, `TaskToken` and their futures are owner-local;
 task wakers and `FrameWaker` alone cross that boundary. The remaining contracts below stand.
@@ -253,6 +257,9 @@ owner host for the page lifetime.
 These are deliberate divergences from Flutter's process-global shape.
 
 ### 9. Public API consequences
+
+**Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) §1 to §3 for
+the first two items below (thread affinity and the cross-thread vocabulary).
 
 - `View`, `BuildContext`, `ViewState`, `ElementBase`, the view-family traits, notifications and
   the `flui-foundation` callback aliases are not `Send + Sync`; widget authors use `Rc`,
