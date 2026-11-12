@@ -24,7 +24,7 @@ use crate::common::harness::{Harness, mount};
 /// [`ActivateIntent`].
 #[derive(Clone, Copy, Debug)]
 enum Control {
-    /// `RawButton` with an `on_press`.
+    /// `RawButton` with an `on_pressed`.
     RawButton,
     /// An app's own `Focus` + `Actions` control.
     Custom,
@@ -54,7 +54,7 @@ fn mount_control(control: Control) -> (Harness, Rc<Cell<u32>>) {
     let harness = match control {
         Control::RawButton => mount(
             RawButton::new(SizedBox::new(40.0, 40.0))
-                .on_press(move |_ctx| counted.set(counted.get() + 1)),
+                .on_pressed(move |_ctx| counted.set(counted.get() + 1)),
         ),
         Control::Custom => mount(Actions::new(Focus::new(SizedBox::new(40.0, 40.0))).action(
             CallbackAction::new(move |_ctx, _: &ActivateIntent| counted.set(counted.get() + 1)),
@@ -251,9 +251,9 @@ pub(crate) fn a_space_released_after_tab_activates_nothing() {
     let (counted_first, counted_second) = (Rc::clone(&first), Rc::clone(&second));
     let harness = mount(Row::new((
         RawButton::new(SizedBox::new(40.0, 40.0))
-            .on_press(move |_ctx| counted_first.set(counted_first.get() + 1)),
+            .on_pressed(move |_ctx| counted_first.set(counted_first.get() + 1)),
         RawButton::new(SizedBox::new(40.0, 40.0))
-            .on_press(move |_ctx| counted_second.set(counted_second.get() + 1)),
+            .on_pressed(move |_ctx| counted_second.set(counted_second.get() + 1)),
     )));
     let manager = harness.focus_manager();
     let space = Key::character(" ");
@@ -284,9 +284,9 @@ pub(crate) fn keyboard_continues_after_callback_panic() {
     let counted = Rc::clone(&activations);
     let harness = mount(Row::new((
         RawButton::new(SizedBox::new(40.0, 40.0))
-            .on_press(|_ctx| -> () { panic!("on_press failed") }),
+            .on_pressed(|_ctx| -> () { panic!("on_pressed failed") }),
         RawButton::new(SizedBox::new(40.0, 40.0))
-            .on_press(move |_ctx| counted.set(counted.get() + 1)),
+            .on_pressed(move |_ctx| counted.set(counted.get() + 1)),
     )));
     let manager = harness.focus_manager();
     let enter = Key::Named(NamedKey::Enter);
