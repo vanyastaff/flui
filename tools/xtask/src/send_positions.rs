@@ -1,5 +1,5 @@
 //! `cargo xtask send-positions`: every place the public API of `flui` and
-//! `flui-sdk` names `Send` or `Sync` is listed, under the rule of ADR-0136 §3
+//! `flui-sdk` names `Send` or `Sync` is listed, under the rule of ADR-0323 §3
 //! (and ADR-0089 §6).
 //!
 //! UI state is owner-local (ADR-0136): a bound that asks for `Send` where a
@@ -36,7 +36,7 @@
 //!
 //! **The list.** [`ALLOWLIST`] names each position by item path, kind and
 //! marker, with a count when the item writes it more than once, and, for an
-//! entry added under ADR-0136 §3's rule, which kind of value crosses there
+//! entry added under ADR-0323 §3's rule, which kind of value crosses there
 //! (`crosses`). A position the list does not cover is a finding; so is a
 //! listed one the code no longer has. A position is added only by the change
 //! that writes it, for a value that really crosses a thread; every other entry
@@ -627,7 +627,7 @@ struct Entry {
     marker: Marker,
     #[serde(default = "one")]
     count: usize,
-    /// Which of ADR-0136 §3's kinds of value crosses a thread here. An entry added since that
+    /// Which of ADR-0323 §3's kinds of value crosses a thread here. An entry added since that
     /// rule names it; the older ones are unnamed until a change touches them.
     #[serde(default)]
     #[expect(
@@ -637,7 +637,7 @@ struct Entry {
     crosses: Option<Crossing>,
 }
 
-/// What crosses a thread at a listed position (ADR-0136 §3).
+/// What crosses a thread at a listed position (ADR-0323 §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum Crossing {
@@ -772,7 +772,7 @@ fn check(surface: &Surface, list: &BTreeMap<Position, usize>) -> Vec<Finding> {
 fn seed(surface: &Surface) -> String {
     let mut out = String::from(
         "# Every place the public API of `flui` and `flui-sdk` names `Send` or `Sync`\n\
-         # (ADR-0089 §6, ADR-0136 §3), written by `cargo xtask send-positions --seed`. The gate\n\
+         # (ADR-0089 §6, ADR-0323 §3), written by `cargo xtask send-positions --seed`. The gate\n\
          # fails on a position it does not cover and on an entry that allows more than the code\n\
          # has. A position is added only for a value that really crosses a thread, by the change\n\
          # that writes it, with its kind in `crosses`; every other entry only goes.\n\
