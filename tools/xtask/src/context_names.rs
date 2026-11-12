@@ -199,16 +199,26 @@ fn last_segment(ty: &syn::Type) -> Option<String> {
     }
 }
 
-/// The last segment of the first trait among bounds.
+/// The last segment of the first context trait among bounds, or of the
+/// first trait when none is a context: `dyn Send + BuildContext` is a context
+/// whichever order the bounds are written in.
 fn bound_segment<'a>(bounds: impl IntoIterator<Item = &'a syn::TypeParamBound>) -> Option<String> {
-    bounds.into_iter().find_map(|bound| match bound {
-        syn::TypeParamBound::Trait(bound) => bound
-            .path
-            .segments
-            .last()
-            .map(|segment| segment.ident.to_string()),
-        _ => None,
-    })
+    let names: Vec<String> = bounds
+        .into_iter()
+        .filter_map(|bound| match bound {
+            syn::TypeParamBound::Trait(bound) => bound
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string()),
+            _ => None,
+        })
+        .collect::<Vec<String>>();
+    names
+        .iter()
+        .find(|name| is_context(name))
+        .or_else(|| names.first())
+        .cloned()
 }
 
 /// The self-test's crate root.
@@ -223,6 +233,8 @@ fn fixture() -> Memory {
         mod tests;
 
         pub fn build(cx: &dyn BuildContext) {}
+        pub fn sendable(cx: &(dyn Send + SendableContext)) {}
+        pub fn opaque(cx: impl Sync + OpaqueContext) {}
         pub struct S;
         impl S {
             pub fn layout(&self, _cx: &mut BoxLayoutCtx<'_>) {}
@@ -256,12 +268,14 @@ fn fixture() -> Memory {
         files
             .into_iter()
             .map(|(rel, text)| (rel.to_owned(), text.to_owned()))
-            .collect(),
+            .collect::<std::collections::BTreeMap<String, String>>(),
     )
 }
 
 /// What the self-test must report, as `Display` text heads.
-const EXPECTED: [&str; 7] = [
+const EXPECTED: [&str; 9] = [
+    "`cx: SendableContext`",
+    "`cx: OpaqueContext`",
     "`cx: BuildContext`",
     "`cx: BoxLayoutCtx`",
     "`cx: RenderObjectContext`",
@@ -287,11 +301,11 @@ fn self_test_diff() -> (Vec<String>, Vec<String>) {
         .iter()
         .filter(|head| !reported.iter().any(|line| line.contains(*head)))
         .map(|head| (*head).to_owned())
-        .collect();
+        .collect::<Vec<String>>();
     let extra = reported
         .into_iter()
         .filter(|line| !EXPECTED.iter().any(|head| line.contains(head)))
-        .collect();
+        .collect::<Vec<String>>();
     (missed, extra)
 }
 

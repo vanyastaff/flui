@@ -136,7 +136,6 @@ flui-interaction 13, flui-painting 11, flui-material 10, flui-platform 8, flui-f
 `std::task::Context`; `cx` не носит ни одна привязка контекста, и это держит `xtask context-names`
 ([ADR-0325](../../../adr/ADR-0325-a-context-is-bound-as-ctx-and-its-type-is-named-context.md)). Время жизни
 контекста — `'ctx`.
-`count.get(cx)` … `.on_press(move |cx| count.update(cx, …))`.
 
 **Затронутые спеки и документы `EventCx` (правятся после утверждения, в PR прохода):**
 
@@ -229,7 +228,7 @@ Design») не трогается. В `.toml`, `.wgsl` и `llms.txt` — сло�
 4. Модули: пути `mod`/`use`, разбор мешков (tasks.md §2).
 5. Файлы и каталоги (`git mv`), сначала публичные модули, потом внутренние (tasks.md §4).
 6. Cargo-фичи `test-utils` и `test-support` → `testing`.
-7. Привязки и времена жизни (`ctx` → `cx`).
+7. Привязки и времена жизни: уже `ctx` (ADR-0325), проход их не трогает.
 8. `#[doc(alias)]`.
 9. Имена тестов (tasks.md §5); `rg` каждого старого имени по документам.
 10. Документы: `ARCHITECTURE.md`, `docs/`, книга, [`design/`](https://github.com/vanyastaff/flui/tree/083b0f75da003030e908d107825e9f4db4e54437/design), `llms.txt`, ADR, таблица в
@@ -328,7 +327,7 @@ Names say what a thing is or does. `cargo xtask names` checks the first five rul
 - **C-CASE**: an acronym is one word (`Hsl`, `Ios`, `MacOs`, `RoundedRect`, not `RRect`);
   constants are `SCREAMING_SNAKE_CASE`. No `#[expect(non_*_case*)]` outside `generated.rs`.
 - **Getters have no `get_`** (std's `get`, `get_mut`, `get_disjoint_mut`, `get_or_insert*` aside).
-- **One concept, one word**: contexts are `…Context` bound as `cx`; a called `Fn` alias or
+- **One concept, one word**: contexts are `…Context` bound as `ctx`; a called `Fn` alias or
   wrapper is `…Callback`; a closure that builds a view is `…Fn`; `Builder` is only C-BUILDER;
   `Cancelled`, `Adapter`. No two public items of a crate share a name.
 - **Tests are named for their outcome**, without a `test_` prefix.
@@ -344,7 +343,7 @@ Names say what a thing is or does. `cargo xtask names` checks the first five rul
 Строка таблицы гейтов:
 
 ```markdown
-| Bag words, C-CASE, `get_` getters, one spelling per concept, `…Context`/`cx`, `testing` features, test names, retired names from the rename table | `cargo xtask names` (allowlist `tools/xtask/allowlists/names.toml`, shrink-only) |
+| Bag words, C-CASE, `get_` getters, one spelling per concept, `…Context`, `testing` features, test names, retired names from the rename table | `cargo xtask names` (allowlist `tools/xtask/allowlists/names.toml`, shrink-only) |
 ```
 
 ## 7. Гейт `cargo xtask names`
