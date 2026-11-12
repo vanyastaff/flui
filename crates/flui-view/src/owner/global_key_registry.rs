@@ -3,7 +3,7 @@
 //!
 //! # Why this exists
 //!
-//! The registry used to be a bare `FxHashMap<u64, ElementId>` keyed on
+//! The registry used to be a bare `HashMap<u64, ElementId>` keyed on
 //! [`ViewKey::key_hash`]. That makes a hash the *identity* of a key, which
 //! is a category error with two consequences:
 //!
@@ -29,7 +29,6 @@
 //! [`global_key_reservations`](super::global_key_reservations)' job. The
 //! three never merge — see `global_key_scope`'s "Split authority" section.
 
-use rustc_hash::FxHashMap;
 use std::ops::Deref;
 
 use flui_foundation::{ElementId, ViewKey};
@@ -82,8 +81,12 @@ struct Entry {
 /// explicit enough that the identity check cannot be optimised away by
 /// accident.
 #[derive(Default)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "indexed by view-key hashes, which an application-defined global key may derive from its own data, so the table keeps SipHash's random seed against chosen collisions"
+)]
 pub(crate) struct GlobalKeyRegistry {
-    buckets: FxHashMap<u64, Vec<Entry>>,
+    buckets: std::collections::HashMap<u64, Vec<Entry>>,
 }
 
 pub(super) struct PreparedRegistration {

@@ -278,8 +278,12 @@ impl GlobalKeyReservations {
 /// decides membership, so two colliding-but-distinct keys are never
 /// conflated into a false duplicate report.
 #[derive(Default)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "indexed by view-key hashes, which an application-defined global key may derive from its own data, so the table keeps SipHash's random seed against chosen collisions"
+)]
 struct SeenKeys {
-    buckets: FxHashMap<u64, Vec<SeenKey>>,
+    buckets: std::collections::HashMap<u64, Vec<SeenKey>>,
 }
 
 /// One key already claimed during this verification pass, and by whom for
