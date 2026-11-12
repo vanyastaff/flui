@@ -483,9 +483,7 @@ fn cross_typecheck_plan(host: Host) -> anyhow::Result<Vec<Step>> {
 
 /// CI's `test-features` job: the suites behind features the default run never
 /// enables (flui-assets and flui-widgets default to `default = []`). The
-/// facade's catalogs, neither on by default, are in [`TEST_SCOPE`]. The
-/// `signals` features of flui-view, flui-testing, flui-widgets and flui-app
-/// are empty (signals are always compiled, ADR-0085 §5), so no run names them.
+/// facade's catalogs, neither on by default, are in [`TEST_SCOPE`].
 fn test_features_plan() -> Vec<Step> {
     let nextest =
         |args: &[&str]| Step::from(Cmd::cargo(["nextest", "run"]).args(args.iter().copied()));
@@ -614,7 +612,9 @@ fn native_feature_slice_plan(target: Option<&str>) -> Vec<Step> {
 
 /// Local `gpu-test` gate: engine readbacks and path-recording allocations, then the facade's
 /// composited-layer update readback (it needs the render pipeline and the
-/// headless renderer, which only the facade depends on together).
+/// headless renderer, which only the facade depends on together); that test is
+/// `#[ignore]`d in ordinary runs, which have no adapter, so this run names
+/// `--run-ignored all`.
 /// `--test-threads 1`: each test builds its own `wgpu::Device`, and a software
 /// rasterizer serializes submission, so parallel tests saturate it.
 fn gpu_test_plan(backend: Option<GpuBackend>) -> Vec<Step> {
@@ -630,7 +630,7 @@ fn gpu_test_plan(backend: Option<GpuBackend>) -> Vec<Step> {
         "raster_backpressure_allocation",
     ]);
     let facade = Cmd::cargo(["nextest", "run", "-p", "flui", "--no-default-features"])
-        .args(["--features", "gpu-readback-tests"])
+        .args(["--run-ignored", "all"])
         .args(["--test", "composited_layer_update_readback"]);
     [engine, facade]
         .into_iter()
@@ -1267,14 +1267,14 @@ mod tests {
             lines(&gpu_test_plan(None)),
             [
                 "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui-engine --features testing --lib --test raster_backpressure_allocation --locked --no-fail-fast --test-threads 1",
-                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
+                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui --no-default-features --run-ignored all --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
             ]
         );
         assert_eq!(
             lines(&gpu_test_plan(Some(GpuBackend::Gl))),
             [
                 "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui-engine --features testing --lib --test raster_backpressure_allocation --locked --no-fail-fast --test-threads 1",
-                "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
+                "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui --no-default-features --run-ignored all --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
             ]
         );
     }

@@ -178,7 +178,7 @@ translated strings: every string forwarded to `DefaultWidgetsLocalizations`, so 
 the packages. Its RTL table and `GlobalWidgetsLocalizationsDelegate` moved to
 `flui_widgets::localization`, the design systems' exemption set became `flui-app` and the
 facade ([ADR-0028](ADR-0028-design-system-decoupling-contract.md)), and the
-facade's `localizations` feature stays empty until nothing names it. ADR-0041's "Localization
+facade has no `localizations` feature. ADR-0041's "Localization
 direction is locked" paragraph has nothing left to govern.
 
 ### 2. Reach facts are a gate over the resolved graph
@@ -194,7 +194,7 @@ still lists every edge any root can activate, and a test pins the resolver to `c
 --target all` for five roots.
 
 The roots are the facade under every combination `cargo xtask facade-combos` builds, the facade
-with each of its features alone (which adds `testing` and `gpu-readback-tests`), and every crate
+with each of its features alone (which adds `testing`), and every crate
 with a tier, alone, at its defaults and with `--all-features` (which reaches what the facade never
 selects, such as `flui-widgets/network-images`). These are what "every facade feature
 combination" means everywhere in these records.

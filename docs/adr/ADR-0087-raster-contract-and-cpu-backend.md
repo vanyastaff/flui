@@ -62,9 +62,9 @@ decomposition — lives in the engine as crate-private traits: `CommandRenderer`
 `HeadlessRenderer` (`crates/flui-engine/src/headless.rs:54`) documents that it only approximates
 `BackdropFilter`, `ShaderMask` and `Follower` (`headless.rs:15-27`).
 
-Every pixel test therefore needs a GPU adapter. The facade's `gpu-readback-tests` feature is off
-by default because "the workspace `test` job has none" (`Cargo.toml:618-625`),
-so golden images cannot run in the ordinary test job, and a machine with no usable adapter has
+Every pixel test therefore needs a GPU adapter. The facade's readback test is `#[ignore]`d in an
+ordinary run because the workspace `test` job has none
+(`tests/composited_layer_update_readback.rs`), so golden images cannot run in the ordinary test job, and a machine with no usable adapter has
 no renderer at all.
 
 ### Every frame is a full repaint

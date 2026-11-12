@@ -7,10 +7,10 @@
 //! hooks: a [`RenderView`](crate::RenderView) itself, or the state of a
 //! [`StatefulRenderView`](crate::StatefulRenderView).
 
-use std::any::{Any, TypeId};
-use std::panic::AssertUnwindSafe;
+use std::any::TypeId;
 
 use flui_foundation::RenderId;
+use flui_foundation::panic::FirstPanic;
 use flui_rendering::{
     RenderUpdateImpact, pipeline::PipelineOwner, protocol::Protocol,
     traits::RenderObject as RenderObjectTrait,
@@ -174,6 +174,7 @@ pub(crate) fn push<V, A, R>(
             owner.collects_semantics,
         ),
     };
+    let mut caught = FirstPanic::new();
     let outcome = pipeline_owner.with_mut(|pipeline_owner| {
         let node = pipeline_owner
             .render_tree_mut()
@@ -182,25 +183,23 @@ pub(crate) fn push<V, A, R>(
         let render_object = node
             .downcast_render_object_mut::<R>()
             .expect("BUG: a render element's live node must hold its render object type");
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: an update_render_object panic replaces the element with an ErrorView"
-        )]
-        std::panic::catch_unwind(AssertUnwindSafe(|| update(&ctx, render_object)))
+        // A panic here replaces the element with an ErrorView, through the
+        // caller.
+        caught.contain(|| update(&ctx, render_object))
     });
-    let impact = match outcome {
-        Ok(impact) => impact,
-        Err(payload) => {
+    let Some(impact) = outcome else {
+        if let Some(payload) = caught.held() {
             owner.record_armed_lifecycle_panic(
                 core.self_id(),
                 core.creation_site(),
                 TypeId::of::<V>(),
                 LifecycleHook::Update,
-                payload.as_ref(),
+                payload,
                 "updating the render object of RenderElement",
             );
-            std::panic::resume_unwind(payload);
         }
+        caught.resume();
+        return;
     };
     pipeline_owner.with_mut(|pipeline_owner| {
         pipeline_owner.apply_render_update_impact(render_id, impact);
@@ -226,7 +225,8 @@ pub(crate) fn unmount<V, A, R>(
     A: ElementArity,
     R: 'static,
 {
-    let mut recovered: Option<Box<dyn Any + Send>> = None;
+    // The unmount hook runs contained; the element still unmounts.
+    let mut caught = FirstPanic::new();
     if let Some(render_id) = *slot
         && let Some(pipeline_owner) = core.pipeline_owner()
     {
@@ -236,32 +236,27 @@ pub(crate) fn unmount<V, A, R>(
             owner.collects_semantics,
         );
         pipeline_owner.with_mut(|pipeline_owner| {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: the unmount hook runs contained; the element still unmounts"
-            )]
             if let Some(render_object) = pipeline_owner
                 .render_tree_mut()
                 .get_mut(render_id)
                 .and_then(|node| node.downcast_render_object_mut::<R>())
-                && let Err(payload) =
-                    std::panic::catch_unwind(AssertUnwindSafe(|| release(&ctx, render_object)))
             {
-                recovered = Some(payload);
+                caught.contain(|| release(&ctx, render_object));
             }
         });
     }
-    if let Some(payload) = recovered {
+    if let Some(payload) = caught.held() {
         owner.record_hook_panic(
             core.self_id(),
             core.creation_site(),
             TypeId::of::<V>(),
             LifecycleHook::UnmountRenderObject,
-            payload.as_ref(),
+            payload,
             "unmounting the render object of RenderElement",
         );
-        flui_foundation::panic::discard_payload(payload);
     }
+    // Recorded, the payload is destroyed under containment.
+    drop(caught);
     super::behavior_commons::remove_render_object_from_tree(core, *slot, behavior_name);
     *slot = None;
 }
