@@ -328,7 +328,7 @@ impl TabBar {
     #[must_use]
     pub fn on_tap<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, usize) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>, usize) -> R + 'static,
     ) -> Self {
         self.on_tap = Some(crate::event_callback::value_callback(callback));
         self

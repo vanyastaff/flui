@@ -21,7 +21,7 @@ use crate::{ElementBase, InheritedView};
 /// capabilities a render-object widget needs to register owner-local
 /// interaction callbacks while keeping the render object itself data-only and
 /// `Send + Sync`, and the [`WriterSource`] those callbacks open their
-/// [`EventCx`](crate::EventCx) from (ADR-0086 §3).
+/// [`EventContext`](crate::EventContext) from (ADR-0086 §3).
 ///
 /// `build` cannot reach it: the element creates and updates the render object
 /// outside the build pass, so a render view has no path to a writer inside

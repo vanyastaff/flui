@@ -25,7 +25,8 @@ use flui_rendering::{
     RenderUpdateImpact,
     constraints::BoxConstraints,
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext,
     },
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
@@ -209,7 +210,7 @@ impl RenderBox for RenderAnimatedAlign {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.configured().compute_min_intrinsic_width(height, ctx)
     }
@@ -217,7 +218,7 @@ impl RenderBox for RenderAnimatedAlign {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.configured().compute_max_intrinsic_width(height, ctx)
     }
@@ -225,7 +226,7 @@ impl RenderBox for RenderAnimatedAlign {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.configured().compute_min_intrinsic_height(width, ctx)
     }
@@ -233,7 +234,7 @@ impl RenderBox for RenderAnimatedAlign {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.configured().compute_max_intrinsic_height(width, ctx)
     }
@@ -241,7 +242,7 @@ impl RenderBox for RenderAnimatedAlign {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         self.configured().compute_dry_layout(constraints, ctx)
     }
@@ -250,7 +251,7 @@ impl RenderBox for RenderAnimatedAlign {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         self.configured()
             .compute_dry_baseline(constraints, baseline, ctx)

@@ -102,7 +102,7 @@ use flui_foundation::inspect::{Fields, Inspect, Unit};
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
-    context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
+    context::{PaintContext, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     pipeline::LocalRenderInvalidationHandle,
     protocol::SliverProtocol,
@@ -663,7 +663,7 @@ impl RenderSliver for RenderSliverScrollingPersistentHeader {
         self.child_position
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 
@@ -767,7 +767,7 @@ impl RenderSliver for RenderSliverPinnedPersistentHeader {
         0.0
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 
@@ -1299,7 +1299,7 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
         self.child_position.unwrap_or(0.0)
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 

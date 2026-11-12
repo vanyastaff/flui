@@ -20,7 +20,10 @@ use flui_foundation::{RenderId, Single};
 use flui_rendering::{
     RenderUpdateImpact,
     constraints::BoxConstraints,
-    context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxLayoutContext,
+        PaintContext,
+    },
     hit_testing::{
         CursorRequest, HitTestBehavior, MouseTrackerAnnotation, PanZoomTarget, PointerTarget,
         ScrollTarget, SmartZoomTarget,
@@ -218,7 +221,7 @@ impl RenderBox for RenderInteractive {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
             Ok(constraints.biggest())
@@ -231,14 +234,14 @@ impl RenderBox for RenderInteractive {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         flui_rendering::context::proxy_queries::forward_dry_baseline(constraints, baseline, ctx)
     }
 
     /// The ring is painted after the child and inside the box, so a
     /// neighbour painted later cannot cover it.
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         if self.has_child {
             ctx.paint_child();
         }

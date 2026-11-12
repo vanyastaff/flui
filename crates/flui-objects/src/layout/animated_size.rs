@@ -54,8 +54,8 @@ use crate::layout::shifted_box::AligningShiftedBox;
 use flui_rendering::{
     constraints::{BoxConstraints, Constraints},
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
-        PaintCx,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext, PaintContext,
     },
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
@@ -677,7 +677,7 @@ impl RenderBox for RenderAnimatedSize {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -688,7 +688,7 @@ impl RenderBox for RenderAnimatedSize {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -699,7 +699,7 @@ impl RenderBox for RenderAnimatedSize {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -710,7 +710,7 @@ impl RenderBox for RenderAnimatedSize {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
             return Ok(0.0);
@@ -721,7 +721,7 @@ impl RenderBox for RenderAnimatedSize {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 || constraints.is_tight() {
             return Ok(constraints.smallest());
@@ -734,7 +734,7 @@ impl RenderBox for RenderAnimatedSize {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
             return Ok(None);
@@ -755,11 +755,11 @@ impl RenderBox for RenderAnimatedSize {
         )))
     }
 
-    // Closure is load-bearing: `PaintCx::paint_child` is ambiguous as a method path
+    // Closure is load-bearing: `PaintContext::paint_child` is ambiguous as a method path
     // (Single's zero-arg overload vs the indexed variant on other arities), so the
     // closure cannot be replaced by a method reference.
     #[expect(clippy::redundant_closure_for_method_calls)]
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         if self.has_visual_overflow && self.clip_behavior != Clip::None {
             let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
             ctx.with_clip_rect(bounds, self.clip_behavior, |ctx| ctx.paint_child());

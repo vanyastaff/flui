@@ -152,7 +152,7 @@ impl RenderBox for RenderOffstage {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if self.offstage {
             Ok(0.0)
@@ -164,7 +164,7 @@ impl RenderBox for RenderOffstage {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if self.offstage {
             Ok(0.0)
@@ -176,7 +176,7 @@ impl RenderBox for RenderOffstage {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if self.offstage {
             Ok(0.0)
@@ -188,7 +188,7 @@ impl RenderBox for RenderOffstage {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if self.offstage {
             Ok(0.0)
@@ -200,7 +200,7 @@ impl RenderBox for RenderOffstage {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         if self.offstage {
             // Same size `perform_layout` commits while offstage.
@@ -214,7 +214,7 @@ impl RenderBox for RenderOffstage {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         if self.offstage {
             Ok(None)
@@ -223,7 +223,7 @@ impl RenderBox for RenderOffstage {
         }
     }
 
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Single>) {
         if self.offstage {
             // Nothing is painted while offstage.
             return;

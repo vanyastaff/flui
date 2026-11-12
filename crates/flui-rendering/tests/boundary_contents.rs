@@ -322,7 +322,7 @@ impl flui_rendering::traits::RenderBox for PanicsWhenArmed {
         Ok(ctx.constrain(Size::new(10.0, 10.0)))
     }
 
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, flui_foundation::Leaf>) {
         assert!(
             !self.0.load(std::sync::atomic::Ordering::Relaxed),
             "PanicsWhenArmed: armed, failing this paint on purpose",
@@ -426,7 +426,7 @@ impl flui_rendering::traits::RenderBox for PaintsChildAt {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Single>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, flui_foundation::Single>) {
         let dx = f64::from_bits(self.0.load(std::sync::atomic::Ordering::Relaxed));
         ctx.paint_child_at(flui_foundation::geometry::Offset::new(dx, 0.0));
     }
@@ -551,7 +551,7 @@ impl flui_rendering::traits::RenderBox for PaintsChildWhen {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Single>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, flui_foundation::Single>) {
         if self.0.get() {
             ctx.paint_child();
         }

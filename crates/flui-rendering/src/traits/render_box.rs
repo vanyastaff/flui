@@ -236,7 +236,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut crate::context::BoxIntrinsicsContext<'_>,
     ) -> crate::error::RenderResult<f64> {
         Ok(0.0)
     }
@@ -245,7 +245,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut crate::context::BoxIntrinsicsContext<'_>,
     ) -> crate::error::RenderResult<f64> {
         Ok(0.0)
     }
@@ -254,7 +254,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     fn compute_min_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut crate::context::BoxIntrinsicsContext<'_>,
     ) -> crate::error::RenderResult<f64> {
         Ok(0.0)
     }
@@ -263,7 +263,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     fn compute_max_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+        _ctx: &mut crate::context::BoxIntrinsicsContext<'_>,
     ) -> crate::error::RenderResult<f64> {
         Ok(0.0)
     }
@@ -279,7 +279,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     fn compute_dry_layout(
         &self,
         _constraints: BoxConstraints,
-        _ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+        _ctx: &mut crate::context::BoxDryLayoutContext<'_>,
     ) -> crate::error::RenderResult<Size> {
         Ok(Size::ZERO)
     }
@@ -330,7 +330,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
         &self,
         _constraints: BoxConstraints,
         _baseline: TextBaseline,
-        _ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
+        _ctx: &mut crate::context::BoxDryBaselineContext<'_>,
     ) -> crate::error::RenderResult<Option<f64>> {
         Ok(None)
     }
@@ -357,7 +357,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     /// # Example
     ///
     /// ```ignore
-    /// fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    /// fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
     ///     // Draw background in local coordinates (size from RenderState).
     ///     ctx.canvas()
     ///         .draw_rect(Rect::from_origin_size(Point::ZERO, ctx.size()), &paint);
@@ -369,7 +369,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     /// The default implementation splices all children in tree order
     /// — pass-through containers need no override. An override that does NOT call any
     /// child-painting method hides its subtree (offstage semantics).
-    fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Self::Arity>) {
+    fn paint(&self, ctx: &mut crate::context::PaintContext<'_, Self::Arity>) {
         ctx.paint_children_in_order();
     }
 
@@ -705,10 +705,10 @@ pub use flui_painting::TextBaseline;
 /// # Architecture Note
 ///
 /// The `perform_layout_raw` body **is** the real bridge — it receives a
-/// protocol-erased `&mut dyn BoxLayoutCtxErased`, reconstructs a typed
-/// `BoxLayoutCtx<T::Arity, T::ParentData>` via the in-crate
-/// `BoxLayoutCtx::from_erased` ctor (`pub(crate)` — see
-/// [`crate::protocol::BoxLayoutCtx`]), wraps it in a `BoxLayoutContext`
+/// protocol-erased `&mut dyn ErasedBoxLayoutContext`, reconstructs a typed
+/// `RawBoxLayoutContext<T::Arity, T::ParentData>` via the in-crate
+/// `RawBoxLayoutContext::from_erased` ctor (`pub(crate)` — see
+/// [`crate::protocol::RawBoxLayoutContext`]), wraps it in a `BoxLayoutContext`
 /// (the rich ergonomic wrapper), and calls
 /// [`RenderBox::perform_layout`]. Its result passes directly to the pipeline;
 /// an error supplies no geometry for this request.
@@ -721,7 +721,7 @@ pub use flui_painting::TextBaseline;
 /// recursion in a typed `BoxHitTestContext` and calls `RenderBox::hit_test`
 /// — see its own doc for the ctx-level transform-stack handoff to the
 /// driver. `paint_raw` is the live paint bridge: it wraps the pipeline's
-/// `FragmentRecorder` in the typed `PaintCx<T::Arity>` and calls
+/// `FragmentRecorder` in the typed `PaintContext<T::Arity>` and calls
 /// `RenderBox::paint`.
 ///
 /// Note: This requires T to also implement Inspect since `RenderObject<P>`
@@ -732,14 +732,14 @@ where
 {
     fn perform_layout_raw(
         &mut self,
-        ctx: &mut <BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
+        ctx: &mut <BoxProtocol as crate::protocol::Protocol>::ErasedLayoutContext<'_>,
     ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
         // The real bridge.
         //
         // The pipeline / `RenderEntry::layout_leaf_only` hands us a
-        // `&mut dyn BoxLayoutCtxErased` (the GAT for `BoxProtocol`
+        // `&mut dyn ErasedBoxLayoutContext` (the GAT for `BoxProtocol`
         // resolves to exactly this). We reconstruct a typed
-        // `BoxLayoutCtx<T::Arity, T::ParentData>` via the `from_erased`
+        // `RawBoxLayoutContext<T::Arity, T::ParentData>` via the `from_erased`
         // ctor (Proxy storage that delegates child ops back through the
         // erased trait), wrap it in the ergonomic `BoxLayoutContext` so
         // user widgets get nice helpers, and call `T::perform_layout`.
@@ -751,7 +751,7 @@ where
         // only for genuine third-party panics (panic! / unwrap in user
         // widget code) which still surface as `RenderError::Poisoned`.
         let typed_inner =
-            crate::protocol::BoxLayoutCtx::<T::Arity, T::ParentData>::from_erased(ctx);
+            crate::protocol::RawBoxLayoutContext::<T::Arity, T::ParentData>::from_erased(ctx);
         let mut layout_ctx =
             crate::context::BoxLayoutContext::<T::Arity, T::ParentData>::new(typed_inner);
         T::perform_layout(self, &mut layout_ctx)
@@ -764,13 +764,13 @@ where
         size: flui_foundation::geometry::Size,
     ) {
         // The paint bridge: wrap the recorder in the typed, arity-gated
-        // PaintCx and call the user's RenderBox::paint. Unlike the
+        // PaintContext and call the user's RenderBox::paint. Unlike the
         // layout bridge there is no GAT erasure — the recorder is a
         // concrete type (no ParentData in the paint surface), so the
         // re-typing is a zero-cost PhantomData re-tag. `size` is the
         // node's committed `RenderState` geometry, threaded by the
         // pipeline so paint reads `ctx.size()` (2B field dedup).
-        let mut ctx = crate::context::PaintCx::<T::Arity>::new(recorder, child_count, size);
+        let mut ctx = crate::context::PaintContext::<T::Arity>::new(recorder, child_count, size);
         T::paint(self, &mut ctx);
     }
 
@@ -794,18 +794,19 @@ where
         // `ctx.is_within_own_size()` (2B field dedup).
         //
         // `hit_child`'s third parameter is the ctx-level transform stack's
-        // accumulated forward transform at call time (`BoxHitTestCtx::
+        // accumulated forward transform at call time (`RawBoxHitTestContext::
         // local_transform_for_driver`) — `ctx.push_offset`/`push_transform`/
         // `with_transform` push onto that stack, and the driver folds it
         // into `HitTestEntry.transform` for exactly the scoped recursive
         // call (see `RenderObject::hit_test_raw`'s doc and
         // `crate::context::HitTestContext`'s "Ctx-level pushes ARE
-        // forwarded to the driver" doc). `BoxHitTestCtx` itself never talks
+        // forwarded to the driver" doc). `RawBoxHitTestContext` itself never talks
         // to the driver directly; it only accumulates the stack and hands
         // the top-of-scope composition to `hit_child` on every call.
-        let inner = crate::protocol::BoxHitTestCtx::<T::Arity, T::ParentData>::with_child_callback(
-            position, hit_child,
-        );
+        let inner =
+            crate::protocol::RawBoxHitTestContext::<T::Arity, T::ParentData>::with_child_callback(
+                position, hit_child,
+            );
         let mut ctx =
             crate::context::BoxHitTestContext::new(inner, size).with_child_count(child_count);
         let blocks_below = T::hit_test(self, &mut ctx);
@@ -823,7 +824,7 @@ where
         &self,
         dimension: crate::storage::IntrinsicDimension,
         extent: f64,
-        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut crate::context::BoxIntrinsicsContext<'_>,
     ) -> crate::error::RenderResult<f64> {
         // Preserve the driver's complete mutable query capability at the
         // typed bridge: text and recursive child queries cannot be split.
@@ -839,7 +840,7 @@ where
     fn dry_layout_raw(
         &self,
         constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
-        ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+        ctx: &mut crate::context::BoxDryLayoutContext<'_>,
     ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
         T::compute_dry_layout(self, constraints, ctx)
     }
@@ -848,7 +849,7 @@ where
         &self,
         constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
         baseline: crate::traits::TextBaseline,
-        ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
+        ctx: &mut crate::context::BoxDryBaselineContext<'_>,
     ) -> crate::error::RenderResult<Option<f64>> {
         T::compute_dry_baseline(self, constraints, baseline, ctx)
     }

@@ -50,6 +50,11 @@ crate-type = ["rlib", "cdylib"]
 /// dependency is compiled once and rebuilt only when `Cargo.lock` moves, so
 /// the cost is paid on the first build alone. The application's own crates
 /// stay unoptimized for fast rebuilds.
+///
+/// A release build is what ships, so it strips the symbol table too: a panic
+/// still prints its message and `file:line`, and only a backtrace's frame
+/// names go, as in a Flutter release build. `--profile profiling` keeps the
+/// symbols and line tables a profiler or a crash report needs.
 pub(super) const PROFILES: &str = r#"[profile.dev.package."*"]
 opt-level = 3
 debug = false
@@ -58,7 +63,12 @@ debug = false
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-strip = "debuginfo"
+strip = "symbols"
+
+[profile.profiling]
+inherits = "release"
+strip = "none"
+debug = "line-tables-only"
 "#;
 
 /// `.gitignore` for a generated project. Part of the plan (not a

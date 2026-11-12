@@ -318,7 +318,7 @@ impl Scaffold {
     #[must_use]
     pub fn on_drawer_changed<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
         self.on_drawer_changed = Some(crate::event_callback::value_callback(callback));
@@ -329,7 +329,7 @@ impl Scaffold {
     #[must_use]
     pub fn on_end_drawer_changed<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
         self.on_end_drawer_changed = Some(crate::event_callback::value_callback(callback));

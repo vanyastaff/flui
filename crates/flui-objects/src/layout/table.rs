@@ -50,7 +50,8 @@ use crate::TableColumnWidth;
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext,
     },
     parent_data::TableCellParentData,
     traits::{RenderBox, TextBaseline},
@@ -842,7 +843,7 @@ impl RenderBox for RenderTable {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
@@ -897,7 +898,7 @@ impl RenderBox for RenderTable {
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
@@ -921,7 +922,7 @@ impl RenderBox for RenderTable {
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
@@ -945,7 +946,7 @@ impl RenderBox for RenderTable {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
@@ -986,7 +987,7 @@ impl RenderBox for RenderTable {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.compute_min_intrinsic_height(width, ctx)
     }
@@ -1013,7 +1014,7 @@ impl RenderBox for RenderTable {
         &self,
         constraints: BoxConstraints,
         _baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
@@ -1076,7 +1077,7 @@ impl RenderBox for RenderTable {
         Ok(before_baseline)
     }
 
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Variable>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Variable>) {
         let row_count = self.row_tops.len().saturating_sub(1);
 
         // 1. Row decorations.

@@ -47,7 +47,7 @@ use flui_foundation::geometry::Size;
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
+    context::{BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext, BoxLayoutContext},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -187,7 +187,7 @@ impl RenderBox for RenderLayoutBuilder {
     fn compute_dry_layout(
         &self,
         _constraints: BoxConstraints,
-        _ctx: &mut BoxDryLayoutCtx<'_>,
+        _ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         tracing::error!(
             "RenderLayoutBuilder does not support dry layout: computing it would require \
@@ -206,7 +206,7 @@ impl RenderBox for RenderLayoutBuilder {
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         report_unsupported_intrinsics();
         Ok(0.0)
@@ -215,7 +215,7 @@ impl RenderBox for RenderLayoutBuilder {
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         report_unsupported_intrinsics();
         Ok(0.0)
@@ -224,7 +224,7 @@ impl RenderBox for RenderLayoutBuilder {
     fn compute_min_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         report_unsupported_intrinsics();
         Ok(0.0)
@@ -233,7 +233,7 @@ impl RenderBox for RenderLayoutBuilder {
     fn compute_max_intrinsic_height(
         &self,
         _width: f64,
-        _ctx: &mut BoxIntrinsicsCtx<'_>,
+        _ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         report_unsupported_intrinsics();
         Ok(0.0)

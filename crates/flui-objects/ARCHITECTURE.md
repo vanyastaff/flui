@@ -403,7 +403,7 @@ and each placeholder is a separate node painting in its own coordinates.
 
 **Choice:** `RenderSkeleton` lays a `ShimmerBand` gradient across its nearest
 paint anchor (`RenderPaintAnchor`, also a repaint boundary) and translates it
-by its own offset from the anchor (`PaintCx::paint_anchor`), so placeholders
+by its own offset from the anchor (`PaintContext::paint_anchor`), so placeholders
 cut windows out of one band without an offscreen group around them. The band
 starts one band-width before the anchor's leading edge and ends past its
 trailing edge, so a repeating phase has no seam. Without a band or without an

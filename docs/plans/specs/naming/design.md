@@ -112,20 +112,6 @@ flui-interaction 13, flui-painting 11, flui-material 10, flui-platform 8, flui-f
 
 | Было | Стало | Крейт | Ссылок | Замечание |
 |---|---|---|---|---|
-| `EventCx<'a>` | `EventContext<'a>` | flui-view | 509 | `EventContextError` уже в этом написании |
-| `PaintCx<'a, A>` | `PaintContext<'a, A>` | flui-rendering | 190 | файл `context/paint_cx.rs` → `context/paint.rs` |
-| `TextCx<'a>` | `TextContextMut<'a>` | flui-rendering | 28 | `TextContext` занят, это `RefMut` на него |
-| `BoxLayoutCtx` | `RawBoxLayoutContext` | flui-rendering | 80 | под обёрткой `BoxLayoutContext` (= `LayoutContext<Box…>`) |
-| `SliverLayoutCtx` | `RawSliverLayoutContext` | flui-rendering | 27 | то же |
-| `BoxHitTestCtx` | `RawBoxHitTestContext` | flui-rendering | 31 | то же |
-| `SliverHitTestCtx` | `RawSliverHitTestContext` | flui-rendering | 12 | то же |
-| `BoxLayoutCtxErased` (трейт) | `ErasedBoxLayoutContext` | flui-rendering | 51 | объектно-безопасная форма |
-| `SliverLayoutCtxErased` (трейт) | `ErasedSliverLayoutContext` | flui-rendering | 27 | то же |
-| `ErasedBoxLayoutCtx` (struct) | `DriverBoxLayoutContext` | flui-rendering | 13 | драйверная реализация трейта выше |
-| `ErasedSliverLayoutCtx` (struct) | `DriverSliverLayoutContext` | flui-rendering | 10 | то же |
-| `BoxIntrinsicsCtx` | `BoxIntrinsicsContext` | flui-rendering | 212 | реэкспорт `src/rendering.rs` |
-| `BoxDryLayoutCtx` | `BoxDryLayoutContext` | flui-rendering | 92 | то же |
-| `BoxDryBaselineCtx` | `BoxDryBaselineContext` | flui-rendering | 72 | — |
 | `NodeContext` | `FocusNodePayload` | flui-interaction | 15 | не контекст |
 
 Без изменений остаются `BuildContext`, `LifecycleContext`, `ElementBuildContext`,

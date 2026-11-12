@@ -125,7 +125,7 @@ Rules:
     `Rect::contains` (`rrect.rs:499-501`, `rsuperellipse.rs:400-402`), and which the clip render
     objects (`crates/flui-objects/src/proxy/clip.rs:316`, `:345`, `:385`, called from their
     hit test at `:923`), `HitShape::contains`
-    (`crates/flui-objects/src/interaction/content_shape.rs:45`), `BoxHitTestCtx::is_hit`
+    (`crates/flui-objects/src/interaction/content_shape.rs:45`), `RawBoxHitTestContext::is_hit`
     (`crates/flui-rendering/src/protocol/box_protocol.rs:1737-1739`) and the layer annotation
     search (`crates/flui-layer/src/tree/annotations.rs:81-85`) call. The half-open rule wins, so every
     box shape (`Rect`, `Size`, `Bounds`, the rounded shapes' straight edges) takes it. For the

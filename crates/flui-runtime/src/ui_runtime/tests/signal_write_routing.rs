@@ -116,7 +116,7 @@ pub(crate) fn a_write_to_a_secondary_presentations_signal_rebuilds_its_reader() 
     );
 }
 
-/// The command's `EventCx` is opened by the minting presentation's writer
+/// The command's `EventContext` is opened by the minting presentation's writer
 /// source: it writes that graph, and it refuses a sibling presentation's
 /// handle as foreign rather than writing it in passing.
 pub(crate) fn cross_thread_signal_write_opens_the_owner_writer_source() {
@@ -158,7 +158,7 @@ pub(crate) fn cross_thread_signal_write_opens_the_owner_writer_source() {
     assert_eq!(sig_a.peek(&graph_a, |v| *v), Ok(1));
 }
 
-/// A command whose write panics inside its `EventCx` keeps its envelope out
+/// A command whose write panics inside its `EventContext` keeps its envelope out
 /// of the unwind, then destroys it once under containment (ADR-0281 §3). The
 /// write before the panic stays applied, the command's panic is the one
 /// resumed, and the next command writes normally and disposes its own

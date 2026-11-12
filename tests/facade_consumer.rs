@@ -236,7 +236,11 @@ fn external_consumers_extend_and_test_through_the_facade() {
         let mut dependencies = toml::Table::new();
         dependencies.insert(alias.into(), dependency("flui", root, false));
         let mut dev_dependencies = toml::Table::new();
-        dev_dependencies.insert(alias.into(), facade_with_features(root, &["testing"]));
+        // `unstable-windows` for the secondary-window case, the one that names it.
+        dev_dependencies.insert(
+            alias.into(),
+            facade_with_features(root, &["testing", "unstable-windows"]),
+        );
         let source = rename_facade(include_str!("fixtures/facade_extensions.rs"), alias);
         let output = run_consumer(dependencies, Some(dev_dependencies), &source, "test");
         assert!(

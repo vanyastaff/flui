@@ -236,7 +236,7 @@ impl MenuHost {
     /// `position` in root coordinates. Returns whether it opened.
     pub(crate) fn open(
         &self,
-        ctx: &mut EventCx<'_>,
+        ctx: &mut EventContext<'_>,
         cause: MenuCause,
         position: Option<Offset<f64>>,
     ) -> bool {
@@ -321,7 +321,7 @@ fn same_menu(a: &Rc<dyn SelectionMenu>, b: &Rc<dyn SelectionMenu>) -> bool {
 pub(crate) fn show_menu_action(
     semantics: Semantics,
     host: &Rc<MenuHost>,
-    focus: impl Fn(&mut EventCx<'_>) + 'static,
+    focus: impl Fn(&mut EventContext<'_>) + 'static,
 ) -> Semantics {
     if !host.can_open() {
         return semantics;
@@ -371,7 +371,7 @@ impl Action<ShowContextMenuIntent> for ShowSelectionMenu {
                 .is_some_and(|enclosing| enclosing.is_enabled(intent))
     }
 
-    fn invoke(&self, ctx: &mut EventCx<'_>, intent: &ShowContextMenuIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventContext<'_>, intent: &ShowContextMenuIntent) -> ActionOutcome {
         if let Some(host) = self.owner_opens() {
             return if host.open(ctx, MenuCause::Key, None) {
                 ActionOutcome::Performed

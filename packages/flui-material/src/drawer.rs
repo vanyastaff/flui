@@ -418,7 +418,7 @@ impl DrawerHandle {
 }
 
 /// Signature for [`DrawerController::on_open_changed`].
-type DrawerCallback = Rc<dyn Fn(&mut EventCx<'_>, bool)>;
+type DrawerCallback = Rc<dyn Fn(&mut EventContext<'_>, bool)>;
 type BoundDrawerCallback = Rc<dyn Fn(bool)>;
 
 /// Provides interactive behavior for [`Drawer`] content: open/close
@@ -486,7 +486,7 @@ impl DrawerController {
     #[must_use]
     pub fn on_open_changed<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
         self.on_open_changed = Some(crate::event_callback::value_callback(callback));

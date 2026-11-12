@@ -216,12 +216,12 @@ impl RawTextField {
         self
     }
 
-    /// Call `callback` with the dispatch's `&mut EventCx<'_>` and the new
+    /// Call `callback` with the dispatch's `&mut EventContext<'_>` and the new
     /// text after each user edit. Forwards to [`EditableText::on_changed`].
     #[must_use]
     pub fn on_changed<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &str) -> R + 'static,
         R: EventOutcome,
     {
         self.on_changed = Some(ref_callback(callback));
@@ -239,11 +239,11 @@ impl RawTextField {
     /// while it has focus. Forwards to [`EditableText::on_submitted`] — see
     /// that method's doc for exactly when it fires. Added for symmetry with
     /// `flui_material::TextField::on_submitted`, which forwards the same
-    /// way. The callback receives the dispatch's `&mut EventCx<'_>` first.
+    /// way. The callback receives the dispatch's `&mut EventContext<'_>` first.
     #[must_use]
     pub fn on_submitted<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &str) -> R + 'static,
         R: EventOutcome,
     {
         self.on_submitted = Some(ref_callback(callback));

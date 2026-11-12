@@ -137,7 +137,7 @@ impl std::fmt::Debug for CupertinoTabBarItem {
 
 /// A user tap handler over a tab's index. `Rc`-based (owner-local, per
 /// ADR-0027) — matches `GestureDetector::on_tap`'s own callback shape.
-type TabTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, usize)>;
+type TabTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, usize)>;
 
 /// An iOS-style bottom tab bar — see the module docs for exactly what is and
 /// is not supported.
@@ -208,7 +208,7 @@ impl CupertinoTabBar {
     #[must_use]
     pub fn on_tap<R: flui_sdk::view::EventOutcome>(
         mut self,
-        on_tap: impl Fn(&mut flui_sdk::view::EventCx<'_>, usize) -> R + 'static,
+        on_tap: impl Fn(&mut flui_sdk::view::EventContext<'_>, usize) -> R + 'static,
     ) -> Self {
         self.on_tap = Some(Rc::new(move |ctx, index| on_tap(ctx, index).report()));
         self

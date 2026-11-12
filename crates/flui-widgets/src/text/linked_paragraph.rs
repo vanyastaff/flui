@@ -1,4 +1,4 @@
-﻿//! A paragraph whose links a handler activates.
+//! A paragraph whose links a handler activates.
 //!
 //! Each link gets a tap recognizer of its own, built against the enclosing
 //! arena scope, so two contacts on two links recognize independently and a
@@ -44,7 +44,7 @@ use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionHandler};
 use flui_view::element::ElementKind;
 use flui_view::{
-    BuildContext, EventCx, IntoView, LifecycleContext, RebuildHandle, RebuildReason,
+    BuildContext, EventContext, IntoView, LifecycleContext, RebuildHandle, RebuildReason,
     RenderObjectContext, RenderObjectContextError, StatefulView, StatelessView, View, ViewExt,
     ViewState, WriterSource,
 };
@@ -72,7 +72,7 @@ struct LiveLinks {
 impl LiveLinks {
     /// Run the handler for `link` inside `ctx`, with no borrow held while it
     /// runs.
-    fn open(&self, ctx: &mut EventCx<'_>, link: &TextLink) {
+    fn open(&self, ctx: &mut EventContext<'_>, link: &TextLink) {
         if !self.mounted.get() {
             return;
         }
@@ -511,7 +511,7 @@ struct OpenLink {
 }
 
 impl Action<ActivateLinkIntent> for OpenLink {
-    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &ActivateLinkIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventContext<'_>, _intent: &ActivateLinkIntent) -> ActionOutcome {
         self.live.open(ctx, &self.link);
         ActionOutcome::Performed
     }
@@ -528,7 +528,7 @@ impl Action<ActivateIntent> for DeclineActivation {
         false
     }
 
-    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &ActivateIntent) -> ActionOutcome {
         ActionOutcome::NotPerformed
     }
 }
@@ -538,7 +538,11 @@ impl Action<ActivationPressIntent> for DeclineActivation {
         false
     }
 
-    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+    fn invoke(
+        &self,
+        _ctx: &mut EventContext<'_>,
+        _intent: &ActivationPressIntent,
+    ) -> ActionOutcome {
         ActionOutcome::NotPerformed
     }
 }

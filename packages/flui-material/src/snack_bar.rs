@@ -183,7 +183,7 @@ impl std::fmt::Debug for SnackBar {
 #[derive(Clone, StatefulView)]
 pub struct SnackBarAction {
     label: String,
-    on_pressed: std::rc::Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>,
+    on_pressed: std::rc::Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>,
 }
 
 impl SnackBarAction {
@@ -192,7 +192,7 @@ impl SnackBarAction {
     #[must_use]
     pub fn new<F, R>(label: impl Into<String>, on_pressed: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         Self {

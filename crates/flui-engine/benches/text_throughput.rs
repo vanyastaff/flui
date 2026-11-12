@@ -79,10 +79,10 @@ fn row_text(row: usize, salt: usize) -> String {
     )
 }
 
-fn shape(text_cx: &mut TextContext, text: &str) -> Arc<ShapedParagraph> {
+fn shape(text_ctx: &mut TextContext, text: &str) -> Arc<ShapedParagraph> {
     let spans = [(text.to_owned(), None)];
     Arc::new(
-        text_cx
+        text_ctx
             .shape(&ParagraphSpec {
                 font_weight_adjustment: 0,
                 spans: &spans,
@@ -181,9 +181,9 @@ fn text_throughput(c: &mut Criterion) {
         (WIDTH, HEIGHT),
     );
 
-    let mut text_cx = TextContext::new(&FontCollection::new());
+    let mut text_ctx = TextContext::new(&FontCollection::new());
     let steady: Vec<Arc<ShapedParagraph>> = (0..ROWS)
-        .map(|row| shape(&mut text_cx, &row_text(row, 0)))
+        .map(|row| shape(&mut text_ctx, &row_text(row, 0)))
         .collect();
     let glyphs = glyph_count(&steady);
 
@@ -211,7 +211,7 @@ fn text_throughput(c: &mut Criterion) {
             || {
                 salt += 1;
                 (0..ROWS)
-                    .map(|row| shape(&mut text_cx, &row_text(row, salt * 131 + row)))
+                    .map(|row| shape(&mut text_ctx, &row_text(row, salt * 131 + row)))
                     .collect::<Vec<_>>()
             },
             |layouts| {

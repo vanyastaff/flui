@@ -32,7 +32,7 @@ use flui_platform::keyboard::{
 };
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_view::{EventCx, EventOutcome};
+use flui_view::{EventContext, EventOutcome};
 
 use super::actions::{
     Actions, ActivateIntent, ActivationPressIntent, BackIntent, CopySelectionTextIntent,
@@ -44,8 +44,8 @@ use super::focus::Focus;
 use crate::support::{command_modifiers, event_callback};
 
 /// A callback bound to a [`SingleActivator`] in [`CallbackShortcuts`]: it
-/// receives the key event's [`EventCx`] (ADR-0086).
-pub type ShortcutCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
+/// receives the key event's [`EventContext`] (ADR-0086).
+pub type ShortcutCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 
 // ============================================================================
 // SingleActivator
@@ -359,7 +359,7 @@ impl CallbackShortcuts {
     #[must_use]
     pub fn binding<F, R>(mut self, activator: SingleActivator, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
         self.bindings.push((activator, event_callback(callback)));

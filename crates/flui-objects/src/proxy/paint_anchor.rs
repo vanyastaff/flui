@@ -5,7 +5,7 @@
 //! coordinates and cannot walk up to an ancestor. A node that has to agree
 //! with its relatives on one coordinate space — every skeleton under a
 //! shimmer drawing the same band — reads its offset from the nearest anchor
-//! through `PaintCx::paint_anchor`, which the paint walk accumulates across
+//! through `PaintContext::paint_anchor`, which the paint walk accumulates across
 //! inline children and repaint boundaries alike.
 //!
 //! The anchor is also a repaint boundary: whatever animates against it
@@ -16,7 +16,7 @@ use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -66,7 +66,7 @@ impl RenderBox for RenderPaintAnchor {
         }
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 

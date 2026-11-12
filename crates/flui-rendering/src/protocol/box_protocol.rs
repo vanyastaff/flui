@@ -12,7 +12,7 @@ use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
     parent_data::{BoxParentData, ParentData},
-    pipeline::{TextCx, TextSource, lend_text},
+    pipeline::{TextContextMut, TextSource, lend_text},
     protocol::{
         capabilities::{HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi},
         protocol::{Protocol, sealed},
@@ -23,7 +23,7 @@ use crate::{
 // CHILD STATE
 // ============================================================================
 //
-// Per-child layout-time bookkeeping owned by `BoxLayoutCtx`. Earlier
+// Per-child layout-time bookkeeping owned by `RawBoxLayoutContext`. Earlier
 // companions — a closure-based iterator (`ChildrenAccess`) and a
 // `ChildHandle` wrapper — fought the borrow checker for users that
 // never appeared, so they were deleted outright.
@@ -31,7 +31,7 @@ use crate::{
 // `BoxLayoutContextApi::layout_child` / `position_child` /
 // `child_geometry` / `child_parent_data` need.
 
-/// Per-child layout-time state held by [`BoxLayoutCtx`].
+/// Per-child layout-time state held by [`RawBoxLayoutContext`].
 ///
 /// Created by the pipeline before invoking a parent's `perform_layout`,
 /// mutated through `BoxLayoutContextApi::layout_child` /
@@ -103,7 +103,7 @@ impl Protocol for BoxProtocol {
     type DefaultParentData = BoxParentData;
 
     // Protocol-layout-erasure — sanctioned erased layout-context boundary
-    type LayoutCtxErased<'ctx> = dyn BoxLayoutCtxErased + 'ctx;
+    type ErasedLayoutContext<'ctx> = dyn ErasedBoxLayoutContext + 'ctx;
 
     type LayoutCache = crate::storage::BoxLayoutCache;
 
@@ -183,14 +183,14 @@ impl Protocol for BoxProtocol {
     }
 
     /// Wraps the given `BoxConstraints` in a typed
-    /// `BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints, text)` (no
+    /// `RawBoxLayoutContext::<Leaf, BoxParentData>::new(constraints, text)` (no
     /// children, no callback) and hands an erased `&mut dyn
-    /// BoxLayoutCtxErased` view to `f`.
+    /// ErasedBoxLayoutContext` view to `f`.
     ///
     /// `Leaf` arity is used for the typed wrapper because this entry
     /// point does not expose children — calls to `layout_child` /
     /// `position_child` through the erased view will hit the
-    /// `BoxLayoutCtxErased` blanket on `BoxLayoutCtx`, which forwards to
+    /// `ErasedBoxLayoutContext` blanket on `RawBoxLayoutContext`, which forwards to
     /// `LayoutContextApi` whose `Leaf`-arity body returns `Size::ZERO` /
     /// no-op (the existing semantics for a no-children context).
     ///
@@ -200,12 +200,12 @@ impl Protocol for BoxProtocol {
     fn with_leaf_erased_ctx<R>(
         constraints: BoxConstraints,
         text: TextSource<'_>,
-        f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
+        f: impl FnOnce(&mut Self::ErasedLayoutContext<'_>) -> R,
     ) -> R {
         let mut typed =
-            BoxLayoutCtx::<flui_foundation::Leaf, BoxParentData>::new(constraints, text);
+            RawBoxLayoutContext::<flui_foundation::Leaf, BoxParentData>::new(constraints, text);
         // Protocol-layout-erasure — sanctioned erased layout-context boundary
-        let erased: &mut dyn BoxLayoutCtxErased = &mut typed;
+        let erased: &mut dyn ErasedBoxLayoutContext = &mut typed;
         f(erased)
     }
 }
@@ -265,7 +265,7 @@ impl LayoutCapability for BoxLayout {
     type Geometry = Size;
     type CacheKey = BoxConstraintsCacheKey;
     type Context<'ctx, A: Arity, P: ParentData + Default>
-        = BoxLayoutCtx<'ctx, A, P>
+        = RawBoxLayoutContext<'ctx, A, P>
     where
         Self: 'ctx;
 
@@ -384,8 +384,8 @@ pub type BoxChildIntrinsicCallback<'a> = &'a dyn Fn(
 /// from an erased context.
 ///
 /// When the `RenderBox`
-/// blanket impl constructs a `BoxLayoutCtx::from_erased(...)` Proxy view
-/// of an `&mut dyn BoxLayoutCtxErased`, the typed wrapper needs to honour
+/// blanket impl constructs a `RawBoxLayoutContext::from_erased(...)` Proxy view
+/// of an `&mut dyn ErasedBoxLayoutContext`, the typed wrapper needs to honour
 /// the [`LayoutContextApi::child_geometry`] contract
 /// (`Option<&Size>` — borrow-returning). The erased trait can only hand
 /// out owned `Size` (no reference lifetime to bind to). The Proxy
@@ -423,34 +423,34 @@ type ProxyChildSizeCache = Vec<Option<Size>>;
 ///    used by `RenderEntry::layout_leaf_only` (leaf shape) and
 ///    `layout_dirty_root` (parent+children disjoint-borrow shape).
 /// 2. `Proxy` (constructor `from_erased`): wraps `&mut dyn
-///    BoxLayoutCtxErased` so the `RenderObject<BoxProtocol>` blanket
+///    ErasedBoxLayoutContext` so the `RenderObject<BoxProtocol>` blanket
 ///    impl can reconstruct a typed
-///    `BoxLayoutCtx<T::Arity, T::ParentData>` to hand to
+///    `RawBoxLayoutContext<T::Arity, T::ParentData>` to hand to
 ///    `RenderBox::perform_layout`. Child operations delegate through
 ///    the erased trait; typed parent-data access downcasts via
 ///    [`ParentData`].
-pub struct BoxLayoutCtx<'ctx, A: Arity, P: ParentData + Default> {
-    storage: BoxLayoutCtxStorage<'ctx, P>,
+pub struct RawBoxLayoutContext<'ctx, A: Arity, P: ParentData + Default> {
+    storage: BoxLayoutContextStorage<'ctx, P>,
     _phantom: std::marker::PhantomData<A>,
 }
 
-impl<A: Arity, P: ParentData + Default> std::fmt::Debug for BoxLayoutCtx<'_, A, P> {
+impl<A: Arity, P: ParentData + Default> std::fmt::Debug for RawBoxLayoutContext<'_, A, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Storage holds live driver callbacks / an erased pipeline context;
         // report the storage mode and the (Copy) constraints only.
         let (mode, constraints) = match &self.storage {
-            BoxLayoutCtxStorage::Direct { constraints, .. } => ("Direct", constraints),
-            BoxLayoutCtxStorage::Proxy { constraints, .. } => ("Proxy", constraints),
+            BoxLayoutContextStorage::Direct { constraints, .. } => ("Direct", constraints),
+            BoxLayoutContextStorage::Proxy { constraints, .. } => ("Proxy", constraints),
         };
-        f.debug_struct("BoxLayoutCtx")
+        f.debug_struct("RawBoxLayoutContext")
             .field("storage", &mode)
             .field("constraints", constraints)
             .finish_non_exhaustive()
     }
 }
 
-/// Internal storage variants. See [`BoxLayoutCtx`] doc.
-enum BoxLayoutCtxStorage<'ctx, P: ParentData + Default> {
+/// Internal storage variants. See [`RawBoxLayoutContext`] doc.
+enum BoxLayoutContextStorage<'ctx, P: ParentData + Default> {
     /// Production / pipeline path: owns child state and an optional
     /// synchronous layout callback.
     Direct {
@@ -480,13 +480,13 @@ enum BoxLayoutCtxStorage<'ctx, P: ParentData + Default> {
         /// `erased.layout_child(idx, c)` — see [`ProxyChildSizeCache`].
         child_sizes: ProxyChildSizeCache,
         /// The underlying erased context (typically a pipeline-side
-        /// `BoxLayoutCtx` in Direct mode).
+        /// `RawBoxLayoutContext` in Direct mode).
         // Protocol-layout-erasure — sanctioned erased layout-context boundary
-        erased: &'ctx mut dyn BoxLayoutCtxErased,
+        erased: &'ctx mut dyn ErasedBoxLayoutContext,
     },
 }
 
-impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
+impl<'ctx, A: Arity, P: ParentData + Default> RawBoxLayoutContext<'ctx, A, P> {
     /// Creates a new box layout context with given constraints (no children
     /// access), measuring text through `text`. Direct storage.
     ///
@@ -494,7 +494,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// hooks receive the complete context rather than an extractable source.
     pub fn new(constraints: BoxConstraints, text: TextSource<'ctx>) -> Self {
         Self {
-            storage: BoxLayoutCtxStorage::Direct {
+            storage: BoxLayoutContextStorage::Direct {
                 constraints,
                 children: None,
                 child_ids: None,
@@ -515,7 +515,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         text: TextSource<'ctx>,
     ) -> Self {
         Self {
-            storage: BoxLayoutCtxStorage::Direct {
+            storage: BoxLayoutContextStorage::Direct {
                 constraints,
                 children: Some(children),
                 child_ids: None,
@@ -542,7 +542,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         text: TextSource<'ctx>,
     ) -> Self {
         Self {
-            storage: BoxLayoutCtxStorage::Direct {
+            storage: BoxLayoutContextStorage::Direct {
                 constraints,
                 children: Some(children),
                 child_ids: Some(child_ids),
@@ -553,12 +553,12 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         }
     }
 
-    /// Constructs a Proxy-mode `BoxLayoutCtx`
+    /// Constructs a Proxy-mode `RawBoxLayoutContext`
     /// that delegates child operations to the given erased context. Used by
     /// the `RenderObject<BoxProtocol>` blanket impl in
     /// [`crate::traits::RenderBox`] to hand a typed
-    /// `&mut BoxLayoutCtx<T::Arity, T::ParentData>` to
-    /// `RenderBox::perform_layout`, given only `&mut dyn BoxLayoutCtxErased`
+    /// `&mut RawBoxLayoutContext<T::Arity, T::ParentData>` to
+    /// `RenderBox::perform_layout`, given only `&mut dyn ErasedBoxLayoutContext`
     /// at the trait boundary.
     ///
     /// Constraints are eagerly cached from `erased.constraints()` (cheap —
@@ -574,9 +574,9 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// see the erased context; restricting the ctor prevents downstream
     /// code from constructing Proxy contexts (a sharp tool that requires
     /// the parent_data-downcast invariants and Direct↔Proxy semantic
-    /// awareness documented on [`BoxLayoutCtxErased`]).
+    /// awareness documented on [`ErasedBoxLayoutContext`]).
     // Protocol-layout-erasure — sanctioned erased layout-context boundary
-    pub(crate) fn from_erased(erased: &'ctx mut dyn BoxLayoutCtxErased) -> Self {
+    pub(crate) fn from_erased(erased: &'ctx mut dyn ErasedBoxLayoutContext) -> Self {
         let constraints = erased.constraints();
         // Review fix #2: assert at construction time that the typed
         // wrapper P matches the underlying Direct ctx's P. The Proxy
@@ -593,7 +593,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
                 Some(id) => id == std::any::TypeId::of::<P>(),
                 None => true,
             },
-            "BoxLayoutCtx::from_erased: ParentData type mismatch — \
+            "RawBoxLayoutContext::from_erased: ParentData type mismatch — \
              underlying erased ctx reports TypeId={:?}, typed wrapper \
              requested {:?} ({})",
             erased.parent_data_type_id(),
@@ -607,7 +607,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         // (sparse + hashing on the hot path).
         let child_count = erased.child_count();
         Self {
-            storage: BoxLayoutCtxStorage::Proxy {
+            storage: BoxLayoutContextStorage::Proxy {
                 constraints,
                 child_sizes: vec![None; child_count],
                 erased,
@@ -617,14 +617,14 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     }
 
     /// The text context to measure with: the UI runtime's, lent through the
-    /// pipeline, for as long as the returned [`TextCx`] lives.
+    /// pipeline, for as long as the returned [`TextContextMut`] lives.
     ///
     /// # Errors
     ///
     /// Returns [`crate::error::RenderError::TextContextBusy`] when another
     /// independently owned context already holds the shared text resource.
-    pub fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>> {
-        BoxLayoutCtxErased::text(self)
+    pub fn text(&mut self) -> crate::error::RenderResult<TextContextMut<'_>> {
+        ErasedBoxLayoutContext::text(self)
     }
 
     /// Distance from the top of child `index` to its first baseline of
@@ -635,8 +635,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         baseline: crate::traits::TextBaseline,
     ) -> crate::error::RenderResult<Option<f64>> {
         match &self.storage {
-            BoxLayoutCtxStorage::Direct { .. } => Ok(None),
-            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+            BoxLayoutContextStorage::Direct { .. } => Ok(None),
+            BoxLayoutContextStorage::Proxy { erased, .. } => {
                 erased.child_distance_to_actual_baseline(index, baseline)
             }
         }
@@ -644,21 +644,21 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
 }
 
 impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, A, P>
-    for BoxLayoutCtx<'ctx, A, P>
+    for RawBoxLayoutContext<'ctx, A, P>
 {
     fn constraints(&self) -> &BoxConstraints {
         match &self.storage {
-            BoxLayoutCtxStorage::Direct { constraints, .. }
-            | BoxLayoutCtxStorage::Proxy { constraints, .. } => constraints,
+            BoxLayoutContextStorage::Direct { constraints, .. }
+            | BoxLayoutContextStorage::Proxy { constraints, .. } => constraints,
         }
     }
 
     fn child_count(&self) -> usize {
         match &self.storage {
-            BoxLayoutCtxStorage::Direct { children, .. } => {
+            BoxLayoutContextStorage::Direct { children, .. } => {
                 children.as_ref().map_or(0, |c| c.len())
             }
-            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.child_count(),
+            BoxLayoutContextStorage::Proxy { erased, .. } => erased.child_count(),
         }
     }
 
@@ -668,7 +668,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<Size> {
         match &mut self.storage {
-            BoxLayoutCtxStorage::Direct {
+            BoxLayoutContextStorage::Direct {
                 children,
                 child_ids,
                 layout_child_callback,
@@ -701,7 +701,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
                 }
                 Ok(Size::ZERO)
             }
-            BoxLayoutCtxStorage::Proxy {
+            BoxLayoutContextStorage::Proxy {
                 erased,
                 child_sizes,
                 ..
@@ -724,7 +724,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 
     fn position_child(&mut self, index: usize, offset: Offset) {
         match &mut self.storage {
-            BoxLayoutCtxStorage::Direct { children, .. } => {
+            BoxLayoutContextStorage::Direct { children, .. } => {
                 if let Some(children) = children.as_mut()
                     && let Some(child) = children.get_mut(index)
                 {
@@ -732,7 +732,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
                     child.offset = offset;
                 }
             }
-            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+            BoxLayoutContextStorage::Proxy { erased, .. } => {
                 erased.position_child(index, offset);
             }
         }
@@ -740,11 +740,11 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 
     fn child_geometry(&self, index: usize) -> Option<&Size> {
         match &self.storage {
-            BoxLayoutCtxStorage::Direct { children, .. } => children
+            BoxLayoutContextStorage::Direct { children, .. } => children
                 .as_ref()
                 .and_then(|c| c.get(index))
                 .map(|child| &child.size),
-            BoxLayoutCtxStorage::Proxy { child_sizes, .. } => {
+            BoxLayoutContextStorage::Proxy { child_sizes, .. } => {
                 // Indexed access — out-of-range returns None (consistent
                 // with Direct's `children.get(index).map(...)`); in-range
                 // unfilled slot (Some(None)) also returns None.
@@ -755,11 +755,11 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 
     fn child_parent_data(&self, index: usize) -> Option<&P> {
         match &self.storage {
-            BoxLayoutCtxStorage::Direct { children, .. } => children
+            BoxLayoutContextStorage::Direct { children, .. } => children
                 .as_ref()
                 .and_then(|c| c.get(index))
                 .map(|child| &child.parent_data),
-            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+            BoxLayoutContextStorage::Proxy { erased, .. } => {
                 // P: ParentData : DowncastSync : 'static, so downcast is sound.
                 erased
                     .child_parent_data_dyn(index)
@@ -770,11 +770,11 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 
     fn child_parent_data_mut(&mut self, index: usize) -> Option<&mut P> {
         match &mut self.storage {
-            BoxLayoutCtxStorage::Direct { children, .. } => children
+            BoxLayoutContextStorage::Direct { children, .. } => children
                 .as_mut()
                 .and_then(|c| c.get_mut(index))
                 .map(|child| &mut child.parent_data),
-            BoxLayoutCtxStorage::Proxy { erased, .. } => erased
+            BoxLayoutContextStorage::Proxy { erased, .. } => erased
                 // Lazily create the slot with THIS parent's type — the
                 // erased driver storage holds Option<Box<dyn ParentData>>
                 // and cannot name P (one-downcast rule).
@@ -799,18 +799,18 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 ///
 /// Before this trait existed, the blanket impl `impl<T: RenderBox> RenderObject<BoxProtocol> for T`
 /// could not bridge to the user's typed `RenderBox::perform_layout(ctx:
-/// &mut BoxLayoutCtx<Self::Arity, Self::ParentData>)` because the trait
+/// &mut RawBoxLayoutContext<Self::Arity, Self::ParentData>)` because the trait
 /// surface only carried protocol-typed constraints (no children, no
 /// layout-callback). As a consequence, the blanket `perform_layout_raw`
 /// shipped as a no-op returning the cached `*self.size()`, which
 /// concretely showed `Size::ZERO` for fresh boxes.
 ///
-/// `BoxLayoutCtxErased` is the trait-object-friendly wrapper: the pipeline / [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
-/// constructs a typed [`BoxLayoutCtx<'_, A, P>`], the trait blanket impl
-/// below coerces it to `&mut dyn BoxLayoutCtxErased`, and the
+/// `ErasedBoxLayoutContext` is the trait-object-friendly wrapper: the pipeline / [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
+/// constructs a typed [`RawBoxLayoutContext<'_, A, P>`], the trait blanket impl
+/// below coerces it to `&mut dyn ErasedBoxLayoutContext`, and the
 /// `RenderObject<BoxProtocol>` blanket impl in
 /// [`crate::traits::RenderBox`] reconstructs a typed
-/// `BoxLayoutCtx<T::Arity, T::ParentData>` via a `Proxy` storage variant
+/// `RawBoxLayoutContext<T::Arity, T::ParentData>` via a `Proxy` storage variant
 /// that delegates all child / position / parent-data operations back
 /// through this trait.
 ///
@@ -820,14 +820,14 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 /// `&dyn ParentData`. The blanket impl's `Proxy` view then `downcast_ref::<T::ParentData>()`s
 /// to recover the typed payload required by user widget code
 /// (`ctx.child_parent_data(i) -> Option<&FlexParentData>` and similar).
-/// The downcast is total in practice because the typed BoxLayoutCtx that
+/// The downcast is total in practice because the typed RawBoxLayoutContext that
 /// produced the erased view was constructed with `Vec<ChildState<P>>`
 /// matching the same P; a mismatch indicates a bug at the construction
 /// site (pipeline / blanket-impl logic error, not user code).
 ///
 /// # Sliver counterpart
 ///
-/// [`SliverLayoutCtxErased`](super::sliver_protocol::SliverLayoutCtxErased) is the
+/// [`ErasedSliverLayoutContext`](super::sliver_protocol::ErasedSliverLayoutContext) is the
 /// analogous trait for sliver layout. The sliver bridge is currently
 /// stubbed — see [`crate::traits::RenderSliver`].
 ///
@@ -836,9 +836,9 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 /// No longer `Send + Sync`-bound: the render tree this context walks is
 /// owned by exactly one `PipelineOwner` on exactly one thread, so
 /// `LayoutContextApi` (whose `Proxy` storage carries `&mut dyn
-/// BoxLayoutCtxErased`) dropped its own `Send + Sync` supertrait
+/// ErasedBoxLayoutContext`) dropped its own `Send + Sync` supertrait
 /// requirement along with it.
-pub trait BoxLayoutCtxErased {
+pub trait ErasedBoxLayoutContext {
     /// Box constraints from parent. Cheap copy (`BoxConstraints` is `Copy`).
     fn constraints(&self) -> BoxConstraints;
 
@@ -846,7 +846,7 @@ pub trait BoxLayoutCtxErased {
     /// The loan borrows this mutable capability, preventing child queries
     /// through it until the loan ends. Independently held resource aliases
     /// return [`crate::error::RenderError::TextContextBusy`].
-    fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>>;
+    fn text(&mut self) -> crate::error::RenderResult<TextContextMut<'_>>;
 
     /// Number of children visible to this context.
     fn child_count(&self) -> usize;
@@ -959,20 +959,20 @@ pub trait BoxLayoutCtxErased {
     /// context, when known.
     ///
     /// Returns `Some(TypeId::of::<P>())` for the blanket impl on
-    /// `BoxLayoutCtx<A, P>` when the context was constructed with
+    /// `RawBoxLayoutContext<A, P>` when the context was constructed with
     /// children access (and therefore the `P` type is observable as
     /// type-of-the-stored-Vec). Returns `None` for children-less Direct
     /// contexts (P is still in the type parameter but no concrete
     /// payload exists) and for Proxy contexts (which delegate to the
     /// underlying erased ctx).
     ///
-    /// **Use:** the in-crate `BoxLayoutCtx::from_erased` ctor consults
+    /// **Use:** the in-crate `RawBoxLayoutContext::from_erased` ctor consults
     /// this to `debug_assert!` that the typed wrapper it is about to
     /// construct matches the underlying P — a mismatch indicates a
     /// pipeline / blanket-impl construction bug (a Direct ctx built
     /// with `Vec<ChildState<FlexParentData>>` would only be bridged
-    /// to a typed `BoxLayoutCtx<_, FlexParentData>`, never to a
-    /// `BoxLayoutCtx<_, BoxParentData>`). The default return is `None`
+    /// to a typed `RawBoxLayoutContext<_, FlexParentData>`, never to a
+    /// `RawBoxLayoutContext<_, BoxParentData>`). The default return is `None`
     /// so the debug_assert is a no-op for Proxy / no-children paths,
     /// which is correct: those carry no static evidence to check.
     ///
@@ -1004,12 +1004,12 @@ pub trait BoxLayoutCtxErased {
     }
 }
 
-impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, A, P> {
+impl<A: Arity, P: ParentData + Default> ErasedBoxLayoutContext for RawBoxLayoutContext<'_, A, P> {
     #[inline]
-    fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>> {
+    fn text(&mut self) -> crate::error::RenderResult<TextContextMut<'_>> {
         match &mut self.storage {
-            BoxLayoutCtxStorage::Direct { text, .. } => lend_text(*text),
-            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.text(),
+            BoxLayoutContextStorage::Direct { text, .. } => lend_text(*text),
+            BoxLayoutContextStorage::Proxy { erased, .. } => erased.text(),
         }
     }
 
@@ -1017,8 +1017,8 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
     fn descendant_layout_degraded(&self) -> bool {
         match &self.storage {
             // A direct context runs no walk, so nothing can have degraded.
-            BoxLayoutCtxStorage::Direct { .. } => false,
-            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.descendant_layout_degraded(),
+            BoxLayoutContextStorage::Direct { .. } => false,
+            BoxLayoutContextStorage::Proxy { erased, .. } => erased.descendant_layout_degraded(),
         }
     }
 
@@ -1050,15 +1050,15 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
         index: usize,
         constraints: SliverConstraints,
     ) -> crate::error::RenderResult<SliverGeometry> {
-        // Direct-storage `BoxLayoutCtx` does not carry a sliver callback
+        // Direct-storage `RawBoxLayoutContext` does not carry a sliver callback
         // (it is used by leaf-only paths and unit tests that never wire
         // cross-protocol layout). Return `ZERO` — the same conservative
         // fallback as `layout_child` returning `Size::ZERO` on the
         // no-callback Direct path. Proxy storage delegates to the
         // underlying erased ctx which IS wired by the pipeline.
         match &mut self.storage {
-            BoxLayoutCtxStorage::Direct { .. } => Ok(SliverGeometry::ZERO),
-            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+            BoxLayoutContextStorage::Direct { .. } => Ok(SliverGeometry::ZERO),
+            BoxLayoutContextStorage::Proxy { erased, .. } => {
                 erased.layout_sliver_child(index, constraints)
             }
         }
@@ -1070,24 +1070,28 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
         index: usize,
     ) -> Option<(SliverConstraints, SliverGeometry)> {
         match &self.storage {
-            BoxLayoutCtxStorage::Direct { .. } => None,
-            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.cached_sliver_child_layout(index),
+            BoxLayoutContextStorage::Direct { .. } => None,
+            BoxLayoutContextStorage::Proxy { erased, .. } => {
+                erased.cached_sliver_child_layout(index)
+            }
         }
     }
 
     #[inline]
     fn sliver_child_needs_layout(&self, index: usize) -> bool {
         match &self.storage {
-            BoxLayoutCtxStorage::Direct { .. } => true,
-            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.sliver_child_needs_layout(index),
+            BoxLayoutContextStorage::Direct { .. } => true,
+            BoxLayoutContextStorage::Proxy { erased, .. } => {
+                erased.sliver_child_needs_layout(index)
+            }
         }
     }
 
     #[inline]
     fn sliver_child_geometry_degraded(&self, index: usize) -> bool {
         match &self.storage {
-            BoxLayoutCtxStorage::Direct { .. } => false,
-            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+            BoxLayoutContextStorage::Direct { .. } => false,
+            BoxLayoutContextStorage::Proxy { erased, .. } => {
                 erased.sliver_child_geometry_degraded(index)
             }
         }
@@ -1105,8 +1109,8 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
         baseline: crate::traits::TextBaseline,
     ) -> crate::error::RenderResult<Option<f64>> {
         match &self.storage {
-            BoxLayoutCtxStorage::Direct { .. } => Ok(None),
-            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+            BoxLayoutContextStorage::Direct { .. } => Ok(None),
+            BoxLayoutContextStorage::Proxy { erased, .. } => {
                 erased.child_distance_to_actual_baseline(index, baseline)
             }
         }
@@ -1117,22 +1121,24 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
         // Storage-aware: Direct returns own children's parent_data;
         // Proxy delegates back through the underlying erased ctx.
         match &self.storage {
-            BoxLayoutCtxStorage::Direct { children, .. } => children
+            BoxLayoutContextStorage::Direct { children, .. } => children
                 .as_ref()
                 .and_then(|c| c.get(index))
                 .map(|child| &child.parent_data as &dyn ParentData),
-            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.child_parent_data_dyn(index),
+            BoxLayoutContextStorage::Proxy { erased, .. } => erased.child_parent_data_dyn(index),
         }
     }
 
     #[inline]
     fn child_parent_data_dyn_mut(&mut self, index: usize) -> Option<&mut dyn ParentData> {
         match &mut self.storage {
-            BoxLayoutCtxStorage::Direct { children, .. } => children
+            BoxLayoutContextStorage::Direct { children, .. } => children
                 .as_mut()
                 .and_then(|c| c.get_mut(index))
                 .map(|child| &mut child.parent_data as &mut dyn ParentData),
-            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.child_parent_data_dyn_mut(index),
+            BoxLayoutContextStorage::Proxy { erased, .. } => {
+                erased.child_parent_data_dyn_mut(index)
+            }
         }
     }
 
@@ -1147,11 +1153,11 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
         // Direct ctx with the same P (the from_erased site is the only
         // construction path), so the extra plumbing buys nothing.
         match &self.storage {
-            BoxLayoutCtxStorage::Direct {
+            BoxLayoutContextStorage::Direct {
                 children: Some(_), ..
             } => Some(std::any::TypeId::of::<P>()),
-            BoxLayoutCtxStorage::Direct { children: None, .. }
-            | BoxLayoutCtxStorage::Proxy { .. } => None,
+            BoxLayoutContextStorage::Direct { children: None, .. }
+            | BoxLayoutContextStorage::Proxy { .. } => None,
         }
     }
 
@@ -1165,10 +1171,10 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
         match &mut self.storage {
             // Direct-storage contexts have no intrinsics callback; return the
             // same conservative 0.0 that the default trait body produces.
-            BoxLayoutCtxStorage::Direct { .. } => Ok(0.0),
-            // Proxy delegates to the pipeline-wired ErasedBoxLayoutCtx, which
+            BoxLayoutContextStorage::Direct { .. } => Ok(0.0),
+            // Proxy delegates to the pipeline-wired DriverBoxLayoutContext, which
             // holds the `BoxChildIntrinsicCallback` set by `layout_dirty_root`.
-            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+            BoxLayoutContextStorage::Proxy { erased, .. } => {
                 erased.child_intrinsic(index, dimension, extent)
             }
         }
@@ -1186,7 +1192,7 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
 /// `dyn RenderObject` nodes), so the slot is `Option<Box<dyn
 /// ParentData>>`, lazily created by the typed blanket bridge with
 /// `T::ParentData::default()` on first mutable access
-/// ([`BoxLayoutCtxErased::child_parent_data_dyn_or_insert`]). This is
+/// ([`ErasedBoxLayoutContext::child_parent_data_dyn_or_insert`]). This is
 /// what lifts the former `ChildState<BoxParentData>` hardcode that
 /// made every non-`BoxParentData` parent (Flex, Stack) panic in
 /// production layout.
@@ -1275,13 +1281,13 @@ impl<'ctx> DegradationProbe<'ctx> {
 }
 
 /// Driver-native, parent-data-erased implementation of
-/// [`BoxLayoutCtxErased`] — the production layout walk's context.
+/// [`ErasedBoxLayoutContext`] — the production layout walk's context.
 ///
-/// Mirrors the Direct `BoxLayoutCtx` shape (children slice, child
+/// Mirrors the Direct `RawBoxLayoutContext` shape (children slice, child
 /// ids, synchronous layout callback) minus the `P` parameter; the
 /// typed view is reconstructed per node by the blanket bridge's
 /// `from_erased` with the node's OWN `Arity` and `ParentData`.
-pub struct ErasedBoxLayoutCtx<'ctx> {
+pub struct DriverBoxLayoutContext<'ctx> {
     constraints: BoxConstraints,
     /// See [`DegradationProbe`]: how this context learns of a degraded
     /// descendant. `None` in contexts the production walk did not build.
@@ -1312,11 +1318,11 @@ pub struct ErasedBoxLayoutCtx<'ctx> {
     text: TextSource<'ctx>,
 }
 
-impl std::fmt::Debug for ErasedBoxLayoutCtx<'_> {
+impl std::fmt::Debug for DriverBoxLayoutContext<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The layout / baseline / intrinsic callbacks are live driver
         // closures over the slot map; report constraints and child state.
-        f.debug_struct("ErasedBoxLayoutCtx")
+        f.debug_struct("DriverBoxLayoutContext")
             .field("constraints", &self.constraints)
             .field("children", &self.children)
             .field("child_ids", &self.child_ids)
@@ -1324,7 +1330,7 @@ impl std::fmt::Debug for ErasedBoxLayoutCtx<'_> {
     }
 }
 
-impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
+impl<'ctx> DriverBoxLayoutContext<'ctx> {
     /// Creates the walk-side context over pre-built child slots.
     ///
     /// `sliver_layout_child_callback` is `None` when the parent is known
@@ -1363,12 +1369,12 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
     }
 }
 
-impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
+impl ErasedBoxLayoutContext for DriverBoxLayoutContext<'_> {
     fn constraints(&self) -> BoxConstraints {
         self.constraints
     }
 
-    fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>> {
+    fn text(&mut self) -> crate::error::RenderResult<TextContextMut<'_>> {
         lend_text(self.text)
     }
 
@@ -1516,7 +1522,7 @@ impl HitTestCapability for BoxHitTest {
     type Result = BoxHitTestResult;
     type Entry = BoxHitTestEntry;
     type Context<'ctx, A: Arity, P: ParentData>
-        = BoxHitTestCtx<'ctx, A, P>
+        = RawBoxHitTestContext<'ctx, A, P>
     where
         Self: 'ctx;
 }
@@ -1587,10 +1593,10 @@ impl BoxHitTestEntry {
 ///   `None` tests at the child's laid-out position (the driver subtracts
 ///   the child's `RenderState.offset`).
 /// - `local_transform`: the FORWARD (paint-direction) transform
-///   [`BoxHitTestCtx`]'s own ctx-level stack accumulated before this call
+///   [`RawBoxHitTestContext`]'s own ctx-level stack accumulated before this call
 ///   (`None` when nothing was pushed). The driver pushes its inverse onto
 ///   the shared `HitTestResult` for the duration of the recursive call —
-///   see [`BoxHitTestCtx::hit_test_child`] — so a render object that calls
+///   see [`RawBoxHitTestContext::hit_test_child`] — so a render object that calls
 ///   `ctx.push_offset`/`ctx.push_transform`/`ctx.with_transform` before
 ///   testing a child gets that push folded into `HitTestEntry.transform`
 ///   instead of silently discarded.
@@ -1602,7 +1608,7 @@ pub type HitTestChildCallback<'a> =
 /// Box-protocol hit-test context: local-space position, the entry
 /// path under construction, the live child recursion supplied by the
 /// pipeline driver, and the transform stack (with a cached composition,
-/// see [`BoxHitTestCtx::current_transform`]).
+/// see [`RawBoxHitTestContext::current_transform`]).
 ///
 /// # Transform accumulation
 ///
@@ -1634,7 +1640,7 @@ pub type HitTestChildCallback<'a> =
 /// `HitTestEntry.transform`.
 ///
 /// [`HitTestContext::register_self_hit_entry`]: crate::context::HitTestContext::register_self_hit_entry
-pub struct BoxHitTestCtx<'ctx, A: Arity, P: ParentData> {
+pub struct RawBoxHitTestContext<'ctx, A: Arity, P: ParentData> {
     position: Offset,
     result: BoxHitTestResult,
     /// Live recursion into the pipeline's hit-test walk. `None` in
@@ -1650,11 +1656,11 @@ pub struct BoxHitTestCtx<'ctx, A: Arity, P: ParentData> {
     _phantom: std::marker::PhantomData<(&'ctx (), A, P)>,
 }
 
-impl<A: Arity, P: ParentData> std::fmt::Debug for BoxHitTestCtx<'_, A, P> {
+impl<A: Arity, P: ParentData> std::fmt::Debug for RawBoxHitTestContext<'_, A, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `child_callback` is the driver's live hit-test recursion; report
         // the position, accumulated result, and transform state.
-        f.debug_struct("BoxHitTestCtx")
+        f.debug_struct("RawBoxHitTestContext")
             .field("position", &self.position)
             .field("result", &self.result)
             .field("transform_stack", &self.transform_stack)
@@ -1663,7 +1669,7 @@ impl<A: Arity, P: ParentData> std::fmt::Debug for BoxHitTestCtx<'_, A, P> {
     }
 }
 
-impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
+impl<'ctx, A: Arity, P: ParentData> RawBoxHitTestContext<'ctx, A, P> {
     /// Creates a new box hit test context.
     pub fn new(position: Offset) -> Self {
         Self {
@@ -1728,7 +1734,7 @@ impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
 }
 
 impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
-    for BoxHitTestCtx<'ctx, A, P>
+    for RawBoxHitTestContext<'ctx, A, P>
 {
     fn position(&self) -> &Offset {
         &self.position

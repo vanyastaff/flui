@@ -5,7 +5,7 @@ use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::inspect::Value;
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxLayoutContext},
+    context::{BoxDryLayoutContext, BoxHitTestContext, BoxLayoutContext},
     hit_testing::{
         CursorRequest, DeviceId, HitTestBehavior, MouseRegionTarget, MouseTrackerAnnotation,
     },
@@ -196,7 +196,7 @@ impl RenderBox for RenderMouseRegion {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() > 0 {
             ctx.child_dry_layout(0, constraints)

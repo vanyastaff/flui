@@ -474,7 +474,7 @@ impl RenderNode {
     /// # ⚠ LEAF-ONLY — DO NOT CALL FOR NON-LEAF RENDER OBJECTS
     ///
     /// This method delegates to `RenderEntry::layout_leaf_only`, which
-    /// builds a `BoxLayoutCtx::<Leaf, BoxParentData>` with **no
+    /// builds a `RawBoxLayoutContext::<Leaf, BoxParentData>` with **no
     /// children**. Non-leaf render objects routed through this method
     /// observe `ctx.child_count() == 0` and silently produce wrong
     /// geometry. The name `layout_leaf_erased` (PR #141 Codex review
@@ -498,7 +498,7 @@ impl RenderNode {
     /// `TryFrom<ErasedGeometry>`.
     ///
     /// `PipelineOwner::layout_dirty_root` does NOT route through
-    /// this method — it builds typed `BoxLayoutCtx` with children via
+    /// this method — it builds typed `RawBoxLayoutContext` with children via
     /// disjoint borrows and calls `render_object.perform_layout_raw`
     /// directly against an erased view, bypassing the leaf-mode
     /// constraint entirely.

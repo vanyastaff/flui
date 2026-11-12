@@ -874,7 +874,7 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
     /// the same split `RenderTransform::paint` makes between `paint` and
     /// `paint_effects` for its own layer (`crates/flui-objects/src/layout/transform.rs`).
     /// Pushing the clip again here would wrap the child in it twice.
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 

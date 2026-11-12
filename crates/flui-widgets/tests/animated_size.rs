@@ -21,7 +21,7 @@ use flui_animation::{MotionSpec, SharedCurve, SpringDescription, Vsync, curves};
 use flui_painting::Alignment;
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::{BuildContext, StatefulView};
-use flui_view::{EventCx, IntoView, ViewState};
+use flui_view::{EventContext, IntoView, ViewState};
 use flui_widgets::{AnimatedSize, MotionBuilder, SizedBox};
 use parking_lot::Mutex;
 
@@ -29,7 +29,7 @@ use parking_lot::Mutex;
 const FRAME: Duration = Duration::from_millis(20);
 const RUN: Duration = Duration::from_millis(100);
 
-type EndCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
+type EndCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 
 #[derive(Clone, StatefulView)]
 struct SizeProbe {

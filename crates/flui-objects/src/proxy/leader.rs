@@ -37,7 +37,7 @@ use flui_foundation::geometry::Offset;
 use flui_rendering::layer::LayerLink;
 
 use flui_rendering::{
-    context::{BoxHitTestContext, PaintCx},
+    context::{BoxHitTestContext, PaintContext},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -111,11 +111,11 @@ impl RenderBox for RenderLeaderLayer {
         true
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         // Pushes the LeaderLayer regardless of child presence; the children
         // paint (nothing, when childless) inside the scope either way.
         let size = ctx.size();
-        ctx.with_leader(self.link, size, PaintCx::paint_children_in_order);
+        ctx.with_leader(self.link, size, PaintContext::paint_children_in_order);
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

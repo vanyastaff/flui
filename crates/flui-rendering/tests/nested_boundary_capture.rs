@@ -18,7 +18,7 @@ use flui_objects::{
 };
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext, PaintAnchor, PaintCx},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintAnchor, PaintContext},
     parent_data::BoxParentData,
     pipeline::{Idle, PipelineOwner},
     testing::{SceneHost, TreeNode, box_node, tree, update_render_object},
@@ -118,7 +118,7 @@ impl RenderBox for PaintTally {
         Ok(ctx.constrain(Size::new(10.0, 10.0)))
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         self.paints.fetch_add(1, Ordering::Relaxed);
         *self.anchor.lock().expect("no panic holds the lock") = ctx.paint_anchor();
     }

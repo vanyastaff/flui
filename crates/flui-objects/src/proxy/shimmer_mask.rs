@@ -19,7 +19,7 @@ use flui_painting::paint::BlendMode;
 use flui_painting::styling::Color;
 use flui_rendering::{
     RenderUpdateImpact,
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
     traits::RenderBox,
@@ -87,10 +87,10 @@ impl RenderBox for RenderShimmerMask {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    // Closure is load-bearing: `PaintCx::paint_child` is ambiguous as a method
+    // Closure is load-bearing: `PaintContext::paint_child` is ambiguous as a method
     // path across arities.
     #[expect(clippy::redundant_closure_for_method_calls)]
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         if !self.has_child {
             return;
         }
