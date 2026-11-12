@@ -14,7 +14,7 @@ use flui_sdk::widgets::{
     GestureDetector, OverflowBox, Row, SizedBox, WidgetState, WidgetStatesController,
 };
 
-use crate::common::{LaidOut, lay_out, tight};
+use crate::common::{LaidOut, lay_out, lay_out_animated, tight};
 
 const WIDTH: f64 = 100.0;
 const HEIGHT: f64 = 40.0;
@@ -599,5 +599,47 @@ pub fn a_settled_well_detaches_its_painter() {
         laid.draw_ops().len(),
         idle,
         "a settled wave leaves nothing behind"
+    );
+}
+
+/// A well at rest holds no state-layer animation: mounted, it registers
+/// nothing with its frame registry, and once a hover has faded out it lets
+/// the layer's animation go again, so the registry is empty and asks for no
+/// frame.
+///
+/// Red-check: make the layer in `Indication::new` (the registry holds its
+/// controller from the mount on).
+pub fn a_resting_well_holds_no_state_layer_animation() {
+    let vsync = flui_sdk::animation::Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), tinted(well())),
+        tight(WIDTH, HEIGHT),
+        vsync.clone(),
+    );
+    laid.pump_for(ms(16));
+    assert!(vsync.is_empty(), "a mounted well registers no animation");
+
+    laid.dispatch_pointer_hover(50.0, 20.0);
+    laid.pump_for(ms(16));
+    laid.pump_for(ms(16));
+    assert_eq!(layers(&laid).len(), 1, "the hover shows the state layer");
+
+    laid.dispatch_pointer_hover(500.0, 500.0);
+    for _ in 0..4 {
+        laid.pump_for(ms(100));
+    }
+    assert!(layers(&laid).is_empty(), "the layer faded out");
+    assert!(
+        vsync.is_empty() && !vsync.has_running(),
+        "a well back at rest holds no animation"
+    );
+
+    laid.dispatch_pointer_hover(50.0, 20.0);
+    laid.pump_for(ms(16));
+    laid.pump_for(ms(16));
+    assert_eq!(
+        layers(&laid).len(),
+        1,
+        "the next hover starts a layer again"
     );
 }
