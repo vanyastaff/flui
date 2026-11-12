@@ -38,8 +38,8 @@ is rejected, so the seam had no accepted record. What `main` holds:
 | The host keeps the instance in `Arc<Mutex<Slot>>`, lends it out of the slot for each call and catches each call's panic by hand | `crates/flui-app/src/app/hot_reload.rs` (`DevReload`, `lend`, `disable`) |
 | Hosts call different methods: desktop and iOS `attach`, `poll` and `detach`; Android only `scene_frame`; the web none. A worker hook does nothing on Android, a scene hook nothing elsewhere | the trait's module table; `runner/desktop.rs`, `runner/ios.rs`, `runner/main_window.rs`, `runner/android.rs` |
 | `flui-app` has no edge to `flui-hot-reload` under any feature | `FACTS` in `tools/xtask/src/workspace/reach.rs` |
-| `flui-hot-reload` is an official package (`tier-kind = "official"`) still under `crates/`, implementing both hooks behind its `host-hook` feature | `crates/flui-hot-reload/Cargo.toml`, `src/hook.rs` |
-| Fifteen manifest exceptions are debt of the dlopen path: in `flui-hot-reload` four `edge-exceptions`, two `reach-exceptions` and six `globals`; in `flui-view` two `globals` (`REGISTRY_STACK` and `TEST_REGISTRY`, `ManuallyDrop` for a hot-reload `cdylib`); in the facade one `edge-exceptions` entry | the manifests' `[package.metadata.flui]` |
+| `flui-hot-reload` is an official package (`tier-kind = "official"`) under `packages/`, implementing both hooks behind its `host-hook` feature | `packages/flui-hot-reload/Cargo.toml`, `src/hook.rs` |
+| Ten manifest exceptions are debt of the dlopen path: in `flui-hot-reload` two `reach-exceptions` and six `globals`; in `flui-view` two `globals` (`REGISTRY_STACK` and `TEST_REGISTRY`, `ManuallyDrop` for a hot-reload `cdylib`) | the manifests' `[package.metadata.flui]` |
 
 What is the contract of the reload seam, independent of the tool behind it, and where do the dlopen
 path's exceptions exit?
@@ -183,7 +183,7 @@ lent scene is rendered inline (ADR-0305 §10).
 
 A host that does not drive an installed hook never calls its factory and logs once, when its loop
 starts, that the hook is not driven there. A desktop scene plugin runs through the package's own
-driver in the application's frame loop (`examples/scene_render.rs`), not through the host. Widget
+driver in the application's frame loop (`packages/flui-hot-reload/examples/scene_render.rs`), not through the host. Widget
 reload on Android and the web is a shortfall in `docs/gaps.md`, not part of this contract.
 
 §5. **A hook's failure costs hot reload, never the frame.** The factory and every hook method are
@@ -212,16 +212,19 @@ user code:
 - `flui-hot-reload` lives under `packages/`. Its normal dependencies are `flui-sdk` and the contract
   crates (ADR-0088 §2), with no `edge-exceptions`, and it implements §1 and §3 through
   `flui_sdk::view::dev_reload`.
-- The items of the plugin ABI that its `app-plugin` half names (`WidgetsBinding`, `PipelineCell`
-  and `PipelineOwner`, `Scene`, `LayerTree`, and the smallest further set the worker needs) are
-  Evolving items of `flui_sdk::hooks`, which ADR-0088 §4 keeps outside its surface ceiling, each
-  pinned in `crates/flui-sdk/tests/surface.rs`. `flui_view::__runtime` stays out of the SDK, as
-  `crates/flui-view/ARCHITECTURE.md` requires. These items leave with the dlopen path (§7).
+- The items of the plugin ABI that its `app-plugin` half names are Evolving items of
+  `flui_sdk::hooks`, which ADR-0088 §4 keeps outside its surface ceiling, each pinned in
+  `crates/flui-sdk/tests/surface.rs`: `PluginPipeline` (the root a plugin image mounts, its
+  binding, pipeline owner and layer tree behind one frame call) and its `PluginFrameError`,
+  `Scene` and `LayerTree`, and `TextContextHandle`. The binding, `PipelineCell` and
+  `PipelineOwner` stay behind `PluginPipeline`, and `flui_view::__runtime` stays out of the SDK,
+  as `crates/flui-view/ARCHITECTURE.md` requires. These items leave with the dlopen path (§7).
 - No core crate, no host and not the facade names the package in any form: `flui-app`,
-  `flui-runtime` and `flui` have no edge to it, and the facade's `hot-reload` feature goes with the
-  rule that the facade names no official package (ADR-0088 §6). An application adds the package as
-  a direct dependency, and `flui create --hot-reload` adds it under a feature of the generated
-  application.
+  `flui-runtime` and `flui` have no edge to it, and the facade has no reload feature, by the rule
+  that the facade names no official package (ADR-0088 §6). An application adds the package as a
+  direct dependency. `flui create --hot-reload` generates the host, worker and types crates, each
+  of which names it directly: that split is how the package reloads, so the template has no
+  build without it, and the template leaves with the dlopen path (§7).
 - The package reaches the application only through the hooks of §1 and §3.
 
 §7. **The dlopen path is the package's implementation, and a code patcher is its exit.**
@@ -233,8 +236,7 @@ user code:
   `REGISTRY_STACK` and `TEST_REGISTRY` in `ManuallyDrop` form; the package's `globals` entries
   (`dispatch::REQUEST_REBUILD`, the three statics `app_plugin!` emits,
   `worker::REGISTRATION_SESSION`, `worker::WORKER_BUILDS`); its `reach-exceptions` for `windows`
-  and `android_log-sys`, which the loader needs. Its four `edge-exceptions` and the facade's edge
-  exit with §6.
+  and `android_log-sys`, which the loader needs.
 - The dlopen path is deleted when a code patcher implements `DevReloadHook` on Windows, macOS and
   Linux. Then the worker template, the dlopen driver, the `hot_reload_counter` and
   `hot_reload_lifecycle_fixture` examples and the entries above go together, and `cargo xtask
@@ -272,7 +274,8 @@ user code:
   fails the gate; the factories' positions are listed.
 - **`cargo xtask reach`.** The facts `flui-hot-reload must be absent from flui-app's default graph`
   and `flui-hot-reload must be absent from flui-app's graph with every feature` hold §6 for the
-  host. When the facade's feature goes, its presence fact becomes an absence fact.
+  host, and `flui-hot-reload must be absent from the facade's graph with every feature` holds it
+  for the facade.
 - **`cargo xtask workspace`.** It refuses `edge-exceptions` under `packages/`, so the package's move
   there proves "on `flui-sdk` alone". `cargo xtask globals` and `cargo xtask reach` read §7's entries,
   each with `exit = "ADR-0311"`, and report each as stale once the dlopen path is gone.
@@ -286,7 +289,7 @@ user code:
   `a_panicking_attach_leaves_the_loop_without_reload` and
   `each_reload_event_maps_to_the_ui_runtime_tier`; the runner's
   `main_window_reload_hook_stays_attached_across_failed_reopens_and_detaches_with_loop`. The
-  package's (`crates/flui-hot-reload/src/hook/tests.rs`): `event_for_maps_each_driver_outcome`,
+  package's (`packages/flui-hot-reload/src/hook/tests.rs`): `event_for_maps_each_driver_outcome`,
   `a_rebuild_request_polls_as_a_patch_and_wakes_once_until_detached`,
   `an_artifact_change_wakes_the_host`, `dropping_an_attached_hook_joins_its_watcher`,
   `scene_frame_without_a_loaded_plugin_draws_nothing` and `scene_frame_reset_recovery_matrix`.

@@ -121,13 +121,13 @@ pub fn disabled_ink_well_does_not_fire_a_tap_callback() {
 
 fn enter() -> KeyEvent {
     KeyEventBuilder::new(Code::Enter)
-        .with_key(Key::Named(NamedKey::Enter))
+        .key(Key::Named(NamedKey::Enter))
         .build()
 }
 
 fn tab() -> KeyEvent {
     KeyEventBuilder::new(Code::Tab)
-        .with_key(Key::Named(NamedKey::Tab))
+        .key(Key::Named(NamedKey::Tab))
         .build()
 }
 

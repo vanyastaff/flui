@@ -439,9 +439,9 @@ fn mouse_button(
 fn key(code: Code, key: Key, state: KeyState, repeat: bool) -> PlatformInput {
     PlatformInput::Keyboard(
         KeyEventBuilder::new(code)
-            .with_key(key)
-            .with_state(state)
-            .with_repeat(repeat)
+            .key(key)
+            .state(state)
+            .repeat(repeat)
             .build(),
     )
 }

@@ -2152,8 +2152,8 @@ fn editable_key_edit_whose_listener_retirement_fails() {
     let key = flui_interaction::testing::input::KeyEventBuilder::new(
         flui_interaction::events::Code::KeyA,
     )
-    .with_key(flui_interaction::events::Key::character("a"))
-    .with_state(flui_interaction::events::KeyState::Down)
+    .key(flui_interaction::events::Key::character("a"))
+    .state(flui_interaction::events::KeyState::Down)
     .build();
     let _ = raised(|| {
         let _ = harness
@@ -2613,8 +2613,8 @@ fn editable_key_edit_whose_on_changed_panics() {
     let key = flui_interaction::testing::input::KeyEventBuilder::new(
         flui_interaction::events::Code::KeyA,
     )
-    .with_key(flui_interaction::events::Key::character("a"))
-    .with_state(flui_interaction::events::KeyState::Down)
+    .key(flui_interaction::events::Key::character("a"))
+    .state(flui_interaction::events::KeyState::Down)
     .build();
     let _ = raised(|| {
         let _ = harness
@@ -2741,8 +2741,8 @@ fn key_edit_whose_listener_rebuilds_the_field(
     let key = flui_interaction::testing::input::KeyEventBuilder::new(
         flui_interaction::events::Code::KeyA,
     )
-    .with_key(flui_interaction::events::Key::character("a"))
-    .with_state(flui_interaction::events::KeyState::Down)
+    .key(flui_interaction::events::Key::character("a"))
+    .state(flui_interaction::events::KeyState::Down)
     .build();
     let manager = harness.borrow().focus_manager();
     assert_eq!(

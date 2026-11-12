@@ -21,7 +21,7 @@ or WASM targets with their own build step.
 
 | Example | Run |
 |---|---|
-| **scene_render** — end-to-end GPU compositor proof | `cargo run --example scene_render` |
+| **scene_render** — end-to-end GPU compositor proof | `cargo run -p flui-hot-reload --example scene_render` |
 
 ## Hot reload
 
@@ -39,7 +39,7 @@ cargo watch -w examples/desktop_scene -x "build -p flui-desktop-scene"
 
 # Terminal 2 — run the host with in-process reload (Linux/macOS; see
 # docs/hot-reload.md for the Windows .dll path)
-FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run --example scene_render
+FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run -p flui-hot-reload --example scene_render
 ```
 
 ## Web / WASM

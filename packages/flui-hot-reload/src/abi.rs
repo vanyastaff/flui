@@ -25,7 +25,7 @@
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use flui_layer::{LayerTree, Scene};
+use flui_sdk::hooks::{LayerTree, Scene};
 
 /// The ABI-compatibility token for THIS compilation of the plugin boundary.
 ///

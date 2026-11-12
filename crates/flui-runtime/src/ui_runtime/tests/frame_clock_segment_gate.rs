@@ -124,8 +124,8 @@ pub(crate) fn agent_playback_drives_independent_windows_and_one_paused_step_fram
         .build_on(Some(&runtime.presentations.get(b).expect("B").vsync()));
     a_owner.controller().forward().expect("A run");
     b_owner.controller().forward().expect("B run");
-    edit(&a_window, MotionRequest::new().with_rate(2.0));
-    edit(&b_window, MotionRequest::new().with_rate(0.5));
+    edit(&a_window, MotionRequest::new().rate(2.0));
+    edit(&b_window, MotionRequest::new().rate(0.5));
     let mut sink = ScriptedSink::always_presents();
     runtime.set_now_secs_for_test(0.0);
     let _ = runtime.render_frame(&mut sink);
@@ -134,12 +134,12 @@ pub(crate) fn agent_playback_drives_independent_windows_and_one_paused_step_fram
     assert!((a_owner.controller().value() - 0.5).abs() < 1e-9);
     assert!((b_owner.controller().value() - 0.125).abs() < 1e-9);
 
-    edit(&a_window, MotionRequest::new().with_rate(0.0));
+    edit(&a_window, MotionRequest::new().rate(0.0));
     runtime.set_now_secs_for_test(10.0);
     let _ = runtime.render_frame(&mut sink);
     assert_eq!(a_owner.controller().value(), 0.5);
     assert_eq!(b_owner.controller().value(), 1.0);
-    edit(&b_window, MotionRequest::new().with_rate(0.0));
+    edit(&b_window, MotionRequest::new().rate(0.0));
     runtime.set_now_secs_for_test(11.0);
     let _ = runtime.render_frame(&mut sink);
     let a_frames = runtime
@@ -154,7 +154,7 @@ pub(crate) fn agent_playback_drives_independent_windows_and_one_paused_step_fram
         .expect("B")
         .clock()
         .produced_count();
-    edit(&a_window, MotionRequest::new().with_step_ms(100));
+    edit(&a_window, MotionRequest::new().step_ms(100));
     let _ = runtime.render_frame(&mut sink);
     assert!((a_owner.controller().value() - 0.6).abs() < 1e-9);
     assert_eq!(
@@ -187,7 +187,7 @@ pub(crate) fn agent_playback_drives_independent_windows_and_one_paused_step_fram
         a_frames + 1,
         "a paused run cannot keep producing after its explicit step"
     );
-    edit(&b_window, MotionRequest::new().with_step_ms(50));
+    edit(&b_window, MotionRequest::new().step_ms(50));
     let _ = runtime.render_frame(&mut sink);
     assert_eq!(
         runtime
@@ -251,12 +251,13 @@ pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
         let controller = owner.controller();
         let run = match kind {
             "repeat" | "finite repeat" => controller.repeat(
-                flui_animation::RepeatSpec::new(flui_animation::RepeatMode::Restart)
-                    .with_iterations(if kind == "finite repeat" {
+                flui_animation::RepeatSpec::new(flui_animation::RepeatMode::Restart).iterations(
+                    if kind == "finite repeat" {
                         flui_animation::Iterations::Finite(3)
                     } else {
                         flui_animation::Iterations::Infinite
-                    }),
+                    },
+                ),
             ),
             "spring" => controller.animate_with(
                 SpringSimulation::try_new(

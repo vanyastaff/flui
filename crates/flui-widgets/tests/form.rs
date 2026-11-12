@@ -23,16 +23,16 @@ use crate::common::{LaidOut, SignalProbe, lay_out, tight};
 
 fn character(ch: char) -> KeyEvent {
     KeyEventBuilder::new(Code::KeyA)
-        .with_key(Key::character(ch.to_string()))
-        .with_state(KeyState::Down)
+        .key(Key::character(ch.to_string()))
+        .state(KeyState::Down)
         .build()
 }
 
 fn named(key: NamedKey, modifiers: Modifiers) -> KeyEvent {
     KeyEventBuilder::new(Code::Tab)
-        .with_key(Key::Named(key))
-        .with_state(KeyState::Down)
-        .with_modifiers(modifiers)
+        .key(Key::Named(key))
+        .state(KeyState::Down)
+        .modifiers(modifiers)
         .build()
 }
 

@@ -5,120 +5,6 @@
 # entry that is no longer one.
 
 [[allow]]
-crate = "flui-animation"
-type = "MotionSpec"
-method = "with_curve"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-animation"
-type = "MotionSpec"
-method = "with_duration"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-animation"
-type = "RepeatSpec"
-method = "with_iterations"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-animation"
-type = "RepeatSpec"
-method = "with_period"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-animation"
-type = "RepeatSpec"
-method = "with_range"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-assets"
-type = "AssetRegistryBuilder"
-method = "with_cache_config"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-assets"
-type = "AssetRegistryBuilder"
-method = "with_capacity"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-assets"
-type = "AssetRegistryBuilder"
-method = "with_decode_threads"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-assets"
-type = "AssetRegistryBuilder"
-method = "with_decoded_image_budget"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-assets"
-type = "AssetRegistryBuilder"
-method = "with_default_capacity"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-cli"
-type = "BuilderContextBuilder"
-method = "with_bundle"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-cli"
-type = "BuilderContextBuilder"
-method = "with_features"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-cli"
-type = "BuilderContextBuilder"
-method = "with_floors"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-cli"
-type = "BuilderContextBuilder"
-method = "with_output_dir"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-cli"
-type = "BuilderContextBuilder"
-method = "with_platform"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-cli"
-type = "BuilderContextBuilder"
-method = "with_profile"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-cli"
-type = "BuilderContextBuilder"
-method = "with_target"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-cli"
-type = "TemplateBuilder"
-method = "with_cargo_check"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-cli"
-type = "TemplateBuilder"
-method = "with_git"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
 crate = "flui-engine"
 type = "SlotConfig"
 method = "with_color"
@@ -140,186 +26,30 @@ reason = "written before the rule had a gate; its crate's rename removes it"
 crate = "flui-interaction"
 type = "GestureSettings"
 method = "with_double_tap_timeout"
-reason = "written before the rule had a gate; its crate's rename removes it"
+reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"
 
 [[allow]]
 crate = "flui-interaction"
 type = "GestureSettings"
 method = "with_long_press_timeout"
-reason = "written before the rule had a gate; its crate's rename removes it"
+reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"
 
 [[allow]]
 crate = "flui-interaction"
 type = "GestureSettings"
 method = "with_position_smoothing"
-reason = "written before the rule had a gate; its crate's rename removes it"
+reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"
 
 [[allow]]
 crate = "flui-interaction"
 type = "GestureSettings"
 method = "with_velocity_estimator"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-interaction"
-type = "KeyEventBuilder"
-method = "with_composing"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-interaction"
-type = "KeyEventBuilder"
-method = "with_key"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-interaction"
-type = "KeyEventBuilder"
-method = "with_location"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-interaction"
-type = "KeyEventBuilder"
-method = "with_modifiers"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-interaction"
-type = "KeyEventBuilder"
-method = "with_repeat"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-interaction"
-type = "KeyEventBuilder"
-method = "with_state"
-reason = "written before the rule had a gate; its crate's rename removes it"
+reason = "layered settings: the getter reads the effective value (host observation, accessibility floor), so the field stays private and the builder keeps with_"
 
 [[allow]]
 crate = "flui-log"
 type = "FilterConfig"
 method = "with_env_var"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-native"
-type = "DisplaySpec"
-method = "with_color"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-native"
-type = "DisplaySpec"
-method = "with_persistent_key"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-native"
-type = "DisplaySpec"
-method = "with_refresh_period"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-native"
-type = "DisplaySpec"
-method = "with_scale_factor"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "StrokeOptions"
-method = "with_cap"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "StrokeOptions"
-method = "with_dash_offset"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "StrokeOptions"
-method = "with_dash_pattern"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "StrokeOptions"
-method = "with_join"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "StrokeOptions"
-method = "with_miter_limit"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "StrokeOptions"
-method = "with_width"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "TextDecorationConfig"
-method = "with_color"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "TextDecorationConfig"
-method = "with_style"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-painting"
-type = "TextDecorationConfig"
-method = "with_thickness"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-protocol"
-type = "ActParams"
-method = "with_snapshot"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-protocol"
-type = "AnnouncementsParams"
-method = "with_max_entries"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-protocol"
-type = "MotionRequest"
-method = "with_rate"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-protocol"
-type = "MotionRequest"
-method = "with_step_ms"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-protocol"
-type = "ReadParams"
-method = "with_query"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-protocol"
-type = "RecordParams"
-method = "with_keep_text"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-protocol"
-type = "WaitParams"
-method = "with_timeout_ms"
 reason = "written before the rule had a gate; its crate's rename removes it"
 
 [[allow]]
@@ -335,85 +65,7 @@ method = "with_growth_direction"
 reason = "written before the rule had a gate; its crate's rename removes it"
 
 [[allow]]
-crate = "flui-system"
-type = "OpenRequest"
-method = "with_accept_label"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "OpenRequest"
-method = "with_directory"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "OpenRequest"
-method = "with_filter"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "OpenRequest"
-method = "with_title"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "SaveRequest"
-method = "with_accept_label"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "SaveRequest"
-method = "with_directory"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "SaveRequest"
-method = "with_filter"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "SaveRequest"
-method = "with_suggested_name"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "SaveRequest"
-method = "with_title"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
 crate = "flui-testing"
 type = "MountOptions"
 method = "with_capabilities"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-view"
-type = "FutureBuilder"
-method = "with_initial_data"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-view"
-type = "PersistentHeaderView"
-method = "with_snap_command"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-view"
-type = "PersistentHeaderView"
-method = "with_snap_controller"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-view"
-type = "StreamBuilder"
-method = "with_initial_data"
 reason = "written before the rule had a gate; its crate's rename removes it"

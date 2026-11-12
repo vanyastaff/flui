@@ -27,9 +27,9 @@ impl Intent for AddToCounter {}
 /// Ctrl+A, the key every test here binds to `AddToCounter`.
 fn ctrl_a() -> KeyEvent {
     KeyEventBuilder::new(Code::Unidentified)
-        .with_state(KeyState::Down)
-        .with_key(Key::character("a"))
-        .with_modifiers(Modifiers::CONTROL)
+        .state(KeyState::Down)
+        .key(Key::character("a"))
+        .modifiers(Modifiers::CONTROL)
         .build()
 }
 

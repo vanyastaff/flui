@@ -30,8 +30,8 @@ pub(crate) fn raw_text_field_callbacks_write_through_the_forwarded_ctx() {
     let _ = focus_node.request_focus();
 
     let typed = KeyEventBuilder::new(Code::KeyA)
-        .with_key(Key::character("a"))
-        .with_state(KeyState::Down)
+        .key(Key::character("a"))
+        .state(KeyState::Down)
         .build();
     let _ = harness
         .focus_manager()
@@ -40,8 +40,8 @@ pub(crate) fn raw_text_field_callbacks_write_through_the_forwarded_ctx() {
     assert_eq!(probe.value(), Ok(1), "on_changed wrote");
 
     let enter = KeyEventBuilder::new(Code::Enter)
-        .with_key(Key::Named(NamedKey::Enter))
-        .with_state(KeyState::Down)
+        .key(Key::Named(NamedKey::Enter))
+        .state(KeyState::Down)
         .build();
     let _ = harness
         .focus_manager()
@@ -100,8 +100,8 @@ pub(crate) fn the_return_key_submits_a_single_line_field_without_a_line_break() 
     let _ = focus_node.request_focus();
     for state in [KeyState::Down, KeyState::Up] {
         let enter = KeyEventBuilder::new(Code::Enter)
-            .with_key(Key::Named(NamedKey::Enter))
-            .with_state(state)
+            .key(Key::Named(NamedKey::Enter))
+            .state(state)
             .build();
         let _ = harness.focus_manager().dispatch_key_event(&enter);
     }

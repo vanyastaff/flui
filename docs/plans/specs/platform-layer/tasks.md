@@ -1982,7 +1982,7 @@ graph LR
   `ScreenPeriods::period_of` период не строит, а выбирает, чей опубликованный период несёт экран
   (первого живого окна), — это учёт iOS, он остался, а строитель `link_rate` (`LinkPeriod::observe`)
   переведён; `refresh_estimate` остался как оценщик (усечённое среднее, выбросы), ушли его построение
-  периода и полоса. headless (`DisplaySpec::with_refresh_period(Duration)`) остался на
+  периода и полоса. headless (`DisplaySpec::refresh_period(Duration)`) остался на
   `TryFrom<Duration>`: это период, заданный тестом, не отчёт ОС. Расхождений копии не имели — все шли
   через конструкторы контракта; полоса браузера считается теперь в секундах, а не в миллисекундах
   (округление расходится лишь на самой границе, тесты её не задевают); 1 Гц из `dmDisplayFrequency`
@@ -4199,7 +4199,7 @@ graph LR
   новейшего; без протокола — `NotOnThisDevice`. X11 — `NotYetOnThisHost` (`_ICC_PROFILE` не
   читается). Web: `matchMedia` по `(dynamic-range: high)` и `(color-gamut: p3|rec2020)`,
   слушатели `change` помечают снимок устаревшим; запас — `NotOnThisPlatform`, цвет прочих
-  экранов списка — `NotOnThisPlatform`. Headless: `DisplaySpec::with_color` (по умолчанию SDR
+  экранов списка — `NotOnThisPlatform`. Headless: `DisplaySpec::color` (по умолчанию SDR
   sRGB) и `DisplayChange::Color`. **Движок.** `flui-engine` зависит от `flui-platform` (R → C,
   разрешено); `Renderer::with_surface_color(target, color, display: Option<DisplayColor>)`,
   `ResolvedSurfaceColor::resolve(.., display, hdr, ..)`: при цвете платформы диапазон и запас

@@ -4,7 +4,7 @@
 //! `flui-app` drives it through [`DevReloadHook`] without naming this crate:
 //!
 //! ```rust,ignore
-//! use flui::hot_reload::WorkerReloadHook;
+//! use flui_hot_reload::WorkerReloadHook;
 //!
 //! let config = flui::AppConfig::new().dev_reload(WorkerReloadHook::new(worker_path));
 //! ```

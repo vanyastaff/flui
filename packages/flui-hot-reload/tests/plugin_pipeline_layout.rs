@@ -1,12 +1,12 @@
 //! A plugin pipeline lays its root out at the surface size of each frame the
 //! host asks for, not only at the size it was mounted with.
 
-use flui_layer::Scene;
-use flui_rendering::TextContextHandle;
 use flui_sdk::geometry::{Rect, Size};
+use flui_sdk::hooks::Scene;
+use flui_sdk::hooks::TextContextHandle;
 use flui_sdk::painting::Color;
+use flui_sdk::view::{BuildContext, IntoView, StatelessView, View, element::ElementKind};
 use flui_sdk::widgets::ColoredBox;
-use flui_view::{BuildContext, IntoView, StatelessView, View, element::ElementKind};
 
 /// Fills whatever the root is given, so the painted area is the root's size.
 #[derive(Clone)]
@@ -49,7 +49,9 @@ fn a_plugin_pipeline_lays_out_at_the_size_of_each_frame() {
         (200.0, 100.0),
         (200.0, 100.0),
     ] {
-        let scene = pipeline.draw_frame(width, height);
+        let scene = pipeline
+            .draw_frame(width, height)
+            .expect("the frame paints its root");
         assert_eq!(
             painted_size(&scene),
             Size::new(width, height),

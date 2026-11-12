@@ -79,8 +79,8 @@ fn key(app: &LaidOut, key: Key) -> bool {
                 manager
                     .dispatch_key_event(
                         &KeyEventBuilder::new(Code::Unidentified)
-                            .with_key(key.clone())
-                            .with_state(state)
+                            .key(key.clone())
+                            .state(state)
                             .build(),
                     )
                     .is_handled()

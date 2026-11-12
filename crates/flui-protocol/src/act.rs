@@ -207,7 +207,7 @@ impl ActParams {
 
     /// Read `snapshot` back.
     #[must_use]
-    pub fn with_snapshot(mut self, snapshot: Snapshot) -> Self {
+    pub fn snapshot(mut self, snapshot: Snapshot) -> Self {
         self.snapshot = snapshot;
         self
     }

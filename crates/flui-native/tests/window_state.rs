@@ -169,9 +169,8 @@ fn restoring_returns_to_the_rectangle_before() {
 }
 
 fn fullscreen_is_borderless_on_the_whole_display() {
-    let platform = HeadlessPlatform::new().with_displays(vec![
-        DisplaySpec::new("Wide", 2560, 1440).with_scale_factor(2.0),
-    ]);
+    let platform = HeadlessPlatform::new()
+        .with_displays(vec![DisplaySpec::new("Wide", 2560, 1440).scale_factor(2.0)]);
     let window = open(&platform);
     let (_, fullscreen) = applied(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
     assert_eq!(fullscreen.mode, WindowMode::Fullscreen);

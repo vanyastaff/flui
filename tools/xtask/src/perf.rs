@@ -210,7 +210,7 @@ pub(crate) fn perf(args: &PerfArgs) -> anyhow::Result<ExitCode> {
         } else {
             size::Measure::All
         };
-        return size::run(&root, &target_dir, mode, measure);
+        return size::run(&root, mode, measure);
     }
     let out = target_dir.join("perf");
     if out.exists() {

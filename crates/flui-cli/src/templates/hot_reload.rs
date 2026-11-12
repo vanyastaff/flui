@@ -10,7 +10,7 @@
 //! worker and the host independently: `flui run` watches the worker crate and
 //! rebuilds only it, leaving the running host untouched.
 
-use super::{DependencySource, ProjectPlan};
+use super::{DependencySource, FrameworkPackage, ProjectPlan};
 
 /// A dependency on a sibling crate inside the generated workspace.
 fn member_dep(sibling: &str) -> String {
@@ -118,7 +118,8 @@ types_watch = "{types_package}/src"
 }
 
 fn types_plan(types_package: &str, source: &DependencySource) -> ProjectPlan {
-    let facade_dep = source.dependency("flui", &["hot-reload"]);
+    let facade_dep = source.dependency(FrameworkPackage::Facade, &[]);
+    let reload_dep = source.dependency(FrameworkPackage::HotReload, &["app-plugin"]);
 
     let cargo = format!(
         r#"[package]
@@ -131,6 +132,7 @@ description = "Shared types and persistent State for the hot-reload app"
 
 [dependencies]
 flui = {facade_dep}
+flui-hot-reload = {reload_dep}
 "#
     );
 
@@ -145,7 +147,8 @@ fn logic_plan(
     worker_lib: &str,
     source: &DependencySource,
 ) -> ProjectPlan {
-    let facade_dep = source.dependency("flui", &["hot-reload"]);
+    let facade_dep = source.dependency(FrameworkPackage::Facade, &[]);
+    let reload_dep = source.dependency(FrameworkPackage::HotReload, &["app-plugin"]);
     let types_dep = member_dep(types_package);
     let types_crate = types_package.replace('-', "_");
 
@@ -164,6 +167,7 @@ name = "{worker_lib}"
 
 [dependencies]
 flui = {facade_dep}
+flui-hot-reload = {reload_dep}
 {types_package} = {types_dep}
 "#
     );
@@ -183,7 +187,8 @@ fn host_plan(
     worker_lib: &str,
     source: &DependencySource,
 ) -> ProjectPlan {
-    let facade_dep = source.dependency("flui", &["hot-reload"]);
+    let facade_dep = source.dependency(FrameworkPackage::Facade, &[]);
+    let reload_dep = source.dependency(FrameworkPackage::HotReload, &["app-plugin", "host-hook"]);
     let types_dep = member_dep(types_package);
     let types_crate = types_package.replace('-', "_");
 
@@ -202,6 +207,7 @@ path = "src/main.rs"
 
 [dependencies]
 flui = {facade_dep}
+flui-hot-reload = {reload_dep}
 {types_package} = {types_dep}
 tracing = {{ workspace = true }}
 "#
@@ -268,7 +274,7 @@ use std::sync::{
     atomic::{AtomicI32, Ordering},
 };
 
-use flui::hot_reload::{WorkerBuildEnv, get_worker_build_ptr};
+use flui_hot_reload::{WorkerBuildEnv, get_worker_build_ptr};
 use flui::prelude::*;
 
 /// Stable-layout fingerprint. Bump when the shared types change shape.
@@ -361,7 +367,7 @@ use std::sync::{
     atomic::{AtomicI32, Ordering},
 };
 
-use flui::hot_reload::{WorkerBuildEnv, hot_reload_worker, request_rebuild};
+use flui_hot_reload::{WorkerBuildEnv, hot_reload_worker, request_rebuild};
 use flui::painting::styling::Color;
 use flui::prelude::*;
 use flui::widgets::{ColoredBox, Column, GestureDetector, Padding, Text};
@@ -395,7 +401,7 @@ fn build_counter_ui(
     .boxed()
 }
 
-fn init_counter_worker(register: flui::hot_reload::RegisterWorkerBuildFn) {
+fn init_counter_worker(register: flui_hot_reload::RegisterWorkerBuildFn) {
     register(TYPE_FINGERPRINT, build_counter_ui as *const ());
 }
 
@@ -413,7 +419,7 @@ use std::sync::{Arc, atomic::AtomicI32};
 
 use __TYPES_CRATE__::{CounterApp, CounterShell};
 use flui::app::{AppConfig, AppLaunch, LaunchError, run_app};
-use flui::hot_reload::{WorkerReloadHook, engine::env};
+use flui_hot_reload::{WorkerReloadHook, engine::env};
 
 /// Default worker dylib path, used when `FLUI_WORKER_PLUGIN` is unset (a bare
 /// `cargo run -p __HOST_PACKAGE__` without `flui run`).
