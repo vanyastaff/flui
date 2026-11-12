@@ -1,7 +1,9 @@
 //! [`Image`] widget — displays a bitmap image.
 
 use std::path::PathBuf;
-use std::{rc::Rc, sync::Arc};
+use std::rc::Rc;
+#[cfg(feature = "asset-images")]
+use std::sync::Arc;
 
 use flui_foundation::geometry::{Rect, Size};
 use flui_objects::RenderImage;
