@@ -418,8 +418,8 @@ fn text_services_probe() {
 
     let platform = crate::WindowsPlatform::try_new().expect("platform");
     let options = WindowOptions::default()
-        .with_title("flui tsf probe")
-        .with_size(Size::new(640.0, 200.0));
+        .title("flui tsf probe")
+        .size(Size::new(640.0, 200.0));
     let window = platform
         .open_window(
             options,

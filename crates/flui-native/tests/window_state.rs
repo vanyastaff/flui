@@ -195,7 +195,7 @@ fn app_title_bar_controls_survive_open_commands_and_fullscreen() {
     ] {
         let frame = WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(controls));
         let platform = HeadlessPlatform::new();
-        let window = Opened::on(&platform, WindowOptions::default().with_frame(frame))
+        let window = Opened::on(&platform, WindowOptions::default().frame(frame))
             .expect("a headless window opens with an app title bar");
         assert_eq!(window.state().frame, frame, "opening keeps {controls:?}");
         applied(&window, WindowCommand::SetFrame(WindowFrame::System));
@@ -487,9 +487,9 @@ fn opening_options_are_reflected_in_the_first_snapshot() {
     let normal =
         flui_platform::WindowGeometry::new(Some(Point::new(50.0, 60.0)), Size::new(700.0, 500.0));
     let options = WindowOptions::default()
-        .with_position(Some(Point::new(50.0, 60.0)))
-        .with_mode(WindowMode::Maximized)
-        .with_normal_geometry(Some(normal));
+        .position(Some(Point::new(50.0, 60.0)))
+        .mode(WindowMode::Maximized)
+        .normal_geometry(Some(normal));
     let window: Rc<dyn HostWindow> = platform
         .open_window(
             options,

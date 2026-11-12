@@ -738,16 +738,16 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
         // (`runner::desktop::rendered_window_options`), so nothing can open a
         // window at alpha 0 that no one will ever reveal.
         Self::default()
-            .with_title(config.title.clone())
-            .with_size(config.size)
-            .with_resizable(config.resizable)
-            .with_frame(config.frame)
-            .with_min_size(config.min_size)
-            .with_max_size(config.max_size)
-            .with_position(config.position)
-            .with_mode(config.mode)
-            .with_input_latency(config.input_latency)
-            .with_os_options(os_options_for(config))
+            .title(config.title.clone())
+            .size(config.size)
+            .resizable(config.resizable)
+            .frame(config.frame)
+            .min_size(config.min_size)
+            .max_size(config.max_size)
+            .position(config.position)
+            .mode(config.mode)
+            .input_latency(config.input_latency)
+            .os_options(os_options_for(config))
     }
 }
 
@@ -769,7 +769,7 @@ fn os_options_for(config: &AppConfig) -> flui_platform::os_options::OsWindowOpti
     if options.android.is_none()
         && let Some(color_mode) = color_mode
     {
-        options.android = Some(AndroidWindowOptions::default().with_color_mode(color_mode));
+        options.android = Some(AndroidWindowOptions::default().color_mode(color_mode));
     }
     options
 }
@@ -815,8 +815,8 @@ mod tests {
         }
         let own = AppConfig::new()
             .surface_color(flui_engine::SurfaceColor::Hdr)
-            .os_options(OsWindowOptions::default().with_android(
-                AndroidWindowOptions::default().with_color_mode(AndroidColorMode::WideColorGamut),
+            .os_options(OsWindowOptions::default().android(
+                AndroidWindowOptions::default().color_mode(AndroidColorMode::WideColorGamut),
             ));
         assert_eq!(mode(&own), Some(AndroidColorMode::WideColorGamut));
     }

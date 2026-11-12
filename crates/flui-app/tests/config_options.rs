@@ -69,8 +69,8 @@ fn the_mode_is_kept() {
 }
 
 fn every_systems_options_are_kept() {
-    let os_options = OsWindowOptions::default().with_windows(
-        Win32WindowOptions::default().with_corner_preference(WindowsCornerPreference::DoNotRound),
+    let os_options = OsWindowOptions::default().windows(
+        Win32WindowOptions::default().corner_preference(WindowsCornerPreference::DoNotRound),
     );
     assert_eq!(
         options(&AppConfig::new().os_options(os_options.clone())).os_options,

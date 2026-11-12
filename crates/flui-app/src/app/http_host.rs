@@ -283,9 +283,8 @@ mod tests {
             .expect("a 404 is a response");
         assert_eq!(missing.status().as_u16(), 404);
 
-        let too_large = block_on(
-            http.send(HttpRequest::get(format!("http://{address}/large")).with_body_limit(16)),
-        );
+        let too_large =
+            block_on(http.send(HttpRequest::get(format!("http://{address}/large")).body_limit(16)));
         assert!(
             matches!(too_large, Err(HttpError::TooLarge { limit: 16 })),
             "{too_large:?}"
@@ -358,7 +357,7 @@ mod tests {
         let held = block_on(
             http.send(
                 HttpRequest::get(format!("http://{address}/large"))
-                    .with_deadline(Duration::from_millis(300)),
+                    .deadline(Duration::from_millis(300)),
             ),
         )
         .expect("the head arrives within the deadline");

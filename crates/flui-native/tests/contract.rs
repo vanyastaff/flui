@@ -60,13 +60,13 @@ fn test_window_lifecycle_contract() {
 
     // Contract 3: Window creation should either succeed or fail gracefully
     let options = WindowOptions::default()
-        .with_title("Contract Test Window".to_string())
-        .with_size(Size::new(640.0, 480.0))
-        .with_visible(false)
-        .with_resizable(true)
-        .with_frame(WindowFrame::System)
-        .with_min_size(Some(Size::new(320.0, 240.0)))
-        .with_max_size(None);
+        .title("Contract Test Window".to_string())
+        .size(Size::new(640.0, 480.0))
+        .visible(false)
+        .resizable(true)
+        .frame(WindowFrame::System)
+        .min_size(Some(Size::new(320.0, 240.0)))
+        .max_size(None);
 
     match platform.open_window(
         options,
@@ -160,9 +160,9 @@ fn test_window_lifecycle_contract() {
 
             // Contract 10: Multiple window creation
             let options2 = WindowOptions::default()
-                .with_title("Contract Test Window 2".to_string())
-                .with_size(Size::new(400.0, 300.0))
-                .with_visible(false);
+                .title("Contract Test Window 2".to_string())
+                .size(Size::new(400.0, 300.0))
+                .visible(false);
 
             match platform.open_window(
                 options2,

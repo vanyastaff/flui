@@ -151,7 +151,7 @@ unsafe fn piece(_url: &[u16], at: PWSTR, length: u32) -> &[u16] {
 
 impl Stack for Sessions {
     fn open(&self, request: &HttpRequest) -> Result<Box<dyn Connection>, HttpError> {
-        let url = request.url();
+        let url = request.url.as_str();
         let invalid = || HttpError::InvalidUrl {
             url: url.to_owned(),
         };
@@ -194,7 +194,7 @@ impl Stack for Sessions {
         }
         let host: Vec<u16> = host.iter().copied().chain([0]).collect();
         let object = wire::object_name(path, extra);
-        let verb = wide(request.method().as_str());
+        let verb = wide(request.method.as_str());
 
         // SAFETY: the session is open and the host a NUL-ended wide string.
         let connect = unsafe {
@@ -232,8 +232,8 @@ impl Stack for Sessions {
         }
         let exchange = Arc::new(Exchange {
             gate: Gate::new(raw as usize, close),
-            headers: wire::request_headers(request.headers()),
-            body: request.body().to_vec(),
+            headers: wire::request_headers(&request.headers),
+            body: request.body.clone(),
             buffer: ReadBuffer::new(),
         });
         let context = Arc::as_ptr(&exchange) as usize;

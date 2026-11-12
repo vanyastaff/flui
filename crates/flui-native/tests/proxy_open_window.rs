@@ -130,7 +130,7 @@ fn requests_open_in_order_and_a_full_queue_hands_the_request_back() {
 
     let refused = proxy
         .open_window(WindowRequest::new(
-            WindowOptions::default().with_title("one too many"),
+            WindowOptions::default().title("one too many"),
             || RecordingWindowHandler::new() as Rc<dyn WindowHandler>,
         ))
         .expect_err("a full queue refuses");

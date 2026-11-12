@@ -208,13 +208,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let options = WindowOptions::default()
-        .with_title(title.to_string())
-        .with_size(Size::new(800.0, 600.0))
-        .with_resizable(true)
-        .with_visible(true)
-        .with_frame(WindowFrame::System)
-        .with_min_size(None)
-        .with_max_size(None);
+        .title(title.to_string())
+        .size(Size::new(800.0, 600.0))
+        .resizable(true)
+        .visible(true)
+        .frame(WindowFrame::System)
+        .min_size(None)
+        .max_size(None);
 
     // Create window before running the event loop (run() takes ownership)
     let handler = Rc::new(SceneWindow::default());
