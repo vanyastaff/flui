@@ -61,6 +61,10 @@ const ANSWER_FRAMES: u32 = 64;
 /// Outline lines a failure lists.
 const SHOWN_LINES: usize = 15;
 
+/// At most this many zero-length frames run work due now before a read: a
+/// woken completion, the rebuild it schedules and the semantics it commits.
+const DUE_NOW_FRAMES: u32 = 8;
+
 /// The window a [`Tester`] mounts its view in: its logical size, and the
 /// platform whose conventions the application follows.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -361,6 +365,7 @@ impl Tester {
     ///
     /// [`TestError::Agent`] when the window cannot answer.
     pub fn try_find_all(&mut self, locator: &Locator) -> Result<Vec<Match>, TestError> {
+        self.run_due_now();
         let call = self
             .window
             .call::<SemanticsLocate>(LocateParams::new(locator.clone()))?;
@@ -444,6 +449,7 @@ impl Tester {
     }
 
     fn try_semantics(&mut self) -> Result<Tree, TestError> {
+        self.run_due_now();
         let call = self
             .window
             .call::<SemanticsRead>(ReadParams::new(self.window.id()))?;
@@ -458,6 +464,7 @@ impl Tester {
     #[track_caller]
     #[must_use]
     pub fn inspect_widgets(&mut self) -> InspectReading {
+        self.run_due_now();
         let call = self
             .window
             .call::<InspectWidgets>(InspectParams::new(self.window.id()))
@@ -474,6 +481,7 @@ impl Tester {
     #[track_caller]
     #[must_use]
     pub fn inspect_render(&mut self) -> InspectReading {
+        self.run_due_now();
         let call = self
             .window
             .call::<InspectRender>(InspectParams::new(self.window.id()))
@@ -635,6 +643,19 @@ impl Tester {
 
     // --- Internals --------------------------------------------------------
 
+    /// Run the frames due now, without moving the clock, so the read that
+    /// follows sees what they commit: a read is answered at the drain that
+    /// opens a frame, before that frame runs ready work. Bounded, because a
+    /// running animation keeps a frame due.
+    fn run_due_now(&mut self) {
+        for _ in 0..DUE_NOW_FRAMES {
+            if self.host.time_to_next_frame() != Some(Duration::ZERO) {
+                return;
+            }
+            let _ = self.host.pump(Duration::ZERO);
+        }
+    }
+
     /// Pump until `answer` is answered: the drain at the next frame boundary,
     /// or a frame per input tick.
     fn answered<T>(&mut self, answer: AgentAnswer<T>) -> Result<T, TestError> {
@@ -684,6 +705,7 @@ impl Tester {
     }
 
     fn actionability(&mut self, found: &Match) -> Result<Actionability, TestError> {
+        self.run_due_now();
         let call = self
             .window
             .call::<ElementActionability>(ActionabilityParams::new(found.element))?;
@@ -888,24 +910,18 @@ fn wait(
     holds: impl Fn(&mut Tester, &[Match]) -> Result<(), String>,
 ) -> Result<(), TestError> {
     let mut waited = Duration::ZERO;
-    // A read is answered at the drain that opens a frame, from the tree the
-    // frame before committed; the frame it opens may then run ready work and
-    // commit what the expectation waits for. So an idle application is
-    // judged only on a read made after a frame in which it stayed idle.
-    let mut read_after_idle = false;
     loop {
+        // Each read first runs the work due now, so both verdicts below are
+        // made on the tree that work committed.
         let matches = tester.try_find_all(locator)?;
         let found = match holds(tester, &matches) {
             Ok(()) => return Ok(()),
             Err(found) => found,
         };
+        // Only a frame due now keeps the expectation pumping: a timer due
+        // later is the test's to reach with `pump_for`.
         let next = tester.host.time_to_next_frame();
-        let due = next.filter(|wait| *wait <= FRAME);
-        if due.is_none() {
-            if !read_after_idle {
-                read_after_idle = true;
-                continue;
-            }
+        if next != Some(Duration::ZERO) {
             return Err(TestError::Idle {
                 expected: expected.to_owned(),
                 locator: Box::new(locator.clone()),
@@ -923,7 +939,6 @@ fn wait(
                 shown: tester.shown(),
             });
         }
-        read_after_idle = false;
         tester.pump();
         waited += FRAME;
     }

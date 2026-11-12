@@ -1,9 +1,12 @@
 //! `Tester` drives an application through its window's agent: it finds by
 //! locator, acts through the input lease, and fails with what the window shows.
 
+use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::time::Duration;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
+use flui_foundation::MonotonicClock as _;
 use flui_testing::{TestError, TestWindow, Tester, find};
 use flui_view::prelude::*;
 use flui_view::{Signal, StatefulView};
@@ -158,13 +161,10 @@ fn a_long_press_longer_than_the_answer_budget_is_delivered() {
     assert!(took >= Duration::from_secs(2), "the press lasted {took:?}");
 }
 
-/// A completion the test wakes between frames is polled by the frame the
-/// expectation's first read runs; the expectation reads the tree that frame
-/// committed before it calls the application idle.
-#[test]
-fn an_expectation_reads_the_tree_a_ready_completion_committed() {
+/// A `FutureBuilder` that shows "waiting" until the returned call wakes it
+/// with 7.
+fn pending_future() -> (Tester, impl FnOnce()) {
     use std::cell::RefCell;
-    use std::rc::Rc;
     use std::task::{Context, Poll, Waker};
 
     use flui_widgets::{FutureBuilder, FutureFactory, SnapshotBuilder};
@@ -194,14 +194,109 @@ fn an_expectation_reads_the_tree_a_ready_completion_committed() {
     });
     let mut t = Tester::mount(FutureBuilder::keyed(Some(1_u32), factory, builder));
     t.expect(find::text("waiting")).to_exist();
+    let wake = move || {
+        *ready.borrow_mut() = true;
+        waker
+            .borrow_mut()
+            .take()
+            .expect("the first poll stored its waker")
+            .wake();
+    };
+    (t, wake)
+}
 
-    *ready.borrow_mut() = true;
-    waker
-        .borrow_mut()
-        .take()
-        .expect("the first poll stored its waker")
-        .wake();
+/// A completion the test wakes between frames is polled by a frame the
+/// expectation runs before it reads; the expectation reads the tree that
+/// frame committed before it calls the application idle.
+#[test]
+fn an_expectation_reads_the_tree_a_ready_completion_committed() {
+    let (mut t, wake) = pending_future();
+    wake();
     t.expect(find::text("got 7")).to_exist();
+}
+
+/// The same completion: an expectation of what it replaces does not pass on
+/// the tree from before it.
+#[test]
+fn an_expectation_does_not_pass_on_the_tree_a_ready_completion_replaced() {
+    let (mut t, wake) = pending_future();
+    wake();
+    let message = panic_text(|| t.expect(find::text("waiting")).to_exist());
+    assert!(message.contains("got 7"), "{message}");
+}
+
+const DEBOUNCE: Duration = Duration::from_millis(100);
+
+/// Sleeps [`DEBOUNCE`] on the runtime's clock from `init_state`, recording
+/// when it started, then sets `done`.
+#[derive(Clone, StatefulView)]
+struct Debounce {
+    started: Rc<Cell<Option<Instant>>>,
+    done: Rc<Cell<bool>>,
+}
+
+struct DebounceState {
+    view: Debounce,
+    task: Option<flui_view::TaskToken>,
+}
+
+impl StatefulView for Debounce {
+    type State = DebounceState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        DebounceState {
+            view: self.clone(),
+            task: None,
+        }
+    }
+}
+
+impl ViewState<Debounce> for DebounceState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        let timer: flui_view::TimerHandle = ctx.timer().expect("a hosted tree has a timer");
+        self.view.started.set(Some(timer.now()));
+        let sleep = timer.sleep(DEBOUNCE);
+        let done = Rc::clone(&self.view.done);
+        self.task = ctx.async_driver().map(|driver| {
+            driver.spawn_local(Box::pin(async move {
+                sleep.await;
+                done.set(true);
+            }))
+        });
+    }
+
+    fn build(&self, _view: &Debounce, _ctx: &dyn BuildContext) -> impl IntoView {
+        Text::new("debouncing")
+    }
+}
+
+/// A timer due within the next frame is still the test's to reach: a failing
+/// expectation neither moves the clock nor fires it.
+#[test]
+fn an_expectation_does_not_fire_a_timer_due_within_a_frame() {
+    let view = Debounce {
+        started: Rc::default(),
+        done: Rc::default(),
+    };
+    let (started, done) = (Rc::clone(&view.started), Rc::clone(&view.done));
+    let mut t = Tester::mount(view);
+    let deadline = started.get().expect("init_state ran") + DEBOUNCE;
+    let short = Duration::from_millis(5);
+    let left = deadline
+        .checked_duration_since(t.clock().now())
+        .and_then(|left| left.checked_sub(short))
+        .expect("mounting took less than the debounce");
+    t.pump_for(left);
+    assert!(!done.get(), "the deadline is still {short:?} away");
+
+    let before = t.clock().elapsed();
+    let message = panic_text(|| t.expect(find::text("settled")).to_exist());
+    assert!(message.contains("idle"), "{message}");
+    assert_eq!(t.clock().elapsed(), before, "the clock did not move");
+    assert!(!done.get(), "the timer did not fire");
+
+    t.pump_for(short);
+    assert!(done.get(), "the test reaches it with pump_for");
 }
 
 #[test]
