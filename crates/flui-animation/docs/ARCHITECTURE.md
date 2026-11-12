@@ -988,7 +988,7 @@ by construction, so either alone detects it): `forward`/`forward_from`,
 `reverse`/`reverse_from`, `fling`/`fling_with`, and a `repeat` given no
 range (so it defaults to this controller's own bounds) are refused on an
 unbounded controller. There is no finite bound/range to run to. A repeat
-`with_range` on an unbounded controller WORKS: an explicit finite range is
+`RepeatSpec::range` on an unbounded controller WORKS: an explicit finite range is
 not "unbounded" in the relevant sense.
 
 **On ANY controller** (bounded too: FLUI's declared behavior CHANGE, since
