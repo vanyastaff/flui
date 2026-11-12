@@ -49,10 +49,11 @@ mod tests {
 
     use crate::testing::gap::GapId;
 
-    /// Which adapters report where the screen reader's cursor is. iOS's and
-    /// Android's do, through their vendored adapters; elsewhere a scenario that
-    /// needs it fails as [`GapId::AccessibilityBridgeFidelity`], and this table
-    /// is where an adapter that starts to report it says so.
+    /// Which adapters report where the screen reader's cursor is. None does
+    /// on the published AccessKit adapters: `accesskit_ios` and
+    /// `accesskit_android` track the cursor and keep it to themselves. A
+    /// scenario that needs it fails as [`GapId::AccessibilityBridgeFidelity`],
+    /// and this table is where an adapter that starts to report it says so.
     #[test]
     fn each_native_adapter_says_whether_it_reports_the_assistive_cursor() {
         let adapters: &[(&str, AssistiveFocusSupport, AssistiveFocusSupport)] = &[
@@ -78,13 +79,13 @@ mod tests {
             (
                 "TalkBack",
                 super::android::AndroidAccessibility::ASSISTIVE_FOCUS,
-                AssistiveFocusSupport::Reported,
+                AssistiveFocusSupport::Unreported,
             ),
             #[cfg(target_os = "ios")]
             (
                 "UIAccessibility",
                 super::apple::IosAccessibility::ASSISTIVE_FOCUS,
-                AssistiveFocusSupport::Reported,
+                AssistiveFocusSupport::Unreported,
             ),
         ];
         for (adapter, support, expected) in adapters {

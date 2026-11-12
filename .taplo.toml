@@ -8,7 +8,6 @@ exclude = [
     ".claude/**",
     ".10x/**",
     ".worktrees/**",
-    "third_party/**", # vendored as published (third_party/README.md)
 ]
 
 [formatting]
