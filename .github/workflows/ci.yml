@@ -246,6 +246,7 @@ jobs:
       trybuild_required: ${{ steps.scope.outputs.trybuild_required }}
       size_required: ${{ steps.scope.outputs.size_required }}
       send_positions_required: ${{ steps.scope.outputs.send_positions_required }}
+      miri_required: ${{ steps.scope.outputs.miri_required }}
       features_required: ${{ steps.scope.outputs.features_required }}
       hack_args: ${{ steps.scope.outputs.hack_args }}
     steps:
@@ -991,15 +992,18 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────
   # miri checks selected ownership and containment contracts without a GPU:
+  # flui-foundation and flui-log whole, the rendering storage arena,
   # rendering owner failure/publishing families, public GlobalKey migration,
   # surface-before-target destruction and cancellation of renderer construction.
-  # The same scopes are used by `cargo xtask miri`; they are not a full
+  # A pull request runs it when its diff reaches a source the job interprets
+  # whole (`miri_required`, `change_scope::miri_scope`). The same scopes are
+  # used by `cargo xtask miri`; they are not a full
   # workspace memory-safety audit.
   # ─────────────────────────────────────────────────────────────────────────
   miri:
     name: miri
     needs: [checks, plan]
-    if: needs.plan.outputs.lane == 'full'
+    if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.miri_required == 'true')
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
@@ -1025,6 +1029,19 @@ jobs:
       # `+nightly` is required: the committed rust-toolchain.toml pin overrides
       # the job's installed default toolchain, and the pinned stable has no
       # miri component (first run failed exactly there).
+      #
+      # The ground every crate above stands on: flui-foundation's id newtypes,
+      # notifiers and claim slot, flui-log's layer downcast, and the
+      # render-node arena of flui-rendering. Every unit test of the first two
+      # (their integration suites spawn processes, which Miri cannot), the
+      # `storage::` module of the third.
+      - name: cargo miri test (flui-foundation)
+        run: cargo +nightly miri test -p flui-foundation --lib --locked
+      - name: cargo miri test (flui-log)
+        run: cargo +nightly miri test -p flui-log --lib --locked
+      - name: cargo miri test (rendering storage)
+        run: cargo +nightly miri test -p flui-rendering --lib --locked "storage::"
+
       - name: cargo miri test (pipeline::owner)
         run: cargo +nightly miri test -p flui-rendering --lib --locked pipeline::owner
 
@@ -1382,10 +1399,11 @@ jobs:
       #      tooling   deps
       #      wide      deps + HEAVY_JOBS (the Linux PR gate)
       #      full      wide + FULL_JOBS (additional Linux checks) + test-trybuild
-      #                + size + api-contracts
+      #                + size + api-contracts + miri
       #    and a wide pull request adds test-trybuild when `trybuild_required`,
-      #    size when `size_required`, feature-scope when `features_required` and
-      #    api-contracts when `send_positions_required` (ON_DEMAND).
+      #    size when `size_required`, feature-scope when `features_required`,
+      #    api-contracts when `send_positions_required` and miri when
+      #    `miri_required` (ON_DEMAND).
       #    Every other job must skip. Any other skip (a drifted `if:`, a
       #    cancellation) or a job that ran where it should have skipped fails
       #    the aggregator. Each list must equal the jobs whose `if:` names its
@@ -1396,11 +1414,12 @@ jobs:
           HEAVY_JOBS: >-
             clippy wasm-check cross-typecheck test test-nested doc test-features public-api
           FULL_JOBS: >-
-            feature-matrix doc-test miri perf-gates
+            feature-matrix doc-test perf-gates
           LANE: ${{ needs.plan.outputs.lane }}
           TRYBUILD_REQUIRED: ${{ needs.plan.outputs.trybuild_required }}
           SIZE_REQUIRED: ${{ needs.plan.outputs.size_required }}
           SEND_POSITIONS_REQUIRED: ${{ needs.plan.outputs.send_positions_required }}
+          MIRI_REQUIRED: ${{ needs.plan.outputs.miri_required }}
           FEATURES_REQUIRED: ${{ needs.plan.outputs.features_required }}
           EVENT: ${{ github.event_name }}
         run: cargo xtask ci-verify
