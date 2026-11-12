@@ -512,6 +512,8 @@ where
     /// built-in stateless behavior therefore reports `NONE`:
     ///
     /// ```
+    /// use std::rc::Rc;
+    ///
     /// use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData};
     /// use flui_foundation::Single;
     /// use flui_view::{BuildContext, ErrorView, IntoView, StatelessView};
@@ -527,7 +529,7 @@ where
     /// }
     ///
     /// let behavior = StatelessBehavior::new();
-    /// let core = ElementCore::<OrdinaryView, Single>::new(OrdinaryView);
+    /// let core = ElementCore::<OrdinaryView, Single>::new(Rc::new(OrdinaryView));
     /// let mut parent_data = BoxParentData::default();
     /// let impact = behavior.apply_parent_data_config(&core, &mut parent_data);
     /// assert_eq!(impact, RenderUpdateImpact::NONE);
