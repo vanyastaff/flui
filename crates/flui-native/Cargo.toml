@@ -602,14 +602,6 @@ wayland = [
     "dep:wayland-cursor",
 ]
 
-# Web platform
-# Honest note (verified 2026-08-04): no-op selector — zero
-# `feature = "web"` references in this crate's src. The web host and each
-# feature's `web` file are gated by `#[cfg(target_arch = "wasm32")]` on the
-# actual compile target (`src/hosts/mod.rs`), not by this flag; enabling or
-# disabling it changes nothing observable. Kept as a forward-compatible name
-# for downstream `Cargo.toml`s, mirroring `desktop`.
-web = []
 x11 = ["dep:x11rb", "dep:rustix", "dep:xkbcommon-dl", "dep:xim-ctext"]
 
 # The built-in HTTP client of the native hosts without a system stack (Linux

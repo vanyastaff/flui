@@ -867,21 +867,11 @@ cupertino = ["dep:flui-cupertino"]
 # Off by default like every capability (ADR-0088 §6): `system` gives
 # `flui::services::system`, the providers of the launcher and the file dialogs.
 system = ["dep:flui-system"]
-# Deprecated and empty. The global widgets localizations now live in
-# `flui::widgets` and need no feature; this name stays only so a build that
-# still passes `flui/localizations` (the weekly workflow does) keeps resolving.
-# It is removed once nothing names it (ADR-0081).
-localizations = []
-
-# === GPU readback tests ===
-# Opt-in, and OFF by default on purpose. `tests/composited_layer_update_readback.rs`
-# needs a real wgpu adapter; the workspace `test` job has none, and `gpu-test`
-# runs WARP on Windows. Ungated, that test
-# fails there with `AdapterRequest(NotFound { active_backends: Backends(0x0) })`, an
-# ENVIRONMENT failure that looks nothing like the pixel mismatch it appears to be.
-# It is not skipped when no adapter is found: a test that quietly passes on a machine
-# that cannot run it inflates the count and proves nothing. CI runs it in `gpu-test`.
-gpu-readback-tests = []
+# `HttpCapability`'s built-in provider: each host's own HTTP stack, `ureq`
+# over rustls on Linux and the BSDs, which have none (ADR-0280). Off, a widget
+# acquiring `HttpCapability` is refused as not registered and the application
+# links no HTTP client or TLS stack.
+http = ["flui-app/http"]
 
 # === Unstable input surface ===
 # Additive. Re-exports the handle-less input capabilities
@@ -954,11 +944,6 @@ serde = [
 name = "facade_serde"
 path = "tests/facade_serde.rs"
 required-features = ["serde"]
-
-[[test]]
-name = "composited_layer_update_readback"
-path = "tests/composited_layer_update_readback.rs"
-required-features = ["gpu-readback-tests"]
 
 # The "Agent workflow" acceptance test: mounts the counter
 # template's tree through `flui::testing`, so it needs both the `testing`

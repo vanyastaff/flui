@@ -44,6 +44,23 @@ pub(super) const LIB_TABLE: &str = r#"# The rlib feeds the binary and the tests;
 crate-type = ["rlib", "cdylib"]
 "#;
 
+/// The profiles every template's workspace root writes. Dependencies are
+/// optimized in debug builds too: wgpu and naga's shader translation, Parley's
+/// shaping and lyon's tessellation set a debug build's frame time, and a
+/// dependency is compiled once and rebuilt only when `Cargo.lock` moves, so
+/// the cost is paid on the first build alone. The application's own crates
+/// stay unoptimized for fast rebuilds.
+pub(super) const PROFILES: &str = r#"[profile.dev.package."*"]
+opt-level = 3
+debug = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+"#;
+
 /// `.gitignore` for a generated project. Part of the plan (not a
 /// side-effect of `git init`) so `--dry-run` lists it and a real run and a
 /// dry run always agree on the file set.
