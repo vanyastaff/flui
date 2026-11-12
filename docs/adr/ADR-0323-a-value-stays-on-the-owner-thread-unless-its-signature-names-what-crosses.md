@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-11-12)
 - **Date:** 2026-11-12
 - **Supersedes:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §2 (the thread-affinity table) and
-  §9's first two items (the public API's thread affinity and the cross-thread vocabulary);
+  §9's items on the public API's thread affinity and the cross-thread vocabulary;
   [ADR-0136](ADR-0136-owner-local-ui-surfaces.md) §3 (the two gates and the kinds of value that
   cross); [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md) §4 (where parallel work
   leaves the owner thread)
@@ -99,7 +99,7 @@ the compiler proves each: nothing is made `Send` by assertion.
 | `job` | work handed to another thread, with its captures | `FnOnce() -> T + Send + 'static`, `Future + Send + 'static` | `Background::compute` and `io`, `TaskSpawner`, `ComputeJob`, `IoFuture`, `DecodeJob`, a service's future, `OwnerPoster::post` towards the owner |
 | `worker-result` | what a job returns or publishes | `T: Send + 'static` on the job's output only | the same items, `ServicePublisher<E>`, `Resolver<T>` |
 | `handle` | a capability another thread holds or calls | a `Clone + Send + Sync` type, or a trait whose implementations are called off the owner thread | `SignalSender`, `AppHandle`, `Executor`, the host pools, `HttpClient`, `Storage`, `SurfaceTarget`, `DisplayConnection`, a factory inside `AppConfig`, a tracing sink |
-| `snapshot` | an immutable value a committed scene carries to the raster executor | `Send + Sync` on the value, shared by `Arc` | `flui-layer`'s `AnnotationValue`, and with it `AnnotatedRegion<T>` |
+| `snapshot` | a committed scene, which moves by value (`SceneSnapshot`, `Scene`, `LayerTree`), and an immutable value it carries to the raster executor | `Send` on the scene; `Send + Sync` on a carried value, shared by `Arc` | `flui-layer`'s `AnnotationValue`, and with it `AnnotatedRegion<T>` |
 | `error` | an error's source | `Box<dyn Error + Send + Sync + 'static>` | every public error enum's `source` |
 
 Rules that follow:

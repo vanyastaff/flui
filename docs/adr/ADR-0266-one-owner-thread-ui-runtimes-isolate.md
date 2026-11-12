@@ -92,12 +92,6 @@ runtime partition with ADR-0242 decision 8.
 **Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) §2, which lists
 what crosses a thread.
 
-Work that can run in parallel leaves the owner thread through the typed cross-thread handles:
-`IoFuture`, `ComputeJob` and the host pools for workers, `SignalSender`, `RebuildHandle`,
-`FrameWaker` and `AppHandle` for coming back, the raster thread for GPU work
-([ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) §4). Those are the
-public API's only `Send` positions, held by `cargo xtask send-positions`.
-
 ### §5. What may come later, and how
 
 - **State shared by windows** is an app-scope owner-local signal graph on the owner thread: read in

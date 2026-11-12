@@ -7,8 +7,8 @@
   sentence "Multiple UI runtimes may execute concurrently" and §1's sentence on runtime count per
   owner thread: every UI runtime runs on one owner thread.
 - **Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) for §2 (the
-  thread-affinity table) and §9's first two items (the public API's thread affinity and the
-  cross-thread vocabulary): one record states what stays on the owner thread and what crosses.
+  thread-affinity table) and §9's items on the public API's thread affinity and the
+  cross-thread vocabulary: one record states what stays on the owner thread and what crosses.
 - **Date:** 2026-07-11
 - **Revised:** 2026-11-03 — the title no longer calls FLUI a multi-threaded runtime: one owner
   thread hosts every UI runtime (ADR-0266), and the parallelism is outside the UI transaction.
@@ -125,20 +125,11 @@ another at 144 Hz, a background one frozen), and raster scheduling (GPU backpres
 ### 2. Thread-affinity model — the compiler states the rules
 
 **Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) §1 and §2,
-which state what stays on the owner thread and what crosses; the table below is the record of
-the earlier wording.
+which state what stays on the owner thread and what crosses.
 
 **Superseded-by:** [ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md) for async task
 ownership: `OwnerFrame`, `AsyncDriver`, `TaskToken` and their futures are owner-local;
 task wakers and `FrameWaker` alone cross that boundary. The remaining contracts below stand.
-
-| Type | Contract |
-|---|---|
-| `UiRuntime`, element and render trees, `PipelineCell`, views, contexts, UI callbacks | `!Send + !Sync` — single writer, structurally |
-| `SceneSnapshot`, `Scene`, `LayerTree` | `Send`, moves by value — the immutable commit artifact |
-| `WorkerJob<Input>` / `WorkerResult<Output>` | `Send`, owned immutable payloads |
-| `UiCommandSender` | `Clone + Send + Sync` — enqueue-and-wake capability, closed vocabulary |
-| `Renderer` | owned by exactly one raster owner, never shared |
 
 A UI tree cannot be handed to a worker, workers receive owned inputs and return results
 instead of writing into the tree, and cross-thread interaction exists only through sanctioned
@@ -259,21 +250,8 @@ These are deliberate divergences from Flutter's process-global shape.
 ### 9. Public API consequences
 
 **Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) §1 to §3 for
-the first two items below (thread affinity and the cross-thread vocabulary).
+the public API's thread affinity and the cross-thread vocabulary, which stood here.
 
-- `View`, `BuildContext`, `ViewState`, `ElementBase`, the view-family traits, notifications and
-  the `flui-foundation` callback aliases are not `Send + Sync`; widget authors use `Rc`,
-  `Cell` and `RefCell` freely. `RenderObject`, `RenderSliver` and `ParentData` are not
-  `Send + Sync` either: a `PipelineOwner` belongs to one presentation on one thread. Listener,
-  animation-status, post-frame and event callbacks are `'static` without `Send`, and
-  controllers are `Rc<RefCell<_>>` handles. `cargo xtask send-positions` holds every `Send`
-  position left in the public API to a list that only shrinks.
-- **Closed command vocabulary**: the cross-thread surface is domain-specific — coalesced redraw
-  requests (`RebuildHandle`, `FrameWaker`), signal writes (`SignalSender`), owner-queued hot
-  reload, stamped worker results (`IoFuture`, `ComputeJob`), application
-  commands (`AppHandle`), and the raster handle verbs. The run-a-closure primitive is crate-private; a public arbitrary-closure
-  executor is rejected as a standing constraint. Raw channels never appear in public
-  signatures.
 - `UiRuntime` now lives in the internal `flui-runtime` crate (ADR-0083); `flui-app` owns its
   native host assembly and dispatch. Crate visibility is distinct from a stable embedder API:
   public internal-crate items do not by themselves establish that stability contract.
