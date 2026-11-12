@@ -162,10 +162,11 @@ struct ListenerStorage<Arg> {
     entries: RefCell<Listeners<Arg>>,
     delivery_depth: Cell<usize>,
     failed: AtomicBool,
-    retired: RefCell<Vec<(ListenerId, OwnedCallback<Arg>)>>,
-    /// Captures handed over by [`Notifier::retire_after_delivery`], retired
-    /// after this round's own removed listeners.
-    deferred: RefCell<Vec<Box<dyn Any>>>,
+    /// What the delivery in progress retires when its outermost round ends.
+    /// Made by the first removal or hand-over during a delivery and kept
+    /// after it, so a channel nobody removes from mid-delivery holds one
+    /// empty slot instead of two lists.
+    retiring: RefCell<Option<Box<Retiring<Arg>>>>,
     /// Listener identities: the owner-local mint whose refusal is sticky, so
     /// a listener id is never issued twice.
     next_id: IdMint<ListenerId>,
@@ -176,11 +177,64 @@ impl<Arg> Drop for ListenerStorage<Arg> {
     fn drop(&mut self) {
         // Empty the field before any capture can unwind through its drop glue.
         // Final Rc ownership gives exclusive access without holding a borrow.
-        let mut callbacks = std::mem::take(self.retired.get_mut());
+        let Retiring {
+            removed: mut callbacks,
+            deferred,
+        } = self
+            .retiring
+            .get_mut()
+            .take()
+            .map(|retiring| *retiring)
+            .unwrap_or_default();
         callbacks.extend(std::mem::take(self.entries.get_mut()).into_callbacks());
-        let deferred = std::mem::take(self.deferred.get_mut());
         retire_callbacks(callbacks);
         drop(deferred);
+    }
+}
+
+/// What a delivery in progress holds until its outermost round ends.
+struct Retiring<Arg> {
+    /// Listeners removed during the delivery.
+    removed: Vec<(ListenerId, OwnedCallback<Arg>)>,
+    /// Captures handed over by [`Notifier::retire_after_delivery`], retired
+    /// after the round's own removed listeners.
+    deferred: Vec<Box<dyn Any>>,
+}
+
+impl<Arg> Default for Retiring<Arg> {
+    fn default() -> Self {
+        Self {
+            removed: Vec::new(),
+            deferred: Vec::new(),
+        }
+    }
+}
+
+impl<Arg> ListenerStorage<Arg> {
+    /// The lists of the delivery in progress, made on first use. The borrow
+    /// is held only while a value is pushed: nothing is dropped under it.
+    fn retiring(&self) -> std::cell::RefMut<'_, Retiring<Arg>> {
+        std::cell::RefMut::map(self.retiring.borrow_mut(), |slot| {
+            &mut **slot.get_or_insert_with(Box::default)
+        })
+    }
+
+    /// Takes what the delivery has gathered so far, or `None` when there is
+    /// nothing left to retire. The lists are handed out; the slot stays.
+    #[expect(
+        clippy::type_complexity,
+        reason = "the two lists of one delivery, taken together and used once"
+    )]
+    fn take_retiring(&self) -> Option<(Vec<(ListenerId, OwnedCallback<Arg>)>, Vec<Box<dyn Any>>)> {
+        let mut slot = self.retiring.borrow_mut();
+        let retiring = slot.as_mut()?;
+        if retiring.removed.is_empty() && retiring.deferred.is_empty() {
+            return None;
+        }
+        Some((
+            std::mem::take(&mut retiring.removed),
+            std::mem::take(&mut retiring.deferred),
+        ))
     }
 }
 
@@ -214,7 +268,7 @@ impl<Arg: 'static> SubscribedChannel for ListenerStorage<Arg> {
         let callback = self.entries.borrow_mut().withdraw(id);
         if let Some(callback) = callback {
             if self.delivery_depth.get() != 0 {
-                self.retired.borrow_mut().push((id, callback));
+                self.retiring().removed.push((id, callback));
             } else {
                 drop(callback);
             }
@@ -268,8 +322,7 @@ impl<Arg> Notifier<Arg> {
                 entries: RefCell::new(Listeners::default()),
                 delivery_depth: Cell::new(0),
                 failed: AtomicBool::new(false),
-                retired: RefCell::new(Vec::new()),
-                deferred: RefCell::new(Vec::new()),
+                retiring: RefCell::new(None),
                 next_id: IdMint::new(),
                 is_disposed: Cell::new(false),
             }),
@@ -510,7 +563,7 @@ impl<Arg> Notifier<Arg> {
         if self.listeners.delivery_depth.get() == 0 {
             return Some(capture);
         }
-        self.listeners.deferred.borrow_mut().push(Box::new(capture));
+        self.listeners.retiring().deferred.push(Box::new(capture));
         None
     }
 
@@ -535,7 +588,7 @@ impl<Arg> Notifier<Arg> {
     fn retire_removed(&self, id: ListenerId, callback: Option<OwnedCallback<Arg>>) {
         if self.listeners.delivery_depth.get() != 0 {
             if let Some(callback) = callback {
-                self.listeners.retired.borrow_mut().push((id, callback));
+                self.listeners.retiring().removed.push((id, callback));
             }
         } else {
             drop(callback);
@@ -545,8 +598,8 @@ impl<Arg> Notifier<Arg> {
     fn retire_removed_map(&self, callbacks: Listeners<Arg>) {
         if self.listeners.delivery_depth.get() != 0 {
             self.listeners
-                .retired
-                .borrow_mut()
+                .retiring()
+                .removed
                 .extend(callbacks.into_callbacks());
         } else {
             retire_listeners(callbacks);
@@ -694,11 +747,9 @@ impl<Arg> Notifier<Arg> {
             drop(snapshot);
             if self.listeners.delivery_depth.get() == 1 {
                 loop {
-                    let mut retired = std::mem::take(&mut *self.listeners.retired.borrow_mut());
-                    let deferred = std::mem::take(&mut *self.listeners.deferred.borrow_mut());
-                    if retired.is_empty() && deferred.is_empty() {
+                    let Some((mut retired, deferred)) = self.listeners.take_retiring() else {
                         break;
-                    }
+                    };
                     retired.sort_unstable_by_key(|(id, _)| *id);
                     for (_, callback) in retired {
                         recovery.retire_callout_capture(callback);
