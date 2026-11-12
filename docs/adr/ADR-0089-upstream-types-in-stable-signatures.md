@@ -93,7 +93,7 @@ from `flui-geometry`/`flui-types`, `PlatformWindow::resize` and `safe_area_inset
 facade re-exports whole internal crates (`pub use flui_types as types`, `src/lib.rs:150`). Every
 item reachable from a Stable crate's public API therefore carries the Stable promise, whatever
 its crate's `tier-kind`; the `internal` kind's "no promise" covers only items outside that
-closure. The closure gate of §6 is what lists them.
+closure. `api/flui.txt` lists them for the facade ([ADR-0323](ADR-0323-the-facade-api-is-a-committed-snapshot.md)).
 
 ### 2. What may appear
 
@@ -226,7 +226,7 @@ translation has exhaustive inbound matches and its outbound role-family test.
   both, an admission and an entry in use beside ones no longer needed into the contract's real
   rustdoc output, and the rule reports exactly the violations. The same gate checks the core
   host's allow list on every target it builds a host for (ADR-0151 §8).
-- `cargo xtask send-positions` and its `--self-test` (§6), in CI's `api-contracts` job: the self-test runs
+- `cargo xtask send-positions` and its `--self-test` (§6), in CI's `public-api` job and `cargo test -p xtask`: the self-test runs
   the rule over a rustdoc JSON document with one planted position of each kind, a private sealed
   supertrait, a stale and an over-counted entry, and the items the walk must not reach or count
   (a private item, a public item in a private module, a private field, a synthetic impl, a

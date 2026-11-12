@@ -172,7 +172,7 @@ pub(crate) fn send_positions(args: &SendPositionsArgs) -> anyhow::Result<ExitCod
 
 /// Every workspace library that is not a proc-macro, by crate name, with its
 /// package name.
-fn libraries(metadata: &cargo_metadata::Metadata) -> BTreeMap<String, String> {
+pub(crate) fn libraries(metadata: &cargo_metadata::Metadata) -> BTreeMap<String, String> {
     metadata
         .workspace_packages()
         .into_iter()
@@ -349,7 +349,7 @@ fn reach(
 }
 
 /// The ids in a list of ids, skipping a stripped (`null`) one.
-fn ids(list: &Json) -> impl Iterator<Item = String> + '_ {
+pub(crate) fn ids(list: &Json) -> impl Iterator<Item = String> + '_ {
     list.as_array()
         .into_iter()
         .flatten()
@@ -375,12 +375,12 @@ fn implementations<'a>(index: &'a Json, list: &'a Json) -> impl Iterator<Item = 
 
 /// Public to whoever can name the parent: `pub`, or the default of a trait's
 /// items, a variant or an implementation's items.
-fn public(item: &Json) -> bool {
+pub(crate) fn public(item: &Json) -> bool {
     matches!(item["visibility"].as_str(), Some("public" | "default"))
 }
 
 /// The crate and path of an item another crate defines, as `doc` records it.
-fn external(doc: &Json, id: &str) -> Option<(String, Vec<String>)> {
+pub(crate) fn external(doc: &Json, id: &str) -> Option<(String, Vec<String>)> {
     let summary = doc["paths"].get(id)?;
     let krate = api_closure::id_text(&summary["crate_id"]);
     let lib = doc["external_crates"].get(&krate)?["name"]
@@ -397,7 +397,7 @@ fn external(doc: &Json, id: &str) -> Option<(String, Vec<String>)> {
 /// The id of the item at `path` (crate name first): the path rustdoc records
 /// for a local item, or the walk from the crate root through public modules
 /// and re-exports.
-fn resolve(doc: &Json, path: &[String]) -> Option<String> {
+pub(crate) fn resolve(doc: &Json, path: &[String]) -> Option<String> {
     let recorded = doc["paths"].as_object()?.iter().find(|(_, summary)| {
         summary["crate_id"].as_u64() == Some(0)
             && summary["path"].as_array().is_some_and(|segments| {
@@ -852,7 +852,7 @@ fn implementation(trait_: Json, for_type: Json, generics: Json, synthetic: bool)
 /// items: one planted position of each kind, one hidden in each place the
 /// walk must not reach, and the synthetic and blanket implementations it
 /// must skip.
-fn fixture() -> Json {
+pub(crate) fn fixture() -> Json {
     let s = json!({ "resolved_path": { "path": "S", "id": 5, "args": null } });
     let index: serde_json::Map<String, Json> = [
         item(0, Some("fixture"), "public", json!({ "module": { "is_crate": true, "items": [1, 2, 3, 4, 5, 9, 10, 12, 14, 15], "is_stripped": false } })),

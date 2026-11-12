@@ -40,6 +40,7 @@ mod panic_boundary;
 mod panic_messages;
 mod perf;
 mod platform_floor;
+mod public_api;
 mod ratchet;
 mod recording_vocabulary;
 mod send_impls;
@@ -130,6 +131,8 @@ enum Command {
     /// Check that every place the public API names `Send` or `Sync` is listed under
     /// ADR-0136 §3.
     SendPositions(send_positions::SendPositionsArgs),
+    /// Check the facade's public API against its committed snapshot `api/flui.txt` (ADR-0323).
+    PublicApi(public_api::PublicApiArgs),
     /// Check that every `new` returning `Result` or `Option` is listed and the list only
     /// shrinks: such a constructor is `try_new` (AGENTS.md).
     TryNew(try_new::TryNewArgs),
@@ -219,6 +222,7 @@ fn main() -> ExitCode {
         Command::PanicBoundary(args) => panic_boundary::panic_boundary(&args),
         Command::SendImpls(args) => send_impls::send_impls(&args),
         Command::SendPositions(args) => send_positions::send_positions(&args),
+        Command::PublicApi(args) => public_api::public_api(&args),
         Command::TryNew(args) => try_new::try_new(&args),
         Command::PanicMessages(args) => panic_messages::panic_messages(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),

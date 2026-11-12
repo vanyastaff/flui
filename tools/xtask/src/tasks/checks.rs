@@ -171,11 +171,11 @@ mod tests {
     use clap::{CommandFactory as _, Parser as _};
 
     use super::*;
-    use crate::{perf, send_positions};
+    use crate::{perf, public_api, send_positions};
 
     /// Every gate's self-test: the gate run over its planted violations,
     /// failing unless exactly the planted findings come back (ADR-0078 §4).
-    const SELF_TESTS: [(&str, InProcess); 16] = [
+    const SELF_TESTS: [(&str, InProcess); 17] = [
         ("workspace", |args| workspace::workspace(&parsed(args)?)),
         ("reach", |args| workspace::reach(&parsed(args)?)),
         ("module-dag", |args| module_dag::module_dag(&parsed(args)?)),
@@ -188,6 +188,7 @@ mod tests {
         ("send-positions", |args| {
             send_positions::send_positions(&parsed(args)?)
         }),
+        ("public-api", |args| public_api::public_api(&parsed(args)?)),
         ("try-new", |args| try_new::try_new(&parsed(args)?)),
         ("panic-messages", |args| {
             panic_messages::panic_messages(&parsed(args)?)

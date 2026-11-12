@@ -114,7 +114,7 @@ weak-handle and thread-boundary rules in this section still apply.
   public API of `flui` and `flui-sdk` (a supertrait, a bound, a `dyn … + Send`) in
   `tools/xtask/allowlists/send-positions.toml`, read from the nightly rustdoc JSON that
   [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §6's loader produces, in CI's
-  `api-contracts` job. An unlisted position fails the gate, and so does an entry the code no
+  `public-api` job, on every pull request. An unlisted position fails the gate, and so does an entry the code no
   longer has. A position is admitted only where a value really crosses a thread: a caught
   panic's payload, a waker or what it carries, a worker's result, or a handle meant for another
   thread. The change that writes it lists it, naming that kind as the entry's
@@ -151,7 +151,7 @@ weak-handle and thread-boundary rules in this section still apply.
 ## Validation
 
 - §3: `cargo xtask send-impls` runs in `cargo xtask checks` and `cargo xtask send-positions` in
-  CI's `api-contracts` job, each with its `--self-test`; `cargo xtask deps` (cargo-deny over
+  CI's `public-api` job, each with its `--self-test` (the latter's in `cargo test -p xtask`); `cargo xtask deps` (cargo-deny over
   `deny.toml`) holds the crate bans; xtask's `send_positions_list_entry_names_one_of_the_kinds_that_cross`
   refuses a `crosses` kind this section does not name.
 - `tests/thread_boundary_ui.rs` (`async_driver_stays_on_its_thread`): an `AsyncDriver` handed
