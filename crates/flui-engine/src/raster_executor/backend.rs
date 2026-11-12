@@ -78,7 +78,7 @@ pub trait SlotBackend {
     fn reclaim(&mut self, level: MemoryPressureLevel);
 
     /// Whether the device is lost: every frame fails
-    /// [`EngineError::DeviceLost`](crate::EngineError::DeviceLost) until a
+    /// [`EngineError::DeviceLost`] until a
     /// [`rebuild_device`](Self::rebuild_device) succeeds.
     fn device_lost(&self) -> bool;
 
