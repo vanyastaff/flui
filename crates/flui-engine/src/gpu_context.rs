@@ -49,9 +49,25 @@ thread_local! {
 
 /// An offscreen slot: a texture the executor reads back.
 struct OffscreenSlot {
-    texture: wgpu::Texture,
+    /// `None` after a device rebuild that could not make it at the slot's
+    /// size: the slot renders nothing until a resize makes one.
+    texture: Option<wgpu::Texture>,
     format: wgpu::TextureFormat,
     size: (u32, u32),
+}
+
+impl OffscreenSlot {
+    /// The slot's target.
+    ///
+    /// # Errors
+    /// [`EngineError::InvalidTargetSize`] while the device has no target of
+    /// the slot's size (a rebuilt device with a smaller limit).
+    fn target(&self) -> EngineResult<&wgpu::Texture> {
+        self.texture.as_ref().ok_or(EngineError::InvalidTargetSize {
+            width: self.size.0,
+            height: self.size.1,
+        })
+    }
 }
 
 /// What one slot renders into.
@@ -537,8 +553,12 @@ impl GpuContext {
         for (id, slot) in slots.iter_mut() {
             let rebuilt = match slot {
                 SurfaceSlot::Offscreen(entry) => {
-                    offscreen_texture(domain, max_dim, entry.size, entry.format)
-                        .map(|texture| entry.texture = texture)
+                    // A target the new device cannot make at the slot's size
+                    // is gone, not left on the old device: the slot renders
+                    // nothing until a resize makes one.
+                    let made = offscreen_texture(domain, max_dim, entry.size, entry.format);
+                    entry.texture = made.as_ref().ok().cloned();
+                    made.map(drop)
                 }
                 SurfaceSlot::Window(window) => window.rebuild(&gpu),
             };
@@ -595,7 +615,7 @@ impl GpuContext {
         self.insert(
             slot,
             SurfaceSlot::Offscreen(OffscreenSlot {
-                texture,
+                texture: Some(texture),
                 format,
                 size,
             }),
@@ -647,10 +667,10 @@ impl GpuContext {
         let (adapter, domain) = (&self.adapter, &self.domain);
         match self.slots.get_mut(slot) {
             Some(SurfaceSlot::Offscreen(entry)) => {
-                if entry.size == size {
+                if entry.size == size && entry.texture.is_some() {
                     return Ok(());
                 }
-                entry.texture = offscreen_texture(domain, max_dim, size, entry.format)?;
+                entry.texture = Some(offscreen_texture(domain, max_dim, size, entry.format)?);
                 entry.size = size;
                 Ok(())
             }
@@ -677,7 +697,7 @@ impl GpuContext {
     pub(crate) fn render_slot(&mut self, slot: SlotId, tree: &LayerTree) -> EngineResult<()> {
         let (texture, format, size) = {
             let entry = self.offscreen_slot(slot)?;
-            (entry.texture.clone(), entry.format, entry.size)
+            (entry.target()?.clone(), entry.format, entry.size)
         };
         let _submission_scope = self.domain.begin_frame_scope()?;
         let mut painter = self.take_painter(format, size);
@@ -814,7 +834,7 @@ impl GpuContext {
     /// attached offscreen slot; a readback error.
     pub(crate) fn read_slot(&self, slot: SlotId) -> EngineResult<Vec<u8>> {
         let entry = self.offscreen_slot(slot)?;
-        crate::headless::readback_rgba(&self.domain, &entry.texture, entry.size.0, entry.size.1)
+        crate::headless::readback_rgba(&self.domain, entry.target()?, entry.size.0, entry.size.1)
     }
 
     /// What this context has built over its life.

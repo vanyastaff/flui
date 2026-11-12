@@ -86,6 +86,9 @@ struct ExecSlot {
     /// The size the backend last refused, so a size refused again on every
     /// turn or every send warns once.
     refused_size: Option<flui_foundation::geometry::DeviceSize>,
+    /// Whether the slot presents to a window's surface, which only its owner
+    /// can replace.
+    window: bool,
 }
 
 /// The raster executor: owns the backend and every slot, and renders them on
@@ -291,6 +294,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
         first: &mut FirstPanic,
     ) -> usize {
         let mut caught = FirstPanic::new();
+        let window = matches!(target, SlotTarget::Window(_));
         let failure = match caught.contain(|| self.backend.attach(slot, target, config)) {
             Some(Ok(())) => None,
             Some(Err(error)) => Some(SlotFailure::Refused(error)),
@@ -313,6 +317,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 visibility: config.visibility,
                 full_redraw: Some(FullReason::FirstFrame),
                 refused_size: None,
+                window,
             });
             return 0;
         };
@@ -464,7 +469,9 @@ impl<B: SlotBackend> RasterExecutor<B> {
             };
             let extra = {
                 let mut state = slot.inbox.lock();
-                state.wants_surface = true;
+                // A window slot dropped its surface; an offscreen slot waits
+                // for a size its new device can make.
+                state.wants_surface |= slot.window;
                 state.hold_failure(SlotFailure::Refused(error))
             };
             retire(None, extra, first);

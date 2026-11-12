@@ -1776,22 +1776,30 @@ fn a_backend_that_cannot_rebuild_inline_gives_up_at_once() {
     ));
 }
 
-/// A slot the rebuilt device cannot present to drops its surface and asks
-/// its owner for another, with why; the other slots render.
+/// An offscreen slot whose target the rebuilt device cannot make holds why in
+/// its record and asks for no surface, which only a window can be given; the
+/// other slots render.
 #[test]
-fn a_slot_the_rebuilt_device_cannot_present_to_asks_for_a_new_surface() {
+fn an_offscreen_slot_the_rebuilt_device_refuses_holds_why_and_asks_no_surface() {
     let mut rig = rig();
     let refused = attached(&mut rig, 1);
     let kept = attached(&mut rig, 2);
     rig.backend.lose_device();
-    rig.backend
-        .refuse_on_rebuild(refused.slot, EngineError::IncompatibleSurface);
+    rig.backend.refuse_on_rebuild(
+        refused.slot,
+        EngineError::InvalidTargetSize {
+            width: 8,
+            height: 8,
+        },
+    );
     let _ = rig.executor.turn();
-    let record = rig.sender.record(refused.slot).expect("held");
-    assert!(record.wants_surface, "the owner makes a new surface");
+    assert!(
+        !rig.sender.record(refused.slot).expect("held").wants_surface,
+        "an offscreen slot takes no restore"
+    );
     assert!(matches!(
         rig.sender.take_failure(refused.slot),
-        Some(SlotFailure::Refused(EngineError::IncompatibleSurface))
+        Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
     ));
     assert!(!rig.sender.record(kept.slot).expect("held").wants_surface);
     let _ = rig

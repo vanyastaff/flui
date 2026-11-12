@@ -524,3 +524,33 @@ fn a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation() {
     let _ = executor.turn();
     assert_eq!(drain(), [(1, RasterVerdict::Presented)]);
 }
+
+/// A window the rebuilt device cannot present to drops its surface: its
+/// record asks the owner for another, with why, and a restore answers it.
+#[test]
+fn a_window_the_rebuilt_device_cannot_present_to_asks_for_a_new_surface() {
+    let mut rig = rig();
+    let (slot, _) = rig.sized_window();
+    rig.backend.lose_device();
+    rig.backend
+        .refuse_on_rebuild(slot, EngineError::IncompatibleSurface);
+    let _ = rig.executor.turn();
+    assert!(
+        rig.sender.record(slot).expect("held").wants_surface,
+        "the owner makes a new surface"
+    );
+    assert!(matches!(
+        rig.sender.take_failure(slot),
+        Some(SlotFailure::Refused(EngineError::IncompatibleSurface))
+    ));
+    let SendReceipt::Configured(restored) = rig.send(RasterCommand::Restore {
+        slot,
+        surface: rig.surface(),
+    }) else {
+        panic!("a restore of a sized window mints a generation");
+    };
+    let _ = rig.frame(slot, restored, 1);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(1, RasterVerdict::Presented)]);
+    assert!(!rig.sender.record(slot).expect("held").wants_surface);
+}
