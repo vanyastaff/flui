@@ -10181,8 +10181,8 @@ fn placement_clock() -> (AnimationController, AnimationController, MotionSpec) {
     clock.set_value(1.0).expect("no build is running");
     let driver = clock.clone();
     let motion = MotionSpec::default()
-        .with_duration(Duration::from_millis(100))
-        .with_curve(curves::LINEAR);
+        .duration(Duration::from_millis(100))
+        .curve(curves::LINEAR);
     (clock, driver, motion)
 }
 

@@ -21,9 +21,9 @@ fn command() -> Modifiers {
 
 fn chord(character: &str, modifiers: Modifiers) -> KeyEvent {
     KeyEventBuilder::new(Code::KeyC)
-        .with_key(Key::character(character))
-        .with_state(KeyState::Down)
-        .with_modifiers(modifiers)
+        .key(Key::character(character))
+        .state(KeyState::Down)
+        .modifiers(modifiers)
         .build()
 }
 
@@ -593,9 +593,9 @@ pub(crate) fn a_field_follows_the_platform_convention_it_is_built_under() {
     const WORD: usize = 4;
     let arrow = |modifiers: Modifiers| {
         KeyEventBuilder::new(Code::ArrowRight)
-            .with_key(Key::Named(NamedKey::ArrowRight))
-            .with_state(KeyState::Down)
-            .with_modifiers(modifiers)
+            .key(Key::Named(NamedKey::ArrowRight))
+            .state(KeyState::Down)
+            .modifiers(modifiers)
             .build()
     };
     let mount = |window: TargetPlatform, wrapped: Option<TargetPlatform>| {

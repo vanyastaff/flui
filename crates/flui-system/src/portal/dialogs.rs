@@ -162,14 +162,14 @@ impl FileDialogBackend for PortalDialogs {
         options.insert("directory", Variant::from(request.picks_folders()));
         common(
             &mut options,
-            request.accept_label(),
-            request.directory(),
-            request.filters(),
+            request.accept_label.as_deref(),
+            request.directory.as_deref(),
+            &request.filters,
         );
         self.show(
             window,
             "OpenFile",
-            request.title(),
+            request.title.as_deref(),
             options,
             answer,
             |picks| (!picks.is_empty()).then_some(picks),
@@ -178,19 +178,19 @@ impl FileDialogBackend for PortalDialogs {
 
     fn save(&self, window: &WindowRef, request: SaveRequest, answer: Resolver<SaveResult>) {
         let mut options = Options::new();
-        if let Some(name) = request.suggested_name() {
-            options.insert("current_name", Variant::from(name.to_owned()));
+        if let Some(name) = request.suggested_name {
+            options.insert("current_name", Variant::from(name));
         }
         common(
             &mut options,
-            request.accept_label(),
-            request.directory(),
-            request.filters(),
+            request.accept_label.as_deref(),
+            request.directory.as_deref(),
+            &request.filters,
         );
         self.show(
             window,
             "SaveFile",
-            request.title(),
+            request.title.as_deref(),
             options,
             answer,
             |picks| picks.into_iter().next(),

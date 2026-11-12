@@ -39,7 +39,7 @@ pub trait MotionBuilder: Sized {
     #[must_use]
     fn duration(mut self, duration: Duration) -> Self {
         let motion = self.motion_mut();
-        *motion = std::mem::take(motion).with_duration(duration);
+        *motion = std::mem::take(motion).duration(duration);
         self
     }
 
@@ -47,7 +47,7 @@ pub trait MotionBuilder: Sized {
     #[must_use]
     fn curve(mut self, curve: impl Curve + 'static) -> Self {
         let motion = self.motion_mut();
-        *motion = std::mem::take(motion).with_curve(curve);
+        *motion = std::mem::take(motion).curve(curve);
         self
     }
 

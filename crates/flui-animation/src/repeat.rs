@@ -45,8 +45,8 @@ pub enum Iterations {
 /// let range = ValueRange::try_new(0.2, 0.8).expect("finite, ordered range");
 /// let _run = controller.repeat(
 ///     RepeatSpec::new(RepeatMode::Alternate)
-///         .with_range(range)
-///         .with_iterations(Iterations::Finite(3)),
+///         .range(range)
+///         .iterations(Iterations::Finite(3)),
 /// )?;
 /// # Ok::<(), flui_animation::AnimationError>(())
 /// ```
@@ -72,7 +72,7 @@ impl RepeatSpec {
 
     /// Repeat within `range`, clamped into the controller's bounds, instead
     /// of over the bounds themselves.
-    pub const fn with_range(mut self, range: ValueRange) -> Self {
+    pub const fn range(mut self, range: ValueRange) -> Self {
         self.range = Some(range);
         self
     }
@@ -81,13 +81,13 @@ impl RepeatSpec {
     /// at the call: a later duration change does not retime the run, and
     /// both legs of an alternating repeat share it. A zero period settles
     /// at the call on the end of the last iteration.
-    pub const fn with_period(mut self, period: Duration) -> Self {
+    pub const fn period(mut self, period: Duration) -> Self {
         self.period = Some(period);
         self
     }
 
     /// Run `iterations` instead of repeating forever.
-    pub const fn with_iterations(mut self, iterations: Iterations) -> Self {
+    pub const fn iterations(mut self, iterations: Iterations) -> Self {
         self.iterations = iterations;
         self
     }

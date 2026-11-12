@@ -739,7 +739,7 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
     let alt_f4 = || {
         PlatformInput::Keyboard(
             KeyEventBuilder::new(Code::F4)
-                .with_modifiers(Modifiers::ALT)
+                .modifiers(Modifiers::ALT)
                 .build(),
         )
     };

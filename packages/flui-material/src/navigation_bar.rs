@@ -309,8 +309,8 @@ impl NavigationBar {
             indicator_color: None,
             overlay_color: None,
             motion: MotionSpec::default()
-                .with_duration(NAVIGATION_INDICATOR_DURATION)
-                .with_curve(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
+                .duration(NAVIGATION_INDICATOR_DURATION)
+                .curve(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
         }
     }
 

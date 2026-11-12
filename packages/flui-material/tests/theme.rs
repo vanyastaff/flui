@@ -264,7 +264,7 @@ pub fn theme_installs_the_focus_ring_style() {
             &flui_interaction::testing::input::KeyEventBuilder::new(
                 flui_interaction::events::Code::Tab,
             )
-            .with_key(flui_interaction::events::Key::Named(
+            .key(flui_interaction::events::Key::Named(
                 flui_interaction::events::NamedKey::Tab,
             ))
             .build(),

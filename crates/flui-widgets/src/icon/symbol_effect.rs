@@ -604,7 +604,7 @@ impl SymbolEffectHostState {
         let _ = controller.set_value(0.0);
         let _ = controller.repeat(
             RepeatSpec::new(RepeatMode::Restart)
-                .with_iterations(Iterations::Finite(self.effect.repeat.get())),
+                .iterations(Iterations::Finite(self.effect.repeat.get())),
         );
     }
 
