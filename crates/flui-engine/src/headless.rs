@@ -142,21 +142,42 @@ impl HeadlessRenderer {
         )
     }
 
-    /// Rasterize `tree` at `size` (device pixels) and return tightly-packed
+    /// Rasterize `scene` at `size` (device pixels) and return tightly-packed
     /// (no row padding) RGBA8 pixels, top row first — ready for
-    /// `image::save_buffer(.., ColorType::Rgba8)`.
+    /// `image::save_buffer(.., ColorType::Rgba8)`. A retained version is
+    /// walked in place, as the windowed renderer draws it (ADR-0304 §9).
     ///
-    /// The surface is cleared to opaque white before the tree is drawn, so any
-    /// area the tree does not paint reads as white rather than uninitialized
-    /// GPU memory. A capture that failed or unwound costs the next one a fresh
-    /// painter, not a failure.
+    /// The surface is cleared to opaque white before the scene is drawn, so
+    /// any area the scene does not paint reads as white rather than
+    /// uninitialized GPU memory. A capture that failed or unwound costs the
+    /// next one a fresh painter, not a failure.
     ///
     /// # Errors
     /// [`EngineError::InvalidTargetSize`] for a zero or over-limit size;
     /// [`EngineError::FrameAlreadyActive`] for a capture started while another
     /// is running on this renderer; otherwise [`EngineError`] when the render
     /// pass or the readback fails.
+    pub fn render_scene(
+        &self,
+        scene: &flui_layer::Scene,
+        size: (u32, u32),
+    ) -> EngineResult<Vec<u8>> {
+        self.render_content(scene.content(), size)
+    }
+
+    /// [`render_scene`](Self::render_scene) for a tree the caller keeps.
+    ///
+    /// # Errors
+    /// As [`render_scene`](Self::render_scene).
     pub fn render_layer_tree(&self, tree: &LayerTree, size: (u32, u32)) -> EngineResult<Vec<u8>> {
+        self.render_content(flui_layer::SceneContent::Tree(tree), size)
+    }
+
+    fn render_content(
+        &self,
+        content: flui_layer::SceneContent<'_>,
+        size: (u32, u32),
+    ) -> EngineResult<Vec<u8>> {
         let mut capture = self
             .capture
             .try_borrow_mut()
@@ -171,7 +192,7 @@ impl HeadlessRenderer {
             context.attach_offscreen(id, size, CAPTURE_FORMAT)?;
             *slot.insert(id)
         };
-        context.render_slot(slot, flui_layer::SceneContent::Tree(tree))?;
+        context.render_slot(slot, content)?;
         context.read_slot(slot)
     }
 

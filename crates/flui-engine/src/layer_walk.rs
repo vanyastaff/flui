@@ -14,7 +14,7 @@
 //! it: each node an offset at its placement, each effect entry its layer over
 //! the entries under it, each chunk its recording, each slot the child node
 //! where it stands. A partial frame passes its damage, and a slot whose
-//! subtree cannot reach it is skipped ([`SceneVersion::subtree_meets`]): what
+//! subtree cannot reach it is skipped ([`SceneVersion::subtree_cull`]): what
 //! the walk costs follows what the damage reaches, not the scene's size.
 //!
 //! The explicit stack owns traversal order; `record_scene` is the shared
@@ -195,6 +195,7 @@ enum Visit {
 /// Termination: a version's slots form a tree (`SceneOwner::apply` refuses a
 /// cycle and a second parent), so every node is entered at most once.
 fn walk_version<V: SceneVisitor>(version: &SceneVersion, cull: Option<Rect<f64>>, visitor: &mut V) {
+    let mut cull = cull.map(|rect| version.subtree_cull(rect));
     let mut stack = vec![Visit::Node(version.root())];
     while let Some(visit) = stack.pop() {
         match visit {
@@ -254,9 +255,9 @@ fn walk_version<V: SceneVisitor>(version: &SceneVersion, cull: Option<Rect<f64>>
                     }
                     match entry {
                         Entry::Effect { .. } => {
-                            let Some(layer) = content.effect_layer(index) else {
-                                continue;
-                            };
+                            let layer = content
+                                .effect_layer(index)
+                                .expect("BUG: a boundary's effect entry holds its layer");
                             let entered = visitor
                                 .enter(Site::Entry(version, at), &Item::Layer(layer))
                                 == Step::Descend;
@@ -272,7 +273,7 @@ fn walk_version<V: SceneVisitor>(version: &SceneVersion, cull: Option<Rect<f64>>
                             }
                         }
                         Entry::Slot { node: child, .. } => {
-                            if cull.is_some_and(|rect| !version.subtree_meets(*child, rect)) {
+                            if cull.as_mut().is_some_and(|cull| !cull.meets(*child)) {
                                 continue;
                             }
                             stack.push(Visit::Entries {
@@ -309,12 +310,10 @@ fn close_until<V: SceneVisitor>(
         if !top.entered {
             continue;
         }
-        let Some(layer) = version
+        let layer = version
             .node(node)
             .and_then(|held| held.content().effect_layer(top.entry))
-        else {
-            continue;
-        };
+            .expect("BUG: an entered effect's node and layer outlive its scope");
         let at = EntryAddress {
             node,
             entry: top.entry,
@@ -739,6 +738,195 @@ mod tests {
             walk_scene(SceneContent::Tree(&tree), None, &mut flattened);
             assert_eq!(walked.log, flattened.log, "case {case}");
         }
+    }
+
+    /// Where each chunk of a tree lands on the surface, read from the tree
+    /// walk alone: the transforms it accumulates, each follower at the
+    /// transform it resolves, and the clips above, as bounding boxes. `None`
+    /// for a chunk nothing of which is shown.
+    #[derive(Default)]
+    struct Landing {
+        state: Vec<(Matrix4, Option<Rect<f64>>, bool)>,
+        chunks: Vec<(*const flui_painting::DisplayList, Option<Rect<f64>>)>,
+    }
+
+    impl SceneVisitor for Landing {
+        fn enter(&mut self, site: Site<'_>, item: &Item<'_>) -> Step {
+            use flui_layer::Layer;
+            let (ctm, clip, hidden) =
+                self.state
+                    .last()
+                    .copied()
+                    .unwrap_or((Matrix4::IDENTITY, None, false));
+            let translated = |offset: flui_foundation::geometry::Offset| {
+                ctm * Matrix4::translation(offset.dx, offset.dy, 0.0)
+            };
+            let mut next = (ctm, clip, hidden);
+            let commands = match item {
+                Item::Chunk(commands) => Some(*commands),
+                Item::Layer(Layer::Picture(picture)) => Some(picture.picture()),
+                _ => None,
+            };
+            if let Some(commands) = commands {
+                let landed = commands
+                    .bounds()
+                    .map(|bounds| ctm.transform_rect(&bounds))
+                    .and_then(|bounds| match clip {
+                        Some(clip) => bounds.intersect(&clip),
+                        None => Some(bounds),
+                    })
+                    .filter(|_| !hidden);
+                self.chunks.push((std::ptr::from_ref(commands), landed));
+            } else {
+                match item {
+                    Item::Placed(offset) => next.0 = translated(offset.offset()),
+                    Item::Layer(Layer::Transform(transform)) => {
+                        next.0 = ctm * *transform.transform();
+                    }
+                    Item::Layer(Layer::Follower(_)) => match site.follower_transform() {
+                        Some(transform) => next.0 = ctm * transform,
+                        None => next.2 = true,
+                    },
+                    Item::Layer(Layer::ClipRect(rect)) if rect.clips() => {
+                        let bounds = ctm.transform_rect(&rect.bounds());
+                        next.1 = match clip {
+                            Some(clip) => clip.intersect(&bounds),
+                            None => Some(bounds),
+                        };
+                        next.2 |= next.1.is_none();
+                    }
+                    Item::Layer(layer) => next.0 = translated(layer.local_translation()),
+                    Item::Chunk(_) => {}
+                }
+            }
+            self.state.push(next);
+            Step::Descend
+        }
+
+        fn exit(&mut self, _site: Site<'_>, _item: &Item<'_>) {
+            self.state.pop();
+        }
+    }
+
+    /// The chunks a walk enters.
+    #[derive(Default)]
+    struct Entered(Vec<*const flui_painting::DisplayList>);
+
+    impl SceneVisitor for Entered {
+        fn enter(&mut self, _site: Site<'_>, item: &Item<'_>) -> Step {
+            if let Item::Chunk(commands) = item {
+                self.0.push(std::ptr::from_ref(*commands));
+            }
+            Step::Descend
+        }
+
+        fn exit(&mut self, _site: Site<'_>, _item: &Item<'_>) {}
+    }
+
+    fn meets(a: Rect<f64>, b: Rect<f64>) -> bool {
+        a.left() <= b.right()
+            && b.left() <= a.right()
+            && a.top() <= b.bottom()
+            && b.top() <= a.bottom()
+    }
+
+    /// A walk culled by a damage rect enters every chunk the flattened tree
+    /// lands in that rect, over random trees of boundaries, transforms,
+    /// rotations, clips, leaders and followers and random damage; the
+    /// landings come from the tree walk, not from the version's geometry.
+    #[test]
+    fn a_culled_walk_enters_every_chunk_its_damage_meets() {
+        let mut skipped = 0_usize;
+        for case in 0..2_000_u64 {
+            let mut rng =
+                Rng(0x9E37_79B9_7F4A_7C15 ^ (case + 1).wrapping_mul(0xBF58_476D_1CE4_E5B9));
+            let count = 1 + rng.below(6);
+            let version = random_version(&mut rng, count);
+            let tree = version.flatten();
+            let mut landing = Landing::default();
+            walk_scene(SceneContent::Tree(&tree), None, &mut landing);
+            let damage = Rect::from_xywh(
+                rng.signed(150.0) + 150.0,
+                rng.signed(150.0) + 150.0,
+                1.0 + rng.signed(40.0).abs(),
+                1.0 + rng.signed(40.0).abs(),
+            );
+            let mut culled = Entered::default();
+            walk_scene(SceneContent::Version(&version), Some(damage), &mut culled);
+            for &(chunk, landed) in &landing.chunks {
+                let entered = culled.0.contains(&chunk);
+                if let Some(landed) = landed
+                    && meets(landed, damage)
+                {
+                    assert!(
+                        entered,
+                        "case {case}: a chunk landing at {landed:?} skipped under {damage:?}"
+                    );
+                }
+                skipped += usize::from(!entered);
+            }
+        }
+        assert!(
+            skipped > 0,
+            "no walk skipped a chunk, so the cull was never tested"
+        );
+    }
+
+    /// A blur over a slot draws past the chunk under it: a damage beside the
+    /// chunk, inside the blur's reach, enters it; one past that reach does not.
+    #[test]
+    fn a_culled_walk_enters_a_slot_whose_blur_reaches_the_damage() {
+        use flui_layer::{
+            BoundaryContent, ImageFilterLayer, Layer, Placement, SceneOp, SceneOwner,
+        };
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        let root = writer.current().root();
+        let child = writer.mint_node();
+        let version = writer.next_content_version().expect("a version");
+        let mut own = BoundaryContent::builder();
+        own.chunk(square(3, version, (0.0, 0.0)));
+        writer.push(SceneOp::Publish {
+            node: child,
+            content: std::sync::Arc::new(own.finish()),
+        });
+        writer.push(SceneOp::Place {
+            node: child,
+            placement: Placement::try_new(flui_foundation::geometry::Offset::new(100.0, 100.0))
+                .expect("a finite offset"),
+        });
+        let mut content = BoundaryContent::builder();
+        content.push_effect(
+            Layer::from(ImageFilterLayer::new(
+                flui_painting::paint::ImageFilter::blur(4.0),
+            )),
+            flui_foundation::RenderId::new(2),
+            0,
+        );
+        content.slot(child);
+        content.pop_effect();
+        writer.push(SceneOp::Publish {
+            node: root,
+            content: std::sync::Arc::new(content.finish()),
+        });
+        owner.apply(SURFACE).expect("a blurred slot applies");
+        let version = owner.current();
+        let walk = |damage: Rect<f64>| {
+            let mut entered = Entered::default();
+            walk_scene(SceneContent::Version(version), Some(damage), &mut entered);
+            entered.0.len()
+        };
+        // The square spans 100..110; the blur spreads it a few pixels.
+        assert_eq!(
+            walk(Rect::from_xywh(112.0, 104.0, 2.0, 2.0)),
+            1,
+            "inside the blur"
+        );
+        assert_eq!(
+            walk(Rect::from_xywh(200.0, 104.0, 2.0, 2.0)),
+            0,
+            "past the blur"
+        );
     }
 
     /// A partial frame's walk enters the boundaries its damage can reach

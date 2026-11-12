@@ -225,8 +225,11 @@ A scene holding a retained `SceneVersion` is walked without building a tree
 layer over the entries under it, each chunk its recording, and each slot the
 child node where it stands, in the order `SceneVersion::flatten` would build
 (`a_version_walks_as_its_flattened_tree`). A partial frame passes its damage
-rect, and a slot whose subtree cannot reach it is skipped
-(`SceneVersion::subtree_meets`), so the walk enters what the damage reaches
+rect, rounded out to the whole pixels its scissor admits, and a slot whose
+subtree cannot reach it is skipped
+(`SceneVersion::subtree_cull`, which keeps the folded chains of the path it
+walks, so a slot costs its own effects and not the depth of the tree), and
+the walk enters what the damage reaches
 (`a_partial_walk_enters_only_the_boundaries_its_damage_reaches`,
 `a_partial_frame_of_a_version_draws_as_its_flattened_tree`). Backdrop inputs
 of a version are closed by `SceneVersion::close_damage`, which reads only the

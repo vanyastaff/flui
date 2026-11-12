@@ -81,6 +81,17 @@ impl Row {
         self.owner.patch_damage()
     }
 
+    /// Moves box `index` to `x` and answers the damage of the patch.
+    fn place(&mut self, index: usize, x: f64) -> DamageRegion {
+        let mut writer = self.owner.writer();
+        writer.push(SceneOp::Place {
+            node: self.boxes[index],
+            placement: Placement::try_new(Offset::new(x, 8.0)).expect("a finite offset"),
+        });
+        self.owner.apply(SURFACE).expect("a move applies");
+        self.owner.patch_damage()
+    }
+
     fn version(&self) -> SceneVersion {
         self.owner.current().clone()
     }
@@ -176,19 +187,12 @@ fn a_partial_frame_of_a_version_draws_as_its_flattened_tree() {
         "{plan:?}"
     );
 
-    let pixels = walked.read_rgba().expect("readback");
-    let oracle = flattened.read_rgba().expect("readback");
-    let differing = pixels
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .zip(oracle.as_chunks::<4>().0)
-        .filter(|(walked, flat)| walked != flat)
-        .count();
     assert_eq!(
-        differing, 0,
+        differing(&mut walked, &mut flattened),
+        0,
         "pixels the walk drew unlike the flattened tree"
     );
+    let pixels = walked.read_rgba().expect("readback");
     let (x, y) = centre(2);
     assert_eq!(px(&pixels, x, y), BLUE, "the recoloured box");
     for index in [0, 1, 3] {
@@ -256,4 +260,158 @@ fn a_raster_panic_renders_the_next_frame_in_full() {
         let (x, y) = centre(index);
         assert_eq!(px(&pixels, x, y), colour, "box {index}");
     }
+}
+
+/// How many pixels of the two captures differ.
+fn differing(walked: &mut RetainedCapture, flattened: &mut RetainedCapture) -> usize {
+    let pixels = walked.read_rgba().expect("readback");
+    let oracle = flattened.read_rgba().expect("readback");
+    pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(oracle.as_chunks::<4>().0)
+        .filter(|(walked, flat)| walked != flat)
+        .count()
+}
+
+/// A damage that ends inside a pixel redraws that whole pixel, so a
+/// boundary that reaches only the part of it the damage leaves out still
+/// draws its share there, as the flattened tree does.
+#[test]
+fn a_boundary_in_the_last_partly_damaged_pixel_draws_its_share() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut walked = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    let mut flattened = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    let mut row = Row::new([Color::RED, Color::RED, Color::RED, Color::RED]);
+    // Box 1 starts 0.7 into pixel 35.
+    let _ = row.place(1, 35.7);
+    let version = row.version();
+    let full = DamageRegion::Full(flui_layer::FullReason::FirstFrame);
+    both(&mut walked, &mut flattened, &version, full);
+    for capture in [&mut walked, &mut flattened] {
+        capture.mark_dirty(Rect::from_ltrb(0.0, 0.0, 1.0, 1.0));
+        capture
+            .render_scene(&Scene::new(version.flatten()))
+            .expect("the warm-up renders");
+    }
+
+    // The damage ends at 35.5, short of box 1, and its scissor takes pixel
+    // 35 whole.
+    let damage = Rect::from_ltrb(20.0, 10.0, 35.5, 20.0);
+    walked.mark_dirty(damage);
+    walked
+        .render_scene(&Scene::of_version(version.clone()))
+        .expect("the walked frame renders");
+    flattened.mark_dirty(damage);
+    flattened
+        .render_scene(&Scene::new(version.flatten()))
+        .expect("the flattened frame renders");
+    assert!(
+        matches!(walked.last_plan(), Some(FramePlan::RetainedPartial(_))),
+        "{:?}",
+        walked.last_plan()
+    );
+    let pixels = walked.read_rgba().expect("readback");
+    assert_ne!(px(&pixels, 35, 16), WHITE, "box 1's share of pixel 35");
+    assert_eq!(
+        differing(&mut walked, &mut flattened),
+        0,
+        "pixels the walk drew unlike the flattened tree"
+    );
+}
+
+/// The root's content: a hard clip of `clip` over one chunk that multiplies
+/// `color` over a square larger than the clip.
+fn clipped_multiply(writer: &mut SceneWriter<'_>, clip: Rect<f64>, color: Color) {
+    let version = writer.next_content_version().expect("a content version");
+    let mut canvas = Canvas::new();
+    canvas.draw_rect(
+        clip.expand(10.0),
+        &Paint::fill(color).with_blend_mode(flui_painting::paint::BlendMode::Multiply),
+    );
+    let mut content = BoundaryContent::builder();
+    content.push_effect(
+        flui_layer::Layer::from(flui_layer::ClipRectLayer::hard_edge(clip)),
+        RenderId::new(2),
+        0,
+    );
+    content.chunk(Arc::new(Chunk::new(
+        RenderId::new(3),
+        0,
+        version,
+        canvas.finish(),
+    )));
+    content.pop_effect();
+    let root = writer.current().root();
+    writer.push(SceneOp::Publish {
+        node: root,
+        content: Arc::new(content.finish()),
+    });
+}
+
+/// A destination-reading chunk larger than the clip over it damages the
+/// clip, and the frame that redraws it draws as the flattened tree does:
+/// what the chunk reads and writes outside the clip is cut away, so it does
+/// not straddle the damage, and the next frame stays partial.
+#[test]
+fn a_clipped_destination_reading_chunk_redraws_inside_its_clip() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut walked = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    let mut flattened = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    let clip = Rect::from_xywh(40.0, 40.0, 24.0, 24.0);
+    let mut owner = SceneOwner::new();
+    clipped_multiply(&mut owner.writer(), clip, Color::rgba(0, 128, 255, 255));
+    owner.apply(SURFACE).expect("the scene applies");
+    let version = owner.current().clone();
+    both(
+        &mut walked,
+        &mut flattened,
+        &version,
+        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+    );
+    let warm = Rect::from_ltrb(0.0, 0.0, 1.0, 1.0);
+    for capture in [&mut walked, &mut flattened] {
+        capture.mark_dirty(warm);
+        capture
+            .render_scene(&Scene::new(version.flatten()))
+            .expect("the warm-up renders");
+    }
+
+    clipped_multiply(&mut owner.writer(), clip, Color::rgba(255, 0, 128, 255));
+    owner.apply(SURFACE).expect("a recolour applies");
+    let damage = owner.patch_damage();
+    let DamageRegion::Region(region) = damage else {
+        panic!("a recolour damages a region: {damage:?}");
+    };
+    let damaged = region.bounds().to_rect();
+    assert!(
+        damaged.contains_rect(&clip) && !damaged.contains_rect(&clip.expand(10.0)),
+        "the damage is the clip, short of the chunk: {damaged:?}"
+    );
+    let plan = both(&mut walked, &mut flattened, owner.current(), damage);
+    assert!(
+        matches!(plan, Some(FramePlan::RetainedPartial(_))),
+        "{plan:?}"
+    );
+    assert_eq!(
+        differing(&mut walked, &mut flattened),
+        0,
+        "pixels the walk drew unlike the flattened tree"
+    );
+    // The frame was correct, so nothing forces the next one to repaint in
+    // full.
+    walked.mark_dirty(warm);
+    walked
+        .render_scene(&Scene::of_version(owner.current().clone()))
+        .expect("the next frame renders");
+    assert!(
+        matches!(walked.last_plan(), Some(FramePlan::RetainedPartial(_))),
+        "a correct frame forced a full repaint: {:?}",
+        walked.last_plan()
+    );
 }

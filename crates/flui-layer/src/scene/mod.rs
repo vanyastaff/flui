@@ -17,7 +17,7 @@ pub use owner::{
     Applied, Placement, ReleasedContents, SceneError, SceneOp, SceneOwner, ScenePublication,
     SceneWriter, SurfaceKey,
 };
-pub use version::{EntryAddress, SceneNode, SceneVersion};
+pub use version::{EntryAddress, SceneNode, SceneVersion, SubtreeCull};
 
 use crate::tree::LayerTree;
 

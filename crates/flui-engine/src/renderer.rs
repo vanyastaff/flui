@@ -2064,8 +2064,12 @@ impl Renderer {
         // A partial frame scissors every draw to its damage and repaints the
         // background there first (`damage::begin_partial`); `partial_damage`
         // is `None` for a full frame, which needs neither.
+        // The walk culls by the whole pixels the scissor admits, not the raw
+        // damage: a boundary that reaches only the partly covered edge pixel
+        // still draws its share of that pixel, which the clear wiped.
+        let mut redrawn = None;
         if let Some(damage) = partial_damage {
-            crate::damage::begin_partial(backend.painter_mut(), damage);
+            redrawn = Some(crate::damage::begin_partial(backend.painter_mut(), damage));
             tracing::trace!(
                 left = damage.left(),
                 top = damage.top(),
@@ -2080,24 +2084,21 @@ impl Renderer {
         // COPY_SRC here: the swapchain image when the surface offers it, the
         // retained target (created with it) otherwise. A version's walk skips
         // the boundaries the damage cannot reach.
-        crate::layer_walk::record_scene(scene.content(), partial_damage, &mut backend)?;
+        crate::layer_walk::record_scene(scene.content(), redrawn, &mut backend)?;
 
         // An advanced shape (one that reads the destination) whose bounds
         // straddle the damage edge was drawn clipped, so outside the damage
-        // the retained pixels under it are stale: the caller repaints the
-        // next frame in full. A retained version cannot reach this: a chunk
-        // that reads the destination damages its whole bounds and the damage
-        // is closed over it (ADR-0304 §6), so it is a debug assertion there.
-        // A tree built by hand carries no such guarantee and keeps the
-        // repaint.
-        let straddled = partial_damage
-            .is_some_and(|damage| backend.painter().has_advanced_shape_straddling(damage));
+        // the retained pixels under it may be stale: the caller repaints the
+        // next frame in full. A retained version needs no such check: the
+        // damage of a chunk that reads the destination is closed over what it
+        // shows (ADR-0304 §6), which a clip over it cuts, while the shape's
+        // bounds here are uncut, so the check would repaint a correct frame
+        // (`a_clipped_destination_reading_chunk_redraws_inside_its_clip`).
+        // A tree built by hand carries no such guarantee and keeps it.
+        let straddled = scene.version().is_none()
+            && redrawn
+                .is_some_and(|damage| backend.painter().has_advanced_shape_straddling(damage));
         if straddled {
-            debug_assert!(
-                scene.version().is_none(),
-                "BUG: a destination-reading chunk straddles the damage of a retained version, \
-                 whose damage covers each such chunk whole"
-            );
             tracing::debug!(
                 "Advanced shape straddles partial damage; scheduling full repaint next frame"
             );

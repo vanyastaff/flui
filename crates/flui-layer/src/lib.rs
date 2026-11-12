@@ -92,7 +92,7 @@ pub use scene::{
     Applied, BoundaryContent, Bounds, Chunk, ContentBuilder, ContentVersion, Entry, EntryAddress,
     EntryIndex, Lineage, Placement, ReleasedContents, Scene, SceneContent, SceneError, SceneNode,
     SceneNodeId, SceneNodeMarker, SceneOp, SceneOwner, ScenePublication, SceneVersion,
-    SceneVersionId, SceneWriter, SurfaceKey,
+    SceneVersionId, SceneWriter, SubtreeCull, SurfaceKey,
 };
 pub use scene_snapshot::{
     DamageRect, DamageRegion, FullReason, NonFinite, Region, ResyncReason, SceneSnapshot,

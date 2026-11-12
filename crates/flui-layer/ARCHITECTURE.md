@@ -22,7 +22,7 @@ Citations below name symbols, not line numbers.
 | `SceneBuilder` push/pop | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is a scene patch (decision 5). |
 | `Scene` | [`src/scene/mod.rs`](src/scene/mod.rs) `Scene` | A frozen `SceneVersion` or `LayerTree` (decision 6). |
 | Retained scene | [`src/scene/`](src/scene/) `SceneOwner`, `SceneVersion`, `BoundaryContent`, `SceneOp` | A persistent version changed by typed patches (decision 9), which `flui-rendering`'s paint writes; what ADR-0304 still owes is its item of [`docs/gaps.md`](../../docs/gaps.md). |
-| Retained layers across frames | the retained scene (decision 9) | A clean repaint boundary keeps its `BoundaryContent` in the next version and costs no operation; the engine walks the version in place and skips each boundary a partial frame's damage cannot reach (`SceneVersion::subtree_meets`). Cross-frame damage is the footprint of the patch (decision 9), not a comparison of frames. |
+| Retained layers across frames | the retained scene (decision 9) | A clean repaint boundary keeps its `BoundaryContent` in the next version and costs no operation; the engine walks the version in place and skips each boundary a partial frame's damage cannot reach (`SceneVersion::subtree_cull`). Cross-frame damage is the footprint of the patch (decision 9), not a comparison of frames. |
 | Composition callbacks | none | They would fire after a scene-add step this architecture does not have. |
 | `Layer::Canvas(CanvasLayer)` | `Layer::Canvas(CanvasLayer)` | A live recorder inside the tree; see [Producers](#producers). |
 
