@@ -185,7 +185,7 @@ where
     T: 'static,
     E: 'static,
 {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::stateful(self)
     }
 }

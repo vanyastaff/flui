@@ -819,7 +819,7 @@ struct Tagged {
 }
 
 impl View for Tagged {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 

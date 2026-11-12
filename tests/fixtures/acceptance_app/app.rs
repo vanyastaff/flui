@@ -1247,7 +1247,7 @@ impl StatelessView for NoteRow {
 }
 
 impl View for NoteRow {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 

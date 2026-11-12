@@ -126,3 +126,46 @@ pub(crate) fn a_lazily_mounted_item_handed_back_unchanged_is_not_built_again() {
         "the same items were offered again"
     );
 }
+
+/// Counts the copies made of it.
+#[derive(StatelessView)]
+struct Copies {
+    copies: Rc<Cell<u32>>,
+}
+
+impl Clone for Copies {
+    fn clone(&self) -> Self {
+        self.copies.set(self.copies.get() + 1);
+        Self {
+            copies: Rc::clone(&self.copies),
+        }
+    }
+}
+
+impl StatelessView for Copies {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::shrink()
+    }
+}
+
+/// An element keeps the shared view it is offered as its configuration: a
+/// mount, two updates with fresh views and the builds they cause copy the
+/// view not once (ADR-0245).
+pub(crate) fn an_element_keeps_the_view_it_is_offered_without_copying_it() {
+    let copies = Rc::new(Cell::new(0));
+    let offer = || {
+        Copies {
+            copies: Rc::clone(&copies),
+        }
+        .boxed()
+    };
+    let mut harness = mount(Directionality::new(TextDirection::Ltr, offer()));
+    for direction in [TextDirection::Rtl, TextDirection::Ltr] {
+        harness.swap_root(Directionality::new(direction, offer()));
+    }
+    assert_eq!(
+        copies.get(),
+        0,
+        "the element copied the view it was offered"
+    );
+}

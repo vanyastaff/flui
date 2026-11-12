@@ -188,6 +188,22 @@ fn action_component_contracts() {
             ink_well::enter_on_a_focused_elevated_button_writes_a_signal_and_rebuilds_its_reader,
         ),
         (
+            "ink_well::ink well a11y tree matches wrappers",
+            ink_well::ink_well_a11y_tree_matches_wrappers,
+        ),
+        (
+            "ink_well::ink well contests like gesture detector",
+            ink_well::ink_well_contests_like_gesture_detector,
+        ),
+        (
+            "ink_well::a disabled ink well is disabled in every part",
+            ink_well::a_disabled_ink_well_is_disabled_in_every_part,
+        ),
+        (
+            "ink_well::the press hold survives a rebuild and a disable ends it",
+            ink_well::the_press_hold_survives_a_rebuild_and_a_disable_ends_it,
+        ),
+        (
             "floating_action_button::fab theme slot reaches the mounted materials color and elevation",
             floating_action_button::fab_theme_slot_reaches_the_mounted_materials_color_and_elevation,
         ),

@@ -56,7 +56,7 @@ impl StatelessView for Reentrant {
 }
 
 impl View for Reentrant {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 
@@ -84,7 +84,7 @@ impl View for Reentrant {
 struct Leaf;
 
 impl View for Leaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }

@@ -40,7 +40,7 @@ impl StatelessView for SimpleStatelessView {
 }
 
 impl View for SimpleStatelessView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -71,7 +71,7 @@ impl flui_view::RenderView for LeafView {
 }
 
 impl View for LeafView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -144,7 +144,7 @@ impl ViewState<HookOrderView> for HookOrderState {
 }
 
 impl View for HookOrderView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -327,14 +327,14 @@ impl ViewState<LifecycleCallbackView> for LifecycleCallbackState {
 }
 
 impl View for LifecycleCallbackView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
 
 pub(crate) fn stateful_activate_and_deactivate_require_completed_init_state() {
     let view = LifecycleCallbackView;
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new());
+    let mut element = StatefulElement::new(std::rc::Rc::new(view), StatefulBehavior::new());
     let mut owner = BuildOwner::new();
     element.mount(None, 0, &mut owner.element_owner_mut());
 

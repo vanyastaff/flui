@@ -1641,7 +1641,7 @@ mod tests {
     }
 
     impl View for LeafView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
         }
     }
@@ -1673,7 +1673,7 @@ mod tests {
     }
 
     impl View for RegistryStateView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
 
@@ -1727,7 +1727,7 @@ mod tests {
     }
 
     impl View for LookupInBuild {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateless(self)
         }
     }
@@ -1755,7 +1755,7 @@ mod tests {
     }
 
     impl View for KeyedLookupParent {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
 
@@ -1861,7 +1861,7 @@ mod tests {
     }
 
     impl View for DisposeMarkerView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
     }
@@ -1889,7 +1889,7 @@ mod tests {
         }
 
         impl View for ParentOfDisposeMarker {
-            fn create_element(&self) -> crate::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
                 crate::element::ElementKind::stateless(self)
             }
         }

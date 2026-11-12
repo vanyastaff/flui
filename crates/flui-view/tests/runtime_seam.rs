@@ -141,7 +141,7 @@ impl StatelessView for LookupInBuild {
 }
 
 impl View for LookupInBuild {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }
@@ -167,7 +167,7 @@ impl RenderView for LookupLeaf {
 }
 
 impl View for LookupLeaf {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::render_variable(self)
     }
 }

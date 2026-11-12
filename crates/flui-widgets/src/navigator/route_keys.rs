@@ -72,7 +72,7 @@ pub(super) struct RouteKeys {
 }
 
 impl View for RouteKeys {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }

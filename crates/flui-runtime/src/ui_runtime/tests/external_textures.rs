@@ -31,7 +31,7 @@ struct VideoSurfaceState {
 }
 
 impl flui_view::View for VideoSurface {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -88,7 +88,7 @@ struct Toggle {
 }
 
 impl flui_view::View for Toggle {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }

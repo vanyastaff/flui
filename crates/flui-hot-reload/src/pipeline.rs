@@ -286,7 +286,7 @@ mod tests {
     }
 
     impl View for ProbeRoot {
-        fn create_element(&self) -> ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
             ElementKind::stateless(self)
         }
 

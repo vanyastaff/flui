@@ -64,7 +64,7 @@ impl StatelessView for DummyChild {
 }
 
 impl View for DummyChild {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -93,7 +93,7 @@ impl InheritedView for ThemeProvider {
 }
 
 impl View for ThemeProvider {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::inherited(self)
     }
 }
@@ -129,7 +129,7 @@ impl RenderView for LeafView {
 }
 
 impl View for LeafView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -228,7 +228,7 @@ pub(crate) fn missing_inherited_reads_refresh_lifecycle_and_survive_build_recove
     }
     struct ProbeState(std::rc::Rc<std::cell::Cell<usize>>);
     impl View for Probe {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateful(self)
         }
     }
@@ -459,7 +459,7 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl View for PanicDcd {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateful(self)
         }
     }
@@ -487,7 +487,7 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl View for PanicThemeProvider {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::inherited(self)
         }
     }
@@ -526,7 +526,7 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl View for DcdHost {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::render_variable(self)
         }
     }
@@ -542,7 +542,7 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl View for CountingSibling {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateless(self)
         }
     }
@@ -706,7 +706,7 @@ pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtre
         }
     }
     impl View for Shade {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::inherited(self)
         }
     }
@@ -719,7 +719,7 @@ pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtre
     }
     struct DependentState(Rc<Cell<usize>>);
     impl View for Dependent {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateful(self)
         }
     }
@@ -756,7 +756,7 @@ pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtre
         }
     }
     impl View for Host {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateless(self)
         }
     }

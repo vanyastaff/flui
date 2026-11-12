@@ -42,7 +42,7 @@ impl StatelessView for BuildSubject {
     }
 }
 impl View for BuildSubject {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -72,7 +72,7 @@ impl ViewState<InitSubject> for InitState {
     }
 }
 impl View for InitSubject {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -95,7 +95,7 @@ impl StatelessView for Host {
     }
 }
 impl View for Host {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }

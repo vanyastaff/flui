@@ -40,7 +40,7 @@ impl RenderView for LeafBox {
 }
 
 impl View for LeafBox {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::render_variable(self)
     }
 }
@@ -107,7 +107,7 @@ impl RenderView for GlobalKeyedLeafBox {
 }
 
 impl View for GlobalKeyedLeafBox {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::render_variable(self)
     }
 
@@ -233,7 +233,7 @@ impl crate::ViewState<GlobalKeyedPanicsOnActivate> for GlobalKeyedPanicsOnActiva
 }
 
 impl View for GlobalKeyedPanicsOnActivate {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::stateful(self)
     }
     fn key(&self) -> Option<&dyn ViewKey> {

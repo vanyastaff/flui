@@ -120,13 +120,13 @@ the scheduler's drain budget. Pinned by
 ### A child the parent hands back unchanged is not built again
 
 ADR-0245. `BoxedView` shares its erased view (`Rc<dyn View>`), and the allocation is the
-view's identity. `BoxedView::create_element` records it on the element it creates
-(`ElementBase::note_source_view`), `dispatch_view_update` records the one each update takes
-(and clears it for an update from anything else), and an update offering the shared view the
-element already holds returns `ViewUpdate::Unchanged` before cloning, replacing or marking
-dirty: no `did_update_view`, no render-object update, no rebuild. The element holds it
-weakly, so it never prolongs a view or what its closures captured, and the allocation stays
-reserved while held, so another view cannot take its address. Boxing a `BoxedView` returns it
+view's identity. `View::create_element` takes the view as `Rc<Self>`, so the element keeps
+its configuration in that allocation (`ElementCore::shared_view`) instead of a copy, and
+`dispatch_view_update` takes the allocation each update offers (a view offered by reference
+alone is copied into one). An update offering the shared view the element already holds
+returns `ViewUpdate::Unchanged` before replacing or marking dirty: no `did_update_view`, no
+render-object update, no rebuild. The element holds the allocation, so another view cannot
+take its address. Boxing a `BoxedView` returns it
 unchanged; `Child` and `Children` lend their `BoxedView`s, not the views inside, so the
 reconciler sees the identity. A parent that rebuilds for its own reasons (a focus edge, a
 route change) therefore rebuilds what it builds and hands the child it was given back

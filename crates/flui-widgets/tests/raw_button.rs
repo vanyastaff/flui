@@ -1004,3 +1004,166 @@ pub(crate) fn a_panicking_focus_edge_still_reports_the_shown_focus() {
         Some("focus edge handler")
     );
 }
+
+/// `Pressed` has two sources, the contact the button's recognizer tracks and
+/// the activation holds a control takes (ADR-0322 §3), and the controller
+/// counts them: a contact inside a hold, and a hold inside a contact, each
+/// give one edge down and one edge up. A hold taken or dropped while the
+/// button is disabled presses nothing.
+///
+/// Red-check: write `Pressed` from the contact alone (the contact's up ends
+/// the press the hold still keeps).
+pub(crate) fn a_press_hold_and_a_contact_give_one_pressed_edge() {
+    use std::cell::RefCell;
+
+    use flui_foundation::Listenable as _;
+    use std::time::Duration;
+
+    let states = WidgetStatesController::default();
+    let edges = Rc::new(RefCell::new(Vec::<bool>::new()));
+    let _listening = {
+        let (states, edges) = (states.clone(), Rc::clone(&edges));
+        let last = std::cell::Cell::new(false);
+        states.clone().listen(Rc::new(move || {
+            let pressed = states.value().contains_state(WidgetState::Pressed);
+            if pressed != last.replace(pressed) {
+                edges.borrow_mut().push(pressed);
+            }
+        }))
+    };
+    let enabled = flui_testing::widgets::SharedSignal::new(true);
+    let mut app = lay_out(
+        Toggled {
+            enabled: enabled.clone(),
+            states: states.clone(),
+        },
+        loose(400.0),
+    );
+    let press = |app: &mut LaidOut| {
+        app.dispatch_pointer_down(20.0, 20.0);
+        app.pump_for(Duration::from_millis(200));
+    };
+    let release = |app: &mut LaidOut| {
+        app.dispatch_pointer_up(20.0, 20.0);
+        app.pump_for(Duration::from_millis(400));
+    };
+
+    // A contact inside a hold.
+    let hold = states.hold_pressed();
+    press(&mut app);
+    release(&mut app);
+    assert!(
+        states.value().contains_state(WidgetState::Pressed),
+        "the hold outlives the contact"
+    );
+    drop(hold);
+    assert_eq!(*edges.borrow(), [true, false], "one press, start to end");
+
+    // A hold inside a contact.
+    edges.borrow_mut().clear();
+    press(&mut app);
+    let hold = states.hold_pressed();
+    app.pump();
+    drop(hold);
+    assert!(
+        states.value().contains_state(WidgetState::Pressed),
+        "the contact outlives the hold"
+    );
+    release(&mut app);
+    assert_eq!(*edges.borrow(), [true, false], "one press, start to end");
+
+    // Disabled under a hold: the press ends, and the late drop breaks nothing.
+    edges.borrow_mut().clear();
+    let hold = states.hold_pressed();
+    enabled.set(false);
+    app.pump();
+    assert_eq!(states.value(), WidgetStates::DISABLED);
+    drop(hold);
+    let hold = states.hold_pressed();
+    assert_eq!(
+        states.value(),
+        WidgetStates::DISABLED,
+        "a hold on a disabled control presses nothing"
+    );
+    drop(hold);
+    enabled.set(true);
+    app.pump();
+    assert_eq!(states.value(), WidgetStates::NONE);
+    assert_eq!(*edges.borrow(), [true, false]);
+}
+
+/// A button that its test turns off and on, writing to `states`.
+#[derive(Clone, StatefulView)]
+struct Toggled {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+    states: WidgetStatesController,
+}
+
+struct ToggledState {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+}
+
+impl StatefulView for Toggled {
+    type State = ToggledState;
+    fn create_state(&self, _cx: &dyn flui_view::LifecycleContext) -> Self::State {
+        ToggledState {
+            enabled: self.enabled.clone(),
+        }
+    }
+}
+
+impl ViewState<Toggled> for ToggledState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.enabled.bind(ctx);
+    }
+
+    fn build(&self, view: &Toggled, ctx: &dyn BuildContext) -> impl IntoView {
+        let button = RawButton::new(flui_widgets::SizedBox::new(120.0, 60.0))
+            .states_controller(view.states.clone());
+        if self.enabled.get(ctx) {
+            button.on_press(|_cx| {}).boxed()
+        } else {
+            button.boxed()
+        }
+    }
+}
+
+/// A listener that panics when a hold first sets `Pressed` unwinds through
+/// the hold, which gives its count back: `Pressed` is clear after the
+/// containment and the next hold presses and releases as before.
+///
+/// Red-check: build the `PressHold` after the listeners run (the count stays
+/// taken by a token that never existed, and `Pressed` never clears).
+pub(crate) fn a_listener_panic_under_a_new_hold_leaves_no_hold_behind() {
+    use flui_foundation::Listenable as _;
+    use flui_foundation::panic::FirstPanic;
+
+    let states = WidgetStatesController::default();
+    let armed = Rc::new(std::cell::Cell::new(true));
+    let _listening = {
+        let armed = Rc::clone(&armed);
+        states.listen(Rc::new(move || {
+            assert!(!armed.replace(false), "the listener's first call panics");
+        }))
+    };
+    let pressed =
+        |states: &WidgetStatesController| states.value().contains_state(WidgetState::Pressed);
+
+    let mut failure = FirstPanic::new();
+    let hold = failure.contain(|| states.hold_pressed());
+    assert!(
+        hold.is_none() && failure.held().is_some(),
+        "the listener panicked"
+    );
+    flui_foundation::panic::discard_payload(
+        failure
+            .into_payload()
+            .expect("BUG: the panic was just held"),
+    );
+    assert!(!pressed(&states), "the unwound hold released Pressed");
+
+    let hold = states.hold_pressed();
+    assert!(pressed(&states), "the next hold presses");
+    drop(hold);
+    assert!(!pressed(&states), "and its drop releases");
+}

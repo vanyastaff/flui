@@ -349,7 +349,7 @@ fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resu
         }
     }
     impl View for PanicsWhenNamed {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::render_variable(self)
         }
     }
