@@ -980,7 +980,7 @@ pub(crate) struct FeatureMatrixArgs {
     /// only (`-p a -p b`, the `hack_args` of `cargo xtask affected`): what a
     /// pull request's `feature-scope` job runs, a `k/N` slice of them per
     /// runner.
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     packages: Option<String>,
     #[command(flatten)]
     pub(crate) run: RunOpts,
@@ -1522,6 +1522,24 @@ mod tests {
             both(" --partition 2/3")
         );
         assert!(feature_scope_plan(packages, Slice::Combinations).is_err());
+        // the invocation CI's `feature-scope` job writes: a value that starts
+        // with `-p`, beside a slice
+        #[derive(clap::Parser)]
+        struct FeatureMatrixCli {
+            #[command(flatten)]
+            args: FeatureMatrixArgs,
+        }
+        use clap::Parser as _;
+        let parsed = FeatureMatrixCli::try_parse_from([
+            "feature-matrix",
+            "--packages",
+            packages,
+            "--slice",
+            "2/3",
+        ])
+        .expect("the job's arguments parse");
+        assert_eq!(parsed.args.packages.as_deref(), Some(packages));
+        assert_eq!(parsed.args.slice, Slice::Shard { index: 2, count: 3 });
     }
 
     fn native_feature_slices_lint_each_feature_alone_with_and_without_all_targets() {

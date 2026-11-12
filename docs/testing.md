@@ -1095,7 +1095,7 @@ reaches what the check reads. `plan` decides this in its outputs, and each job i
 
 - `test-trybuild` runs when `trybuild_required` is set. That happens when the diff touches one of
   these:
-  - a file that a tracked `*.stderr` cites in a `--> path` line (the fixture, or the definition of
+  - a file that a tracked `*.stderr` cites in a `--> path` or `::: path` line (the fixture, or the declaration of
     a type the compiler names);
   - a file beside an expectation;
   - a runner of the suites;

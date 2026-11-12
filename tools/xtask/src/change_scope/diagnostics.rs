@@ -1,7 +1,7 @@
 //! Which changed files can change what a compile-fail case prints.
 //!
 //! The trybuild suites (`test-trybuild`) hold each case's compiler output in a
-//! `*.stderr` expectation. The output quotes, in its `--> path` lines, every
+//! `*.stderr` expectation. The output quotes, in its `--> path` and `::: path` lines, every
 //! source of the error chain: the fixture, and the definition of each type
 //! the compiler names (`note: required because it appears within the type
 //! … --> crates/<crate>/src/<file>.rs`). A change that leaves all of those
@@ -29,7 +29,9 @@ const EVERY_EXPECTATION: &[&str] = &[
 /// What a runner of the suites names: a test target that builds cases.
 const RUNNER_MARK: &str = "trybuild::TestCases";
 
-/// The repo-relative files the `--> path` lines of `expectation` cite.
+/// The repo-relative files the `--> path` lines (the error's location) and
+/// `::: path` lines (a secondary location, such as the declaration of a private
+/// item) of `expectation` cite.
 ///
 /// trybuild prints a path inside the package that runs the case relative to
 /// that package (`src/x.rs`, `tests/ui/x.rs`), a path elsewhere in the
@@ -41,7 +43,11 @@ const RUNNER_MARK: &str = "trybuild::TestCases";
 pub(super) fn cited_paths(expectation: &str, package_dir: &str) -> BTreeSet<String> {
     let mut cited = BTreeSet::new();
     for line in expectation.lines() {
-        let Some(rest) = line.trim_start().strip_prefix("--> ") else {
+        let line = line.trim_start();
+        let Some(rest) = line
+            .strip_prefix("--> ")
+            .or_else(|| line.strip_prefix("::: "))
+        else {
             continue;
         };
         let path = rest.split(':').next().unwrap_or(rest).trim();
@@ -138,7 +144,7 @@ note: required because it appears within the type `X`
    | pub struct X {
   --> $RUST/core/src/marker.rs
   --> $CARGO/registry/src/some-crate/src/lib.rs
-  --> src/owned.rs
+  ::: src/owned.rs
 ";
         let cited = cited_paths(text, "crates/flui-view");
         let expected: BTreeSet<String> = [
@@ -165,6 +171,8 @@ note: required because it appears within the type `X`
         for reaches in [
             // `WidgetStatesController`, quoted by the facade's thread-boundary case
             "crates/flui-widgets/src/widget_state.rs",
+            // the declaration flui-runtime's privacy case cites only as `::: src/…`
+            "crates/flui-runtime/src/ui_runtime/frame.rs",
             "tests/ui/thread_boundary/owner_values_stay_on_their_thread.stderr",
             "tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs",
             "tests/ui/thread_boundary/a_new_case.rs",

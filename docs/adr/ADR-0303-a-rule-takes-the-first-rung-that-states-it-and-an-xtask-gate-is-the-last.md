@@ -194,7 +194,8 @@ runs when its diff reaches what the check reads. The narrow form is worked out b
 of its own.
 
 - **What the check reads comes from its own expectations.** A trybuild expectation quotes, in its
-  `--> path` lines, every file of the error chain: the fixture, and the definition of each type
+  `--> path` and `::: path` lines, every file of the error chain: the fixture, and the declaration
+  of each type or item
   the compiler names. `plan` reads the tracked `*.stderr` files on each run
   (`change_scope::diagnostics`) and sets `trybuild_required` when the diff touches one of these:
   - a cited file;
