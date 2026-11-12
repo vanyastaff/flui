@@ -41,17 +41,18 @@ struct Rig {
 }
 
 fn rig() -> Rig {
+    let clock = ManualClock::new();
+    rig_on(std::rc::Rc::new(clock.clone()), clock)
+}
+
+/// A rig whose executor reads `paced`, a clock over `clock`'s timeline.
+fn rig_on(paced: std::rc::Rc<dyn MonotonicClock>, clock: ManualClock) -> Rig {
     let backend = ScriptedSlots::new();
     let wakes = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&wakes);
-    let clock = ManualClock::new();
-    let (executor, sender) = RasterExecutor::new(
-        backend.clone(),
-        std::rc::Rc::new(clock.clone()),
-        move || {
-            counted.fetch_add(1, Ordering::SeqCst);
-        },
-    );
+    let (executor, sender) = RasterExecutor::new(backend.clone(), paced, move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
     Rig {
         executor,
         sender,
@@ -1781,6 +1782,58 @@ fn a_loss_met_by_a_frame_is_published_with_its_rebuild_due_now() {
     let _ = rig.executor.turn();
     assert_eq!(rebuilds(&rig.backend), 1);
     assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+}
+
+/// A clock over a manual timeline that panics on every read once armed: the
+/// owner's code failing where the executor reads the time.
+#[derive(Debug)]
+struct ArmedClock {
+    clock: ManualClock,
+    armed: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl MonotonicClock for ArmedClock {
+    fn now(&self) -> std::time::Instant {
+        assert!(!self.armed.get(), "injected clock panic");
+        MonotonicClock::now(&self.clock)
+    }
+}
+
+/// A clock that panics while a frame loses the device does not stall
+/// recovery: the loss is still published with a rebuild due, the owner is
+/// woken, and the clock's panic is resumed after the turn.
+#[test]
+fn a_panicking_clock_still_publishes_a_loss_and_wakes_the_owner() {
+    let clock = ManualClock::new();
+    let armed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut rig = rig_on(
+        std::rc::Rc::new(ArmedClock {
+            clock: clock.clone(),
+            armed: std::rc::Rc::clone(&armed),
+        }),
+        clock,
+    );
+    let at = attached(&mut rig, 1);
+    let woken = rig.wakes.load(Ordering::SeqCst);
+    rig.backend.lose_device_in_next_render();
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    armed.set(true);
+    let mut caught = FirstPanic::new();
+    let turn = caught.contain(|| rig.executor.turn());
+    armed.set(false);
+    assert!(
+        turn.is_none() && caught.into_payload().is_some(),
+        "the clock's panic is resumed"
+    );
+    assert_eq!(
+        rig.sender.device_health(),
+        DeviceHealth::Rebuilding { attempts: 0 }
+    );
+    assert!(rig.sender.device_retry_at().is_some(), "a rebuild is due");
+    assert!(
+        rig.wakes.load(Ordering::SeqCst) > woken,
+        "the owner is woken"
+    );
 }
 
 /// A backend that cannot rebuild where the executor runs (the web) is given

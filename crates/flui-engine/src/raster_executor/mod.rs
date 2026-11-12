@@ -109,6 +109,8 @@ pub struct RasterExecutor<B: SlotBackend = crate::GpuContext> {
     /// The time the device's rebuilds are paced on: the UI runtime's clock,
     /// so a manual one walks the backoff without sleeping.
     clock: Rc<dyn MonotonicClock>,
+    /// The clock's last answer, which a read that panics falls back to.
+    read_at: std::cell::Cell<web_time::Instant>,
     /// The context's device rebuilds (ADR-0305 §8).
     rebuilds: DeviceRebuilds,
     slots: Vec<Option<ExecSlot>>,
@@ -144,6 +146,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 shared,
                 lifecycle: Some(lifecycle),
                 wake: Box::new(wake),
+                read_at: std::cell::Cell::new(clock.now()),
                 clock,
                 rebuilds: DeviceRebuilds::default(),
                 slots: Vec::new(),
@@ -364,16 +367,13 @@ impl<B: SlotBackend> RasterExecutor<B> {
         }
         let mut failure = None;
         let mut failed = None;
-        let mut now = self.clock.now();
+        let mut now = self.now(first);
         if self.rebuilds.due(now) {
             if self.backend.rebuilds_inline() {
                 let attempt = first.contain(|| self.backend.rebuild_device());
                 // A failed attempt blocked for as long as the driver took: the
                 // next waits out its backoff from when this one ended. The
-                // clock is the owner's code, so it is read under containment
-                // and only once the attempt's own answer is committed.
-                let ended =
-                    |first: &mut FirstPanic| first.contain(|| self.clock.now()).unwrap_or(now);
+                // clock is read only once the attempt's own answer is committed.
                 match attempt {
                     Some(Ok(refused)) => {
                         self.rebuilds.recovered();
@@ -385,11 +385,11 @@ impl<B: SlotBackend> RasterExecutor<B> {
                     }
                     Some(Err(error)) => {
                         failure = Some(error);
-                        now = ended(first);
+                        now = self.now(first);
                         failed = Some(self.rebuilds.record_failure(now));
                     }
                     None => {
-                        now = ended(first);
+                        now = self.now(first);
                         failed = Some(self.rebuilds.record_failure(now));
                     }
                 }
@@ -429,9 +429,24 @@ impl<B: SlotBackend> RasterExecutor<B> {
             return false;
         }
         self.rebuilds.note_lost();
-        let _published = self.publish_device(None, self.clock.now(), first);
+        let now = self.now(first);
+        let _published = self.publish_device(None, now, first);
         report(Report::DeviceLost, first);
         true
+    }
+
+    /// The clock's time, read under containment: the clock is the owner's
+    /// code, and a read that panics answers the last time it gave, so the
+    /// turn still publishes the device's record and wakes its owner before
+    /// the panic is resumed.
+    fn now(&self, first: &mut FirstPanic) -> web_time::Instant {
+        match first.contain(|| self.clock.now()) {
+            Some(now) => {
+                self.read_at.set(now);
+                now
+            }
+            None => self.read_at.get(),
+        }
     }
 
     /// Write the device's health, its next attempt and a new failure into the
