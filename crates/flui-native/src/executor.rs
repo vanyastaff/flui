@@ -16,6 +16,10 @@ use tokio::runtime::{Handle, Runtime};
 /// Worker threads of the host's own runtime. Small and fixed: an application
 /// hands the host its IO runtime instead, so this one serves only a host
 /// started without one, and must never claim a full-core pool.
+#[cfg_attr(
+    not(all(target_os = "linux", any(feature = "wayland", feature = "x11"))),
+    allow(dead_code, reason = "only the Linux hosts run IO on tokio")
+)]
 const WORKER_THREADS: usize = 2;
 
 /// The last clone of an own runtime may be released from one of its tasks,
@@ -40,7 +44,7 @@ pub struct NativeExecutor(Inner);
 
 #[derive(Clone)]
 #[cfg_attr(
-    not(target_os = "linux"),
+    not(all(target_os = "linux", any(feature = "wayland", feature = "x11"))),
     allow(dead_code, reason = "only the Linux hosts run IO on tokio")
 )]
 enum Inner {
@@ -71,7 +75,7 @@ impl NativeExecutor {
 
     /// The runtime to spawn on, starting an own runtime on first use.
     #[cfg_attr(
-        not(target_os = "linux"),
+        not(all(target_os = "linux", any(feature = "wayland", feature = "x11"))),
         allow(dead_code, reason = "only the Linux hosts run IO on tokio")
     )]
     pub(crate) fn handle(&self) -> Handle {
@@ -84,7 +88,7 @@ impl NativeExecutor {
 
 impl RuntimeOwner {
     #[cfg_attr(
-        not(target_os = "linux"),
+        not(all(target_os = "linux", any(feature = "wayland", feature = "x11"))),
         allow(dead_code, reason = "only the Linux hosts run IO on tokio")
     )]
     fn runtime(&self) -> &Runtime {
