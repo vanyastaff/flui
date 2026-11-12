@@ -56,7 +56,7 @@ impl<V: View + Clone> RootRenderView<V> {
 }
 
 impl<V: View + Clone + 'static> View for RootRenderView<V> {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::Root(Box::new(RootRenderElement::new(self)))
     }
 }
@@ -73,8 +73,8 @@ impl<V: View + Clone + 'static> View for RootRenderView<V> {
 /// 3. Sets `pipelineOwner.root_id = render_id`
 /// 4. Builds child widgets
 pub struct RootRenderElement<V: View + Clone> {
-    /// The View configuration
-    view: RootRenderView<V>,
+    /// The View configuration, in the allocation it was offered in
+    view: std::rc::Rc<RootRenderView<V>>,
     /// The root RenderObject ID in RenderTree
     render_id: Option<RenderId>,
     /// [`PipelineCell`] handle to this render tree's `PipelineOwner`
@@ -100,9 +100,9 @@ pub struct RootRenderElement<V: View + Clone> {
 
 impl<V: View + Clone + 'static> RootRenderElement<V> {
     /// Create a new RootRenderElement.
-    pub fn new(view: &RootRenderView<V>) -> Self {
+    pub fn new(view: std::rc::Rc<RootRenderView<V>>) -> Self {
         Self {
-            view: view.clone(),
+            view,
             render_id: None,
             pipeline_owner: None,
             lifecycle: Lifecycle::Initial,
@@ -276,8 +276,8 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
     }
 
     fn update(&mut self, new_view: &dyn View, _element_owner: &mut crate::ElementOwner<'_>) {
-        if let Some(v) = new_view.as_any().downcast_ref::<RootRenderView<V>>() {
-            self.view = v.clone();
+        if let Some(v) = crate::view::shared_view_of::<RootRenderView<V>>(new_view) {
+            self.view = v;
             // The child config may have changed — re-reconcile next build.
             self.needs_build = true;
             // Update configuration if size changed

@@ -18,7 +18,7 @@ use flui_rendering::{
     constraints::BoxConstraints,
     error::PoisonPhase,
     pipeline::{Idle, PipelineOwner},
-    testing::{box_node, edit_render_object, inspect::first_opacity_alpha, tree},
+    testing::{SceneHost, box_node, edit_render_object, inspect::first_opacity_alpha, tree},
 };
 
 /// A `Single`-arity proxy whose `paint_effects` panics while `armed`, for
@@ -133,7 +133,8 @@ pub(crate) fn a_panicking_descriptor_under_a_repaint_poisons_the_frame_in_the_pa
     let calls = Arc::new(AtomicUsize::new(0));
     let (owner, fx) = mount(Arc::clone(&armed), Arc::clone(&calls), 128, false);
 
-    let (mut owner, result) = owner.run_frame();
+    let mut scene = SceneHost::new();
+    let (mut owner, result) = scene.run_frame(owner);
     result.expect("first frame paints cleanly");
     let calls_before_arm = calls.load(Ordering::Relaxed);
 
@@ -142,7 +143,7 @@ pub(crate) fn a_panicking_descriptor_under_a_repaint_poisons_the_frame_in_the_pa
     });
     owner.mark_needs_paint(fx);
 
-    let (mut owner, result) = owner.run_frame();
+    let (mut owner, result) = scene.run_frame(owner);
     let observed = format!("{result:?}");
     let Err(flui_rendering::error::RenderError::Poisoned { phase, .. }) =
         result.map_err(flui_foundation::TreeError::into_error)
@@ -168,7 +169,7 @@ pub(crate) fn a_panicking_descriptor_under_a_repaint_poisons_the_frame_in_the_pa
     edit_render_object::<PoisonedDescriptor, _, _>(&mut owner, fx, |object| {
         object.armed.store(false, Ordering::Relaxed);
     });
-    let (owner, result) = owner.run_frame();
+    let (owner, result) = scene.run_frame(owner);
     let tree = result
         .expect("the retry paints cleanly")
         .expect("the retry produces a layer tree");

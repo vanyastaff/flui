@@ -794,14 +794,14 @@ pub trait RenderView: Clone + 'static + Sized {
 macro_rules! impl_render_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> $crate::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> $crate::element::ElementKind {
                 $crate::element::ElementKind::render_variable(self)
             }
         }
     };
     ($ty:ty, site = $field:ident) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> $crate::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> $crate::element::ElementKind {
                 $crate::element::ElementKind::render_variable(self)
             }
 

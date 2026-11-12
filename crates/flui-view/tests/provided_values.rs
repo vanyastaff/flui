@@ -142,7 +142,7 @@ impl InheritedView for Inherit {
 }
 
 impl View for Inherit {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::inherited(self)
     }
 }
@@ -170,7 +170,7 @@ impl StatelessView for Plain {
 }
 
 impl View for Plain {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -202,7 +202,7 @@ impl ViewState<Kept> for KeptState {
 }
 
 impl View for Kept {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -255,7 +255,7 @@ impl<K: Tone> ViewState<Reader<K>> for ReaderState {
 }
 
 impl<K: Tone> View for Reader<K> {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -292,7 +292,7 @@ impl RenderView for Leaf {
 }
 
 impl View for Leaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -332,7 +332,7 @@ impl RenderView for Group {
 }
 
 impl View for Group {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -361,7 +361,7 @@ impl ViewState<Keyed> for KeyedState {
 }
 
 impl View for Keyed {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 
@@ -748,7 +748,7 @@ pub(crate) fn a_signal_read_in_provide_republishes_on_write() {
     }
 }
 
-/// A view whose next clone to drop after `provide` ran panics, once.
+/// A view whose `build` panics once after its `provide` ran.
 #[derive(Clone)]
 struct Brittle {
     armed: Rc<Cell<bool>>,
@@ -756,6 +756,7 @@ struct Brittle {
 
 impl StatelessView for Brittle {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        assert!(!self.armed.replace(false), "authored build failure");
         Leaf
     }
 
@@ -765,14 +766,8 @@ impl StatelessView for Brittle {
 }
 
 impl View for Brittle {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
-    }
-}
-
-impl Drop for Brittle {
-    fn drop(&mut self) {
-        assert!(!self.armed.replace(false), "authored drop failure");
     }
 }
 

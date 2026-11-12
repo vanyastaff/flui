@@ -43,13 +43,17 @@ pub struct PipelineCounters {
     /// Render nodes whose `paint_raw` ran. A repaint boundary grafted from
     /// its retained layers is not a paint.
     pub nodes_painted: u64,
-    /// Layers the paint composer created fresh this pass: sealed pictures,
-    /// pushed effect or boundary layers, and the layers a composited-layer
-    /// update patches into a grafted boundary.
+    /// Scene entries the paint composer created fresh this pass: sealed
+    /// chunks, pushed effects, and the effects a composited-layer update
+    /// rebuilds in a republished content.
     pub layers_produced: u64,
-    /// Layers cloned unchanged from a clean repaint boundary's retained
-    /// output instead of being painted again. A patched layer is not one.
+    /// Entries a composited-layer update carried over unchanged into the
+    /// content it republishes. A clean boundary emits nothing and counts
+    /// nothing.
     pub layers_reused: u64,
+    /// Operations the patches paint buffered: publishes, placements and
+    /// retirements (ADR-0304 §3).
+    pub scene_ops: u64,
     /// Nodes carried by the accessibility updates the semantics owner
     /// delivered. A flush whose diff is empty adds nothing.
     pub semantics_nodes_updated: u64,
@@ -75,6 +79,7 @@ impl PipelineCounters {
             nodes_painted: self.nodes_painted.saturating_sub(earlier.nodes_painted),
             layers_produced: self.layers_produced.saturating_sub(earlier.layers_produced),
             layers_reused: self.layers_reused.saturating_sub(earlier.layers_reused),
+            scene_ops: self.scene_ops.saturating_sub(earlier.scene_ops),
             semantics_nodes_updated: self
                 .semantics_nodes_updated
                 .saturating_sub(earlier.semantics_nodes_updated),
@@ -102,6 +107,7 @@ impl AddAssign for PipelineCounters {
         self.nodes_painted = self.nodes_painted.saturating_add(rhs.nodes_painted);
         self.layers_produced = self.layers_produced.saturating_add(rhs.layers_produced);
         self.layers_reused = self.layers_reused.saturating_add(rhs.layers_reused);
+        self.scene_ops = self.scene_ops.saturating_add(rhs.scene_ops);
         self.semantics_nodes_updated = self
             .semantics_nodes_updated
             .saturating_add(rhs.semantics_nodes_updated);

@@ -18,7 +18,7 @@ struct Third;
 macro_rules! unbuilt_view {
     ($($view:ty),*) => {$(
         impl View for $view {
-            fn create_element(&self) -> ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
                 unreachable!("these views are only compared by type, never mounted")
             }
         }

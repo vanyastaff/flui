@@ -418,10 +418,12 @@ impl HeadlessBinding {
         // this method's docs for exactly what that excludes and why. It mirrors
         // production, where `attach_root_widget` mounts and lays out and the
         // first `draw_frame` comes after.
+        let mut scene = flui_rendering::testing::SceneHost::new();
         let committed_layer_tree = self.enter_owner_scope(|| {
-            let layer_tree = build_owner
-                .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
-                .expect("the bootstrap frame must succeed");
+            let (painted, layer_tree) = scene.drive_cell(&pipeline_owner, |writer| {
+                build_owner.run_frame_with_layout_builders(&mut tree, &pipeline_owner, writer)
+            });
+            painted.expect("the bootstrap frame must succeed");
             // Same trailing step every pumped frame's pipeline runs: the
             // safety net for a frame that hit the fixpoint's pass bound (the
             // loop itself services lazy-sliver requests between passes). A
@@ -443,6 +445,7 @@ impl HeadlessBinding {
             tree,
             pipeline_owner,
             committed_layer_tree,
+            scene,
             options.capabilities,
         );
 

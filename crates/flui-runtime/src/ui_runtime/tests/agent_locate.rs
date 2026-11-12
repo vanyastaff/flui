@@ -331,7 +331,7 @@ fn a_render_object_that_panics_in_the_hit_test_answers_platform_before_the_owner
         }
     }
     impl View for PanicsWhenHit {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::render_variable(self)
         }
     }

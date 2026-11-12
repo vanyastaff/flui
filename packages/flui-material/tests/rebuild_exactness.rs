@@ -115,7 +115,7 @@ pub(crate) struct StaticChild {
 }
 
 impl View for StaticChild {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::proxy(self)
     }
 

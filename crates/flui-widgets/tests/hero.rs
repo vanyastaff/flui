@@ -328,7 +328,7 @@ fn reparent_hero(initially_scoped: bool, read_scope: bool, stop_reading: bool) {
         changes: std::rc::Rc<std::cell::Cell<usize>>,
     }
     impl View for KeyedHero {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateful(self)
         }
         fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
@@ -603,7 +603,7 @@ pub(crate) fn a_hero_child_keeps_its_state_across_a_flight_without_a_global_key(
     #[derive(Clone)]
     struct Counter(Arc<AtomicUsize>);
     impl View for Counter {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateful(self)
         }
     }
@@ -627,7 +627,7 @@ pub(crate) fn a_hero_child_keeps_its_state_across_a_flight_without_a_global_key(
         creations: Arc<AtomicUsize>,
     }
     impl View for Stage {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateless(self)
         }
     }

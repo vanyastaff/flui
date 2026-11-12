@@ -1160,7 +1160,7 @@ impl FieldLongPress {
         if self.built_for.as_ref() == Some(&policy) {
             return;
         }
-        let GesturePolicy { arena, settings } = policy.clone();
+        let (arena, settings) = (policy.arena().clone(), policy.settings().clone());
         let weak = Rc::downgrade(handles);
         let (pressed, moved, released, cancelled) =
             (weak.clone(), weak.clone(), weak.clone(), weak);
@@ -1228,7 +1228,7 @@ impl std::fmt::Debug for HandlesView {
 }
 
 impl View for HandlesView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }

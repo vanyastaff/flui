@@ -103,7 +103,7 @@ fn semantics_assembly_matrix() {
 fn paint_matrix() {
     let cases: &[(&str, fn())] = &[
         ("paint_fragment_snapshot::clip_rect_object_brackets_child_in_clip_layer", crate::paint_fragment_snapshot::clip_rect_object_brackets_child_in_clip_layer),
-        ("paint_fragment_snapshot::inline_siblings_merge_into_one_origin_baked_picture", crate::paint_fragment_snapshot::inline_siblings_merge_into_one_origin_baked_picture),
+        ("paint_fragment_snapshot::a_picture_run_holds_one_render_objects_output", crate::paint_fragment_snapshot::a_picture_run_holds_one_render_objects_output),
         ("paint_fragment_snapshot::repaint_boundary_child_splits_into_rebased_offset_layer", crate::paint_fragment_snapshot::repaint_boundary_child_splits_into_rebased_offset_layer),
         ("dpr_pipeline::paint_root_carries_the_dpr_scale_and_ops_stay_logical", crate::dpr_pipeline::paint_root_carries_the_dpr_scale_and_ops_stay_logical),
         ("animation_pipeline::animated_opacity_layer_follows_and_zero_alpha_skips", crate::animation_pipeline::animated_opacity_layer_follows_and_zero_alpha_skips),

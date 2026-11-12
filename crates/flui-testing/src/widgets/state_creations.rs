@@ -54,7 +54,7 @@ impl ViewState<StateCreations> for StateCreationsState {
 }
 
 impl View for StateCreations {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

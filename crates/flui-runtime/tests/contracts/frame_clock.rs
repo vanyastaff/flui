@@ -205,9 +205,9 @@ impl FrameSink for FontWidthSink {
         (800, 600)
     }
 
-    fn submit(&mut self, scene: flui_layer::Scene) -> SubmitVerdict {
-        self.0 = scene
-            .tree()
+    fn submit(&mut self, scene: flui_layer::ScenePublication) -> SubmitVerdict {
+        let tree = scene.scene.flatten();
+        self.0 = tree
             .iter()
             .filter_map(|(_, node)| match node.layer() {
                 flui_layer::Layer::Picture(picture) => Some(picture),
@@ -1284,7 +1284,7 @@ impl FrameSink for Sink {
         (800, 600)
     }
 
-    fn submit(&mut self, _: flui_layer::Scene) -> SubmitVerdict {
+    fn submit(&mut self, _: flui_layer::ScenePublication) -> SubmitVerdict {
         SubmitVerdict::Presented
     }
 }

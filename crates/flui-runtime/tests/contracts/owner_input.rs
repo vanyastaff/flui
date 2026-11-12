@@ -66,7 +66,7 @@ fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
         fn surface_size(&mut self) -> (u32, u32) {
             (160, 80)
         }
-        fn submit(&mut self, _: flui_layer::Scene) -> flui_runtime::sink::SubmitVerdict {
+        fn submit(&mut self, _: flui_layer::ScenePublication) -> flui_runtime::sink::SubmitVerdict {
             flui_runtime::sink::SubmitVerdict::Presented
         }
     }
@@ -688,7 +688,7 @@ fn accessibility_input_reaches_the_semantics_owner() {
         fn surface_size(&mut self) -> (u32, u32) {
             (40, 40)
         }
-        fn submit(&mut self, _: flui_layer::Scene) -> flui_runtime::sink::SubmitVerdict {
+        fn submit(&mut self, _: flui_layer::ScenePublication) -> flui_runtime::sink::SubmitVerdict {
             flui_runtime::sink::SubmitVerdict::Presented
         }
     }
@@ -878,7 +878,9 @@ fn a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic() {
         owner.set_root_constraints(Some(flui_rendering::constraints::BoxConstraints::tight(
             flui_foundation::geometry::Size::new(100.0, 100.0),
         )));
-        owner.run_frame_in_place().expect("the tree paints");
+        flui_rendering::testing::SceneHost::new()
+            .run_frame_in_place(owner)
+            .expect("the tree paints");
         healthy
     });
     let position = flui_foundation::geometry::Offset::new(10.0, 10.0);
@@ -999,7 +1001,7 @@ fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
         fn surface_size(&mut self) -> (u32, u32) {
             (40, 40)
         }
-        fn submit(&mut self, _: flui_layer::Scene) -> flui_runtime::sink::SubmitVerdict {
+        fn submit(&mut self, _: flui_layer::ScenePublication) -> flui_runtime::sink::SubmitVerdict {
             flui_runtime::sink::SubmitVerdict::Presented
         }
     }

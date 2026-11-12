@@ -548,6 +548,9 @@ struct RareRegistrations {
     traversal_group: Registered<GroupConfig>,
     traversal_overrides: RefCell<FocusTraversalOverrides>,
     traversal_overrides_generation: Cell<u64>,
+    /// The stored fallback geometry of [`FocusNode::set_rect`]. A node a
+    /// widget hosts measures through its rect provider and never stores one.
+    rect: Cell<Rect<f64>>,
 }
 
 impl RareRegistrations {
@@ -558,6 +561,7 @@ impl RareRegistrations {
             traversal_group: Registered::new(),
             traversal_overrides: RefCell::new(FocusTraversalOverrides::default()),
             traversal_overrides_generation: Cell::new(0),
+            rect: Cell::new(Rect::ZERO),
         }
     }
 }
@@ -574,7 +578,6 @@ pub struct FocusNode {
     scope_owner: RefCell<Option<Weak<FocusScopeNode>>>,
     on_key_event: Registered<KeyEventHandler>,
     listeners: ChangeNotifier,
-    rect: Cell<Rect<f64>>,
     rect_provider: Registered<RectProvider>,
     context: Registered<NodeContext>,
     manager_binding: RefCell<ManagerBinding>,
@@ -735,7 +738,6 @@ impl FocusNode {
             scope_owner: RefCell::new(scope_owner),
             on_key_event: Registered::new(),
             listeners: ChangeNotifier::new(),
-            rect: Cell::new(Rect::ZERO),
             rect_provider: Registered::new(),
             context: Registered::new(),
             manager_binding: RefCell::new(ManagerBinding::Unbound),
@@ -872,12 +874,12 @@ impl FocusNode {
         });
         failure.retire(provider);
         failure.finish();
-        rect.unwrap_or_else(|| self.rect.get())
+        rect.unwrap_or_else(|| self.stored_rect())
     }
 
     /// Store fallback traversal geometry.
     pub fn set_rect(&self, rect: Rect<f64>) {
-        self.rect.set(rect);
+        self.rare().rect.set(rect);
     }
 
     /// Install a live traversal-geometry source.
@@ -967,6 +969,12 @@ impl FocusNode {
         self.rare.get_or_init(|| Box::new(RareRegistrations::new()))
     }
 
+    /// The fallback geometry [`set_rect`](Self::set_rect) stored, or the
+    /// empty rectangle of a node that never stored one.
+    fn stored_rect(&self) -> Rect<f64> {
+        self.rare.get().map_or(Rect::ZERO, |rare| rare.rect.get())
+    }
+
     fn next_property_generation(generation: &Cell<u64>) -> u64 {
         let next = generation
             .get()
@@ -1035,7 +1043,7 @@ impl FocusNode {
         self.close_mode()
     }
     pub(super) fn traversal_geometry_snapshot(&self) -> (Option<RectProvider>, Rect<f64>) {
-        (self.rect_provider.get(), self.rect.get())
+        (self.rect_provider.get(), self.stored_rect())
     }
 
     /// Register a listener for focus or focusability changes on this node.

@@ -106,7 +106,7 @@ impl Board {
 struct Desk(Board);
 
 impl View for Desk {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -152,7 +152,7 @@ impl ViewState<Desk> for DeskState {
 struct BoardGrid(Board);
 
 impl View for BoardGrid {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

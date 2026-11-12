@@ -178,6 +178,12 @@ impl PluginPipeline {
             // exit, a panic included, and returns the frame's
             // `Option<LayerTree>` or its error. On error we log and emit an
             // empty Scene so the host's opaque pointer stays valid.
+            // A scene of its own each frame: the host draws the frame whole, so
+            // nothing is retained across the plugin boundary, and the pipeline
+            // repaints from the root into the new lineage. It drops after the
+            // pipeline's borrow ends: an annotation's `Drop` is user code.
+            let mut scene = flui_rendering::layer::SceneOwner::new();
+            let mut released: Option<flui_rendering::layer::SceneVersion> = None;
             let layer_tree = pipeline_owner.with_mut(|guard| {
                 if let Some(root_id) = guard.root_id() {
                     guard.mark_needs_paint(root_id);
@@ -190,14 +196,60 @@ impl PluginPipeline {
                 // unmeasured tree; constraints set once at mount would keep the
                 // first size after a resize.
                 guard.set_root_constraints(Some(BoxConstraints::tight(Size::new(width, height))));
-                match guard.run_frame_in_place() {
-                    Ok(layer_tree) => layer_tree,
+                let mut writer = scene.writer();
+                let painted = match guard.run_frame_in_place(&mut writer) {
+                    Ok(painted) => painted,
                     Err(e) => {
                         log(&format!("draw_frame: pipeline failed: {e:?}"));
-                        None
+                        false
                     }
+                };
+                if !painted {
+                    return None;
                 }
+                // The scene's root slots the frame, as a presentation's does: a
+                // node no slot reaches is unattached, and its leaders are
+                // invisible to followers and to the pipeline's leader watches.
+                if let Some(frame) = guard.scene_frame_node() {
+                    let mut root = flui_rendering::layer::BoundaryContent::builder();
+                    root.slot(frame);
+                    let node = writer.current().root();
+                    writer.push(flui_rendering::layer::SceneOp::Publish {
+                        node,
+                        content: std::sync::Arc::new(root.finish()),
+                    });
+                }
+                // The key only tells a resize apart: whole pixels, clamped to
+                // the range `u32` holds, a non-finite size as zero.
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "clamped to 0..=u32::MAX before the cast"
+                )]
+                let pixels = |extent: f64| {
+                    if extent.is_finite() {
+                        extent.ceil().clamp(0.0, f64::from(u32::MAX)) as u32
+                    } else {
+                        0
+                    }
+                };
+                let surface = flui_rendering::layer::SurfaceKey {
+                    size: (pixels(width), pixels(height)),
+                    generation: flui_foundation::SurfaceGeneration::ZERO,
+                };
+                if let Err(error) = scene.apply(surface) {
+                    log(&format!(
+                        "draw_frame: BUG: the pipeline's patch was refused: {error}"
+                    ));
+                    return None;
+                }
+                released = guard.scene_applied(scene.current());
+                guard
+                    .scene_frame_node()
+                    .and_then(|node| scene.current().flatten_node(node))
             });
+            // The version the pipeline replaced drops here, outside its borrow.
+            drop(released);
 
             // Phase 3: freeze the LayerTree into a Scene (an empty one when
             // the pipeline produced nothing).
@@ -234,7 +286,7 @@ mod tests {
     }
 
     impl View for ProbeRoot {
-        fn create_element(&self) -> ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
             ElementKind::stateless(self)
         }
 
@@ -299,6 +351,46 @@ mod tests {
             key.current_element(),
             KeyLookup::NoActiveRuntime,
             "plugin scope must not leak"
+        );
+    }
+
+    /// The plugin's scene root slots the frame, so a leader the frame
+    /// publishes is attached: the pipeline's leader watches see it.
+    ///
+    /// Red-check: apply the patch without republishing the root (the watch
+    /// reads no leader).
+    #[test]
+    fn a_plugin_frame_publishes_its_leaders_attached() {
+        use flui_objects::{RenderLeaderLayer, RenderSizedBox};
+        use flui_rendering::layer::LayerLink;
+        use flui_rendering::testing::{box_node, tree};
+
+        let root = ProbeRoot {
+            key: GlobalKey::<()>::new(),
+        };
+        let mut pipeline =
+            PluginPipeline::mount(root, 100.0, 100.0, TextContextHandle::standalone());
+        let _built = pipeline.draw_frame(100.0, 100.0);
+        let link = LayerLink::new();
+        pipeline.pipeline_owner.with_mut(|owner| {
+            let (leader, _) = tree::mount(
+                owner,
+                box_node(RenderLeaderLayer::new(link))
+                    .child(box_node(RenderSizedBox::fixed(10.0, 20.0))),
+            );
+            owner.set_root_id(Some(leader));
+        });
+        let scheduler = flui_scheduler::UpdateScheduler::new();
+        let frame = flui_scheduler::OwnerFrame::try_new(&scheduler)
+            .expect("the scheduler has no live owner frame");
+        let watch = pipeline
+            .pipeline_owner
+            .watch_leader(link, frame.post_frame_handle());
+
+        let _scene = pipeline.draw_frame(100.0, 100.0);
+        assert!(
+            watch.geometry().is_some(),
+            "the leader the plugin frame painted is attached"
         );
     }
 }

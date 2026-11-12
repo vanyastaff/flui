@@ -925,9 +925,10 @@ mod twin_readback_tests {
     }
 
     /// A capture that unwinds in the middle of its frame costs the next one a
-    /// fresh painter, not a failure: the painter is taken for the frame, so
-    /// the unwound frame's half-recorded state never reaches the next one,
-    /// and the device domain's frame scope ends with the unwind.
+    /// fresh painter over the same pipelines, not a failure: the painter is
+    /// taken for the frame, so the unwound frame's half-recorded state never
+    /// reaches the next one, and the device domain's frame scope ends with
+    /// the unwind.
     fn an_unwound_capture_leaves_the_next_capture_drawing() {
         let Some(renderer) = crate::test_support::renderer_or_skip() else {
             return;
@@ -955,6 +956,11 @@ mod twin_readback_tests {
             renderer.context().builds().glyph_atlases,
             built.glyph_atlases + 1,
             "the unwound frame's painter is discarded and the next frame builds one"
+        );
+        assert_eq!(
+            renderer.context().builds().pipeline_sets,
+            built.pipeline_sets,
+            "the unwound frame's pipelines are kept for the next painter"
         );
     }
 

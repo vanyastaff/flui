@@ -42,7 +42,7 @@ impl RenderView for KeyedBox {
 }
 
 impl View for KeyedBox {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::render_variable(self)
     }
     fn key(&self) -> Option<&dyn ViewKey> {
@@ -67,7 +67,7 @@ impl RenderView for HostBox {
     }
 }
 impl View for HostBox {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::render_variable(self)
     }
 }
@@ -145,7 +145,7 @@ impl RenderView for PlainBox {
     }
 }
 impl View for PlainBox {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::render_variable(self)
     }
 }
@@ -253,7 +253,7 @@ impl RenderView for PanicsOnCreate {
 }
 
 impl View for PanicsOnCreate {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::render_variable(self)
     }
 }

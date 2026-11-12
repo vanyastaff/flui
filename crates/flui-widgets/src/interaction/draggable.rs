@@ -725,7 +725,7 @@ struct FeedbackAnchor {
 }
 
 impl View for FeedbackAnchor {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -882,7 +882,7 @@ impl DraggableState {
         let Some(policy) = self.policy.clone() else {
             return;
         };
-        let GesturePolicy { arena, settings } = policy.clone();
+        let (arena, settings) = (policy.arena().clone(), policy.settings().clone());
         let built_for = BuiltFor {
             policy,
             trigger,

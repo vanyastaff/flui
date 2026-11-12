@@ -1,7 +1,7 @@
 //! A `LeaderWatch` hears its leader's geometry change after the frame that
 //! painted it, and only then: a steady layout delivers nothing.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_foundation::geometry::Size;
@@ -11,7 +11,7 @@ use flui_objects::{RenderFlex, RenderLeaderLayer, RenderSizedBox};
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::{LeaderWatch, PipelineCell, PipelineOwner},
-    testing::{box_node, tree, update_render_object},
+    testing::{SceneHost, box_node, tree, update_render_object},
 };
 use flui_scheduler::{IdleDeadline, Instant, OwnerFrame, UpdateScheduler};
 // Lower-crate test drives a frame through the composition-root seam
@@ -23,6 +23,7 @@ use flui_scheduler::__runtime::DriveFrame as _;
 /// scheduler whose post-frame lane its watches deliver through.
 struct Scene {
     cell: PipelineCell,
+    host: RefCell<SceneHost>,
     scheduler: UpdateScheduler,
     frame: OwnerFrame,
     sized: flui_foundation::RenderId,
@@ -50,6 +51,7 @@ impl Scene {
         let frame = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
         Self {
             cell: PipelineCell::new(owner),
+            host: RefCell::new(SceneHost::new()),
             scheduler,
             frame,
             sized: registry.get("sized").expect("labelled"),
@@ -64,7 +66,10 @@ impl Scene {
 
     /// Lays out and paints whatever is dirty.
     fn paint(&self) {
-        self.cell.run_frame().expect("the frame runs");
+        self.host
+            .borrow_mut()
+            .run_cell_frame(&self.cell)
+            .expect("the frame runs");
     }
 
     /// Completes a frame of the scheduler, which runs its post-frame lane.
@@ -144,7 +149,7 @@ fn a_watch_without_a_leader_reads_none() {
     let scene = Scene::new(20.0);
     let watch = scene.watch(LayerLink::new());
     let (heard, _listening) = counted(&watch);
-    for _ in 0..2 {
+    for _ in 0..4 {
         scene.paint();
         scene.complete();
     }
@@ -251,4 +256,154 @@ fn a_moved_leader_is_heard() {
     assert_eq!(heard.get(), 2, "the move is heard");
     assert_eq!(origin(&watch).map(|point| point.x), Some(30.0));
     assert_eq!(height(&watch), Some(20.0), "the size stays");
+}
+
+thread_local! {
+    /// The pipeline whose borrow a dropped annotation looks at, and whether
+    /// each drop found it free.
+    static WATCHED: RefCell<(Option<flui_rendering::pipeline::WeakPipelineCell>, Vec<bool>)> =
+        const { RefCell::new((None, Vec::new())) };
+}
+
+/// An annotation whose `Drop` records whether the pipeline was free.
+#[derive(Debug)]
+struct DropProbe;
+
+impl Drop for DropProbe {
+    fn drop(&mut self) {
+        WATCHED.with(|watched| {
+            let mut watched = watched.borrow_mut();
+            let free = watched
+                .0
+                .as_ref()
+                .and_then(flui_rendering::pipeline::WeakPipelineCell::upgrade)
+                .map(|cell| cell.is_free());
+            if let Some(free) = free {
+                watched.1.push(free);
+            }
+        });
+    }
+}
+
+/// The version a newly applied one replaces drops once the pipeline is free:
+/// an annotation it held last runs its `Drop`, user code, with no borrow of
+/// the pipeline live. Each row drives the frames another way a test kit
+/// offers.
+///
+/// Red-check: drop the replaced version inside the `with_mut` that reports
+/// the applied scene, or apply inside `run_cell_frame`'s checkout (the drop
+/// finds the pipeline borrowed).
+#[test]
+fn a_replaced_version_drops_outside_the_pipeline_borrow() {
+    use flui_objects::RenderAnnotatedRegion;
+    use std::sync::Arc;
+
+    type Driver = fn(&mut SceneHost, &PipelineCell);
+    let drivers: [(&str, Driver); 2] = [
+        ("drive_cell", |host, cell| {
+            let (painted, _) = host.drive_cell(cell, |writer| cell.run_frame(writer));
+            painted.expect("the frame runs");
+        }),
+        ("run_cell_frame", |host, cell| {
+            host.run_cell_frame(cell).expect("the frame runs");
+        }),
+    ];
+    for (name, frame) in drivers {
+        let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+        let (root, registry) = tree::mount(
+            &mut owner,
+            box_node(RenderAnnotatedRegion::new(Arc::new(DropProbe)))
+                .label("region")
+                .child(box_node(RenderSizedBox::fixed(10.0, 10.0))),
+        );
+        owner.set_root_id(Some(root));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(50.0, 50.0))));
+        let region = registry.get("region").expect("labelled");
+        let cell = PipelineCell::new(owner);
+        let mut host = SceneHost::new();
+        WATCHED.with(|watched| *watched.borrow_mut() = (Some(cell.downgrade()), Vec::new()));
+
+        frame(&mut host, &cell);
+        // A renewed scene keeps nothing of the last version, so the version
+        // the watches hold is the last holder of the first annotation.
+        drop(
+            host.owner_mut()
+                .renew(flui_layer::ResyncReason::RasterReset),
+        );
+        cell.with_mut(|owner| {
+            update_render_object::<RenderAnnotatedRegion, _>(owner, region, |region| {
+                region.set_value(Arc::new(DropProbe))
+            });
+        });
+        frame(&mut host, &cell);
+
+        let drops = WATCHED.with(|watched| std::mem::take(&mut watched.borrow_mut().1));
+        WATCHED.with(|watched| watched.borrow_mut().0 = None);
+        assert!(!drops.is_empty(), "{name}: a replaced annotation dropped");
+        assert!(
+            drops.iter().all(|free| *free),
+            "{name}: each annotation dropped with the pipeline free: {drops:?}"
+        );
+    }
+}
+
+/// A patch painted and never reported applied holds the only copy of what it
+/// recorded once the annotation it read is replaced. The next paint gives it
+/// up; the annotation drops when the next patch opens, with the pipeline
+/// free.
+///
+/// Red-check: drop the unapplied patch's records inside the paint pass (the
+/// drop finds the pipeline borrowed).
+#[test]
+fn an_unapplied_patch_drops_outside_the_pipeline_borrow() {
+    use flui_objects::{RenderAnnotatedRegion, RenderRepaintBoundary};
+    use std::sync::Arc;
+
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    // Under a boundary of its own, so its content is a record the patch keeps.
+    let (root, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(RenderAnnotatedRegion::new(Arc::new(DropProbe)))
+                .label("region")
+                .child(box_node(RenderSizedBox::fixed(10.0, 10.0))),
+        ),
+    );
+    owner.set_root_id(Some(root));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(50.0, 50.0))));
+    let region = registry.get("region").expect("labelled");
+    let cell = PipelineCell::new(owner);
+    let mut host = SceneHost::new();
+    WATCHED.with(|watched| *watched.borrow_mut() = (Some(cell.downgrade()), Vec::new()));
+    let replace = || {
+        cell.with_mut(|owner| {
+            update_render_object::<RenderAnnotatedRegion, _>(owner, region, |region| {
+                region.set_value(Arc::new(DropProbe))
+            });
+        });
+    };
+
+    let (painted, _) = host.drive_cell(&cell, |writer| cell.run_frame(writer));
+    painted.expect("the frame runs");
+    // Painted and never applied: the patch alone holds this annotation once
+    // the region reads another.
+    replace();
+    cell.run_frame(&mut host.owner_mut().writer())
+        .expect("the frame runs");
+    replace();
+    cell.run_frame(&mut host.owner_mut().writer())
+        .expect("the frame runs");
+    // Opening the next patch drops what the last painter discarded.
+    host.owner_mut().writer();
+
+    let drops = WATCHED.with(|watched| std::mem::take(&mut watched.borrow_mut().1));
+    WATCHED.with(|watched| watched.borrow_mut().0 = None);
+    assert!(
+        !drops.is_empty(),
+        "the unapplied patch's annotation dropped"
+    );
+    assert!(
+        drops.iter().all(|free| *free),
+        "each annotation dropped with the pipeline free: {drops:?}"
+    );
 }

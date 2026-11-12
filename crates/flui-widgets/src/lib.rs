@@ -357,6 +357,9 @@ pub use value_listenable_builder::{
 pub use widget_state::{
     WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
+// An activation's hold on `Pressed`, for the official catalogs (ADR-0322 §3).
+#[doc(hidden)]
+pub use widget_state::PressHold;
 pub use wrap::Wrap;
 
 pub use flui_view::HapticsMode;

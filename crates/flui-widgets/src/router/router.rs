@@ -244,7 +244,7 @@ impl<R: Routable> Router<R> {
 }
 
 impl<R: Routable> View for Router<R> {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

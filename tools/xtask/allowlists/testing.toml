@@ -63,12 +63,17 @@ names = ["FakeBackend"]
 [[allow]]
 path = "crates/flui-engine/src/renderer.rs"
 kind = "double"
-names = ["FakeSurface", "RecordingTarget"]
+names = ["RecordingTarget"]
 
 [[allow]]
 path = "crates/flui-engine/src/surface_lease.rs"
 kind = "double"
 names = ["RecordingSurface", "RecordingTarget"]
+
+[[allow]]
+path = "crates/flui-engine/src/surface_present.rs"
+kind = "double"
+names = ["FakeSurface"]
 
 [[allow]]
 path = "crates/flui-engine/src/window_target.rs"

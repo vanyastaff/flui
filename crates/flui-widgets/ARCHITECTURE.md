@@ -2987,8 +2987,8 @@ edits but not the caller's own, and `set_value` on a text form field seen by
 **Choice:** `RawButton` is a theme-free press target, so an application that
 uses no design system has a button, and its `on_press` takes
 `Fn(&mut EventCx<'_>)`, the typed write capability of ADR-0086. It is
-stateless and builds one `InteractiveNode` (`interaction/node.rs`, private;
-ADR-0322 §1): one element and one `RenderInteractive` that carry what the
+stateless and builds one `InteractiveNode` (`interaction/node.rs`,
+`#[doc(hidden)]` for the official catalogs, outside every prelude; ADR-0322 §1): one element and one `RenderInteractive` that carry what the
 wrappers `Semantics`, `GestureDetector`, `Actions`, `Focus` and `FocusRing`
 carry, on the hosts those wrappers run on (`FocusHost`, `RecognizerHost`). The
 node is hit opaquely and mounts the tap recognizer a `GestureDetector` would;

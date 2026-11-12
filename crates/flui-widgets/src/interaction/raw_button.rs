@@ -10,7 +10,8 @@ use super::actions::{
     Action, ActionOutcome, ActivateIntent, ActivationPressIntent, ButtonActivateIntent,
 };
 use super::focus_host::FocusConfig;
-use super::node::{Description, InteractiveNode};
+use super::gesture_detector::{PressCallbacks, PressSource};
+use super::node::{Description, InteractiveNode, NodePress};
 use crate::support::event_callback;
 use crate::widget_state::WidgetStatesController;
 
@@ -141,6 +142,16 @@ impl Action<ButtonActivateIntent> for Press {
 /// Space's key-down on an enabled button: consumed, so the press and the
 /// release that activates belong to the button. It changes nothing — the
 /// button has no pressed look.
+/// The button's tap is its press: the action the bindings share answers it
+/// too, so the node's tap slot holds no second callback.
+impl PressSource for Press {
+    fn callbacks(&self) -> PressCallbacks {
+        PressCallbacks::tap(self.0.clone())
+    }
+}
+
+impl NodePress for Press {}
+
 impl Action<ActivationPressIntent> for Press {
     fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
         ActionOutcome::Performed
@@ -173,8 +184,8 @@ impl StatelessView for RawButton {
             .action::<ActivationPressIntent, Press>(&press);
         // The node replaces its callbacks on every build, so a new closure
         // takes effect on the next press.
-        if let Some(handler) = self.on_press.clone() {
-            node = node.on_tap(handler);
+        if enabled {
+            node = node.press(press);
         }
         if let Some(states) = self.states.clone() {
             node = node.states(states);

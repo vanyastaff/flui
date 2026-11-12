@@ -82,7 +82,7 @@ impl ViewState<StateSubject> for HookState {
     }
 }
 impl View for StateSubject {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
     fn key(&self) -> Option<&dyn ViewKey> {
@@ -113,7 +113,7 @@ impl RenderView for RenderSubject {
     }
 }
 impl View for RenderSubject {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }

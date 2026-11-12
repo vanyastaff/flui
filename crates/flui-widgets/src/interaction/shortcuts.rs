@@ -383,7 +383,7 @@ impl std::fmt::Debug for CallbackShortcuts {
 }
 
 impl View for CallbackShortcuts {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }

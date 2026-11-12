@@ -558,7 +558,7 @@ impl InteractiveViewer {
 }
 
 impl View for InteractiveViewer {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -1477,7 +1477,7 @@ impl std::fmt::Debug for AlternativesMount {
 }
 
 impl View for AlternativesMount {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -1525,7 +1525,7 @@ impl std::fmt::Debug for RowFocusProbe {
 }
 
 impl View for RowFocusProbe {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

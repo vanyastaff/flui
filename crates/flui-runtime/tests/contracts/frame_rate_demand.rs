@@ -25,7 +25,7 @@ impl flui_runtime::sink::FrameSink for Sink {
     fn surface_size(&mut self) -> (u32, u32) {
         (160, 80)
     }
-    fn submit(&mut self, _: flui_layer::Scene) -> flui_runtime::sink::SubmitVerdict {
+    fn submit(&mut self, _: flui_layer::ScenePublication) -> flui_runtime::sink::SubmitVerdict {
         flui_runtime::sink::SubmitVerdict::Presented
     }
 }

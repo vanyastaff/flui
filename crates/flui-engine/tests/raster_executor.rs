@@ -449,6 +449,61 @@ fn a_stopped_executor_settles_every_pending_frame_failed() {
     );
 }
 
+/// A lifecycle command sent while the stop runs (here from the host's wake,
+/// which the stop calls for its settlements) comes back `Gone` with its
+/// command, and its slot id is the owner's again: no command is accepted into
+/// a queue the stop has already drained (ADR-0305 §9).
+#[test]
+fn a_command_sent_during_the_stop_comes_back_gone() {
+    let owner: std::rc::Rc<std::cell::OnceCell<RasterSender>> = std::rc::Rc::default();
+    let answers: std::rc::Rc<RefCell<Vec<Result<SendReceipt, RasterSendError>>>> =
+        std::rc::Rc::default();
+    let (mut executor, sender) = RasterExecutor::new(ScriptedSlots::new(), {
+        let owner = std::rc::Rc::clone(&owner);
+        let answers = std::rc::Rc::clone(&answers);
+        move || {
+            let sender = owner.get().expect("the owner's sender is set");
+            let slot = sender.mint_slot().expect("a slot id is left");
+            answers
+                .borrow_mut()
+                .push(sender.send(attach_command(slot, address(9))));
+        }
+    });
+    let queued = sender.mint_slot().expect("a slot id is left");
+    let SendReceipt::Configured(generation) = sender
+        .send(attach_command(queued, address(1)))
+        .expect("accepted")
+    else {
+        panic!("a positive size configures the slot");
+    };
+    let _ = sender
+        .send(frame(
+            Attached {
+                slot: queued,
+                address: address(1),
+                generation,
+            },
+            1,
+        ))
+        .expect("accepted");
+    assert!(owner.set(sender).is_ok());
+
+    executor.shut_down();
+    let answers = answers.borrow();
+    assert_eq!(answers.len(), 1, "the stop woke the host once");
+    assert!(
+        matches!(&answers[0], Err(RasterSendError::Gone(command)) if matches!(**command, RasterCommand::Attach { .. })),
+        "{:?}",
+        answers[0]
+    );
+    let sender = owner.get().expect("set above");
+    assert_eq!(
+        sender.record(queued).map(|record| record.phase),
+        Some(SlotPhase::Detached),
+        "the attach queued before the stop is answered"
+    );
+}
+
 /// A later frame supersedes a pending one: one render, of the survivor, with
 /// the superseded frame's damage folded in, and one settlement naming it.
 #[test]
@@ -879,16 +934,13 @@ fn a_panicking_host_wake_is_resumed_after_the_turn_committed() {
     assert_eq!(rig.wakes.load(Ordering::SeqCst), 2);
 }
 
-/// A resize the backend refuses or panics in is held in the slot's record,
-/// and stays pending: frames stamped with the minted generation settle
+/// A resize the backend refuses for now or panics in is held in the slot's
+/// record, and stays pending: frames stamped with the minted generation settle
 /// `SurfaceStale` until a later turn applies it, and then render.
 #[test]
 fn a_failed_resize_is_held_in_the_record_and_retried_next_turn() {
     for answer in [
-        ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
-            width: 16,
-            height: 16,
-        }),
+        ScriptedAnswer::Fail(EngineError::Timeout),
         ScriptedAnswer::Panic,
     ] {
         let mut rig = rig();
@@ -937,6 +989,128 @@ fn a_failed_resize_is_held_in_the_record_and_retried_next_turn() {
             .count();
         assert_eq!(resizes, 2);
     }
+}
+
+/// Counts the `WARN` events of the executor's resize refusals.
+#[derive(Default)]
+struct CountsResizeWarnings(Arc<AtomicUsize>);
+
+impl tracing::Subscriber for CountsResizeWarnings {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message(bool);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 |= format!("{value:?}").contains("resize refused");
+                }
+            }
+        }
+        let mut message = Message(false);
+        event.record(&mut message);
+        if *event.metadata().level() == tracing::Level::WARN && message.0 {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A size the backend always refuses (over the device's limit) is not retried:
+/// the record holds why, frames stamped for it settle `SurfaceStale`, and the
+/// refusal warns once however many turns and sends repeat it. A later size the
+/// backend accepts configures the slot again.
+///
+/// Red-check: retry every refused resize, as the executor did before it told
+/// transient refusals from lasting ones, and the backend sees the size on every
+/// turn and the warning repeats.
+#[test]
+fn a_size_the_backend_always_refuses_is_not_retried_and_warns_once() {
+    let warnings = Arc::new(AtomicUsize::new(0));
+    let subscriber = CountsResizeWarnings(Arc::clone(&warnings));
+    tracing::subscriber::with_default(subscriber, || {
+        let mut rig = rig();
+        let at = attached(&mut rig, 1);
+        let refused_size = DeviceSize::new(1 << 20, 16);
+        let refusal = || {
+            ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
+                width: 1 << 20,
+                height: 16,
+            })
+        };
+        rig.backend.script_resize(refusal());
+        rig.backend.script_resize(refusal());
+        let resize = |rig: &Rig, size| {
+            let receipt = rig
+                .sender
+                .send(RasterCommand::Configure {
+                    slot: at.slot,
+                    change: SlotChange::Size(size),
+                })
+                .expect("accepted");
+            let SendReceipt::Configured(generation) = receipt else {
+                panic!("a positive size mints a generation: {receipt:?}");
+            };
+            Attached { generation, ..at }
+        };
+        let refused = resize(&rig, refused_size);
+        for epoch in 1..=3 {
+            let _ = rig.sender.send(frame(refused, epoch)).expect("accepted");
+            let _ = rig.executor.turn();
+            assert_eq!(
+                verdicts(&rig.sender, at.slot),
+                [(epoch, RasterVerdict::SurfaceStale)]
+            );
+        }
+        assert!(matches!(
+            rig.sender.take_failure(at.slot),
+            Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
+        ));
+        let resizes = |rig: &Rig| {
+            rig.backend
+                .calls()
+                .into_iter()
+                .filter(|call| matches!(call, SlotCall::Resize(..)))
+                .count()
+        };
+        assert_eq!(resizes(&rig), 1, "a lasting refusal is not retried");
+
+        // The owner asks for the same size again: tried once more, not warned.
+        let again = resize(&rig, refused_size);
+        let _ = rig.sender.send(frame(again, 4)).expect("accepted");
+        let _ = rig.executor.turn();
+        assert_eq!(
+            verdicts(&rig.sender, at.slot),
+            [(4, RasterVerdict::SurfaceStale)]
+        );
+        assert_eq!(resizes(&rig), 2);
+        assert_eq!(
+            warnings.load(Ordering::SeqCst),
+            1,
+            "one warning for the size"
+        );
+
+        let accepted = resize(&rig, DeviceSize::new(16, 16));
+        let _ = rig.sender.send(frame(accepted, 5)).expect("accepted");
+        let _ = rig.executor.turn();
+        assert_eq!(
+            verdicts(&rig.sender, at.slot),
+            [(5, RasterVerdict::Presented)]
+        );
+    });
 }
 
 /// A subscriber that panics at every event.
@@ -1023,7 +1197,7 @@ impl Drop for MintsOnDrop {
 struct PanicsAtAttach;
 
 impl flui_engine::SlotBackend for PanicsAtAttach {
-    fn attach(&mut self, _: SlotId, _: SlotTarget) -> flui_engine::EngineResult<()> {
+    fn attach(&mut self, _: SlotId, _: SlotTarget, _: SlotConfig) -> flui_engine::EngineResult<()> {
         std::panic::panic_any(MintsOnDrop)
     }
 
@@ -1039,6 +1213,26 @@ impl flui_engine::SlotBackend for PanicsAtAttach {
     ) -> flui_engine::EngineResult<PresentDisposition> {
         Ok(PresentDisposition::Presented)
     }
+
+    fn release(&mut self, _: SlotId) {}
+
+    fn restore(
+        &mut self,
+        _: SlotId,
+        _: flui_engine::UnconfiguredSurface,
+    ) -> flui_engine::EngineResult<()> {
+        Ok(())
+    }
+
+    fn set_display_color(
+        &mut self,
+        _: SlotId,
+        _: flui_platform::DisplayColor,
+    ) -> flui_engine::EngineResult<()> {
+        Ok(())
+    }
+
+    fn set_latency(&mut self, _: SlotId, _: flui_engine::FrameLatency) {}
 
     fn detach(&mut self, _: SlotId) {}
 
@@ -1097,7 +1291,7 @@ fn unformattable() -> EngineError {
 
 /// The executor never formats a failure it hands to the owner: an attach or
 /// resize refused with an error that panics when formatted still commits the
-/// refusal, settles the pending frame and keeps the resize pending.
+/// refusal, settles the pending frame and holds the refusal in the record.
 #[test]
 fn a_refusal_whose_error_panics_when_formatted_still_commits() {
     let mut rig = rig();
@@ -1148,12 +1342,12 @@ fn a_refusal_whose_error_panics_when_formatted_still_commits() {
         verdicts(&rig.sender, at.slot),
         [(1, RasterVerdict::SurfaceStale)]
     );
-    let _ = rig.sender.send(frame(current, 2)).expect("accepted");
-    let _ = rig.executor.turn();
-    assert_eq!(
-        verdicts(&rig.sender, at.slot),
-        [(2, RasterVerdict::Presented)],
-        "the resize stayed pending and was retried"
+    assert!(
+        matches!(
+            rig.sender.take_failure(at.slot),
+            Some(SlotFailure::Refused(EngineError::SurfaceCreation(_)))
+        ),
+        "the refused resize is held in the record, unformatted"
     );
 }
 
@@ -1211,5 +1405,52 @@ fn a_surface_loss_keeps_the_barrier_of_a_pending_resize() {
         verdicts(&rig.sender, at.slot),
         [(3, RasterVerdict::Presented)],
         "the resize that succeeds authorises the frame"
+    );
+}
+
+/// A surface lost after the backend refused a size keeps that size's barrier,
+/// as a pending one does: the generation the loss mints is not authorised
+/// while the slot keeps its old configuration.
+///
+/// Red-check: let a surface loss authorise its generation when no size is
+/// pending, ignoring a refused one, and the frame renders.
+#[test]
+fn a_surface_loss_keeps_the_barrier_of_a_refused_size() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    let _ = rig
+        .sender
+        .send(RasterCommand::Configure {
+            slot: at.slot,
+            change: SlotChange::Size(DeviceSize::new(1 << 20, 16)),
+        })
+        .expect("accepted");
+    rig.backend
+        .script_resize(ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
+            width: 1 << 20,
+            height: 16,
+        }));
+    rig.backend
+        .script_render(ScriptedAnswer::Fail(EngineError::SurfaceLost));
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(1, RasterVerdict::SurfaceStale)]
+    );
+    let required = Attached {
+        generation: rig
+            .sender
+            .record(at.slot)
+            .expect("the owner holds the slot")
+            .required_generation,
+        ..at
+    };
+    let _ = rig.sender.send(frame(required, 2)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(2, RasterVerdict::SurfaceStale)],
+        "no frame renders laid out for a size the slot does not have"
     );
 }

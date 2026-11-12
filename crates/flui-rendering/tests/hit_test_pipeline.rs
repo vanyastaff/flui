@@ -14,7 +14,10 @@
 
 use flui_foundation::geometry::Offset;
 use flui_objects::{RenderColoredBox, RenderFlex, RenderPadding, RenderTransform};
-use flui_rendering::{pipeline::PipelineOwner, testing::inspect};
+use flui_rendering::{
+    pipeline::PipelineOwner,
+    testing::{SceneHost, inspect},
+};
 
 use crate::common::{BoxedRenderObject, laid_out_loose_200x200 as laid_out};
 
@@ -265,7 +268,8 @@ pub(crate) fn perspective_flow_hits_its_actual_child_plane() {
     owner.set_root_constraints(Some(flui_rendering::constraints::BoxConstraints::new(
         0.0, 200.0, 0.0, 200.0,
     )));
-    let (owner, frame) = owner.run_frame();
+    let mut scene = SceneHost::new();
+    let (owner, frame) = scene.run_frame(owner);
     frame.expect("the flow paints");
     assert!(
         inspect::hit_path(&owner, 10.0 / 7.0, 25.0 / 7.0).is_empty(),

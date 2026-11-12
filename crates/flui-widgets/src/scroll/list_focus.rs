@@ -650,7 +650,7 @@ impl std::fmt::Debug for FocusableList {
 }
 
 impl View for FocusableList {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -854,7 +854,7 @@ impl std::fmt::Debug for ListItemFocus {
 }
 
 impl View for ListItemFocus {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 

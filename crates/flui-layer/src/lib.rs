@@ -75,7 +75,9 @@ mod texture_registry;
 mod tree;
 
 pub use compositor::SceneBuilder;
-pub use damage::{Closure, DamageMode, LayerDiffer, MAX_CLOSURE_ROUNDS, close_over, read_closure};
+#[cfg(feature = "testing")]
+pub use damage::LayerDiffer;
+pub use damage::{Closure, DamageMode, MAX_CLOSURE_ROUNDS, RasterBase, close_over, read_closure};
 pub use flui_foundation::LayerId;
 pub use layer::{
     AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, BackdropGroupKey, CanvasLayer,
@@ -98,4 +100,6 @@ pub use scene_snapshot::{
 pub use texture_registry::{
     TextureIdsExhausted, TextureListener, TextureRegistration, TextureRegistry, TextureUpdates,
 };
-pub use tree::{BoundaryStamp, ContentToken, LayerNode, LayerTree};
+#[cfg(feature = "testing")]
+pub use tree::{BoundaryStamp, ContentToken};
+pub use tree::{LayerNode, LayerTree};

@@ -75,7 +75,7 @@ struct Host {
 }
 
 impl View for Host {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }
@@ -284,7 +284,7 @@ pub(crate) mod local_history {
     }
 
     impl View for HandleProbe {
-        fn create_element(&self) -> ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
             ElementKind::stateful(self)
         }
     }
@@ -416,7 +416,7 @@ pub(crate) mod local_history {
     }
 
     impl View for PopsInBuild {
-        fn create_element(&self) -> ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
             ElementKind::stateful(self)
         }
     }
@@ -615,7 +615,7 @@ pub(crate) mod local_history {
     }
 
     impl View for Stage {
-        fn create_element(&self) -> ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
             ElementKind::stateless(self)
         }
     }

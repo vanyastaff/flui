@@ -99,7 +99,7 @@ impl std::fmt::Debug for TickerMode {
 }
 
 impl View for TickerMode {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

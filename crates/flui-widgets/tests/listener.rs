@@ -634,7 +634,7 @@ pub(crate) fn custom_recognizer_competes_through_a_listener() {
     #[derive(Clone)]
     struct Attached(Rc<RefCell<Vec<&'static str>>>);
     impl View for Attached {
-        fn create_element(&self) -> flui_view::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateful(self)
         }
     }
