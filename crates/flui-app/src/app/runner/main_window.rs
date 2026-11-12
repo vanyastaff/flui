@@ -689,6 +689,39 @@ pub(super) fn shutdown_main_window() {
     }
 }
 
+/// The execution services a starting platform may resolve, before any
+/// teardown is armed: dropped armed (a refused platform, an unwind out of
+/// the host's start), it shuts them down and clears the executors the run
+/// stashed, so the next run on this thread resolves its own (ADR-0327 §3).
+struct StartupExecution {
+    armed: bool,
+}
+
+impl StartupExecution {
+    /// The platform is up: the loop's teardown owns the services from here.
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StartupExecution {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let shut = APP_RUNTIME.with(|slot| {
+            slot.try_borrow_mut()
+                .map(|mut runtime| runtime.shutdown_execution(std::time::Instant::now()))
+                .is_ok()
+        });
+        if !shut {
+            tracing::warn!(
+                "the runtime was borrowed when the platform failed to start; its execution services stay"
+            );
+        }
+    }
+}
+
 /// Retires the loop's main window and UI runtimes when dropped: after
 /// `Platform::run` returns, or while a panic unwinds out of it. Held inside
 /// the [`OwnerHostClearGuard`], so the windows go before the owner platform
@@ -736,8 +769,35 @@ where
         let host = flui_native::current_host().map_err(AppRunError::from_platform)?;
         // Before the platform, whose registries report only to a capture already installed.
         super::begin_native_journal(host.backend());
-        host.start().map_err(AppRunError::from_platform)
+        start_host(host)
     })
+}
+
+/// Start `host`. The Wayland and X11 hosts run their IO sources (XIM, IBus,
+/// logind, the settings portal) on the application's IO runtime, so a
+/// process runs one (ADR-0327 §3); every other host, and an application that
+/// brought its own executors, starts on the host's own.
+fn start_host(
+    host: flui_native::CurrentHost,
+) -> Result<Box<dyn flui_native::Platform>, AppRunError> {
+    #[cfg(target_os = "linux")]
+    if matches!(
+        host,
+        flui_native::CurrentHost::Wayland | flui_native::CurrentHost::X11
+    ) {
+        let services = APP_RUNTIME.with(|slot| Arc::clone(slot.borrow_mut().ensure_execution()));
+        let runtime = services
+            .io_runtime()
+            .map_err(|error| AppRunError::Platform {
+                source: Arc::new(error),
+            })?;
+        if let Some(runtime) = runtime {
+            return host
+                .start_with(flui_native::NativeExecutor::from_tokio(runtime))
+                .map_err(AppRunError::from_platform);
+        }
+    }
+    host.start().map_err(AppRunError::from_platform)
 }
 
 #[cfg(test)]
@@ -847,7 +907,16 @@ where
         .into_registry(&slots)
         .map_err(AppRunError::CapabilityConflict)?;
     let _logging = super::super::logging::init_managed_logging(&application.config);
+    // Before the platform: a host that runs IO on the application's runtime
+    // takes it while it starts (ADR-0327 §3). Until the platform is up no
+    // teardown is armed, so the guard takes the services down with a
+    // refusal or an unwind out of the host's start.
+    let startup = StartupExecution { armed: true };
+    if let Some(executors) = application.config.executors.clone() {
+        APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_executors(executors));
+    }
     let platform = platform()?;
+    startup.disarm();
     let fatal = Rc::new(RefCell::new(None));
     let disconnect = Arc::new(Disconnect::default());
     // The loop's handle on it: the loop arms it and installs the agent.
@@ -891,9 +960,6 @@ where
                 runtime.capabilities = Some(registry);
                 runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
                 runtime.window_renderers = renderers;
-                if let Some(executors) = config.executors.clone() {
-                    runtime.install_host_executors(executors);
-                }
                 runtime.reopen_lifecycles();
                 runtime.ensure_execution();
             });
@@ -1326,6 +1392,57 @@ mod tests {
         assert!(matches!(error, AppRunError::Platform { .. }), "{error:?}");
     }
 
+    /// The application's executors are in place before the platform starts,
+    /// so a host that runs its IO on the application's runtime finds the
+    /// services it was configured with (ADR-0327 §3); a platform that then
+    /// refuses takes the services down with the run.
+    fn the_platform_starts_after_the_application_executors_are_installed() {
+        let executors = flui_runtime::execution::DeterministicExecutors::new();
+        let app = Application::new(|_| -> flui_widgets::Text {
+            panic!("never built when the platform refuses");
+        })
+        .config(crate::app::AppConfig::default().executors(executors.host_executors()));
+        let seen = Rc::new(std::cell::Cell::new(None));
+        let witness = Rc::clone(&seen);
+        let error = run_with_platform_factory(app, move || {
+            let host_pools =
+                APP_RUNTIME.with(|slot| !slot.borrow_mut().ensure_execution().owns_default_pools());
+            witness.set(Some(host_pools));
+            Err(AppRunError::OnReadyPanicked)
+        })
+        .expect_err("a refused platform fails the run");
+        assert!(matches!(error, AppRunError::OnReadyPanicked), "{error:?}");
+        assert_eq!(
+            seen.get(),
+            Some(true),
+            "the platform starts on the configured executors"
+        );
+        assert!(
+            APP_RUNTIME.with(|slot| slot.borrow().execution().is_none()),
+            "a refused platform leaves no execution services behind"
+        );
+
+        // A host whose start unwinds after the services resolved leaves none
+        // behind either, and the next run resolves the executors it names.
+        let app = Application::new(|_| -> flui_widgets::Text {
+            panic!("never built when the platform's start unwinds");
+        })
+        .config(crate::app::AppConfig::default().executors(executors.host_executors()));
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with_platform_factory(app, || {
+                APP_RUNTIME.with(|slot| {
+                    slot.borrow_mut().ensure_execution();
+                });
+                panic!("the host's start unwinds");
+            })
+        }));
+        assert!(unwound.is_err(), "the start's panic resumes to the caller");
+        assert!(
+            APP_RUNTIME.with(|slot| slot.borrow().execution().is_none()),
+            "an unwind out of the platform's start leaves no execution services behind"
+        );
+    }
+
     fn main_window_factory_panic_is_typed_and_initial_window_is_fatal() {
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("factory witness");
@@ -1409,6 +1526,10 @@ mod tests {
                 (
                     "a_platform_below_the_floor_fails_the_run_as_unsupported",
                     a_platform_below_the_floor_fails_the_run_as_unsupported as fn(),
+                ),
+                (
+                    "the_platform_starts_after_the_application_executors_are_installed",
+                    the_platform_starts_after_the_application_executors_are_installed as fn(),
                 ),
                 (
                     "main_window_factory_panic_is_typed_and_initial_window_is_fatal",

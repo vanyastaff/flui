@@ -627,6 +627,33 @@ impl ExecutionServices {
         !matches!(self.backend, Backend::Host(_))
     }
 
+    /// The IO runtime the native host runs its long-lived sources on (XIM,
+    /// IBus, logind, the settings portal), starting it on first use, so a
+    /// process runs one IO runtime (ADR-0327 §3). Its IO and time drivers
+    /// are enabled.
+    ///
+    /// `Ok(None)` with host-injected pools: FLUI runs no runtime then, and
+    /// the host keeps its own.
+    ///
+    /// The host spawns on the handle directly, outside the IO lane's
+    /// admission window: its sources are not jobs, and each ends when its
+    /// owner drops it or when [`Self::shutdown`] drops the runtime's tasks.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::ShuttingDown`] once [`Self::shutdown`] has begun and
+    /// [`SpawnError::Unavailable`] when the OS refuses to start the pool.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn io_runtime(&self) -> Result<Option<tokio::runtime::Handle>, SpawnError> {
+        if !self.lifecycle.is_accepting() {
+            return Err(SpawnError::ShuttingDown);
+        }
+        match &self.backend {
+            Backend::Host(_) => Ok(None),
+            Backend::Default(pools) => pools.io_handle().map(Some),
+        }
+    }
+
     /// Spawn an **asynchronous compute** job (see the module doc's
     /// work-class model). Fire-and-forget: result delivery is the caller's
     /// business.
