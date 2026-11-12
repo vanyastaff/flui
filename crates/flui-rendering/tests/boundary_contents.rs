@@ -522,7 +522,7 @@ fn a_pixel_ratio_change_retires_the_nodes_it_replaces() {
 
 /// A parent that paints its one child only while the flag it holds is set.
 #[derive(Debug)]
-struct PaintsChildWhen(Arc<std::sync::atomic::AtomicBool>);
+struct PaintsChildWhen(std::rc::Rc<std::cell::Cell<bool>>);
 
 impl flui_foundation::inspect::Inspect for PaintsChildWhen {
     fn kind(&self) -> &'static str {
@@ -552,7 +552,7 @@ impl flui_rendering::traits::RenderBox for PaintsChildWhen {
     flui_rendering::forward_single_child_box_queries!();
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Single>) {
-        if self.0.load(std::sync::atomic::Ordering::Relaxed) {
+        if self.0.get() {
             ctx.paint_child();
         }
     }
@@ -576,10 +576,10 @@ impl flui_rendering::traits::RenderBox for PaintsChildWhen {
 /// Red-check: queue nothing for a plain order (the child stays left out).
 #[test]
 fn a_parent_painting_its_child_again_drops_the_order_that_left_it_out() {
-    let shows = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let shows = std::rc::Rc::new(std::cell::Cell::new(false));
     let (owner, registry) = mount(
         box_node(RenderRepaintBoundary::new()).child(
-            box_node(PaintsChildWhen(Arc::clone(&shows)))
+            box_node(PaintsChildWhen(std::rc::Rc::clone(&shows)))
                 .label("parent")
                 .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
         ),
@@ -592,7 +592,7 @@ fn a_parent_painting_its_child_again_drops_the_order_that_left_it_out() {
     let mut owner = frame(&mut scene, owner);
     assert!(!presents(&owner), "precondition: the child is left out");
 
-    shows.store(true, std::sync::atomic::Ordering::Relaxed);
+    shows.set(true);
     owner.mark_needs_paint(parent);
     owner = frame(&mut scene, owner);
     assert!(presents(&owner), "the child painted again is presented");
