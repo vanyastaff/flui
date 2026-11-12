@@ -552,3 +552,10 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - Desktop and iOS reload widget code in place through `DevReloadHook` (ADR-0311 §4): a worker edit reassembles every UI runtime with its `State` kept. The Android runner drives only the scene hook, so `flui run --scene` reloads a `Scene` plugin, not the widget tree. The web drives no reload hook: `flui run --device browser:<browser>` reloads the page on every rebuild, and the page's state with it ([`hot-reload.md`](hot-reload.md), "WASM / Web").
 - The likely shape on Android is the desktop's worker path, pushed to the device as the scene plugin is; on the Web, which has no `dlopen`, a code patcher (ADR-0311 §7).
 - The check is a widget edit on an Android device and in a browser that reloads with a stateful counter's value kept.
+
+### Two versions of zbus on Linux
+
+> **Environments:** Linux · **Who it hurts:** Every Linux application, which compiles both D-Bus stacks · **Parity:** none (build graph)
+
+- `flui-native` and `flui-system` speak D-Bus through zbus 6, while `accesskit_unix` 0.24.1, the newest release, reaches zbus 5 through `atspi`, so the default graph on Linux carries both with their `zvariant`, `zbus_names` and macro crates (`cargo tree -p flui -i zbus@5.19.0`). Moving FLUI's own D-Bus code back to zbus 5 would trade a current API for an unmaintained one (RUSTSEC-2026-0370 to -0372 in `deny.toml`).
+- The entry closes when `accesskit_unix` moves to zbus 6: then the workspace resolves one zbus, the three advisories leave `deny.toml`, and `crates_linux` in `perf/size.toml` falls.

@@ -1,0 +1,11 @@
+# Written by `cargo xtask perf --size --bless`; Linux x86_64.
+# Package counts of the facade's default graph and the counter example's sizes.
+
+[size]
+counter_release_bytes = 27245528
+counter_wasm_bytes = 16660316
+crates_android = 223
+crates_linux = 275
+crates_macos = 208
+crates_wasm32 = 180
+crates_windows = 207
