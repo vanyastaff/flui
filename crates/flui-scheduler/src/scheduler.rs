@@ -343,7 +343,7 @@ impl std::fmt::Debug for FrameCompletionFuture {
 impl Future for FrameCompletionFuture {
     type Output = Result<FrameOutcome, SchedulerClosed>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         // NO caller code runs under this guard, on either path -- which
         // rests on a drop-order dependency named at the slow path below,
         // not on the structure alone. That is stronger than the registry's
@@ -375,7 +375,7 @@ impl Future for FrameCompletionFuture {
             if state
                 .waker
                 .as_ref()
-                .is_some_and(|stored| stored.will_wake(cx.waker()))
+                .is_some_and(|stored| stored.will_wake(ctx.waker()))
             {
                 return Poll::Pending;
             }
@@ -393,7 +393,7 @@ impl Future for FrameCompletionFuture {
         // refactor silently reverses that order and runs `Waker::drop`
         // under the lock -- issue #1057's hang, reintroduced by a change
         // that looks like tidying.
-        let fresh_waker = cx.waker().clone();
+        let fresh_waker = ctx.waker().clone();
 
         let displaced_waker = {
             let mut state = self.state.lock();

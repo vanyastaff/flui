@@ -191,7 +191,7 @@ fn default_tile_height(is_three_line: bool, has_subtitle: bool, is_dense: bool) 
 ///     .leading(Icon::new(IconData::new(0xE87D)))
 ///     .title(Text::new("Inbox"))
 ///     .subtitle(Text::new("12 unread messages"))
-///     .on_tap(|_cx| {});
+///     .on_tap(|_ctx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct ListTile {
@@ -809,7 +809,7 @@ impl StatelessView for ListTile {
                 .on_tap
                 .clone()
                 .expect("BUG: is_interactive() checked on_tap.is_some()");
-            ink_well = ink_well.on_tap(move |cx| on_tap(cx));
+            ink_well = ink_well.on_tap(move |ctx| on_tap(ctx));
         }
 
         let tile_constraints =

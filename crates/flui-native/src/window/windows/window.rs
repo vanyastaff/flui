@@ -1032,14 +1032,15 @@ impl WindowsWindow {
         if fullscreen {
             return Ok(());
         }
-        // SAFETY: `self.hwnd` is this wrapper's live window handle; the RECT is
-        // a stack local out-parameter; the style calls take plain integers.
         super::proc::with_window_context(
             self.hwnd,
             "restyle_frame",
             |ctx| -> Result<(), ApplyError> {
                 // The frame changes in two steps; a subscriber sees the result only.
                 let _hold = ctx.hold_publishing();
+                // SAFETY: `self.hwnd` is this wrapper's live window handle; the
+                // RECT is a stack local out-parameter; the style calls take
+                // plain integers.
                 unsafe {
                     let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
                     let changed = restyled(style, decorated, resizable);
@@ -2052,6 +2053,8 @@ impl WindowsWindow {
     /// that one is restored and hidden again; the show and the hide are not the
     /// window appearing, and the runtime hears neither.
     fn restore_hidden(&self) {
+        // SAFETY: `IsIconic` reads the state of a handle and dereferences no
+        // memory of ours; a handle that is no longer a window answers false.
         let iconic = unsafe { IsIconic(self.hwnd()) }.as_bool();
         if iconic {
             super::proc::with_window_context(self.hwnd(), "restore_hidden", |ctx| {

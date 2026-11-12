@@ -35,7 +35,7 @@ use crate::theme::Theme;
 /// use flui_material::ElevatedButton;
 /// use flui_sdk::widgets::Text;
 ///
-/// let _button = ElevatedButton::new(Text::new("Save")).on_pressed(|_cx| {});
+/// let _button = ElevatedButton::new(Text::new("Save")).on_pressed(|_ctx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct ElevatedButton {

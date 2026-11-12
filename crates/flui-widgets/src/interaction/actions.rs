@@ -20,7 +20,7 @@
 //! # Deferred, and named
 //!
 //! An `ActionDispatcher` as a replaceable object, an
-//! `Actions` handler hook and a do-nothing action (write `CallbackAction::new(|_cx, _| ())`
+//! `Actions` handler hook and a do-nothing action (write `CallbackAction::new(|_ctx, _| ())`
 //! until the propagation-control use case arrives). A `Shortcuts` resolves
 //! from the primary focus's position, the chain each `Focus` records on its
 //! node (ADR-0079).
@@ -113,11 +113,11 @@ pub trait Action<T: Intent> {
     }
 
     /// Perform the operation inside the dispatch that resolved it:
-    /// `cx` is the key event's [`EventCx`], so an action writes signals the
+    /// `ctx` is the key event's [`EventCx`], so an action writes signals the
     /// same way every other event callback does (ADR-0086). The
     /// [`ActionOutcome`] reaches the key path through
     /// [`to_key_event_result`](Self::to_key_event_result).
-    fn invoke(&self, cx: &mut EventCx<'_>, intent: &T) -> ActionOutcome;
+    fn invoke(&self, ctx: &mut EventCx<'_>, intent: &T) -> ActionOutcome;
 
     /// What a key event that invoked this action reports.
     ///
@@ -151,7 +151,7 @@ pub trait Action<T: Intent> {
 /// impl Intent for SaveIntent {}
 ///
 /// fn save_action(saves: Signal<u32>) -> CallbackAction<SaveIntent> {
-///     CallbackAction::new(move |cx, _: &SaveIntent| saves.update(cx, |n| *n += 1))
+///     CallbackAction::new(move |ctx, _: &SaveIntent| saves.update(ctx, |n| *n += 1))
 /// }
 /// ```
 pub struct CallbackAction<T: Intent> {
@@ -180,8 +180,8 @@ impl<T: Intent> std::fmt::Debug for CallbackAction<T> {
 }
 
 impl<T: Intent> Action<T> for CallbackAction<T> {
-    fn invoke(&self, cx: &mut EventCx<'_>, intent: &T) -> ActionOutcome {
-        (self.on_invoke)(cx, intent);
+    fn invoke(&self, ctx: &mut EventCx<'_>, intent: &T) -> ActionOutcome {
+        (self.on_invoke)(ctx, intent);
         ActionOutcome::Performed
     }
 }
@@ -221,7 +221,7 @@ impl<T: Intent, A: Action<T> + 'static> Binding<T, A> {
     ) -> BindingTable {
         BindingTable {
             is_enabled,
-            invoke: |action, cx, intent| bound::<A>(action).invoke(cx, typed::<T>(intent)),
+            invoke: |action, ctx, intent| bound::<A>(action).invoke(ctx, typed::<T>(intent)),
             to_key_event_result: |action, intent, outcome| {
                 bound::<A>(action).to_key_event_result(typed::<T>(intent), outcome)
             },
@@ -294,15 +294,15 @@ impl ErasedAction {
 
     /// Invoke outside a key dispatch: a gesture, a control's press, an
     /// assistive-technology action.
-    pub(crate) fn invoke(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> ActionOutcome {
-        (self.table.invoke)(&*self.action, cx, intent)
+    pub(crate) fn invoke(&self, ctx: &mut EventCx<'_>, intent: &dyn Any) -> ActionOutcome {
+        (self.table.invoke)(&*self.action, ctx, intent)
     }
 
     /// Invoke inside the key event's dispatch, then report what the key
     /// dispatch should do — **one** call, so the key result cannot disagree
     /// with what actually ran.
-    pub(crate) fn invoke_for_key(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> KeyEventResult {
-        let outcome = (self.table.invoke)(&*self.action, cx, intent);
+    pub(crate) fn invoke_for_key(&self, ctx: &mut EventCx<'_>, intent: &dyn Any) -> KeyEventResult {
+        let outcome = (self.table.invoke)(&*self.action, ctx, intent);
         (self.table.to_key_event_result)(&*self.action, intent, outcome)
     }
 }
@@ -717,7 +717,7 @@ impl NextFocusAction {
 }
 
 impl Action<NextFocusIntent> for NextFocusAction {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &NextFocusIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &NextFocusIntent) -> ActionOutcome {
         if self.focus_manager.focus_next() {
             ActionOutcome::Performed
         } else {
@@ -742,7 +742,7 @@ impl PreviousFocusAction {
 }
 
 impl Action<PreviousFocusIntent> for PreviousFocusAction {
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &PreviousFocusIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &PreviousFocusIntent) -> ActionOutcome {
         if self.focus_manager.focus_previous() {
             ActionOutcome::Performed
         } else {
@@ -773,7 +773,7 @@ impl DirectionalFocusAction {
     }
 }
 impl Action<DirectionalFocusIntent> for DirectionalFocusAction {
-    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &DirectionalFocusIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, intent: &DirectionalFocusIntent) -> ActionOutcome {
         if self.focus_manager.focus_in_direction(intent.0) {
             ActionOutcome::Performed
         } else {

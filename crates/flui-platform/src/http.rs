@@ -508,7 +508,7 @@ pub trait BodySource: Send + 'static {
     /// caller's.
     fn poll_chunk(
         self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        ctx: &mut Context<'_>,
     ) -> Poll<Option<Result<Vec<u8>, HttpError>>>;
 }
 
@@ -518,7 +518,7 @@ struct Whole(Option<Vec<u8>>);
 impl BodySource for Whole {
     fn poll_chunk(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        _ctx: &mut Context<'_>,
     ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
         Poll::Ready(self.0.take().filter(|bytes| !bytes.is_empty()).map(Ok))
     }
@@ -558,11 +558,14 @@ impl ResponseBody {
     ///
     /// The source's failure, or [`HttpError::TooLarge`] once the bytes read
     /// pass the limit. Every later call answers `None`.
-    pub fn poll_chunk(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
+    pub fn poll_chunk(
+        &mut self,
+        ctx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
         if self.done {
             return Poll::Ready(None);
         }
-        let chunk = match self.source.as_mut().poll_chunk(cx) {
+        let chunk = match self.source.as_mut().poll_chunk(ctx) {
             Poll::Pending => return Poll::Pending,
             Poll::Ready(chunk) => chunk,
         };
@@ -586,7 +589,7 @@ impl ResponseBody {
 
     /// The next chunk, `None` at the end; see [`Self::poll_chunk`].
     pub fn next_chunk(&mut self) -> impl Future<Output = Option<Result<Vec<u8>, HttpError>>> + '_ {
-        std::future::poll_fn(move |cx| self.poll_chunk(cx))
+        std::future::poll_fn(move |ctx| self.poll_chunk(ctx))
     }
 
     /// The whole body.

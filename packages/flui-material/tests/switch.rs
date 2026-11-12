@@ -51,7 +51,7 @@ pub fn tap_fires_on_changed_with_the_flipped_value() {
     let observed = Rc::new(RefCell::new(None));
     let recorder = Rc::clone(&observed);
     let laid = lay_out(
-        themed(Switch::new(false).on_changed(move |_cx, next| {
+        themed(Switch::new(false).on_changed(move |_ctx, next| {
             *recorder.borrow_mut() = Some(next);
         })),
         constraints(),
@@ -83,7 +83,7 @@ pub fn disabled_switch_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
 
     let mut laid_enabled = laid_disabled;
     let counter = Rc::clone(&taps);
-    laid_enabled.pump_widget(themed(Switch::new(false).on_changed(move |_cx, _| {
+    laid_enabled.pump_widget(themed(Switch::new(false).on_changed(move |_ctx, _| {
         *counter.borrow_mut() += 1;
     })));
     laid_enabled.dispatch_pointer_down(TAP_TARGET_WIDTH / 2.0, TAP_TARGET_HEIGHT / 2.0);
@@ -99,7 +99,7 @@ pub fn disabled_switch_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
 pub fn mounted_switch_exports_its_role_and_toggle_state() {
     for (value, expected) in [(false, Toggled::False), (true, Toggled::True)] {
         let mut laid = lay_out(
-            themed(Switch::new(value).on_changed(|_cx, _| {})),
+            themed(Switch::new(value).on_changed(|_ctx, _| {})),
             constraints(),
         );
         laid.enable_semantics();
@@ -164,7 +164,7 @@ fn animated_switch(vsync: &Vsync, value: bool, direction: TextDirection) -> impl
         vsync.clone(),
         Directionality::new(
             direction,
-            themed(Switch::new(value).on_changed(|_cx, _| {})),
+            themed(Switch::new(value).on_changed(|_ctx, _| {})),
         ),
     )
 }

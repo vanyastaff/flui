@@ -1843,7 +1843,7 @@ mod tests {
         let future_retired = Arc::new(AtomicBool::new(false));
         let capture = RetirementProbe(Arc::clone(&future_retired));
         let payload = Arc::clone(&payload_retired);
-        let future = Box::pin(std::future::poll_fn(move |_cx| -> Poll<()> {
+        let future = Box::pin(std::future::poll_fn(move |_ctx| -> Poll<()> {
             let _capture = &capture;
             std::panic::panic_any(RetirementProbe(Arc::clone(&payload)));
         }));
@@ -1867,7 +1867,7 @@ mod tests {
 
         let healthy_retired = Arc::new(AtomicBool::new(false));
         let capture = RetirementProbe(Arc::clone(&healthy_retired));
-        let future = Box::pin(std::future::poll_fn(move |_cx| {
+        let future = Box::pin(std::future::poll_fn(move |_ctx| {
             let _capture = &capture;
             Poll::Ready(7)
         }));

@@ -181,9 +181,14 @@ pub(crate) fn a_recolour_paints_what_a_fresh_layout_paints() {
 
     // One context for every painter: the faces, and so the glyph keys, are
     // the same ones.
-    let mut cx: TextContext = text_cx();
+    let mut ctx: TextContext = text_cx();
     let mut rasterizer = SwashRasterizer::new();
-    fn painter_on(text: TextSpan, cx: &mut TextContext, width: f64, truncate: bool) -> TextPainter {
+    fn painter_on(
+        text: TextSpan,
+        ctx: &mut TextContext,
+        width: f64,
+        truncate: bool,
+    ) -> TextPainter {
         let mut painter = TextPainter::new()
             .with_text(text)
             .with_text_direction(TextDirection::Ltr);
@@ -192,7 +197,7 @@ pub(crate) fn a_recolour_paints_what_a_fresh_layout_paints() {
             painter.set_ellipsis(Some("…".to_string()));
         }
         painter
-            .layout(cx, 0.0, width)
+            .layout(ctx, 0.0, width)
             .expect("valid fixture lays out");
         painter
     }
@@ -280,7 +285,7 @@ pub(crate) fn a_recolour_paints_what_a_fresh_layout_paints() {
 
     for row in rows {
         let name = row.name;
-        let mut painter = painter_on(row.before, &mut cx, row.width, row.truncate);
+        let mut painter = painter_on(row.before, &mut ctx, row.width, row.truncate);
         let mut previous = painted(&painter, &mut rasterizer);
         for ((after, expected), keeps) in row.steps.into_iter().zip(row.keeps) {
             assert_eq!(
@@ -290,12 +295,12 @@ pub(crate) fn a_recolour_paints_what_a_fresh_layout_paints() {
             );
             if expected == Invalidation::Layout {
                 painter
-                    .layout(&mut cx, 0.0, row.width)
+                    .layout(&mut ctx, 0.0, row.width)
                     .expect("valid fixture lays out");
             }
             let recoloured = painted(&painter, &mut rasterizer);
             let fresh = painted(
-                &painter_on(after, &mut cx, row.width, row.truncate),
+                &painter_on(after, &mut ctx, row.width, row.truncate),
                 &mut rasterizer,
             );
             assert_eq!(recoloured.glyphs, fresh.glyphs, "{name}: placed glyphs");
@@ -319,7 +324,7 @@ pub(crate) fn a_recolour_paints_what_a_fresh_layout_paints() {
                 // A layout under the same constraints is a cache hit, and
                 // paints the recoloured paragraph.
                 painter
-                    .layout(&mut cx, 0.0, row.width)
+                    .layout(&mut ctx, 0.0, row.width)
                     .expect("valid fixture lays out");
                 let again = painted(&painter, &mut rasterizer);
                 assert!(
@@ -333,7 +338,7 @@ pub(crate) fn a_recolour_paints_what_a_fresh_layout_paints() {
 
     // The ellipsis glyph, last of the truncated line, paints in the colour
     // of the span it follows, and the cut fell inside that span.
-    let mut painter = painter_on(cut_in_child(red, blue), &mut cx, narrow, true);
+    let mut painter = painter_on(cut_in_child(red, blue), &mut ctx, narrow, true);
     let before = painted(&painter, &mut rasterizer);
     assert!(
         before.paragraph.text().ends_with('…') && before.paragraph.text().contains("A s"),
@@ -373,12 +378,12 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
 
     const WIDTH: f64 = 120.0;
 
-    fn laid_out(cx: &mut TextContext, text: InlineSpan) -> TextPainter {
+    fn laid_out(ctx: &mut TextContext, text: InlineSpan) -> TextPainter {
         let mut painter = TextPainter::new()
             .with_text(text)
             .with_text_direction(TextDirection::Ltr);
         painter
-            .layout(cx, 0.0, WIDTH)
+            .layout(ctx, 0.0, WIDTH)
             .expect("valid fixture lays out");
         painter
     }
@@ -420,7 +425,7 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
 
     // One context for every layout: a fresh collection per layout would
     // miss the shaping cache and prove nothing about what was kept.
-    let mut cx = text_cx();
+    let mut ctx = text_cx();
 
     // Every field set, none defaulted: a new field fails to compile here.
     let TextStyle {
@@ -708,7 +713,7 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
 
     // Controls: the fixture shapes real glyphs, and the geometry oracle sees
     // a spacing change.
-    let (base_paragraph, base_color) = recorded(&laid_out(&mut cx, base.clone()));
+    let (base_paragraph, base_color) = recorded(&laid_out(&mut ctx, base.clone()));
     assert_eq!(base_color, Color::BLUE);
     assert!(
         base_paragraph.runs().any(|run| !run.glyphs().is_empty()),
@@ -720,17 +725,17 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
     });
     assert_ne!(
         geometry(&base_paragraph),
-        geometry(&recorded(&laid_out(&mut cx, spaced)).0),
+        geometry(&recorded(&laid_out(&mut ctx, spaced)).0),
         "the geometry oracle sees a letter-spacing change"
     );
 
     let mut failures = Vec::new();
     for (field, varied, expected, command_color) in rows {
-        let mut painter = laid_out(&mut cx, base.clone());
+        let mut painter = laid_out(&mut ctx, base.clone());
         let (before, _) = recorded(&painter);
         let answer = painter.set_text(Some(varied.clone()));
         painter
-            .layout(&mut cx, 0.0, WIDTH)
+            .layout(&mut ctx, 0.0, WIDTH)
             .expect("valid fixture lays out");
         let (after, color) = recorded(&painter);
         if answer != expected {
@@ -740,7 +745,7 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
             continue;
         }
         if answer == Paint {
-            let fresh = recorded(&laid_out(&mut cx, varied)).0;
+            let fresh = recorded(&laid_out(&mut ctx, varied)).0;
             if !Arc::ptr_eq(&before, &after) {
                 failures.push(format!("{field}: a paint change reshaped"));
             } else if geometry(&after) != geometry(&fresh) {

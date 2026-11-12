@@ -24,11 +24,11 @@ fn background_batches_are_bounded_with_frames_disabled() {
     let task_polls = Rc::clone(&polls);
     let token = owner
         .async_driver()
-        .spawn_local(Box::pin(poll_fn(move |cx| {
+        .spawn_local(Box::pin(poll_fn(move |ctx| {
             task_trace.borrow_mut().push("poll");
             task_polls.set(task_polls.get() + 1);
             if task_polls.get() == 1 {
-                cx.waker().wake_by_ref();
+                ctx.waker().wake_by_ref();
                 Poll::Pending
             } else {
                 Poll::Ready(())

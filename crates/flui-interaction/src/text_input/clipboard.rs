@@ -2,7 +2,7 @@
 //! (ADR-0152).
 //!
 //! A widget acquires a [`ClipboardHandle`] through
-//! `cx.capability::<ClipboardCapability>()` in a lifecycle hook. The marker
+//! `ctx.capability::<ClipboardCapability>()` in a lifecycle hook. The marker
 //! and the handle live here because framework widgets name them; the
 //! operating system's clipboard reaches the handle through a
 //! [`ClipboardBackend`] that the application's provider builds over the
@@ -17,7 +17,7 @@ use flui_platform::{ClipboardRead, ClipboardWrite, Concealment};
 
 use super::shared_read::SharedRead;
 
-/// The clipboard capability: `cx.capability::<ClipboardCapability>()` hands
+/// The clipboard capability: `ctx.capability::<ClipboardCapability>()` hands
 /// out a [`ClipboardHandle`].
 #[derive(Debug)]
 #[allow(
@@ -69,15 +69,15 @@ pub struct ClipboardHandle {
 }
 
 impl ClipboardHandle {
-    /// A handle over `backend` for the acquisition `cx`: its reads settle
+    /// A handle over `backend` for the acquisition `ctx`: its reads settle
     /// through the UI runtime's completions, and share the read in flight
     /// with every other handle of that runtime.
     #[must_use]
-    pub fn new(backend: impl ClipboardBackend, cx: &ProviderContext<'_>) -> Self {
+    pub fn new(backend: impl ClipboardBackend, ctx: &ProviderContext<'_>) -> Self {
         Self {
             backend: Rc::new(backend),
-            completions: cx.completions().clone(),
-            reads: cx.runtime_local::<ClipboardReads>(),
+            completions: ctx.completions().clone(),
+            reads: ctx.runtime_local::<ClipboardReads>(),
         }
     }
 

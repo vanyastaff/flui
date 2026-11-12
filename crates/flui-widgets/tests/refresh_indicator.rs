@@ -74,12 +74,12 @@ struct Refresh {
 impl Future for Refresh {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
         if self.refreshes.done.get() {
             self.finished = true;
             return Poll::Ready(());
         }
-        *self.refreshes.waker.borrow_mut() = Some(cx.waker().clone());
+        *self.refreshes.waker.borrow_mut() = Some(ctx.waker().clone());
         Poll::Pending
     }
 }
@@ -163,7 +163,7 @@ impl Inbox {
         )
         .axis(axis)
         .controller(self.refresh.clone())
-        .on_refresh(move |_cx| {
+        .on_refresh(move |_ctx| {
             refreshes.started.set(refreshes.started.get() + 1);
             Refresh {
                 refreshes: Rc::clone(&refreshes),

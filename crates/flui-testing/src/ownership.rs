@@ -641,7 +641,7 @@ fn swipe_row() -> BoxedView {
         ColoredBox::new(ROW).child(SizedBox::new(300.0, 60.0)),
         [action("Pin")],
         [action("Delete")],
-        SwipeAlternative::PresentedMenu(Rc::new(|_cx, _request| {})),
+        SwipeAlternative::PresentedMenu(Rc::new(|_ctx, _request| {})),
     )
     .expect("BUG: two labelled actions");
     Column::new(vec![SizedBox::new(300.0, 70.0).boxed(), row.boxed()])
@@ -957,7 +957,7 @@ fn viewer_alternatives() -> GestureAlternatives {
     GestureAlternatives::try_new(Alternative::ContextMenu(
         MenuSpec::new(
             GestureCommand::new("Zoom in", ZoomIntent::In),
-            |_cx, _request| {},
+            |_ctx, _request| {},
         )
         .item(GestureCommand::new("Zoom out", ZoomIntent::Out)),
     ))
@@ -970,7 +970,7 @@ fn pager_alternatives() -> GestureAlternatives {
     GestureAlternatives::try_new(Alternative::ContextMenu(
         MenuSpec::new(
             GestureCommand::new("Previous page", PageIntent::Previous),
-            |_cx, _request| {},
+            |_ctx, _request| {},
         )
         .item(GestureCommand::new("Next page", PageIntent::Next)),
     ))

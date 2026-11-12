@@ -54,11 +54,11 @@ impl StatelessView for FlingToFile {
                 Axis::Horizontal,
             ))
             .drag(
-                DragSlot::horizontal().on_end(move |cx, details: DragEndDetails| {
+                DragSlot::horizontal().on_end(move |ctx, details: DragEndDetails| {
                     if details.primary_velocity < -300.0 {
-                        let _ = left.perform(cx);
+                        let _ = left.perform(ctx);
                     } else if details.primary_velocity > 300.0 {
-                        let _ = right.perform(cx);
+                        let _ = right.perform(ctx);
                     }
                 }),
             )
@@ -103,10 +103,10 @@ fn filing_row() -> (Actions, GestureAlternatives, impl Fn() -> Filed + 'static) 
             .child(ColoredBox::new(Color::rgb(10, 20, 30)))
             .boxed(),
     })
-    .action(CallbackAction::new(move |_cx, _: &Archive| {
+    .action(CallbackAction::new(move |_ctx, _: &Archive| {
         archive.set(archive.get() + 1);
     }))
-    .action(CallbackAction::new(move |_cx, _: &Pin| {
+    .action(CallbackAction::new(move |_ctx, _: &Pin| {
         pin.set(pin.get() + 1);
     }));
     (view, alternatives, move || (archived.get(), pinned.get()))

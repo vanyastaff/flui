@@ -2142,6 +2142,8 @@ fn session_locked_now() -> bool {
         // allocation's alignment; level 1 is the union's only member.
         let info = unsafe { std::ptr::read_unaligned(buffer.0.cast::<WTSINFOEXW>()) };
         info.Level == 1
+            // SAFETY: `Level == 1` names the union's active member, which is
+            // also its only one.
             && unsafe { info.Data.WTSInfoExLevel1 }.SessionFlags as u32 == WTS_SESSIONSTATE_LOCK
     });
     // SAFETY: the buffer the query allocated, freed once.

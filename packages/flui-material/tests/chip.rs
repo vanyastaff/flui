@@ -97,10 +97,10 @@ pub fn tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap() {
     let laid = lay_out(
         themed(
             Chip::new(Text::new("Tag"))
-                .on_pressed(move |_cx| {
+                .on_pressed(move |_ctx| {
                     *press_counter.borrow_mut() += 1;
                 })
-                .on_deleted(move |_cx| {
+                .on_deleted(move |_ctx| {
                     *delete_counter.borrow_mut() += 1;
                 }),
         ),
@@ -142,10 +142,10 @@ pub fn disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
         themed(
             Chip::new(Text::new("Tag"))
                 .enabled(false)
-                .on_pressed(move |_cx| {
+                .on_pressed(move |_ctx| {
                     *press_counter.borrow_mut() += 1;
                 })
-                .on_deleted(move |_cx| {
+                .on_deleted(move |_ctx| {
                     *delete_counter.borrow_mut() += 1;
                 }),
         ),
@@ -191,7 +191,7 @@ pub fn a_filter_chip_announces_its_selection_as_pressed() {
             themed(
                 FilterChip::new(Text::new("Vegetarian"))
                     .selected(selected)
-                    .on_selected(|_cx, _next| {}),
+                    .on_selected(|_ctx, _next| {}),
             ),
             loose(300.0),
         );

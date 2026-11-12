@@ -50,7 +50,7 @@ pub(crate) mod intent_tests {
                 Shortcuts::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)))
                     .shortcut(SingleActivator::character("s").control(), SaveIntent),
             )
-            .action(CallbackAction::new(move |_cx, _intent: &SaveIntent| {
+            .action(CallbackAction::new(move |_ctx, _intent: &SaveIntent| {
                 saves_for_action.fetch_add(1, Ordering::SeqCst);
             })),
         );
@@ -88,7 +88,7 @@ pub(crate) mod intent_tests {
                         Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)),
                     )
                     .action(CallbackAction::new(
-                        move |_cx, _intent: &SaveIntent| {
+                        move |_ctx, _intent: &SaveIntent| {
                             saves_for_action.set(saves_for_action.get() + 1);
                         },
                     )),
@@ -528,7 +528,7 @@ pub(crate) mod activation_tests {
         let counted = Rc::clone(&runs);
         let harness = mount(
             Actions::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&button)))
-                .action(CallbackAction::new(move |_cx, _: &ActivateIntent| {
+                .action(CallbackAction::new(move |_ctx, _: &ActivateIntent| {
                     counted.set(counted.get() + 1);
                 })),
         );
@@ -607,8 +607,8 @@ pub(crate) mod event_cx_tests {
         let probe_node = Rc::clone(&node);
         let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
             CallbackShortcuts::new(field(&probe_node))
-                .binding(SingleActivator::character("s").control(), move |cx| {
-                    count.update(cx, |n| *n += 1)
+                .binding(SingleActivator::character("s").control(), move |ctx| {
+                    count.update(ctx, |n| *n += 1)
                 })
         });
         let mut harness = mount(probe.view());
@@ -627,8 +627,8 @@ pub(crate) mod event_cx_tests {
         let probe_node = Rc::clone(&node);
         let probe = SignalProbe::new(move |ProbeSignals { released, .. }| {
             CallbackShortcuts::new(field(&probe_node))
-                .binding(SingleActivator::character("s").control(), move |cx| {
-                    released.set(cx, 1)
+                .binding(SingleActivator::character("s").control(), move |ctx| {
+                    released.set(ctx, 1)
                 })
         });
         let mut harness = mount(probe.view());
@@ -652,8 +652,8 @@ pub(crate) mod event_cx_tests {
                 Shortcuts::new(field(&probe_node))
                     .shortcut(SingleActivator::character("s").control(), SaveIntent),
             )
-            .action(CallbackAction::new(move |cx, _: &SaveIntent| {
-                count.update(cx, |n| *n += 1)
+            .action(CallbackAction::new(move |ctx, _: &SaveIntent| {
+                count.update(ctx, |n| *n += 1)
             }))
         });
         let mut harness = mount(probe.view());
@@ -672,8 +672,8 @@ pub(crate) mod event_cx_tests {
                 Shortcuts::new(field(&probe_node))
                     .shortcut(SingleActivator::character("s").control(), SaveIntent),
             )
-            .action(CallbackAction::new(move |cx, _: &SaveIntent| {
-                released.set(cx, 1)
+            .action(CallbackAction::new(move |ctx, _: &SaveIntent| {
+                released.set(ctx, 1)
             }))
         });
         let mut harness = mount(probe.view());
@@ -695,7 +695,7 @@ pub(crate) mod event_cx_tests {
         let node = FocusNode::with_debug_label("action-let-bound-field");
         let probe_node = Rc::clone(&node);
         let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
-            let save = callback_ref(move |cx, _intent: &SaveIntent| count.set(cx, 9));
+            let save = callback_ref(move |ctx, _intent: &SaveIntent| count.set(ctx, 9));
             Actions::new(
                 Shortcuts::new(field(&probe_node))
                     .shortcut(SingleActivator::character("s").control(), SaveIntent),

@@ -49,9 +49,9 @@ fn armed_completion_probe(
     let mut future = scheduler.end_of_frame();
     let counter = CountingWaker::new().shared();
     let waker = Waker::from(Arc::clone(&counter));
-    let mut cx = Context::from_waker(&waker);
+    let mut ctx = Context::from_waker(&waker);
     assert!(
-        Pin::new(&mut future).poll(&mut cx).is_pending(),
+        Pin::new(&mut future).poll(&mut ctx).is_pending(),
         "must not already be complete before any frame has run"
     );
     (future, counter)
@@ -114,8 +114,8 @@ fn assert_recovered_from_panic(
         "the pre-registered end_of_frame waiter must be woken exactly once by the abort"
     );
     let waker = Waker::noop();
-    let mut cx = Context::from_waker(waker);
-    let resolved = Pin::new(&mut completion_future).poll(&mut cx);
+    let mut ctx = Context::from_waker(waker);
+    let resolved = Pin::new(&mut completion_future).poll(&mut ctx);
     let Poll::Ready(outcome) = resolved else {
         panic!("an aborted frame still resolves end_of_frame -- it finished, badly");
     };
@@ -280,7 +280,7 @@ struct PanicsOnPoll;
 impl Future for PanicsOnPoll {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
+    fn poll(self: Pin<&mut Self>, _ctx: &mut Context<'_>) -> Poll<()> {
         panic!("async poll probe");
     }
 }
@@ -294,7 +294,7 @@ struct CountedThenReady(Arc<AtomicUsize>);
 impl Future for CountedThenReady {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
+    fn poll(self: Pin<&mut Self>, _ctx: &mut Context<'_>) -> Poll<()> {
         let polls = self.0.fetch_add(1, Ordering::SeqCst) + 1;
         if polls >= 2 {
             Poll::Ready(())
@@ -449,8 +449,8 @@ fn a_post_frame_callback_panic_still_resolves_completed_not_aborted() {
     );
 
     let waker = Waker::noop();
-    let mut cx = Context::from_waker(waker);
-    let Poll::Ready(outcome) = Pin::new(&mut completion_future).poll(&mut cx) else {
+    let mut ctx = Context::from_waker(waker);
+    let Poll::Ready(outcome) = Pin::new(&mut completion_future).poll(&mut ctx) else {
         panic!("a post-frame callback's own panic must still resolve the completion future");
     };
     assert!(
@@ -473,8 +473,8 @@ fn the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abor
     let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let mut future = scheduler.end_of_frame();
     let panic_waker = panicking_waker("waker probe");
-    let mut cx = Context::from_waker(&panic_waker);
-    assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
+    let mut ctx = Context::from_waker(&panic_waker);
+    assert!(Pin::new(&mut future).poll(&mut ctx).is_pending());
 
     let payload = catch_unwind(AssertUnwindSafe(|| {
         owner

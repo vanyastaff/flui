@@ -2,7 +2,7 @@
 //! file to the trash (ADR-0154 §3, §4).
 //!
 //! A widget acquires a [`Launcher`] through
-//! `cx.capability::<LauncherCapability>()` in a lifecycle hook. The marker
+//! `ctx.capability::<LauncherCapability>()` in a lifecycle hook. The marker
 //! and the handle live in this contract crate because framework widgets (a
 //! link) name them; the operating system's handler reaches the handle
 //! through a [`LauncherBackend`] that a capability crate's provider builds.
@@ -20,7 +20,7 @@ use std::{
 use crate::capability::{Capability, Completion, CompletionSource, ProviderContext, Resolver};
 use crate::unsupported::Unsupported;
 
-/// The launcher capability: `cx.capability::<LauncherCapability>()` hands out
+/// The launcher capability: `ctx.capability::<LauncherCapability>()` hands out
 /// a [`Launcher`].
 #[derive(Debug)]
 #[allow(
@@ -216,12 +216,12 @@ pub struct Launcher {
 }
 
 impl Launcher {
-    /// A handle over `backend` for the acquisition `cx`.
+    /// A handle over `backend` for the acquisition `ctx`.
     #[must_use]
-    pub fn new(backend: impl LauncherBackend, cx: &ProviderContext<'_>) -> Self {
+    pub fn new(backend: impl LauncherBackend, ctx: &ProviderContext<'_>) -> Self {
         Self {
             backend: Rc::new(backend),
-            completions: cx.completions().clone(),
+            completions: ctx.completions().clone(),
         }
     }
 

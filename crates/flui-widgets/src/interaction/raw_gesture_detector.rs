@@ -43,7 +43,7 @@ pub trait GestureRecognizerFactory: 'static {
     type Recognizer: GestureRecognizer + 'static;
 
     /// Build the recognizer against the detector's arena, settings and writer.
-    fn create(&self, cx: &RecognizerContext) -> Rc<Self::Recognizer>;
+    fn create(&self, ctx: &RecognizerContext) -> Rc<Self::Recognizer>;
 
     /// Apply this factory's configuration to the recognizer an earlier factory
     /// of the same type and key created.
@@ -176,7 +176,7 @@ impl std::fmt::Debug for ContactAdmission {
 /// A factory with its recognizer type erased, so one detector holds several.
 pub(super) trait ErasedFactory {
     fn factory_type(&self) -> TypeId;
-    fn create_live(self: Rc<Self>, cx: &RecognizerContext) -> Rc<dyn LiveRecognizer>;
+    fn create_live(self: Rc<Self>, ctx: &RecognizerContext) -> Rc<dyn LiveRecognizer>;
     fn update_live(&self, live: &dyn LiveRecognizer);
 }
 
@@ -186,8 +186,8 @@ impl<F: GestureRecognizerFactory> ErasedFactory for F {
         TypeId::of::<F>()
     }
 
-    fn create_live(self: Rc<Self>, cx: &RecognizerContext) -> Rc<dyn LiveRecognizer> {
-        GestureRecognizerFactory::create(&*self, cx)
+    fn create_live(self: Rc<Self>, ctx: &RecognizerContext) -> Rc<dyn LiveRecognizer> {
+        GestureRecognizerFactory::create(&*self, ctx)
     }
 
     fn update_live(&self, live: &dyn LiveRecognizer) {
@@ -433,13 +433,13 @@ fn context_of(ctx: &dyn LifecycleContext) -> RecognizerContext {
     }
 }
 
-fn create_slots(factories: &[FactoryEntry], cx: &RecognizerContext) -> SmallVec<[Slot; 1]> {
+fn create_slots(factories: &[FactoryEntry], ctx: &RecognizerContext) -> SmallVec<[Slot; 1]> {
     factories
         .iter()
         .map(|entry| Slot {
             factory_type: entry.factory.factory_type(),
             key: entry.key.clone(),
-            live: Rc::clone(&entry.factory).create_live(cx),
+            live: Rc::clone(&entry.factory).create_live(ctx),
         })
         .collect()
 }
@@ -477,9 +477,9 @@ impl RecognizerHost {
 
     /// The owner's `init_state`: build a recognizer per factory.
     pub(crate) fn init(&mut self, ctx: &dyn LifecycleContext) {
-        let cx = context_of(ctx);
-        self.slots = create_slots(&self.factories, &cx);
-        self.context = Some(cx);
+        let ctx = context_of(ctx);
+        self.slots = create_slots(&self.factories, &ctx);
+        self.context = Some(ctx);
     }
 
     /// The owner's `did_change_dependencies`: a changed gesture policy
@@ -505,7 +505,7 @@ impl RecognizerHost {
     /// The owner's `did_update_view`: follow a new list of factories.
     pub(crate) fn update(&mut self, factories: &[FactoryEntry]) {
         let mut failure = FirstPanic::new();
-        let Some(cx) = &self.context else {
+        let Some(ctx) = &self.context else {
             let outgoing = std::mem::replace(&mut self.factories, SmallVec::from(factories));
             failure.contain(|| drop(outgoing));
             failure.resume();
@@ -554,7 +554,7 @@ impl RecognizerHost {
             .map(|(entry, paired)| {
                 paired
                     .is_none()
-                    .then(|| Rc::clone(&entry.factory).create_live(cx))
+                    .then(|| Rc::clone(&entry.factory).create_live(ctx))
             })
             .collect();
 
@@ -628,8 +628,8 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
             listener = listener.on_pointer_pan_zoom_claim(move |dispatch| claim(dispatch));
         }
         // Without a context (no lane yet) there is no writer to answer with.
-        if let (Some(claim), Some(cx)) = (view.smart_zoom_claim.clone(), self.host.context()) {
-            let writer = cx.writer().clone();
+        if let (Some(claim), Some(ctx)) = (view.smart_zoom_claim.clone(), self.host.context()) {
+            let writer = ctx.writer().clone();
             listener = listener.on_smart_zoom_claim(move |dispatch| claim(dispatch, &writer));
         }
         let listener = listener.recognizers(self.host.recognizer_set(view.admission.as_ref()));

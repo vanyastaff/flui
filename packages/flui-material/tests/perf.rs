@@ -222,7 +222,7 @@ fn record_counts(scenario: &str, counts: &[(&str, u64)]) {
 fn perf_ink_well_over_text() {
     let [elements, render_nodes, ..] = control_over_text("ink_well_over_text", |row| {
         InkWell::new(Text::new(format!("Row {row}")))
-            .on_tap(|_cx| {})
+            .on_tap(|_ctx| {})
             .boxed()
     });
     // The well's element, its node's element and the ink's; the node's

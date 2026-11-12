@@ -185,7 +185,7 @@ impl fmt::Debug for Sleep {
 impl Future for Sleep {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
         let Some(store) = self.deadlines.upgrade() else {
             return Poll::Pending;
         };
@@ -203,11 +203,11 @@ impl Future for Sleep {
             .armed
             .borrow()
             .get(&key)
-            .is_some_and(|known| known.will_wake(cx.waker()));
+            .is_some_and(|known| known.will_wake(ctx.waker()));
         if known {
             return Poll::Pending;
         }
-        let waker = cx.waker().clone();
+        let waker = ctx.waker().clone();
         // The clone may have retired the owner: nothing is armed after that.
         let released = if store.closed.get() {
             Some(waker)

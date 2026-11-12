@@ -58,11 +58,11 @@ impl<C: Capability> View for Acquire<C> {
 }
 
 impl<C: Capability> ViewState<Acquire<C>> for AcquireState<C> {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        *self.slot.borrow_mut() = Some(cx.capability::<C>());
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.slot.borrow_mut() = Some(ctx.capability::<C>());
     }
 
-    fn build(&self, _view: &Acquire<C>, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Acquire<C>, _ctx: &dyn BuildContext) -> impl IntoView {
         SizedBox::new(10.0, 10.0)
     }
 }

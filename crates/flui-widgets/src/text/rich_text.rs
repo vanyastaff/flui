@@ -62,7 +62,7 @@ use flui_view::environment::MediaQuery;
 /// let _ = RichText::new(
 ///     TextSpan::new("Read the ").with_child(TextSpan::new("terms").with_link("app://terms")),
 /// )
-/// .on_link(|_cx, link| println!("open {link}"));
+/// .on_link(|_ctx, link| println!("open {link}"));
 /// ```
 #[derive(Clone)]
 pub struct RichText {

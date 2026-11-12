@@ -1071,7 +1071,7 @@ runs `checks`, `plan` and the `ci` aggregator:
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling | `deps` |
 | `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`) over the whole workspace, and the on-demand jobs its diff asks for (below) |
-| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `miri`, `doc-test`, `api-contracts` (all Linux), and `test-trybuild` always; in `clippy` and `test` it also turns on the `native-features` and `gpu-test --backend gl` steps |
+| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `miri`, `doc-test`, `perf-gates` (all Linux), and `test-trybuild` and `api-contracts` always; in `clippy` and `test` it also turns on the `native-features` and `gpu-test --backend gl` steps |
 
 - **Wide lane**: every pull request that compiles anything runs every Linux
   job, in parallel, over the whole workspace. One serial job over the
@@ -1129,8 +1129,16 @@ reaches what the check reads. `plan` decides this in its outputs, and each job i
 - `feature-scope` runs feature-matrix's per-feature clippy (`--packages`) over `hack_args`: the
   changed crates that have features and the crates whose manifest changed. A dependent's
   feature-gated edge is left to `feature-matrix`.
+- `api-contracts` runs `send-positions` alone when `send_positions_required` is set. That
+  happens when a changed library line, in a crate the facade reaches, does one of these:
+  - names `Send` or `Sync`;
+  - declares a `pub use` or `pub mod`, or sits inside a multi-line `pub use`;
+  - names a segment of a listed item's path, in the file that defines that item.
 
-A pull request that reaches neither skips both.
+  A change to the list, `tools/xtask/src/send_positions.rs` or the rustdoc JSON loader
+  (`api_closure`) sets it too. The list is read from `tools/xtask/allowlists/send-positions.toml` on each run.
+
+A pull request that reaches none of them skips all three.
 
 
 **Only `full` checks these**, so a pull request can merge green and still

@@ -341,7 +341,7 @@ impl Shared {
         let callback = self.controller.borrow().callback();
         let writer = self.writer.borrow().clone();
         if let (Some(callback), Some(writer)) = (callback, writer) {
-            writer.write(|cx| callback(cx, index));
+            writer.write(|ctx| callback(ctx, index));
         }
     }
 
@@ -753,23 +753,23 @@ impl ViewState<Carousel> for CarouselState {
                 ),
             ),
         )
-        .on_press(move |_cx| controller.set_paused(!controller.is_paused()));
+        .on_press(move |_ctx| controller.set_paused(!controller.is_paused()));
         let end = match Directionality::maybe_of(ctx) {
             Some(TextDirection::Rtl) => Alignment::CENTER_LEFT,
             _ => Alignment::CENTER_RIGHT,
         };
         let carousel = Listener::new()
-            .on_pointer_down(move |_cx, _pointer| pause())
+            .on_pointer_down(move |_ctx, _pointer| pause())
             .child(
                 MouseRegion::new()
-                    .on_enter(move |_cx, _pointer, _position| on_hover())
+                    .on_enter(move |_ctx, _pointer, _position| on_hover())
                     // A screen reader reading an item stops the carousel, as
                     // keyboard focus entering it does; only a platform that
                     // reports its cursor says so (`assistive_focus_support`).
                     .child(
                         Semantics::new()
                             .container(true)
-                            .on_assistive_focus_within(move |_cx, within| {
+                            .on_assistive_focus_within(move |_ctx, within| {
                                 if within {
                                     on_read();
                                 }

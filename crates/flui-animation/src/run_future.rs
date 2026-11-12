@@ -73,7 +73,7 @@ impl Resolved {
 fn poll_resolution(
     inner: &AnimationRunFutureInner,
     registration: &mut Option<usize>,
-    cx: &mut Context<'_>,
+    ctx: &mut Context<'_>,
 ) -> Poll<Resolved> {
     {
         let state = inner.state.borrow();
@@ -81,13 +81,13 @@ fn poll_resolution(
             *registration = None;
             return Poll::Ready(resolved);
         }
-        if registration.is_some_and(|index| state.waiters[index].will_wake(cx.waker())) {
+        if registration.is_some_and(|index| state.waiters[index].will_wake(ctx.waker())) {
             return Poll::Pending;
         }
     }
     // RawWaker cloning can execute foreign code. Preserve the old registration
     // if cloning fails, and recheck publication after borrowing state again.
-    let replacement = cx.waker().clone();
+    let replacement = ctx.waker().clone();
     let mut state = inner.state.borrow_mut();
     if let Some(resolved) = state.resolution {
         *registration = None;
@@ -298,9 +298,9 @@ impl Clone for AnimationRunFuture {
 impl Future for AnimationRunFuture {
     type Output = Result<(), RunCanceled>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        poll_resolution(&this.inner, &mut this.registration, cx)
+        poll_resolution(&this.inner, &mut this.registration, ctx)
             .map(|resolved| resolved.as_output())
     }
 }
@@ -497,8 +497,8 @@ impl std::fmt::Debug for RunDelivery {
 /// controller.stop().expect("live controller");
 ///
 /// let waker = Waker::noop();
-/// let mut cx = Context::from_waker(waker);
-/// match Pin::new(&mut future).poll(&mut cx) {
+/// let mut ctx = Context::from_waker(waker);
+/// match Pin::new(&mut future).poll(&mut ctx) {
 ///     Poll::Ready(Err(RunCanceled { .. })) => {}
 ///     other => panic!("expected Err(RunCanceled), got {other:?}"),
 /// }

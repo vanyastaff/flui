@@ -26,7 +26,7 @@ use regex::Regex;
 use serde::Deserialize;
 
 use super::aggregator::WIDE_CONDITION;
-use super::diagnostics;
+use super::{diagnostics, thread_positions};
 
 /// Documentation: a change made only of these compiles nothing.
 ///
@@ -301,6 +301,17 @@ impl Package {
             .pointer("/flui/wasm")
             .and_then(serde_json::Value::as_bool)
             != Some(false)
+    }
+
+    /// The directory of the package's manifest, repo-relative and
+    /// `/`-separated, `""` for the root package.
+    pub(super) fn dir(&self, root: &Path) -> String {
+        let dir = self
+            .manifest_path
+            .parent()
+            .and_then(|d| relative(d, root))
+            .unwrap_or_default();
+        if dir == "." { String::new() } else { dir }
     }
 }
 
@@ -610,6 +621,9 @@ pub(super) struct Scope {
     /// The changed file that can move a size `perf --size` holds, if any
     /// ([`crate::perf::size::changed_input`]): a pull request then runs `size`.
     pub(super) size_input: Option<String>,
+    /// The changed file that can change what `send-positions` reports, if any
+    /// ([`thread_positions::changed_position`]): a pull request then runs it.
+    pub(super) send_positions_input: Option<String>,
     pub(super) reason: String,
 }
 
@@ -623,6 +637,7 @@ impl Scope {
             heavy_required: false,
             trybuild_input: None,
             size_input: None,
+            send_positions_input: None,
             reason,
         }
     }
@@ -662,6 +677,8 @@ pub(super) fn classify_change(
     scope.trybuild_input =
         diagnostics::changed_input(repo, files, changed_lines)?.map(str::to_owned);
     scope.size_input = crate::perf::size::changed_input(files).map(str::to_owned);
+    scope.send_positions_input =
+        thread_positions::changed_position(repo, files, changed_lines)?.map(str::to_owned);
     Ok(scope)
 }
 
@@ -778,6 +795,7 @@ fn classify_packages(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         heavy_required: false,
         trybuild_input: None,
         size_input: None,
+        send_positions_input: None,
         reason,
     })
 }

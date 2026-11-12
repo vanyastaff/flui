@@ -62,9 +62,12 @@ pub(super) struct OnDemand {
 
 /// The on-demand jobs: the trybuild suites when a changed file can change an
 /// expectation, the release size builds when a changed file can move a size
-/// past a code change (`perf --size`), and the per-feature clippy of the
-/// changed packages that have features (main's `feature-matrix` runs it over the whole workspace).
-pub(super) const ON_DEMAND: [OnDemand; 3] = [
+/// past a code change (`perf --size`), the per-feature clippy of the changed
+/// packages that have features (main's `feature-matrix` runs it over the whole
+/// workspace), and the API contracts when a changed line can change what
+/// `send-positions` reports (a pull request runs that half; `api-closure` stays
+/// on `main`).
+pub(super) const ON_DEMAND: [OnDemand; 4] = [
     OnDemand {
         job: "test-trybuild",
         output: "trybuild_required",
@@ -79,6 +82,11 @@ pub(super) const ON_DEMAND: [OnDemand; 3] = [
         job: "feature-scope",
         output: "features_required",
         in_full: false,
+    },
+    OnDemand {
+        job: "api-contracts",
+        output: "send_positions_required",
+        in_full: true,
     },
 ];
 
@@ -540,6 +548,17 @@ mod tests {
         };
         green(&features, &without(quiet.clone(), "feature-scope"));
         red(&features, &quiet, "'feature-scope': 'skipped");
+        let positions = Run {
+            asked: &["send_positions_required"],
+            ..run("wide")
+        };
+        green(&positions, &without(quiet.clone(), "api-contracts"));
+        red(&positions, &quiet, "'api-contracts': 'skipped");
+        red(
+            &run("wide"),
+            &without(quiet.clone(), "api-contracts"),
+            "'api-contracts': 'ran (success)",
+        );
         let main = Run {
             event: "push",
             ..run("full")

@@ -129,7 +129,7 @@ pub(crate) fn signal_write() {
 pub(crate) fn writer_source() {
     let (ui_runtime, acquired, released) = mounted();
     drop_holding(ui_runtime, &released, &acquired.writer);
-    let written = acquired.writer.write(|cx| acquired.signal.set(cx, 8));
+    let written = acquired.writer.write(|ctx| acquired.signal.set(ctx, 8));
     assert_eq!(written, Err(flui_view::SignalError::OwnerClosed));
 }
 

@@ -39,24 +39,24 @@ struct Mailbox {
 struct Producer(Arc<Mutex<Mailbox>>);
 impl Future for Producer {
     type Output = Result<Value, ()>;
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut mailbox = self.0.lock();
         if let Some(value) = mailbox.events.pop_front() {
             Poll::Ready(value)
         } else {
-            mailbox.waker = Some(cx.waker().clone());
+            mailbox.waker = Some(ctx.waker().clone());
             Poll::Pending
         }
     }
 }
 impl Stream for Producer {
     type Item = Result<Value, ()>;
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut mailbox = self.0.lock();
         if let Some(value) = mailbox.events.pop_front() {
             Poll::Ready(Some(value))
         } else {
-            mailbox.waker = Some(cx.waker().clone());
+            mailbox.waker = Some(ctx.waker().clone());
             Poll::Pending
         }
     }

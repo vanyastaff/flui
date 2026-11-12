@@ -61,12 +61,12 @@ impl View for Gauge {
 }
 
 impl ViewState<Gauge> for GaugeState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        let battery = cx.capability::<Battery>().expect("the plugin provides it");
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        let battery = ctx.capability::<Battery>().expect("the plugin provides it");
         self.level.set(Some(battery.level));
     }
 
-    fn build(&self, _view: &Gauge, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Gauge, _ctx: &dyn BuildContext) -> impl IntoView {
         SizedBox::new(10.0, 10.0)
     }
 }

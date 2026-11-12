@@ -360,7 +360,7 @@ impl Action<PageIntent> for PageAction {
         Some(self.turns_change.clone())
     }
 
-    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &PageIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, intent: &PageIntent) -> ActionOutcome {
         let Some(page) = self.target(*intent) else {
             return ActionOutcome::NotPerformed;
         };
@@ -626,7 +626,7 @@ impl PageChangeDelivery {
         // that rebuilds this page view cannot collide with it.
         let callback = self.callback.borrow().clone();
         if let Some(callback) = callback {
-            self.writer.write(|cx| callback(cx, page));
+            self.writer.write(|ctx| callback(ctx, page));
         }
     }
 }

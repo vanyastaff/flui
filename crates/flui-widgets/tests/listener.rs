@@ -190,7 +190,7 @@ fn counter() -> (
     let in_cb = Rc::clone(&count);
     (
         count,
-        move |_cx: &mut EventCx<'_>, _event: PointerDispatch<'_>| {
+        move |_ctx: &mut EventCx<'_>, _event: PointerDispatch<'_>| {
             in_cb.set(in_cb.get() + 1);
         },
     )
@@ -709,7 +709,7 @@ pub(crate) mod event_cx {
     pub(crate) fn a_refused_write_in_a_pointer_callback_is_reported_not_panicked() {
         let probe = SignalProbe::new(|ProbeSignals { released, .. }| {
             Listener::new()
-                .on_pointer_down(move |cx, _dispatch| released.set(cx, 1))
+                .on_pointer_down(move |ctx, _dispatch| released.set(ctx, 1))
                 .child(target())
         });
         let app = lay_out(probe.view(), tight(100.0, 100.0));

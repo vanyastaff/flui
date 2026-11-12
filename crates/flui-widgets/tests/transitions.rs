@@ -532,7 +532,7 @@ fn taps_at(
     let taps = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&taps);
     let detector = GestureDetector::new()
-        .on_tap(move |_cx| {
+        .on_tap(move |_ctx| {
             counter.fetch_add(1, Ordering::SeqCst);
         })
         .child(child_box());

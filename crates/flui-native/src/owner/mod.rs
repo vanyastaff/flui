@@ -983,9 +983,9 @@ impl std::future::Future for PendingWindow {
     /// hand back, and this is not the backend's fault).
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        ctx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        match std::future::Future::poll(std::pin::Pin::new(&mut self.handle), cx) {
+        match std::future::Future::poll(std::pin::Pin::new(&mut self.handle), ctx) {
             std::task::Poll::Ready(ClaimOutcome::Delivered(result)) => {
                 std::task::Poll::Ready(result)
             }

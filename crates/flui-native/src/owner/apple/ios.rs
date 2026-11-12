@@ -1014,7 +1014,10 @@ define_class!(
         }
     }
 
+    // SAFETY: NSObjectProtocol has no additional requirements.
     unsafe impl NSObjectProtocol for FluiAppDelegate {}
+    // SAFETY: every method of the protocol is optional and the delegate answers
+    // only those declared above, with UIKit's signatures, on the main thread.
     unsafe impl UIApplicationDelegate for FluiAppDelegate {}
 );
 
@@ -1623,7 +1626,10 @@ define_class!(
         #[unsafe(method(sceneWillEnterForeground:))]
         fn foreground(&self, scene: &UIScene) { Self::scene_event(self, scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Foreground)); }
     }
+    // SAFETY: NSObjectProtocol has no additional requirements.
     unsafe impl NSObjectProtocol for FluiSceneDelegate {}
+    // SAFETY: every method of the protocol is optional and the delegate answers
+    // only those declared above, with UIKit's signatures, on the main thread.
     unsafe impl UISceneDelegate for FluiSceneDelegate {}
 );
 impl FluiSceneDelegate {

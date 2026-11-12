@@ -4937,7 +4937,7 @@ pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
     let _listener = controller
         .position()
         .add_activity_listener(Rc::new(move || {
-            seen.set(Some(writer.write(|cx| signal.set(cx, 1))));
+            seen.set(Some(writer.write(|ctx| signal.set(ctx, 1))));
         }));
     controller
         .animate_to(

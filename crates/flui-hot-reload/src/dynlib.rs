@@ -179,6 +179,9 @@ mod sys {
     pub(super) fn load_library(path: &Path) -> Option<*mut c_void> {
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
 
+        // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the
+        // `LoadLibraryW` call; a failed load is an `Err` turned into `None`
+        // before any handle escapes this block.
         #[expect(unsafe_code)]
         unsafe {
             let handle = LoadLibraryW(windows::core::PCWSTR(wide.as_ptr())).ok()?;
@@ -190,6 +193,11 @@ mod sys {
         let c_name = CString::new(name).ok()?;
         let module = HMODULE(handle.cast());
 
+        // SAFETY: `handle` comes from `load_library` and is kept alive by the
+        // owning `DynLib` for the duration of this call; `c_name` is a
+        // NUL-terminated `CString` that outlives it. The result is only an
+        // address — turning it into a callable is the caller's obligation,
+        // documented on `DynLib::symbol`.
         #[expect(unsafe_code)]
         unsafe {
             let addr = GetProcAddress(module, windows::core::PCSTR(c_name.as_ptr().cast()));
@@ -202,6 +210,11 @@ mod sys {
     /// `handle` must be a valid library handle returned by `load_library`.
     #[expect(unsafe_code)]
     pub(super) unsafe fn close_library(handle: *mut c_void) {
+        // SAFETY: `handle` is the module `LoadLibraryW` returned in
+        // `load_library` (the caller-side contract is the `# Safety` doc
+        // above). Like `dlclose`, `FreeLibrary` is balanced rather than
+        // unique: the loader refcounts, and each `DynLib::drop` decrements
+        // exactly once.
         unsafe {
             let module = HMODULE(handle.cast());
             let _ = FreeLibrary(module);

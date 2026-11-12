@@ -114,7 +114,7 @@ pipeline (element tree → render objects → layout → paint → `wgpu`). The
 minimal one is a piece of state and a button that updates it — the same
 `CounterView`/`CounterState` shape `flui create`'s `counter` template
 generates, kept in sync deliberately. The count is a `Signal`, read in `build`
-and written by the button's press through the `cx` its callback receives:
+and written by the button's press through the `ctx` its callback receives:
 
 ```rust
 //! examples/counter.rs (excerpt)
@@ -150,7 +150,7 @@ impl ViewState<CounterView> for CounterState {
                     Text::new(count.get(ctx).to_string()),
                     SizedBox::height(16.0),
                     RawButton::new(Text::new("Increment"))
-                        .on_press(move |cx| count.update(cx, |n| *n += 1)),
+                        .on_press(move |ctx| count.update(ctx, |n| *n += 1)),
                 ))
                 .main_axis_alignment(MainAxisAlignment::Center),
             ),

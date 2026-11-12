@@ -114,7 +114,7 @@ impl Scene {
     /// reads them.
     fn alternatives() -> GestureAlternatives {
         GestureAlternatives::try_new(Alternative::ContextMenu(
-            MenuSpec::new(GestureCommand::new(DELETE, Delete), |_cx, _request| {})
+            MenuSpec::new(GestureCommand::new(DELETE, Delete), |_ctx, _request| {})
                 .item(GestureCommand::new(ARCHIVE, Archive))
                 .item(GestureCommand::new(PIN, Pin)),
         ))
@@ -147,13 +147,13 @@ impl Scene {
                         .top(self.row.dy)
                         .boxed(),
                 ]))
-                .action(CallbackAction::new(move |_cx, _: &Delete| {
+                .action(CallbackAction::new(move |_ctx, _: &Delete| {
                     delete.borrow_mut().push(DELETE);
                 }))
-                .action(CallbackAction::new(move |_cx, _: &Archive| {
+                .action(CallbackAction::new(move |_ctx, _: &Archive| {
                     archive.borrow_mut().push(ARCHIVE);
                 }))
-                .action(CallbackAction::new(move |_cx, _: &Pin| {
+                .action(CallbackAction::new(move |_ctx, _: &Pin| {
                     assert!(!pin_panics, "pinning failed");
                     pin.borrow_mut().push(PIN);
                 })),
@@ -172,7 +172,7 @@ impl Scene {
         let log: Log = Rc::default();
         let delete = Rc::clone(&log);
         let home =
-            Actions::new(Self::area()).action(CallbackAction::new(move |_cx, _: &Delete| {
+            Actions::new(Self::area()).action(CallbackAction::new(move |_ctx, _: &Delete| {
                 delete.borrow_mut().push(DELETE);
             }));
         let mut laid = lay_out(flui_widgets::WidgetsApp::new(home), tight(400.0, 300.0));
@@ -731,7 +731,7 @@ fn long_press_card(events: &Events, own_menu: bool) -> Draggable {
     ));
     if own_menu {
         let opened = Rc::clone(events);
-        commands = commands.alternative(AlternativeKind::context_menu(move |_cx, _request| {
+        commands = commands.alternative(AlternativeKind::context_menu(move |_ctx, _request| {
             opened.borrow_mut().push("open");
         }));
     }

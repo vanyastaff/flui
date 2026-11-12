@@ -106,7 +106,7 @@ flui-interaction 13, flui-painting 11, flui-material 10, flui-platform 8, flui-f
 
 ## 4. Контексты (решение владельца N1)
 
-Типы-контексты называются `…Context`, привязки — `cx`. Написания `Ctx` и `Cx` из имён типов
+Типы-контексты называются `…Context`, привязки — `ctx` (ADR-0325). Написания `Ctx` и `Cx` из имён типов
 уходят. Слово `Context` закрепляется за контекстами: тип, который не передаётся как контекст,
 его не носит (`NodeContext` → `FocusNodePayload`).
 
@@ -132,13 +132,10 @@ flui-interaction 13, flui-painting 11, flui-material 10, flui-platform 8, flui-f
 `RenderObjectContext`, `LayoutContext`, `HitTestContext`, `BoxLayoutContext`,
 `SliverLayoutContext`, `BoxHitTestContext`, `SliverHitTestContext`, `MultiChildLayoutContext`,
 `FlowPaintingContext`, `TextContext`, `TaskContext` и `ServiceContext`.
-
-**Привязки.** 3559 вхождений `ctx` в 343 файлах становятся `cx`, 230 времён жизни `'ctx` —
-`'cx`. Где в одной функции уже есть `cx` (параметр `BuildContext` и замыкание события) или в
-одном типе уже есть `'cx` (`FlowPaintingContext<'ctx, 'cx>`), инструмент не переименовывает и
-выводит список для ручной правки. Затенение `cx` в замыкании `move |cx| …` внутри `build(cx)`
-допустимо и идиоматично (так в GPUI). Пример из authoring-styles меняется на
-`count.get(cx)` … `.on_press(move |cx| count.update(cx, …))`.
+**Привязки.** Привязка любого контекста называется `ctx`, включая `EventContext` и
+`std::task::Context`; `cx` не носит ни одна привязка контекста, и это держит `xtask context-names`
+([ADR-0325](../../../adr/ADR-0325-a-context-is-bound-as-ctx-and-its-type-is-named-context.md)). Время жизни
+контекста — `'ctx`.
 
 **Затронутые спеки и документы `EventCx` (правятся после утверждения, в PR прохода):**
 
@@ -168,7 +165,7 @@ TOML и `.stderr`, а таблица нужна ещё гейту и ветка�
 
 ```toml
 [[rename]]
-kind = "ident"            # ident | path | method | module | file | feature | binding
+kind = "ident"            # ident | path | method | module | file | feature
 old = "RRect"
 new = "RoundedRect"
 crate = "flui-foundation" # где определено; гейт проверяет, что определение одно
@@ -201,7 +198,7 @@ scope = ["crates/flui-interaction/**", "crates/flui-widgets/**", "packages/**"]
 - `file` — `git mv` и правка `mod`/`#[path]`.
 - `feature` — ключ `[features]` и каждое упоминание в `Cargo.toml`, `.config/nextest.toml`,
   шаблонах `flui-cli`, `docs/testing.md`, в `--features` скриптов xtask.
-- `binding` — `ctx` → `cx`, `'ctx` → `'cx` по правилам §4.
+- `binding` — не нужен: привязку держит `xtask context-names` (§4).
 
 **Где применяется.** `.rs` — по токенам. В строковых литералах правятся только слова из
 `strings`. Литерал первого аргумента `debug_struct`/`debug_tuple` правится всегда, если он равен
@@ -231,7 +228,7 @@ Design») не трогается. В `.toml`, `.wgsl` и `llms.txt` — сло�
 4. Модули: пути `mod`/`use`, разбор мешков (tasks.md §2).
 5. Файлы и каталоги (`git mv`), сначала публичные модули, потом внутренние (tasks.md §4).
 6. Cargo-фичи `test-utils` и `test-support` → `testing`.
-7. Привязки и времена жизни (`ctx` → `cx`).
+7. Привязки и времена жизни: уже `ctx` (ADR-0325), проход их не трогает.
 8. `#[doc(alias)]`.
 9. Имена тестов (tasks.md §5); `rg` каждого старого имени по документам.
 10. Документы: `ARCHITECTURE.md`, `docs/`, книга, [`design/`](https://github.com/vanyastaff/flui/tree/083b0f75da003030e908d107825e9f4db4e54437/design), `llms.txt`, ADR, таблица в
@@ -330,7 +327,7 @@ Names say what a thing is or does. `cargo xtask names` checks the first five rul
 - **C-CASE**: an acronym is one word (`Hsl`, `Ios`, `MacOs`, `RoundedRect`, not `RRect`);
   constants are `SCREAMING_SNAKE_CASE`. No `#[expect(non_*_case*)]` outside `generated.rs`.
 - **Getters have no `get_`** (std's `get`, `get_mut`, `get_disjoint_mut`, `get_or_insert*` aside).
-- **One concept, one word**: contexts are `…Context` bound as `cx`; a called `Fn` alias or
+- **One concept, one word**: contexts are `…Context` bound as `ctx`; a called `Fn` alias or
   wrapper is `…Callback`; a closure that builds a view is `…Fn`; `Builder` is only C-BUILDER;
   `Cancelled`, `Adapter`. No two public items of a crate share a name.
 - **Tests are named for their outcome**, without a `test_` prefix.
@@ -346,7 +343,7 @@ Names say what a thing is or does. `cargo xtask names` checks the first five rul
 Строка таблицы гейтов:
 
 ```markdown
-| Bag words, C-CASE, `get_` getters, one spelling per concept, `…Context`/`cx`, `testing` features, test names, retired names from the rename table | `cargo xtask names` (allowlist `tools/xtask/allowlists/names.toml`, shrink-only) |
+| Bag words, C-CASE, `get_` getters, one spelling per concept, `…Context`, `testing` features, test names, retired names from the rename table | `cargo xtask names` (allowlist `tools/xtask/allowlists/names.toml`, shrink-only) |
 ```
 
 ## 7. Гейт `cargo xtask names`
@@ -361,12 +358,10 @@ Names say what a thing is or does. `cargo xtask names` checks the first five rul
 **Классы.** 1–10 — как в requirements.md («Гейт `cargo xtask names`»): `path-word`, `mod-word`,
 `item-word`, `getter`, `acronym`, `case-expect`, `dup-name` (вместе с проверкой литерала
 `debug_struct`, R16), `ctx-spelling`, `feature`, `test-name`. Дизайн уточняет один и добавляет
-четыре класса:
+три класса:
 
 - `ctx-spelling` проверяет и обратное: тип не-контекст с суффиксом `Context` — находка, если он
   не передаётся `&`/`&mut` параметром ни одной `pub fn`. Так ловится `NodeContext`.
-- `cx-binding` (новый): параметр функции или замыкания с типом на `…Context` назван не `cx`,
-  `_cx` или `<префикс>_cx` (`child_cx`). То же для времени жизни у типа-контекста (`'cx`).
 - `retired` (новый): имя из колонки `old` таблицы переименований найдено в `.rs` или в code
   span неархивного Markdown. Исключения: значение `#[doc(alias)]`, `CHANGELOG.md`,
   `changelog.d/`, сама таблица. Обмены О1 (`Theme`) не проверяются: их старое имя законно
@@ -397,8 +392,6 @@ requirements.md (`src/util.rs` → находка, `src/baseline.rs` → нет,
 
 - `pub struct PaintCx` → `ctx-spelling`; `pub struct PaintContext` → нет;
   `pub type NodeContext = Rc<dyn Any>` → `ctx-spelling`;
-- `fn layout(ctx: &mut BoxLayoutContext<…>)` → `cx-binding`; `fn layout(cx: …)` и
-  `child_cx` → нет; `struct X<'ctx>` у контекста → `cx-binding`;
 - `use flui::painting::RRect` → `retired`; `#[doc(alias = "RRect")]` → нет; `RRect` в
   `CHANGELOG.md` → нет; `Theme` при записи-обмене → нет;
 - запись `alias = "RRect"` без атрибута на `RoundedRect` → `alias`; лишний

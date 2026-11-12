@@ -41,8 +41,8 @@ impl RoomFuture {
 impl Future for RoomFuture {
     type Output = Result<(), SpawnError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.0.as_mut().poll(cx)
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.0.as_mut().poll(ctx)
     }
 }
 

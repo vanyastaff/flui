@@ -277,7 +277,7 @@ impl Config {
             item: Rc::new(move |row| item(row).into_view().boxed()),
             feedback: None,
             proxy_decorator: None,
-            on_reorder: Rc::new(move |cx, change| on_reorder(cx, change).report()),
+            on_reorder: Rc::new(move |ctx, change| on_reorder(ctx, change).report()),
             on_reorder_preview: None,
             item_label: None,
             handles: ReorderHandles::default(),
@@ -297,7 +297,8 @@ impl Config {
         F: Fn(&mut EventCx<'_>, ReorderPreview) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_reorder_preview = Some(Rc::new(move |cx, preview| callback(cx, preview).report()));
+        self.on_reorder_preview =
+            Some(Rc::new(move |ctx, preview| callback(ctx, preview).report()));
     }
 
     /// The index of the item keyed `key`, by the keys now.
@@ -332,7 +333,7 @@ impl Config {
 ///     items.borrow().len(),
 ///     move |i| keys.borrow()[i],
 ///     move |item| Text::new(labels.borrow()[item.index()]),
-///     move |_cx, change| {
+///     move |_ctx, change| {
 ///         let mut items = model.borrow_mut();
 ///         let item = items.remove(change.from);
 ///         items.insert(change.to, item);
@@ -497,7 +498,7 @@ impl ReorderableList {
 ///     photos.borrow().len(),
 ///     move |i| keys.borrow()[i],
 ///     move |tile| Text::new(labels.borrow()[tile.index()]),
-///     move |_cx, change| {
+///     move |_ctx, change| {
 ///         let mut photos = model.borrow_mut();
 ///         let photo = photos.remove(change.from);
 ///         photos.insert(change.to, photo);
@@ -1090,7 +1091,7 @@ impl Shared {
         else {
             return;
         };
-        self.write(|cx| preview(cx, ReorderPreview { from, over }));
+        self.write(|ctx| preview(ctx, ReorderPreview { from, over }));
     }
 
     /// A drag of `key` is over the row of the item keyed `row`.
@@ -1150,9 +1151,9 @@ impl Shared {
 
     /// The drag of `key` was let go over the list: the item goes where the
     /// drag shows it.
-    fn dropped(&self, cx: &mut EventCx<'_>, key: &dyn ViewKey) {
+    fn dropped(&self, ctx: &mut EventCx<'_>, key: &dyn ViewKey) {
         if let Some(Some(to)) = self.with_drag(key, |drag, _| drag.over.or(drag.left_over)) {
-            let _ = self.reorder(cx, key, to, ReorderCause::Drag);
+            let _ = self.reorder(ctx, key, to, ReorderCause::Drag);
         }
     }
 
@@ -1195,7 +1196,7 @@ impl Shared {
             && let (Some(callback), Some(from)) =
                 (view.on_reorder_preview.clone(), view.index_of(&**key))
         {
-            self.write(|cx| callback(cx, ReorderPreview { from, over: None }));
+            self.write(|ctx| callback(ctx, ReorderPreview { from, over: None }));
         }
     }
 
@@ -1213,7 +1214,7 @@ impl Shared {
     /// nothing when it is there already.
     fn reorder(
         &self,
-        cx: &mut EventCx<'_>,
+        ctx: &mut EventCx<'_>,
         key: &dyn ViewKey,
         to: usize,
         cause: ReorderCause,
@@ -1242,7 +1243,7 @@ impl Shared {
         };
         // The rows slide to the order the app's rebuild gives them.
         self.reshown();
-        (view.on_reorder)(cx, Reorder { from, to, cause });
+        (view.on_reorder)(ctx, Reorder { from, to, cause });
         let announcer = self.announcer.borrow().clone();
         if let Some(announcer) = announcer {
             let _ = announcer.announce(message, Urgency::Polite);
@@ -1411,11 +1412,11 @@ impl Shared {
             },
             move |_hover| scrollable.clone(),
         )
-        .on_drop(move |cx, drag, _at, _action| {
+        .on_drop(move |ctx, drag, _at, _action| {
             if let Some(payload) = drag.value::<RowPayload>()
                 && Rc::ptr_eq(&payload.list, &dropped)
             {
-                dropped.dropped(cx, &*payload.key);
+                dropped.dropped(ctx, &*payload.key);
             }
         })
         .on_leave(move |drag| {
@@ -1597,9 +1598,9 @@ impl HandleSource {
             child_offset,
             ended: Rc::new(move |proxy| landed.proxy_ended(&*landed_key, proxy)),
         })
-        .on_drag_started(move |_cx| started.started(&started_key))
+        .on_drag_started(move |_ctx| started.started(&started_key))
         // A drag that ends anywhere, dropped or not, is over no row now.
-        .on_drag_end(move |_cx, _outcome| {
+        .on_drag_end(move |_ctx, _outcome| {
             ended.ended(&ended_key);
         })
     }
@@ -1659,12 +1660,12 @@ impl StatelessView for DragHandle {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let chain = ambient_action_chain(ctx);
         GestureDetector::new()
-            .on_tap(move |cx| {
+            .on_tap(move |ctx| {
                 if let Some(open) = chain
                     .as_ref()
                     .and_then(|chain| resolve(chain, &ShowContextMenuIntent))
                 {
-                    open.invoke(cx, &ShowContextMenuIntent);
+                    open.invoke(ctx, &ShowContextMenuIntent);
                 }
             })
             .child(self.child.clone())
@@ -1820,11 +1821,11 @@ impl StatelessView for ReorderRow {
         )
         .on_drop({
             let list = Rc::clone(&self.list);
-            move |cx, drag, _at, _action| {
+            move |ctx, drag, _at, _action| {
                 if let Some(payload) = drag.value::<RowPayload>()
                     && Rc::ptr_eq(&payload.list, &list)
                 {
-                    list.dropped(cx, &*payload.key);
+                    list.dropped(ctx, &*payload.key);
                 }
             }
         });
@@ -2031,9 +2032,13 @@ impl Action<ReorderIntent> for RowMoves {
         self.target(*intent).is_some()
     }
 
-    fn invoke(&self, cx: &mut EventCx<'_>, intent: &ReorderIntent) -> ActionOutcome {
+    fn invoke(&self, ctx: &mut EventCx<'_>, intent: &ReorderIntent) -> ActionOutcome {
         match self.target(*intent) {
-            Some(to) if self.list.reorder(cx, &*self.key, to, ReorderCause::Command) => {
+            Some(to)
+                if self
+                    .list
+                    .reorder(ctx, &*self.key, to, ReorderCause::Command) =>
+            {
                 ActionOutcome::Performed
             }
             _ => ActionOutcome::NotPerformed,

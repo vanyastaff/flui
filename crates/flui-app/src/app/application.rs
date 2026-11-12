@@ -129,7 +129,7 @@ where
     }
     /// Provide the capability `C` with `provider`, in place of the built-in
     /// provider and of any plugin's (ADR-0152). A widget acquires it with
-    /// `cx.capability::<C>()` in a lifecycle hook.
+    /// `ctx.capability::<C>()` in a lifecycle hook.
     ///
     /// Overriding one capability twice fails [`run`](Self::run) with
     /// [`AppRunError::CapabilityConflict`] before any window opens.

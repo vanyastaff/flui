@@ -770,8 +770,8 @@ where
         // re-typing is a zero-cost PhantomData re-tag. `size` is the
         // node's committed `RenderState` geometry, threaded by the
         // pipeline so paint reads `ctx.size()` (2B field dedup).
-        let mut cx = crate::context::PaintCx::<T::Arity>::new(recorder, child_count, size);
-        T::paint(self, &mut cx);
+        let mut ctx = crate::context::PaintCx::<T::Arity>::new(recorder, child_count, size);
+        T::paint(self, &mut ctx);
     }
 
     fn hit_test_raw(

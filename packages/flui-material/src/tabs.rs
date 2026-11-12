@@ -860,7 +860,7 @@ fn build_tab_cell(
     let tap_callback = on_tap.cloned();
     let ink_well = InkWell::new(cell)
         .overlay_color(resolved.overlay_color.clone())
-        .on_tap(move |cx| {
+        .on_tap(move |ctx| {
             // A panicking position observer must not skip the caller's
             // callback: both run, then the first failure resumes.
             let mut recovery = PanicRecovery::new();
@@ -868,7 +868,7 @@ fn build_tab_cell(
                 let _ = tap_controller.animate_to(index);
             });
             if let Some(callback) = &tap_callback {
-                recovery.run(|| callback(cx, index));
+                recovery.run(|| callback(ctx, index));
             }
             recovery.finish();
         });
