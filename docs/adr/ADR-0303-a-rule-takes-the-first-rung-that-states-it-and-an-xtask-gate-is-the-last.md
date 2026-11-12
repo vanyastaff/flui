@@ -231,7 +231,8 @@ of its own.
   facade reaches, `plan` sets `send_positions_required` when a changed library line, added or
   removed, does one of these (`change_scope::thread_positions`):
   - names `Send` or `Sync` as a word, outside a comment;
-  - declares a `pub use` or `pub mod`, which decides what the facade re-exports;
+  - declares a `pub use` or `pub mod`, or sits inside a `pub use` that spans several lines (read
+    from the blob on its side of the diff), which decides what the facade re-exports;
   - names, in the file that defines an item the list names, a segment of that item's path
     there (`AppConfig`, `with_memory_reclaim`), so a rename or a move on a line apart from the
     bound is seen. An implementation's entry (`impl Trait for Type`) resolves each path it

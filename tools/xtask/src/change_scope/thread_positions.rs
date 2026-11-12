@@ -21,7 +21,8 @@ use crate::send_positions::{ALLOWLIST, ROOTS, listed_items};
 /// - a library source of a crate the facade reaches whose changed lines
 ///   (`changed_lines`, a unified diff; without one, its whole text) name
 ///   `Send` or `Sync`, or declare a `pub use` or `pub mod`, which decides what
-///   the facade re-exports;
+///   the facade re-exports, or sit inside a multi-line `pub use`
+///   ([`in_a_public_use`]);
 /// - a changed line, in the file that defines an item the list names, that
 ///   holds a name of the item's path there (`AppConfig`,
 ///   `with_memory_reclaim`): a rename or a move takes the path off its entry,
@@ -83,14 +84,85 @@ pub(super) fn changed_position<'f>(
                         .get(*file)
                         .is_some_and(|names| words(line).any(|word| names.contains(word)))
             })
-            .find_map(|(file, _)| api.iter().find(|f| **f == file)),
-        None => api.iter().find(|f| {
-            defining.contains_key(**f)
+            .find_map(|(file, _)| api.iter().copied().find(|f| *f == file))
+            .or_else(|| in_a_public_use(repo, diff, &api)),
+        None => api.iter().copied().find(|f| {
+            defining.contains_key(*f)
                 || std::fs::read_to_string(repo.root.join(f))
                     .is_ok_and(|text| text.lines().any(names_a_position))
         }),
     };
-    Ok(found.copied())
+    Ok(found)
+}
+
+/// The first file of `api` whose diff changes a line inside a `pub use`
+/// statement that spans several lines (`pub use a::{\n    B,\n};`): an
+/// interior line names no `pub use` itself. The statement is read from the
+/// file on the side the line belongs to, by the blob the diff's `index` line
+/// names; a diff without one (a synthetic one) has no sides to read.
+fn in_a_public_use<'a>(repo: &Repo, diff: &str, api: &[&'a str]) -> Option<&'a str> {
+    let mut file: Option<&'a str> = None;
+    let (mut old, mut new) = (BTreeSet::new(), BTreeSet::new());
+    let (mut old_line, mut new_line) = (0_usize, 0_usize);
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git a/") {
+            let path = rest.split_once(" b/").map_or(rest, |(a, _)| a);
+            file = api.iter().copied().find(|f| *f == path);
+            old.clear();
+            new.clear();
+        } else if let Some(blobs) = line.strip_prefix("index ") {
+            let blobs = blobs.split(' ').next().unwrap_or(blobs);
+            if let (Some(_), Some((a, b))) = (file, blobs.split_once("..")) {
+                old = public_use_lines(repo, a);
+                new = public_use_lines(repo, b);
+            }
+        } else if line.starts_with("+++ ") || line.starts_with("--- ") {
+            // the file names, read from `diff --git`
+        } else if let Some(header) = line.strip_prefix("@@ -") {
+            let mut ranges = header.split(' ');
+            let start = |range: Option<&str>| {
+                range
+                    .and_then(|r| r.trim_start_matches('+').split(',').next())
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .unwrap_or(0)
+            };
+            old_line = start(ranges.next());
+            new_line = start(ranges.next());
+        } else if line.starts_with('-') {
+            if file.is_some() && old.contains(&old_line) {
+                return file;
+            }
+            old_line += 1;
+        } else if line.starts_with('+') {
+            if file.is_some() && new.contains(&new_line) {
+                return file;
+            }
+            new_line += 1;
+        }
+    }
+    None
+}
+
+/// The 1-based lines of the blob `id` that sit inside a `pub use` statement,
+/// from its first line to the one that ends it with `;`; none for a missing
+/// side (`0000000`) or an unreadable blob.
+fn public_use_lines(repo: &Repo, id: &str) -> BTreeSet<usize> {
+    if id.bytes().all(|b| b == b'0') {
+        return BTreeSet::new();
+    }
+    let Ok(text) = repo.git(&["cat-file", "blob", id]) else {
+        return BTreeSet::new();
+    };
+    let mut lines = BTreeSet::new();
+    let mut inside = false;
+    for (n, line) in text.lines().enumerate() {
+        inside |= line.trim_start().starts_with("pub use ");
+        if inside {
+            lines.insert(n + 1);
+            inside = !line.contains(';');
+        }
+    }
+    lines
 }
 
 /// Whether `path` is the gate itself: its list, its rule, or the rustdoc JSON
@@ -260,6 +332,48 @@ mod tests {
         );
     }
 
+    /// An interior line of a multi-line `pub use` reaches the gate, on the
+    /// side of the diff it belongs to; a line outside the statement does not.
+    fn a_line_inside_a_public_use_reaches_the_gate() {
+        let facade = "src/rendering.rs";
+        let blob = repo()
+            .git(&["rev-parse", &format!("HEAD:{facade}")])
+            .expect("the facade's blob");
+        let text = std::fs::read_to_string(repo().root.join(facade)).expect("the facade");
+        let lines: Vec<&str> = text.lines().collect();
+        let start = lines
+            .iter()
+            .position(|l| l.starts_with("pub use ") && !l.contains(';'))
+            .expect("a multi-line `pub use` in the facade");
+        let interior = lines[start + 1];
+        assert!(!names_a_position(interior), "{interior}");
+        let diff = |sign: char, at: usize, line: &str| {
+            let blob = blob.trim();
+            let side = if sign == '-' {
+                format!("-{at},1 +{},0", at - 1)
+            } else {
+                format!("-{},0 +{at},1", at - 1)
+            };
+            format!(
+                "diff --git a/{facade} b/{facade}\nindex {blob}..{blob} 100644\n--- a/{facade}\n+++ b/{facade}\n@@ {side} @@\n{sign}{line}\n"
+            )
+        };
+        let reaches = |diff: String| {
+            changed_position(repo(), &[facade.to_owned()], Some(&diff))
+                .expect("reading the list")
+                .map(str::to_owned)
+        };
+        for sign in ['-', '+'] {
+            assert_eq!(
+                reaches(diff(sign, start + 2, interior)).as_deref(),
+                Some(facade),
+                "{sign}{interior}"
+            );
+        }
+        // the first line of the file is the crate's documentation
+        assert_eq!(reaches(diff('-', 1, lines[0])), None, "{}", lines[0]);
+    }
+
     /// Without a diff (`--files`), the whole text of a changed file decides.
     fn a_file_list_reads_the_whole_file() {
         let config = "crates/flui-app/src/app/config.rs";
@@ -279,6 +393,10 @@ mod tests {
                 (
                     "a_listed_items_name_reaches_the_gate",
                     a_listed_items_name_reaches_the_gate as fn(),
+                ),
+                (
+                    "a_line_inside_a_public_use_reaches_the_gate",
+                    a_line_inside_a_public_use_reaches_the_gate as fn(),
                 ),
                 (
                     "a_file_list_reads_the_whole_file",

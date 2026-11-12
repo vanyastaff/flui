@@ -716,9 +716,10 @@ jobs:
   # from stable documentation and the semver report. On main both gates run.
   # On a pull request only send-positions runs, and only when the diff can
   # change what it reports. `plan` sets `send_positions_required` when a
-  # changed line of a library the facade reaches names `Send` or `Sync`, or
-  # declares a `pub use` or `pub mod`, or when the diff touches the file of an
-  # item the list names (tools/xtask/src/change_scope/thread_positions.rs).
+  # changed line of a library the facade reaches names `Send` or `Sync`,
+  # declares or sits inside a `pub use`, declares a `pub mod`, or names an
+  # item the list names in its file, and when the gate itself changes
+  # (tools/xtask/src/change_scope/thread_positions.rs).
   # api-closure stays on main. Locally:
   # `cargo xtask api-closure` and `cargo xtask send-positions`.
   api-contracts:

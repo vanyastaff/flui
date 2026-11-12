@@ -1113,7 +1113,7 @@ reaches what the check reads. `plan` decides this in its outputs, and each job i
 - `api-contracts` runs `send-positions` alone when `send_positions_required` is set. That
   happens when a changed library line, in a crate the facade reaches, does one of these:
   - names `Send` or `Sync`;
-  - declares a `pub use` or `pub mod`;
+  - declares a `pub use` or `pub mod`, or sits inside a multi-line `pub use`;
   - names a segment of a listed item's path, in the file that defines that item.
 
   A change to the list, `tools/xtask/src/send_positions.rs` or the rustdoc JSON loader
