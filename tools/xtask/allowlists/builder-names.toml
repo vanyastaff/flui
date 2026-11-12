@@ -299,60 +299,6 @@ method = "with_growth_direction"
 reason = "written before the rule had a gate; its crate's rename removes it"
 
 [[allow]]
-crate = "flui-system"
-type = "OpenRequest"
-method = "with_accept_label"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "OpenRequest"
-method = "with_directory"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "OpenRequest"
-method = "with_filter"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "OpenRequest"
-method = "with_title"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "SaveRequest"
-method = "with_accept_label"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "SaveRequest"
-method = "with_directory"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "SaveRequest"
-method = "with_filter"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "SaveRequest"
-method = "with_suggested_name"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-system"
-type = "SaveRequest"
-method = "with_title"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
 crate = "flui-testing"
 type = "MountOptions"
 method = "with_capabilities"
