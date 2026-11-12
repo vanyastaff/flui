@@ -1432,16 +1432,14 @@ pub(crate) mod source {
                 ),
             );
             let id = self.source.mint(&DisplayKey::Web("primary".into()));
-            let displays = id
-                .map(|id| {
-                    vec![with_period(
-                        DisplayInfo::new(id, "Browser Screen", bounds, scale_factor)
-                            .with_primary(true)
-                            .with_color(self.page_color(window)),
-                        period,
-                    )]
-                })
-                .unwrap_or_default();
+            let displays = id.map_or_default(|id| {
+                vec![with_period(
+                    DisplayInfo::new(id, "Browser Screen", bounds, scale_factor)
+                        .with_primary(true)
+                        .with_color(self.page_color(window)),
+                    period,
+                )]
+            });
             Ok((displays, id))
         }
 
@@ -2381,8 +2379,7 @@ mod events {
                 .borrow()
                 .as_ref()
                 .and_then(|followed| get(&followed.details, "screens"))
-                .map(|screens| js_sys::Array::from(&screens).to_vec())
-                .unwrap_or_default();
+                .map_or_default(|screens| js_sys::Array::from(&screens).to_vec());
             let listeners: Vec<Listener> = listed
                 .iter()
                 .filter_map(event_target)

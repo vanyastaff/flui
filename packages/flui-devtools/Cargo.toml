@@ -25,10 +25,10 @@ all-features = true
 # The package-author surface (ADR-0088 §4): `hooks::FrameSnapshot` for the
 # timeline's scheduler bridge and `foundation::observe` for the inspector's
 # ADR-0040 seam. Devtools names no internal crate in a normal dependency.
-# Not optional: an app that links devtools already compiles the SDK's closure
-# through the facade, so the edge costs only the SDK crate itself, and every
-# feature combination reaches the framework the same way.
-flui-sdk = { workspace = true }
+# Optional and owned by the three features that reach the framework: with
+# none of them on (`--no-default-features`, or `serde` alone) the crate names
+# nothing of it, and cargo's `unused_dependencies` lint reports the edge.
+flui-sdk = { workspace = true, optional = true }
 
 # Timing and performance (web-time is the maintained replacement for instant)
 web-time = { workspace = true }
@@ -54,7 +54,7 @@ default = ["profiling", "timeline", "inspector"]
 # Frame profiler. `tracing-subscriber` is what lets it be *fed*: an official
 # package cannot be called by the framework, so `FrameTimingLayer` subscribes
 # to the frame spans the framework already emits.
-profiling = ["dep:tracing", "dep:tracing-subscriber", "flui-sdk/animation-diagnostics"]
+profiling = ["dep:flui-sdk", "dep:tracing", "dep:tracing-subscriber", "flui-sdk/animation-diagnostics"]
 
 # The serialisation half of `timeline`, not a capability of its own. It is
 # a named feature because the `flui` facade has a `serde` feature and cargo
@@ -64,12 +64,12 @@ profiling = ["dep:tracing", "dep:tracing-subscriber", "flui-sdk/animation-diagno
 serde = ["dep:serde"]
 
 # Event timeline with Chrome-trace export and the FrameSnapshot bridge.
-timeline = ["serde", "dep:serde_json"]
+timeline = ["dep:flui-sdk", "serde", "dep:serde_json"]
 
 # Counting/logging tree observer over the ADR-0040 observation seam, which
 # it reaches as `flui_sdk::foundation::observe`: its surface has no access
 # to the trees themselves.
-inspector = ["dep:tracing"]
+inspector = ["dep:flui-sdk", "dep:tracing"]
 
 # The complete inventory, kept as an explicit name for `cargo hack` runs.
 full = ["profiling", "timeline", "inspector"]
