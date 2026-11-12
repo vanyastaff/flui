@@ -21,8 +21,11 @@ use crate::send_positions::{ALLOWLIST, ROOTS, listed_items};
 ///   (`changed_lines`, a unified diff; without one, its whole text) name
 ///   `Send` or `Sync`, or declare a `pub use` or `pub mod`, which decides what
 ///   the facade re-exports;
-/// - the file that defines an item the list names: a rename there moves the
-///   item's path off its entry, on whichever line the bound sits.
+/// - a changed line, in the file that defines an item the list names, that
+///   holds a name of the item's path there (`AppConfig`,
+///   `with_memory_reclaim`): a rename or a move takes the path off its entry,
+///   on whichever line the bound sits. Without a diff, any change to that
+///   file.
 ///
 /// A bound that becomes public through a change elsewhere (a private item
 /// made `pub` on a line that names no marker) is left to the gate on `main`.
@@ -68,16 +71,19 @@ pub(super) fn changed_position<'f>(
         return Ok(None);
     }
     let defining = defining_files(repo, ws)?;
-    if let Some(found) = api.iter().find(|f| defining.contains(**f)) {
-        return Ok(Some(found));
-    }
     let found = match changed_lines {
         Some(diff) => diff_lines(diff)
-            .filter(|(_, line)| names_a_position(line))
+            .filter(|(file, line)| {
+                names_a_position(line)
+                    || defining
+                        .get(*file)
+                        .is_some_and(|names| words(line).any(|word| names.contains(word)))
+            })
             .find_map(|(file, _)| api.iter().find(|f| **f == file)),
         None => api.iter().find(|f| {
-            std::fs::read_to_string(repo.root.join(f))
-                .is_ok_and(|text| text.lines().any(names_a_position))
+            defining.contains_key(**f)
+                || std::fs::read_to_string(repo.root.join(f))
+                    .is_ok_and(|text| text.lines().any(names_a_position))
         }),
     };
     Ok(found.copied())
@@ -90,35 +96,48 @@ fn names_a_position(line: &str) -> bool {
     if code.starts_with("//") {
         return false;
     }
-    code.split(|c: char| !(c.is_alphanumeric() || c == '_'))
-        .any(|word| word == "Send" || word == "Sync")
+    words(code).any(|word| word == "Send" || word == "Sync")
         || code.contains("pub use ")
         || code.contains("pub mod ")
 }
 
-/// The repo-relative source file of each item the list names: the module file
-/// of its longest module path that exists in its crate (`a::b` is
+/// The identifiers and keywords of `line`.
+fn words(line: &str) -> impl Iterator<Item = &str> {
+    line.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|word| !word.is_empty())
+}
+
+/// The repo-relative source file of each item the list names, with the names
+/// its path takes inside that file (`AppConfig`, `with_memory_reclaim`): the
+/// module file of its longest module path that exists in its crate (`a::b` is
 /// `src/a/b.rs` or `src/a/b/mod.rs`, the crate root `src/lib.rs`).
-fn defining_files(repo: &Repo, ws: &Workspace) -> anyhow::Result<BTreeSet<String>> {
+fn defining_files(
+    repo: &Repo,
+    ws: &Workspace,
+) -> anyhow::Result<BTreeMap<String, BTreeSet<String>>> {
     let text = std::fs::read_to_string(repo.root.join(ALLOWLIST))?;
     let crates: BTreeMap<String, String> = ws
         .packages
         .values()
         .map(|p| (p.name.replace('-', "_"), p.dir(&repo.root)))
         .collect();
-    let mut files = BTreeSet::new();
+    let mut files: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for item in listed_items(&text)? {
         let mut segments = item.split("::");
         let Some(dir) = segments.next().and_then(|ident| crates.get(ident)) else {
             continue;
         };
         let segments: Vec<&str> = segments.collect();
-        if let Some(file) = (0..=segments.len())
-            .rev()
-            .flat_map(|k| module_files(dir, &segments[..k]))
-            .find(|file| repo.root.join(file).is_file())
-        {
-            files.insert(file);
+        if let Some((file, inside)) = (0..=segments.len()).rev().find_map(|k| {
+            module_files(dir, &segments[..k])
+                .into_iter()
+                .find(|file| repo.root.join(file).is_file())
+                .map(|file| (file, &segments[k..]))
+        }) {
+            files
+                .entry(file)
+                .or_default()
+                .extend(inside.iter().map(|&name| name.to_owned()));
         }
     }
     Ok(files)
@@ -192,13 +211,14 @@ mod tests {
         }
     }
 
-    /// The file that defines a listed item reaches the gate on any change, so
-    /// a rename on a line apart from its bound is seen; another file of the
-    /// same crate is not.
-    fn a_listed_items_file_reaches_the_gate() {
+    /// A line that names a listed item, in the file that defines it, reaches
+    /// the gate, so a rename on a line apart from its bound is seen; another
+    /// line of that file and the same line in another file do not.
+    fn a_listed_items_name_reaches_the_gate() {
         let config = "crates/flui-app/src/app/config.rs";
-        let rename = Some("+    pub fn with_reclaim(");
+        let rename = Some("-    pub fn with_memory_reclaim(");
         assert_eq!(reaches(config, rename).as_deref(), Some(config));
+        assert_eq!(reaches(config, Some("+    let frames = 3;")), None);
         assert_eq!(
             reaches("crates/flui-widgets/src/container.rs", rename),
             None
@@ -222,8 +242,8 @@ mod tests {
                     a_changed_marker_reaches_the_gate as fn(),
                 ),
                 (
-                    "a_listed_items_file_reaches_the_gate",
-                    a_listed_items_file_reaches_the_gate as fn(),
+                    "a_listed_items_name_reaches_the_gate",
+                    a_listed_items_name_reaches_the_gate as fn(),
                 ),
                 (
                     "a_file_list_reads_the_whole_file",
