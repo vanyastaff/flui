@@ -5,14 +5,6 @@
 //! every `#[test]` here to report `... ok`. `examples/acceptance_app.rs` runs
 //! `app` in a window. Each spec's rows are a module beside `smoke`.
 
-#![cfg_attr(
-    test,
-    expect(
-        deprecated,
-        reason = "the rows still drive flui::testing::harness; they move to Tester as it gains their verbs"
-    )
-)]
-
 pub mod app;
 
 #[cfg(test)]

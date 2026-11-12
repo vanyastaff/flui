@@ -40,6 +40,11 @@ pub mod rendering {
 /// driver, the widget layout harness, gesture replay, the accessibility
 /// reader and the teardown and storage doubles. The facade's own consumer
 /// fixtures are their last users ([gaps](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#the-facades-old-test-harnesses)).
+///
+/// The compiler reports a deprecated module only for the items the module
+/// defines, and this one only re-exports, so a path through it raises no
+/// warning: this marker and the gaps entry are the notice, and the module
+/// goes before a release.
 #[deprecated(note = "use flui::testing::Tester and flui::testing::find")]
 pub mod harness {
     pub use flui_rendering::testing::inspect::render_snapshot;

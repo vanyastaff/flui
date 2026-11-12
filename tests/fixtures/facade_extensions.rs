@@ -1,8 +1,4 @@
 #![cfg(test)]
-#![expect(
-    deprecated,
-    reason = "the rows below still drive flui::testing::harness; they move to Tester as it gains their verbs"
-)]
 
 use flui::animation::Animation;
 use flui::geometry::{Offset, Point, Rect, Size};
