@@ -2209,6 +2209,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "smallvec",
  "swash",
  "sys-locale",
  "thiserror 2.0.21",

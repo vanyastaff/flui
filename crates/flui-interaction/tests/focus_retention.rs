@@ -196,6 +196,81 @@ fn bounded_focus_reentry_publishes_in_order_and_recovers() {
     drop(attachments);
 }
 
+/// Issue #1040's reproducer: A is focused, B's own listener requests C while
+/// the manager is publishing A → B. Every committed transition reaches the
+/// manager's listeners once, in the order it was applied, so a subscriber that
+/// keeps the last destination agrees with `primary_focus`; the same holds when
+/// the chain returns to an earlier node (A → B → C → B), and the next request
+/// publishes alone.
+fn node_listener_reentry_publishes_each_transition_in_order() {
+    for (name, chain) in [
+        ("A -> B -> C", &[1, 2][..]),
+        ("A -> B -> C -> B", &[1, 2, 1][..]),
+    ] {
+        let manager = FocusManager::new();
+        let nodes = [FocusNode::new(), FocusNode::new(), FocusNode::new()];
+        let attachments: Vec<_> = nodes
+            .iter()
+            .map(|node| manager.root_scope().attach_node(node).expect("attach"))
+            .collect();
+        let _ = nodes[0].request_focus();
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let recorded = Rc::clone(&edges);
+        let manager_listener = manager.listen(move |previous, current| {
+            recorded.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        });
+        // Each node in the chain hands focus to the next once it holds it.
+        let mut node_listeners = Vec::new();
+        for pair in chain.windows(2) {
+            let holder = Rc::downgrade(&nodes[pair[0]]);
+            let next = Rc::downgrade(&nodes[pair[1]]);
+            let fired = Rc::new(Cell::new(false));
+            node_listeners.push(nodes[pair[0]].subscribe(move || {
+                let holder = holder.upgrade().expect("attached holder");
+                if holder.has_primary_focus() && !fired.get() {
+                    fired.set(true);
+                    let _ = next.upgrade().expect("attached next").request_focus();
+                }
+            }));
+        }
+        let _ = nodes[chain[0]].request_focus();
+
+        let ids: Vec<_> = nodes.iter().map(|node| node.id()).collect();
+        let mut expected = vec![(Some(ids[0]), Some(ids[chain[0]]))];
+        expected.extend(
+            chain
+                .windows(2)
+                .map(|pair| (Some(ids[pair[0]]), Some(ids[pair[1]]))),
+        );
+        assert_eq!(
+            *edges.borrow(),
+            expected,
+            "{name}: each transition once, in order"
+        );
+        let last = *chain.last().expect("a chain has a destination");
+        assert!(nodes[last].has_primary_focus(), "{name}");
+        assert_eq!(
+            edges.borrow().last().and_then(|edge| edge.1),
+            manager.primary_focus().map(|node| node.id()),
+            "{name}: the last published destination is the primary focus"
+        );
+
+        edges.borrow_mut().clear();
+        let _ = nodes[0].request_focus();
+        assert_eq!(
+            *edges.borrow(),
+            [(Some(ids[last]), Some(ids[0]))],
+            "{name}: the next request publishes alone"
+        );
+        drop(node_listeners);
+        drop(manager_listener);
+        drop(attachments);
+    }
+}
+
 type CommitDiagnosticAction = (bool, Rc<dyn Fn()>);
 thread_local! {
     static COMMIT_DIAGNOSTIC: RefCell<Option<CommitDiagnosticAction>> = const { RefCell::new(None) };
@@ -1552,6 +1627,10 @@ fn caught_callback_failures_leave_captures_with_their_owner() {
         (
             "bounded focus reentry ordering and healthy recovery",
             bounded_focus_reentry_publishes_in_order_and_recovers,
+        ),
+        (
+            "node listener reentry ordering",
+            node_listener_reentry_publishes_each_transition_in_order,
         ),
         (
             "commit diagnostics, competing observers and reentrant FIFO",

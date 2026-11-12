@@ -168,6 +168,44 @@ fn line_width(paint: &crate::paint::Paint) -> f64 {
 const SHADOW_REACH: f64 = 3.5;
 
 impl DrawOp {
+    /// Whether replaying this op changes the state the ops after it see: a
+    /// clip narrows it, a save, a restore or a layer scope opens or closes
+    /// one. Every other op only draws.
+    pub(crate) fn scopes_replay(&self) -> bool {
+        match self {
+            Self::ClipRect { .. }
+            | Self::ClipRRect { .. }
+            | Self::ClipRSuperellipse { .. }
+            | Self::ClipPath { .. }
+            | Self::SaveLayer { .. }
+            | Self::RestoreLayer
+            | Self::Save
+            | Self::Restore => true,
+            Self::Line { .. }
+            | Self::Rect { .. }
+            | Self::RRect { .. }
+            | Self::Circle { .. }
+            | Self::Oval { .. }
+            | Self::Path { .. }
+            | Self::Paragraph { .. }
+            | Self::ParagraphShadow { .. }
+            | Self::Image { .. }
+            | Self::ImageRegion { .. }
+            | Self::ImageRepeat { .. }
+            | Self::ImageNineSlice { .. }
+            | Self::ImageFiltered { .. }
+            | Self::Texture { .. }
+            | Self::Shadow { .. }
+            | Self::Arc { .. }
+            | Self::DRRect { .. }
+            | Self::Points { .. }
+            | Self::Vertices { .. }
+            | Self::Color { .. }
+            | Self::Paint { .. }
+            | Self::Atlas { .. } => false,
+        }
+    }
+
     /// Every pixel this op may change, in its own (pre-transform) coordinate
     /// space; `None` for an op that draws nothing.
     ///

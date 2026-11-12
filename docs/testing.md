@@ -1075,7 +1075,7 @@ runs `checks`, `plan` and the `ci` aggregator:
 |---|---|---|
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling | `deps` |
-| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`) over the whole workspace, and the on-demand jobs its diff asks for (below) |
+| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`, `public-api`) over the whole workspace, and the on-demand jobs its diff asks for (below) |
 | `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `doc-test`, `perf-gates` (all Linux), and `test-trybuild`, `api-contracts` and `miri` always; in `clippy` and `test` it also turns on the `native-features` and `gpu-test --backend gl` steps |
 
 - **Wide lane**: every pull request that compiles anything runs every Linux
@@ -1184,6 +1184,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `test-trybuild` | `cargo xtask test --nested --nested-group trybuild` | compile-fail suites; plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
 | `doc` | `cargo xtask doc-strict` (in `gate`) | — |
+| `public-api` | `cargo xtask public-api` | nightly (rustdoc JSON); `cargo xtask public-api --write` restates `api/flui.txt` when a change to the facade's API is meant (ADR-0324) |
 | `deps` | `cargo xtask deps` | CI runs `--only policy` and `--only advisories` as two steps, with `--strict` (a missing cargo-deny or cargo-shear fails instead of being skipped); every lane but `docs` runs it; the advisories step blocks on main and on a pull request whose change is workspace-wide or touches `deny.toml`, and only reports on other pull requests, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
 | `doc-test` | `cargo test --workspace --locked --doc` (in `cargo xtask ci`) | — |
 | `miri` | `cargo xtask miri` | nightly + miri |

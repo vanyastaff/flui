@@ -51,6 +51,8 @@ icu_segmenter = { workspace = true }
 swash = { workspace = true }
 parley = { workspace = true }
 lru = { workspace = true }
+# The canvas paint pool, inline for the few paints one recording holds.
+smallvec = { workspace = true }
 
 [dev-dependencies]
 # Colour property tests and the compile-fail suite.

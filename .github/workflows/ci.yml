@@ -776,6 +776,41 @@ jobs:
           cargo xtask send-positions --self-test
 
   # ─────────────────────────────────────────────────────────────────────────
+  # public-api — the facade's public API against its committed snapshot
+  # `api/flui.txt` (ADR-0324), on every pull request that compiles anything,
+  # so the pull request that changes the surface carries its diff. Locally:
+  # `cargo xtask public-api` (`--write` restates the file), with a nightly
+  # toolchain.
+  # ─────────────────────────────────────────────────────────────────────────
+  public-api:
+    name: public-api
+    needs: [checks, plan]
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+
+      # No rust-cache: the nightly builds of every crate the facade reaches
+      # take 5 GB, half the repository's cache budget.
+      # rustdoc's JSON output is nightly-only; the gate runs it through
+      # `rustup run nightly`, so the pin stays every other step's toolchain.
+      - name: Install Rust nightly (rustdoc JSON)
+        uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
+
+      # Nightly adds lints ahead of stable; lints are the stable jobs'
+      # business, so its warnings do not fail this step.
+      - name: cargo xtask public-api
+        env:
+          CARGO_BUILD_WARNINGS: warn
+        run: cargo xtask public-api
+
+  # ─────────────────────────────────────────────────────────────────────────
   # perf-gates — what a frame costs, by counts that do not depend on the
   # runner: `cargo xtask perf --check` compares every perf scenario's frame
   # counters and allocations with crates/flui-widgets/perf/baseline/, and
@@ -1328,7 +1363,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, clippy, feature-matrix, feature-scope, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, api-contracts, perf-gates, size, deps, doc-test, miri]
+    needs: [checks, plan, clippy, feature-matrix, feature-scope, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, public-api, api-contracts, perf-gates, size, deps, doc-test, miri]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -1377,7 +1412,7 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
-            clippy wasm-check cross-typecheck test test-nested doc test-features
+            clippy wasm-check cross-typecheck test test-nested doc test-features public-api
           FULL_JOBS: >-
             feature-matrix doc-test perf-gates
           LANE: ${{ needs.plan.outputs.lane }}
