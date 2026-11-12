@@ -207,8 +207,7 @@ fn tools() -> Value {
                         "type": ["object", "string"],
                         "description": "One of: {\"appears\": locator}, {\"gone\": locator}, {\"matches\": {\"locator\": locator, \"expect\": {\"name\": text} | {\"value\": text} | {\"state\": {…}} | {\"count\": n} | \"focused\"}}, \"settled\" (no frame, callback, timer or image load pending), {\"frames\": n}, {\"event\": {\"kind\": …}}, {\"all\": [conditions]}, {\"any\": [conditions]}. A locator is as in flui_locate; a text is {\"match\": \"exact\", \"text\": \"…\"}."
                     },
-                    "timeout_ms": { "type": "integer", "minimum": 0, "description": "How long to hold out; 5000 when left out, a day at most." },
-                    "max_frames": { "type": "integer", "minimum": 1, "description": "Give up after this many presented frames." }
+                    "timeout_ms": { "type": "integer", "minimum": 0, "description": "How long to hold out; 5000 when left out, a day at most." }
                 },
                 "required": ["condition"],
                 "additionalProperties": false
@@ -274,7 +273,7 @@ fn call_tool(params: &Value, agent: &mut impl Agent) -> Result<Value, (i32, Stri
             send::<SemanticsAct>(agent, params)
         }),
         "flui_wait" => window_of(args, agent).and_then(|window| {
-            let mut params = picked(args, &["condition", "timeout_ms", "max_frames"]);
+            let mut params = picked(args, &["condition", "timeout_ms"]);
             params["window"] = Value::String(window);
             send_held::<WaitUntil>(agent, params)
         }),
@@ -343,7 +342,7 @@ fn locator_in_window(
         return Err(invalid("`locator` is required and must be an object"));
     };
     let mut locator = locator.clone();
-    if !locator.contains_key("window") {
+    if locator.get("window").is_none_or(Value::is_null) {
         locator.insert("window".to_owned(), Value::String(window_of(args, agent)?));
     }
     Ok(Value::Object(locator))
@@ -634,6 +633,11 @@ mod tests {
             "flui_locate",
             json!({ "window": "w1", "locator": { "window": "w5", "role": "button" } }),
         );
+        call(
+            &mut agent,
+            "flui_locate",
+            json!({ "window": "w2", "locator": { "window": null, "role": "button" } }),
+        );
         assert_eq!(
             agent.asked,
             [
@@ -646,6 +650,10 @@ mod tests {
                 (
                     "semantics.locate".to_owned(),
                     json!({ "locator": { "window": "w5", "role": "button" } })
+                ),
+                (
+                    "semantics.locate".to_owned(),
+                    json!({ "locator": { "window": "w2", "role": "button" } })
                 ),
             ]
         );
