@@ -308,8 +308,8 @@ pub struct AssetRegistryBuilder<C = NoCapacity> {
 // Initial state - cannot build
 impl AssetRegistryBuilder<NoCapacity> {
     pub fn new() -> Self;
-    pub fn with_capacity(self, capacity: CacheCapacity) -> AssetRegistryBuilder<HasCapacity>;
-    pub fn with_cache_config(self, config: AssetCacheConfig) -> AssetRegistryBuilder<HasCapacity>;
+    pub fn capacity(self, capacity: CacheCapacity) -> AssetRegistryBuilder<HasCapacity>;
+    pub fn cache_config(self, config: AssetCacheConfig) -> AssetRegistryBuilder<HasCapacity>;
 }
 
 // Final state - can build
@@ -454,7 +454,7 @@ pins one accepted initializer, shared data/error, waiter restart and next hit.
 
 Image loads (`load_image`, `load_network_image`) bypass typed caching. Each
 registry keeps their decoded images in its own LRU, bounded by pixel bytes
-(`with_decoded_image_budget`; 256 MiB, 64 MiB on Android, iOS and the web); an
+(`decoded_image_budget`; 256 MiB, 64 MiB on Android, iOS and the web); an
 image larger than the budget is handed to its waiters and not kept.
 `cached_image` is the synchronous probe a frame makes before it starts a load.
 There is no process-wide image cache, so equal sources in two registries are two
@@ -487,7 +487,7 @@ lanes shut down and dropped it, closes its waiters, and each admits itself again
 the first becomes the new lead, on its own lanes. A load that panics answers its
 waiters with the failure instead, from a drop guard that sees the unwind.
 
-Decodes run at most `with_decode_threads` at once (half the cores, at most four),
+Decodes run at most `decode_threads` at once (half the cores, at most four),
 never on the IO lane. A compute lane with no room is waited for through
 `Executor::room`, and the decode spawned again once it has room; a compute
 lane whose workers could not start hands the decode back to where the load runs;

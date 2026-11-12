@@ -104,10 +104,14 @@ enum Pick {
 pub struct OpenRequest {
     pick: Pick,
     multiple: bool,
-    title: Option<String>,
-    directory: Option<PathBuf>,
-    filters: Vec<FileFilter>,
-    accept_label: Option<String>,
+    /// The dialog's title, if set.
+    pub title: Option<String>,
+    /// The folder the dialog opens in, if set; it must be absolute.
+    pub directory: Option<PathBuf>,
+    /// The filters offered, the selected one first. Only a file dialog takes filters.
+    pub filters: Vec<FileFilter>,
+    /// The accept button's label, if set.
+    pub accept_label: Option<String>,
 }
 
 impl OpenRequest {
@@ -143,14 +147,14 @@ impl OpenRequest {
 
     /// The dialog's title.
     #[must_use]
-    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+    pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
     /// The folder the dialog opens in.
     #[must_use]
-    pub fn with_directory(mut self, directory: impl Into<PathBuf>) -> Self {
+    pub fn directory(mut self, directory: impl Into<PathBuf>) -> Self {
         self.directory = Some(directory.into());
         self
     }
@@ -158,14 +162,14 @@ impl OpenRequest {
     /// Offer `filter`; the first filter added is selected. Only a file
     /// dialog takes filters.
     #[must_use]
-    pub fn with_filter(mut self, filter: FileFilter) -> Self {
+    pub fn filter(mut self, filter: FileFilter) -> Self {
         self.filters.push(filter);
         self
     }
 
     /// The label of the button that accepts the choice.
     #[must_use]
-    pub fn with_accept_label(mut self, label: impl Into<String>) -> Self {
+    pub fn accept_label(mut self, label: impl Into<String>) -> Self {
         self.accept_label = Some(label.into());
         self
     }
@@ -182,30 +186,6 @@ impl OpenRequest {
         self.multiple
     }
 
-    /// The dialog's title, if set.
-    #[must_use]
-    pub fn title(&self) -> Option<&str> {
-        self.title.as_deref()
-    }
-
-    /// The folder the dialog opens in, if set.
-    #[must_use]
-    pub fn directory(&self) -> Option<&Path> {
-        self.directory.as_deref()
-    }
-
-    /// The filters offered, the selected one first.
-    #[must_use]
-    pub fn filters(&self) -> &[FileFilter] {
-        &self.filters
-    }
-
-    /// The accept button's label, if set.
-    #[must_use]
-    pub fn accept_label(&self) -> Option<&str> {
-        self.accept_label.as_deref()
-    }
-
     pub(super) fn is_valid(&self) -> bool {
         self.filters.iter().all(FileFilter::is_valid)
             && (!self.picks_folders() || self.filters.is_empty())
@@ -217,11 +197,16 @@ impl OpenRequest {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SaveRequest {
-    title: Option<String>,
-    directory: Option<PathBuf>,
-    suggested_name: Option<String>,
-    filters: Vec<FileFilter>,
-    accept_label: Option<String>,
+    /// The dialog's title, if set.
+    pub title: Option<String>,
+    /// The folder the dialog opens in, if set; it must be absolute.
+    pub directory: Option<PathBuf>,
+    /// The file name the dialog proposes, if set: a name, not a path.
+    pub suggested_name: Option<String>,
+    /// The filters offered, the selected one first. Only a file dialog takes filters.
+    pub filters: Vec<FileFilter>,
+    /// The accept button's label, if set.
+    pub accept_label: Option<String>,
 }
 
 impl SaveRequest {
@@ -233,67 +218,37 @@ impl SaveRequest {
 
     /// The dialog's title.
     #[must_use]
-    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+    pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
     /// The folder the dialog opens in.
     #[must_use]
-    pub fn with_directory(mut self, directory: impl Into<PathBuf>) -> Self {
+    pub fn directory(mut self, directory: impl Into<PathBuf>) -> Self {
         self.directory = Some(directory.into());
         self
     }
 
     /// The file name the dialog proposes: a name, not a path.
     #[must_use]
-    pub fn with_suggested_name(mut self, name: impl Into<String>) -> Self {
+    pub fn suggested_name(mut self, name: impl Into<String>) -> Self {
         self.suggested_name = Some(name.into());
         self
     }
 
     /// Offer `filter`; the first filter added is selected.
     #[must_use]
-    pub fn with_filter(mut self, filter: FileFilter) -> Self {
+    pub fn filter(mut self, filter: FileFilter) -> Self {
         self.filters.push(filter);
         self
     }
 
     /// The label of the button that accepts the choice.
     #[must_use]
-    pub fn with_accept_label(mut self, label: impl Into<String>) -> Self {
+    pub fn accept_label(mut self, label: impl Into<String>) -> Self {
         self.accept_label = Some(label.into());
         self
-    }
-
-    /// The dialog's title, if set.
-    #[must_use]
-    pub fn title(&self) -> Option<&str> {
-        self.title.as_deref()
-    }
-
-    /// The folder the dialog opens in, if set.
-    #[must_use]
-    pub fn directory(&self) -> Option<&Path> {
-        self.directory.as_deref()
-    }
-
-    /// The proposed file name, if set.
-    #[must_use]
-    pub fn suggested_name(&self) -> Option<&str> {
-        self.suggested_name.as_deref()
-    }
-
-    /// The filters offered, the selected one first.
-    #[must_use]
-    pub fn filters(&self) -> &[FileFilter] {
-        &self.filters
-    }
-
-    /// The accept button's label, if set.
-    #[must_use]
-    pub fn accept_label(&self) -> Option<&str> {
-        self.accept_label.as_deref()
     }
 
     pub(super) fn is_valid(&self) -> bool {

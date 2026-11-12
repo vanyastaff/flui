@@ -436,7 +436,7 @@ impl RenderBox for RenderTransform {
     /// Pushing the matrix again here would wrap the child in it twice.
     /// Coordinate mapping keeps the matrix through `apply_paint_transform`
     /// below regardless of which branch painted.
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Single>) {
         if !self.has_child {
             return;
         }

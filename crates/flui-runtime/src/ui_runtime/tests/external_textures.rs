@@ -259,7 +259,7 @@ pub(crate) fn a_hidden_texture_stops_painting_after_one_frame() {
     fixture.ui_runtime.render_frame(&mut sink);
     fixture
         .writer
-        .write(|cx| fixture.shown.set(cx, 0))
+        .write(|ctx| fixture.shown.set(ctx, 0))
         .expect("write");
     fixture.ui_runtime.render_frame(&mut sink);
     assert!(
@@ -291,7 +291,7 @@ pub(crate) fn unmounting_the_owner_retires_its_texture() {
         .expect("registered");
     fixture
         .writer
-        .write(|cx| fixture.shown.set(cx, 0))
+        .write(|ctx| fixture.shown.set(ctx, 0))
         .expect("write");
     fixture.ui_runtime.render_frame(&mut sink);
     assert!(fixture.shared.lock().is_none(), "the owner was disposed");

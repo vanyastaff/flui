@@ -112,9 +112,9 @@ const SELECTED_ROW_OPACITY: f64 = 0.08;
 /// A row-selection toggle: fires with the row's next `selected` value.
 /// `Rc`-based (owner-local, per ADR-0027) — matches [`InkWell`]'s own
 /// callback shape.
-type RowSelectCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, bool)>;
+type RowSelectCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, bool)>;
 /// A cell tap handler.
-type CellTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
+type CellTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>;
 /// A resolved, per-state row/overlay color cascade.
 type RowColorProperty = WidgetStateProperty<Option<Color>>;
 
@@ -193,7 +193,7 @@ impl DataCell {
     #[must_use]
     pub fn on_tap<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_tap = Some(crate::event_callback::press_callback(callback));
         self
@@ -248,7 +248,7 @@ impl DataRow {
     #[must_use]
     pub fn on_select_changed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, bool) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>, bool) -> R + 'static,
     ) -> Self {
         self.on_select_changed = Some(crate::event_callback::value_callback(callback));
         self
@@ -282,7 +282,7 @@ pub struct DataTable {
     on_select_all: Option<RowSelectCallback>,
     show_checkbox_column: bool,
     show_bottom_border: bool,
-    decoration: Option<BoxDecoration<f64>>,
+    decoration: Option<BoxDecoration>,
     data_row_color: Option<RowColorProperty>,
     data_row_min_height: Option<f64>,
     data_row_max_height: Option<f64>,
@@ -347,7 +347,7 @@ impl DataTable {
     #[must_use]
     pub fn on_select_all<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, bool) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>, bool) -> R + 'static,
     ) -> Self {
         self.on_select_all = Some(crate::event_callback::value_callback(callback));
         self
@@ -372,7 +372,7 @@ impl DataTable {
 
     /// Overrides the table's background/border decoration.
     #[must_use]
-    pub fn decoration(mut self, decoration: BoxDecoration<f64>) -> Self {
+    pub fn decoration(mut self, decoration: BoxDecoration) -> Self {
         self.decoration = Some(decoration);
         self
     }
@@ -464,7 +464,7 @@ impl DataTable {
 /// [`DataTable`]'s theme-resolved geometry/color/text-style — see
 /// [`resolve_style`]'s doc comment for the cascade.
 struct ResolvedDataTableStyle {
-    decoration: Option<BoxDecoration<f64>>,
+    decoration: Option<BoxDecoration>,
     /// The widget/theme `dataRowColor` override cascade — `None` when
     /// neither tier set one (distinct from "resolves to no color for these
     /// states", which is `Some` wrapping a property that itself returns
@@ -686,7 +686,7 @@ fn cell_padding(
 
 /// The row divider's border side, reusing [`crate::divider`]'s own
 /// established M3 default color, `ColorScheme.outlineVariant`.
-fn row_border_side(color_scheme: &ColorScheme, thickness: f64) -> BorderSide<f64> {
+fn row_border_side(color_scheme: &ColorScheme, thickness: f64) -> BorderSide {
     BorderSide::new(color_scheme.outline_variant, thickness, BorderStyle::Solid)
 }
 
@@ -698,8 +698,8 @@ fn row_decoration(
     row_index: usize,
     show_bottom_border: bool,
     color: Option<Color>,
-    border_side: BorderSide<f64>,
-) -> BoxDecoration<f64> {
+    border_side: BorderSide,
+) -> BoxDecoration {
     let border = if show_bottom_border {
         Some(Border::new(None, None, Some(border_side), None))
     } else if row_index == 0 {
@@ -744,7 +744,7 @@ fn selection_summary(rows: &[DataRow], display_checkbox_column: bool) -> (bool, 
 /// comment.
 fn wrap_selectable(
     content: BoxedView,
-    on_tap: impl Fn(&mut flui_sdk::view::EventCx<'_>) + 'static,
+    on_tap: impl Fn(&mut flui_sdk::view::EventContext<'_>) + 'static,
     overlay: Option<RowColorProperty>,
 ) -> BoxedView {
     let mut ink_well = InkWell::new(content).on_tap(on_tap);
@@ -758,7 +758,7 @@ fn wrap_selectable(
 /// margin, wrapped to fill the checkbox column's cell.
 fn header_checkbox_cell(
     checked: Option<bool>,
-    on_change: impl Fn(&mut flui_sdk::view::EventCx<'_>, Option<bool>) + 'static,
+    on_change: impl Fn(&mut flui_sdk::view::EventContext<'_>, Option<bool>) + 'static,
     margin_start: f64,
     margin_end: f64,
 ) -> BoxedView {
@@ -781,7 +781,7 @@ fn row_checkbox_cell(
 ) -> BoxedView {
     let mut checkbox = Checkbox::new(selected);
     if let Some(handler) = on_select_changed.clone() {
-        checkbox = checkbox.on_changed(move |cx, next| handler(cx, next.unwrap_or(false)));
+        checkbox = checkbox.on_changed(move |ctx, next| handler(ctx, next.unwrap_or(false)));
     }
     let content: BoxedView = Semantics::new()
         .container(true)
@@ -792,7 +792,7 @@ fn row_checkbox_cell(
         .boxed();
 
     let wrapped = match on_select_changed {
-        Some(handler) => wrap_selectable(content, move |cx| handler(cx, !selected), overlay),
+        Some(handler) => wrap_selectable(content, move |ctx| handler(ctx, !selected), overlay),
         None => content,
     };
     TableCell::new(TableCellVerticalAlignment::Fill, wrapped).boxed()
@@ -854,9 +854,9 @@ fn data_cell(
         .boxed();
 
     if let Some(on_tap) = cell.on_tap.clone() {
-        wrap_selectable(content, move |cx| on_tap(cx), overlay)
+        wrap_selectable(content, move |ctx| on_tap(ctx), overlay)
     } else if let Some(toggle) = row_toggle {
-        wrap_selectable(content, move |cx| toggle(cx), overlay)
+        wrap_selectable(content, move |ctx| toggle(ctx), overlay)
     } else {
         content
     }
@@ -932,16 +932,16 @@ impl StatelessView for DataTable {
             let on_select_all = self.on_select_all.clone();
             heading_cells.push(header_checkbox_cell(
                 checked,
-                move |cx, next: Option<bool>| {
+                move |ctx, next: Option<bool>| {
                     let effective = some_checked || next.unwrap_or(false);
                     if let Some(handler) = &on_select_all {
-                        handler(cx, effective);
+                        handler(ctx, effective);
                     } else {
                         for (selected, handler) in &rows_snapshot {
                             if let Some(handler) = handler
                                 && *selected != effective
                             {
-                                handler(cx, effective);
+                                handler(ctx, effective);
                             }
                         }
                     }
@@ -999,8 +999,9 @@ impl StatelessView for DataTable {
             let row_toggle: Option<CellTapCallback> =
                 row.on_select_changed.clone().map(|handler| {
                     let selected = row.selected;
-                    Rc::new(move |cx: &mut flui_sdk::view::EventCx<'_>| handler(cx, !selected))
-                        as CellTapCallback
+                    Rc::new(move |ctx: &mut flui_sdk::view::EventContext<'_>| {
+                        handler(ctx, !selected);
+                    }) as CellTapCallback
                 });
             for (col_index, column) in self.columns.iter().enumerate() {
                 let padding = cell_padding(

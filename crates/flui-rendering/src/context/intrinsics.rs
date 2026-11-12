@@ -11,7 +11,7 @@ use flui_foundation::geometry::Size;
 
 use crate::constraints::BoxConstraints;
 use crate::parent_data::{FlexParentData, ParentData};
-use crate::pipeline::{TextCx, TextSource, lend_text};
+use crate::pipeline::{TextContextMut, TextSource, lend_text};
 use crate::storage::IntrinsicDimension;
 use crate::traits::TextBaseline;
 
@@ -54,7 +54,7 @@ pub enum DryBaselineChildResponse {
 
 /// Child probe kinds issued during a dry-layout computation.
 ///
-/// A single enum so `BoxDryLayoutCtx` can hold one `&mut`-capturing callback
+/// A single enum so `BoxDryLayoutContext` can hold one `&mut`-capturing callback
 /// instead of two (which would require two simultaneous `&mut` borrows of the
 /// slot map).  ISP: only the sub-query kinds a dry-layout pass legitimately
 /// issues are present here.
@@ -91,14 +91,14 @@ pub enum DryLayoutChildResponse {
 }
 
 // ============================================================================
-// BoxDryBaselineCtx
+// BoxDryBaselineContext
 // ============================================================================
 
 /// Child-query channel for one dry-baseline computation.
 ///
 /// Handed to [`crate::traits::RenderBox::compute_dry_baseline`]; baseline and dry-layout
 /// child probes share one driver callback so the slot map is borrowed once.
-pub struct BoxDryBaselineCtx<'a> {
+pub struct BoxDryBaselineContext<'a> {
     child_count: usize,
     /// Erased per-child parent data; indexed by child position.
     ///
@@ -114,16 +114,16 @@ pub struct BoxDryBaselineCtx<'a> {
     text: TextSource<'a>,
 }
 
-impl std::fmt::Debug for BoxDryBaselineCtx<'_> {
+impl std::fmt::Debug for BoxDryBaselineContext<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `query` is a live driver callback into the slot map; show counters only.
-        f.debug_struct("BoxDryBaselineCtx")
+        f.debug_struct("BoxDryBaselineContext")
             .field("child_count", &self.child_count)
             .finish_non_exhaustive()
     }
 }
 
-impl<'a> BoxDryBaselineCtx<'a> {
+impl<'a> BoxDryBaselineContext<'a> {
     /// Wraps the driver's child dry-baseline callback.
     pub(crate) fn new(
         child_count: usize,
@@ -143,13 +143,13 @@ impl<'a> BoxDryBaselineCtx<'a> {
     }
 
     /// The text context to measure with: the UI runtime's, lent through the
-    /// pipeline, for as long as the returned [`TextCx`] lives.
+    /// pipeline, for as long as the returned [`TextContextMut`] lives.
     ///
     /// # Errors
     ///
     /// Returns [`crate::error::RenderError::TextContextBusy`] when an
     /// independently held loan already uses the runtime's shared resource.
-    pub fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>> {
+    pub fn text(&mut self) -> crate::error::RenderResult<TextContextMut<'_>> {
         lend_text(self.text)
     }
 
@@ -273,7 +273,7 @@ impl<'a> BoxDryBaselineCtx<'a> {
 }
 
 // ============================================================================
-// BoxIntrinsicsCtx
+// BoxIntrinsicsContext
 // ============================================================================
 
 /// Child-query channel for one intrinsic computation.
@@ -284,25 +284,25 @@ impl<'a> BoxDryBaselineCtx<'a> {
 /// one computation.
 ///
 /// [`RenderBox::compute_min_intrinsic_width`]: crate::traits::RenderBox::compute_min_intrinsic_width
-pub struct BoxIntrinsicsCtx<'a> {
+pub struct BoxIntrinsicsContext<'a> {
     child_count: usize,
-    /// Erased per-child parent data; same semantics as [`BoxDryLayoutCtx::child_parent_data`].
+    /// Erased per-child parent data; same semantics as [`BoxDryLayoutContext::child_parent_data`].
     child_parent_data: &'a [Option<&'a dyn ParentData>],
     query: &'a mut dyn FnMut(usize, IntrinsicDimension, f64) -> crate::error::RenderResult<f64>,
     /// The text context this computation measures with.
     text: TextSource<'a>,
 }
 
-impl std::fmt::Debug for BoxIntrinsicsCtx<'_> {
+impl std::fmt::Debug for BoxIntrinsicsContext<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `query` is a live driver callback into the slot map; show counters only.
-        f.debug_struct("BoxIntrinsicsCtx")
+        f.debug_struct("BoxIntrinsicsContext")
             .field("child_count", &self.child_count)
             .finish_non_exhaustive()
     }
 }
 
-impl<'a> BoxIntrinsicsCtx<'a> {
+impl<'a> BoxIntrinsicsContext<'a> {
     /// Wraps the driver's child-query callback.
     pub(crate) fn new(
         child_count: usize,
@@ -319,13 +319,13 @@ impl<'a> BoxIntrinsicsCtx<'a> {
     }
 
     /// The text context to measure with: the UI runtime's, lent through the
-    /// pipeline, for as long as the returned [`TextCx`] lives.
+    /// pipeline, for as long as the returned [`TextContextMut`] lives.
     ///
     /// # Errors
     ///
     /// Returns [`crate::error::RenderError::TextContextBusy`] when an
     /// independently held loan already uses the runtime's shared resource.
-    pub fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>> {
+    pub fn text(&mut self) -> crate::error::RenderResult<TextContextMut<'_>> {
         lend_text(self.text)
     }
 
@@ -407,7 +407,7 @@ impl<'a> BoxIntrinsicsCtx<'a> {
 }
 
 // ============================================================================
-// BoxDryLayoutCtx
+// BoxDryLayoutContext
 // ============================================================================
 
 /// Child-query channel for one dry-layout computation.
@@ -416,7 +416,7 @@ impl<'a> BoxIntrinsicsCtx<'a> {
 /// answers what size the child WOULD take under the given constraints,
 /// memoized per child and constraints by the pipeline. `child_intrinsic`
 /// and the named convenience methods answer the child's intrinsic dimensions
-/// through the same memoized take-out walk — identical to `BoxIntrinsicsCtx`
+/// through the same memoized take-out walk — identical to `BoxIntrinsicsContext`
 /// and `BoxLayoutContext::child_intrinsic` so a proxy can share one
 /// `child_constraints` helper across all three compute paths.
 ///
@@ -426,7 +426,7 @@ impl<'a> BoxIntrinsicsCtx<'a> {
 /// two sub-query kinds are packed into one enum-dispatched call.
 ///
 /// [`RenderBox::compute_dry_layout`]: crate::traits::RenderBox::compute_dry_layout
-pub struct BoxDryLayoutCtx<'a> {
+pub struct BoxDryLayoutContext<'a> {
     child_count: usize,
     /// Erased per-child parent data populated by the driver from each child's
     /// `RenderNode::parent_data`. Indexed by child position; entries are `None`
@@ -444,16 +444,16 @@ pub struct BoxDryLayoutCtx<'a> {
     text: TextSource<'a>,
 }
 
-impl std::fmt::Debug for BoxDryLayoutCtx<'_> {
+impl std::fmt::Debug for BoxDryLayoutContext<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `query` is a live driver callback into the slot map; show counters only.
-        f.debug_struct("BoxDryLayoutCtx")
+        f.debug_struct("BoxDryLayoutContext")
             .field("child_count", &self.child_count)
             .finish_non_exhaustive()
     }
 }
 
-impl<'a> BoxDryLayoutCtx<'a> {
+impl<'a> BoxDryLayoutContext<'a> {
     /// Wraps the driver's dispatched child-query callback.
     pub(crate) fn new(
         child_count: usize,
@@ -473,13 +473,13 @@ impl<'a> BoxDryLayoutCtx<'a> {
     }
 
     /// The text context to measure with: the UI runtime's, lent through the
-    /// pipeline, for as long as the returned [`TextCx`] lives.
+    /// pipeline, for as long as the returned [`TextContextMut`] lives.
     ///
     /// # Errors
     ///
     /// Returns [`crate::error::RenderError::TextContextBusy`] when an
     /// independently held loan already uses the runtime's shared resource.
-    pub fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>> {
+    pub fn text(&mut self) -> crate::error::RenderResult<TextContextMut<'_>> {
         lend_text(self.text)
     }
 
@@ -615,7 +615,7 @@ impl<'a> BoxDryLayoutCtx<'a> {
 #[cfg(any(test, feature = "testing"))]
 pub mod test_support {
     use super::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxIntrinsicsCtx, DryBaselineChildRequest,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxIntrinsicsContext, DryBaselineChildRequest,
         DryBaselineChildResponse, DryLayoutChildRequest, DryLayoutChildResponse,
         IntrinsicDimension,
     };
@@ -623,7 +623,7 @@ pub mod test_support {
     /// A leaf context for unit-testing `compute_*` implementations of
     /// childless objects: any child query is a contract violation and
     /// panics with the probe's coordinates.
-    pub fn leaf_intrinsics<R>(f: impl FnOnce(&mut BoxIntrinsicsCtx<'_>) -> R) -> R {
+    pub fn leaf_intrinsics<R>(f: impl FnOnce(&mut BoxIntrinsicsContext<'_>) -> R) -> R {
         let mut deny_query =
             |index: usize, dim: IntrinsicDimension, extent: f64| -> crate::RenderResult<f64> {
                 panic!(
@@ -632,7 +632,7 @@ pub mod test_support {
                 )
             };
         let text = crate::pipeline::TextContextHandle::standalone();
-        f(&mut BoxIntrinsicsCtx::new(
+        f(&mut BoxIntrinsicsContext::new(
             0,
             &[],
             &mut deny_query,
@@ -642,7 +642,7 @@ pub mod test_support {
 
     /// Leaf context for `compute_dry_layout` tests; panics on any child query
     /// (both `DryLayout` and `Intrinsic` kinds).
-    pub fn leaf_dry_layout<R>(f: impl FnOnce(&mut BoxDryLayoutCtx<'_>) -> R) -> R {
+    pub fn leaf_dry_layout<R>(f: impl FnOnce(&mut BoxDryLayoutContext<'_>) -> R) -> R {
         let mut deny = |index: usize,
                         request: DryLayoutChildRequest|
          -> crate::RenderResult<DryLayoutChildResponse> {
@@ -662,11 +662,16 @@ pub mod test_support {
             }
         };
         let text = crate::pipeline::TextContextHandle::standalone();
-        f(&mut BoxDryLayoutCtx::new(0, &[], &mut deny, text.source()))
+        f(&mut BoxDryLayoutContext::new(
+            0,
+            &[],
+            &mut deny,
+            text.source(),
+        ))
     }
 
     /// Leaf context for `compute_dry_baseline` tests; panics on any child query.
-    pub fn leaf_dry_baseline<R>(f: impl FnOnce(&mut BoxDryBaselineCtx<'_>) -> R) -> R {
+    pub fn leaf_dry_baseline<R>(f: impl FnOnce(&mut BoxDryBaselineContext<'_>) -> R) -> R {
         let mut deny = |index: usize,
                         request: DryBaselineChildRequest|
          -> crate::RenderResult<DryBaselineChildResponse> {
@@ -686,7 +691,7 @@ pub mod test_support {
             }
         };
         let text = crate::pipeline::TextContextHandle::standalone();
-        f(&mut BoxDryBaselineCtx::new(
+        f(&mut BoxDryBaselineContext::new(
             0,
             &[],
             &mut deny,

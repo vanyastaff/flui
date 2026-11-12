@@ -31,7 +31,7 @@ pub(crate) fn long_press_fires_when_held_past_the_deadline() {
 
     let mut scoped = lay_out(
         GestureDetector::new()
-            .on_long_press(move |_cx| {
+            .on_long_press(move |_ctx| {
                 in_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(target()),
@@ -86,10 +86,10 @@ pub(crate) fn double_tap_combined_with_tap_fires_double_tap_once_and_tap_never()
 
     let mut scoped = lay_out(
         GestureDetector::new()
-            .on_tap(move |_cx| {
+            .on_tap(move |_ctx| {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_double_tap(move |_cx| {
+            .on_double_tap(move |_ctx| {
                 double_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(target()),

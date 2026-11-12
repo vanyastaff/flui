@@ -216,12 +216,12 @@ impl RawTextField {
         self
     }
 
-    /// Call `callback` with the dispatch's `&mut EventCx<'_>` and the new
+    /// Call `callback` with the dispatch's `&mut EventContext<'_>` and the new
     /// text after each user edit. Forwards to [`EditableText::on_changed`].
     #[must_use]
     pub fn on_changed<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &str) -> R + 'static,
         R: EventOutcome,
     {
         self.on_changed = Some(ref_callback(callback));
@@ -239,11 +239,11 @@ impl RawTextField {
     /// while it has focus. Forwards to [`EditableText::on_submitted`] — see
     /// that method's doc for exactly when it fires. Added for symmetry with
     /// `flui_material::TextField::on_submitted`, which forwards the same
-    /// way. The callback receives the dispatch's `&mut EventCx<'_>` first.
+    /// way. The callback receives the dispatch's `&mut EventContext<'_>` first.
     #[must_use]
     pub fn on_submitted<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, &str) -> R + 'static,
         R: EventOutcome,
     {
         self.on_submitted = Some(ref_callback(callback));
@@ -304,10 +304,10 @@ impl ViewState<RawTextField> for RawTextFieldState {
             editable = editable.caret_height(height);
         }
         if let Some(on_submitted) = view.on_submitted.clone() {
-            editable = editable.on_submitted(move |cx, text| on_submitted(cx, text));
+            editable = editable.on_submitted(move |ctx, text| on_submitted(ctx, text));
         }
         if let Some(on_changed) = view.on_changed.clone() {
-            editable = editable.on_changed(move |cx, text| on_changed(cx, text));
+            editable = editable.on_changed(move |ctx, text| on_changed(ctx, text));
         }
 
         let padded = Padding::new(view.content_padding).child(editable);
@@ -319,7 +319,7 @@ impl ViewState<RawTextField> for RawTextFieldState {
         // wherever the keyboard moved it meanwhile.
         let focus_node = Rc::clone(&self.focus_node);
         Listener::new()
-            .on_pointer_down(move |_cx, _dispatch| {
+            .on_pointer_down(move |_ctx, _dispatch| {
                 let _ = focus_node.request_focus();
             })
             .child(decorated)
@@ -351,7 +351,7 @@ impl ViewState<RawTextField> for RawTextFieldState {
 // ============================================================================
 
 /// Simple 1-px dark-gray border over a white background for the field.
-fn field_border_decoration() -> BoxDecoration<f64> {
+fn field_border_decoration() -> BoxDecoration {
     BoxDecoration::new()
         .set_color(Some(Color::WHITE))
         .set_border(Some(Border::all(BorderSide::new(

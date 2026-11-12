@@ -358,7 +358,7 @@ impl<P: Protocol> RenderEntry<P> {
     ///
     /// This method constructs a leaf-mode typed layout context via
     /// [`Protocol::with_leaf_erased_ctx`]
-    /// (`BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints, text)` with
+    /// (`RawBoxLayoutContext::<Leaf, BoxParentData>::new(constraints, text)` with
     /// **no children**). Non-leaf render objects (Padding, Flex,
     /// Center, etc.) routed through this method observe
     /// `ctx.child_count() == 0` and take their no-child branches —
@@ -384,11 +384,11 @@ impl<P: Protocol> RenderEntry<P> {
     /// `PipelineOwner::layout_dirty_root` is the production entry point
     /// for parent-children layout: it leases the tree and acquires nodes as the walk reaches them, and
     /// constructs a typed
-    /// `BoxLayoutCtx` with the child slice via
-    /// [`crate::protocol::BoxLayoutCtx::with_layout_callback`] —
+    /// `RawBoxLayoutContext` with the child slice via
+    /// [`crate::protocol::RawBoxLayoutContext::with_layout_callback`] —
     /// bypassing this method entirely. Callers wanting parent-children
     /// layout should either go through `PipelineOwner::layout_dirty_root`
-    /// or directly construct a `BoxLayoutCtx` with `with_layout_callback`
+    /// or directly construct a `RawBoxLayoutContext` with `with_layout_callback`
     /// and invoke `render_object.perform_layout_raw(&mut typed_ctx)`
     /// against an erased view, replicating what `layout_dirty_root` does
     /// internally.
@@ -443,7 +443,7 @@ impl<P: Protocol> RenderEntry<P> {
 
         // Wrap constraints in a leaf-mode erased ctx scoped to the inner
         // closure. The protocol's `with_leaf_erased_ctx` constructs a
-        // typed `BoxLayoutCtx::new` / `SliverLayoutCtx::new` on its own
+        // typed `RawBoxLayoutContext::new` / `RawSliverLayoutContext::new` on its own
         // stack frame and lends an erased `&mut dyn` view; the borrow
         // expires when the FnOnce closure returns, keeping the storage
         // local to this call.

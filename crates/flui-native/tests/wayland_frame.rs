@@ -117,8 +117,8 @@ mod cases {
         fn new(title: &str) -> Self {
             Self::open(
                 WindowOptions::default()
-                    .with_title(title)
-                    .with_size(Size::new(CONTENT.0, CONTENT.1)),
+                    .title(title)
+                    .size(Size::new(CONTENT.0, CONTENT.1)),
             )
         }
 
@@ -573,9 +573,9 @@ mod cases {
     fn a_title_bar_of_the_applications_moves_and_resizes_through_the_compositor(session: &Session) {
         let opened = Opened::open(
             WindowOptions::default()
-                .with_title("app title bar")
-                .with_size(Size::new(CONTENT.0, CONTENT.1))
-                .with_frame(WindowFrame::AppTitleBar(AppTitleBar::new())),
+                .title("app title bar")
+                .size(Size::new(CONTENT.0, CONTENT.1))
+                .frame(WindowFrame::AppTitleBar(AppTitleBar::new())),
         );
         let screen = session.screen();
         let mouse = Mouse { screen: &screen };

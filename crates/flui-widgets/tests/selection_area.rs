@@ -88,7 +88,7 @@ fn recorded_area(
 ) -> (SelectionArea, Rc<RefCell<Vec<Option<String>>>>) {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let record = Rc::clone(&seen);
-    let area = SelectionArea::new(child).on_selection_changed(move |_cx, change| {
+    let area = SelectionArea::new(child).on_selection_changed(move |_ctx, change| {
         record.borrow_mut().push(
             change
                 .selected
@@ -346,7 +346,7 @@ pub(crate) fn a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_
                 Semantics::new()
                     .container(true)
                     .label("Go")
-                    .on_click(|_cx| {})
+                    .on_click(|_ctx| {})
                     .child(SizedBox::new(20.0, 20.0)),
             ))),
         ))),
@@ -489,7 +489,7 @@ pub(crate) fn links_in_a_selection_area_keep_their_own_nodes() {
             TextSpan::new(" and the "),
             TextSpan::new("privacy notice").with_link("app://privacy"),
         ]))
-        .on_link(move |_cx, link| record.borrow_mut().push(link.to_string())),
+        .on_link(move |_ctx, link| record.borrow_mut().push(link.to_string())),
     ));
     let (terms, privacy) = {
         let tree = consumer(&laid);
@@ -908,7 +908,7 @@ pub(crate) fn span_overrides_read_their_override_and_hold_their_runs() {
                 .with_link("app://terms")
                 .with_semantics_label("license agreement"),
         ]))
-        .on_link(|_cx, _link| {}),
+        .on_link(|_ctx, _link| {}),
     )));
     let mut laid = mounted(area);
     let (document, hi, there) = {
@@ -1175,7 +1175,7 @@ fn linked_area(width: f64) -> (LaidOut, Rc<RefCell<Vec<Option<String>>>>) {
                 TextSpan::new(" and the "),
                 TextSpan::new("privacy notice").with_link("app://privacy"),
             ]))
-            .on_link(|_cx, _link| {}),
+            .on_link(|_ctx, _link| {}),
         ),
     );
     (mounted(area), seen)
@@ -1264,7 +1264,7 @@ fn linked_text() -> flui_widgets::RichText {
         TextSpan::new(" and the "),
         TextSpan::new("privacy notice").with_link("app://privacy"),
     ]))
-    .on_link(|_cx, _link| {})
+    .on_link(|_ctx, _link| {})
 }
 
 /// A link a clip leaves out of the tree leaves its runs with no region, so
@@ -1340,7 +1340,7 @@ pub(crate) fn a_link_inside_a_cluster_leaves_the_runs_with_the_text() {
             TextSpan::new("Cafe"),
             TextSpan::new("\u{301} menu").with_link("app://menu"),
         ]))
-        .on_link(|_cx, _link| {}),
+        .on_link(|_ctx, _link| {}),
     ));
     let tree = consumer(&laid);
     let state = tree.state();

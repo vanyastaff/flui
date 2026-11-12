@@ -3343,10 +3343,10 @@ impl Keys {
 
     fn send(&self, code: Code, key: Key, state: KeyState, repeat: bool, mods: Modifiers) -> bool {
         let event = flui_interaction::testing::input::KeyEventBuilder::new(code)
-            .with_state(state)
-            .with_key(key)
-            .with_repeat(repeat)
-            .with_modifiers(mods)
+            .state(state)
+            .key(key)
+            .repeat(repeat)
+            .modifiers(mods)
             .build();
         self.manager.dispatch_key_event(&event).is_handled()
     }

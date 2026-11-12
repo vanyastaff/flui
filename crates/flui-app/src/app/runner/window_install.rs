@@ -225,7 +225,7 @@ impl WindowInstall {
         let address = self.prepared.address();
         let mut close = PreparedCloseRequest::new(address, self.window.native(), handler);
         if let Some(guard) = self.prepared.close_guard() {
-            close = close.with_guard(guard);
+            close = close.guard(guard);
         }
         self.native.close = Some(close);
         let router = self.host.native().close_requests();

@@ -995,7 +995,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 }
                 // `local_transform` is the object's own FORWARD (paint-direction)
                 // transform, accumulated by its ctx-level `push_transform`/
-                // `push_offset` calls (`BoxHitTestCtx::composed_transform`).
+                // `push_offset` calls (`RawBoxHitTestContext::composed_transform`).
                 // `with_paint_transform` pushes its INVERSE onto the shared
                 // `HitTestResult`, matching every other forward-transform push
                 // in this walk (`hit_test_transform` above, the follower offset).
@@ -1363,7 +1363,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let mut hit_child = |index: usize,
                              override_pos: Option<MainAxisPosition>,
                              // The sliver protocol's ctx-level transform stack is a
-                             // permanent no-op (`SliverHitTestCtx::push_transform`) —
+                             // permanent no-op (`RawSliverHitTestContext::push_transform`) —
                              // this is threaded only for signature uniformity with
                              // the shared `RenderObject::hit_test_raw` trait method
                              // and is always `None`.

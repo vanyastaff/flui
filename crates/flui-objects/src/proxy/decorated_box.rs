@@ -13,7 +13,7 @@ use flui_painting::styling::BoxDecoration;
 use flui_painting::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
 
 use flui_rendering::{
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -33,7 +33,7 @@ pub enum DecorationPosition {
 #[derive(Debug, Clone)]
 pub struct RenderDecoratedBox {
     /// What to paint.
-    decoration: BoxDecoration<f64>,
+    decoration: BoxDecoration,
     /// Behind or in front of the child.
     position: DecorationPosition,
     /// Whether the decoration's background edges are anti-aliased. Kept
@@ -45,7 +45,7 @@ pub struct RenderDecoratedBox {
 
 impl RenderDecoratedBox {
     /// Creates a decorated box painting `decoration` behind the child.
-    pub fn new(decoration: BoxDecoration<f64>) -> Self {
+    pub fn new(decoration: BoxDecoration) -> Self {
         Self {
             decoration,
             position: DecorationPosition::Background,
@@ -80,7 +80,7 @@ impl RenderDecoratedBox {
     }
 
     /// The current decoration.
-    pub fn decoration(&self) -> &BoxDecoration<f64> {
+    pub fn decoration(&self) -> &BoxDecoration {
         &self.decoration
     }
 
@@ -88,7 +88,7 @@ impl RenderDecoratedBox {
     /// responsible for the repaint mark.
     pub fn set_decoration(
         &mut self,
-        decoration: BoxDecoration<f64>,
+        decoration: BoxDecoration,
     ) -> flui_rendering::RenderUpdateImpact {
         if self.decoration == decoration {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -163,7 +163,7 @@ impl RenderBox for RenderDecoratedBox {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let rect = Self::paint_rect(ctx.size());
         if self.position == DecorationPosition::Background {
             paint_box_decoration(

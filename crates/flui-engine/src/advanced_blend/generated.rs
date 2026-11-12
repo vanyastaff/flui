@@ -62,6 +62,10 @@
     clippy::all,
     clippy::pedantic
 )]
+#[expect(
+    clippy::undocumented_unsafe_blocks,
+    reason = "wgsl_bindgen writes `unsafe impl bytemuck::Pod`/`Zeroable` for each uniform struct into OUT_DIR, where no SAFETY comment can live; its generated const asserts pin every field offset, the alignment and the size to the WGSL layout"
+)]
 pub(super) mod advanced_blend_gen {
     include!(concat!(env!("OUT_DIR"), "/advanced_blend_generated.rs"));
 }

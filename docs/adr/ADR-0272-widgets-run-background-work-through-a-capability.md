@@ -186,12 +186,12 @@ path does not have.
    - Good: one call for the caller.
    - Bad: the executor queues without bound, which ADR-0047 refuses; the bound would move to
      each caller, unseen by the host's admission.
-2. **A poll per lane, `poll_compute_room(cx)` and `poll_io_room(cx)`.**
+2. **A poll per lane, `poll_compute_room(ctx)` and `poll_io_room(ctx)`.**
    - Good: no allocation; the executor keeps refusing.
    - Bad: a method per lane. A poll cannot tell that its caller gave up, so a waker registered
      by a wait that was dropped stays until the lane frees room; waits started and abandoned
      while a lane stays full pile up.
-3. **One poll that names the lane, `poll_room(Lane, cx)`.**
+3. **One poll that names the lane, `poll_room(Lane, ctx)`.**
    - Good: a new lane is a `Lane` variant, not a new method.
    - Bad: the same pile-up as option 2.
 4. **One wait that names the lane, `room(Lane) -> RoomFuture`, a named future type.**

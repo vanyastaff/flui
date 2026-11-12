@@ -232,32 +232,32 @@ const SAMPLES: [Sample; 4] = [
 
 /// A test-local Parley context: fontique's shared collection, no host scan.
 struct Shaper {
-    font_cx: FontContext,
-    layout_cx: LayoutContext<()>,
+    font_ctx: FontContext,
+    layout_ctx: LayoutContext<()>,
 }
 
 impl Shaper {
     fn new() -> Self {
         Self {
-            font_cx: FontContext {
+            font_ctx: FontContext {
                 collection: Collection::new(CollectionOptions {
                     shared: true,
                     system_fonts: false,
                 }),
                 source_cache: SourceCache::new_shared(),
             },
-            layout_cx: LayoutContext::new(),
+            layout_ctx: LayoutContext::new(),
         }
     }
 
     /// Registers every face in `bytes`; returns the first family's name.
     fn register(&mut self, bytes: Vec<u8>) -> String {
         let families = self
-            .font_cx
+            .font_ctx
             .collection
             .register_fonts(Blob::new(Arc::new(bytes)), None);
         let (family, _) = families.first().expect("the bytes hold a face");
-        self.font_cx
+        self.font_ctx
             .collection
             .family_name(*family)
             .expect("a registered family has a name")
@@ -266,8 +266,8 @@ impl Shaper {
 
     fn layout(&mut self, text: &str, size: f32, family: &str) -> Layout<()> {
         let mut builder = self
-            .layout_cx
-            .ranged_builder(&mut self.font_cx, text, 1.0, true);
+            .layout_ctx
+            .ranged_builder(&mut self.font_ctx, text, 1.0, true);
         builder.push_default(StyleProperty::FontSize(size));
         builder.push_default(StyleProperty::FontFamily(FontFamily::Single(
             FontFamilyName::Named(Cow::Owned(family.to_owned())),

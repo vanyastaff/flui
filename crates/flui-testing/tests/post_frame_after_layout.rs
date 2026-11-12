@@ -63,7 +63,7 @@ impl RenderBox for FixedBox {
             Size::new(40.0, 24.0)
         })
     }
-    fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
 }
 
 fn binding_with_one_box() -> (HeadlessBinding, PipelineCell, flui_foundation::RenderId) {

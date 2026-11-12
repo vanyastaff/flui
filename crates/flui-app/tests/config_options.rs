@@ -15,25 +15,18 @@ fn options(config: &AppConfig) -> WindowOptions {
 }
 
 fn the_title_is_kept() {
-    assert_eq!(
-        options(&AppConfig::new().with_title("Notes")).title,
-        "Notes"
-    );
+    assert_eq!(options(&AppConfig::new().title("Notes")).title, "Notes");
 }
 
 fn the_size_is_kept() {
     assert_eq!(
-        options(&AppConfig::new().with_size(900, 700)).size,
+        options(&AppConfig::new().size(900, 700)).size,
         Size::new(900.0, 700.0)
     );
 }
 
 fn the_limits_are_kept() {
-    let converted = options(
-        &AppConfig::new()
-            .with_min_size(300, 200)
-            .with_max_size(1600, 1200),
-    );
+    let converted = options(&AppConfig::new().min_size(300, 200).max_size(1600, 1200));
     assert_eq!(converted.min_size, Some(Size::new(300.0, 200.0)));
     assert_eq!(converted.max_size, Some(Size::new(1600.0, 1200.0)));
 }
@@ -50,7 +43,7 @@ fn the_frame_flags_are_kept() {
             )),
         ),
     ] {
-        let converted = options(&AppConfig::new().with_resizable(false).with_frame(frame));
+        let converted = options(&AppConfig::new().resizable(false).frame(frame));
         assert!(!converted.resizable);
         assert_eq!(converted.frame, frame);
     }
@@ -58,7 +51,7 @@ fn the_frame_flags_are_kept() {
 
 fn the_position_is_kept() {
     assert_eq!(
-        options(&AppConfig::new().with_position(Point::new(-1200.0, 80.0))).position,
+        options(&AppConfig::new().position(Point::new(-1200.0, 80.0))).position,
         Some(Point::new(-1200.0, 80.0))
     );
     assert_eq!(options(&AppConfig::new()).position, None);
@@ -71,16 +64,16 @@ fn the_mode_is_kept() {
         WindowMode::Maximized,
         WindowMode::Fullscreen,
     ] {
-        assert_eq!(options(&AppConfig::new().with_mode(mode)).mode, mode);
+        assert_eq!(options(&AppConfig::new().mode(mode)).mode, mode);
     }
 }
 
 fn every_systems_options_are_kept() {
-    let os_options = OsWindowOptions::default().with_windows(
-        Win32WindowOptions::default().with_corner_preference(WindowsCornerPreference::DoNotRound),
+    let os_options = OsWindowOptions::default().windows(
+        Win32WindowOptions::default().corner_preference(WindowsCornerPreference::DoNotRound),
     );
     assert_eq!(
-        options(&AppConfig::new().with_os_options(os_options.clone())).os_options,
+        options(&AppConfig::new().os_options(os_options.clone())).os_options,
         os_options
     );
     assert_eq!(
@@ -93,7 +86,7 @@ fn every_systems_options_are_kept() {
 /// window opens with, which the web and Android hosts read.
 fn the_input_latency_is_kept() {
     assert_eq!(
-        options(&AppConfig::new().with_input_latency(InputLatency::Low)).input_latency,
+        options(&AppConfig::new().input_latency(InputLatency::Low)).input_latency,
         InputLatency::Low
     );
     assert_eq!(
@@ -104,11 +97,7 @@ fn the_input_latency_is_kept() {
 
 fn visibility_and_reveal_stay_the_options_own() {
     let defaults = WindowOptions::default();
-    let converted = options(
-        &AppConfig::new()
-            .with_title("x")
-            .with_mode(WindowMode::Maximized),
-    );
+    let converted = options(&AppConfig::new().title("x").mode(WindowMode::Maximized));
     assert_eq!(converted.visible, defaults.visible);
     assert_eq!(converted.reveal, defaults.reveal);
     assert_eq!(

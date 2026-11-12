@@ -19,11 +19,11 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
     let waker = flui_foundation::testing::CountingWaker::calling(move || thread.unpark())
         .shared()
         .waker();
-    let mut cx = Context::from_waker(&waker);
+    let mut ctx = Context::from_waker(&waker);
     let mut future = std::pin::pin!(future);
     let until = Instant::now() + Duration::from_secs(5);
     loop {
-        if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut ctx) {
             return output;
         }
         assert!(Instant::now() < until, "timed out waiting for a future");
@@ -74,7 +74,7 @@ fn a_request_on_its_own_thread_answers_its_head_and_body() {
     assert_eq!(
         block_on(
             Http::new(Arc::new(BlockingClient::new(declared)))
-                .send(HttpRequest::get("https://example.test/large").with_body_limit(100))
+                .send(HttpRequest::get("https://example.test/large").body_limit(100))
         )
         .map(|_| ()),
         Err(HttpError::TooLarge { limit: 100 })
@@ -128,9 +128,10 @@ fn a_request_left_or_past_its_deadline_aborts_its_connection() {
     });
     assert_eq!(counters.aborted.load(AtomicOrdering::SeqCst), 1);
 
-    let late = block_on(http.send(
-        HttpRequest::get("https://example.test/silent").with_deadline(Duration::from_millis(50)),
-    ));
+    let late =
+        block_on(http.send(
+            HttpRequest::get("https://example.test/silent").deadline(Duration::from_millis(50)),
+        ));
     assert_eq!(late.map(|_| ()), Err(HttpError::Timeout));
     eventually("the deadline ends the request's thread", || {
         counters.closed.load(AtomicOrdering::SeqCst) == 2
@@ -138,7 +139,7 @@ fn a_request_left_or_past_its_deadline_aborts_its_connection() {
 
     let (stack, counters) = Scripted::new(Body::Endless);
     let held = block_on(Http::new(Arc::new(BlockingClient::new(stack))).send(
-        HttpRequest::get("https://example.test/stream").with_deadline(Duration::from_millis(100)),
+        HttpRequest::get("https://example.test/stream").deadline(Duration::from_millis(100)),
     ))
     .expect("the head arrives within the deadline");
     eventually(

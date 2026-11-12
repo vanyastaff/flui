@@ -596,10 +596,10 @@ struct CountingPan(std::rc::Rc<std::cell::Cell<u32>>);
 impl flui_widgets::GestureRecognizerFactory for CountingPan {
     type Recognizer = flui_interaction::DragGestureRecognizer;
 
-    fn create(&self, cx: &flui_widgets::RecognizerContext) -> std::rc::Rc<Self::Recognizer> {
+    fn create(&self, ctx: &flui_widgets::RecognizerContext) -> std::rc::Rc<Self::Recognizer> {
         self.0.set(self.0.get() + 1);
         flui_interaction::DragGestureRecognizer::builder(
-            cx.arena().clone(),
+            ctx.arena().clone(),
             flui_interaction::DragAxis::Free,
         )
         .build()
@@ -664,9 +664,9 @@ struct CancelPanics;
 impl flui_widgets::GestureRecognizerFactory for CancelPanics {
     type Recognizer = flui_interaction::DragGestureRecognizer;
 
-    fn create(&self, cx: &flui_widgets::RecognizerContext) -> std::rc::Rc<Self::Recognizer> {
+    fn create(&self, ctx: &flui_widgets::RecognizerContext) -> std::rc::Rc<Self::Recognizer> {
         flui_interaction::DragGestureRecognizer::builder(
-            cx.arena().clone(),
+            ctx.arena().clone(),
             flui_interaction::DragAxis::Free,
         )
         .on_start(|_| {})
@@ -685,9 +685,9 @@ struct TaggedTap(std::rc::Rc<std::cell::Cell<u32>>, u32);
 impl flui_widgets::GestureRecognizerFactory for TaggedTap {
     type Recognizer = flui_interaction::TapGestureRecognizer;
 
-    fn create(&self, cx: &flui_widgets::RecognizerContext) -> std::rc::Rc<Self::Recognizer> {
+    fn create(&self, ctx: &flui_widgets::RecognizerContext) -> std::rc::Rc<Self::Recognizer> {
         self.0.set(self.1);
-        flui_interaction::TapGestureRecognizer::builder(cx.arena().clone()).build()
+        flui_interaction::TapGestureRecognizer::builder(ctx.arena().clone()).build()
     }
 
     fn update(&self, _recognizer: &Self::Recognizer) {
@@ -1205,7 +1205,7 @@ pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
     assert_eq!(starts.get(), 1);
     enabled.set(false);
     probe
-        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .write(|ctx| signal.get().expect("mounted probe").set(ctx, 1))
         .expect("write");
     laid.pump();
     laid.dispatch_pointer_event(
@@ -1215,7 +1215,7 @@ pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
     assert_eq!(ends.get(), 0, "removed callbacks are not invoked");
     enabled.set(true);
     probe
-        .write(|cx| signal.get().expect("mounted probe").set(cx, 2))
+        .write(|ctx| signal.get().expect("mounted probe").set(ctx, 2))
         .expect("write");
     laid.pump();
     let before = updates.get();
@@ -1316,7 +1316,7 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
         assert_eq!(starts.get(), 1);
         policy.set(DragPointerStrategy::ContinueWithRemaining);
         probe
-            .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+            .write(|ctx| signal.get().expect("mounted probe").set(ctx, 1))
             .expect("write policy rebuild");
         // Lifecycle update failures are recovered by substituting the failed
         // child, so this frame completes. Observe the host's contained report
@@ -1369,7 +1369,7 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
             // The tree's recovery replaces the failed actor. Rebuild the live
             // parent to mount the configured healthy actor before fresh input.
             probe
-                .write(|cx| signal.get().expect("mounted probe").set(cx, 2))
+                .write(|ctx| signal.get().expect("mounted probe").set(ctx, 2))
                 .expect("rebuild after contained cancellation");
             laid.pump();
             assert_eq!(
@@ -1438,11 +1438,11 @@ fn authored_drag_owner_replacement(horizontal: bool) {
             remembered.set(Some(count));
             let (started, cancels, ends, fail) =
                 (started.clone(), cancels.clone(), ends.clone(), fail.clone());
-            let on_start = move |_: &mut flui_view::EventCx<'_>,
+            let on_start = move |_: &mut flui_view::EventContext<'_>,
                                  _: flui_interaction::DragStartDetails| {
                 started.set(started.get() + 1);
             };
-            let on_end = move |_: &mut flui_view::EventCx<'_>,
+            let on_end = move |_: &mut flui_view::EventContext<'_>,
                                details: flui_interaction::DragEndDetails| {
                 match details.reason {
                     GestureEndReason::Completed => ends.set(ends.get() + 1),
@@ -1495,7 +1495,7 @@ fn authored_drag_owner_replacement(horizontal: bool) {
             threshold.set(60.0);
         }
         probe
-            .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+            .write(|ctx| signal.get().expect("mounted probe").set(ctx, 1))
             .expect("rebuild authored scope");
         let ((), log) = flui_testing::log_capture::capture(|| laid.pump());
         assert_eq!(
@@ -1530,7 +1530,7 @@ fn authored_drag_owner_replacement(horizontal: bool) {
         );
         if cancellation_panics {
             probe
-                .write(|cx| signal.get().expect("mounted probe").set(cx, 2))
+                .write(|ctx| signal.get().expect("mounted probe").set(ctx, 2))
                 .expect("remount after containment");
             laid.pump();
         }
@@ -1612,7 +1612,7 @@ fn authored_contact_owner_replacement(family: &'static str) {
     }
     changed.set(true);
     probe
-        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .write(|ctx| signal.get().expect("mounted probe").set(ctx, 1))
         .expect("replace authored contact profile");
     laid.pump();
     if family == "long press" {
@@ -1714,7 +1714,7 @@ pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admissi
     assert_eq!(starts.get(), 1);
     changed.set(true);
     probe
-        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .write(|ctx| signal.get().expect("mounted probe").set(ctx, 1))
         .expect("replace authored scale owner");
     laid.pump();
     assert_eq!(
@@ -1975,7 +1975,7 @@ pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
     laid.dispatch_pointer_down(10.0, 50.0);
     mounted.set(false);
     probe
-        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .write(|ctx| signal.get().expect("mounted probe").set(ctx, 1))
         .expect("write");
     laid.pump();
     assert_eq!(
@@ -2004,7 +2004,7 @@ pub(crate) fn gesture_detector_fires_on_tap_for_a_down_up_on_the_child() {
 
     let laid = lay_out(
         GestureDetector::new()
-            .on_tap(move |_cx| {
+            .on_tap(move |_ctx| {
                 in_cb.fetch_add(1, Ordering::SeqCst);
             })
             // A hit-testable child so the DeferToChild Listener registers.
@@ -2055,7 +2055,7 @@ pub(crate) fn toggling_on_tap_keeps_the_child_state() {
         let mut detector = GestureDetector::new().child(CountsMounts(Arc::clone(&mounts)));
         if tappable {
             let taps = Arc::clone(&taps);
-            detector = detector.on_tap(move |_cx| {
+            detector = detector.on_tap(move |_ctx| {
                 taps.fetch_add(1, Ordering::SeqCst);
             });
         }
@@ -2095,18 +2095,18 @@ pub(crate) fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
     // to the pan recognizer and cancel the tap.
     let laid = lay_out(
         GestureDetector::new()
-            .on_tap(move |_cx| {
+            .on_tap(move |_ctx| {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
             })
             .drag(
                 DragSlot::pan()
-                    .on_start(move |_cx, _details| {
+                    .on_start(move |_ctx, _details| {
                         start_cb.fetch_add(1, Ordering::SeqCst);
                     })
-                    .on_update(move |_cx, _details| {
+                    .on_update(move |_ctx, _details| {
                         update_cb.fetch_add(1, Ordering::SeqCst);
                     })
-                    .on_end(move |_cx, _details| {
+                    .on_end(move |_ctx, _details| {
                         end_cb.fetch_add(1, Ordering::SeqCst);
                     }),
             )
@@ -2160,13 +2160,13 @@ pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_
         GestureDetector::new()
             .drag(
                 DragSlot::horizontal()
-                    .on_start(move |_cx, _details| {
+                    .on_start(move |_ctx, _details| {
                         start_cb.fetch_add(1, Ordering::SeqCst);
                     })
-                    .on_cancel(move |_cx| {
+                    .on_cancel(move |_ctx| {
                         cancel_cb.fetch_add(1, Ordering::SeqCst);
                     })
-                    .on_end(move |_cx, details| {
+                    .on_end(move |_ctx, details| {
                         recorded.borrow_mut().push(details.reason);
                         end_cb.fetch_add(1, Ordering::SeqCst);
                     }),
@@ -2211,11 +2211,11 @@ pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_
 }
 
 // ============================================================================
-// Event context (ADR-0086): every callback receives `&mut EventCx<'_>` and
+// Event context (ADR-0086): every callback receives `&mut EventContext<'_>` and
 // writes a signal through it; the write rebuilds the signal's reader.
 // ============================================================================
 
-pub(crate) mod event_cx {
+pub(crate) mod event_context {
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -2239,7 +2239,7 @@ pub(crate) mod event_cx {
     pub(crate) fn a_tap_writes_a_signal_and_rebuilds_its_reader() {
         let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
             GestureDetector::new()
-                .on_tap(move |cx| count.update(cx, |n| *n += 1))
+                .on_tap(move |ctx| count.update(ctx, |n| *n += 1))
                 .child(target())
         });
         let mut app = lay_out(probe.view(), tight(100.0, 100.0));
@@ -2297,12 +2297,12 @@ pub(crate) mod event_cx {
             let detector = GestureDetector::new();
             let detector = if long_press {
                 detector
-                    .on_tap(|_cx| {})
-                    .on_long_press(move |cx| count.update(cx, |n| *n += 1))
+                    .on_tap(|_ctx| {})
+                    .on_long_press(move |ctx| count.update(ctx, |n| *n += 1))
             } else {
                 detector
-                    .on_tap(move |cx| count.update(cx, |n| *n += 1))
-                    .on_long_press(|_cx| {})
+                    .on_tap(move |ctx| count.update(ctx, |n| *n += 1))
+                    .on_long_press(|_ctx| {})
             };
             labelled(detector)
         });
@@ -2340,8 +2340,8 @@ pub(crate) mod event_cx {
         let mut app = lay_out(
             labelled(
                 GestureDetector::new()
-                    .on_tap(|_cx| -> () { panic!("intentional assistive tap panic") })
-                    .on_long_press(move |_cx| {
+                    .on_tap(|_ctx| -> () { panic!("intentional assistive tap panic") })
+                    .on_long_press(move |_ctx| {
                         observed_long_press.set(observed_long_press.get() + 1);
                     }),
             ),
@@ -2376,9 +2376,8 @@ pub(crate) fn viewer_reports_cancelled_then_completed_interactions() {
     let reasons = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&reasons);
     let laid = lay_out(
-        InteractiveViewer::new(crate::common::viewer_alternatives())
-            .on_interaction_end(move |_cx, details| recorded.borrow_mut().push(details.reason))
-            .child(target_for_viewer()),
+        InteractiveViewer::new(crate::common::viewer_alternatives(), target_for_viewer())
+            .on_interaction_end(move |_ctx, details| recorded.borrow_mut().push(details.reason)),
         tight(200.0, 200.0),
     );
     laid.dispatch_pointer_down(30.0, 80.0);

@@ -45,7 +45,7 @@ Both lanes count in-flight work against a cap; a full lane refuses with `SpawnEr
 
 ### Host injection avoids duplicate pools
 
-`AppConfig::with_executors(HostExecutors)` carries two runtime-neutral trait objects (`HostComputePool`, `HostIoPool` — boxed-closure and boxed-future contracts, deliberately not Tokio types, per the adoption guide's "the contract is an injected executor and must remain runtime-neutral"). The bootstrap stashes them into `AppRuntime` *before* UI runtime install resolves the services; with a host present the default pools are **never constructed**. FLUI's admission and cancellation wrappers apply identically on top of host pools, so the observable contract does not depend on who owns the threads.
+`AppConfig::executors(HostExecutors)` carries two runtime-neutral trait objects (`HostComputePool`, `HostIoPool` — boxed-closure and boxed-future contracts, deliberately not Tokio types, per the adoption guide's "the contract is an injected executor and must remain runtime-neutral"). The bootstrap stashes them into `AppRuntime` *before* UI runtime install resolves the services; with a host present the default pools are **never constructed**. FLUI's admission and cancellation wrappers apply identically on top of host pools, so the observable contract does not depend on who owns the threads.
 
 ### Determinism and wasm
 

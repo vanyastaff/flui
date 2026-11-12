@@ -139,91 +139,91 @@ pub struct WindowOptions {
 impl WindowOptions {
     /// Set the title.
     #[must_use]
-    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+    pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
         self
     }
 
     /// Set the initial content size.
     #[must_use]
-    pub const fn with_size(mut self, size: Size<f64>) -> Self {
+    pub const fn size(mut self, size: Size<f64>) -> Self {
         self.size = size;
         self
     }
 
     /// Set whether the window is resizable.
     #[must_use]
-    pub const fn with_resizable(mut self, resizable: bool) -> Self {
+    pub const fn resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
         self
     }
 
     /// Set whether the window is visible initially.
     #[must_use]
-    pub const fn with_visible(mut self, visible: bool) -> Self {
+    pub const fn visible(mut self, visible: bool) -> Self {
         self.visible = visible;
         self
     }
 
     /// Set when a visible window first becomes visible to the viewer.
     #[must_use]
-    pub const fn with_reveal(mut self, reveal: WindowReveal) -> Self {
+    pub const fn reveal(mut self, reveal: WindowReveal) -> Self {
         self.reveal = reveal;
         self
     }
 
     /// Set what frames the window.
     #[must_use]
-    pub const fn with_frame(mut self, frame: WindowFrame) -> Self {
+    pub const fn frame(mut self, frame: WindowFrame) -> Self {
         self.frame = frame;
         self
     }
 
     /// Set the minimum content size.
     #[must_use]
-    pub const fn with_min_size(mut self, min_size: Option<Size<f64>>) -> Self {
+    pub const fn min_size(mut self, min_size: Option<Size<f64>>) -> Self {
         self.min_size = min_size;
         self
     }
 
     /// Set the maximum content size.
     #[must_use]
-    pub const fn with_max_size(mut self, max_size: Option<Size<f64>>) -> Self {
+    pub const fn max_size(mut self, max_size: Option<Size<f64>>) -> Self {
         self.max_size = max_size;
         self
     }
 
     /// Set the display the position is measured on.
     #[must_use]
-    pub const fn with_display(mut self, display: Option<crate::DisplayId>) -> Self {
+    pub const fn display(mut self, display: Option<crate::DisplayId>) -> Self {
         self.display = display;
         self
     }
 
     /// Set the initial outer position.
     #[must_use]
-    pub const fn with_position(mut self, position: Option<Point<f64>>) -> Self {
+    pub const fn position(mut self, position: Option<Point<f64>>) -> Self {
         self.position = position;
         self
     }
 
     /// Set the mode the window opens in.
     #[must_use]
-    pub const fn with_mode(mut self, mode: WindowMode) -> Self {
+    pub const fn mode(mut self, mode: WindowMode) -> Self {
         self.mode = mode;
         self
     }
 
     /// Set the rectangle a maximized or fullscreen window returns to.
     #[must_use]
-    pub const fn with_normal_geometry(mut self, normal_geometry: Option<WindowGeometry>) -> Self {
+    pub const fn normal_geometry(mut self, normal_geometry: Option<WindowGeometry>) -> Self {
         self.normal_geometry = normal_geometry;
         self
     }
 
     /// Set how early pointer samples reach the window.
     #[must_use]
-    pub const fn with_input_latency(mut self, input_latency: InputLatency) -> Self {
+    pub const fn input_latency(mut self, input_latency: InputLatency) -> Self {
         self.input_latency = input_latency;
         self
     }
@@ -231,7 +231,7 @@ impl WindowOptions {
     /// Set what the window is created with on each operating system that has
     /// options of its own.
     #[must_use]
-    pub fn with_os_options(mut self, os_options: OsWindowOptions) -> Self {
+    pub fn os_options(mut self, os_options: OsWindowOptions) -> Self {
         self.os_options = os_options;
         self
     }

@@ -510,13 +510,13 @@ impl LaidOut {
     }
 
     /// The clipboard this tree's widgets acquire through
-    /// `cx.capability::<ClipboardCapability>()`.
+    /// `ctx.capability::<ClipboardCapability>()`.
     pub fn clipboard(&self) -> crate::ScriptedClipboard {
         self.host.ui_runtime().clipboard()
     }
 
     /// The primary selection this tree's widgets acquire through
-    /// `cx.capability::<PrimarySelectionCapability>()`.
+    /// `ctx.capability::<PrimarySelectionCapability>()`.
     pub fn primary_selection(&self) -> crate::ScriptedPrimarySelection {
         self.host.ui_runtime().primary_selection()
     }

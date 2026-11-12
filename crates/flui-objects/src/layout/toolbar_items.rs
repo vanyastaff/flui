@@ -48,7 +48,10 @@ use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_painting::{paint::Clip, typography::TextDirection};
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
+    context::{
+        BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext, BoxLayoutContext,
+        PaintContext,
+    },
     parent_data::BoxParentData,
     traits::{RenderBox, TextBaseline},
 };
@@ -469,7 +472,7 @@ impl RenderToolbarItems {
     /// The row length a layout at `width` would choose, from the children's
     /// maximum intrinsic widths at `height`.
     fn intrinsic_row_len(
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
         width: f64,
         height: f64,
     ) -> flui_rendering::RenderResult<(usize, Vec<f64>)> {
@@ -489,7 +492,7 @@ impl RenderToolbarItems {
 
     fn intrinsic_height(
         &self,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
         width: f64,
         min: bool,
     ) -> flui_rendering::RenderResult<f64> {
@@ -499,7 +502,7 @@ impl RenderToolbarItems {
         }
         let items = Self::item_count(count);
         let (len, _) = Self::intrinsic_row_len(ctx, width, f64::INFINITY)?;
-        let height_of = |ctx: &mut BoxIntrinsicsCtx<'_>, i: usize| {
+        let height_of = |ctx: &mut BoxIntrinsicsContext<'_>, i: usize| {
             if min {
                 ctx.child_min_intrinsic_height(i, width)
             } else {
@@ -566,7 +569,7 @@ impl RenderBox for RenderToolbarItems {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         let count = ctx.child_count();
         self.arrange(constraints, count, |i, c| ctx.child_dry_layout(i, c))
@@ -576,7 +579,7 @@ impl RenderBox for RenderToolbarItems {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let count = ctx.child_count();
         let items = Self::item_count(count);
@@ -591,7 +594,7 @@ impl RenderBox for RenderToolbarItems {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         let items = Self::item_count(ctx.child_count());
         (0..items)
@@ -602,7 +605,7 @@ impl RenderBox for RenderToolbarItems {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.intrinsic_height(ctx, width, true)
     }
@@ -610,7 +613,7 @@ impl RenderBox for RenderToolbarItems {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         self.intrinsic_height(ctx, width, false)
     }
@@ -628,8 +631,8 @@ impl RenderBox for RenderToolbarItems {
         self.shows(child_slot)
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        let paint_shown = |ctx: &mut PaintCx<'_, Variable>| {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
+        let paint_shown = |ctx: &mut PaintContext<'_, Variable>| {
             for i in 0..self.child_count {
                 if self.shows(i) {
                     ctx.paint_child(i);

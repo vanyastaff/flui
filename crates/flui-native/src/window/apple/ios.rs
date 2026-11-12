@@ -411,6 +411,7 @@ define_class!(
         }
     }
 
+    // SAFETY: NSObjectProtocol has no additional requirements.
     unsafe impl NSObjectProtocol for FluiView {}
 
     // SAFETY: the view is main-thread-only and answers the optional methods
@@ -2278,6 +2279,7 @@ pub(crate) mod status_bar {
             }
         }
 
+        // SAFETY: NSObjectProtocol has no additional requirements.
         unsafe impl NSObjectProtocol for FluiViewController {}
     );
 

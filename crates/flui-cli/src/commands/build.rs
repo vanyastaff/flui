@@ -354,14 +354,14 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
         AndroidBuilder::new(&workspace_root).context("failed to initialize Android builder")?;
 
     let mut builder = BuilderContextBuilder::new(workspace_root)
-        .with_floors(floors)
-        .with_platform(Platform::Android {
+        .floors(floors)
+        .platform(Platform::Android {
             targets: vec!["arm64-v8a".to_string()],
         })
-        .with_profile(profile);
+        .profile(profile);
 
     if let Some(out) = output {
-        builder = builder.with_output_dir(out.clone());
+        builder = builder.output_dir(out.clone());
     }
 
     let ctx = builder.build();
@@ -430,17 +430,17 @@ fn build_ios(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
     let bundle = super::ios::configured_bundle(&workspace_root)?;
     let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root)
-        .with_floors(floors)
-        .with_platform(Platform::Ios { targets })
-        .with_target(options.cargo_target())
-        .with_profile(profile);
+        .floors(floors)
+        .platform(Platform::Ios { targets })
+        .target(options.cargo_target())
+        .profile(profile);
     if !options.library
         && let Some(bundle) = bundle
     {
-        builder = builder.with_bundle(bundle);
+        builder = builder.bundle(bundle);
     }
     if let Some(out) = output {
-        builder = builder.with_output_dir(out.clone());
+        builder = builder.output_dir(out.clone());
     }
     let ctx = builder.build();
 
@@ -495,15 +495,15 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root)
-        .with_floors(floors)
-        .with_platform(Platform::Web {
+        .floors(floors)
+        .platform(Platform::Web {
             target: "web".to_string(),
         })
-        .with_target(options.cargo_target())
-        .with_profile(profile);
+        .target(options.cargo_target())
+        .profile(profile);
 
     if let Some(out) = output {
-        builder = builder.with_output_dir(out.clone());
+        builder = builder.output_dir(out.clone());
     }
 
     let ctx = builder.build();
@@ -550,14 +550,14 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
 
     let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root.clone())
-        .with_floors(floors)
-        .with_platform(Platform::Desktop { target: None })
-        .with_target(options.cargo_target())
-        .with_profile(profile);
+        .floors(floors)
+        .platform(Platform::Desktop { target: None })
+        .target(options.cargo_target())
+        .profile(profile);
 
     #[cfg(target_os = "macos")]
     {
-        builder = builder.with_bundle(macos_bundle()?);
+        builder = builder.bundle(macos_bundle()?);
     }
 
     // Placed after the macOS bundle-metadata resolution above (not before
@@ -566,7 +566,7 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
     ensure_flui_project(&workspace_root)?;
 
     if let Some(out) = output {
-        builder = builder.with_output_dir(out.clone());
+        builder = builder.output_dir(out.clone());
     }
 
     let ctx = builder.build();
@@ -629,15 +629,15 @@ fn build_specific_platform(
 
     let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root.clone())
-        .with_floors(floors)
-        .with_platform(Platform::Desktop {
+        .floors(floors)
+        .platform(Platform::Desktop {
             target: Some(target_triple.to_string()),
         })
-        .with_target(options.cargo_target())
-        .with_profile(profile);
+        .target(options.cargo_target())
+        .profile(profile);
 
     if target == BuildTarget::Macos {
-        builder = builder.with_bundle(macos_bundle()?);
+        builder = builder.bundle(macos_bundle()?);
     }
 
     // See the matching comment in `build_desktop`: bundle-metadata parse
@@ -645,7 +645,7 @@ fn build_specific_platform(
     ensure_flui_project(&workspace_root)?;
 
     if let Some(out) = output {
-        builder = builder.with_output_dir(out.clone());
+        builder = builder.output_dir(out.clone());
     }
 
     let ctx = builder.build();
@@ -719,15 +719,15 @@ fn build_macos_universal(
 
     let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root.clone())
-        .with_floors(floors)
-        .with_platform(Platform::Desktop {
+        .floors(floors)
+        .platform(Platform::Desktop {
             target: Some(SLICES[0].to_string()),
         })
-        .with_target(options.cargo_target())
-        .with_profile(profile);
+        .target(options.cargo_target())
+        .profile(profile);
 
     if let Some(out) = output {
-        builder = builder.with_output_dir(out.clone());
+        builder = builder.output_dir(out.clone());
     }
     let ctx = builder.build();
     let output_dir = ctx.output_dir;
@@ -748,13 +748,13 @@ fn build_macos_universal(
         let builder_inst = DesktopBuilder::new();
         let floors = crate::config::project_floors(&workspace_root)?;
         let slice_ctx = BuilderContextBuilder::new(workspace_root.clone())
-            .with_floors(floors)
-            .with_platform(Platform::Desktop {
+            .floors(floors)
+            .platform(Platform::Desktop {
                 target: Some(triple.to_string()),
             })
-            .with_target(options.cargo_target())
-            .with_profile(profile)
-            .with_output_dir(slice_dir)
+            .target(options.cargo_target())
+            .profile(profile)
+            .output_dir(slice_dir)
             .build();
 
         DesktopBuilder::validate_environment().context("environment validation failed")?;

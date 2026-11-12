@@ -14,7 +14,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+//! let registry = AssetRegistryBuilder::new().default_capacity().build();
 //! let font = FontAsset::file("assets/Roboto-Regular.ttf");
 //! let handle = registry.load(font).await?;
 //! println!("Font: {} bytes", handle.bytes.len());
@@ -34,7 +34,7 @@
 //! ```rust,ignore
 //! use flui_assets::{AssetRegistryBuilder, ImageAsset};
 //!
-//! let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+//! let registry = AssetRegistryBuilder::new().default_capacity().build();
 //! let image = ImageAsset::file("assets/logo.png");
 //! let handle = registry.load(image).await?;
 //! println!("Image: {}x{}", handle.width(), handle.height());

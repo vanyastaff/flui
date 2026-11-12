@@ -101,7 +101,7 @@ impl flui_foundation::inspect::Inspect for RawTextQueries {
 impl RenderObject<BoxProtocol> for RawTextQueries {
     fn perform_layout_raw(
         &mut self,
-        _ctx: &mut <BoxProtocol as Protocol>::LayoutCtxErased<'_>,
+        _ctx: &mut <BoxProtocol as Protocol>::ErasedLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         Ok(Size::ZERO)
     }
@@ -126,7 +126,7 @@ impl RenderObject<BoxProtocol> for RawTextQueries {
         &self,
         dimension: IntrinsicDimension,
         extent: f64,
-        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         ctx.child_intrinsic(0, dimension, extent)
     }
@@ -134,7 +134,7 @@ impl RenderObject<BoxProtocol> for RawTextQueries {
     fn dry_layout_raw(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         ctx.child_dry_layout(0, constraints)
     }
@@ -143,7 +143,7 @@ impl RenderObject<BoxProtocol> for RawTextQueries {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         ctx.child_dry_baseline(0, constraints, baseline)
     }

@@ -72,7 +72,7 @@ impl flui_rendering::traits::RenderBox for RetirementProbe {
 
     fn perform_layout(
         &mut self,
-        _cx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+        _ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
     ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
         Ok(flui_foundation::geometry::Size::new(10.0, 10.0))
     }

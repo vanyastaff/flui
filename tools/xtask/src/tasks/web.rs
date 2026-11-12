@@ -11,7 +11,7 @@ use anyhow::{Context, bail, ensure};
 use regex::Regex;
 
 use super::exec::{Cmd, Runner, Step, parsed, target_dir};
-use super::{WASM_TARGET, deny_warnings, wasm_facade_check};
+use super::{WASM_TARGET, deny_warnings, wasm_hot_reload_check};
 use crate::util::repo_root;
 use crate::{change_scope, wasm};
 
@@ -24,8 +24,8 @@ const LINKED: [(&str, &str); 2] = [
 static TEST_RESULT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^test result: ok\. ([0-9]+) passed").expect("BUG: static regex"));
 
-/// Check and clippy of the wasm-capable workspace, then the facade's
-/// hot-reload feature. `no_wasm` are the packages that cannot target wasm32.
+/// Check and clippy of the wasm-capable workspace, then `flui-hot-reload` with
+/// every feature. `no_wasm` are the packages that cannot target wasm32.
 /// The workspace clippy pass is lib/bin targets only (test targets pull
 /// native-only dev-dependencies such as tokio), and it is the only lint pass
 /// over flui-native's wasm32-only web backend. flui-native's test targets
@@ -63,7 +63,7 @@ fn check_plan(no_wasm: &BTreeSet<String>) -> Vec<Step> {
             WASM_TARGET,
         ]))
         .into(),
-        wasm_facade_check().into(),
+        wasm_hot_reload_check().into(),
         // an application capturing `Rc` in owner-local callbacks (ADR-0086)
         deny_warnings(Cmd::cargo([
             "clippy",

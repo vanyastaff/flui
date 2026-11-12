@@ -57,7 +57,7 @@ use flui_painting::paint::Alignment;
 use flui_rendering::layer::{FollowerLayer, LayerLink, LeaderClip};
 
 use flui_rendering::{
-    context::{BoxHitTestContext, PaintCx},
+    context::{BoxHitTestContext, PaintContext},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -271,7 +271,7 @@ impl RenderBox for RenderFollowerLayer {
         true
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         // Pushes the FollowerLayer regardless of child presence; the no-leader/hidden decision resolves at a
         // later render-time pass (module doc), not here. `with_follower`
         // publishes this node's own paint-time size the same way
@@ -283,7 +283,7 @@ impl RenderBox for RenderFollowerLayer {
                 .with_leader_anchor(self.leader_anchor)
                 .with_follower_anchor(self.follower_anchor)
                 .with_leader_clip(self.leader_clip),
-            PaintCx::paint_children_in_order,
+            PaintContext::paint_children_in_order,
         );
     }
 

@@ -5,8 +5,9 @@
 //! view-specific logic while the unified Element handles all common operations.
 
 use flui_rendering::parent_data::SliverSlot;
-use std::{any::TypeId, marker::PhantomData, panic::AssertUnwindSafe, rc::Rc};
+use std::{any::TypeId, marker::PhantomData, rc::Rc};
 
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ElementId, Listenable, RenderId};
 
 use super::{
@@ -15,7 +16,7 @@ use super::{
     provided::{Provided, Publication},
 };
 use crate::{
-    context::{BuildContext, BuildCtx, LifecycleContext},
+    context::{BuildContext, LifecycleContext, LiveBuildContext},
     owner::LifecycleHook,
     view::{
         AnimatedView, BoxedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView,
@@ -27,19 +28,19 @@ use crate::{
 ///
 /// During a [`BuildOwner::build_scope`](crate::BuildOwner) drain the owner
 /// carries a [`BuildHandle`](crate::ElementOwner) — a borrowed live view of
-/// the real tree — so the variant resolves to [`BuildCtx`] and ancestor
+/// the real tree — so the variant resolves to [`LiveBuildContext`] and ancestor
 /// walks / `depend_on` hit real nodes (PR-K). A component build outside a
 /// `build_scope` drain is a framework bug: it would otherwise resurrect the
 /// inert `new_minimal` context and make `InheritedView` reads silently fail.
 ///
 /// Holding the concrete value in a local lets the caller hand out a
 /// `&dyn BuildContext` whose borrow outlives the user `build()` closure.
-pub(crate) enum BuildCtxChoice<'a> {
+pub(crate) enum LiveBuildContextChoice<'a> {
     /// Live context over the borrowed real tree (inside `build_scope`).
-    Live(BuildCtx<'a>),
+    Live(LiveBuildContext<'a>),
 }
 
-impl BuildCtxChoice<'_> {
+impl LiveBuildContextChoice<'_> {
     /// Borrow the chosen context as `build` sees it: no presentation
     /// capabilities.
     pub(crate) fn as_ctx(&self) -> &dyn BuildContext {
@@ -94,23 +95,20 @@ pub(super) fn armed_state_hook<V, A>(
     A: ElementArity,
 {
     let sink_start = lifecycle_sink_len(owner);
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a state hook's panic is recorded against its element, then resumed"
-    )]
-    let outcome = std::panic::catch_unwind(AssertUnwindSafe(run));
+    let mut caught = FirstPanic::new();
+    caught.contain(run);
     mark_lifecycle_records(owner, sink_start);
-    if let Err(payload) = outcome {
+    if let Some(payload) = caught.held() {
         owner.record_armed_lifecycle_panic(
             core.self_id(),
             core.creation_site(),
             TypeId::of::<V>(),
             hook,
-            payload.as_ref(),
+            payload,
             context,
         );
-        std::panic::resume_unwind(payload);
     }
+    caught.resume();
 }
 
 /// Creates and initializes a state at its element's first build:
@@ -131,37 +129,32 @@ where
     A: ElementArity,
 {
     let sink_start = lifecycle_sink_len(owner);
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a state's create_state or init_state panic is recorded and the element recovers"
-    )]
-    let outcome = std::panic::catch_unwind(AssertUnwindSafe(create_and_init));
+    let mut caught = FirstPanic::new();
+    let made = caught.contain(create_and_init);
     mark_lifecycle_records(owner, sink_start);
-    match outcome {
-        Ok(state) => state,
-        Err(payload) => {
-            owner.record_armed_lifecycle_panic(
-                core.self_id(),
-                core.creation_site(),
-                TypeId::of::<V>(),
-                LifecycleHook::InitState,
-                payload.as_ref(),
-                context,
-            );
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a released value's destructor panic must not replace the initialization panic"
-            )]
-            if let Some(element) = core.self_id()
-                && let Err(release) = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    owner.release_reactive(element);
-                }))
-            {
-                flui_foundation::panic::discard_payload(release);
-            }
-            std::panic::resume_unwind(payload)
-        }
+    if let Some(state) = made {
+        return state;
     }
+    if let Some(payload) = caught.held() {
+        owner.record_armed_lifecycle_panic(
+            core.self_id(),
+            core.creation_site(),
+            TypeId::of::<V>(),
+            LifecycleHook::InitState,
+            payload,
+            context,
+        );
+    }
+    // A released value's destructor panic is discarded behind the
+    // initialization panic, which stays the first.
+    if let Some(element) = core.self_id() {
+        caught.contain(|| owner.release_reactive(element));
+    }
+    std::panic::resume_unwind(
+        caught
+            .into_payload()
+            .expect("BUG: a state that was not made holds its panic"),
+    )
 }
 
 /// Runs a state's hook on the way out (`deactivate`, `dispose`): a panic is
@@ -177,20 +170,19 @@ pub(super) fn contained_state_hook<V, A>(
     V: Clone + 'static,
     A: ElementArity,
 {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a leaving state's hook panic is recorded; later elements still leave"
-    )]
-    if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(run)) {
+    // Recorded, then destroyed under containment when `caught` drops: later
+    // elements still leave.
+    let mut caught = FirstPanic::new();
+    caught.contain(run);
+    if let Some(payload) = caught.held() {
         owner.record_hook_panic(
             core.self_id(),
             core.creation_site(),
             TypeId::of::<V>(),
             hook,
-            payload.as_ref(),
+            payload,
             context,
         );
-        flui_foundation::panic::discard_payload(payload);
     }
 }
 
@@ -215,14 +207,9 @@ pub(super) fn publish_provided<V, A>(
     A: ElementArity,
 {
     super::behavior_commons::begin_reactive_build(core, owner);
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a provide hook's panic is recorded and the element recovers"
-    )]
-    let published = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        publication.publish(owner, provide);
-    }));
-    if let Err(payload) = published {
+    let mut caught = FirstPanic::new();
+    caught.contain(|| publication.publish(owner, provide));
+    if let Some(payload) = caught.held() {
         if let Some(id) = core.self_id() {
             owner.reactive.end_element_build(id, false);
         }
@@ -231,23 +218,23 @@ pub(super) fn publish_provided<V, A>(
             core.creation_site(),
             TypeId::of::<V>(),
             LifecycleHook::Provide,
-            payload.as_ref(),
+            payload,
             "publishing the element's values",
         );
-        std::panic::resume_unwind(payload);
     }
+    caught.resume();
 }
 
 /// Pick the build context for `core`'s `build()` from `owner`.
 ///
 /// `BuildHandle` is `Copy`, so reading `owner.build_view` lifts the borrowed
 /// tree/sink references (lifetime `'a`, tied to the data — not to this `&`
-/// borrow of `owner`) out cleanly; the returned `BuildCtxChoice<'a>` does not
+/// borrow of `owner`) out cleanly; the returned `LiveBuildContextChoice<'a>` does not
 /// keep `owner` borrowed, so the caller can still pass `owner` on mutably.
 pub(crate) fn make_build_ctx<'a, V, A>(
     core: &ElementCore<V, A>,
     owner: &crate::ElementOwner<'a>,
-) -> BuildCtxChoice<'a>
+) -> LiveBuildContextChoice<'a>
 where
     V: Clone + 'static,
     A: ElementArity,
@@ -280,7 +267,7 @@ where
     // (`ElementNode::element` panics in that window), so a `BuildContext` cannot
     // look itself up. `ElementCore` holds the same `PipelineCell` the node would
     // have.
-    BuildCtxChoice::Live(BuildCtx::new(
+    LiveBuildContextChoice::Live(LiveBuildContext::new(
         element_id,
         tree_depth,
         handle.tree,
@@ -525,6 +512,8 @@ where
     /// built-in stateless behavior therefore reports `NONE`:
     ///
     /// ```
+    /// use std::rc::Rc;
+    ///
     /// use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData};
     /// use flui_foundation::Single;
     /// use flui_view::{BuildContext, ErrorView, IntoView, StatelessView};
@@ -540,7 +529,7 @@ where
     /// }
     ///
     /// let behavior = StatelessBehavior::new();
-    /// let core = ElementCore::<OrdinaryView, Single>::new(OrdinaryView);
+    /// let core = ElementCore::<OrdinaryView, Single>::new(Rc::new(OrdinaryView));
     /// let mut parent_data = BoxParentData::default();
     /// let impact = behavior.apply_parent_data_config(&core, &mut parent_data);
     /// assert_eq!(impact, RenderUpdateImpact::NONE);

@@ -45,7 +45,7 @@ fn the_control_draws_ios_dots_and_turns_its_pager() {
         vsync.clone(),
         Column::new(vec![
             Expanded::new(
-                PageView::new(pages(4), pager_alternatives()).controller(controller.clone()),
+                PageView::new(pager_alternatives(), pages(4)).controller(controller.clone()),
             )
             .boxed(),
             Center::new()
@@ -102,7 +102,7 @@ fn pager_alternatives() -> GestureAlternatives {
     GestureAlternatives::try_new(Alternative::ContextMenu(
         MenuSpec::new(
             GestureCommand::new("Previous page", PageIntent::Previous),
-            |_cx, _request| {},
+            |_ctx, _request| {},
         )
         .item(GestureCommand::new("Next page", PageIntent::Next)),
     ))

@@ -20,7 +20,10 @@ use crate::app::{AppCall, AppLog, run_keeping_owner};
 fn ready_bootstraps_once_and_its_failure_is_runs() {
     let log = AppLog::new();
     let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &log);
-    assert_eq!(owner.shared().name(), "Headless");
+    assert!(
+        format!("{owner:?}").contains("Headless"),
+        "the owner of the headless run"
+    );
     assert_eq!(log.calls(), [AppCall::Ready]);
 
     let failing = AppLog::new();

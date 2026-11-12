@@ -255,8 +255,8 @@ impl std::fmt::Debug for DragFetch {
 impl Future for DragFetch {
     type Output = Result<TransferPayload, TransferError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let Poll::Ready(result) = Pin::new(&mut self.request).poll(cx) else {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        let Poll::Ready(result) = Pin::new(&mut self.request).poll(ctx) else {
             return Poll::Pending;
         };
         let limits = self.limits;

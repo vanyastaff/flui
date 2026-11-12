@@ -72,7 +72,7 @@ impl FocusRingStyle {
     /// inside the box it marks. The inner border is as wide as both bands;
     /// the outer one is drawn over its outer part.
     #[must_use]
-    pub fn bands_inside(&self) -> (BoxDecoration<f64>, BoxDecoration<f64>) {
+    pub fn bands_inside(&self) -> (BoxDecoration, BoxDecoration) {
         let (outer, inner) = (self.outer_band(), self.inner_band());
         let inner = if inner > 0.0 {
             band_border(self.inner, outer + inner)
@@ -106,7 +106,7 @@ fn band(width: f64) -> f64 {
 }
 
 /// A uniform `width` border in `color`, or no border for a zero width.
-fn band_border(color: Color, width: f64) -> BoxDecoration<f64> {
+fn band_border(color: Color, width: f64) -> BoxDecoration {
     if width > 0.0 {
         BoxDecoration::new().set_border(Some(Border::all(BorderSide::new(
             color,

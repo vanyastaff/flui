@@ -21,11 +21,11 @@ pub(crate) const COMBOS: [&str; 11] = [
     "--no-default-features --features material",
     "--no-default-features --features cupertino",
     "--no-default-features --features material,cupertino",
-    "--no-default-features --features hot-reload",
     "--no-default-features --features serde",
     "--no-default-features --features animation-diagnostics",
     "--no-default-features --features native",
     "--no-default-features --features system",
+    "--no-default-features --features http",
     "--all-features",
     "",
 ];

@@ -55,6 +55,10 @@ fn read() -> usize {
 
 struct CountingAllocator;
 
+#[expect(
+    unsafe_code,
+    reason = "test-only GlobalAlloc wrapper forwarding to System, matching frame_telemetry_allocation.rs's pattern"
+)]
 // SAFETY: `alloc`/`dealloc` forward unchanged to `System`, so every pointer
 // is freed by the allocator that produced it. `realloc`/`alloc_zeroed` are
 // deliberately NOT overridden: `GlobalAlloc`'s defaults decompose them into
@@ -64,10 +68,6 @@ struct CountingAllocator;
 // alloc), never a miss. The measured region is single-threaded (the test
 // thread drives everything), so the `Relaxed`-equivalent `Cell` counter is
 // sound: nothing else touches it concurrently.
-#[expect(
-    unsafe_code,
-    reason = "test-only GlobalAlloc wrapper forwarding to System, matching frame_telemetry_allocation.rs's pattern"
-)]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         bump(1);
@@ -146,9 +146,9 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
     driver.set_request_frame(|| {});
     let mut tokens = Vec::with_capacity(READY_TASKS);
     for _ in 0..READY_TASKS {
-        tokens.push(driver.spawn_local(Box::pin(std::future::poll_fn(|cx| {
+        tokens.push(driver.spawn_local(Box::pin(std::future::poll_fn(|ctx| {
             // Self-wake on every poll, forever: R stays 64 pump after pump.
-            cx.waker().wake_by_ref();
+            ctx.waker().wake_by_ref();
             Poll::<()>::Pending
         }))));
     }

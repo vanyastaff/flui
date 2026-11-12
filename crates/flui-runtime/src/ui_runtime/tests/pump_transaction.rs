@@ -21,7 +21,7 @@ use flui_foundation::ManualClock;
 /// frame without the UI runtime's local lane (the lane is never drained).
 pub(crate) fn pump_post_frame_callback_observes_this_frames_committed_layout() {
     use flui_rendering::prelude::Leaf;
-    use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, PaintCx, RenderBox};
+    use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, PaintContext, RenderBox};
 
     #[derive(Debug, Default)]
     struct FixedBox;
@@ -41,7 +41,7 @@ pub(crate) fn pump_post_frame_callback_observes_this_frames_committed_layout() {
         ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
             Ok(flui_foundation::geometry::Size::new(40.0, 24.0))
         }
-        fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+        fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
     }
 
     let mut ui_runtime = UiRuntime::for_test();
@@ -223,7 +223,7 @@ pub(crate) fn step_during_a_tick_applies_next_frame() {
                     let answer = window
                         .call::<method::MotionSet>(MotionParams::new(
                             window.id(),
-                            MotionRequest::new().with_rate(0.0).with_step_ms(100),
+                            MotionRequest::new().rate(0.0).step_ms(100),
                         ))
                         .expect("admitted during traversal");
                     *reply.borrow_mut() = Some(answer);

@@ -55,8 +55,8 @@ use flui_rendering::{
     RenderUpdateImpact,
     constraints::BoxConstraints,
     context::{
-        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
-        PaintCx,
+        BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
+        BoxLayoutContext, PaintContext,
     },
     parent_data::BoxParentData,
     traits::{PaintEffects, RenderBox, TextBaseline},
@@ -91,7 +91,7 @@ pub struct RenderContainer {
     padding: Option<EdgeInsets>,
     margin: EdgeInsets,
     color: Option<Color>,
-    decoration: Option<BoxDecoration<f64>>,
+    decoration: Option<BoxDecoration>,
     additional_constraints: Option<BoxConstraints>,
     transform: Option<Matrix4>,
 
@@ -147,7 +147,7 @@ impl RenderContainer {
     }
 
     /// Returns the decoration, if any.
-    pub fn decoration(&self) -> Option<&BoxDecoration<f64>> {
+    pub fn decoration(&self) -> Option<&BoxDecoration> {
         self.decoration.as_ref()
     }
 
@@ -227,7 +227,7 @@ impl RenderContainer {
     }
 
     /// Sets the decoration painted behind the child.
-    pub fn set_decoration(&mut self, decoration: Option<BoxDecoration<f64>>) -> RenderUpdateImpact {
+    pub fn set_decoration(&mut self, decoration: Option<BoxDecoration>) -> RenderUpdateImpact {
         if self.decoration == decoration {
             return RenderUpdateImpact::NONE;
         }
@@ -323,7 +323,7 @@ impl RenderContainer {
 
     /// Builder form of [`set_decoration`](Self::set_decoration).
     #[must_use]
-    pub fn with_decoration(mut self, decoration: BoxDecoration<f64>) -> Self {
+    pub fn with_decoration(mut self, decoration: BoxDecoration) -> Self {
         let _ = self.set_decoration(Some(decoration));
         self
     }
@@ -539,7 +539,7 @@ impl RenderBox for RenderContainer {
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         // Tight additional width answers the query; asking the child would
         // hit LayoutBuilder's unsupported-intrinsics path even though the
@@ -561,7 +561,7 @@ impl RenderBox for RenderContainer {
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if self.additional_width_is_tight() {
             return Ok(self.intrinsic_width(0.0));
@@ -580,7 +580,7 @@ impl RenderBox for RenderContainer {
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if self.additional_height_is_tight() {
             return Ok(self.intrinsic_height(0.0));
@@ -599,7 +599,7 @@ impl RenderBox for RenderContainer {
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
-        ctx: &mut BoxIntrinsicsCtx<'_>,
+        ctx: &mut BoxIntrinsicsContext<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         if self.additional_height_is_tight() {
             return Ok(self.intrinsic_height(0.0));
@@ -618,7 +618,7 @@ impl RenderBox for RenderContainer {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         let inner_constraints = self.inner_constraints(&constraints);
         let content_constraints = inner_constraints.deflate(self.effective_padding());
@@ -644,7 +644,7 @@ impl RenderBox for RenderContainer {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
             return Ok(None);
@@ -686,7 +686,7 @@ impl RenderBox for RenderContainer {
     /// Paints the decoration, then the color, then the child — the order of
     /// the stack this collapses, where `DecoratedBox` encloses `ColoredBox`,
     /// which encloses the content.
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let shift = self.paint_translation();
         let rect = Rect::from_origin_size(
             Point::new(self.margin.left + shift.dx, self.margin.top + shift.dy),

@@ -185,15 +185,15 @@ async fn exchange(
     request: HttpRequest,
     mut head_tx: oneshot::Sender<Result<HttpResponse, HttpError>>,
 ) {
-    let limit = request.body_limit();
+    let limit = request.body_limit;
     let exchange = Aborting(start(&request));
     let head = JsFuture::from(exchange.0.head());
-    let Some(head) = unless_closed(head, poll_fn(|cx| head_tx.poll_closed(cx))).await else {
+    let Some(head) = unless_closed(head, poll_fn(|ctx| head_tx.poll_closed(ctx))).await else {
         return;
     };
     let head = head.map_err(|reason| match failure(reason) {
         Rejection::Url => HttpError::InvalidUrl {
-            url: request.url().to_owned(),
+            url: request.url.clone(),
         },
         Rejection::Other(error) => error,
     });
@@ -250,18 +250,18 @@ async fn exchange(
 fn start(request: &HttpRequest) -> FetchExchange {
     let names = Array::new();
     let values = Array::new();
-    for (name, value) in request.headers().iter() {
+    for (name, value) in request.headers.iter() {
         names.push(&JsValue::from_str(name.as_str()));
         values.push(&JsValue::from_str(&byte_string(value.as_bytes())));
     }
-    let body = (!request.body().is_empty()).then(|| Uint8Array::from(request.body()));
+    let body = (!request.body.is_empty()).then(|| Uint8Array::from(request.body.as_slice()));
     // A deadline past what the timer can hold is no deadline.
-    let deadline_ms = Some(request.deadline().as_secs_f64() * 1000.0)
+    let deadline_ms = Some(request.deadline.as_secs_f64() * 1000.0)
         .filter(|ms| *ms <= LONGEST_TIMER_MS)
         .map(f64::ceil);
     FetchExchange::new(
-        request.method().as_str(),
-        request.url(),
+        request.method.as_str(),
+        request.url.as_str(),
         &names,
         &values,
         body,
@@ -346,11 +346,11 @@ async fn unless_closed<T>(
 ) -> Option<T> {
     let mut work = pin!(work);
     let mut closed = pin!(closed);
-    poll_fn(|cx| {
-        if closed.as_mut().poll(cx).is_ready() {
+    poll_fn(|ctx| {
+        if closed.as_mut().poll(ctx).is_ready() {
             return Poll::Ready(None);
         }
-        work.as_mut().poll(cx).map(Some)
+        work.as_mut().poll(ctx).map(Some)
     })
     .await
 }
@@ -373,12 +373,12 @@ struct Chunks {
 impl BodySource for Chunks {
     fn poll_chunk(
         mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        ctx: &mut Context<'_>,
     ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
         if self.ended {
             return Poll::Ready(None);
         }
-        Poll::Ready(match std::task::ready!(self.receiver.poll_recv(cx)) {
+        Poll::Ready(match std::task::ready!(self.receiver.poll_recv(ctx)) {
             Some(Chunk::Bytes(bytes)) => Some(Ok(bytes)),
             Some(Chunk::End) => {
                 self.ended = true;

@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Size;
-use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
+use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
 use flui_testing::widgets::{LaidOut, lay_out, tight};
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::{
@@ -45,7 +45,7 @@ impl RenderBox for TripwireBox {
         Ok(Size::new(40.0, 24.0))
     }
 
-    fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {
+    fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {
         assert!(!self.armed.load(Ordering::SeqCst), "tripwire paint fired");
     }
 }
@@ -271,9 +271,9 @@ impl View for ClosesAgainOnDetach {
 }
 
 impl ViewState<ClosesAgainOnDetach> for ClosesAgainOnDetachState {
-    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let ClosesAgainOnDetach { detached, tree } = self.view.clone();
-        let (_, observation) = cx
+        let (_, observation) = ctx
             .lifecycle_handle()
             .expect("a ui_runtime presentation has a lifecycle")
             .subscribe(move |state| {
@@ -288,7 +288,7 @@ impl ViewState<ClosesAgainOnDetach> for ClosesAgainOnDetachState {
         self.observation = Some(observation);
     }
 
-    fn build(&self, _view: &ClosesAgainOnDetach, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &ClosesAgainOnDetach, _ctx: &dyn BuildContext) -> impl IntoView {
         flui_widgets::SizedBox::new(10.0, 10.0)
     }
 }

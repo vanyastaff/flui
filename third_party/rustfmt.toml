@@ -1,3 +1,0 @@
-# Vendored sources stay as published; `cargo fmt --all` reaches them as path
-# dependencies of flui-native.
-disable_all_formatting = true

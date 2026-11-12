@@ -133,7 +133,7 @@ const _: () = assert!(INNER_RADIUS < OUTER_RADIUS);
 
 /// A value-change callback: the newly-selected value. `Rc`-based
 /// (owner-local, per ADR-0027) — matches [`InkWell`]'s own callback shape.
-type RadioChangeCallback<T> = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, T)>;
+type RadioChangeCallback<T> = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, T)>;
 
 /// A Material Design radio button for selecting one value out of a
 /// mutually-exclusive group. See the module docs' "API shape" section for
@@ -149,7 +149,7 @@ type RadioChangeCallback<T> = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, T)>;
 ///     Summer,
 /// }
 ///
-/// let _selected = Radio::new(Season::Spring, Some(Season::Spring)).on_changed(|_cx, _next| { /* ... */ });
+/// let _selected = Radio::new(Season::Spring, Some(Season::Spring)).on_changed(|_ctx, _next| { /* ... */ });
 /// let _unselected = Radio::new(Season::Summer, Some(Season::Spring));
 /// ```
 #[derive(Clone, StatefulView)]
@@ -197,7 +197,7 @@ impl<T: PartialEq + Clone + 'static> Radio<T> {
     #[must_use]
     pub fn on_changed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, T) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>, T) -> R + 'static,
     ) -> Self {
         self.on_changed = Some(crate::event_callback::value_callback(callback));
         self
@@ -325,12 +325,12 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
         .states_controller(self.states.clone())
         .focus_indicator(FocusIndicator::Halo);
         if interactive {
-            ink_well = ink_well.on_tap(move |cx| {
+            ink_well = ink_well.on_tap(move |ctx| {
                 if selected {
                     return;
                 }
                 if let Some(handler) = &on_changed {
-                    handler(cx, next_value.clone());
+                    handler(ctx, next_value.clone());
                 }
             });
         }

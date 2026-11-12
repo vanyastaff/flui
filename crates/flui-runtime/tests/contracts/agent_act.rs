@@ -44,9 +44,9 @@ impl ViewState<Moving> for MovingState {
     fn build(&self, view: &Moving, ctx: &dyn BuildContext) -> impl IntoView {
         let moved = self.moved;
         let presses = Arc::clone(&view.presses);
-        let go = RawButton::new(Text::new("Go")).on_press(move |cx| {
+        let go = RawButton::new(Text::new("Go")).on_press(move |ctx| {
             presses.fetch_add(1, Ordering::SeqCst);
-            moved.update(cx, |n| *n += 1)
+            moved.update(ctx, |n| *n += 1)
         });
         let go = if moved.get(ctx).is_multiple_of(2) {
             go.into_view().boxed()

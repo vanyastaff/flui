@@ -14,8 +14,8 @@ use flui_platform::WindowOptions;
 
 fn two_displays() -> HeadlessPlatform {
     HeadlessPlatform::new().with_displays(vec![
-        DisplaySpec::new("Left", 1920, 1080).with_refresh_period(Duration::from_millis(16)),
-        DisplaySpec::new("Right", 2560, 1440).with_scale_factor(2.0),
+        DisplaySpec::new("Left", 1920, 1080).refresh_period(Duration::from_millis(16)),
+        DisplaySpec::new("Right", 2560, 1440).scale_factor(2.0),
     ])
 }
 
@@ -195,8 +195,7 @@ fn a_profile_change_reaches_the_snapshot_as_a_new_revision() {
 
     let platform = HeadlessPlatform::new().with_displays(vec![
         DisplaySpec::new("Panel", 1920, 1080),
-        DisplaySpec::new("Projector", 1280, 720)
-            .with_color(Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)),
+        DisplaySpec::new("Projector", 1280, 720).color(Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)),
     ]);
     let controls = platform.display_controls();
     let before = platform.display_snapshot().expect("snapshot");

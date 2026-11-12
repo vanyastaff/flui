@@ -48,7 +48,7 @@ impl Seen {
             let taps = Rc::clone(&taps);
             let shade = u8::try_from(index % 12).expect("BUG: below 12") * 20;
             GestureDetector::new()
-                .on_tap(move |_cx| taps.borrow_mut().push(index))
+                .on_tap(move |_ctx| taps.borrow_mut().push(index))
                 .child(ColoredBox::new(Color::rgb(shade, 40, 60)))
         })
         .item_spacing(SPACING)
@@ -305,7 +305,7 @@ fn index_changes_are_heard_once_each() {
     {
         let heard = Rc::clone(&heard);
         let again = controller.clone();
-        controller.on_index_changed(move |_cx, index| {
+        controller.on_index_changed(move |_ctx, index| {
             heard.borrow_mut().push(index);
             // Moving again from inside the callback holds no borrow of the controller.
             if index == 3 {
@@ -330,7 +330,7 @@ fn index_changes_are_heard_once_each() {
     let replaced = Rc::new(RefCell::new(Vec::new()));
     {
         let replaced = Rc::clone(&replaced);
-        controller.on_index_changed(move |_cx, index| replaced.borrow_mut().push(index));
+        controller.on_index_changed(move |_ctx, index| replaced.borrow_mut().push(index));
     }
     controller.jump_to_item(1).expect("no build is running");
     settle(&mut laid);
@@ -378,7 +378,7 @@ fn autoplay_steps_and_wraps_until_paused() {
     let heard = Rc::new(RefCell::new(Vec::new()));
     {
         let heard = Rc::clone(&heard);
-        controller.on_index_changed(move |_cx, index| heard.borrow_mut().push(index));
+        controller.on_index_changed(move |_ctx, index| heard.borrow_mut().push(index));
     }
     let seen = Seen::default();
     let mut laid = mount(
@@ -420,7 +420,7 @@ fn reduced_motion_stops_autoplay_and_moves_at_once() {
     let heard = Rc::new(RefCell::new(Vec::new()));
     {
         let heard = Rc::clone(&heard);
-        controller.on_index_changed(move |_cx, index| heard.borrow_mut().push(index));
+        controller.on_index_changed(move |_ctx, index| heard.borrow_mut().push(index));
     }
     let seen = Seen::default();
     let mut laid = mount(

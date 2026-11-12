@@ -306,7 +306,7 @@ impl StatelessView for Host {
             .autofocus(self.autofocus);
         if let Some(handler) = &self.on_focus_change {
             let handler = Rc::clone(handler);
-            focus = focus.on_focus_change(move |cx, focused| handler(cx, focused));
+            focus = focus.on_focus_change(move |ctx, focused| handler(ctx, focused));
         }
         FocusScope::with_external_node(Rc::clone(&self.scope), focus)
             .into_view()
@@ -410,7 +410,7 @@ impl StatelessView for Field {
         let mut focus = Focus::new(SizedBox::new(10.0, 10.0)).debug_label(self.key.value());
         if let Some(handler) = &self.on_focus_change {
             let handler = Rc::clone(handler);
-            focus = focus.on_focus_change(move |cx, focused| handler(cx, focused));
+            focus = focus.on_focus_change(move |ctx, focused| handler(ctx, focused));
         }
         focus
     }
@@ -514,10 +514,10 @@ pub(crate) fn the_successor_rebuilds_in_the_frame_that_moved_focus() {
     let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
         let mut second = Field::new("b");
         // Only the gain writes: teardown's loss arrives after the owner closed.
-        second.on_focus_change = Some(Rc::new(move |cx, focused| {
+        second.on_focus_change = Some(Rc::new(move |ctx, focused| {
             if focused {
                 count
-                    .set(cx, 1)
+                    .set(ctx, 1)
                     .expect("the focus edge may write the probe signal");
             }
         }));
@@ -554,10 +554,10 @@ pub(crate) fn the_successor_rebuilds_in_the_frame_that_moved_focus() {
         if shown_b.get() {
             let mut second = Field::new("b");
             let hide = Rc::clone(&shown_b);
-            second.on_focus_change = Some(Rc::new(move |cx, focused| {
+            second.on_focus_change = Some(Rc::new(move |ctx, focused| {
                 if focused && hide.replace(false) {
                     count
-                        .set(cx, 1)
+                        .set(ctx, 1)
                         .expect("the focus edge may write the probe signal");
                 }
             }));
@@ -898,7 +898,7 @@ pub(crate) fn a_directionality_update_changes_tab_order_without_replacing_focus_
 /// Event context (ADR-0086): the focus edge and the key handler run inside a
 /// write the `Focus` opens from the writer source it acquired in
 /// `init_state`.
-pub(crate) mod event_cx {
+pub(crate) mod event_context {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -921,9 +921,9 @@ pub(crate) mod event_cx {
             let recorded = Rc::clone(&recorded);
             Focus::new(SizedBox::new(10.0, 10.0))
                 .focus_node(Rc::clone(&configuration.borrow()))
-                .on_focus_change(move |cx, focused| {
+                .on_focus_change(move |ctx, focused| {
                     recorded.borrow_mut().push(focused);
-                    count.set(cx, u32::from(focused))
+                    count.set(ctx, u32::from(focused))
                 })
         });
         let mut harness = mount(probe.view());
@@ -951,7 +951,7 @@ pub(crate) mod event_cx {
         let probe = SignalProbe::new(move |ProbeSignals { released, .. }| {
             Focus::new(SizedBox::new(10.0, 10.0))
                 .focus_node(Rc::clone(&probe_node))
-                .on_focus_change(move |cx, _focused| released.set(cx, 1))
+                .on_focus_change(move |ctx, _focused| released.set(ctx, 1))
         });
         let _harness = mount(probe.view());
 
@@ -1373,7 +1373,7 @@ pub(crate) fn a_failing_frame_request_still_delivers_every_focus_edge() {
         let edges = Rc::clone(&edges);
         Focus::new(SizedBox::new(10.0, 10.0))
             .focus_node(Rc::clone(node))
-            .on_focus_change(move |_cx, focused| edges.borrow_mut().push((name, focused)))
+            .on_focus_change(move |_ctx, focused| edges.borrow_mut().push((name, focused)))
     };
     laid.pump_widget(Column::new((
         field(&first, "first"),

@@ -35,7 +35,7 @@ use crate::theme::Theme;
 /// use flui_material::ElevatedButton;
 /// use flui_sdk::widgets::Text;
 ///
-/// let _button = ElevatedButton::new(Text::new("Save")).on_pressed(|_cx| {});
+/// let _button = ElevatedButton::new(Text::new("Save")).on_pressed(|_ctx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct ElevatedButton {
@@ -71,7 +71,7 @@ impl ElevatedButton {
     #[must_use]
     pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
         mut self,
-        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+        callback: impl Fn(&mut flui_sdk::view::EventContext<'_>) -> R + 'static,
     ) -> Self {
         self.on_pressed = Some(crate::event_callback::press_callback(callback));
         self

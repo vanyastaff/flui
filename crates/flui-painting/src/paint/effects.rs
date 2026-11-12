@@ -470,7 +470,7 @@ impl StrokeOptions {
     /// Set stroke width.
     #[inline]
     #[must_use]
-    pub fn with_width(mut self, width: f64) -> Self {
+    pub fn width(mut self, width: f64) -> Self {
         self.width = width;
         self
     }
@@ -478,7 +478,7 @@ impl StrokeOptions {
     /// Set line cap style.
     #[inline]
     #[must_use]
-    pub fn with_cap(mut self, cap: StrokeCap) -> Self {
+    pub fn cap(mut self, cap: StrokeCap) -> Self {
         self.cap = cap;
         self
     }
@@ -486,7 +486,7 @@ impl StrokeOptions {
     /// Set line join style.
     #[inline]
     #[must_use]
-    pub fn with_join(mut self, join: StrokeJoin) -> Self {
+    pub fn join(mut self, join: StrokeJoin) -> Self {
         self.join = join;
         self
     }
@@ -494,7 +494,7 @@ impl StrokeOptions {
     /// Set miter limit.
     #[inline]
     #[must_use]
-    pub fn with_miter_limit(mut self, miter_limit: f64) -> Self {
+    pub fn miter_limit(mut self, miter_limit: f64) -> Self {
         self.miter_limit = miter_limit;
         self
     }
@@ -502,7 +502,7 @@ impl StrokeOptions {
     /// Set dash pattern.
     #[inline]
     #[must_use]
-    pub fn with_dash_pattern(mut self, pattern: Vec<f64>) -> Self {
+    pub fn dash_pattern(mut self, pattern: Vec<f64>) -> Self {
         self.dash_pattern = Some(Arc::new(pattern));
         self
     }
@@ -510,7 +510,7 @@ impl StrokeOptions {
     /// Set dash offset.
     #[inline]
     #[must_use]
-    pub fn with_dash_offset(mut self, offset: f64) -> Self {
+    pub fn dash_offset(mut self, offset: f64) -> Self {
         self.dash_offset = offset;
         self
     }

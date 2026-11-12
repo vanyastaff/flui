@@ -31,7 +31,7 @@ painter and display list, and the engine's replay of a paragraph.
 | `set_text` classifies a shadow-only change as a repaint, and `AnimatedDefaultTextStyle` promises interpolated shadows; both repaint the same op | `crates/flui-painting/src/text_painter/mod.rs` (`set_text`), `crates/flui-widgets/src/text/animated_default_text_style.rs:14` |
 | `foreground` and `background` are `Option<Color>` copies of fields that are paints elsewhere, so each duplicates `color` and `background_color` | `text_style.rs:258-262`, `crates/flui-painting/src/text_layout/mod.rs:33-37` |
 | An empty `shadows` inherits the parent's, so a span cannot clear an inherited shadow | `text_style.rs:438-442` |
-| `TextShadow` duplicates `styling::Shadow<f64>` with split offset fields | `crates/flui-painting/src/typography/text_style.rs`, `crates/flui-painting/src/styling/shadow.rs:22-35` |
+| `TextShadow` duplicates `styling::Shadow` with split offset fields | `crates/flui-painting/src/typography/text_style.rs`, `crates/flui-painting/src/styling/shadow.rs:22-35` |
 | ADR-0092 §4 says a run carries "decoration as today"; no style field takes a decoration | `docs/adr/ADR-0092-per-realm-text-over-parley.md:340-343`; `rg TextDecoration` finds no consumer |
 | A blur exists only as a layer image filter, whose sigma is validated into a sticky recording error that blanks the segment | `crates/flui-engine/src/painter/layer.rs` (`save_layer_with_image_filter`), `crates/flui-engine/src/command_ir.rs` (`support_radius`) |
 | Parley merges adjacent spans whose shaping styles are equal, so a span that differs from its neighbour only in a shadow shares its glyph run | `parley-0.11.1/src/resolve/range.rs:139-154` |
@@ -64,7 +64,7 @@ Chosen option: 3, because it paints what applications already write, and every s
 a paragraph op has to classify a shadow before it compiles.
 
 §1. **One paint vocabulary.** A `TextStyle` paints with `color` (the glyphs), `background_color`
-(the span's line boxes) and `shadows: Option<Vec<Shadow<f64>>>` (`None` inherits, an empty list
+(the span's line boxes) and `shadows: Option<Vec<Shadow>>` (`None` inherits, an empty list
 clears). `foreground`, `background` and `TextShadow` are removed. The paint fields are read in one
 exhaustive destructure, `SpanPaint::of`, the twin of `TextStyle::layout_affecting_eq`: a new field
 does not compile until both classify it.
@@ -110,7 +110,7 @@ a recording error.
 - Good, because a blurred shadow uses the engine's existing blur layer, so the raster contract
   gains one op and no new filter.
 - Bad, because `foreground`, `background` and `TextShadow` go: callers move to `color`,
-  `background_color` and `Shadow<f64>`.
+  `background_color` and `Shadow`.
 - Bad, because a blurred shadow costs a layer per shadow per paragraph; text shadows are rare and
   short, and a cost model is the scene's (ADR-0304), not this op's.
 - Neutral, because decorations stay out of the vocabulary: no style field accepts one, so nothing

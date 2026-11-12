@@ -23,52 +23,30 @@ exclude = ["/ARCHITECTURE.md"]
 crate-type = ["rlib"]
 
 [features]
-default = ["desktop", "http"]
+# Nothing is on by default: an application turns on what it uses, through
+# the facade's feature of the same name (ADR-0088 §6). Platform dispatch is
+# `#[cfg(target_os = ...)]` on the compile target, never a feature.
+default = []
 
 # The built-in HTTP capability (ADR-0280): each host's own stack, `ureq` on
-# Linux and the BSDs, which have none (`flui-native`'s `http` feature).
-# Without it a widget acquiring `HttpCapability` is refused as not
-# registered, and the application links no TLS stack.
+# Linux and the BSDs, which have none (`flui-native`'s `http` feature). The
+# facade's `http` turns it on. Without it a widget acquiring `HttpCapability`
+# is refused as not registered, and the application links no TLS stack.
 http = ["flui-native/http"]
-
-# Accepted and ignored: `UiCommand::SignalWrite` is always compiled (ADR-0085 §5).
-# It stays only because CI's `test-features` job still passes
-# `--features flui-app/signals`; it goes with that step.
-signals = []
-
-# === Platform Features ===
-# Honest note (verified 2026-08-04): these four are no-op selectors today —
-# `rg 'feature\s*=\s*"(desktop|android|ios|web)"' crates/flui-app/src` has
-# zero hits. Platform dispatch in this crate is `#[cfg(target_os = "...")]`
-# on the actual target, not one of these flags; enabling or disabling any of
-# them changes nothing observable. They exist as forward-compatible names for
-# downstream `Cargo.toml`s to opt into (e.g. `default-features = false,
-# features = ["desktop"]`) if/when this crate grows real per-platform gating,
-# and `desktop` staying default keeps that future migration additive. Do not
-# assume enabling one of these turns on platform-specific code — check the
-# actual `#[cfg(target_os = ...)]` gates for that.
-desktop = []
-android = []
-ios = []
-web = []
-
-# === Debug Features ===
-# Honest note (verified 2026-08-04): also no-op selectors — zero
-# `feature = "debug-overlay"` / `feature = "performance-overlay"` references
-# in this crate's src. There is one runtime toggle for this, not two:
-# `AppConfig::show_performance_overlay` (`app/config.rs`), which `runner.rs`
-# also calls "the debug overlay" in comments — it is the same overlay under
-# both names, controlled entirely at runtime, not by either compile-time
-# feature. Kept for the same forward-compatible-name reason as the platform
-# features above.
-debug-overlay = []
-performance-overlay = []
 
 # The escape hatch (ADR-0254 §8): `flui_app::native`, the core host's
 # per-system window extensions and `native::with_window`, which the facade
 # publishes as `flui::native` behind its own `native` feature. Off, the module
 # is absent and the runner keeps no list of host windows.
 native = []
+
+# Additional top-level windows (ADR-0091): `open_window`, `open_secondary_window`
+# and `WindowPolicy`. Off, the application has one window: ADR-0091 §3–§5 are not
+# built (a `Shared` window is refused, an open answers only that it was admitted),
+# so the multi-window surface stays out of the stable API until they are
+# (`docs/gaps.md`). The runner builds the secondary-window machinery regardless;
+# the facade's `unstable-windows` forwards here.
+unstable-windows = []
 
 # The `testing` module (ADR-0243): an application run on the headless platform,
 # driven from the test thread. Off by default and not part of the release API;
@@ -172,8 +150,10 @@ flui-engine = { workspace = true, features = ["vulkan"] }
 flui-testing = { workspace = true }
 # `CountingWaker`, the waker whose wakes a served-page test counts.
 flui-foundation = { workspace = true, features = ["testing"] }
-# The `testing` kit, for this crate's integration tests.
-flui-app = { path = ".", features = ["testing"] }
+# The `testing` kit, for this crate's integration tests; `http`, so the
+# built-in HTTP provider is tested with the crate; and the multi-window
+# entry points.
+flui-app = { path = ".", features = ["testing", "http", "unstable-windows"] }
 static_assertions.workspace = true
 # A throwaway data root for the host storage tests.
 tempfile.workspace = true

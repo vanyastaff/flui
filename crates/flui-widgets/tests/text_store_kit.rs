@@ -34,7 +34,7 @@ impl EditableTextFixture {
         let mut harness = mount_with_ime(
             EditableText::new(controller.clone(), Rc::clone(&focus_node))
                 .obscure_text(obscured)
-                .on_changed(move |_cx, _| {
+                .on_changed(move |_ctx, _| {
                     counted.set(counted.get() + 1);
                     let hook = hooked.borrow().clone();
                     if let Some(hook) = hook {

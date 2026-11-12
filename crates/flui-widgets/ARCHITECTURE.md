@@ -557,7 +557,7 @@ separately. Tested by `delivered_route_results_remain_completed` and
 ## Event callback phase boundary
 
 `InteractiveViewer`, `PopScope`, `AnimatedSize`,
-`Dismissible`, `Draggable` and `PageView` event setters receive `EventCx`
+`Dismissible`, `Draggable` and `PageView` event setters receive `EventContext`
 (ADR-0086), and so do `CallbackShortcuts` bindings and `Action::invoke`, which
 run inside the key event's dispatch. Composite input
 handlers forward their child's context; wheel and pinch claim handlers keep
@@ -585,7 +585,7 @@ callback and are cancelled when their widget is disposed. A missing or closed
 post-frame lane reports a warning and drops the event, never dispatches inline.
 
 `GestureDetector`'s assistive activation runs inside the platform request's
-own `EventCx`, the owner-local dispatch `Semantics` hands its handlers
+own `EventContext`, the owner-local dispatch `Semantics` hands its handlers
 (mapping decision 17), exactly as a key's activation does: the handler reads
 the current callback from the live slots, releases the slot borrow and calls
 it, and a disposed detector runs nothing. There is no queue, no rebuild and
@@ -609,10 +609,10 @@ and schedules a rebuild; `build` queues one post-frame entry per recorded page,
 and delivery reads the current callback (mapping decision 37).
 
 Tests: `tests/drag_and_drop.rs`, `tests/page_view_events.rs`, and the
-`event_cx_tests` module of `tests/shortcuts.rs`.
+`event_context_tests` module of `tests/shortcuts.rs`.
 
 `DropTarget`'s `on_drop` and spring-loading callback and `Semantics`' action
-handlers take `EventCx` too. Their render data must stay `Send + Sync`, so each
+handlers take `EventContext` too. Their render data must stay `Send + Sync`, so each
 widget registers its owner-local state (the drop target's receiver, the node's
 action table, each with its `WriterSource`) in the interaction lane and stores
 only the lane's `LocalPayloadTarget` ticket; the drag session and the semantics
@@ -1361,8 +1361,8 @@ rebuild, and a rebuild is exactly what its builder's `DropHover` causes.
 
 **Consequences:** the payload a hit test carries is only the ticket, so the
 render data stays `Send + Sync` while the callbacks stay owner-local and take
-`&mut EventCx` (ADR-0086 §3). `accept` is a query asked at every enter and
-move and takes no `EventCx`; `on_drop` and the spring-loading callback run
+`&mut EventContext` (ADR-0086 §3). `accept` is a query asked at every enter and
+move and takes no `EventContext`; `on_drop` and the spring-loading callback run
 inside the drag's dispatch, so a drop lands before the source's
 `on_drag_end`. Unmounting the target unregisters the ticket, which the drag
 machinery treats as the receiver leaving: one leave at the next move or tick,
@@ -1715,7 +1715,7 @@ that quietly never released what it held.
 (`tests/navigator_public.rs`) counts `dispose()` calls on a probe route and
 asserts exactly one. Deleting `impl Drop for GeneratedRoute` fails it.
 
-### 8. `RouteSettings::with_arguments_shared` relays a payload without changing its identity
+### 8. `RouteSettings::arguments_shared` relays a payload without changing its identity
 
 **Rule:** as §4 above.
 
@@ -1723,26 +1723,26 @@ asserts exactly one. Deleting `impl Drop for GeneratedRoute` fails it.
 equality, so relaying one settings object's arguments onto another must keep
 the same payload.
 
-**Choice:** `with_arguments<T>(value)` keeps taking the value and minting a
+**Choice:** `arguments<T>(value)` keeps taking the value and minting a
 fresh `Arc` (it is the construction case), and a second constructor
-`with_arguments_shared(RouteArguments)` forwards an existing payload untouched.
+`arguments_shared(RouteArguments)` forwards an existing payload untouched.
 
 **Why:** `RouteSettings`' own `PartialEq` compares the payload by `Arc::ptr_eq`,
-so a relay through `with_arguments` silently changes the answer to the exact
+so a relay through `arguments` silently changes the answer to the exact
 question identity-based assertions ask — and the two constructors are one character apart at
 the call site with no type error between them.
 
 **What it does *not* claim.** It is not the only way to move a payload: a caller
 holding a `RouteSettings` can already `clone()` the `Arc` out of
-[`arguments`](RouteSettings::arguments) and carry it by hand, and the test that
+its `arguments` field and carry it by hand, and the test that
 motivated this constructor could have done exactly that. What the constructor
 buys is that the identity-preserving relay is *expressible as a builder call*,
 so the safe form is as short as the unsafe one — rather than a fact about
-`with_arguments` that every relay site has to remember. That is a real but
+`arguments` that every relay site has to remember. That is a real but
 modest gain, and it is stated here as such.
 
 **Replacement tests:** the identity-preserving relay through
-`RouteSettings::with_arguments_shared` (and the contrast: `with_arguments` on an
+`RouteSettings::arguments_shared` (and the contrast: `arguments` on an
 identical value is *not* `ptr_eq`), and through the keyed counterpart
 `RouteKey::with_arguments_shared`, which exists because `RouteKey::with_arguments`
 takes its payload by value and would wrap an `Arc` in another `Arc` — making the
@@ -1926,7 +1926,7 @@ into the builder, which is a typed capture.
 trap.** The first read path added — an observer reporting route names, a
 `ModalRoute::of`, a name-based route finder — makes the empty `settings`
 silently wrong, and `with_settings` on `SimpleRoute` / `PageRoute` / `PopupRoute`
-must land **in that same change**, not after it. `RouteSettings::with_arguments_shared`
+must land **in that same change**, not after it. `RouteSettings::arguments_shared`
 (§8) already exists as the identity-preserving half such a builder needs.
 
 **Test:** none, and deliberately — there is no behavior to pin, only
@@ -2043,13 +2043,13 @@ as:
   panics with the same semantic message in debug and release.
 
 **Why not wait for layout.** Leaving the mismatch to
-`BoxLayoutCtx::from_erased`'s `debug_assert!` made release/profile diverge, hid
+`RawBoxLayoutContext::from_erased`'s `debug_assert!` made release/profile diverge, hid
 the offending widget behind `TypeId` text, and let secondary bootstrap
 `InvalidGeometry` panics mask the primary failure in harnesses.
 
 **Tests:** `parent_data_ancestry.rs` (`expanded_under_stack_…`,
 `positioned_under_row_…`) — assert the attach-seam diagnostic and that the
-message is not `BoxLayoutCtx::from_erased`. Happy paths remain in
+message is not `RawBoxLayoutContext::from_erased`. Happy paths remain in
 `flex_parent_data.rs` / `stack_positioned.rs`.
 
 ### 15. `Container` is one render object, not a conditional widget stack
@@ -2290,7 +2290,7 @@ completion — there is no separate "the push was canceled" state at this
 layer, only whichever lifecycle state the entry has moved to by the time the
 queued command is drained.
 
-### 17. `Semantics` action handlers are owner-local `EventCx` callbacks behind one `Send + Sync` ticket handler per node
+### 17. `Semantics` action handlers are owner-local `EventContext` callbacks behind one `Send + Sync` ticket handler per node
 
 **Rule:** the lane mechanism is ADR-0086 §3 (amended 2026-09-30); how this
 widget uses it is local to this crate, so it is recorded here rather than in an
@@ -2299,12 +2299,12 @@ ADR.
 **Choice:** the builders are named after the actions they register
 (ADR-0203). The payload-free ones — `on_click`, `on_show_context_menu`,
 `on_increment`, `on_decrement`, `on_focus`,
-`on_blur`, and `expandable`'s pair — take `Fn(&mut EventCx<'_>) -> R`; the
+`on_blur`, and `expandable`'s pair — take `Fn(&mut EventContext<'_>) -> R`; the
 others take their payload typed: `on_set_value` a `&str`,
 `on_set_numeric_value` an `f64`, `on_set_scroll_offset` an `Offset<f64>`,
 `on_scroll_{left,right,up,down}` the request's `ScrollUnit`,
 `on_scroll_into_view` an `Option<Reveal>`. `on_action` takes any
-`SemanticsAction` with `Fn(&mut EventCx<'_>, ActionCall)` for what the typed
+`SemanticsAction` with `Fn(&mut EventContext<'_>, ActionCall)` for what the typed
 set does not cover. None needs `Send + Sync`: the closures never reach the
 configuration.
 
@@ -2327,7 +2327,7 @@ put it on something the widget owns — reached through ADR-0086's lane payload.
 **Consequences, named rather than left to be discovered:**
 
 - **The ordinary "activation toggles this control's own state" closure is a
-  signal write.** `on_increment(move |cx| value.update(cx, |v| *v += 1))`
+  signal write.** `on_increment(move |ctx| value.update(ctx, |v| *v += 1))`
   (`an_action_handler_writes_a_signal_and_rebuilds_its_reader`); a refused
   write is reported, not panicked
   (`a_refused_write_in_an_action_handler_is_reported_not_panicked`).
@@ -2819,7 +2819,7 @@ mode set on the form validating every field after any edit,
 ### 23. `FormHandle` and `FormFieldHandle` replace `GlobalKey<FormState>`
 
 The event methods `FormHandle::save`/`reset` and
-`FormFieldHandle::did_change`/`reset` forward the caller's `EventCx` to their
+`FormFieldHandle::did_change`/`reset` forward the caller's `EventContext` to their
 callbacks (ADR-0086). Validators remain queries with no writer. Form reset
 restores its validation-suppression flag on unwind, so a panicking user callback
 cannot disable validation for later edits; the partial field mutations are not
@@ -2982,11 +2982,11 @@ write-back does not mark the field interacted). `on_changed` reporting the user'
 edits but not the caller's own, and `set_value` on a text form field seen by
 `value`, `validate` and `save`: **Unasserted:** no test pins this.
 
-### 33. `RawButton` is a widgets-layer button whose press writes through `EventCx`
+### 33. `RawButton` is a widgets-layer button whose press writes through `EventContext`
 
 **Choice:** `RawButton` is a theme-free press target, so an application that
 uses no design system has a button, and its `on_press` takes
-`Fn(&mut EventCx<'_>)`, the typed write capability of ADR-0086. It is
+`Fn(&mut EventContext<'_>)`, the typed write capability of ADR-0086. It is
 stateless and builds one `InteractiveNode` (`interaction/node.rs`,
 `#[doc(hidden)]` for the official catalogs, outside every prelude; ADR-0322 §1): one element and one `RenderInteractive` that carry what the
 wrappers `Semantics`, `GestureDetector`, `Actions`, `Focus` and `FocusRing`
@@ -3139,10 +3139,10 @@ would delete the wrong one. The callback takes one `DragOutcome`, the shape
 `callback_with` fixes for a `let`-bound closure.
 **Test:** `a_drag_reports_to_the_callbacks_it_started_with`.
 
-### 39. Actions are invoked with the key event's `EventCx`; `maybe_invoke` has no counterpart
+### 39. Actions are invoked with the key event's `EventContext`; `maybe_invoke` has no counterpart
 
-**Choice:** `Action::invoke(&self, cx: &mut EventCx<'_>, intent: &T)`; the
-`Shortcuts` key handler passes its own `cx`, as `CallbackShortcuts` passes it
+**Choice:** `Action::invoke(&self, ctx: &mut EventContext<'_>, intent: &T)`; the
+`Shortcuts` key handler passes its own `ctx`, as `CallbackShortcuts` passes it
 to its bindings (ADR-0086, amending ADR-0023). `Actions::maybe_invoke` is
 removed: its only caller could hold a `BuildContext` only in `build`, which
 has no event context, and a write there is refused. The one invoker resolved
@@ -3150,7 +3150,7 @@ at build time and called from an event is a gesture's
 `CommandHandle` ("Gesture alternatives perform one intent on every path"
 below). `is_enabled` and `to_key_event_result` stay
 queries. **Tests:** `tests/actions.rs` (resolution through key dispatch),
-`tests/shortcuts.rs`'s `event_cx_tests`.
+`tests/shortcuts.rs`'s `event_context_tests`.
 
 ### Pull to refresh is a participant of the scroll channel
 
@@ -3894,7 +3894,7 @@ cold failure followed by recovery.
 ## Controlled catalog inputs
 
 `Slider` and `Disclosure` implement ADR-0124. Input proposes values through
-`EventCx`; only parent configuration commits them. The slider paints and maps
+`EventContext`; only parent configuration commits them. The slider paints and maps
 pointers against allocated bounds, honors inherited or explicit direction, and
 keeps extreme interpolation finite. Disclosure unmounts its collapsed body and
 keeps a real focusable header. Both recheck mounted writer and focus authority

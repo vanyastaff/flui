@@ -252,7 +252,8 @@ pub(crate) fn debug_assert_appkit_main_thread(op: &'static str) {
 // and started on the main thread only, and what they hold of AppKit is
 // notification-centre tokens, which any thread may remove; the window map is
 // reached by the owner thread alone; every other field is `Arc`/`Mutex`-
-// protected. `host::Loop: Send + Sync` requires the wrapper to be shareable.
+// protected. The host still shares the loop through `Arc` until its owner-local
+// step (ADR-0327 §5), which deletes these impls.
 unsafe impl Send for MacOSLoop {}
 // SAFETY: see `Send` above: interior mutability is Mutex-guarded, and the
 // application and the screen observer are reached only through a main-thread
@@ -367,7 +368,7 @@ impl host::Loop for MacOSLoop {
         // The delivery holds the platform and the hooks weakly: they live in
         // this frame, past the ownership guard that tells the handler of the
         // quit as it drops.
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+        let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
             Arc::clone(&platform),
             Arc::clone(&self.loop_control.owner_signal),
         ));
@@ -379,10 +380,7 @@ impl host::Loop for MacOSLoop {
         self.app_delivery
             .resume_through_signal(&self.loop_control.owner_signal);
         self.app_delivery
-            .ready(OwnerPlatform::new(
-                Arc::clone(&platform),
-                Arc::clone(&hooks),
-            ))
+            .ready(OwnerPlatform::new(Arc::clone(&platform), Rc::clone(&hooks)))
             .map_err(PlatformError::bootstrap)?;
         // The handler is bound: the pump may ask it for its deadline.
         self.wake_pump.arm();

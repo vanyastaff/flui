@@ -131,19 +131,20 @@ impl Drop for Session {
 impl Stack for Session {
     fn open(&self, request: &HttpRequest) -> Result<Box<dyn Connection>, HttpError> {
         let invalid = || HttpError::InvalidUrl {
-            url: request.url().to_owned(),
+            url: request.url.clone(),
         };
-        let scheme = request.url().split_once("://").map(|(scheme, _)| scheme);
+        let scheme = request.url.split_once("://").map(|(scheme, _)| scheme);
         if !scheme.is_some_and(|scheme| {
             scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
         }) {
             return Err(invalid());
         }
-        let url = NSURL::URLWithString(&NSString::from_str(request.url())).ok_or_else(invalid)?;
+        let url =
+            NSURL::URLWithString(&NSString::from_str(request.url.as_str())).ok_or_else(invalid)?;
         let native = NSMutableURLRequest::requestWithURL(&url);
-        native.setHTTPMethod(&NSString::from_str(request.method().as_str()));
+        native.setHTTPMethod(&NSString::from_str(request.method.as_str()));
         native.setTimeoutInterval(IDLE_TIMEOUT_SECS);
-        for (name, value) in request.headers().iter() {
+        for (name, value) in request.headers.iter() {
             // A header value is a byte string: one character per byte.
             let value: String = value.as_bytes().iter().copied().map(char::from).collect();
             native.addValue_forHTTPHeaderField(
@@ -151,12 +152,12 @@ impl Stack for Session {
                 &NSString::from_str(name.as_str()),
             );
         }
-        if !request.body().is_empty() {
-            native.setHTTPBody(Some(&NSData::with_bytes(request.body())));
+        if !request.body.is_empty() {
+            native.setHTTPBody(Some(&NSData::with_bytes(&request.body)));
         }
         let task = self.session.dataTaskWithRequest(&native);
         let transfer = Arc::new(Transfer {
-            url: request.url().to_owned(),
+            url: request.url.clone(),
             ..Transfer::default()
         });
         let id = task.taskIdentifier();

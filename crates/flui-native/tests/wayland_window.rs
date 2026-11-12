@@ -57,7 +57,7 @@ impl WaylandFixture {
         let handler = RecordingWindowHandler::new();
         let window = platform
             .open_window(
-                WindowOptions::default().with_title(title),
+                WindowOptions::default().title(title),
                 Rc::clone(&handler) as _,
             )
             .expect("a Wayland window opens");
@@ -220,7 +220,7 @@ impl WindowFixture for WaylandFixture {
         let window = self
             .platform
             .open_window(
-                WindowOptions::default().with_title("presenting"),
+                WindowOptions::default().title("presenting"),
                 Rc::clone(&handler) as _,
             )
             .expect("a Wayland window opens");
@@ -461,7 +461,7 @@ fn a_window_waits_for_its_first_frame_unoccluded() {
     let handler = RecordingWindowHandler::new();
     let window = platform
         .open_window(
-            WindowOptions::default().with_title("first frame"),
+            WindowOptions::default().title("first frame"),
             Rc::clone(&handler) as _,
         )
         .expect("a Wayland window opens");
@@ -509,7 +509,7 @@ fn the_accessibility_bridge_follows_the_compositors_activation() {
     let second = fixture
         .platform
         .open_window(
-            WindowOptions::default().with_title("activated second"),
+            WindowOptions::default().title("activated second"),
             RecordingWindowHandler::new() as _,
         )
         .expect("a second window opens");
@@ -581,7 +581,7 @@ fn an_activation_asks_the_compositor_with_a_token() {
     let cover = fixture
         .platform
         .open_window(
-            WindowOptions::default().with_title("covering"),
+            WindowOptions::default().title("covering"),
             RecordingWindowHandler::new() as _,
         )
         .expect("a second window opens");
@@ -702,7 +702,7 @@ fn a_wayland_run_ends_with_its_last_window() {
     log.answer_exit_policy(ExitAnswer::End);
     log.bootstrap(move |owner| {
         let window = owner
-            .open_window(WindowOptions::default().with_title("a run"), opened as _)
+            .open_window(WindowOptions::default().title("a run"), opened as _)
             .expect("a window opens in the bootstrap")
             .try_ready()
             .expect("at once");
@@ -740,7 +740,7 @@ fn a_due_deadline_no_frame_serves_leaves_the_loop_idle() {
     log.bootstrap(move |owner| {
         let window = owner
             .open_window(
-                WindowOptions::default().with_title("a due deadline"),
+                WindowOptions::default().title("a due deadline"),
                 RecordingWindowHandler::new() as _,
             )
             .expect("a window opens")
@@ -797,7 +797,7 @@ fn a_deadline_its_frame_left_due_again_gets_another_frame() {
         });
         let window = owner
             .open_window(
-                WindowOptions::default().with_title("a deadline due again"),
+                WindowOptions::default().title("a deadline due again"),
                 handler as _,
             )
             .expect("a window opens")

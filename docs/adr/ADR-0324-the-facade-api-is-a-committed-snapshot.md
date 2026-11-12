@@ -91,16 +91,22 @@ Admission under ADR-0303 §3, one line per rung:
 
 The `public-api` job of `ci.yml` runs on every pull request that compiles anything (the `wide`
 lane) and on main: `cargo xtask public-api`. A pull request that changes the surface carries the
-regenerated `api/flui.txt`, and its
-diff is the review of the change. `api-closure`, which builds the core host for every target,
-stays in the main-only `api-contracts` job.
+regenerated `api/flui.txt`, and its diff is the review of the change. `api-closure`, which builds
+the core host for every target, stays in the main-only `api-contracts` job.
+
+The job runs on every such pull request because it does not lengthen one: it is admitted only while
+it finishes before the longest job it runs beside. Measured on the pull request that added it
+(run 43157158790, 4-core `ubuntu-latest`, uncached), `public-api` took 10 min 26 s, against
+17 min 26 s for `test`, 12 min for `test-nested` and 8–9 min for each `cross-typecheck` target. If
+it ever outgrows `test`, it moves to an `ON_DEMAND` row of the change-scope aggregator (ADR-0303
+§9), decided by a diff that reaches a crate the facade re-exports, and keeps its full run on main.
 
 ### Consequences
 
 - Good, because every pull request shows what it adds to and removes from the facade, and the
   narrowing of the crate roots is a diff that only shrinks the file.
 - Bad, because a pull request that compiles anything waits for a nightly rustdoc build of the
-  26 crates the facade reaches (about 11 minutes cold on a 4-core runner, uncached: the builds
+  26 crates the facade reaches (10.5 minutes on a 4-core runner, uncached: the builds
   take 5 GB), in parallel with the longer `test` job,
   and a change to the surface needs a nightly toolchain locally to restate the
   file.

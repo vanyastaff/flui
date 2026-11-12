@@ -45,8 +45,8 @@ fn a_delivery_raised_on_another_thread_reaches_the_handler_with_no_other_input()
     let window = platform
         .open_window(
             WindowOptions::default()
-                .with_title("delivery from another thread")
-                .with_visible(false),
+                .title("delivery from another thread")
+                .visible(false),
             handler.clone(),
         )
         .expect("a hidden window opens");

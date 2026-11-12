@@ -59,7 +59,7 @@ impl AppCapabilities {
 
     /// Provide the capability `C` with `provider`, in place of the built-in
     /// provider and of any plugin's. A widget acquires it with
-    /// `cx.capability::<C>()` in a lifecycle hook.
+    /// `ctx.capability::<C>()` in a lifecycle hook.
     #[must_use = "the builder returns the updated registrations; assign or chain it"]
     pub fn capability<C: Capability>(mut self, provider: impl CapabilityProvider<C>) -> Self {
         self.overrides.provide::<C>(provider);
@@ -142,12 +142,12 @@ struct PlatformClipboard {
 }
 
 impl CapabilityProvider<ClipboardCapability> for PlatformClipboard {
-    fn provide(&self, cx: &ProviderContext<'_>) -> Result<ClipboardHandle, Unsupported> {
+    fn provide(&self, ctx: &ProviderContext<'_>) -> Result<ClipboardHandle, Unsupported> {
         let native = self.slot.borrow().clone().ok_or_else(|| {
             // Between loops: no owner platform is installed.
             Unsupported::of::<ClipboardCapability>(UnsupportedReason::Unavailable)
         })?;
-        Ok(ClipboardHandle::new(NativeBackend(native), cx))
+        Ok(ClipboardHandle::new(NativeBackend(native), ctx))
     }
 }
 
@@ -218,13 +218,13 @@ struct PlatformPrimarySelection {
 }
 
 impl CapabilityProvider<PrimarySelectionCapability> for PlatformPrimarySelection {
-    fn provide(&self, cx: &ProviderContext<'_>) -> Result<PrimarySelectionHandle, Unsupported> {
+    fn provide(&self, ctx: &ProviderContext<'_>) -> Result<PrimarySelectionHandle, Unsupported> {
         let native = self.slot.borrow().clone().ok_or_else(|| {
             // Between loops, or a host of this platform without one (a
             // compositor without the protocol).
             Unsupported::of::<PrimarySelectionCapability>(UnsupportedReason::Unavailable)
         })?;
-        Ok(PrimarySelectionHandle::new(native, cx))
+        Ok(PrimarySelectionHandle::new(native, ctx))
     }
 }
 
@@ -449,7 +449,7 @@ struct HostStorageProvider {
 }
 
 impl CapabilityProvider<StorageCapability> for HostStorageProvider {
-    fn provide(&self, _cx: &ProviderContext<'_>) -> Result<StorageHandle, Unsupported> {
+    fn provide(&self, _ctx: &ProviderContext<'_>) -> Result<StorageHandle, Unsupported> {
         let refusal = match &*self.slot.storage.borrow() {
             Ok(storage) => return Ok(StorageHandle::new(Arc::clone(storage))),
             Err(refusal) => *refusal,
@@ -464,7 +464,7 @@ impl CapabilityProvider<StorageCapability> for HostStorageProvider {
             tracing::warn!(
                 "a widget asked for storage, but the application has no identifier: set \
                  `AppIdentity::with_app_id` (`flui build` does from flui.toml) or \
-                 `AppConfig::with_storage_dir`"
+                 `AppConfig::storage_dir`"
             );
         }
         Err(refusal)
@@ -483,14 +483,14 @@ struct HostBackground {
 }
 
 impl CapabilityProvider<BackgroundCapability> for HostBackground {
-    fn provide(&self, cx: &ProviderContext<'_>) -> Result<Background, Unsupported> {
+    fn provide(&self, ctx: &ProviderContext<'_>) -> Result<Background, Unsupported> {
         let services = self.slot.borrow().clone().ok_or_else(|| {
             // Before the host installs a UI runtime it has no lanes.
             Unsupported::of::<BackgroundCapability>(UnsupportedReason::Unavailable)
         })?;
         Ok(Background::new(
             Arc::new(LoopExecutor(services)),
-            cx.completions().clone(),
+            ctx.completions().clone(),
         ))
     }
 }

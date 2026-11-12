@@ -77,7 +77,7 @@ use flui_rendering::pipeline::WeakPipelineCell;
 use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_view::prelude::StatefulView;
 use flui_view::{
-    BoxedView, BuildContext, Child, EventCx, IntoView, LifecycleContext, ViewExt, ViewState,
+    BoxedView, BuildContext, Child, EventContext, IntoView, LifecycleContext, ViewExt, ViewState,
 };
 
 use crate::interaction::focus_reveal::{
@@ -1171,7 +1171,7 @@ impl ScrollableState {
                     own.remove(PointerKindSet::TRACKPAD);
                     own
                 })
-                .on_start(move |_cx, details| {
+                .on_start(move |_ctx, details| {
                     wheel_drag.borrow_mut().take();
                     // A drag on a scrollable gives it the keys.
                     let _ = focus_pan.request_focus();
@@ -1188,7 +1188,7 @@ impl ScrollableState {
                     // hand-off would flicker the activity signal off.
                     activity_start.writer().set_is_scrolling(true);
                 })
-                .on_update(move |_cx, details| {
+                .on_update(move |_ctx, details| {
                     let finger = match scroll_direction {
                         Axis::Vertical => details.delta.dy,
                         Axis::Horizontal => details.delta.dx,
@@ -1201,7 +1201,7 @@ impl ScrollableState {
                         Point::new(details.local_position.dx, details.local_position.dy),
                     );
                 })
-                .on_end(move |_cx, details| {
+                .on_end(move |_ctx, details| {
                     // Pointer velocity is in "screen coordinates": positive
                     // dy/dx = finger moving down/right; the content follows the
                     // finger, so the offset moves against it.
@@ -1228,7 +1228,7 @@ impl ScrollableState {
                         cancelled();
                     }
                 })
-                .on_cancel(move |_cx| owner_lost.drag_lost()))
+                .on_cancel(move |_ctx| owner_lost.drag_lost()))
             .child(content)
     }
 
@@ -1239,11 +1239,11 @@ impl ScrollableState {
     fn inertia_cancel(
         &self,
         applied: &Applied,
-    ) -> impl Fn(&mut EventCx<'_>, PointerDispatch<'_>) + use<> {
+    ) -> impl Fn(&mut EventContext<'_>, PointerDispatch<'_>) + use<> {
         let moving = self.fling_controller.controller().clone();
         let owner = Rc::clone(&applied.owner);
         let pipeline = self.pipeline.clone();
-        move |_cx, dispatch| {
+        move |_ctx, dispatch| {
             let PointerEvent::ScrollInertiaCancel(signal) = dispatch.local else {
                 return;
             };
@@ -1529,7 +1529,7 @@ impl ScrollableState {
         &self,
         view: &Scrollable,
         applied: &Applied,
-    ) -> impl Fn(&mut EventCx<'_>, &KeyEvent) -> KeyEventResult + use<> {
+    ) -> impl Fn(&mut EventContext<'_>, &KeyEvent) -> KeyEventResult + use<> {
         let wheel_distances = view.config.wheel_distances;
         let scroll_direction = view.config.scroll_direction;
         let anchored = view.anchored.is_some();
@@ -1543,7 +1543,7 @@ impl ScrollableState {
         let key_pipeline = self.pipeline.clone();
         let key_controller = self.scroll_controller.clone();
         let key_post_frame = self.post_frame.clone();
-        move |_cx: &mut EventCx<'_>, event: &KeyEvent| {
+        move |_ctx: &mut EventContext<'_>, event: &KeyEvent| {
             let pipeline = key_pipeline.as_ref();
             if event.state() == KeyState::Up {
                 key_owner.key_released(event.code);
@@ -1887,7 +1887,7 @@ fn scroll_semantics(
         })
     };
     let reveal = Rc::clone(&move_to);
-    let semantics = semantics.on_scroll_into_view(move |_cx, request| {
+    let semantics = semantics.on_scroll_into_view(move |_ctx, request| {
         let Some(Reveal {
             target_rect,
             viewport_rect,
@@ -1936,7 +1936,7 @@ fn scroll_semantics(
     // position is published in: a scrollable growing up or to the left
     // mirrors it back into its own pixels.
     let to_offset = Rc::clone(&set);
-    let semantics = semantics.on_set_scroll_offset(move |_cx, offset| {
+    let semantics = semantics.on_set_scroll_offset(move |_ctx, offset| {
         let visual = match axis {
             Axis::Vertical => offset.dy,
             Axis::Horizontal => offset.dx,
@@ -1954,17 +1954,17 @@ fn scroll_semantics(
     let increase = Rc::clone(&step);
     let decrease = Rc::clone(&step);
     let adjustment = adjustment
-        .on_set_numeric_value(move |_cx, value| set(value, ScrollCause::UserInput))
-        .on_increment(move |_cx| increase(true, SemanticsScrollUnit::Page))
-        .on_decrement(move |_cx| decrease(false, SemanticsScrollUnit::Page));
+        .on_set_numeric_value(move |_ctx, value| set(value, ScrollCause::UserInput))
+        .on_increment(move |_ctx| increase(true, SemanticsScrollUnit::Page))
+        .on_decrement(move |_ctx| decrease(false, SemanticsScrollUnit::Page));
     let forward = Rc::clone(&step);
     let semantics = match axis {
         Axis::Vertical => semantics
-            .on_scroll_down(move |_cx, unit| forward(!reversed, unit))
-            .on_scroll_up(move |_cx, unit| step(reversed, unit)),
+            .on_scroll_down(move |_ctx, unit| forward(!reversed, unit))
+            .on_scroll_up(move |_ctx, unit| step(reversed, unit)),
         Axis::Horizontal => semantics
-            .on_scroll_right(move |_cx, unit| forward(!reversed, unit))
-            .on_scroll_left(move |_cx, unit| step(reversed, unit)),
+            .on_scroll_right(move |_ctx, unit| forward(!reversed, unit))
+            .on_scroll_left(move |_ctx, unit| step(reversed, unit)),
     };
     (semantics, adjustment)
 }

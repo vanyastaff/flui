@@ -60,13 +60,13 @@ fn test_window_lifecycle_contract() {
 
     // Contract 3: Window creation should either succeed or fail gracefully
     let options = WindowOptions::default()
-        .with_title("Contract Test Window".to_string())
-        .with_size(Size::new(640.0, 480.0))
-        .with_visible(false)
-        .with_resizable(true)
-        .with_frame(WindowFrame::System)
-        .with_min_size(Some(Size::new(320.0, 240.0)))
-        .with_max_size(None);
+        .title("Contract Test Window".to_string())
+        .size(Size::new(640.0, 480.0))
+        .visible(false)
+        .resizable(true)
+        .frame(WindowFrame::System)
+        .min_size(Some(Size::new(320.0, 240.0)))
+        .max_size(None);
 
     match platform.open_window(
         options,
@@ -160,9 +160,9 @@ fn test_window_lifecycle_contract() {
 
             // Contract 10: Multiple window creation
             let options2 = WindowOptions::default()
-                .with_title("Contract Test Window 2".to_string())
-                .with_size(Size::new(400.0, 300.0))
-                .with_visible(false);
+                .title("Contract Test Window 2".to_string())
+                .size(Size::new(400.0, 300.0))
+                .visible(false);
 
             match platform.open_window(
                 options2,
@@ -845,13 +845,13 @@ mod native_windows {
         Opened::on(
             platform,
             WindowOptions::default()
-                .with_visible(false)
-                .with_frame(if decorated {
+                .visible(false)
+                .frame(if decorated {
                     WindowFrame::System
                 } else {
                     WindowFrame::None
                 })
-                .with_size(Size::new(320.0, 240.0)),
+                .size(Size::new(320.0, 240.0)),
         )
         .expect("create actual hidden Win32 window")
     }
@@ -917,8 +917,8 @@ mod native_windows {
         Opened::on(
             platform,
             WindowOptions::default()
-                .with_visible(true)
-                .with_size(Size::new(160.0, 120.0)),
+                .visible(true)
+                .size(Size::new(160.0, 120.0)),
         )
         .expect("create actual shown Win32 window")
     }
@@ -990,8 +990,8 @@ mod native_windows {
                 let window = Opened::ready(
                     &owner,
                     WindowOptions::default()
-                        .with_visible(true)
-                        .with_size(Size::new(160.0, 120.0)),
+                        .visible(true)
+                        .size(Size::new(160.0, 120.0)),
                 );
                 let initial = web_time::Instant::now() + Duration::from_millis(80);
                 let state = Arc::new(Mutex::new((Some(initial), 0_usize)));
@@ -1107,8 +1107,8 @@ mod native_windows {
                     let _window = Opened::ready(
                         &owner,
                         WindowOptions::default()
-                            .with_visible(visible)
-                            .with_size(Size::new(160.0, 120.0)),
+                            .visible(visible)
+                            .size(Size::new(160.0, 120.0)),
                     );
                 }
                 let watchdog = owner.proxy();
@@ -1142,8 +1142,8 @@ mod native_windows {
                 let window = Opened::ready(
                     &owner,
                     WindowOptions::default()
-                        .with_visible(true)
-                        .with_size(Size::new(160.0, 120.0)),
+                        .visible(true)
+                        .size(Size::new(160.0, 120.0)),
                 );
                 let hwnd = hwnd_of(&window);
                 // SAFETY: the live wrapper owns this HWND on its creating
@@ -1260,8 +1260,8 @@ mod native_windows {
                 let window = Opened::ready(
                     &owner,
                     WindowOptions::default()
-                        .with_visible(minimized)
-                        .with_size(Size::new(160.0, 120.0)),
+                        .visible(minimized)
+                        .size(Size::new(160.0, 120.0)),
                 );
                 let hwnd = hwnd_of(&window);
                 if minimized {
@@ -1331,8 +1331,8 @@ mod native_windows {
                     let window = Opened::ready(
                         &owner,
                         WindowOptions::default()
-                            .with_visible(true)
-                            .with_size(Size::new(160.0, 120.0)),
+                            .visible(true)
+                            .size(Size::new(160.0, 120.0)),
                     );
                     windows.push(Rc::clone(&window));
                     if index == 0 {
@@ -2410,11 +2410,11 @@ mod native_windows {
                 keydown_observations.fetch_add(1, Ordering::SeqCst);
                 if pump {
                     let mut message = MSG::default();
+                    let hwnd = HWND(pumped_window as *mut _);
                     // SAFETY: the handler runs on the window's creating
                     // thread; only that HWND's queue is pumped. A WM_SYSCHAR
                     // the pump reaches is recorded instead of dispatched, so
                     // it cannot open a modal menu.
-                    let hwnd = HWND(pumped_window as *mut _);
                     while unsafe { PeekMessageW(&raw mut message, Some(hwnd), 0, 0, PM_REMOVE) }
                         .as_bool()
                     {
@@ -3269,8 +3269,8 @@ mod native_windows {
                 windows::Win32::UI::WindowsAndMessaging::SW_SHOWMINNOACTIVE,
             )
         };
-        // SAFETY: a query of the fixture's live window.
         assert!(
+            // SAFETY: a query of the fixture's live window.
             unsafe { IsIconic(hwnd) }.as_bool(),
             "the window is minimised"
         );
@@ -3659,6 +3659,7 @@ mod native_windows {
         // SAFETY: the live shown owner window and initialized point.
         assert!(unsafe { ClientToScreen(hwnd, &raw mut target) }.as_bool());
         // Injection uses actual hit testing, never hwndTarget as an override.
+        // SAFETY: a hit test of a screen point; no handle is retained.
         if unsafe { WindowFromPoint(target) } != hwnd {
             eprintln!(
                 "CANNOT_VERIFY synthetic pointer delivery: shown target is occluded or the desktop is unavailable"
@@ -3791,9 +3792,10 @@ mod native_windows {
                         },
                     }
                 };
-                // SAFETY: initialized union arm matches type and device; the
-                // packet slice remains alive for the synchronous native copy.
                 if let Err(error) =
+                    // SAFETY: initialized union arm matches type and device;
+                    // the packet slice remains alive for the synchronous
+                    // native copy.
                     unsafe { InjectSyntheticPointerInput(device.handle(), &[packet]) }
                 {
                     assert!(
@@ -3811,8 +3813,8 @@ mod native_windows {
                     pump_pointer_thread();
                     std::thread::sleep(Duration::from_millis(2));
                 }
-                // SAFETY: read the actual hit target after native queue pumping.
                 assert_eq!(
+                    // SAFETY: read the actual hit target after native queue pumping.
                     unsafe { WindowFromPoint(target) },
                     hwnd,
                     "owned target must remain hit-testable after native dispatch"
@@ -3978,9 +3980,9 @@ mod native_windows {
             x: left.x + 80,
             y: left.y,
         };
-        // SAFETY: hit tests of screen points; no handle is retained.
         if [left, right]
             .into_iter()
+            // SAFETY: hit tests of screen points; no handle is retained.
             .any(|at| unsafe { WindowFromPoint(at) } != hwnd)
         {
             eprintln!("CANNOT_VERIFY pointer frame: the shown target is occluded");
@@ -4707,6 +4709,7 @@ mod native_windows {
             GetCursorPos(&raw mut original).expect("capture cursor for restoration");
         }
         let _restore = Cursor(original);
+        // SAFETY: a hit test of a screen point; no handle is retained.
         if unsafe { WindowFromPoint(target) } != hwnd {
             eprintln!(
                 "CANNOT_VERIFY native wheel: shown target is occluded or desktop unavailable"
@@ -4747,8 +4750,8 @@ mod native_windows {
                     },
                 },
             };
-            // SAFETY: initialized mouse union arm; cursor is over owned target.
             assert_eq!(
+                // SAFETY: initialized mouse union arm; cursor is over owned target.
                 unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) },
                 1,
                 "native wheel injection accepted"
@@ -5544,8 +5547,8 @@ mod native_windows {
         owner
             .open_window(
                 WindowOptions::default()
-                    .with_visible(false)
-                    .with_size(Size::new(320.0, 240.0)),
+                    .visible(false)
+                    .size(Size::new(320.0, 240.0)),
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("create actual hidden Win32 window")
@@ -5584,7 +5587,7 @@ mod native_windows {
             let releaser = Arc::clone(&releaser);
             move |log, owner| {
                 let allow = Arc::new(AtomicBool::new(false));
-                let shared = owner.shared();
+                let shared = owner.proxy();
                 log.answer_exit_with({
                     let allow = Arc::clone(&allow);
                     let answers = Arc::clone(&answers);
@@ -5608,7 +5611,9 @@ mod native_windows {
                     }
                     std::thread::sleep(Duration::from_millis(200));
                     allow.store(true, Ordering::SeqCst);
-                    shared.request_exit_policy_reevaluation();
+                    shared
+                        .request_exit_policy_reevaluation()
+                        .expect("the owner takes the request");
                 });
                 *releaser.lock().expect("releaser") = Some(worker);
             }
@@ -5635,7 +5640,7 @@ mod native_windows {
             let calls = Arc::clone(&calls);
             let releaser = Arc::clone(&releaser);
             move |log, owner| {
-                let shared = owner.shared();
+                let shared = owner.proxy();
                 log.answer_exit_with({
                     let calls = Arc::clone(&calls);
                     move || {
@@ -5659,7 +5664,9 @@ mod native_windows {
                         std::thread::sleep(Duration::from_millis(5));
                     }
                     std::thread::sleep(Duration::from_millis(200));
-                    shared.request_exit_policy_reevaluation();
+                    shared
+                        .request_exit_policy_reevaluation()
+                        .expect("the owner takes the request");
                 });
                 *releaser.lock().expect("releaser") = Some(worker);
             }
@@ -5767,7 +5774,7 @@ mod native_appkit {
     )]
     fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
         let platform = flui_native::current_platform().expect("AppKit platform");
-        let window = crate::Opened::on(&*platform, WindowOptions::default().with_visible(false))
+        let window = crate::Opened::on(&*platform, WindowOptions::default().visible(false))
             .expect("AppKit window");
         let target = window.surface_target();
         let RawWindowHandle::AppKit(handle) =

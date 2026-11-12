@@ -4,6 +4,7 @@
 - **Date:** 2026-10-20
 - **Superseded-by:** [ADR-0264](ADR-0264-platform-test-doubles-live-with-their-contract.md) for
   §7 only (where the test doubles live) and §6 only (its last sentence)
+  Also [ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) for §8's clause on `tokio::runtime::Handle` only (`NativeExecutor::from_tokio` takes one).
 - **Amended:** 2026-10-22 — section 8: the Activity enters the core host through one function,
   `android_platform(app)`; the confirmation checks the core host's paths on every target it builds
   a host for.
@@ -464,7 +465,9 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
   not string keys (SDL: [libsdl-org/SDL@d0183f0ee3 include/SDL3/SDL_video.h:1493-1507](https://github.com/libsdl-org/SDL/blob/d0183f0ee3/include/SDL3/SDL_video.h#L1493-L1507)).
 - OS types in the core host's public paths (`HWND` and the `win32` re-exports at
   `crates/flui-platform/src/platforms/windows/mod.rs:50-59`, `NSApplication`, `AndroidApp`,
-  `HtmlCanvasElement`, `tokio::runtime::Handle`) become `pub(crate)`. Deeper control from outside goes through
+  `HtmlCanvasElement`) become `pub(crate)`. The one tokio type on a public path is the
+  `tokio::runtime::Handle` that `NativeExecutor::from_tokio` takes, so the host runs its IO on the
+  runtime its creator lends it ([ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) §3). Deeper control from outside goes through
   capability crates and the host bridge (ADR-0152). The Activity, which the system hands only to
   the application's `android_main`, enters through one function of the core host,
   `android_platform(app)`, as the facade's `run_app_android` takes it; nothing the core host hands
@@ -527,7 +530,7 @@ crates/flui-native/
     hosts/                  one table per host and its constructor, nothing else:
                             windows.rs apple.rs android.rs web.rs linux.rs (Wayland and X11) headless.rs
     owner/                  the owner thread and each platform's loop (std's sys/pal): OwnerPlatform,
-                            SharedPlatform, PlatformProxy, the signal and slot, the panic boundary, the one
+                            PlatformProxy, the signal and slot, the panic boundary, the one
                             call point for user code, journal/ (ADR-0215 §4, built under the driver feature;
                             its schema is declared in flui-protocol);
                             windows.rs apple.rs android.rs web.rs linux/{wayland,x11}.rs headless.rs

@@ -136,7 +136,7 @@ brightness, missing slots, live restoration and unrelated size updates.
 
 ### Catalog events forward the dispatch's write context
 
-Press, selection and value-change setters accept `&mut EventCx` and an
+Press, selection and value-change setters accept `&mut EventContext` and an
 `EventOutcome` result (ADR-0086). Composed controls pass the context they
 receive from `InkWell` or the input widget; they do not open a new write
 scope per wrapper. Query callbacks keep their return values and receive no

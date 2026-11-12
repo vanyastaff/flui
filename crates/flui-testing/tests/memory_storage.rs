@@ -32,6 +32,8 @@ fn cloning_waker(action: impl Fn() + Send + Sync + 'static) -> Waker {
         // returns, so a panicking action leaves no unowned reference.
         let executor = unsafe { &*data.cast::<CloneExecutor>() };
         (executor.0)();
+        // SAFETY: `data` still points at the live `Arc<CloneExecutor>` the
+        // input waker owns; the strong reference taken here is the clone's.
         unsafe { Arc::increment_strong_count(data.cast::<CloneExecutor>()) };
         RawWaker::new(data, &VTABLE)
     }
@@ -60,12 +62,12 @@ fn a_held_copy_polled_with_a_waker_that_reads_the_storage_answers() {
         let waker = cloning_waker(move || {
             let _ = reader.contents(&NOTES);
         });
-        let mut cx = Context::from_waker(&waker);
+        let mut ctx = Context::from_waker(&waker);
         let held = storage.hold_copies();
         let mut copy = pin!(storage.copy_aside(&NOTES));
-        let first = copy.as_mut().poll(&mut cx).is_pending();
+        let first = copy.as_mut().poll(&mut ctx).is_pending();
         drop(held);
-        let second = copy.as_mut().poll(&mut cx).is_ready();
+        let second = copy.as_mut().poll(&mut ctx).is_ready();
         let _ = answered.send((first, second, storage.kept_aside(&NOTES)));
     });
     assert_eq!(

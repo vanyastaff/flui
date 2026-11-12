@@ -112,10 +112,10 @@ fn fixture(nested: Option<fn(HWND)>) -> Fixture {
     let window = platform
         .open_window(
             WindowOptions::default()
-                .with_title("flui touchpad")
-                .with_size(Size::new(200.0, 120.0))
+                .title("flui touchpad")
+                .size(Size::new(200.0, 120.0))
                 // Shown: a hidden window keeps no update region.
-                .with_visible(true),
+                .visible(true),
             handler.clone(),
         )
         .expect("window");

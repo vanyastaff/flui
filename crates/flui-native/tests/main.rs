@@ -38,9 +38,6 @@ mod clipboard;
 mod contract;
 #[path = "displays.rs"]
 mod displays;
-#[cfg(not(target_arch = "wasm32"))]
-#[path = "executor.rs"]
-mod executor;
 #[path = "file_store.rs"]
 mod file_store;
 #[path = "gaps.rs"]

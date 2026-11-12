@@ -20,7 +20,7 @@ use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryBaselineCtx, BoxHitTestContext, BoxLayoutContext, PaintCx},
+    context::{BoxDryBaselineContext, BoxHitTestContext, BoxLayoutContext, PaintContext},
     parent_data::BoxParentData,
     traits::{RenderBox, TextBaseline},
 };
@@ -66,7 +66,7 @@ impl RenderBox for RenderIgnoreBaseline {
         }
     }
 
-    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         ctx.paint_child();
     }
 
@@ -93,7 +93,7 @@ impl RenderBox for RenderIgnoreBaseline {
         &self,
         _constraints: BoxConstraints,
         _baseline: TextBaseline,
-        _ctx: &mut BoxDryBaselineCtx<'_>,
+        _ctx: &mut BoxDryBaselineContext<'_>,
     ) -> flui_rendering::RenderResult<Option<f64>> {
         Ok(None)
     }
@@ -103,7 +103,7 @@ impl RenderBox for RenderIgnoreBaseline {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+        ctx: &mut flui_rendering::context::BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         flui_rendering::context::proxy_queries::forward_dry_layout(constraints, ctx)
     }

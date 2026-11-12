@@ -2,7 +2,7 @@
 //! event setter, writes a signal through the context the framework passes,
 //! capturing nothing but the `Copy` signal (ADR-0086 §6). One setter per
 //! family of the census, each in both return forms: the write's result and
-//! `()`. A setter that stops inferring `cx` stops this consumer compiling.
+//! `()`. A setter that stops inferring `ctx` stops this consumer compiling.
 
 use flui::cupertino::CupertinoButton;
 use flui::interaction::KeyEventResult;
@@ -16,26 +16,26 @@ use flui::widgets::{
 
 fn gestures(detector: GestureDetector, count: Signal<u32>) -> GestureDetector {
     detector
-        .on_tap(move |cx| count.set(cx, 1))
-        .on_long_press(move |cx| {
-            let _ = count.set(cx, 2);
+        .on_tap(move |ctx| count.set(ctx, 1))
+        .on_long_press(move |ctx| {
+            let _ = count.set(ctx, 2);
         })
 }
 
 fn pointers(listener: Listener, region: MouseRegion, count: Signal<u32>) -> (Listener, MouseRegion) {
     (
-        listener.on_pointer_down(move |cx, _| count.set(cx, 1)),
-        region.on_enter(move |cx, _, _| {
-            let _ = count.set(cx, 2);
+        listener.on_pointer_down(move |ctx, _| count.set(ctx, 1)),
+        region.on_enter(move |ctx, _, _| {
+            let _ = count.set(ctx, 2);
         }),
     )
 }
 
 fn focus(focus: Focus, count: Signal<u32>) -> Focus {
     focus
-        .on_focus_change(move |cx, focused| count.set(cx, u32::from(focused)))
-        .on_key_event(move |cx, _| {
-            let _ = count.set(cx, 3);
+        .on_focus_change(move |ctx, focused| count.set(ctx, u32::from(focused)))
+        .on_key_event(move |ctx, _| {
+            let _ = count.set(ctx, 3);
             KeyEventResult::Handled
         })
 }
@@ -47,11 +47,11 @@ fn dragging(
     count: Signal<u32>,
 ) -> (Draggable, Dismissible, InteractiveViewer) {
     (
-        draggable.on_drag_started(move |cx| count.set(cx, 1)),
-        dismissible.on_dismissed(move |cx, _| {
-            let _ = count.set(cx, 2);
+        draggable.on_drag_started(move |ctx| count.set(ctx, 1)),
+        dismissible.on_dismissed(move |ctx, _| {
+            let _ = count.set(ctx, 2);
         }),
-        viewer.on_interaction_start(move |cx, _| count.set(cx, 3)),
+        viewer.on_interaction_start(move |ctx, _| count.set(ctx, 3)),
     )
 }
 
@@ -62,19 +62,19 @@ fn navigation(
     count: Signal<u32>,
 ) -> (PopScope, PageView, RefreshIndicator) {
     (
-        pop.on_pop_invoked(move |cx, popped| count.set(cx, u32::from(popped))),
-        pages.on_page_changed(move |cx, page| {
-            let _ = count.set(cx, u32::try_from(page).unwrap_or(u32::MAX));
+        pop.on_pop_invoked(move |ctx, popped| count.set(ctx, u32::from(popped))),
+        pages.on_page_changed(move |ctx, page| {
+            let _ = count.set(ctx, u32::try_from(page).unwrap_or(u32::MAX));
         }),
-        refresh.on_refresh(move |cx| {
-            let _ = count.set(cx, 1);
+        refresh.on_refresh(move |ctx| {
+            let _ = count.set(ctx, 1);
             async {}
         }),
     )
 }
 
 fn semantics(node: Semantics, count: Signal<u32>) -> Semantics {
-    node.on_click(move |cx| count.set(cx, 1))
+    node.on_click(move |ctx| count.set(ctx, 1))
 }
 
 fn text(
@@ -85,13 +85,13 @@ fn text(
 ) -> (EditableText, RawTextField, Form) {
     (
         editable
-            .on_changed(move |cx, value| count.set(cx, u32::try_from(value.len()).unwrap_or(u32::MAX)))
-            .on_submitted(move |cx, _| {
-                let _ = count.set(cx, 0);
+            .on_changed(move |ctx, value| count.set(ctx, u32::try_from(value.len()).unwrap_or(u32::MAX)))
+            .on_submitted(move |ctx, _| {
+                let _ = count.set(ctx, 0);
             }),
-        field.on_changed(move |cx, _| count.set(cx, 1)),
-        form.on_changed(move |cx| {
-            let _ = count.set(cx, 2);
+        field.on_changed(move |ctx, _| count.set(ctx, 1)),
+        form.on_changed(move |ctx| {
+            let _ = count.set(ctx, 2);
         }),
     )
 }
@@ -103,16 +103,16 @@ fn buttons(
     count: Signal<u32>,
 ) -> (RawButton, ElevatedButton, CupertinoButton) {
     (
-        raw.on_press(move |cx| count.set(cx, 1)),
-        material.on_pressed(move |cx| {
-            let _ = count.set(cx, 2);
+        raw.on_press(move |ctx| count.set(ctx, 1)),
+        material.on_pressed(move |ctx| {
+            let _ = count.set(ctx, 2);
         }),
-        cupertino.on_pressed(move |cx| count.set(cx, 3)),
+        cupertino.on_pressed(move |ctx| count.set(ctx, 3)),
     )
 }
 
 fn animation(size: AnimatedSize, count: Signal<u32>) -> AnimatedSize {
-    size.on_end(move |cx| count.set(cx, 1))
+    size.on_end(move |ctx| count.set(ctx, 1))
 }
 
 #[test]

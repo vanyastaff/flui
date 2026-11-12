@@ -905,10 +905,12 @@ pub trait ElementBase: Downcast + 'static {
     /// applies the returned impact to the render parent.
     ///
     /// ```
+    /// use std::rc::Rc;
+    ///
     /// use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData};
     /// use flui_view::{ElementBase, ErrorView, View};
     ///
-    /// let element = ErrorView::new("ordinary element").create_element();
+    /// let element = Rc::new(ErrorView::new("ordinary element")).create_element();
     /// let mut parent_data = BoxParentData::default();
     /// assert_eq!(
     ///     element.apply_parent_data_config(&mut parent_data),

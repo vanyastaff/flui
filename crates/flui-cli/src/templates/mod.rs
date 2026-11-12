@@ -12,7 +12,7 @@ mod source;
 mod widget;
 
 pub use plan::{PlannedFile, ProjectPlan};
-pub use source::DependencySource;
+pub use source::{DependencySource, FrameworkPackage};
 
 use crate::Template;
 use crate::app_id::AppId;
@@ -44,6 +44,84 @@ pub(super) const LIB_TABLE: &str = r#"# The rlib feeds the binary and the tests;
 crate-type = ["rlib", "cdylib"]
 "#;
 
+/// The profiles every template's workspace root writes. Dependencies are
+/// optimized in debug builds too: wgpu and naga's shader translation, Parley's
+/// shaping and lyon's tessellation set a debug build's frame time, and a
+/// dependency is compiled once and rebuilt only when `Cargo.lock` moves, so
+/// the cost is paid on the first build alone. The application's own crates
+/// stay unoptimized for fast rebuilds.
+///
+/// A release build is what ships, so it strips the symbol table too: a panic
+/// still prints its message and `file:line`, and only a backtrace's frame
+/// names go, as in a Flutter release build. `--profile profiling` keeps the
+/// symbols and line tables a profiler or a crash report needs.
+///
+/// A release build is also sized: whole-program LTO, the dependencies at
+/// `opt-level = "s"`, and the crates a frame runs through, together with the
+/// application's own (workspace members, which `"*"` leaves out), at `3`.
+/// `cargo xtask perf --size` builds a generated counter with this profile
+/// (`perf/size.toml`). `panic = "abort"` would drop the unwind tables too, but
+/// it turns a panic FLUI contains in a widget, a callback or a platform entry
+/// (ADR-0281, ADR-0287) into the end of the application, so it stays `unwind`.
+pub(super) const PROFILES: &str = r#"[profile.dev.package."*"]
+opt-level = 3
+debug = false
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
+# Dependencies are optimized for size, the frame path for speed.
+[profile.release.package."*"]
+opt-level = "s"
+
+[profile.release.package.flui-foundation]
+opt-level = 3
+
+[profile.release.package.flui-scheduler]
+opt-level = 3
+
+[profile.release.package.flui-animation]
+opt-level = 3
+
+[profile.release.package.flui-interaction]
+opt-level = 3
+
+[profile.release.package.flui-view]
+opt-level = 3
+
+[profile.release.package.flui-widgets]
+opt-level = 3
+
+[profile.release.package.flui-objects]
+opt-level = 3
+
+[profile.release.package.flui-rendering]
+opt-level = 3
+
+[profile.release.package.flui-semantics]
+opt-level = 3
+
+[profile.release.package.flui-layer]
+opt-level = 3
+
+[profile.release.package.flui-painting]
+opt-level = 3
+
+[profile.release.package.flui-engine]
+opt-level = 3
+
+[profile.release.package.flui-runtime]
+opt-level = 3
+
+[profile.profiling]
+inherits = "release"
+strip = "none"
+debug = "line-tables-only"
+"#;
+
 /// `.gitignore` for a generated project. Part of the plan (not a
 /// side-effect of `git init`) so `--dry-run` lists it and a real run and a
 /// dry run always agree on the file set.
@@ -72,8 +150,8 @@ Cargo.lock
 /// # Builder Methods
 ///
 /// - [`template`](Self::template) - Set the template type (default: Counter)
-/// - [`with_git`](Self::with_git) - Enable/disable git initialization (default: true)
-/// - [`with_cargo_check`](Self::with_cargo_check) - Enable/disable cargo check (default: true)
+/// - [`git`](Self::git) - Enable/disable git initialization (default: true)
+/// - [`cargo_check`](Self::cargo_check) - Enable/disable cargo check (default: true)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemplateBuilder {
     name: ProjectName,
@@ -117,7 +195,7 @@ impl TemplateBuilder {
     /// Configure whether to initialize a git repository.
     ///
     /// Default is `true`.
-    pub fn with_git(mut self, init: bool) -> Self {
+    pub fn git(mut self, init: bool) -> Self {
         self.init_git = init;
         self
     }
@@ -137,7 +215,7 @@ impl TemplateBuilder {
     /// Configure whether to run cargo check after generation.
     ///
     /// Default is `true`.
-    pub fn with_cargo_check(mut self, check: bool) -> Self {
+    pub fn cargo_check(mut self, check: bool) -> Self {
         self.run_cargo_check = check;
         self
     }

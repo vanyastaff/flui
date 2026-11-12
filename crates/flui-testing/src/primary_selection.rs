@@ -126,7 +126,7 @@ impl ScriptedPrimarySelection {
 }
 
 impl CapabilityProvider<PrimarySelectionCapability> for ScriptedPrimarySelection {
-    fn provide(&self, cx: &ProviderContext<'_>) -> Result<PrimarySelectionHandle, Unsupported> {
+    fn provide(&self, ctx: &ProviderContext<'_>) -> Result<PrimarySelectionHandle, Unsupported> {
         let state = self.state.borrow();
         if let Some(refusal) = state.refusal {
             return Err(refusal);
@@ -135,7 +135,7 @@ impl CapabilityProvider<PrimarySelectionCapability> for ScriptedPrimarySelection
             selection: self.clone(),
             _handle: Rc::clone(&state.handles),
         };
-        Ok(PrimarySelectionHandle::new(backend, cx))
+        Ok(PrimarySelectionHandle::new(backend, ctx))
     }
 }
 
