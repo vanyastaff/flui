@@ -19,6 +19,17 @@ or WASM targets with their own build step.
 
 ## Rendering / engine internals
 
+The shared [`benchmark_grid`](benchmark_grid.rs) measures synchronous widget-pipeline wall time
+and records the existing frame counters. Build with
+`cargo heli build --locked --release --example benchmark_grid --no-default-features`, then run
+`target/release/examples/benchmark_grid --items 1000 --kind buttons --mode local --out NEW_DIRECTORY`.
+Use `.exe` on Windows. `--help` lists the bounded sizes and modes. `--capture` additionally validates
+offscreen GPU pixels outside timing; a missing GPU fails that run. The static body has one
+`RepaintBoundary`. Retained idle calls can produce no new frame. These results are neither native
+FPS nor CPU process time, GPU duration or input-to-present latency. The output includes raw samples,
+empty-timer calibration, counts, population/geometry/input checks and nearest-rank percentiles.
+Record the source revision, binary and lockfile hashes, compiler and machine alongside each run.
+
 | Example | Run |
 |---|---|
 | **scene_render** — end-to-end GPU compositor proof | `cargo run -p flui-hot-reload --example scene_render` |

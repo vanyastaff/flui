@@ -1,0 +1,24 @@
+{
+  "source": "e3413f98726e9034f31aa4b47febb6f1999137af",
+  "binarySha256": "50aa4fe1f27a9a6920f15c420c3d3b2fa4216b0289165daf23c74abeb9ae189e",
+  "lockSha256": "7e9eac831206328a17e9a5d5c08df6e9691db5588c9cb128a048946301753682",
+  "fontSha256": "797e35f7f5d6020a5c6ea13b42ecd668bcfb3bbc4baa0e74773527e5b6cb3174",
+  "archiveSha256": "d4652e6196d61ba2182f360b2c5aa1d5a99d33bc239e377ca0b42d4a1e7a1ae4",
+  "archiveBytes": 2522490,
+  "startUtc": "2026-11-02T11:17:36.436Z",
+  "endUtc": "2026-11-02T11:25:02.364Z",
+  "runs": 98,
+  "primarySamples": 800000,
+  "allWorkloadSamples": 810088,
+  "clockCalibrationSamples": 980000,
+  "scope": "synchronous widget pipeline; offscreen GPU correctness separately",
+  "statisticalStatus": "ADVISORY_SHARED_HOST; 12 of 16 cells inconclusive for a 10% improvement claim",
+  "compilerOverlapChecks": "before launch and after exit only, not continuous process monitoring",
+  "environment": {
+    "RUST_LOG": "warn",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null,
+    "RUSTC_WRAPPER": null
+  },
+  "semanticsUpdates": false
+}
