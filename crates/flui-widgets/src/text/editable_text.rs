@@ -1520,11 +1520,7 @@ impl Action<ActivateIntent> for KeptByTheField {
 }
 
 impl Action<ActivationPressIntent> for KeptByTheField {
-    fn invoke(
-        &self,
-        _ctx: &mut EventContext<'_>,
-        _intent: &ActivationPressIntent,
-    ) -> ActionOutcome {
+    fn invoke(&self, _: &mut EventContext<'_>, _: &ActivationPressIntent) -> ActionOutcome {
         ActionOutcome::Performed
     }
 }
@@ -1613,12 +1609,7 @@ impl FieldSemanticsActions {
     /// the text store told after it. Each step runs though an earlier one
     /// failed: the platform hears of the edit before the first failure is
     /// resumed.
-    fn edit(
-        &self,
-        ctx: &EventContext<'_>,
-        commit: bool,
-        edit: impl FnOnce(&TextEditingController),
-    ) {
+    fn edit(&self, ctx: &EventContext<'_>, commit: bool, f: impl FnOnce(&TextEditingController)) {
         if self.edits.writer.check_context(ctx).is_err() || self.live_node().is_none() {
             return;
         }
@@ -1635,7 +1626,7 @@ impl FieldSemanticsActions {
         }
         if self.edits.writer.check_context(ctx).is_ok() && self.live_node().is_some() {
             let controller = self.edits.controller.borrow().clone();
-            calls.run(|| self.edits.around(|| edit(&controller)));
+            calls.run(|| self.edits.around(|| f(&controller)));
             if let Some(store) = &self.store {
                 calls.run(|| store.controller_changed());
             }

@@ -82,7 +82,7 @@ pub use layout::LayoutContext;
 //
 // FragmentScope (née FragmentClip — it now also carries the ShaderMask and
 // BackdropFilter scope variants, not just clips) has ZERO cross-crate
-// consumers (used only crate-internally by the paint encoder in paint_ctx.rs
+// consumers (used only crate-internally by the paint encoder in paint.rs
 // and the composer in pipeline/owner). It is not re-exported as `pub` —
 // only as `pub(crate)` for the pipeline composer.
 #[cfg(any(test, feature = "testing"))]

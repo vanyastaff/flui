@@ -15,7 +15,7 @@
 //!    child's picture.
 //!
 //! Refs:
-//!   * crates/flui-rendering/src/context/paint_ctx.rs (recording side)
+//!   * crates/flui-rendering/src/context/paint.rs (recording side)
 
 use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
