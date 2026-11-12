@@ -36,8 +36,8 @@ use std::time::Duration;
 use flui_sdk::animation::{
     Animatable, Animation, Cubic, Curve, CurvedAnimation, Interval, Tween, curves,
 };
-use flui_sdk::pipeline::TranslationFraction;
 use flui_sdk::platform::TargetPlatform;
+use flui_sdk::rendering::objects::TranslationFraction;
 use flui_sdk::view::prelude::BuildContext;
 use flui_sdk::view::{BoxedView, ViewExt};
 use flui_sdk::widgets::{

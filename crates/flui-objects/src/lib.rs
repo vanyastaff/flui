@@ -79,7 +79,12 @@ pub use proxy::{
     GatedCustomAction, RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
     SemanticsActionRoute,
 };
+pub use proxy::{
+    PathClip, PhysicalClipShape, PhysicalClipSource, RectangleClip, RenderPhysicalModelBase,
+};
 pub use shimmer::{ShimmerBand, ShimmerSweep};
+// The follower's clip mode is a layer value its configuration takes.
+pub use flui_rendering::layer::LeaderClip;
 
 // --- flat re-exports (interaction) ---
 pub use interaction::{
@@ -101,6 +106,9 @@ pub use image::{RenderImage, RenderTexture};
 pub use sliver::{
     CarouselConfig, CarouselGeometry, CarouselItemFrames, CarouselItemPlacement, CarouselLayout,
     CarouselLayoutError, CarouselLayoutKind, MAX_ITEM_EXTENT, RenderSliverCarousel,
+};
+pub use sliver::{
+    FloatingHeaderMode, FloatingMode, FloatingPinnedMode, RenderSliverFloatingHeaderBase,
 };
 pub use sliver::{
     FloatingHeaderSnapConfiguration, InvalidSliverCrossAxisExtent,
