@@ -249,6 +249,10 @@ fn ink_feedback_contracts() {
             ink_ripple::a_settled_hover_paints_the_hover_state_layer,
         ),
         (
+            "ink_ripple::a resting well holds no state layer animation",
+            ink_ripple::a_resting_well_holds_no_state_layer_animation,
+        ),
+        (
             "ink_ripple::a held press grows a wave between its start and end radius",
             ink_ripple::a_held_press_grows_a_wave_between_its_start_and_end_radius,
         ),

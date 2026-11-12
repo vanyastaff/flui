@@ -8,7 +8,11 @@
 //! - **State layer.** One fill of the well's shape whose alpha follows the
 //!   interaction states through [`StateLayerAlpha`]: hover 0.08, focus 0.10,
 //!   pressed 0.10, dragged 0.16. Entering hover takes 15 ms, entering focus or
-//!   a drag 45 ms, and leaving any state 150 ms, all linear.
+//!   a drag 45 ms, and leaving any state 150 ms, all linear. Its animation
+//!   exists only while the layer shows or moves: it starts at the first
+//!   visible target and goes once the well is back at rest (Flutter's
+//!   `InkWell` makes its `InkHighlight` on the first state that shows one),
+//!   so a resting well holds no controller and no frame registration.
 //! - **Ripple.** A short queue of waves. Each wave starts at the pointer-down
 //!   position with radius `0.3 × max(width, height)` and grows over 225 ms
 //!   (fast-out-slow-in) to the distance from its origin to the farthest corner
@@ -407,11 +411,11 @@ fn start_run(
 pub(crate) struct Indication {
     states: RefCell<WidgetStatesController>,
     style: RefCell<IndicationStyle>,
-    /// The state layer's alpha.
-    layer: RefCell<AnimatedValue<f64>>,
+    /// The state layer's alpha, `None` until its first visible target.
+    layer: RefCell<Option<AnimatedValue<f64>>>,
     /// The layer's published alpha, readable while `layer` is borrowed
     /// (its own listeners run inside a retarget).
-    layer_view: AnimatedValueView<f64>,
+    layer_view: RefCell<Option<AnimatedValueView<f64>>>,
     /// The alpha the layer is moving toward.
     layer_target: Cell<f64>,
     /// The colour of the layer's latest visible target; its alpha is
@@ -419,11 +423,7 @@ pub(crate) struct Indication {
     layer_color: Cell<Option<Color>>,
     waves: RefCell<Vec<Wave>>,
     /// The layer controller's repaint listener, held for its whole life.
-    /// Held for its drop; nothing reads it.
-    #[expect(
-        dead_code,
-        reason = "the subscription detaches at the indication's drop"
-    )]
+    /// Held for its drop; `None` until the layer starts.
     layer_listening: RefCell<Option<Subscription>>,
     /// Contacts held on the well: pressed for the state layer while no
     /// wave carries the press.
@@ -449,44 +449,51 @@ impl std::fmt::Debug for Indication {
 
 impl Indication {
     pub(crate) fn new(states: WidgetStatesController, style: IndicationStyle) -> Rc<Self> {
-        let repaint = Rc::new(ChangeNotifier::new());
+        Rc::new_cyclic(|this: &Weak<Self>| Self {
+            states: RefCell::new(states),
+            style: RefCell::new(style),
+            layer: RefCell::new(None),
+            layer_view: RefCell::new(None),
+            layer_target: Cell::new(0.0),
+            layer_color: Cell::new(None),
+            waves: RefCell::new(Vec::new()),
+            layer_listening: RefCell::new(None),
+            contacts: RefCell::new(Vec::new()),
+            vsync: RefCell::new(None),
+            repaint: Rc::new(ChangeNotifier::new()),
+            rebuild: RefCell::new(None),
+            painted: Cell::new(false),
+            this: Weak::clone(this),
+        })
+    }
+
+    /// The state layer's alpha, made at its first visible target: a well
+    /// nobody hovers, focuses or presses holds no animation (Flutter's
+    /// `InkWell` makes its `InkHighlight` in `updateHighlight`, on the first
+    /// state that shows one).
+    fn start_layer(&self) -> Result<(), AnimationError> {
+        let vsync = self.vsync.borrow().clone();
         let layer = AnimatedValue::with_debug_label(
             "InkWell.state_layer",
             0.0,
             MotionSpec::default(),
-            None,
-        )
-        .expect("BUG: a resting state layer starts at the finite alpha 0");
-        let layer_view = layer.animation();
-        Rc::new_cyclic(|this: &Weak<Self>| {
-            let notifier = Rc::clone(&repaint);
-            let indication = Weak::clone(this);
-            // The listener lives as long as the layer's controller; it holds
-            // the indication weakly. The subscription is stored on the
-            // indicated object below.
-            let listening = layer_view.listen(Rc::new(move || {
-                notifier.notify_listeners();
-                if let Some(indication) = indication.upgrade() {
-                    indication.detach_when_idle();
-                }
-            }));
-            Self {
-                states: RefCell::new(states),
-                style: RefCell::new(style),
-                layer: RefCell::new(layer),
-                layer_view,
-                layer_target: Cell::new(0.0),
-                layer_color: Cell::new(None),
-                waves: RefCell::new(Vec::new()),
-                layer_listening: RefCell::new(Some(listening)),
-                contacts: RefCell::new(Vec::new()),
-                vsync: RefCell::new(None),
-                repaint,
-                rebuild: RefCell::new(None),
-                painted: Cell::new(false),
-                this: Weak::clone(this),
+            vsync.as_ref(),
+        )?;
+        let view = layer.animation();
+        let notifier = Rc::clone(&self.repaint);
+        let indication = Weak::clone(&self.this);
+        // The listener lives as long as the layer's controller; it holds the
+        // indication weakly.
+        let listening = view.listen(Rc::new(move || {
+            notifier.notify_listeners();
+            if let Some(indication) = indication.upgrade() {
+                indication.detach_when_idle();
             }
-        })
+        }));
+        *self.layer_view.borrow_mut() = Some(view);
+        *self.layer_listening.borrow_mut() = Some(listening);
+        *self.layer.borrow_mut() = Some(layer);
+        Ok(())
     }
 
     /// The handle a press, or the last run coming to rest, uses to attach
@@ -507,8 +514,9 @@ impl Indication {
     /// run's listener could be called under, except the wave queue, which a
     /// borrow elsewhere reports as active.
     pub(crate) fn is_active(&self) -> bool {
-        self.layer_view.value() > 0.0
-            || self.layer_target.get() > 0.0
+        self.layer_view.try_borrow().map_or(true, |view| {
+            view.as_ref().is_some_and(|view| view.value() > 0.0)
+        }) || self.layer_target.get() > 0.0
             || self
                 .waves
                 .try_borrow()
@@ -523,9 +531,27 @@ impl Indication {
         }
     }
 
-    /// Record whether this build attached the painter.
+    /// Record whether this build attached the painter. A build that attaches
+    /// none finds the layer at rest, so it lets the layer go: a well back at
+    /// rest holds no animation and no frame registration either.
     pub(crate) fn set_painted(&self, painted: bool) {
         self.painted.set(painted);
+        if !painted {
+            self.release_layer();
+        }
+    }
+
+    /// Drop the layer's animation, its view and its listener, each after
+    /// its slot's borrow ends.
+    fn release_layer(&self) {
+        let listening = self.layer_listening.borrow_mut().take();
+        drop(listening);
+        let view = self.layer_view.borrow_mut().take();
+        drop(view);
+        let layer = self.layer.borrow_mut().take();
+        if let Some(mut layer) = layer {
+            layer.dispose();
+        }
     }
 
     /// The states the state layer shows: `Pressed` while a contact is held,
@@ -548,7 +574,9 @@ impl Indication {
 
     /// Move every run to `vsync`.
     pub(crate) fn bind(&self, vsync: Option<Vsync>) {
-        if let Err(error) = self.layer.borrow_mut().rebind(vsync.as_ref()) {
+        if let Some(layer) = self.layer.borrow_mut().as_mut()
+            && let Err(error) = layer.rebind(vsync.as_ref())
+        {
             tracing::error!(%error, "InkWell state layer lost its frame registry");
         }
         for wave in self.waves.borrow_mut().iter_mut() {
@@ -578,8 +606,23 @@ impl Indication {
         if let Some(color) = target {
             self.layer_color.set(Some(color));
         }
+        // A layer at rest that stays invisible needs no animation yet.
+        let started = if self.layer.borrow().is_none() && target_alpha > 0.0 {
+            self.start_layer()
+        } else {
+            Ok(())
+        };
+        if let Err(error) = started {
+            tracing::warn!(%error, "InkWell state layer could not start");
+        }
         let moved = {
-            let mut layer = self.layer.borrow_mut();
+            let mut slot = self.layer.borrow_mut();
+            let Some(layer) = slot.as_mut() else {
+                drop(slot);
+                self.repaint.notify_listeners();
+                self.detach_when_idle();
+                return;
+            };
             if (*layer.target() - target_alpha).abs() <= f64::EPSILON {
                 None
             } else {
@@ -709,12 +752,18 @@ impl Indication {
     pub(crate) fn dispose(&self) {
         let waves = std::mem::take(&mut *self.waves.borrow_mut());
         drop(waves);
-        self.layer.borrow_mut().dispose();
+        if let Some(layer) = self.layer.borrow_mut().as_mut() {
+            layer.dispose();
+        }
     }
 
     /// The state layer's colour now, or `None` when it is invisible.
     fn layer_paint(&self) -> Option<Color> {
-        let alpha = self.layer.borrow().value();
+        let alpha = self
+            .layer
+            .borrow()
+            .as_ref()
+            .map_or(0.0, AnimatedValue::value);
         let color = self.layer_color.get()?;
         (alpha > 0.0).then(|| color.with_opacity(alpha))
     }
