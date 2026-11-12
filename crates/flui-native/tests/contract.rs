@@ -3269,8 +3269,8 @@ mod native_windows {
                 windows::Win32::UI::WindowsAndMessaging::SW_SHOWMINNOACTIVE,
             )
         };
-        // SAFETY: a query of the fixture's live window.
         assert!(
+            // SAFETY: a query of the fixture's live window.
             unsafe { IsIconic(hwnd) }.as_bool(),
             "the window is minimised"
         );
@@ -3813,8 +3813,8 @@ mod native_windows {
                     pump_pointer_thread();
                     std::thread::sleep(Duration::from_millis(2));
                 }
-                // SAFETY: read the actual hit target after native queue pumping.
                 assert_eq!(
+                    // SAFETY: read the actual hit target after native queue pumping.
                     unsafe { WindowFromPoint(target) },
                     hwnd,
                     "owned target must remain hit-testable after native dispatch"
@@ -4750,8 +4750,8 @@ mod native_windows {
                     },
                 },
             };
-            // SAFETY: initialized mouse union arm; cursor is over owned target.
             assert_eq!(
+                // SAFETY: initialized mouse union arm; cursor is over owned target.
                 unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) },
                 1,
                 "native wheel injection accepted"

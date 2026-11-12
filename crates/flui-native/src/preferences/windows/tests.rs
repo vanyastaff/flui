@@ -232,8 +232,8 @@ fn a_receiver_the_os_keeps_stays_registered_and_inert() {
     );
     assert!(!unregistered, "the kept window's class is not retired");
 
-    // SAFETY: `hwnd` is a handle this test created; `IsWindow` only asks.
     assert!(
+        // SAFETY: `hwnd` is a handle this test created; `IsWindow` only asks.
         unsafe { IsWindow(Some(hwnd)) }.as_bool(),
         "the OS kept the window"
     );

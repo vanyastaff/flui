@@ -344,7 +344,7 @@ fn bring_to_front(hwnd: HWND) -> bool {
             }
         }
         std::thread::sleep(Duration::from_millis(50));
-        // SAFETY: no arguments.
+        // SAFETY: `GetForegroundWindow` takes nothing and only reads the foreground handle.
         if unsafe { GetForegroundWindow() } == hwnd {
             return true;
         }
@@ -354,12 +354,12 @@ fn bring_to_front(hwnd: HWND) -> bool {
 
 /// Press and release `key`, only while `hwnd` is the foreground window.
 fn press(hwnd: HWND, key: VIRTUAL_KEY) {
-    // SAFETY: no arguments.
+    // SAFETY: `GetForegroundWindow` takes nothing and only reads the foreground handle.
     if unsafe { GetForegroundWindow() } != hwnd {
         bring_to_front(hwnd);
     }
-    // SAFETY: no arguments.
     assert_eq!(
+        // SAFETY: `GetForegroundWindow` takes nothing and only reads the foreground handle.
         unsafe { GetForegroundWindow() },
         hwnd,
         "the probe window lost the foreground; no key sent"
