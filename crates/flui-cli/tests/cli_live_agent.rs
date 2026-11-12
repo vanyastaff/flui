@@ -411,8 +411,9 @@ fn an_agent_presses_the_counter_on_a_live_device() {
 /// The acceptance application (`tests/fixtures/acceptance_app/`) as a
 /// project of its own: the counter's manifest with the facade's `material`
 /// and `serde` features and the application's codec, and the fixture's
-/// `app.rs` as its library.
-fn acceptance_project(workdir: &Path) -> PathBuf {
+/// `app.rs` as its library, launched with its documents under the storage
+/// directory `storage` instead of the fixture's own.
+fn acceptance_project(workdir: &Path, storage: &str) -> PathBuf {
     let project = counter_project(workdir);
     let manifest_path = project.join("Cargo.toml");
     let text = std::fs::read_to_string(&manifest_path).expect("read the project manifest");
@@ -459,9 +460,17 @@ fn acceptance_project(workdir: &Path) -> PathBuf {
     .expect("write the library root");
     std::fs::write(
         source.join("main.rs"),
-        "use flui_live_agent::app;\n\n\
-         fn main() -> Result<(), flui::LaunchError> {\n    \
-         flui::run_app(app::AcceptanceApp::new(app::Faults::NONE), app::launch())\n}\n",
+        format!(
+            "use flui_live_agent::app;\n\n\
+             fn main() -> Result<(), flui::LaunchError> {{\n    \
+             let dir = flui::platform::AppDataDir::try_new({storage:?})\n        \
+             .expect(\"BUG: the scenario's storage directory name is valid\");\n    \
+             let config = flui::AppConfig::new().with_storage_dir(dir);\n    \
+             flui::run_app(\n        \
+             app::AcceptanceApp::new(app::Faults::NONE),\n        \
+             flui::AppLaunch::new().config(config),\n    \
+             )\n}}\n"
+        ),
     )
     .expect("write the launcher");
     project
@@ -482,8 +491,20 @@ fn an_agent_drives_the_acceptance_app_on_the_desktop() {
         return;
     }
     let workdir = TempDir::new().expect("scaffold workdir");
-    let project = acceptance_project(workdir.path());
-    // The application's documents go to a directory of the run's own.
+    // A storage directory of the run's own: the user's acceptance
+    // application keeps its session, and a page it left open cannot start
+    // this run on it. Linux takes it under the work directory; the other
+    // desktops resolve it in the user's data roots, which the guard empties.
+    let storage = format!(
+        "dev.flui.acceptance-app.live-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("BUG: the clock is past the epoch")
+            .as_nanos()
+    );
+    let _documents = RunDocuments::of(&storage);
+    let project = acceptance_project(workdir.path(), &storage);
     let data = workdir.path().join("data");
     let (_run, received, started) = launch(&project, "desktop", &[("XDG_DATA_HOME", &data)]);
     started.unwrap_or_else(|message| panic!("{message}"));
@@ -511,4 +532,43 @@ fn an_agent_drives_the_acceptance_app_on_the_desktop() {
             .is_none()
             .then(|| button(tree, "Settings"))?
     });
+}
+
+/// The directories a desktop outside Linux keeps the scenario's documents
+/// in (`flui_native::storage::data_dirs`), removed when the scenario ends.
+struct RunDocuments {
+    dirs: Vec<PathBuf>,
+}
+
+impl RunDocuments {
+    fn of(storage: &str) -> Self {
+        let roots: &[&str] = if cfg!(windows) {
+            &["APPDATA", "LOCALAPPDATA"]
+        } else if cfg!(target_os = "macos") {
+            &["HOME"]
+        } else {
+            &[]
+        };
+        let dirs = roots
+            .iter()
+            .filter_map(std::env::var_os)
+            .map(|root| {
+                let root = PathBuf::from(root);
+                if cfg!(target_os = "macos") {
+                    root.join("Library/Application Support").join(storage)
+                } else {
+                    root.join(storage)
+                }
+            })
+            .collect::<Vec<PathBuf>>();
+        Self { dirs }
+    }
+}
+
+impl Drop for RunDocuments {
+    fn drop(&mut self) {
+        for dir in &self.dirs {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 }
