@@ -158,7 +158,7 @@ pub(crate) struct OwnerSignal {
     /// owner opens none for them. The platform itself is the owner thread's:
     /// the slot holds it in that thread's table, and no other thread reaches
     /// it (ADR-0327 §2).
-    platform: Mutex<Option<OwnerSlot<Weak<dyn Platform>>>>,
+    platform: Mutex<Option<Arc<OwnerSlot<Weak<dyn Platform>>>>>,
 }
 
 impl OwnerSignal {
@@ -193,7 +193,7 @@ impl OwnerSignal {
             return;
         }
         // The slot it replaces drops its value on this, its owner, thread.
-        let replaced = self.platform.lock().replace(slot);
+        let replaced = self.platform.lock().replace(Arc::new(slot));
         drop(replaced);
     }
     /// [`serve_platform`](Self::serve_platform), and let the owner open the
@@ -207,11 +207,11 @@ impl OwnerSignal {
     }
     /// The owner's platform, on the owner thread while it lives.
     fn owner_platform(&self) -> Option<Arc<dyn Platform>> {
-        self.platform
-            .lock()
-            .as_ref()
-            .and_then(OwnerSlot::cloned)
-            .and_then(|platform| platform.upgrade())
+        // The slot is read outside the lock: reading it first drops what
+        // slots dropped on other threads left with this one, and a
+        // destructor there may ask this signal again.
+        let slot = self.platform.lock().clone()?;
+        slot.cloned().and_then(|platform| platform.upgrade())
     }
     /// Ask the owner to ask the exit policy again: on the owner, whose table
     /// holds the platform, at once; from another thread, in the owner's next

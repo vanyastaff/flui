@@ -388,6 +388,41 @@ mod tests {
         off_owner_retention_case(true, true);
     }
 
+    /// Reading the owner's platform first drops what slots dropped on other
+    /// threads left with the owner, and such a destructor may ask the signal
+    /// again: the read holds no lock of the signal's while it does.
+    fn an_orphan_dropped_while_the_owner_reads_its_platform_may_ask_the_signal_again() {
+        struct AsksAgain(std::sync::Weak<OwnerSignal>);
+        impl Drop for AsksAgain {
+            fn drop(&mut self) {
+                if let Some(signal) = self.0.upgrade() {
+                    let _ = signal.request_exit_policy_reevaluation();
+                }
+            }
+        }
+        let (answered, answer) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let signal = OwnerSignal::new(Arc::new(|| Ok(())));
+            let platform: Arc<dyn crate::platform::Platform> =
+                Arc::new(crate::HeadlessPlatform::new());
+            signal.serve_platform(&platform);
+            let orphan = crate::owner::slot::OwnerSlot::new();
+            assert!(
+                orphan.replace(AsksAgain(Arc::downgrade(&signal))).is_ok(),
+                "the owner stores the value"
+            );
+            std::thread::spawn(move || drop(orphan))
+                .join()
+                .expect("the slot is dropped on another thread");
+            let _ = answered.send(signal.request_exit_policy_reevaluation().is_ok());
+        });
+        assert_eq!(
+            answer.recv_timeout(std::time::Duration::from_secs(10)),
+            Ok(true),
+            "the owner asked its platform without deadlocking on its own signal"
+        );
+    }
+
     fn worker_burst_coalesces_and_reentrant_wake_gets_a_later_finite_turn() {
         let posts = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::clone(&posts);
@@ -540,6 +575,10 @@ mod tests {
             (
                 "owner callback and capture panic priority",
                 owner_callback_and_capture_panics_do_not_replace_an_existing_unwind,
+            ),
+            (
+                "an orphan that asks the signal while the owner reads its platform",
+                an_orphan_dropped_while_the_owner_reads_its_platform_may_ask_the_signal_again,
             ),
             (
                 "worker burst and reentrant wake",
