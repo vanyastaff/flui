@@ -29,6 +29,8 @@ use std::thread::ThreadId;
 
 type Notify = Arc<dyn Fn() -> Result<(), PlatformError> + Send + Sync>;
 type Callback = Box<dyn FnMut() + Send>;
+/// The owner thread's slot of the platform the signal asks through.
+type PlatformSlot = OwnerSlot<Weak<dyn Platform>>;
 
 /// Where the owner-turn callback waits between turns. Every method is
 /// called with the signal's state lock held and runs no user code.
@@ -158,7 +160,7 @@ pub(crate) struct OwnerSignal {
     /// owner opens none for them. The platform itself is the owner thread's:
     /// the slot holds it in that thread's table, and no other thread reaches
     /// it (ADR-0327 §2).
-    platform: Mutex<Option<Arc<OwnerSlot<Weak<dyn Platform>>>>>,
+    platform: Mutex<Option<Arc<PlatformSlot>>>,
 }
 
 impl OwnerSignal {
