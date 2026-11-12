@@ -43,8 +43,8 @@ enum FilledButtonVariant {
 /// use flui_material::FilledButton;
 /// use flui_sdk::widgets::Text;
 ///
-/// let _filled = FilledButton::new(Text::new("Confirm")).on_pressed(|_cx| {});
-/// let _tonal = FilledButton::tonal(Text::new("Confirm")).on_pressed(|_cx| {});
+/// let _filled = FilledButton::new(Text::new("Confirm")).on_pressed(|_ctx| {});
+/// let _tonal = FilledButton::tonal(Text::new("Confirm")).on_pressed(|_ctx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct FilledButton {

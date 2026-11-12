@@ -19,15 +19,15 @@
 //!
 //! const NOTES: StorageName = StorageName::from_static("notes");
 //! let storage = MemoryStorage::new();
-//! let mut cx = Context::from_waker(Waker::noop());
+//! let mut ctx = Context::from_waker(Waker::noop());
 //!
 //! let barrier = storage.hold_commits();
 //! let mut write = pin!(storage.publish(&NOTES, b"saved".to_vec(), WriteMode::Replace));
-//! assert!(write.as_mut().poll(&mut cx).is_pending(), "held at the barrier");
+//! assert!(write.as_mut().poll(&mut ctx).is_pending(), "held at the barrier");
 //! assert_eq!(storage.contents(&NOTES), None);
 //!
 //! barrier.commit();
-//! assert!(matches!(write.as_mut().poll(&mut cx), Poll::Ready(Ok(_))));
+//! assert!(matches!(write.as_mut().poll(&mut ctx), Poll::Ready(Ok(_))));
 //! assert_eq!(storage.contents(&NOTES).as_deref(), Some(&b"saved"[..]));
 //! ```
 
@@ -209,16 +209,16 @@ impl MemoryStorage {
     ///
     /// const NOTES: StorageName = StorageName::from_static("notes");
     /// let storage = MemoryStorage::new();
-    /// let mut cx = Context::from_waker(Waker::noop());
+    /// let mut ctx = Context::from_waker(Waker::noop());
     ///
     /// // A commit while another barrier is alive commits nothing.
     /// let (outer, inner) = (storage.hold_commits(), storage.hold_commits());
     /// let mut first = pin!(storage.publish(&NOTES, b"one".to_vec(), WriteMode::Replace));
     /// inner.commit();
-    /// assert!(first.as_mut().poll(&mut cx).is_pending());
+    /// assert!(first.as_mut().poll(&mut ctx).is_pending());
     /// assert_eq!(storage.contents(&NOTES), None);
     /// outer.commit();
-    /// assert!(matches!(first.as_mut().poll(&mut cx), Poll::Ready(Ok(_))));
+    /// assert!(matches!(first.as_mut().poll(&mut ctx), Poll::Ready(Ok(_))));
     /// assert_eq!(storage.contents(&NOTES).as_deref(), Some(&b"one"[..]));
     ///
     /// // Dropping a barrier while another is alive discards nothing; the
@@ -226,10 +226,10 @@ impl MemoryStorage {
     /// let (outer, inner) = (storage.hold_commits(), storage.hold_commits());
     /// let mut second = pin!(storage.publish(&NOTES, b"two".to_vec(), WriteMode::Replace));
     /// drop(inner);
-    /// assert!(second.as_mut().poll(&mut cx).is_pending());
+    /// assert!(second.as_mut().poll(&mut ctx).is_pending());
     /// drop(outer);
     /// assert_eq!(
-    ///     second.as_mut().poll(&mut cx),
+    ///     second.as_mut().poll(&mut ctx),
     ///     Poll::Ready(Err(StorageError::Cancelled))
     /// );
     /// assert_eq!(storage.contents(&NOTES).as_deref(), Some(&b"one"[..]));
@@ -276,14 +276,14 @@ impl MemoryStorage {
     /// const NOTES: StorageName = StorageName::from_static("notes");
     /// let storage = MemoryStorage::new();
     /// storage.put(&NOTES, "old");
-    /// let mut cx = Context::from_waker(Waker::noop());
+    /// let mut ctx = Context::from_waker(Waker::noop());
     ///
     /// let held = storage.hold_copies();
     /// let mut copy = pin!(storage.copy_aside(&NOTES));
-    /// assert!(copy.as_mut().poll(&mut cx).is_pending());
+    /// assert!(copy.as_mut().poll(&mut ctx).is_pending());
     /// storage.put(&NOTES, "new");
     /// drop(held);
-    /// assert!(matches!(copy.as_mut().poll(&mut cx), Poll::Ready(Ok(_))));
+    /// assert!(matches!(copy.as_mut().poll(&mut ctx), Poll::Ready(Ok(_))));
     /// assert_eq!(storage.kept_aside(&NOTES), [b"new".to_vec()]);
     /// ```
     #[must_use = "copies are held only while the hold is alive"]
@@ -493,7 +493,7 @@ struct Answered<T: Unpin> {
 impl<T: Unpin> Future for Answered<T> {
     type Output = Result<T, StorageError>;
 
-    fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, _ctx: &mut Context<'_>) -> Poll<Self::Output> {
         self.answer.take().map_or(Poll::Pending, Poll::Ready)
     }
 }
@@ -513,7 +513,7 @@ struct WriteRequest {
 impl Future for WriteRequest {
     type Output = Result<StoredVersion, StorageError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut state = self.state.lock();
         let slot = state
             .writes
@@ -522,7 +522,7 @@ impl Future for WriteRequest {
         if let Some(answer) = slot.answer.take() {
             return Poll::Ready(answer);
         }
-        slot.waker = Some(cx.waker().clone());
+        slot.waker = Some(ctx.waker().clone());
         Poll::Pending
     }
 }
@@ -566,13 +566,13 @@ struct CopyRequest {
 impl Future for CopyRequest {
     type Output = Result<CopiedAside, StorageError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         if self.answered {
             return Poll::Pending;
         }
         // A waker's clone and drop run its owner's code: neither runs under
         // the storage's lock.
-        let waker = cx.waker().clone();
+        let waker = ctx.waker().clone();
         let mut state = self.state.lock();
         if state.copy_holds > 0 {
             state.held_copies.push(waker);

@@ -37,7 +37,7 @@ pub(crate) mod sealed {
 /// - Dependency injection (InheritedView lookups)
 /// - Ancestor lookups (find ancestors by type)
 /// - Dirty marking for rebuilds
-/// - Signal reads (`signals` feature)
+/// - Signal reads
 ///
 /// Presentation capabilities (rebuild scheduling, post-frame work, focus, text
 /// input, keep-alive, the render tree) live on [`LifecycleContext`], which only
@@ -383,11 +383,11 @@ pub trait LifecycleContext: BuildContext {
     fn rebuild_handle(&self) -> crate::RebuildHandle;
 
     /// An owned, `'static`, `!Send` capability that opens a signal write
-    /// (ADR-0086): `source.write(|cx| count.set(cx, 1))`.
+    /// (ADR-0086): `source.write(|ctx| count.set(ctx, 1))`.
     ///
     /// Keep it in the state and use it where an event reaches this widget:
     /// wrapping a recognizer callback so the user's closure receives the
-    /// `&mut EventCx<'_>`, or inside a callback whose shape carries no `cx`.
+    /// `&mut EventCx<'_>`, or inside a callback whose shape carries no `ctx`.
     /// It writes into this element's presentation graph; a signal minted by
     /// another presentation is refused with
     /// [`SignalError::ForeignGraph`](crate::SignalError::ForeignGraph).
@@ -744,7 +744,7 @@ pub trait LifecycleContext: BuildContext {
     fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell>;
 }
 
-/// Platform capabilities through the seam (ADR-0152): `cx.capability::<C>()`.
+/// Platform capabilities through the seam (ADR-0152): `ctx.capability::<C>()`.
 ///
 /// A blanket extension of [`LifecycleContext`], so it exists only where a
 /// lifecycle hook runs. A build context has no such method:

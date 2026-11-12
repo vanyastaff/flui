@@ -920,7 +920,8 @@ impl SemanticsConfiguration {
     /// Sets the stable identifier tests and automation select this node by
     /// (ADR-0240), published as AccessKit `author_id`: UI Automation's
     /// `AutomationId`, macOS `AXIdentifier`, AT-SPI's accessible id, iOS's
-    /// `accessibilityIdentifier` and Android's `viewIdResourceName`.
+    /// `accessibilityIdentifier` (Android's `viewIdResourceName` waits on
+    /// `accesskit_android`: [docs/gaps.md](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#no-accessibility-on-mobile-and-the-web)).
     ///
     /// It is never announced, and it is not semantic payload: setting it
     /// marks nothing annotated and makes no boundary, so adding one never

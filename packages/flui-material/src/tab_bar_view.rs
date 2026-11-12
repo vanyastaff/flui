@@ -299,7 +299,7 @@ impl Action<TabStep> for TabStepAction {
         Some(self.controller.step_changes())
     }
 
-    fn invoke(&self, _cx: &mut EventCx<'_>, step: &TabStep) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, step: &TabStep) -> ActionOutcome {
         let Some(target) = self.target(*step) else {
             return ActionOutcome::NotPerformed;
         };

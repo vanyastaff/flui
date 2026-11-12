@@ -181,10 +181,6 @@ harness = true
 
 [features]
 default = []
-# Accepted and ignored: the signals tests and bench always build (ADR-0085 §5).
-# It stays only because CI's `test-features` job still passes
-# `--features flui-widgets/signals`; it goes with that step.
-signals = []
 # `ScrollStep::for_test` and `FlingStep::for_test`: a nested scroll connection
 # exercised alone, outside the channel that otherwise builds every step.
 testing = []

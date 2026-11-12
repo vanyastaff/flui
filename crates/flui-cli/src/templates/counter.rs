@@ -27,6 +27,7 @@ fn cargo_toml(name: &str, source: &DependencySource) -> String {
         ""
     };
     let lib_table = super::LIB_TABLE;
+    let profiles = super::PROFILES;
 
     format!(
         r#"# FLUI Template v{version}{mode_comment}
@@ -48,12 +49,7 @@ rust-version = "1.99"
 [dev-dependencies]
 {test_deps}
 
-[profile.release]
-opt-level = 3
-lto = "thin"
-codegen-units = 1
-strip = "debuginfo"
-"#
+{profiles}"#
     )
 }
 
@@ -102,7 +98,7 @@ impl ViewState<CounterView> for CounterState {
                     Text::new(count.get(ctx).to_string()),
                     SizedBox::height(16.0),
                     RawButton::new(Text::new("Increment"))
-                        .on_press(move |cx| count.update(cx, |n| *n += 1)),
+                        .on_press(move |ctx| count.update(ctx, |n| *n += 1)),
                 ))
                 .main_axis_alignment(MainAxisAlignment::Center),
             ),

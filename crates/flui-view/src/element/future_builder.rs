@@ -395,12 +395,12 @@ mod tests {
     impl Future for Controlled {
         type Output = Result<Payload, Boom>;
 
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
             let result = self.result.lock().take();
             if let Some(result) = result {
                 Poll::Ready(result)
             } else {
-                let _prev = self.waker.lock().replace(cx.waker().clone());
+                let _prev = self.waker.lock().replace(ctx.waker().clone());
                 Poll::Pending
             }
         }

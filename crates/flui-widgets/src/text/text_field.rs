@@ -304,10 +304,10 @@ impl ViewState<RawTextField> for RawTextFieldState {
             editable = editable.caret_height(height);
         }
         if let Some(on_submitted) = view.on_submitted.clone() {
-            editable = editable.on_submitted(move |cx, text| on_submitted(cx, text));
+            editable = editable.on_submitted(move |ctx, text| on_submitted(ctx, text));
         }
         if let Some(on_changed) = view.on_changed.clone() {
-            editable = editable.on_changed(move |cx, text| on_changed(cx, text));
+            editable = editable.on_changed(move |ctx, text| on_changed(ctx, text));
         }
 
         let padded = Padding::new(view.content_padding).child(editable);
@@ -319,7 +319,7 @@ impl ViewState<RawTextField> for RawTextFieldState {
         // wherever the keyboard moved it meanwhile.
         let focus_node = Rc::clone(&self.focus_node);
         Listener::new()
-            .on_pointer_down(move |_cx, _dispatch| {
+            .on_pointer_down(move |_ctx, _dispatch| {
                 let _ = focus_node.request_focus();
             })
             .child(decorated)

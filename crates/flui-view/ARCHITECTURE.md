@@ -455,10 +455,11 @@ stashed and used after its element is defunct. Capability acquisition is split o
 ### Inherited reads are O(1) and field-precise; reading is depending
 
 **Rule.** Each element node carries its resolved inherited scope, built at mount and shared by
-refcount down runs of non-providers. A provider's scope is the table of everything above it,
-shared, and the few types the nearest providers added since that table was built; a provider
-copies the table only when those outgrow four. A nearer provider of a type shadows a farther one.
-`find_inherited_provider` scans the few and asks the table once.
+refcount down runs of non-providers. A provider's scope is one layer holding the types it
+publishes, over a shared pointer to the scope above; a nearer provider of a type shadows a farther
+one. `find_inherited_provider` walks at most four layers and then asks one table: the provider
+whose parent's chain is four layers long folds that chain into a new table, so a lookup stays
+O(1) at any depth.
 `#[derive(InheritedData)]` generates `FieldMask` constants per field; `InheritedView::changed_fields`
 diffs old and new data per field; `depend_on_field(mask, …)` records a masked dependency, and a
 provider update rebuilds only dependents whose mask intersects the change. The whole-type read
@@ -522,7 +523,7 @@ with `LifecycleHook::Update` (ADR-0287); the element is not requeued.
 
 **Rule.** The reactive graph (`reactive/mod.rs`, one `Reactive` per `BuildOwner`) implements
 `flui_foundation::read_scope::ReadGraph` — pure reads, enough for `Signal::peek` — and never
-`ReaderSink`. `BuildContext` has `ReadScope` as a supertrait, so `sig.get(cx)` resolves through
+`ReaderSink`. `BuildContext` has `ReadScope` as a supertrait, so `sig.get(ctx)` resolves through
 the context's scope. The scope pairs the graph with `ElementReads`, a crate-private sink bound
 to one element: `make_build_ctx` mints it for the element about to build (`BuildCtx` always
 subscribes), and `ElementBuildContext` captures one for its own element and subscribes only while

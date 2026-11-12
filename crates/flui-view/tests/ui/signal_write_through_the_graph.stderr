@@ -7,8 +7,8 @@ error[E0277]: `Reactive` cannot write a signal
   |                   required by a bound introduced by this call
   |
   = help: the trait `WriteTarget` is not implemented for `Reactive`
-  = note: a signal write takes the `&mut EventCx` an event callback receives: `move |cx| count.set(cx, v)`
-  = note: outside a callback, acquire a `WriterSource` in `init_state` and call `source.write(|cx| ..)`; `build` has none
+  = note: a signal write takes the `&mut EventCx` an event callback receives: `move |ctx| count.set(ctx, v)`
+  = note: outside a callback, acquire a `WriterSource` in `init_state` and call `source.write(|ctx| ..)`; `build` has none
 help: the following other types implement trait `WriteTarget`
  --> src/reactive/writer.rs
   |

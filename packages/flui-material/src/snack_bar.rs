@@ -178,7 +178,7 @@ impl std::fmt::Debug for SnackBar {
 /// ```rust
 /// use flui_material::SnackBarAction;
 ///
-/// let _action = SnackBarAction::new("UNDO", |_cx| {});
+/// let _action = SnackBarAction::new("UNDO", |_ctx| {});
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct SnackBarAction {
@@ -260,12 +260,12 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
                 .rebuild
                 .clone()
                 .expect("BUG: init_state runs before the first build");
-            button = button.on_pressed(move |cx| {
+            button = button.on_pressed(move |ctx| {
                 if triggered.replace(true) {
                     return;
                 }
                 rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-                on_pressed(cx);
+                on_pressed(ctx);
                 if let Some(messenger) = &messenger {
                     messenger.hide_current_snack_bar_because(SnackBarClosedReason::Action);
                 }

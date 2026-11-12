@@ -271,7 +271,7 @@ fn on_changed_editing_then_panicking() {
     let node = FocusNode::with_debug_label("on_changed panics");
     let app = controller.clone();
     let mut harness = focused(
-        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, text| {
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_ctx, text| {
             if text == "a" {
                 app.set_text("app");
                 panic!("on_changed failure");
@@ -295,18 +295,19 @@ fn on_changed_rebuilt_away_then_panicking() {
         Rc::clone(&node),
     );
     let capture = PanicsOnDrop("on_changed capture destroyed");
-    let view = EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, _| {
-        let _keep_alive = &capture;
-        if let Some(harness) = nested.upgrade() {
-            // The rebuild drops the field's own `on_changed`.
-            harness
-                .borrow_mut()
-                .as_mut()
-                .expect("mounted")
-                .swap_root(EditableText::new(rebuilt.clone(), Rc::clone(&rebuilt_node)));
-            panic!("on_changed failure");
-        }
-    });
+    let view =
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_ctx, _| {
+            let _keep_alive = &capture;
+            if let Some(harness) = nested.upgrade() {
+                // The rebuild drops the field's own `on_changed`.
+                harness
+                    .borrow_mut()
+                    .as_mut()
+                    .expect("mounted")
+                    .swap_root(EditableText::new(rebuilt.clone(), Rc::clone(&rebuilt_node)));
+                panic!("on_changed failure");
+            }
+        });
     *harness.borrow_mut() = Some(focused(view, &node));
     let field = field(harness.borrow().as_ref().expect("mounted"));
     assert_eq!(edit(&*field, "a"), Ok(LockOutcome::Granted));
@@ -427,7 +428,7 @@ fn observer_panicking_after_a_parked_failure() {
     let node = FocusNode::with_debug_label("observer after a parked failure");
     let app = controller.clone();
     let mut harness = focused(
-        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, text| {
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_ctx, text| {
             if text == "a" {
                 app.set_text("on_changed edit");
                 panic!("on_changed failure");
@@ -1334,7 +1335,7 @@ fn composing_field(
     let heard = Rc::new(RefCell::new(Vec::new()));
     let hear = Rc::clone(&heard);
     let mut harness = mount(
-        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, text| {
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_ctx, text| {
             hear.borrow_mut().push(text.to_owned());
             assert!(hear.borrow().len() != 1, "on_changed failure");
         }),
@@ -2093,7 +2094,7 @@ fn editable_on_changed_failure_ahead_of_a_nested_one() {
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("nested failures");
     let mut harness = focused(
-        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(|_cx, text| {
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(|_ctx, text| {
             assert!(!matches!(text, "a" | "ab"), "on_changed failure on {text}");
         }),
         &node,
@@ -2130,7 +2131,7 @@ fn editable_key_edit_whose_listener_retirement_fails() {
     let sink = Rc::clone(&heard);
     let mut harness = focused(
         EditableText::new(controller.clone(), Rc::clone(&node))
-            .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned())),
+            .on_changed(move |_ctx, text| sink.borrow_mut().push(text.to_owned())),
         &node,
     );
     // A listener that drops its own subscription mid-round; the notifier's
@@ -2187,7 +2188,7 @@ fn editable_unmount_with_a_parked_failure() {
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("dispose");
     let mut harness = focused(
-        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(|_cx, text| {
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(|_ctx, text| {
             assert!(text.is_empty(), "on_changed failure on {text}");
         }),
         &node,
@@ -2525,7 +2526,7 @@ fn editable_settle_retiring_after_on_changed_failed() {
     let node = FocusNode::with_debug_label("settle retirement");
     let app = controller.clone();
     let mut harness = focused(
-        EditableText::new(controller, Rc::clone(&node)).on_changed(move |_cx, text| {
+        EditableText::new(controller, Rc::clone(&node)).on_changed(move |_ctx, text| {
             if text == "a" {
                 app.set_text("app");
                 panic!("on_changed failure");
@@ -2602,7 +2603,7 @@ fn editable_key_edit_whose_on_changed_panics() {
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("key edit, failing owner");
     let mut harness = focused(
-        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(|_cx, text| {
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(|_ctx, text| {
             assert!(text != "a", "on_changed failure");
         }),
         &node,
@@ -2638,7 +2639,7 @@ fn editable_semantic_set_text_whose_on_changed_panics() {
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("semantic edit, failing owner");
     let mut harness = focused(
-        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(|_cx, text| {
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(|_ctx, text| {
             assert!(text != "said", "on_changed failure");
         }),
         &node,
@@ -2683,7 +2684,7 @@ fn logs_as(
     log: &Rc<RefCell<Vec<String>>>,
 ) -> impl Fn(&mut flui_view::EventCx<'_>, &str) + 'static {
     let log = Rc::clone(log);
-    move |_cx, text| log.borrow_mut().push(format!("{name}: {text}"))
+    move |_ctx, text| log.borrow_mut().push(format!("{name}: {text}"))
 }
 
 /// A field whose controller listener, on the next change, synchronously
@@ -3475,7 +3476,7 @@ fn editable_store_outliving_its_field() {
     let node = FocusNode::with_debug_label("outlived field");
     let capture = PanicsOnDrop("on_changed capture destroyed");
     let mut harness = focused(
-        EditableText::new(controller, Rc::clone(&node)).on_changed(move |_cx, _| {
+        EditableText::new(controller, Rc::clone(&node)).on_changed(move |_ctx, _| {
             let _keep_alive = &capture;
         }),
         &node,
@@ -3680,7 +3681,7 @@ fn editable_behind_a_queued_gate_move(through_anchor: bool) {
     let node = FocusNode::with_debug_label("queued gate move");
     let app = controller.clone();
     let mut harness = focused(
-        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, text| {
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_ctx, text| {
             if text == "a" {
                 app.set_text("on_changed edit");
                 panic!("on_changed failure");

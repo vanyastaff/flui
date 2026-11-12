@@ -657,15 +657,15 @@ fn header_box(
         // (ARIA admits `aria-expanded` on controls only).
         if !model.rests_on(0.0) {
             let expand = Rc::clone(model);
-            semantics = semantics.on_scroll_up(move |_cx, _unit| expand.settle_to(0.0, 0.0));
+            semantics = semantics.on_scroll_up(move |_ctx, _unit| expand.settle_to(0.0, 0.0));
         }
         if !model.rests_on(model.range()) {
             let collapse = Rc::clone(model);
             semantics = semantics
-                .on_scroll_down(move |_cx, _unit| collapse.settle_to(collapse.range(), 0.0));
+                .on_scroll_down(move |_ctx, _unit| collapse.settle_to(collapse.range(), 0.0));
         }
         let into_view = Rc::clone(model);
-        semantics = semantics.on_scroll_into_view(move |_cx, request| {
+        semantics = semantics.on_scroll_into_view(move |_ctx, request| {
             // A request for the banner itself, or for content it clips.
             let clipped = request
                 .is_none_or(|reveal| !reveal.viewport_rect.contains_rect(&reveal.target_rect));

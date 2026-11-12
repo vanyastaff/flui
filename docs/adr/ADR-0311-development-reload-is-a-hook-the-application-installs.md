@@ -13,7 +13,7 @@
   (owner-local state; §5, a thread per runtime later);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) and
   [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md) (containment of
-  user code); [ADR-0136](ADR-0136-owner-local-ui-surfaces.md) §3 (the `Send` positions of the
+  user code); [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) §3 (the `Send` positions of the
   public API); [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) §1 (`InputTapFactory`,
   the same factory shape); [ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md) §7
   (the development agent's hooks, which the loop owns the same way); [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the `globals`
@@ -255,7 +255,7 @@ user code:
   the Android `--scene` host moves to `with_dev_scene`.
 - Bad, because `cargo xtask send-positions` gains the two factories' `Send` and `Sync` positions
   while losing the hook's `Send` supertrait; they stay because the factory really crosses threads
-  inside `AppConfig` (ADR-0136 §3).
+  inside `AppConfig` (ADR-0323 §2, a `handle`).
 - Bad, because `flui create --hot-reload` stays a three-crate project until a code patcher arrives,
   and Android and the web have no widget reload.
 - Neutral, because the reload tiers stay `flui_runtime::reload::ReloadTier`, and only `Reassemble`

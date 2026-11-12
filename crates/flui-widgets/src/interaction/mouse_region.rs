@@ -25,8 +25,8 @@ where
     F: Fn(&mut EventCx<'_>, PointerInfo, Offset) -> R + 'static,
     R: EventOutcome,
 {
-    Rc::new(move |cx: &mut EventCx<'_>, pointer, position| {
-        callback(cx, pointer, position).report();
+    Rc::new(move |ctx: &mut EventCx<'_>, pointer, position| {
+        callback(ctx, pointer, position).report();
     })
 }
 
@@ -34,7 +34,7 @@ where
 fn in_write(writer: &WriterSource, callback: &MouseCallback) -> Rc<dyn Fn(PointerInfo, Offset)> {
     let writer = writer.clone();
     let callback = Rc::clone(callback);
-    Rc::new(move |pointer, position| writer.write(|cx| callback(cx, pointer, position)))
+    Rc::new(move |pointer, position| writer.write(|ctx| callback(ctx, pointer, position)))
 }
 
 /// Calls callbacks when the mouse enters, hovers within, or exits its bounds.
@@ -44,7 +44,7 @@ fn in_write(writer: &WriterSource, callback: &MouseCallback) -> Rc<dyn Fn(Pointe
 ///
 /// Each callback receives the dispatch's `&mut EventCx<'_>` first, so it
 /// writes a signal directly (ADR-0086):
-/// `.on_enter(move |cx, _pointer, _position| hovered.set(cx, true))`. The
+/// `.on_enter(move |ctx, _pointer, _position| hovered.set(ctx, true))`. The
 /// pointer metadata preserves kind, role and the optional hardware device identity.
 /// region has no `init_state`; it takes the owner's [`WriterSource`] from the
 /// render-object context that registers its callbacks. A stationary device's
@@ -162,8 +162,8 @@ impl MouseRegion {
     pub(crate) fn hovering(states: &WidgetStatesController) -> Self {
         let (entered, left) = (states.clone(), states.clone());
         Self::new()
-            .on_enter(move |_cx: &mut EventCx<'_>, _pointer, _position| entered.pointer_entered())
-            .on_exit(move |_cx: &mut EventCx<'_>, _pointer, _position| left.pointer_left())
+            .on_enter(move |_ctx: &mut EventCx<'_>, _pointer, _position| entered.pointer_entered())
+            .on_exit(move |_ctx: &mut EventCx<'_>, _pointer, _position| left.pointer_left())
     }
 
     fn configure(&self, render_object: &mut RenderMouseRegion) {

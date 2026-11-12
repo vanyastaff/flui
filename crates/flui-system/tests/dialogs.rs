@@ -182,8 +182,8 @@ struct ForgetfulPlugin;
 
 impl Plugin for ForgetfulPlugin {
     fn register(&self, registrar: &mut CapabilityRegistrar) {
-        registrar.provide::<FileDialogCapability>(|cx: &ProviderContext<'_>| {
-            FileDialogs::try_new(ForgetfulBackend, cx)
+        registrar.provide::<FileDialogCapability>(|ctx: &ProviderContext<'_>| {
+            FileDialogs::try_new(ForgetfulBackend, ctx)
         });
     }
 }

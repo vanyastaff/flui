@@ -32,8 +32,8 @@ struct ClipboardPlugin;
 
 impl Plugin for ClipboardPlugin {
     fn register(&self, registrar: &mut CapabilityRegistrar) {
-        registrar.provide::<ClipboardCapability>(|cx: &ProviderContext<'_>| {
-            Ok(ClipboardHandle::new(Inert, cx))
+        registrar.provide::<ClipboardCapability>(|ctx: &ProviderContext<'_>| {
+            Ok(ClipboardHandle::new(Inert, ctx))
         });
     }
 }
@@ -89,11 +89,11 @@ pub(crate) fn conflicting_registrations_fail_run_before_the_platform_starts() {
     );
 
     let two_overrides = application()
-        .capability::<ClipboardCapability>(|cx: &ProviderContext<'_>| {
-            Ok(ClipboardHandle::new(Inert, cx))
+        .capability::<ClipboardCapability>(|ctx: &ProviderContext<'_>| {
+            Ok(ClipboardHandle::new(Inert, ctx))
         })
-        .capability::<ClipboardCapability>(|cx: &ProviderContext<'_>| {
-            Ok(ClipboardHandle::new(Inert, cx))
+        .capability::<ClipboardCapability>(|ctx: &ProviderContext<'_>| {
+            Ok(ClipboardHandle::new(Inert, ctx))
         })
         .run();
     assert!(

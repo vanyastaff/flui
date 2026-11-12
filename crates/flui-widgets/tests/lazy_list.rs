@@ -486,6 +486,80 @@ pub(crate) fn lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_st
     );
 }
 
+/// A key finder or an item builder that panics with a payload whose own drop
+/// panics is contained: the payload is destroyed under containment, the
+/// frame completes, and the list still lays out.
+pub(crate) fn lazy_list_view_builder_callback_panics_are_contained_with_their_payloads() {
+    struct DropPanics;
+    impl Drop for DropPanics {
+        fn drop(&mut self) {
+            panic!("the callback's payload panics in its drop");
+        }
+    }
+
+    let data: Data = Arc::new(parking_lot::Mutex::new((0..10).collect()));
+    let inits = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let mut laid = lay_out(keyed_list(&data, &inits, false), tight(200.0, 200.0));
+    assert_eq!(born_ids(&laid, &[0, 1, 2]), vec![0, 1, 2]);
+
+    // Row 1 moves; resolving the residents' new indexes calls the finder.
+    {
+        let mut d = data.lock();
+        let row = d.remove(1);
+        d.insert(5, row);
+    }
+    let rows: Vec<u32> = data.lock().clone();
+    let inits_for_rows = Arc::clone(&inits);
+    let asked = Rc::new(Cell::new(false));
+    let finder_asked = Rc::clone(&asked);
+    let list = ListView::builder(rows.len(), 48.0, move |i| {
+        rows.get(i).map(|&id| {
+            KeyedRow {
+                id,
+                key: flui_foundation::ValueKey::new(id),
+                inits: Arc::clone(&inits_for_rows),
+            }
+            .boxed()
+        })
+    })
+    .find_index_by_key(move |_| {
+        finder_asked.set(true);
+        std::panic::panic_any(DropPanics)
+    });
+    laid.pump_widget(list);
+
+    assert!(asked.get(), "the rebuild asked the key finder");
+    assert!(
+        laid.find_text("row0").is_some(),
+        "the list still lays out after the contained lookup"
+    );
+
+    // An item builder that panics the same way is replaced by an error view
+    // for its index; the other rows still build.
+    let rows: Vec<u32> = data.lock().clone();
+    let built = Rc::new(Cell::new(false));
+    let builder_ran = Rc::clone(&built);
+    laid.pump_widget(ListView::builder(rows.len(), 48.0, move |i| {
+        if i == 1 {
+            builder_ran.set(true);
+            std::panic::panic_any(DropPanics);
+        }
+        rows.get(i).map(|&id| {
+            KeyedRow {
+                id,
+                key: flui_foundation::ValueKey::new(id),
+                inits: Arc::clone(&inits),
+            }
+            .boxed()
+        })
+    }));
+    assert!(built.get(), "the rebuild built the panicking index");
+    assert!(
+        laid.find_text("row0").is_some(),
+        "the list still lays out after the contained build"
+    );
+}
+
 // ============================================================================
 // Pinned rows — laid out and announced while scrolled away
 // ============================================================================

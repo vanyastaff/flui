@@ -24,7 +24,7 @@ fn slider(range: NumericRange, log: &Proposals) -> Slider {
     let log = Rc::clone(log);
     Slider::new(range)
         .label("Volume")
-        .on_changed(move |_cx, value| log.borrow_mut().push(value))
+        .on_changed(move |_ctx, value| log.borrow_mut().push(value))
 }
 fn standard(log: &Proposals) -> Slider {
     slider(range(25.0, 0.0, 100.0, 10.0), log)

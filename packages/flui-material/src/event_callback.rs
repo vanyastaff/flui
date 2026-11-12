@@ -22,7 +22,7 @@ where
     F: Fn(&mut EventCx<'_>) -> R + 'static,
     R: EventOutcome,
 {
-    Rc::new(move |cx: &mut EventCx<'_>| callback(cx).report())
+    Rc::new(move |ctx: &mut EventCx<'_>| callback(ctx).report())
 }
 
 /// Store an event callback that also receives a value, adapted to report
@@ -33,5 +33,5 @@ where
     F: Fn(&mut EventCx<'_>, T) -> R + 'static,
     R: EventOutcome,
 {
-    Rc::new(move |cx: &mut EventCx<'_>, value: T| callback(cx, value).report())
+    Rc::new(move |ctx: &mut EventCx<'_>, value: T| callback(ctx, value).report())
 }

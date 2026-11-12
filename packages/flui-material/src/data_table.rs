@@ -781,7 +781,7 @@ fn row_checkbox_cell(
 ) -> BoxedView {
     let mut checkbox = Checkbox::new(selected);
     if let Some(handler) = on_select_changed.clone() {
-        checkbox = checkbox.on_changed(move |cx, next| handler(cx, next.unwrap_or(false)));
+        checkbox = checkbox.on_changed(move |ctx, next| handler(ctx, next.unwrap_or(false)));
     }
     let content: BoxedView = Semantics::new()
         .container(true)
@@ -792,7 +792,7 @@ fn row_checkbox_cell(
         .boxed();
 
     let wrapped = match on_select_changed {
-        Some(handler) => wrap_selectable(content, move |cx| handler(cx, !selected), overlay),
+        Some(handler) => wrap_selectable(content, move |ctx| handler(ctx, !selected), overlay),
         None => content,
     };
     TableCell::new(TableCellVerticalAlignment::Fill, wrapped).boxed()
@@ -854,9 +854,9 @@ fn data_cell(
         .boxed();
 
     if let Some(on_tap) = cell.on_tap.clone() {
-        wrap_selectable(content, move |cx| on_tap(cx), overlay)
+        wrap_selectable(content, move |ctx| on_tap(ctx), overlay)
     } else if let Some(toggle) = row_toggle {
-        wrap_selectable(content, move |cx| toggle(cx), overlay)
+        wrap_selectable(content, move |ctx| toggle(ctx), overlay)
     } else {
         content
     }
@@ -932,16 +932,16 @@ impl StatelessView for DataTable {
             let on_select_all = self.on_select_all.clone();
             heading_cells.push(header_checkbox_cell(
                 checked,
-                move |cx, next: Option<bool>| {
+                move |ctx, next: Option<bool>| {
                     let effective = some_checked || next.unwrap_or(false);
                     if let Some(handler) = &on_select_all {
-                        handler(cx, effective);
+                        handler(ctx, effective);
                     } else {
                         for (selected, handler) in &rows_snapshot {
                             if let Some(handler) = handler
                                 && *selected != effective
                             {
-                                handler(cx, effective);
+                                handler(ctx, effective);
                             }
                         }
                     }
@@ -999,7 +999,7 @@ impl StatelessView for DataTable {
             let row_toggle: Option<CellTapCallback> =
                 row.on_select_changed.clone().map(|handler| {
                     let selected = row.selected;
-                    Rc::new(move |cx: &mut flui_sdk::view::EventCx<'_>| handler(cx, !selected))
+                    Rc::new(move |ctx: &mut flui_sdk::view::EventCx<'_>| handler(ctx, !selected))
                         as CellTapCallback
                 });
             for (col_index, column) in self.columns.iter().enumerate() {

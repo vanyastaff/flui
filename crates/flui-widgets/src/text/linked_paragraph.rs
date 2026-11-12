@@ -70,14 +70,14 @@ struct LiveLinks {
 }
 
 impl LiveLinks {
-    /// Run the handler for `link` inside `cx`, with no borrow held while it
+    /// Run the handler for `link` inside `ctx`, with no borrow held while it
     /// runs.
-    fn open(&self, cx: &mut EventCx<'_>, link: &TextLink) {
+    fn open(&self, ctx: &mut EventCx<'_>, link: &TextLink) {
         if !self.mounted.get() {
             return;
         }
         let handler = Rc::clone(&self.on_link.borrow());
-        handler(cx, link);
+        handler(ctx, link);
     }
 
     /// Move the focus to `node`, as assistive technology asked.
@@ -209,7 +209,7 @@ fn tap(live: &Rc<LiveLinks>, mount: &Mount, link: TextLink) -> Rc<TapGestureReco
     let (live, writer) = (Rc::clone(live), mount.writer.clone());
     TapGestureRecognizer::builder(mount.policy.arena().clone())
         .settings(mount.policy.settings().clone())
-        .on_tap(move |_| writer.write(|cx| live.open(cx, &link)))
+        .on_tap(move |_| writer.write(|ctx| live.open(ctx, &link)))
         .build()
 }
 
@@ -511,8 +511,8 @@ struct OpenLink {
 }
 
 impl Action<ActivateLinkIntent> for OpenLink {
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &ActivateLinkIntent) -> ActionOutcome {
-        self.live.open(cx, &self.link);
+    fn invoke(&self, ctx: &mut EventCx<'_>, _intent: &ActivateLinkIntent) -> ActionOutcome {
+        self.live.open(ctx, &self.link);
         ActionOutcome::Performed
     }
 }
@@ -528,7 +528,7 @@ impl Action<ActivateIntent> for DeclineActivation {
         false
     }
 
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
         ActionOutcome::NotPerformed
     }
 }
@@ -538,7 +538,7 @@ impl Action<ActivationPressIntent> for DeclineActivation {
         false
     }
 
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
         ActionOutcome::NotPerformed
     }
 }
@@ -610,7 +610,7 @@ fn run_link_action(target: LocalPayloadTarget, call: &ActionCall) {
     } else {
         activation
             .writer
-            .write(|cx| activation.live.open(cx, &activation.link));
+            .write(|ctx| activation.live.open(ctx, &activation.link));
     }
 }
 

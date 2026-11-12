@@ -46,11 +46,11 @@ struct ProbeFuture {
 impl Future for ProbeFuture {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        *self.observed.lock().expect("observed waker") = Some(cx.waker().clone());
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
+        *self.observed.lock().expect("observed waker") = Some(ctx.waker().clone());
         match &self.outcome {
             Outcome::Panic => {
-                cx.waker().wake_by_ref();
+                ctx.waker().wake_by_ref();
                 panic!("poll failure");
             }
             Outcome::Ready => Poll::Ready(()),
@@ -60,7 +60,7 @@ impl Future for ProbeFuture {
                 Poll::Pending
             }
             Outcome::Pending => {
-                cx.waker().wake_by_ref();
+                ctx.waker().wake_by_ref();
                 Poll::Pending
             }
         }
@@ -376,8 +376,8 @@ fn task_retirement_disarms_sibling_wakers() {
         std::future::pending::<()>().await;
     }));
     let second = driver
-        .spawn_local_eager(Box::pin(std::future::poll_fn(move |cx| {
-            *observed.lock().expect("observed waker") = Some(cx.waker().clone());
+        .spawn_local_eager(Box::pin(std::future::poll_fn(move |ctx| {
+            *observed.lock().expect("observed waker") = Some(ctx.waker().clone());
             Poll::Pending
         })))
         .expect("pending sibling");

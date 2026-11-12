@@ -7,7 +7,7 @@
 //!
 //! The count is a `Signal`: created in `create_state`, read in `build` (which
 //! rebuilds this view when it changes), and written by the button's press,
-//! whose callback receives the `cx` a write needs. `build` has no `cx` to
+//! whose callback receives the `ctx` a write needs. `build` has no `ctx` to
 //! write with.
 //!
 //! Run with: cargo run --example counter
@@ -44,7 +44,7 @@ impl ViewState<CounterView> for CounterState {
                     Text::new(count.get(ctx).to_string()),
                     SizedBox::height(16.0),
                     RawButton::new(Text::new("Increment"))
-                        .on_press(move |cx| count.update(cx, |n| *n += 1)),
+                        .on_press(move |ctx| count.update(ctx, |n| *n += 1)),
                 ))
                 .main_axis_alignment(MainAxisAlignment::Center),
             ),

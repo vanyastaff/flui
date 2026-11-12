@@ -218,8 +218,8 @@ fn card(shared: &Rc<Shared>, name: &'static str) -> BoxedView {
     .trigger(shared.trigger.get())
     .feedback(|| Text::new("feedback").into_view().boxed())
     .child_when_dragging(move || Text::new(format!("{name} lifted")).into_view().boxed())
-    .on_drag_started(move |_cx| started.note(format!("start {name}")))
-    .on_drag_end(move |cx, outcome: DragOutcome| {
+    .on_drag_started(move |_ctx| started.note(format!("start {name}")))
+    .on_drag_end(move |ctx, outcome: DragOutcome| {
         ended.note(format!("end {name} {outcome:?}"));
         if outcome
             == (DragOutcome::Dropped {
@@ -228,7 +228,7 @@ fn card(shared: &Rc<Shared>, name: &'static str) -> BoxedView {
         {
             ended
                 .board
-                .update_in(cx, |board| board.todo.retain(|card| *card != name))
+                .update_in(ctx, |board| board.todo.retain(|card| *card != name))
                 .expect("the desk's board is alive while its cards are mounted");
         }
     })
@@ -266,7 +266,7 @@ fn target_at(
     )
     .expect("the target's label names it")
     .target(name)
-    .on_drop(move |cx, drag, at, action| {
+    .on_drop(move |ctx, drag, at, action| {
         assert!(
             !dropped.panic_next_drop.replace(false),
             "intentional drop panic"
@@ -278,7 +278,7 @@ fn target_at(
         dropped.drops.borrow_mut().push(at);
         dropped
             .board
-            .update_in(cx, |board| match name {
+            .update_in(ctx, |board| match name {
                 "Done" => board.done.push(card),
                 _ => board.copies.push(card),
             })
@@ -287,7 +287,7 @@ fn target_at(
     if name == "Done"
         && let Some(policy) = shared.spring.get()
     {
-        target = target.spring_loaded(policy, move |_cx, _drag| {
+        target = target.spring_loaded(policy, move |_ctx, _drag| {
             sprung.springs.set(sprung.springs.get() + 1);
         });
     }
@@ -1054,7 +1054,7 @@ fn initial_board() -> Board {
 /// about: a cut in a context menu nobody opens.
 fn quiet_commands() -> DragCommands {
     DragCommands::new(CommandAppearance::new("Cut", SizedBox::shrink()))
-        .alternative(AlternativeKind::context_menu(|_cx, _request| {}))
+        .alternative(AlternativeKind::context_menu(|_ctx, _request| {}))
 }
 
 fn quiet_draggable(started: Rc<Cell<u32>>, ended: Rc<Cell<u32>>) -> Draggable {
@@ -1167,13 +1167,13 @@ fn draggable_cancels_authored_replacement_before_stale_terminal() {
     touch(&laid, 1, 90.0, 1);
     assert_eq!(starts.get(), 1);
     probe
-        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .write(|ctx| signal.get().expect("mounted probe").set(ctx, 1))
         .expect("publish equal authored draggable policy");
     laid.pump();
     assert_eq!(ends.get(), 0, "equal policy keeps the accepted drag");
     threshold.set(100.0);
     probe
-        .write(|cx| signal.get().expect("mounted probe").set(cx, 2))
+        .write(|ctx| signal.get().expect("mounted probe").set(ctx, 2))
         .expect("replace authored draggable policy");
     laid.pump();
     assert_eq!(ends.get(), 1, "outgoing drag is cancelled once");
@@ -1207,7 +1207,7 @@ pub(crate) fn the_alternatives_perform_the_transfer_the_drag_would() {
     };
     for menu in [false, true] {
         let alternative = if menu {
-            AlternativeKind::context_menu(|_cx, _request| {})
+            AlternativeKind::context_menu(|_ctx, _request| {})
         } else {
             AlternativeKind::default()
         };
@@ -1264,7 +1264,7 @@ pub(crate) fn unmounting_a_target_releases_its_receiver() {
         |_hover| SizedBox::new(40.0, 40.0).into_view().boxed(),
     )
     .expect("one labelled command")
-    .on_drop(move |_cx, _drag, _at, _action| {
+    .on_drop(move |_ctx, _drag, _at, _action| {
         std::hint::black_box(&captured);
     });
     let mut laid = lay_out(target, tight(400.0, 400.0));

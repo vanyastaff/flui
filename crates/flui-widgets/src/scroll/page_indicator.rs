@@ -391,20 +391,20 @@ impl ViewState<PageIndicator> for PageIndicatorState {
         let mut semantics = semantics.role(SemanticsRole::Slider);
         if page + 1 < count {
             let controller = controller.clone();
-            semantics = semantics.on_increment(move |_cx: &mut EventCx<'_>| {
+            semantics = semantics.on_increment(move |_ctx: &mut EventCx<'_>| {
                 turn(&controller, page + 1, reduced);
             });
         }
         if page > 0 {
             let controller = controller.clone();
-            semantics = semantics.on_decrement(move |_cx: &mut EventCx<'_>| {
+            semantics = semantics.on_decrement(move |_ctx: &mut EventCx<'_>| {
                 turn(&controller, page - 1, reduced);
             });
         }
         let tapped = Rc::clone(&self.live);
         let controller = controller.clone();
         let width = size.width;
-        let detector = GestureDetector::new().on_tap_up(move |_cx: &mut EventCx<'_>, details| {
+        let detector = GestureDetector::new().on_tap_up(move |_ctx: &mut EventCx<'_>, details| {
             let page = nearest(tapped.position());
             let count = tapped.count.get();
             let towards_end = details.local_position.dx > width / 2.0;

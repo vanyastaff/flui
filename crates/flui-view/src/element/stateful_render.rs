@@ -94,8 +94,8 @@ where
     }
 
     fn on_mount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        render_custody::mount(&mut self.render_id, core, owner, |cx| {
-            core.view().create_render_object(cx)
+        render_custody::mount(&mut self.render_id, core, owner, |ctx| {
+            core.view().create_render_object(ctx)
         });
     }
 
@@ -132,8 +132,8 @@ where
             self.render_id,
             core,
             owner,
-            |cx, render_object: &mut V::RenderObject| {
-                state.update_render_object(core.view(), cx, render_object)
+            |ctx, render_object: &mut V::RenderObject| {
+                state.update_render_object(core.view(), ctx, render_object)
             },
         );
 
@@ -172,8 +172,8 @@ where
             core,
             owner,
             "StatefulRenderBehavior",
-            |cx, render_object: &mut V::RenderObject| {
-                core.view().did_unmount_render_object(cx, render_object);
+            |ctx, render_object: &mut V::RenderObject| {
+                core.view().did_unmount_render_object(ctx, render_object);
             },
         );
     }

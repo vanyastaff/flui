@@ -287,7 +287,7 @@ pub mod prelude {
     };
     // Signal writes (`set`/`update`/`set_if_changed`). Reads need no import:
     // `Signal::get` is inherent and takes the context as a `ReadScope`, so
-    // `ReadScope` is not in the prelude. `cx.scope()` still resolves on any
+    // `ReadScope` is not in the prelude. `ctx.scope()` still resolves on any
     // `BuildContext` without it (a supertrait's methods do); a `ScopeRef` is
     // opaque, so that reaches nothing but a signal read.
     pub use crate::reactive::SignalWriteExt;

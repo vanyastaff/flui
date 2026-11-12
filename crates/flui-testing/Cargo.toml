@@ -21,12 +21,6 @@ exclude = ["/ARCHITECTURE.md"]
 # drives its own `HeadlessBinding` instance), so no isolated targets.
 autotests = false
 
-[features]
-# Accepted and ignored: `HeadlessBinding::reactive()` is always available
-# (ADR-0085 §5). It stays only because CI's `test-features` job still passes
-# `--features flui-testing/signals`; it goes with that step.
-signals = []
-
 [lints]
 workspace = true
 

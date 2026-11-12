@@ -31,13 +31,13 @@ let range = match NumericRange::try_new(volume.get(ctx), 0.0, 100.0, 5.0) {
 Column::new((
     Slider::new(range)
         .label("Volume")
-        .on_changed(move |cx, proposed| volume.set(cx, proposed)),
+        .on_changed(move |ctx, proposed| volume.set(ctx, proposed)),
     Disclosure::new(
         expansion.get(ctx),
         Text::new("Details"),
         Text::new("Additional settings"),
     )
-    .on_changed(move |cx, proposed| expansion.set(cx, proposed)),
+    .on_changed(move |ctx, proposed| expansion.set(ctx, proposed)),
 ))
 .boxed()
 ```

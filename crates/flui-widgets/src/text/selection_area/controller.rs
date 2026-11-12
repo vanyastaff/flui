@@ -250,8 +250,8 @@ impl SelectionModel {
     fn write_programmatic(&self, selection: Option<&DocumentSelection>) -> Result<(), SelectError> {
         let writer = self.writer.borrow().clone();
         let writer = writer.ok_or(SelectError::NotAttached)?;
-        writer.write(|cx| {
-            match writer.check_context(cx) {
+        writer.write(|ctx| {
+            match writer.check_context(ctx) {
                 Ok(()) => {}
                 Err(EventContextError::WrittenDuringBuild { element }) => {
                     return Err(SelectError::DuringBuild { element });
@@ -259,7 +259,7 @@ impl SelectionModel {
                 Err(_) => return Err(SelectError::NotAttached),
             }
             self.commit(
-                cx,
+                ctx,
                 selection,
                 SelectionChangeCause::Programmatic,
                 CaretMemory::default(),

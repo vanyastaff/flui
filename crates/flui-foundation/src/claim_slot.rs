@@ -548,8 +548,8 @@ impl<T> Future for ClaimHandle<T> {
     /// owner disconnection ([`ClaimOutcome::OwnerGone`], woken by
     /// `ClaimSlot`'s `Drop`), or immediately if this handle was already
     /// claimed by an earlier [`try_take`](Self::try_take).
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.poll_claim(Some(cx.waker()))
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.poll_claim(Some(ctx.waker()))
     }
 }
 
@@ -711,8 +711,8 @@ mod tests {
         })
         .shared()
         .waker();
-        let mut cx = Context::from_waker(&waker);
-        assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Pending);
+        let mut ctx = Context::from_waker(&waker);
+        assert_eq!(Pin::new(&mut handle).poll(&mut ctx), Poll::Pending);
 
         slot.deliver(9).expect("slot is still Pending");
 

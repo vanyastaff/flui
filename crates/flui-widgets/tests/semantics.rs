@@ -1076,7 +1076,7 @@ pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_updat
     let lower_controller = controller.clone();
     let lower_focus = Rc::clone(&focus);
     let lower_calls = Rc::clone(&calls);
-    let lower = OverlayEntry::new(move |_cx| {
+    let lower = OverlayEntry::new(move |_ctx| {
         let calls = Rc::clone(&lower_calls);
         Form::new(Column::new((
             Text::new("Retained page").boxed(),
@@ -1087,14 +1087,14 @@ pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_updat
                 .container(true)
                 .role(SemanticsRole::Button)
                 .label("Back")
-                .on_click(move |_cx| calls.set(calls.get() + 1))
+                .on_click(move |_ctx| calls.set(calls.get() + 1))
                 .child(SizedBox::new(80.0, 40.0))
                 .boxed(),
         )))
         .boxed()
     });
     lower.set_maintain_state(true);
-    let upper = OverlayEntry::new(move |_cx| {
+    let upper = OverlayEntry::new(move |_ctx| {
         Column::new((
             Semantics::new()
                 .container(true)
@@ -1105,7 +1105,7 @@ pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_updat
                 .container(true)
                 .role(SemanticsRole::Button)
                 .label("Back")
-                .on_click(|_cx| {})
+                .on_click(|_ctx| {})
                 .child(SizedBox::new(80.0, 40.0))
                 .boxed(),
         ))
@@ -1299,7 +1299,7 @@ pub(crate) fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() 
 
     let (laid, tree, node_id) = pump_labelled(
         host()
-            .on_click(move |_cx| counted.set(counted.get() + 1))
+            .on_click(move |_ctx| counted.set(counted.get() + 1))
             .child(SizedBox::new(40.0, 20.0)),
     );
 
@@ -1339,7 +1339,7 @@ pub(crate) fn the_assistive_cursor_entering_and_leaving_a_subtree_reaches_its_ha
     let mut laid = lay_out(
         Row::new((
             host()
-                .on_assistive_focus_within(move |_cx, within| record.borrow_mut().push(within))
+                .on_assistive_focus_within(move |_ctx, within| record.borrow_mut().push(within))
                 .child(Row::new((item("first"), item("second")))),
             item("outside"),
         )),
@@ -1381,14 +1381,14 @@ pub(crate) fn the_assistive_cursor_entering_and_leaving_a_subtree_reaches_its_ha
 pub(crate) fn an_action_handler_writes_a_signal_and_rebuilds_its_reader() {
     let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
         host()
-            .on_increment(move |cx| count.update(cx, |n| *n += 1))
+            .on_increment(move |ctx| count.update(ctx, |n| *n += 1))
             .child(SizedBox::new(40.0, 20.0))
     });
     let (mut laid, _tree, node_id) = pump_labelled(probe.view());
 
     laid.invoke_semantics_action(request(Action::Increment, node_id, None))
         .expect("an increment on a node advertising one must resolve");
-    assert_eq!(probe.value(), Ok(1), "the handler wrote through its cx");
+    assert_eq!(probe.value(), Ok(1), "the handler wrote through its ctx");
 
     laid.tick();
     assert_eq!(
@@ -1403,8 +1403,8 @@ pub(crate) fn an_action_handler_writes_a_signal_and_rebuilds_its_reader() {
 pub(crate) fn a_refused_write_in_an_action_handler_is_reported_not_panicked() {
     let probe = SignalProbe::new(|ProbeSignals { count, released }| {
         host()
-            .on_decrement(move |cx| released.set(cx, 1))
-            .on_increment(move |cx| count.set(cx, 1))
+            .on_decrement(move |ctx| released.set(ctx, 1))
+            .on_increment(move |ctx| count.set(ctx, 1))
             .child(SizedBox::new(40.0, 20.0))
     });
     let (laid, _tree, node_id) = pump_labelled(probe.view());
@@ -1432,7 +1432,7 @@ pub(crate) fn an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning
     let counted = Rc::clone(&activations);
     let (laid, _tree, node_id) = pump_labelled(
         host()
-            .on_click(move |_cx| counted.set(counted.get() + 1))
+            .on_click(move |_ctx| counted.set(counted.get() + 1))
             .child(SizedBox::new(40.0, 20.0)),
     );
 
@@ -1472,7 +1472,7 @@ pub(crate) fn rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_th
     let tree_for = |version: u32| {
         let ran = Rc::clone(&ran);
         host()
-            .on_click(move |_cx| ran.set(version))
+            .on_click(move |_ctx| ran.set(version))
             .child(SizedBox::new(40.0, 20.0))
     };
     let (mut laid, _tree, node_id) = pump_labelled(tree_for(1));
@@ -1502,7 +1502,7 @@ pub(crate) fn unmounting_a_node_releases_its_action_table() {
     let counted = Rc::clone(&activations);
     let mut harness = crate::common::harness::mount(
         host()
-            .on_click(move |_cx| {
+            .on_click(move |_ctx| {
                 std::hint::black_box(&captured);
                 counted.set(counted.get() + 1);
             })
@@ -1536,7 +1536,7 @@ pub(crate) fn a_detached_mount_advertises_no_actions() {
     use flui_view::RenderView as _;
 
     let render = host()
-        .on_click(|_cx| {})
+        .on_click(|_ctx| {})
         .create_render_object(&flui_view::RenderObjectContext::detached());
     let configuration = render.configuration();
     assert!(
@@ -1578,7 +1578,7 @@ pub(crate) fn a_set_value_request_without_its_text_is_refused_rather_than_emptie
 
     let (laid, _tree, node_id) = pump_labelled(
         host()
-            .on_set_value(move |_cx, text| sink.borrow_mut().push(text.to_owned()))
+            .on_set_value(move |_ctx, text| sink.borrow_mut().push(text.to_owned()))
             .child(SizedBox::new(40.0, 20.0)),
     );
 
@@ -1613,19 +1613,19 @@ pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_prod
         host()
             .expandable(
                 described.get(),
-                move |cx| {
+                move |ctx| {
                     expand.set(true);
-                    count.set(cx, 1)
+                    count.set(ctx, 1)
                 },
-                move |cx| {
+                move |ctx| {
                     collapse.set(false);
-                    count.set(cx, 0)
+                    count.set(ctx, 0)
                 },
             )
-            .on_click(move |cx| {
+            .on_click(move |ctx| {
                 let next = !toggle.get();
                 toggle.set(next);
-                count.set(cx, u32::from(next))
+                count.set(ctx, u32::from(next))
             })
             .child(SizedBox::new(40.0, 20.0))
     });
@@ -1663,9 +1663,9 @@ pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_prod
             .numeric_range(
                 NumericRange::try_new(current.get(), 0.0, 10.0, 1.0).expect("finite fixture"),
             )
-            .on_set_numeric_value(move |cx, exact| {
+            .on_set_numeric_value(move |ctx, exact| {
                 changed.set(exact);
-                count.update(cx, |n| *n += 1)
+                count.update(ctx, |n| *n += 1)
             })
             .child(SizedBox::new(40.0, 20.0))
     });
@@ -1750,7 +1750,7 @@ pub(crate) fn numeric_range_admission_and_owner_payload_validation() {
             .numeric_range(
                 NumericRange::try_new(4.0, 4.0, 4.0, 1.0).expect("zero-span range is valid"),
             )
-            .on_set_numeric_value(move |_cx, value| {
+            .on_set_numeric_value(move |_ctx, value| {
                 assert_eq!(value, 4.0);
                 changed.set(changed.get() + 1);
             })
@@ -2205,7 +2205,7 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
             .container(true)
             .role(SemanticsRole::Button)
             .label("Physical")
-            .on_click(|_cx| {})
+            .on_click(|_ctx| {})
             .child(SizedBox::new(200.0, 40.0))
             .boxed(),
         SizedBox::new(200.0, 600.0).boxed(),
@@ -2298,10 +2298,10 @@ pub(crate) fn merged_custom_actions_each_reach_their_own_handler() {
     let (outer, inner) = (Rc::clone(&ran), Rc::clone(&ran));
     let (laid, tree, node_id) = pump_labelled(
         host()
-            .custom_action("Archive", move |_cx| outer.borrow_mut().push("archive"))
+            .custom_action("Archive", move |_ctx| outer.borrow_mut().push("archive"))
             .child(
                 Semantics::new()
-                    .custom_action("Delete", move |_cx| inner.borrow_mut().push("delete"))
+                    .custom_action("Delete", move |_ctx| inner.borrow_mut().push("delete"))
                     .child(SizedBox::new(40.0, 20.0)),
             ),
     );
@@ -2343,8 +2343,8 @@ pub(crate) fn a_repeated_custom_action_label_replaces_the_action() {
     let (first, second) = (Rc::clone(&ran), Rc::clone(&ran));
     let (laid, tree, node_id) = pump_labelled(
         host()
-            .custom_action("Delete", move |_cx| first.borrow_mut().push("first"))
-            .custom_action("Delete", move |_cx| second.borrow_mut().push("second"))
+            .custom_action("Delete", move |_ctx| first.borrow_mut().push("first"))
+            .custom_action("Delete", move |_ctx| second.borrow_mut().push("second"))
             .child(SizedBox::new(40.0, 20.0)),
     );
     let offered = tree
@@ -2380,7 +2380,7 @@ pub(crate) fn a_gated_custom_action_follows_its_gate_without_a_rebuild() {
             .custom_action_when(
                 "Go",
                 move || gate.get(),
-                move |_cx| counter.set(counter.get() + 1),
+                move |_ctx| counter.set(counter.get() + 1),
             )
             .refresh_on(signal.clone())
             .child(SizedBox::new(40.0, 20.0)),
@@ -2615,7 +2615,7 @@ pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
             role: Some(flui_testing::a11y::Role::Button),
             view: || {
                 RawButton::new(Text::new("Send"))
-                    .on_press(|_cx| {})
+                    .on_press(|_ctx| {})
                     .identifier("send")
                     .boxed()
             },
@@ -2630,7 +2630,7 @@ pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
                     Text::new("Details"),
                     Text::new("Body"),
                 )
-                .on_changed(|_cx, _state| {})
+                .on_changed(|_ctx, _state| {})
                 .identifier("details")
                 .boxed()
             },
@@ -2655,7 +2655,7 @@ pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
                         .expect("valid range");
                 Slider::new(range)
                     .label("Volume")
-                    .on_changed(|_cx, _value| {})
+                    .on_changed(|_ctx, _value| {})
                     .identifier("volume")
                     .boxed()
             },
@@ -2861,12 +2861,12 @@ pub(crate) fn semantics_turned_on_later_publish_the_tree_of_semantics_on_from_th
             Column::new(vec![
                 flui_view::ViewExt::boxed(
                     host()
-                        .on_click(move |_cx| clicks.set(clicks.get() + 1))
+                        .on_click(move |_ctx| clicks.set(clicks.get() + 1))
                         .child(SizedBox::new(40.0, 20.0)),
                 ),
                 flui_view::ViewExt::boxed(
                     RawButton::new(Text::new("Press"))
-                        .on_press(move |_cx| presses.set(presses.get() + 1)),
+                        .on_press(move |_ctx| presses.set(presses.get() + 1)),
                 ),
             ])
         }

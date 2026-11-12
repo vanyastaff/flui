@@ -374,8 +374,8 @@ type FilterChipSelectCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, bool
 /// use flui_sdk::widgets::Text;
 ///
 /// let _info = Chip::new(Text::new("Tag"));
-/// let _pressable = Chip::new(Text::new("Tag")).on_pressed(|_cx| {});
-/// let _deletable = Chip::new(Text::new("Tag")).on_deleted(|_cx| {});
+/// let _pressable = Chip::new(Text::new("Tag")).on_pressed(|_ctx| {});
+/// let _deletable = Chip::new(Text::new("Tag")).on_deleted(|_ctx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct Chip {
@@ -538,7 +538,7 @@ impl StatelessView for Chip {
             ))
             .shape(MaterialShape::Stadium);
             if self.enabled {
-                delete_button = delete_button.on_tap(move |cx| on_deleted(cx));
+                delete_button = delete_button.on_tap(move |ctx| on_deleted(ctx));
             }
             delete_button.boxed()
         });
@@ -559,9 +559,9 @@ impl StatelessView for Chip {
         let mut ink_well = InkWell::new(padded_content).shape(shape);
         if self.is_pressable() {
             let on_pressed = self.on_pressed.clone();
-            ink_well = ink_well.on_tap(move |cx| {
+            ink_well = ink_well.on_tap(move |ctx| {
                 if let Some(handler) = &on_pressed {
-                    handler(cx);
+                    handler(ctx);
                 }
             });
         }
@@ -594,7 +594,7 @@ impl StatelessView for Chip {
 ///
 /// let _chip = FilterChip::new(Text::new("Vegetarian"))
 ///     .selected(true)
-///     .on_selected(|_cx, _next| { /* ... */ });
+///     .on_selected(|_ctx, _next| { /* ... */ });
 /// let _disabled = FilterChip::new(Text::new("Vegetarian"));
 /// ```
 #[derive(Clone, StatelessView)]
@@ -825,7 +825,7 @@ impl StatelessView for FilterChip {
             ))
             .shape(MaterialShape::Stadium);
             if enabled {
-                delete_button = delete_button.on_tap(move |cx| on_deleted(cx));
+                delete_button = delete_button.on_tap(move |ctx| on_deleted(ctx));
             }
             delete_button.boxed()
         });
@@ -846,9 +846,9 @@ impl StatelessView for FilterChip {
         let mut ink_well = InkWell::new(padded_content).shape(shape);
         if enabled {
             let on_selected = self.on_selected.clone();
-            ink_well = ink_well.on_tap(move |cx| {
+            ink_well = ink_well.on_tap(move |ctx| {
                 if let Some(handler) = &on_selected {
-                    handler(cx, !selected);
+                    handler(ctx, !selected);
                 }
             });
         }

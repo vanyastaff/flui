@@ -943,9 +943,9 @@ impl flui_view::StatelessView for Rebuilding {
                 .controller(self.transform.clone())
                 .max_scale(self.max_scale.get(ctx))
                 .boundary_margin(EdgeInsets::all(f64::INFINITY))
-                .on_interaction_update(move |cx, _details| {
+                .on_interaction_update(move |ctx, _details| {
                     *updates.borrow_mut() += 1;
-                    signal.set(cx, 2.0 + f64::from(*updates.borrow()))
+                    signal.set(ctx, 2.0 + f64::from(*updates.borrow()))
                 })
                 .child(SizedBox::new(300.0, 300.0)),
         )

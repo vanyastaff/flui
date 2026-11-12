@@ -43,7 +43,7 @@ pub fn widget_level_style_wins_over_the_elevated_button_theme() {
         Theme::new(
             theme,
             ElevatedButton::new(Text::new("Save"))
-                .on_pressed(|_cx| {})
+                .on_pressed(|_ctx| {})
                 .style(ButtonStyle {
                     background_color: Some(WidgetStateProperty::all(Some(widget_background))),
                     ..Default::default()
@@ -99,7 +99,7 @@ pub fn elevated_button_with_text_child_announces_one_labelled_button_node() {
     let mut laid = lay_out(
         Theme::new(
             ThemeData::light(),
-            ElevatedButton::new(Text::new("Increment")).on_pressed(|_cx| {}),
+            ElevatedButton::new(Text::new("Increment")).on_pressed(|_ctx| {}),
         ),
         tight(120.0, 48.0),
     );
@@ -143,61 +143,61 @@ pub fn material_controls_publish_their_identifier() {
     let rows: [Row; 11] = [
         ("elevated", Role::Button, || {
             ElevatedButton::new(Text::new("Save"))
-                .on_pressed(|_cx| {})
+                .on_pressed(|_ctx| {})
                 .identifier("elevated")
                 .boxed()
         }),
         ("filled", Role::Button, || {
             FilledButton::new(Text::new("Save"))
-                .on_pressed(|_cx| {})
+                .on_pressed(|_ctx| {})
                 .identifier("filled")
                 .boxed()
         }),
         ("outlined", Role::Button, || {
             OutlinedButton::new(Text::new("Save"))
-                .on_pressed(|_cx| {})
+                .on_pressed(|_ctx| {})
                 .identifier("outlined")
                 .boxed()
         }),
         ("text", Role::Button, || {
             TextButton::new(Text::new("Save"))
-                .on_pressed(|_cx| {})
+                .on_pressed(|_ctx| {})
                 .identifier("text")
                 .boxed()
         }),
         ("icon", Role::Button, || {
             IconButton::new(SizedBox::new(24.0, 24.0))
-                .on_pressed(|_cx| {})
+                .on_pressed(|_ctx| {})
                 .identifier("icon")
                 .boxed()
         }),
         ("checkbox", Role::CheckBox, || {
             Checkbox::new(false)
-                .on_changed(|_cx, _value| {})
+                .on_changed(|_ctx, _value| {})
                 .identifier("checkbox")
                 .boxed()
         }),
         ("switch", Role::Switch, || {
             Switch::new(false)
-                .on_changed(|_cx, _value| {})
+                .on_changed(|_ctx, _value| {})
                 .identifier("switch")
                 .boxed()
         }),
         ("radio", Role::RadioButton, || {
             Radio::new("spring", Some("spring"))
-                .on_changed(|_cx, _value| {})
+                .on_changed(|_ctx, _value| {})
                 .identifier("radio")
                 .boxed()
         }),
         ("chip", Role::Button, || {
             Chip::new(Text::new("Tag"))
-                .on_pressed(|_cx| {})
+                .on_pressed(|_ctx| {})
                 .identifier("chip")
                 .boxed()
         }),
         ("filter-chip", Role::Button, || {
             FilterChip::new(Text::new("Tag"))
-                .on_selected(|_cx, _selected| {})
+                .on_selected(|_ctx, _selected| {})
                 .identifier("filter-chip")
                 .boxed()
         }),

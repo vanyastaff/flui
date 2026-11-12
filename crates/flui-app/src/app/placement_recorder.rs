@@ -168,11 +168,11 @@ impl WriteRecord {
     }
 
     /// Take storage's answer to the write in flight, if it has one.
-    fn poll_in_flight(&mut self, cx: &mut Context<'_>) {
+    fn poll_in_flight(&mut self, ctx: &mut Context<'_>) {
         let Some(in_flight) = &mut self.in_flight else {
             return;
         };
-        match in_flight.answer.as_mut().poll(cx) {
+        match in_flight.answer.as_mut().poll(ctx) {
             Poll::Pending => {}
             Poll::Ready(Ok(_)) => {
                 self.written = self.in_flight.take().map(|sent| sent.bytes);
@@ -193,7 +193,7 @@ impl WriteRecord {
         storage: &dyn Storage,
         name: &StorageName,
         now: Instant,
-        cx: &mut Context<'_>,
+        ctx: &mut Context<'_>,
     ) {
         if self.in_flight.is_some() || !self.owes_write() {
             return;
@@ -204,7 +204,7 @@ impl WriteRecord {
         self.last_attempt = Some(now);
         let answer = storage.publish(name, bytes.clone(), WriteMode::Replace);
         self.in_flight = Some(InFlight { bytes, answer });
-        self.poll_in_flight(cx);
+        self.poll_in_flight(ctx);
     }
 }
 
@@ -323,20 +323,20 @@ impl PlacementRecorder {
     }
 
     /// Whether the newest placement is stored, taking storage's answers with
-    /// `cx`'s waker.
+    /// `ctx`'s waker.
     ///
     /// A write that was already in flight when the flush began may answer for
     /// an older placement than the newest: then the newest is handed to storage
     /// in turn, so the flush is over only when storage holds what the window
     /// last reported. A write storage refuses ends the flush with that
     /// placement unstored: a closing window has no later time to retry at.
-    pub(crate) fn poll_flush(&self, cx: &mut Context<'_>, now: Instant) -> bool {
+    pub(crate) fn poll_flush(&self, ctx: &mut Context<'_>, now: Instant) -> bool {
         let mut record = self.record.borrow_mut();
-        record.poll_in_flight(cx);
+        record.poll_in_flight(ctx);
         if record.in_flight.is_none() && record.owes_write() && !record.refused {
-            record.start_write(&*self.storage, &self.name, now, cx);
-            // Register `cx`'s waker with the answer the start did not.
-            record.poll_in_flight(cx);
+            record.start_write(&*self.storage, &self.name, now, ctx);
+            // Register `ctx`'s waker with the answer the start did not.
+            record.poll_in_flight(ctx);
         }
         record.in_flight.is_none() && (!record.owes_write() || record.refused)
     }
@@ -362,13 +362,13 @@ pub(crate) fn settle(recorders: &[Rc<PlacementRecorder>], now: Instant, budget: 
     }
     let deadline = Instant::now() + budget;
     let waker = Waker::from(Arc::new(Unpark(thread::current())));
-    let mut cx = Context::from_waker(&waker);
+    let mut ctx = Context::from_waker(&waker);
     loop {
         // Poll every recorder, not just until one is pending: each registers
         // the waker with its own answer.
         let mut settled = true;
         for recorder in recorders {
-            settled &= recorder.poll_flush(&mut cx, now);
+            settled &= recorder.poll_flush(&mut ctx, now);
         }
         if settled {
             return;

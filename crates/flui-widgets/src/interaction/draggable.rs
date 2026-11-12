@@ -427,7 +427,7 @@ impl Source {
         self.rebuild();
         let callback = self.config.borrow().on_drag_started.clone();
         if let Some(callback) = callback {
-            self.write(|cx| callback(cx));
+            self.write(|ctx| callback(ctx));
         }
     }
 
@@ -447,7 +447,7 @@ impl Source {
             self.haptic(HapticFeedback::Drop, HapticTiming::FramePresented);
         }
         if let Some(callback) = callback {
-            self.write(|cx| callback(cx, outcome));
+            self.write(|ctx| callback(ctx, outcome));
         }
     }
 
@@ -1039,7 +1039,7 @@ impl ViewState<Draggable> for DraggableState {
         let pressed = Rc::downgrade(&self.source);
         let lifted = Rc::downgrade(&self.source);
         let mut listener = Listener::new()
-            .on_pointer_down(move |_cx, dispatch| {
+            .on_pointer_down(move |_ctx, dispatch| {
                 if let (Some(source), PointerEvent::Down(press)) =
                     (pressed.upgrade(), dispatch.local)
                 {
@@ -1048,10 +1048,10 @@ impl ViewState<Draggable> for DraggableState {
                     contacts.push(press.pointer);
                 }
             })
-            .on_pointer_up(move |_cx, dispatch| forget_contact(&lifted, dispatch.local))
+            .on_pointer_up(move |_ctx, dispatch| forget_contact(&lifted, dispatch.local))
             .on_pointer_cancel({
                 let source = Rc::downgrade(&self.source);
-                move |_cx, dispatch| forget_contact(&source, dispatch.local)
+                move |_ctx, dispatch| forget_contact(&source, dispatch.local)
             })
             .recognizer(&self.drag_attachment);
         if view.trigger == DragTrigger::LongPress {
@@ -1120,7 +1120,7 @@ struct DragTransfer {
 }
 
 impl Action<CopySelectionTextIntent> for DragTransfer {
-    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &CopySelectionTextIntent) -> ActionOutcome {
+    fn invoke(&self, _ctx: &mut EventCx<'_>, intent: &CopySelectionTextIntent) -> ActionOutcome {
         let action = match intent {
             CopySelectionTextIntent::Copy => TransferActions::COPY,
             CopySelectionTextIntent::Cut => TransferActions::MOVE,
