@@ -462,6 +462,7 @@ where
 
     /// What `dependent` is recorded as reading from this provider (its depth
     /// and the fields it read), if it depends on it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn dependent(&self, dependent: ElementId) -> Option<&crate::element::DependentEntry> {
         self.behavior.dependent(dependent)
     }
