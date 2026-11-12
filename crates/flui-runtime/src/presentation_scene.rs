@@ -224,7 +224,7 @@ impl SceneSlot {
     }
 
     /// The current version with the damage since the acknowledged one.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "hot-reload"))]
     pub(crate) fn publication(&self) -> Result<ScenePublication, SceneLent> {
         self.scene
             .borrow()
