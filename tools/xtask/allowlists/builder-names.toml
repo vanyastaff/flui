@@ -5,24 +5,6 @@
 # entry that is no longer one.
 
 [[allow]]
-crate = "flui-engine"
-type = "SlotConfig"
-method = "with_color"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-engine"
-type = "SlotConfig"
-method = "with_latency"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
-crate = "flui-engine"
-type = "SlotConfig"
-method = "with_visibility"
-reason = "written before the rule had a gate; its crate's rename removes it"
-
-[[allow]]
 crate = "flui-interaction"
 type = "GestureSettings"
 method = "with_double_tap_timeout"

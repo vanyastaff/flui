@@ -152,14 +152,14 @@ impl SlotConfig {
 
     /// The configuration with `visibility`.
     #[must_use]
-    pub fn with_visibility(mut self, visibility: SlotVisibility) -> Self {
+    pub fn visibility(mut self, visibility: SlotVisibility) -> Self {
         self.visibility = visibility;
         self
     }
 
     /// The configuration asking for `color`, on a display reporting `display`.
     #[must_use]
-    pub fn with_color(mut self, color: SurfaceColor, display: Option<DisplayColor>) -> Self {
+    pub fn color(mut self, color: SurfaceColor, display: Option<DisplayColor>) -> Self {
         self.color = color;
         self.display = display;
         self
@@ -167,7 +167,7 @@ impl SlotConfig {
 
     /// The configuration with `latency`.
     #[must_use]
-    pub fn with_latency(mut self, latency: FrameLatency) -> Self {
+    pub fn latency(mut self, latency: FrameLatency) -> Self {
         self.latency = latency;
         self
     }
