@@ -28,8 +28,7 @@ use crate::send_positions::{ALLOWLIST, ROOTS, listed_items};
 ///   `with_memory_reclaim`): a rename or a move takes the path off its entry,
 ///   on whichever line the bound sits. A method its type's module file does
 ///   not declare is looked for in that module's directory. Without a diff,
-///   any change to that
-///   file.
+///   any change to that file.
 ///
 /// A bound that becomes public through a change elsewhere (a private item
 /// made `pub` on a line that names no marker) is left to the gate on `main`.
