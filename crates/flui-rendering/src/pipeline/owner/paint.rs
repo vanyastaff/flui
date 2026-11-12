@@ -985,10 +985,18 @@ impl PipelineOwner<PaintPhase> {
                     .iter()
                     .enumerate()
                     .all(|(position, child)| child.slot == position && child.opacity == 1.0);
-            composer
-                .work
-                .child_paint_orders
-                .push((node_id, (!plain).then_some(painted_children)));
+            // A plain order is the absence of an entry: one is queued only
+            // to record a list or to drop the one an earlier pass kept, so
+            // the queue the pass keeps between frames does not grow with
+            // every parent.
+            if !plain {
+                composer
+                    .work
+                    .child_paint_orders
+                    .push((node_id, Some(painted_children)));
+            } else if self.last_child_paint_orders.contains_key(&node_id) {
+                composer.work.child_paint_orders.push((node_id, None));
+            }
         }
 
         for _ in 0..effect_layers {
